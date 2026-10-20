@@ -715,3 +715,69 @@ Under GATES-22 a row runs at the convergence (standing: a skip is RED) and on a 
 **Plants** (hbox logs/gates11-fence-plant.sh/.out, GATES-10's logs/gates10-fence-plant.sh plus a standing case; the standing tree under the standing lock, planted test files and a trimmed runs.tsv, restored): main's runner reads the planted skipping test `cargo:launcher:gplantskip : ok` (the fail-open); this runner `INCOMPLETE(skipped: 1, first: skipped: no nd-hosted uid …)`; the sudo test traced `RED(FAIL sudo_reaches_nd)`, as `cargo-untraced:` `ok`; with `--standing` the skip reads `RED(skipped: 1, …)`.
 
 **Critique.** A test that skips without printing `skipped: ` still reads ok: the rule reads the convention, and the convention is HOSTING's to keep (its tests print it). An untraced row is selected and keyed only statically, so it runs more often than a traced one, which is the safe side.
+
+## GATES-20g · Rows run concurrently on free judge slots, each in its own scratch; GATES-20l · the convergence carries what the delta cannot reach, for at most a day (2026-10-21, Ember's question via ROOT; GATES-11 measured, GATES-12 built)
+
+**Why.** Ember asked why a convergence takes 46 minutes. GATES-11 measured convergence 1 (0b86cb067bec): the gates, the full build, the census, the generated files and cargo take about 3 minutes on a warm tree. The rows take about 43 minutes, because they run one after another in one directory. A docs-only delta paid all 46 minutes as well.
+
+**Decision, 20g (gates/runs.py, gates/readset.py, scripts/gate-lib.sh, scripts/pre-push, scripts/standing.sh).**
+- *Concurrency.* With `--slots-dir/--slots N` (pre-push's full judge, and standing), up to N rows run at once in the one tree. The caller's own place runs one row: a judge's gate slot, or standing's lock. Each further row BORROWS a free judge slot: the slot's flock is taken non-blocking for as long as that one row runs, then given back. A row's own runs stay in order. Its lines are printed in row order, whatever order the rows finished in, and each row is followed by `  time ROW: N s (own|borrowed slot K|alone)` from the runner's own clock. `  runs wall: N s` and a `  concurrency:` line close the stage. Longest rows go first, by their last wall in `<traces>/_walls.json`, which is a schedule hint and never a verdict.
+- *How landers' slots compose.* There are N slots, and gate_slot still gives each judge one. A convergence holds no slot of its own; standing's lock is its own place. Under 20g a convergence borrows at most N-1 slots, one per running row. While gate_slot waits for a slot it keeps `<common>/nanodregg-slot-wait/<its pid>`. While any such file names a live process, nothing new is borrowed. So a lander that arrives waits at most for one borrowed row to end. The longest row is the worstcut-rows bench, at 436 s. Nothing is killed to make room. The box never runs more than N slots' worth of judging plus standing's one row, which was also the bound before.
+- *Each row in its own scratch.* A traced run's reduce now also records what it WROTE. This record is never keyed, since a write is no input:
+  - `WR`: the paths it wrote.
+  - `O`: the outermost directories it made.
+  - `RM`: the outermost paths it removed or renamed away.
+  - `LD`: the directories it listed with getdents.
+  - `NS`: whether it entered a mount namespace.
+  Paths come from the tree, /tmp, /var/tmp and home; `.lake/runs/` and `.lake/cargo-target/` are excluded. To place these paths correctly, the reducer now traces bind, unshare, setns and fchdir, follows chdir and fchdir, and gives a child its parent's cwd. Two rows are RED (`run concurrency A + B: RED(shared scratch: …)`) when any of these holds:
+  - one writes a path the other writes;
+  - one removes a path that holds the other's write or directory;
+  - one writes inside a directory the other made;
+  - one writes a path the other reads, either touched or stat'ed;
+  - one adds or removes an entry of a directory the other lists.
+  This is judged over every pair of rows run now, and each row run now against every carried row's record, whether or not they overlapped in time this once. The next schedule may overlap them. Two rows that each make their own directory under one parent (host-file-sim's `.lake/host-file-sim/run-<random>` shape, the tests' `~/.cache/nd-t/<unique>`) do not collide unless one lists, empties or writes into the other's. A concurrent red is a red like any other. In pre-push a concurrency red has no parent counterpart, since the parent's judge is untraced and runs one row at a time, so it is a NEW RED.
+- *Rows whose writes cannot be seen run alone.* That covers a `cargo-untraced:` row, every row of an untraced judge, and a row whose last run entered a mount namespace of its own. Measured: 12 rows, the launcher, client and devtools cargo rows and bar.sh, all through bwrap. Their paths are named in the namespace's view; `/tmp/newroot` is bwrap's pivot inside its own tmpfs. A row found unseen after running beside others, either with no read-set or with NS, is re-run alone, and so is every row that ran beside it. Those runs are the verdicts (`  alone ROW: …`), and from then on the hint schedules the row alone from the start.
+- *A read-set traced in a mount namespace never narrows and never carries.* This tightens GATES-20 and closes a fail-open candidate. A sandboxed process reads through mounts and names what it reads in its own view; the measured read-sets hold `launcher/newroot`, `client/newroot`. So its read-set may miss a box path its verdict depends on. Such a record no longer narrows selection (valid_readset) and is never reused or carried. The same holds for a record from before GATES-20g, which does not say whether it was traced in a namespace. The static rules apply. The in-namespace path is the SYMPTOM. The proper key for those rows is the HOST view of what bwrap mounted: trace the parent's mounts, or translate newroot paths through the bind table. That is GATES-20m (cv 01a15816-7439), and it would also let them run beside others (ROOT approved this containment inside 20g).
+
+**Decision, 20l (scripts/standing.sh, gates/runs.py, gates/converge.py): the carry.**
+- *Rows.* Standing runs runs.py with `--reuse <G>/carry.record --record <G>/carry.new --daily ND_DAILY` (default 86400). A row whose traced key is byte-identical on this tree is not run; its lines and WASTE lines are carried (`  carry ROW: carried (key …, byte-identical to its run at TREE TIME)`). The key covers every path it touched, stat'ed, listed or exec'd, its row line, its waste rows, the runner and the tools. The rule is GATES-19's reuse key, now also used in standing. A record whose run is older than a day is re-run (`  daily ROW: re-run …`). The re-trace check is what catches a narrowed record, and only a run can make it, so every row runs at least daily. Only ok rows are recorded, so a red is never carried.
+- *Build and census.* `build=ok(carried SHA: inputs byte-identical)` when the build inputs are byte-identical to those of the last build that read ok in this directory, whose `.lake` is that build's product. The build inputs are every `.lean`, `.c` and `.h`, `lakefile.lean`, `lean-toolchain` and `lake-manifest.json`, as git blob ids from the judged tree object. The census is carried the same way over the build inputs and every path under `gates/`, which holds the census's allow tables and its code. Each carry lasts at most a day. A key file is removed before its stage runs and written only after it reads ok. The gates, the generated files, the Rust workspace and the waste ceilings run every time.
+- *Times.* The STANDING line gains `carried=N daily=N`. Standing writes `stages: gates=Ns build=Ns cargo=Ns census=Ns generated=Ns runs=Ns waste=Ns total=Ns` from its own clock (`<sha12>.times`). Every CONVERGENCE gains `TIMES …` and `ROWS wall …; ran N: ROW Ns (where), …; carried N: …; daily N: …`, read from the runner's own lines and never from the read-set store's mtimes, which concurrent judges write. Times are reported and never gated.
+
+**Measured** (hbox logs/g12/meas*.{log,runs.out}; the standing tree at 0b86cb067bec, the tree convergence 1 judged, under standing's lock, with a private trace store, `SWARM_MEM_MAX=6G`):
+
+| | rows wall | how |
+|---|---|---|
+| before (convergence 1) | ~43 min (~2580 s) | serial, one directory |
+| 20g, steady state (run 3) | **875 s (14.6 min)** | 16 rows concurrent in ~558 s (row time 1631 s; the critical path is bench-worstcut-rows at 436 s), then 12 namespace rows alone in 317 s; 11 rows on borrowed slots; waste 79/79 ok |
+| 20g, first sighting (run 2) | 2157 s | the 12 namespace rows found NS beside others: they and their neighbours re-run alone (once) |
+
+The first model (run 1, 805 s) placed writes too coarsely, at the first component under home or /tmp. It read 90 false pairs: `~/.cache` (the tests' unique dirs) and `/tmp/newroot` (bwrap's in-namespace pivot). The model above replaced it. With 20l, a docs-only delta carries the build, the census and every row whose key it does not touch. That leaves the gates, the generated files, cargo and the waste check, about 3 minutes warm, until a row's daily re-run falls due.
+
+**Plants** (hbox `logs/g12/new/plant20g.sh` → `plant-final.out`, 5/5 repeated runs green; a fake tree of shell exes under the real strace and a fake common dir; `plant20l.sh` → `plant20l.out`):
+- P1: two rows write `.lake/shared/out` → RED; a third row in its own `{fresh}` → not red.
+- P1b: `run-<random>` dirs under one parent, with one row listing the parent → RED.
+- P1c: the same dirs, unseen by each other → ok.
+- P1d / P1e: a row removing another's scratch → RED, including when it made the parent itself.
+- P2: rows in their own `{fresh}` → ok, 2 borrowed, 3 s wall against ≥ 9 s serial.
+- P3: a write of a path another row reads → RED.
+- P4: a FAIL beside passing rows → RED, exit 1.
+- P5: a live waiter → 0 borrowed; P5b: a dead waiter's file is ignored.
+- P6: every slot held → 0 borrowed.
+- P7: no read-set beside others → it and its neighbour re-run alone.
+- P8 / P8b: carry, a changed read re-runs only its row, `--daily 0` re-runs all, and the carried WASTE line is measured.
+- P9: untraced → one at a time.
+- P10: an `unshare -rm` row → re-run alone, then scheduled alone.
+- P11: a namespace row is never carried.
+- L1–L9: a docs change moves neither the build key nor the census key; a gates/ change moves only the census key; .lean, .c and lean-toolchain changes move the build key; an equal key carries within a day; a different, stale or absent key does not carry.
+- L10: TIMES/ROWS come from the standing's own lines.
+Controls (grep for error|unbound|No such file|Traceback over every output): none.
+
+**Re-emits / refusals.** readset.py and runs.py are runner files, so every traced key changes (RUNNER bytes). The first traced judge after this landing re-runs and re-stores every row. Records from before 20g never narrow or carry. `_walls.json` is new.
+
+**Critique.**
+- (1) The 12 namespace rows run alone: about 5 minutes of the 14.6 that cannot overlap. Mapping bwrap's mounts (mount/pivot_root are already in %file) would let them run beside others. That needs a mount table in reduce, and until it exists alone is the sound answer.
+- (2) A write the tracer cannot see escapes the collision check: an fd inherited from outside, a sandbox's bind mount, or the new mount API. Such a row is either NS (alone) or untraced (alone); a traced row with an open-by-fd write is the residual.
+- (3) A lander may wait up to one row (436 s at worst) for a borrowed slot. That cost was chosen over killing a judged row.
+- (4) Reads outside the tree are not compared for write-read collisions; only tree reads are. Two rows sharing a fixed /tmp name are still caught when both write it.
+- (5) `~/.cache/nd-t` holds 7295 leaked test dirs: CLIENT's (devtools::scratch); ROOT filed it. (6) The next lever on wall time is the critical-path bench itself (bench-worstcut-rows, 436 s): PERF's package-check-per-call (cv 01a1558a-1644, LANG), as ROOT named.

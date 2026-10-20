@@ -44,13 +44,13 @@ lock() {
 # ~10 min behind a busy slot while two others stood free, 10-18.) Returns 3 when no slot freed in 30
 # min: the caller says NOT JUDGED (exit 76), never RED (GATES-22; the landing of GATES-20b-prime read
 # "REFUSED by scripts/pre-push" on a slot wait).
+# GATES-20g: while it waits, gate_slot keeps <common>/nanodregg-slot-wait/<its pid>. A judge's runs.py borrows
+# free slots for concurrent rows only while no such file names a live process, so a lander that arrives waits at
+# most for one borrowed row to end; the file goes when the wait ends (a waiter killed meanwhile is ignored by pid).
 gate_slot() {
   flock_or_refuse || return 1
-  local n k
-  n=$(git -C "$repo" config nanodregg.gateslots || true)
-  if [ -z "$n" ]; then
-    if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" = true ]; then n=4; else n=1; fi
-  fi
+  local n k w=$common/nanodregg-slot-wait/$$
+  n=$(slot_count)
   # GATES-22 (ROOT, lanes' measurements): a waiting judge KEEPS its place: every 30 min it names the holders and
   # waits on; only after ND_SLOT_WAIT seconds (default 4 h) is it NOT JUDGED (return 3), never refused.
   local start; start=$(date +%s)
@@ -60,6 +60,7 @@ gate_slot() {
       exec 9> "$common/nanodregg-gate-$k.flock"
       if flock -n 9; then
         G=$common/nanodregg-gate-$k
+        rm -f "$w"
         [ -z "$said" ] || echo "gate: slot $k freed; judging in it" >&2
         return 0
       fi
@@ -71,12 +72,24 @@ gate_slot() {
         local h; h=$(fuser "$common/nanodregg-gate-$k.flock" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' | head -1)
         echo "  slot $k: ${h:-?} $( [ -n "$h" ] && tr '\0' ' ' < /proc/$h/cmdline 2>/dev/null | cut -c1-200) ($(ls -t "$common/nanodregg-gate-$k"/*.log 2>/dev/null | head -1 | xargs -r basename))" >&2
       done
-      [ "$(date +%s)" -ge "$end" ] && { echo "gate: no slot in $(( ${ND_SLOT_WAIT:-14400} / 60 )) min; not judged" >&2; return 3; }
+      [ "$(date +%s)" -ge "$end" ] && { rm -f "$w"; echo "gate: no slot in $(( ${ND_SLOT_WAIT:-14400} / 60 )) min; not judged" >&2; return 3; }
       next=$(( next + 1800 ))
     fi
-    [ -n "$said" ] || { echo "gate: all $n judge slots busy; waiting, in place, for the first to free" >&2; said=1; }
+    [ -n "$said" ] || { echo "gate: all $n judge slots busy; waiting, in place, for the first to free" >&2; said=1
+                        mkdir -p "${w%/*}" && : > "$w"; }
     sleep 5
   done
+}
+
+# slot_count: N, the box's judge slots (nanodregg.gateslots; default 4 on the landing clone, 1 elsewhere). gate_slot
+# takes one; runs.py --slots N runs at most N rows at once, borrowing the free ones (GATES-20g).
+slot_count() {
+  local n
+  n=$(git -C "$repo" config nanodregg.gateslots || true)
+  if [ -z "$n" ]; then
+    if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" = true ]; then n=4; else n=1; fi
+  fi
+  echo "$n"
 }
 
 # lean_targets DIR: every lean_lib and lean_exe name in DIR's lakefile.lean.

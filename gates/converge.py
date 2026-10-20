@@ -14,6 +14,9 @@ log and runs output (STANDING_DIR/<sha12>.log, .runs.out) and prints:
   FIXED <unit> after <h> h (red at N convergences; first <sha>)
   REVERT <c> <unit>                   (scripts/converge lands the revert: --reverts C, C's owners named)
   REVERT-PENDING <unit>: <c> <c> …    (more than one commit attributed: ROOT picks, `scripts/converge --revert C`)
+  TIMES stages: gates=Ns build=Ns … total=Ns       (standing.sh's own clock, STANDING_DIR/<sha12>.times; GATES-20g)
+  ROWS wall Ns; concurrency …; ran N: ROW Ns (where), …; carried N: ROW …; daily N: ROW …
+                                      (runs.py's own `  time ROW:` lines; reported, never gated)
 
 A UNIT is one red thing: `gates`, `build`, `census`, `generated:<out>`, `cargo`, `run:<row>` (a row, its re-trace
 included), `waste:<op> <metric>`. ATTRIBUTION names the commits of the range that the red unit READ:
@@ -234,7 +237,11 @@ def red_units(st: dict[str, str], runs_out: str, log: str) -> dict[str, set[str]
         elif j == "ok":
             out[s] = set()
         elif s == "runs":
-            rs = {"run:" + m.group(1) for m in re.finditer(r"(?m)^  run (\S+).*?: RED", runs_out)}
+            rs = {"run:" + m.group(1) for m in re.finditer(r"(?m)^  run (\S+).*?: RED", runs_out)
+                  if m.group(1) != "concurrency"}
+            # GATES-20g: a shared scratch is a red of both rows (`run concurrency A + B: RED(…)`)
+            rs |= {"run:" + x for m in re.finditer(r"(?m)^  run concurrency (\S+) \+ (\S+): RED", runs_out)
+                   for x in m.groups()}
             out[s] = rs or {"run:?"}
         elif s == "waste":
             ws = {"waste:" + m.group(1) + " " + m.group(2)
@@ -255,6 +262,26 @@ def unit_stage(u: str) -> str:
         if u.startswith(p + ":"):
             return p
     return u
+
+
+def times(dir_: str, s12: str, runs_out: str) -> list[str]:
+    """The TIMES and ROWS lines of a convergence: read from the standing's own time line and runs.py's own clock
+    (never the read-set store's mtimes, which concurrent judges write)."""
+    try:
+        st = open(os.path.join(dir_, f"{s12}.times"), encoding="utf-8").read().strip()
+    except OSError:
+        st = "stages: (none: standing.sh wrote no time line)"
+    rows = sorted(((int(n), r, w) for r, n, w in re.findall(r"(?m)^  time (\S+): (\d+) s \(([^)]*)\)$", runs_out)),
+                  reverse=True)
+    wall = re.search(r"(?m)^  runs wall: (\d+) s", runs_out)
+    conc = re.search(r"(?m)^  concurrency: (.*)$", runs_out)
+    carried = re.findall(r"(?m)^  carry (\S+): carried", runs_out)
+    daily = re.findall(r"(?m)^  daily (\S+): ", runs_out)
+    return [f"TIMES {st}",
+            f"ROWS wall {wall.group(1) + 's' if wall else '?'}; {conc.group(1) if conc else 'concurrency: ?'}; "
+            f"ran {len(rows)}: " + (", ".join(f"{r} {n}s ({w})" for n, r, w in rows) or "none")
+            + f"; carried {len(carried)}" + (": " + ", ".join(carried) if carried else "")
+            + f"; daily {len(daily)}" + (": " + ", ".join(daily) if daily else "")]
 
 
 def record(a) -> int:
@@ -337,7 +364,7 @@ def record(a) -> int:
             f"landings={len(cs)} "
             f"(fast {nf}, full {len(cs) - nf}) => {verdict} reds={len(reds)} fixed={len(fixed)} "
             f"at {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(now))}")
-    text = "\n".join([head] + out + fixed + reverts)
+    text = "\n".join([head] + times(a.dir, s12, runs_out) + out + fixed + reverts)
     print(text)
     with open(os.path.join(a.dir, "convergence.log"), "a", encoding="utf-8") as fh:
         fh.write(text + "\n")

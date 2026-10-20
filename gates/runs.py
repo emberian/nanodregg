@@ -86,17 +86,46 @@ its reach and by a change its read-set touched; a row with none falls to the sta
 when that key is byte-identical on the candidate. Standing (--standing) re-traces every row and reads
 RED when a fresh read-set exceeds the stored one under an equal key, and reports reads outside the
 tree (F2; RED is GATES-20c).
+CONCURRENT ROWS (GATES-20g; Ember 10-21: the convergence's 46 min were ~43 min of rows run one after another).
+With --slots-dir/--slots N (pre-push's full judge and standing) the rows run concurrently, at most N at once in
+this tree: the caller's own place (a judge's gate slot; standing's lock) runs one row, and each further row
+BORROWS a free judge slot (gate-lib.sh gate_slot's flock, taken non-blocking) for as long as that one row runs,
+then gives it back. Nothing is borrowed while a lander waits for a slot (gate_slot keeps
+nanodregg-slot-wait/<its pid> while it waits), so a lander that arrives waits at most for the borrowed slot's
+current row to end; the box never runs more judges' work than its N slots plus standing, as before. A row's own
+runs stay in order, one at a time; its lines are printed in row order whatever order the rows finished in, each
+row followed by `  time ROW: N s (own|borrowed slot K|alone)` read by this runner's own clock.
+Concurrency needs the tracer, which shows what each row WROTE (readset WR and O): two rows that share a scratch
+are RED (`run concurrency A + B: RED(shared scratch …)`): one writes a path the other writes, removes or renames
+the other's, or writes inside a directory the other made; or one writes a path the other reads (touched or
+stat'ed), or an entry of a directory it lists (getdents; host-file-sim's .lake/host-file-sim/run-<random> is safe beside a
+second such writer only while neither lists, cleans or reads the other's); whether or not they overlapped in
+time this once, since the next schedule may overlap them. A row run now is checked against every row run
+now and every carried row whose record holds what it wrote. A row whose writes cannot be seen never runs beside another: a
+`cargo-untraced:` row, every row of an untraced judge, and a row whose last run entered a mount namespace of its
+own (readset NS: a sandbox names paths in its own view) run alone after the rest; a row that ran beside others
+and turned out unseen (no read-set, or NS), and every row that ran beside it, are run again alone, and those runs
+are their verdicts (`  alone ROW: …`). A concurrent red is a red like any other.
+THE CARRY (GATES-20l; standing: --reuse the previous standing's record, --record this one's, --daily SECONDS):
+a row whose stored record's traced key is byte-identical on this tree (every path it read, stat'ed, listed or
+exec'd, its row line, its waste rows, the runner and the tools) is not run; its lines and WASTE lines are carried
+(`  carry ROW: carried (key …, run at SHA TIME)`). A record whose run is older than --daily is not carried
+(`  daily ROW: re-run …`): every row runs at least daily, since the re-trace check, which only a run can make, is
+what catches a narrowed record.
 Prints one `  run <exe> <args>: <verdict>` line per run and
 `runs: ok|RED|KILLED(load)|UNREAD(timeout)|INCOMPLETE`; exits 0, 1, 76 (killed or timed out twice,
 nothing red: not judged) or 3 (incomplete, nothing red, killed or timed out).
 """
 import argparse
+import concurrent.futures as cf
+import fcntl
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 
 import readset
@@ -302,7 +331,7 @@ def summary(out: str) -> tuple[int, int] | None:
 
 
 def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bindir: str,
-        drives: list[str] = ()) -> tuple[str, str]:
+        drives: list[str] = (), sets: list | None = None) -> tuple[str, str]:
     """One run: (its output, its verdict). `bindir` is where the Lean exes are taken from (a cargo
     row's control passes an empty directory and no `drives`); a cargo row's `drives` must be there."""
     shutil.rmtree(fresh, ignore_errors=True)
@@ -379,20 +408,21 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         if sk:
             v = f"{'RED' if STANDING_RUN['on'] else 'INCOMPLETE'}(skipped: {len(sk)}, first: {sk[0][:200]})"
     shutil.rmtree(fresh, ignore_errors=True)
+    sets = [] if sets is None else sets
     if traced:
-        TRACING["sets"].append(readset.reduce(tr, t.root))
+        sets.append(readset.reduce(tr, t.root))
         try:
             os.remove(tr)
         except FileNotFoundError:
             pass
     else:
-        TRACING["sets"].append(None)
+        sets.append(None)
     return out, v
 
 
-# GATES-20: the strace this judge traces with (None: untraced, every key static), and the read-sets of
-# the runs of the row being judged, one per run (None for a run with no read-set).
-TRACING: dict = {"strace": None, "sets": []}
+# GATES-20: the strace this judge traces with (None: untraced, every key static). A row's runs' read-sets are
+# the row's own list (Row.sets, one per run, None for a run with no read-set): rows run concurrently (GATES-20g).
+TRACING: dict = {"strace": None}
 TRACER = re.compile(r"(?m)^strace: .*$")
 
 
@@ -432,7 +462,10 @@ def valid_readset(t: tree.Tree, exe: str, store: str, gitdir: str, base: str, li
     reach_mods = reach_of(t, exe)
     for k, rec in readset.stored(store, exe)[:3]:
         rs, src = rec.get("readset"), rec.get("tree")
-        if not rs or not src or rec.get("line") != line:
+        if not rs or not src or rec.get("line") != line or rs.get("NS") is not False:
+            # GATES-20g: a run inside a mount namespace of its own named what it read in that namespace's view,
+            # so its read-set may miss a box path it read through a mount; a record from before GATES-20g does
+            # not say: neither narrows (the static rules apply)
             continue
         diff = git_out(gitdir, "diff", "--name-only", src, base)
         if diff is None:
@@ -526,18 +559,23 @@ def traced_selected(t: tree.Tree, changed: list[str], rows: dict, store: str, gi
 
 
 def run_once_more(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bindir: str,
-                  drives: list[str] = ()) -> tuple[str, str]:
-    """`run`, and once more when it timed out or its tracer failed: a second one stays UNREAD (GATES-16)."""
-    out, v = run(t, exe, args, passline, fresh, bindir, drives)
+                  drives: list[str] = (), sets: list | None = None, row: "Row | None" = None) -> tuple[str, str]:
+    """`run`, and once more when it timed out or its tracer failed: a second one stays UNREAD (GATES-16).
+    `row` collects what would be printed (rows run concurrently and print in row order); None prints now."""
+    out, v = run(t, exe, args, passline, fresh, bindir, drives, sets)
     for kind in ("UNREAD(timeout", "UNREAD(tracer"):
         if v.startswith(kind):
-            sys.stderr.write(out + f"\n[runs.py] {exe} {' '.join(args)}: {v}; re-running once\n")
-            out, v = run(t, exe, args, passline, fresh, bindir, drives)
+            msg = out + f"\n[runs.py] {exe} {' '.join(args)}: {v}; re-running once\n"
+            row.err.append(msg) if row else sys.stderr.write(msg)
+            if sets:
+                sets.pop()   # the failed run's read-set is not the row's: the re-run's is
+            out, v = run(t, exe, args, passline, fresh, bindir, drives, sets)
             if v.startswith(kind):
                 v = kind + " twice" + v[len(kind):]
             elif kind == "UNREAD(tracer":
                 # standing counts these (`flakes=N`): a tracer that keeps failing is the box's to fix
-                print(f"  flake {exe} {' '.join(args)}: the tracer failed once; the re-run read {v[:80]}", flush=True)
+                line = f"  flake {exe} {' '.join(args)}: the tracer failed once; the re-run read {v[:80]}"
+                row.say(line) if row else print(line, flush=True)
             break
     return out, v
 
@@ -563,6 +601,132 @@ def control_reads_red(exe: str, v: str, out: str) -> str | None:
     return None
 
 
+class Row:
+    """One row's judgement, kept apart so rows can run concurrently (GATES-20g): its printed lines (printed in
+    row order once every row is done), its runs' stderr, verdicts, WASTE lines, record lines and read-set, its
+    wall time by this runner's clock and where it ran."""
+
+    def __init__(self, exe: str) -> None:
+        self.exe, self.out, self.err, self.results, self.lines = exe, [], [], [], []
+        self.waste, self.record, self.sets, self.rs = [], [], [], None
+        self.ran, self.wall, self.start, self.end, self.where = False, 0.0, 0.0, 0.0, "own"
+
+    def say(self, line: str) -> None:
+        self.out.append(line)
+
+    def report(self, exe: str, args: list[str], v: str, out: str, tag: str = "") -> None:
+        self.err.append(out)
+        name = f"{exe} {' '.join(args)}{tag}"
+        self.say(f"  run {name}: {v}")
+        self.results.append(v)
+        self.lines.append((name, v))
+        # Every failure line of a red run is its own key (`    red RUN: LINE`): pre-push calls a red
+        # PRE-EXISTING only line by line, so a new failure behind an old one on the same exe is new.
+        if v.startswith("RED"):
+            for l in redlines(exe, out)[:40]:
+                self.say(f"    red {name}: {l}")
+
+
+class Slots:
+    """GATES-20g: the box's judge slots (gate-lib.sh gate_slot: <common>/nanodregg-gate-K.flock, K = 1..N) as row
+    tokens. The caller already holds its own place; a further row borrows a slot whose flock is free (non-blocking)
+    and gives it back when the row ends. Nothing is borrowed while a lander waits for a slot: gate_slot keeps
+    <common>/nanodregg-slot-wait/<its pid> while it waits (a dead pid's file is ignored), so a waiting lander waits
+    at most for one borrowed row to end. The descriptor is os.open's, not inheritable (PEP 446): no run's child
+    keeps a borrowed slot after its row."""
+
+    def __init__(self, common: str, n: int) -> None:
+        self.common, self.n = common, n
+
+    def lander_waits(self) -> bool:
+        d = os.path.join(self.common, "nanodregg-slot-wait")
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return False
+        for name in names:
+            if name.isdigit():
+                try:
+                    os.kill(int(name), 0)
+                    return True
+                except ProcessLookupError:
+                    continue
+                except PermissionError:
+                    return True
+        return False
+
+    def borrow(self) -> tuple[int, int] | None:
+        if self.lander_waits():
+            return None
+        for k in range(1, self.n + 1):
+            try:
+                fd = os.open(os.path.join(self.common, f"nanodregg-gate-{k}.flock"), os.O_WRONLY | os.O_CREAT, 0o664)
+            except OSError:
+                continue
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return k, fd
+            except OSError:
+                os.close(fd)
+        return None
+
+    @staticmethod
+    def give_back(tok: tuple[int, int]) -> None:
+        os.close(tok[1])
+
+
+def collisions(rs: dict[str, dict]) -> list[tuple[str, str, str]]:
+    """GATES-20g: (row A, row B, what) for every pair of rows that cannot run beside each other (readset WR, O):
+    A writes a path B writes, or one holding B's write or B's own directory (a removal or rename of it), or a path
+    inside a directory B made; or A writes a path B reads (touched, compiled from or stat'ed: the path or one below
+    it), or adds or removes an entry of a directory B lists. Two rows each making their own directory under one
+    shared parent do not collide (neither can see the other), unless one lists, removes or writes into the other's.
+    A removal (RM) reaches every write of the other row below it, its own directories' contents included.
+    A row with no write record (traced before GATES-20g) is not compared."""
+    under = readset.under
+    out = []
+    names = sorted(e for e in rs if rs[e] is not None and "WR" in rs[e])
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            hit = None
+            for x, y in ((a, b), (b, a)):
+                wx, ox, wy, oy = rs[x]["WR"], rs[x].get("O", []), rs[y]["WR"], rs[y].get("O", [])
+                reads = set(rs[y].get("T", [])) | set(rs[y].get("C", [])) | set(rs[y].get("K", []))
+                lists = set(rs[y].get("LD", []))
+                q = next(((d, v) for d in rs[x].get("RM", []) for v in list(wy) + list(oy) if under(v, d)), None)
+                if q:
+                    hit = f"{x} removes {q[0]}, which holds {y}'s {q[1]}"
+                    break
+                for w in wx:
+                    q = next((v for v in list(wy) + list(oy) if under(v, w)), None) or                         next((o for o in oy if under(w, o) and w != o), None)
+                    if q:
+                        hit = f"{x} writes {w} and {y} writes {q}"
+                        break
+                    q = next((r for r in sorted(reads) if under(r, w)), None)
+                    if q:
+                        hit = f"{x} writes {w}, which {y} reads ({q})"
+                        break
+                for o in ([] if hit else ox):
+                    q = next((r for r in sorted(reads) if under(r, o) and r != o), None)
+                    if q:
+                        hit = f"{x} makes {o}, inside which {y} reads ({q})"
+                        break
+                    q = next((d for d in sorted(lists) if under(d, o)), None)
+                    if q:
+                        hit = f"{x} makes {o} and writes inside it, and {y} lists {q}"
+                        break
+                for w in ([] if hit else list(wx) + list(ox)):
+                    d = os.path.dirname(w) or "."
+                    if d in lists:
+                        hit = f"{x} writes {w}, an entry of {d}, which {y} lists"
+                        break
+                if hit:
+                    break
+            if hit:
+                out.append((a, b, hit))
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("root")
@@ -580,6 +744,9 @@ def main() -> int:
     ap.add_argument("--base", help="GATES-20: the parent commit the selection is against")
     ap.add_argument("--base-table", help="GATES-20: the parent's runs.tsv (a changed row line selects its row)")
     ap.add_argument("--tree-oid", help="GATES-20: the tree object judged here (a stored read-set names it)")
+    ap.add_argument("--slots-dir", help="GATES-20g: the git common dir, where the judge slots' flocks are")
+    ap.add_argument("--slots", type=int, default=1, help="GATES-20g: the box's judge slot count N: at most N rows at once")
+    ap.add_argument("--daily", type=int, help="GATES-20l (standing): a record older than this many seconds is not carried")
     a = ap.parse_args()
     t = tree.read(a.root)
     STANDING_RUN["on"] = a.standing
@@ -639,20 +806,8 @@ def main() -> int:
             os.path.join(t.root, exe.split(":")[1], "tests", exe.split(":")[2] + ".rs"))) and (
             not exe.startswith("script:") or os.path.isfile(os.path.join(t.root, exe[len("script:"):])))
 
-    lines: list[tuple[str, str]] = []
-
-    def report(exe: str, args: list[str], v: str, out: str, tag: str = "") -> None:
-        sys.stderr.write(out)
-        name = f"{exe} {' '.join(args)}{tag}"
-        print(f"  run {name}: {v}")
-        results.append(v)
-        lines.append((name, v))
-        # Every failure line of a red run is its own key (`    red RUN: LINE`): pre-push calls a red
-        # PRE-EXISTING only line by line, so a new failure behind an old one on the same exe is new.
-        if v.startswith("RED"):
-            for l in redlines(exe, out)[:40]:
-                print(f"    red {name}: {l}")
-
+    head = Row("")   # the carried rows' lines and the cargo reader's control, printed before the rows run now
+    now = time.time()
     todo = sorted(e for e in want & set(rows) if rows[e][0])
     keys = dict(l.rstrip("\n").split("\t", 1) for l in open(a.keys, encoding="utf-8") if "\t" in l) if a.keys else {}
     prev = {}
@@ -663,45 +818,70 @@ def main() -> int:
                 prev[f[0][4:]] = (f[1], json.loads(f[3]))
     record = open(a.record, "a", encoding="utf-8") if a.record else None
     reused = set()
+    word = "carry" if a.standing else "reuse"
     for exe in todo:
         k = keys.get("run:" + exe)
         if exe in prev and prev[exe][0].startswith("t:"):
             # GATES-20: the previous judge's own read-set for this verdict, keyed on this tree
             rs0, line = prev[exe][1].get("readset"), row_line(t.root, a.table, exe)
             k = "t:" + readset.key(rs0, t.root, line) if rs0 and line else None
-        if exe in prev and k is not None and prev[exe][0] == k and mine(exe):
+        at = prev[exe][1].get("at") if exe in prev else None
+        if exe in prev and prev[exe][0].startswith("t:") and (prev[exe][1].get("readset") or {}).get("NS") is not False:
+            head.say(f"  {word} {exe}: re-run (its record was traced inside a mount namespace, or before GATES-20g: "
+                     f"what it read there is not keyed)")
+            continue
+        if exe in prev and k is not None and prev[exe][0] == k and mine(exe) and a.daily is not None and (
+                not isinstance(at, (int, float)) or now - at > a.daily):
+            # GATES-20l: every row runs at least daily (the re-trace check, which only a run makes, is what
+            # catches a narrowed record); a record that does not say when it ran is as old as can be
+            head.say(f"  daily {exe}: re-run (its key is byte-identical, but its last run was "
+                     + (f"{(now - at) / 3600:.1f} h ago" if isinstance(at, (int, float)) else "at an unrecorded time")
+                     + f"; every row runs at least every {a.daily / 3600:.0f} h)")
+        elif exe in prev and k is not None and prev[exe][0] == k and mine(exe):
             reused.add(exe)
             for name, v in prev[exe][1]["lines"]:
-                print(f"  run {name}: {v}")
-                results.append(v)
+                head.say(f"  run {name}: {v}")
+                head.results.append(v)
             waste += prev[exe][1]["waste"]
-            print(f"  reuse {exe}: reused (key {k[:16]}, byte-identical to the previous judge's)")
-            record and record.write(f"run:{exe}\t{k}\treused\t{json.dumps(prev[exe][1])}\n")
+            if a.standing:
+                head.say(f"  carry {exe}: carried (key {k[:16]}, byte-identical to its run at "
+                         f"{str(prev[exe][1].get('tree', '?'))[:12]} "
+                         f"{time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(at)) if isinstance(at, (int, float)) else '?'})")
+            else:
+                head.say(f"  reuse {exe}: reused (key {k[:16]}, byte-identical to the previous judge's)")
+            head.record.append(f"run:{exe}\t{k}\treused\t{json.dumps(prev[exe][1])}\n")
         elif exe in prev:
-            print(f"  reuse {exe}: re-run (key changed)")
+            head.say(f"  {word} {exe}: re-run (key changed)")
     todo = [e for e in todo if e not in reused]
     # The cargo reader's own control: whenever a cargo row runs, some `nobin RED` control runs first.
     cargo = [e for e in todo if e.startswith(CARGO)]
     if cargo and not any(rows[e][2] == "nobin RED" for e in cargo):
         first = next((e for e in sorted(rows) if e.startswith(CARGO) and rows[e][2] == "nobin RED"), None)
         if first is None:
-            report("cargo", [], f"RED(harness: no `nobin RED` row proves the cargo reader)", "", " (control)")
+            head.report("cargo", [], f"RED(harness: no `nobin RED` row proves the cargo reader)", "", " (control)")
         elif mine(first):
-            TRACING["sets"] = []
-            out, v = run_once_more(t, first, [], "exit 0", os.path.join(scratch, "reader"), nobin)
-            report(first, [], control_reads_red(first, v, out) or "ok(known-red control read red)", out, " (reader control)")
-    for exe in todo:
+            out, v = run_once_more(t, first, [], "exit 0", os.path.join(scratch, "reader"), nobin, row=head)
+            head.report(first, [], control_reads_red(first, v, out) or "ok(known-red control read red)", out, " (reader control)")
+
+    def judge_row(exe: str) -> Row:
+        o = Row(exe)
         runs, passline, control = rows[exe]
-        lines.clear()
-        TRACING["sets"] = []
-        w0 = len(waste)
         if not mine(exe):
             for args in runs:
-                print(f"  run {exe} {' '.join(args)}: NOT RUN(not in this tree's own table)")
-            continue
+                o.say(f"  run {exe} {' '.join(args)}: NOT RUN(not in this tree's own table)")
+            return o
+        o.ran, o.start = True, time.monotonic()
+        try:
+            judge_runs(o, exe, runs, passline, control)
+        finally:
+            o.end = time.monotonic()
+            o.wall = o.end - o.start
+        return o
+
+    def judge_runs(o: Row, exe: str, runs, passline: str, control) -> None:
         # The known-red control runs FIRST: a runner that cannot read a failure has no verdict to read.
         if exe.startswith(CARGO):
-            out, v = run_once_more(t, exe, [], passline, os.path.join(scratch, f"{exe}-control"), nobin)
+            out, v = run_once_more(t, exe, [], passline, os.path.join(scratch, f"{exe}-control"), nobin, sets=o.sets, row=o)
             if control == "nobin RED":
                 bad = control_reads_red(exe, v, out)
             else:   # `nobin ok`: declared to run no exe, so it must pass with none
@@ -709,38 +889,41 @@ def main() -> int:
                     f"RED(harness: declared `nobin ok` but with no Lean binaries it read {v})"
             cv, cargs = (bad or ("ok(known-red control read red)" if control == "nobin RED" else v)), []
         else:
-            out, v = run_once_more(t, exe, control, passline, os.path.join(scratch, f"{exe}-control"), bindir)
+            out, v = run_once_more(t, exe, control, passline, os.path.join(scratch, f"{exe}-control"), bindir, sets=o.sets, row=o)
             bad = control_reads_red(exe, v, out)
             cv, cargs = (bad or "ok(known-red control read red)"), control
         # A control's WASTE lines are not measurements (it plants); they are never collected.
-        report(exe, cargs, cv if not v.startswith(("KILLED", "UNREAD", "ABSENT")) or bad else v, out, " (control)")
+        o.report(exe, cargs, cv if not v.startswith(("KILLED", "UNREAD", "ABSENT")) or bad else v, out, " (control)")
         if bad or v.startswith(("KILLED", "UNREAD", "ABSENT")):
             for args in runs:
-                print(f"  run {exe} {' '.join(args)}: UNREAD(its known-red control did not read red)")
-            continue
+                o.say(f"  run {exe} {' '.join(args)}: UNREAD(its known-red control did not read red)")
+            o.rs = readset.union(o.sets) if TRACING["strace"] and not exe.startswith("cargo-untraced:") else None
+            return
         for k, args in enumerate(runs):
             out, v = run_once_more(t, exe, args, passline, os.path.join(scratch, f"{exe}-{k}"), bindir,
-                         args if exe.startswith(CARGO) else ())
-            waste += [l for l in out.splitlines() if l.startswith("WASTE ")]
-            report(exe, [] if exe.startswith(CARGO) else args, v, out)
-        ok_all = bool(lines) and all(v.startswith("ok") for _, v in lines)
-        rs = readset.union(TRACING["sets"]) if TRACING["strace"] else None
-        if rs is not None:
-            # GATES-20e: the waste rows this row measured, a judge input no trace can show
-            rs["W"] = sorted({"\t".join(l.split()[1:3]) for l in waste[w0:] if len(l.split()) >= 4})
+                                   args if exe.startswith(CARGO) else (), sets=o.sets, row=o)
+            o.waste += [l for l in out.splitlines() if l.startswith("WASTE ")]
+            o.report(exe, [] if exe.startswith(CARGO) else args, v, out)
+        ok_all = bool(o.lines) and all(v.startswith("ok") for _, v in o.lines)
         if exe.startswith("cargo-untraced:"):
             rs = None   # untraced by its row's kind: static selection and the static key, never a read-set
-        elif TRACING["strace"] and rs is None:
+        else:
+            rs = readset.union(o.sets) if TRACING["strace"] else None
+        o.rs = rs
+        if rs is not None:
+            # GATES-20e: the waste rows this row measured, a judge input no trace can show
+            rs["W"] = sorted({"\t".join(l.split()[1:3]) for l in o.waste if len(l.split()) >= 4})
+        if TRACING["strace"] and rs is None and not exe.startswith("cargo-untraced:"):
             # GATES-20d: a run whose trace could not be read: the static rules apply to this row, and
             # standing's re-trace check cannot run on it (standing counts these lines: INCOMPLETE).
-            print(f"  untraced {exe}: no read-set ({readset.WHY[0] if readset.WHY else 'a run held none'}); "
+            o.say(f"  untraced {exe}: no read-set ({readset.why_none() or 'a run held none'}); "
                   f"the static rules apply")
         line = row_line(t.root, a.table, exe)
         tk = readset.key(rs, t.root, line) if rs and line else None
         if rs and a.traces:
-            o = {c: n for c, n in rs["outside"].items() if c in ("tmp", "home")}
-            if o:
-                print(f"  outside {exe}: " + ", ".join(f"{c} {n}" for c, n in sorted(o.items()))
+            oc = {c: n for c, n in rs["outside"].items() if c in ("tmp", "home")}
+            if oc:
+                o.say(f"  outside {exe}: " + ", ".join(f"{c} {n}" for c, n in sorted(oc.items()))
                       + " (F2: reported; RED is GATES-20c)")
             # The stored read-sets VALID on this tree: each one's own key, re-computed here, equals the key
             # it was stored under (a run on this tree consults exactly what it consulted there).
@@ -751,17 +934,120 @@ def main() -> int:
                 for rec in same:
                     bad = readset.subset_violation(rs, rec.get("readset") or {"T": [], "L": [], "X": []}, t.root)
                     if bad:
-                        report(exe, [], f"RED(trace: the run {bad}, which a stored read-set valid on this tree "
-                                        f"omits: a forged or narrowed record, a nondeterministic run, or an input no "
-                                        f"key covers)", "", " (re-trace)")
+                        o.report(exe, [], f"RED(trace: the run {bad}, which a stored read-set valid on this tree "
+                                          f"omits: a forged or narrowed record, a nondeterministic run, or an input no "
+                                          f"key covers)", "", " (re-trace)")
                         ok_all = False
                         break
             if ok_all and tk and not same:
                 readset.store(a.traces, exe, tk, a.tree_oid or "", line, rs)
-        if record and ok_all and tk:
-            record.write(f"run:{exe}\tt:{tk}\trun\t{json.dumps({'lines': lines, 'waste': waste[w0:], 'readset': rs})}\n")
-        elif record and keys.get("run:" + exe) and ok_all:
-            record.write(f"run:{exe}\t{keys['run:' + exe]}\trun\t{json.dumps({'lines': lines, 'waste': waste[w0:]})}\n")
+        ran = {"at": int(time.time()), "tree": a.tree_oid or ""}
+        if ok_all and tk:
+            o.record.append(f"run:{exe}\tt:{tk}\trun\t{json.dumps({'lines': o.lines, 'waste': o.waste, 'readset': rs, **ran})}\n")
+        elif keys.get("run:" + exe) and ok_all:
+            o.record.append(f"run:{exe}\t{keys['run:' + exe]}\trun\t{json.dumps({'lines': o.lines, 'waste': o.waste, **ran})}\n")
+
+    # GATES-20g: at most N rows at once, this judge's own place plus free judge slots borrowed per row. A row with
+    # no read-set (a cargo-untraced row; every row of an untraced judge) runs alone, after the rest.
+    cap = a.slots if a.slots_dir and a.slots > 1 and TRACING["strace"] else 1
+    # the schedule's memory (never a verdict): each row's last wall, and whether its last run entered a mount
+    # namespace of its own (readset NS: such a row runs alone, so it is scheduled alone from the start)
+    walls_p = os.path.join(a.traces, "_walls.json") if a.traces else None
+    try:
+        walls = json.load(open(walls_p, encoding="utf-8")) if walls_p and os.path.isfile(walls_p) else {}
+        walls = {e: (w if isinstance(w, dict) else {"wall": w}) for e, w in walls.items()}
+    except (OSError, ValueError, AttributeError):
+        walls = {}
+    alone = [e for e in todo if cap == 1 or e.startswith("cargo-untraced:") or walls.get(e, {}).get("ns")]
+    done: dict[str, Row] = {}
+    borrowed, t_all = 0, time.monotonic()
+    together = [e for e in todo if e not in alone]
+    if together:
+        slots = Slots(a.slots_dir, a.slots)
+        # the longest row first by its last wall (a schedule, never a verdict); a row never timed goes first
+        pending = sorted(together, key=lambda e: (-float(walls.get(e, {}).get("wall", 1e9)), e))
+        running: dict = {}
+        own_free = True
+        with cf.ThreadPoolExecutor(max_workers=cap) as ex:
+            while pending or running:
+                while pending and len(running) < cap:
+                    tok = None
+                    if not own_free:
+                        tok = slots.borrow()
+                        if tok is None:
+                            break
+                        borrowed += 1
+                    e = pending.pop(0)
+                    own_free = own_free and tok is not None
+                    running[ex.submit(judge_row, e)] = (e, tok)
+                fin, _ = cf.wait(list(running), timeout=5, return_when=cf.FIRST_COMPLETED)
+                for fu in fin:
+                    e, tok = running.pop(fu)
+                    if tok is None:
+                        own_free = True
+                    else:
+                        Slots.give_back(tok)
+                    done[e] = fu.result()   # a row that crashed crashes the runner: no verdict, never ok
+                    done[e].where = "own" if tok is None else f"borrowed slot {tok[0]}"
+        # A row that ran beside others with no read-set wrote what no one can see: it, and every row that ran
+        # beside it, are run again alone, and those runs are their verdicts.
+        def met(x: str, y: str) -> bool:
+            return x != y and done[x].ran and done[y].ran and done[x].start < done[y].end and done[y].start < done[x].end
+        def unseen(e: str) -> str | None:
+            rs = done[e].rs
+            return "no read-set" if rs is None else "a mount namespace of its own" if rs.get("NS") else None
+        blind = [e for e in together if done[e].ran and unseen(e) and any(met(e, x) for x in together)]
+        again = {e: (f"it ran beside others with {unseen(e)}: what it wrote is unknown" if e in blind else
+                     f"it ran beside {', '.join(sorted(b for b in blind if met(b, e)))}, whose writes are unknown")
+                 for e in sorted(set(blind) | {x for b in blind for x in together if met(b, x)})}
+        for e, why in again.items():
+            o = judge_row(e)
+            o.out.insert(0, f"  alone {e}: re-run with no other row running ({why}); this run is its verdict")
+            o.where = "alone"
+            done[e] = o
+    for e in alone:
+        done[e] = judge_row(e)
+        done[e].where = "alone" if cap > 1 else "own"
+    print(f"  concurrency: at most {cap} row(s) at once; {len(todo)} rows run"
+          + (f" ({len(alone)} alone)" if cap > 1 else "") + ", "
+          f"{borrowed} on a borrowed judge slot, {len(reused)} {'carried' if a.standing else 'reused'}"
+          + ("" if cap > 1 else " (one row at a time: " + ("no --slots" if not (a.slots_dir and a.slots > 1) else "untraced") + ")"))
+    for l in head.out:
+        print(l)
+    sys.stderr.write("".join(head.err))
+    results += head.results
+    record and record.write("".join(head.record))
+    for exe in todo:
+        o = done[exe]
+        sys.stderr.write("".join(o.err))
+        for l in o.out:
+            print(l)
+        if o.ran:
+            print(f"  time {exe}: {o.wall:.0f} s ({o.where})")
+        results += o.results
+        waste += o.waste
+        record and record.write("".join(o.record))
+    # GATES-20g: two rows that share a scratch, or one writing what the other reads, are RED: every pair of rows
+    # run now, and each row run now against every carried row whose record says what it wrote.
+    wr = {e: done[e].rs for e in todo if done[e].rs is not None}
+    pairs = collisions({**wr, **{e: prev[e][1].get("readset") for e in reused}})
+    for x, y, what in pairs:
+        if x in wr or y in wr:
+            v = (f"RED(shared scratch: {what}; rows run concurrently (GATES-20g), so each keeps its scratch in its own "
+                 f"{{fresh}} or a directory no other row writes or reads)")
+            print(f"  run concurrency {x} + {y}: {v}")
+            results.append(v)
+    print(f"  runs wall: {time.monotonic() - t_all:.0f} s ({len(todo)} rows run)")
+    if walls_p:
+        walls.update({e: {"wall": round(done[e].wall, 1), "ns": bool(done[e].rs and done[e].rs.get("NS"))}
+                      for e in todo if done[e].ran})
+        try:
+            tmpw = f"{walls_p}.{os.getpid()}"
+            with open(tmpw, "w", encoding="utf-8") as fh:
+                json.dump(walls, fh)
+            os.replace(tmpw, walls_p)
+        except OSError:
+            pass
     record and record.close()
     shutil.rmtree(nobin, ignore_errors=True)
     if a.waste_out:

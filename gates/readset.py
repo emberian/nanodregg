@@ -1,6 +1,7 @@
 """gates/readset.py — traced read-sets (GATES-20; design redregg/work/GATES-20-DESIGN.md, ROOT F1/F2).
 
-Every verdict run executes under `strace -f -qq -y --seccomp-bpf -e trace=%file,execve,getdents64,clone,clone3,fork,vfork`
+Every verdict run executes under
+`strace -f -qq -y --seccomp-bpf -e trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir`
 (wrap). Its trace is reduced to a READ-SET over the judged tree (reduce):
   T = every tree path the run touched by name: opened, exec'd, probed and absent (ENOENT is a read of
       absence), and stat'ed, accessed or readlink'd BY CARGO: cargo's fingerprint compares a source's
@@ -17,6 +18,16 @@ Every verdict run executes under `strace -f -qq -y --seccomp-bpf -e trace=%file,
       own fingerprint stats every source the crate's dep-info lists, so the sources stay in T).
   L = every tree directory it listed (an add or a remove in it can move the run);
   X = every binary under .lake/build/bin it exec'd.
+  WR, O, NS = what the run WROTE (GATES-20g; never keyed: a write is no input), outside .lake/runs/ and
+      .lake/cargo-target/, in the tree and under /tmp, /var/tmp and the home directory (an outside path is kept
+      absolute, a tree path relative): O the outermost directories it MADE (mkdir = 0); WR every other path it
+      created, opened for writing, truncated, removed, renamed or linked (either name) or bound an AF_UNIX socket
+      at, not under a directory of O (what lies there is its own); RM the outermost paths it removed or renamed
+      away (unlink, rmdir, a rename's source), its own directories' contents included (a row that empties a
+      directory it made may empty another's inside it); LD every tree directory it LISTED (getdents64; L also
+      holds a directory it only opened, and omits its own: L is an input set, LD a collision set). NS: some process of the run entered a mount
+      namespace of its own (clone/unshare CLONE_NEWNS, setns): the paths it names are its namespace's view, not
+      the box's, so its writes are not placed, and runs.py never runs such a row beside another.
   W = the waste rows (`op<TAB>metric`) the run MEASURED (its `WASTE` lines; runs.py adds it): no trace
       shows gates/waste.tsv, because the JUDGE reads it, not the run, yet its ceilings decide the row's
       verdict (GATES-20e, PERF-4's finding at 41e041f). The key holds each W row's ceiling and measured.
@@ -40,6 +51,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 
 VERSION = b"GATES-20 traced key v4 (GATES-22: K, the stat-only paths, keyed by kind)"
 WASTE = "gates/waste.tsv"
@@ -64,7 +76,8 @@ def available() -> str | None:
 
 
 def wrap(strace: str, argv: list[str], out: str) -> list[str]:
-    return [strace, "-f", "-qq", "-y", "--seccomp-bpf", "-e", "trace=%file,execve,getdents64,clone,clone3,fork,vfork",
+    return [strace, "-f", "-qq", "-y", "--seccomp-bpf", "-e",
+            "trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir",
             "-e", "signal=none",
             "-s", "4096", "-o", out] + list(argv)
 
@@ -95,13 +108,44 @@ STATLIKE = ("stat", "lstat", "newfstatat", "fstatat64", "statx", "access", "facc
             "readlink", "readlinkat", "stat64", "lstat64")
 
 
-# Why the last reduce held no read-set (runs.py prints it: a trace it cannot read is never silent).
-WHY: list[str] = []
+# Why the last reduce held no read-set (runs.py prints it: a trace it cannot read is never silent). One per
+# thread: rows are judged concurrently (GATES-20g), and one row's reason must never be printed for another's.
+_TLS = threading.local()
+
+
+def why_none() -> str | None:
+    return getattr(_TLS, "why", None)
 
 
 def _none(why: str) -> None:
-    WHY[:] = [why]
+    _TLS.why = why
     return None
+
+
+# GATES-20g: the calls that write the path they name. An open writes when its flags say so; a mkdir makes a
+# directory only when it returns 0; a bind writes only an AF_UNIX path (an abstract name, `@…`, is no file).
+WRITES = ("unlink", "unlinkat", "rmdir", "rename", "renameat", "renameat2", "link", "linkat", "symlink",
+          "symlinkat", "truncate", "creat", "mknod", "mknodat")
+OPENS = ("open", "openat", "openat2")
+WFLAGS = re.compile(r"\bO_(?:WRONLY|RDWR|CREAT|TRUNC)\b")
+PAIR = re.compile(r'(?:AT_FDCWD|-?\d+)<((?:[^>\\]|\\.)*)>,\s*"((?:[^"\\]|\\.)*)"')
+SUN = re.compile(r'sun_path="((?:[^"\\]|\\.)*)"')
+
+
+def write_key(path: str, root: str) -> str | None:
+    """A written absolute path as WR/O hold it: tree-relative inside the tree, absolute under /tmp, /var/tmp or the
+    home directory; None for the run's own {fresh} (.lake/runs/), cargo's cache (.lake/cargo-target/, under
+    cargo's own lock), the toolchain and the system."""
+    path = os.path.normpath(path)
+    if path == root or path.startswith(root + "/"):
+        r = os.path.relpath(path, root)
+        return None if r == "." or r.startswith(EXCL) or r + "/" in EXCL else r
+    return path if _class(path) in ("tmp", "home") else None
+
+
+def under(p: str, d: str) -> bool:
+    """p is d or lies below it."""
+    return p == d or p.startswith(d.rstrip("/") + "/")
 
 
 def reduce(trace: str, root: str) -> dict | None:
@@ -118,6 +162,12 @@ def reduce(trace: str, root: str) -> dict | None:
     except OSError:
         return _none("no trace file")
     T, C, L, X, outside, outside_paths = set(), set(), set(), set(), {}, {}
+    wrote: set[str] = set()     # GATES-20g: write_key of every non-mkdir write
+    madew: set[str] = set()     # GATES-20g: write_key of every directory it made (tree and outside)
+    ns: set[str] = set()        # GATES-20g: pids in a mount namespace of their own
+    removed: set[str] = set()   # GATES-20g: write_key of every path removed or renamed away
+    LD: set[str] = set()        # GATES-20g: every tree directory listed by getdents64, its own included
+    nspend: set[str] = set()    # a clone with CLONE_NEWNS whose child pid is still to come (`resumed`)
     comp: set[str] = set()   # pids of a compile: exec'd rustc, or cloned from such a pid
     cargo: set[str] = set()  # pids of cargo itself: exec'd cargo, or cloned from such a pid, until another exec
     K: set[str] = set()
@@ -149,10 +199,24 @@ def reduce(trace: str, root: str) -> dict | None:
         if call in CLONES:
             # the child's pid is the return value (on the call's line, or on its `resumed` line)
             r = RET.search(rest)
+            if "CLONE_NEWNS" in rest:
+                nspend.add(pid)
+            if r and (pid in ns or pid in nspend):
+                ns.add(r.group(1))
+            if r:
+                nspend.discard(pid)
             if r and pid in comp:
                 comp.add(r.group(1))
             if r and pid in cargo:
                 cargo.add(r.group(1))
+            if r and r.group(1) not in cwd and pid in cwd:
+                # a child starts in its parent's cwd (coreutils `mkdir -p` chdirs, then writes by a bare name)
+                cwd[r.group(1)] = cwd[pid]
+            continue
+        if call in ("unshare", "setns"):
+            if not resumed and ("CLONE_NEWNS" in rest or "ns/mnt" in rest or call == "setns") \
+                    and rest.rstrip().endswith("= 0"):
+                ns.add(pid)
             continue
         if resumed:
             continue   # the call's arguments were printed on its `<unfinished ...>` line
@@ -167,16 +231,30 @@ def reduce(trace: str, root: str) -> dict | None:
             if "\\" in c.group(1):
                 return _none(f"an escaped name: {c.group(1)[:60]}")
             cwd[pid] = c.group(1)
-        if call == "getdents64":
+        if call in ("getdents64", "fchdir"):
             f = FDARG.match(rest)
             if f:
                 if "\\" in f.group(1):
                     return _none(f"an escaped name: {f.group(1)[:60]}")
+                if call == "fchdir":
+                    if rest.rstrip().endswith("= 0"):
+                        cwd[pid] = os.path.normpath(f.group(1))   # GATES-20g: `mkdir -p` walks by fchdir
+                    continue
                 r = place(f.group(1))
                 if r is not None:
                     L.add(r)
+                    LD.add(r)
             continue
         base = cwd.get(pid, root)
+        if call == "bind":
+            sp = SUN.search(rest)
+            if sp and rest.rstrip().endswith("= 0") and not sp.group(1).startswith("@") and pid not in ns:
+                if "\\" in sp.group(1):
+                    return _none(f"an escaped name: {sp.group(1)[:60]}")
+                wk = write_key(os.path.join(base, sp.group(1)), root)
+                if wk is not None:
+                    wrote.add(wk)
+            continue
         args = rest
         d = DIRFD.match(rest)
         if d and (call.endswith("at") or call in ("statx", "openat2", "faccessat2", "execveat", "renameat2")):
@@ -189,12 +267,34 @@ def reduce(trace: str, root: str) -> dict | None:
             return _none(f"an escaped name: {(s if chr(92) in s else base)[:60]}")
         if call in ("execve", "execveat") and _compiler(s):
             comp.add(pid)
+        mk = call in ("mkdir", "mkdirat") and rest.rstrip().endswith("= 0")
+        if pid not in ns and (mk or call in WRITES or (call in OPENS and WFLAGS.search(args))):
+            # every name the call writes: the first (placed as a read is), and a rename's or link's second
+            ws = [os.path.join(base, s) if s else base]
+            if call in ("rename", "link", "symlink") and len(ss) > 1:
+                ws.append(os.path.join(cwd.get(pid, root), ss[1]))
+            elif call in ("renameat", "renameat2", "linkat", "symlinkat"):
+                ps = PAIR.findall(rest)
+                if len(ps) > 1:
+                    ws.append(os.path.join(ps[1][0], ps[1][1]))
+                elif len(ss) > 1:
+                    ws.append(os.path.join(cwd.get(pid, root), ss[1]))
+            for w in ws:
+                if "\\" in w:
+                    return _none(f"an escaped name: {w[:60]}")
+                wk = write_key(w, root)
+                if wk is not None:
+                    (madew if mk else wrote).add(wk)
+                    if w is ws[0] and call in ("unlink", "unlinkat", "rmdir", "rename", "renameat", "renameat2"):
+                        removed.add(wk)
         if call in ("execve", "execveat") and rest.rstrip().endswith("= 0"):
             if os.path.basename(s) == "cargo":
                 cargo.add(pid)
             else:
                 cargo.discard(pid)
         s = os.path.join(base, s) if s else base
+        if call == "chdir" and rest.rstrip().endswith("= 0"):
+            cwd[pid] = os.path.normpath(s)   # a bare name after it is relative to this
         r = place(s)
         if r is None:
             continue
@@ -218,7 +318,11 @@ def reduce(trace: str, root: str) -> dict | None:
     C = {r for r in C if not own(r)} - T
     L = {r for r in L if not own(r)}
     K = {r for r in K if not own(r)} - T - C
-    return {"T": sorted(T), "C": sorted(C), "K": sorted(K), "L": sorted(L), "X": sorted(X), "outside": outside,
+    O = {m for m in madew if not any(m != x and under(m, x) for x in madew)}
+    WR = {w for w in wrote if not any(under(w, m) for m in madew)}
+    RM = {x for x in removed if not any(x != y and under(x, y) for y in removed)}
+    return {"T": sorted(T), "C": sorted(C), "K": sorted(K), "L": sorted(L), "X": sorted(X),
+            "WR": sorted(WR), "O": sorted(O), "RM": sorted(RM), "LD": sorted(LD), "NS": bool(ns), "outside": outside,
             "outside_paths": {c: sorted(v)[:50] for c, v in outside_paths.items()}}
 
 
@@ -227,9 +331,12 @@ def union(sets: list[dict | None]) -> dict | None:
     the row has none."""
     if not sets or any(s is None for s in sets):
         return None
-    out = {"T": set(), "C": set(), "K": set(), "L": set(), "X": set(), "outside": {}, "outside_paths": {}}
+    out = {"T": set(), "C": set(), "K": set(), "L": set(), "X": set(), "WR": set(), "O": set(), "RM": set(),
+           "LD": set(), "outside": {},
+           "outside_paths": {}}
+    ns = any(s.get("NS") for s in sets)
     for s in sets:
-        for k in ("T", "C", "K", "L", "X"):
+        for k in ("T", "C", "K", "L", "X", "WR", "O", "RM", "LD"):
             out[k] |= set(s.get(k, []))
         for c, n in s["outside"].items():
             out["outside"][c] = out["outside"].get(c, 0) + n
@@ -237,6 +344,11 @@ def union(sets: list[dict | None]) -> dict | None:
             out["outside_paths"].setdefault(c, set()).update(ps)
     return {"T": sorted(out["T"]), "C": sorted(out["C"] - out["T"]), "K": sorted(out["K"] - out["T"] - out["C"]),
             "L": sorted(out["L"]), "X": sorted(out["X"]),
+            # one run's own directory may hold another run's write: the row's O is the union's outermost
+            "O": sorted(m for m in out["O"] if not any(m != x and under(m, x) for x in out["O"])),
+            "WR": sorted(w for w in out["WR"] if not any(under(w, m) for m in out["O"])),
+            "RM": sorted(x for x in out["RM"] if not any(x != y and under(x, y) for y in out["RM"])),
+            "LD": sorted(out["LD"]), "NS": ns,
             "outside": out["outside"],
             "outside_paths": {c: sorted(v)[:50] for c, v in out["outside_paths"].items()}}
 

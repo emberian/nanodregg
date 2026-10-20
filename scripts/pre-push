@@ -205,7 +205,9 @@ git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
 runs_reds() {
   local t=$1 out=$2 rc wrc; shift 2
   : > "$out.waste"; : > "$out.crash"
-  wrapped python3 "$J/runs.py" "$t" --table "$G/judge/gates/runs.tsv" --changed "$G/changed" --waste-out "$out.waste" "$@" > "$out" 2>> "$log"; rc=$?
+  # GATES-20g: the selected rows run concurrently, this slot's row plus free judge slots borrowed per row (traced only)
+  wrapped python3 "$J/runs.py" "$t" --table "$G/judge/gates/runs.tsv" --changed "$G/changed" --waste-out "$out.waste" \
+    --slots-dir "$common" --slots "$(slot_count)" "$@" > "$out" 2>> "$log"; rc=$?
   python3 "$J/waste.py" "$G/judge" --measured "$out.waste" --partial > "$out.wred" 2>&1; wrc=$?
   { sed -n 's/^  run \(.*\): RED.*/run \1/p' "$out"
     sed -n 's/^    red \(.*\)$/red \1/p' "$out"
@@ -242,7 +244,7 @@ judge_runs() {
   # The final re-check of every carried and recorded key, while the slot still holds the
   # candidate's binaries (a parent judge below rebuilds them).
   verify_keys
-  grep -E '^  run |^    red |^  reuse |^  selection: |^  select |^  trace: |^  outside ' "$G/runs.cand" | grep -vE ': ok(\(known-red control read red\))?$' || true
+  grep -E '^  run |^    red |^  reuse |^  selection: |^  select |^  trace: |^  outside |^  alone |^  concurrency: |^  runs wall: ' "$G/runs.cand" | grep -vE ': ok(\(known-red control read red\))?$' || true
   grep '^waste .*measured' "$G/runs.cand.wred" || true
   # 76: a run was killed by a signal, or ran past its wall-clock deadline twice (GATES-16): no
   # verdict about the commit either way, never RED and never green.
