@@ -3462,3 +3462,103 @@ fresh rebuild of all nine affected source modules passed at 6G/two threads and 2
 maxHeartbeats (logs/CX-READER-P10-rebuild.log). No source correction was needed. The
 complete-observation adapter still requires the separately owned Std.hole receive-path
 integration; the decision above accurately retains that boundary.
+
+## LANG-P12 Separate certified acyclic hole-provenance adapter (2026-10-20 real; CX-P12)
+**Decision and ruling.** Implement ROOT's alternative (B) as an additive adapter, a demonstration
+Mini can take. The input has a finite closed namespace of holes, expressions with alternative
+and joint dependencies, finite token-provenance leaves, and natural-number rank witnesses.
+Validation scans every actual reference, including undemanded holes and branches whose token
+polynomial is zero. An accepted edge strictly decreases rank. The first failed edge returns
+fixedPointDependency(hole) for a direct self-reference or rankNotDecreasing(consumer, dependency)
+otherwise. An invalid rank witness is not asserted to prove the graph cyclic.
+
+The output is exactly the LANDED carrier List (List Token × List Token) of Closure.provenance,
+including negative token literals. Expansion distributes joint requirements over alternatives.
+Successful adapt results have independent finite proof-tree semantics (Derives): adapt_correct
+is an equivalence for every token world, with no caller-supplied acyclicity hypothesis.
+unroll_stable preserves the exact polynomial, including order/multiplicity, above the checked
+rank bound; unroll_equation proves all graph equations exactly. Depends is nonempty dependency
+reachability; adapt_acyclic excludes every self-returning path, and cycle_refused returns a
+named error even for an undemanded cycle. refusal_explained ties every emitted reason to an
+actual nondecreasing reference and exact endpoints. Ranked witnesses are accepted, not merely
+sound when some unrelated check happens to accept them.
+
+**Connection to the landed closure.** chain_exact handles arbitrary finite local polynomials.
+chain_candidates consumes the LANDED provenance_iff directly to equate the new two-hole
+derivation with verification by BOTH actual candidate judges. Leaves retain the landed
+fixed-environment scope: an environment change requires regenerating these leaves. This is
+not P9's all-environment carrier, and this lane has no unlanded dependency on P9. Token edits
+can evaluate the same finite polynomial at another liveness world.
+
+**Price premises.** LANDED theorems gaining hypotheses: none. LANDED theorems restated: none.
+No existing Lean file or import is changed, including every Worlds statement. New premises
+Ranked and rank bounds belong only to new helper theorems; adapt_correct derives the needed
+certificate from the executed validator. Four new modules, two proof modules, 388 Lean lines
+(101 deployed), 31 new theorems. No wire, Store, package identity, gate, ceiling or pin changes.
+
+**Sources and boundary.** Stein–Chang–Sridharan, Demanded Abstract Interpretation (PLDI 2021),
+arXiv:2104.01270, §4/§6 and conclusion p13: their dependency graph remains acyclic through
+unrolling; their full framework also uses widening and fixed-point convergence. Here the
+acyclic unrolling technique is specialized to explicit finite hole references with checked
+ranks. No widening, convergence test, or automatic transformation of a cyclic source graph
+is claimed. Cyclic fixed-point provenance is refused; Worlds retains stable-model semantics
+for its separate cyclic-rule analysis.
+
+Alternative (A) is open as cv task **01a15b72-8953-7a72-a08f-73b1dfb4fc95**:
+trigger **the first deployed hole that must depend on itself through a fixed point**.
+It calls for an absorptive fully-continuous carrier, specialization/truth correspondence and
+a deployed consumer, following Dannert–Grädel–Naaf–Tannen, Generalized Absorptive Polynomials
+and Provenance Semantics for Fixed-Point Logic (CSL 2021), arXiv:1910.07910, pp1–2.
+Both papers' relevant extracted source passages were read, along with
+LITERATURE-CONTEXTUAL-20261020.md §§1.14,2.15,4 item6. This source basis does not identify our
+finite proof-tree semantics with general least/greatest fixed-point provenance.
+
+**Evidence.** Scoped build of Lang.Proofs.Contextual.AcyclicExamples GREEN with the default
+finite maxHeartbeats 200000, 6G/two threads. Exact two-hole output retains both alternatives,
+joint positive tokens and negative blockers. A seeded self-reference refuses by name;
+mutual, undemanded and zero-product-masked cycles also refuse. A wrongly ranked acyclic
+chain refuses its witness, while a correct witness for that same graph succeeds.
+
+Nine source-only scratch mutations exercise validation bypass, strict descent, reference
+coverage under both expression constructors, whole-graph coverage, refusal naming, both
+token polarities and sufficient depth. Every mutant definition builds, every corresponding
+probe fails, and the unmutated control passes. Actual Bypass log line 2 prints
+"SILENT_DROP accepted 2 seed monomials"; line 3 is the rfl failure of self_refused_by_name at
+CX_P12_BypassProbe.lean:8:67. An additional mutant-only theorem proves the bypassed result
+equals the seed exactly. Evidence lives under hbox logs/CX-P12-plants/, complete output
+logs/CX-P12-plants.log; every output was read whole and error controls find only expected
+semantic failures. No production check is weakened.
+
+**Alternatives.** Adding acyclicity to the landed arbitrary-hole or Worlds statements would
+change their meaning and is excluded by ROOT's ruling. Treating a fuel-exhausted reference
+as an absent branch is the measured silent-drop mutation. Finite expansion uses a zero
+internal approximation, but validation plus rank completeness prevents any accepted output
+from losing a dependency that way. A cyclic fixed-point carrier remains a distinct triggered
+task, not something rejected because it costs more.
+
+**Critique.** This is a Lean-level reference adapter; no deployed package or resident path
+calls it yet. Input size and ranks are finite caller data, not a new wire resource budget.
+Full distributive provenance can be exponentially large, and repeated references recompute
+their expansions; this is not an incremental or memoized analysis engine. Negative *token*
+literals are supported; negative hole recursion, arbitrary fixed points and automatic rank
+inference are outside this expression language. A raw unroll call remains an approximation:
+only adapt plus its theorem is the certified boundary. Supplied ranks may reject an acyclic
+graph until corrected; the refusal says so rather than diagnosing a cycle.
+
+**Meta-critique.** The easy false success would be to show only a two-hole example and call
+all cycles handled, or to assume acyclicity on a theorem about an unchecked interpreter.
+The independent Derives equivalence, exact graph-equation theorem, all-node cycle boundary
+and measured silent-drop mutation prevent those substitutions. Conversely, presenting this
+as all of Stein's widening/fixed-point framework would overstate it; the explicit refusal
+and triggered alternative (A) preserve the broader destination.
+
+**Independent second reader (CX-READER-P12, 2026-10-20 real).** LAND: all 31 theorem
+statements and their proofs read with the disjunct check. No vacuous escape branch or
+changed landed premise. The boundary is adapt_acyclic/cycle_refused together with
+refusal_explained and the seeded self_refused_by_name counterexample. chain_exact,
+two_hole_direct and chain_candidates connect exact output to both actual leaf judges,
+not merely to validation success. All nine original mutation outputs and the control
+read whole; failures are semantic, not harness errors. Worlds source and proof bytes
+are unchanged. The finite fixed-environment scope, no deployed caller, and distinction
+from Stein's full widening/fixed-point framework remain explicit. Alternative (A)'s
+absorptive-carrier task is OPEN. No source correction or weakened check was required.
