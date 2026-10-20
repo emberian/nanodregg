@@ -3031,3 +3031,88 @@ driven by an actual consumer or rebuild bottleneck, not a target module count.
 **Meta-critique.** Moving code can masquerade as simplification. Here the measurable benefit is that the two
 calculus instances no longer depend on the 89 closure theorems; only their laws/judgments are imported. The
 statement/body equality audit prevents a proof cleanup from slipping into this structural change.
+
+## LANG-72 Boundary declarations and independent reuse licenses (2026-10-20 real; CX-P2)
+**Decision.** Add Boundary def/proof modules over the landed closure, without changing its judge,
+repair, selection, or existing theorem statements. A boundary belongs to an Iface and declares a
+subset of four observations: typingInterface, logicalContract, observableBehavior, costGuarantee.
+The order is inclusion of promises; intersection/union and empty/full declarations form the
+powerset lattice. Cost and behavior are explicitly incomparable. Each boundary supplies its
+behavior projection and cost promise independently of the admission budget.
+
+Boundary.failures compares declared observations against the retained old reference.
+Boundary.obligations reads actual old/new selections and emits named (hole, observation)
+obligations; absence on either side emits every declared obligation. Exact failure coverage,
+empty-list equivalence, and monotonicity connect that executable report to its specification.
+Each reuse theorem needs only its own observation absent from the failure list, so an unrelated
+cost failure cannot invalidate the membership cache license. Typing reuse applies the existing
+CalculusLaws.msubst_lemma to a client template; contract reuse applies a client's proof conditional
+on the guard; behavior reuse covers every function of the declared projection; cost reuse composes
+a bound with client overhead. Typing, contract and cost additionally require old success:
+equality of two failures does not establish validity.
+
+The dependent-type counterexample uses inhabited Fin 1 and empty Fin 0 despite both indices
+having carrier Nat. A client whose family factors through preserved behavior transports its
+inhabitant by equality. The pruning corollary reopens every retained member of an explicit finite
+region whose sole exclusion token is withdrawn, independent of a selected answer's support.
+
+**Experiment.** Actual fuel-bounded binary and structural linear searches compute membership and
+key-probe counts. On eight sorted elements, searching for seven takes three versus eight probes.
+An existing Session proposes both, selects binary, withdraws its sortedness token, then selects
+linear. Its computed statuses are suspended [sortedToken] / verified, with selection 1 and the
+same true answer. Boundary.obligations reports exactly costGuarantee: admission budget stays eight,
+the separate boundary promise stays four (1 + log2 8). A theorem instantiates the general cache
+license despite that cost failure. Queries 0..9 exercise positive/negative membership; [2,0,1]
+exposes binary's dependence on sortedness. Another session has an empty selected support trace
+but rejudges and reopens the excluded alternative when its exclusion token is withdrawn.
+
+**Price premises.** None. No landed theorem gains a hypothesis; none is restated. Only the two
+new modules and this append are proposed. No wire, Store, pins, refusals, or existing gates change.
+SIZE adds two modules (one proof), 451 Lang lines (179 counted as deployed), and 29 theorems.
+
+**Alternatives.** A four-element chain would falsely imply that a cost promise entails a particular
+behavior; the independent observations require the powerset lattice. Requiring the whole
+declaration to pass before any reuse would prevent the card's membership/cost separation.
+Replacing the closure judge with a boundary-aware judge would couple this independent audit to
+admission and violate this wave's append-only ownership discipline. This addition is a callable
+audit over actual selections, not automatic enforcement in existing select/repair. A future
+consumer can invoke it without replacing the judge.
+
+**Verification.** Scoped Lang.Proofs.Contextual.Boundary build is green under 6G/two threads;
+proof maxHeartbeats is 400000 (definitions retain Lean's finite default). Five temporary mutations
+in the new definition module each failed compilation of named concrete theorems, and restoring
+the original source rebuilt green. Suppressing typingInterface, logicalContract, observableBehavior,
+or costGuarantee makes all_observation_checks_exercised false. Suppressing cost additionally
+makes binary_to_linear_boundary false. Treating missing selections as no obligations makes
+unfilled_boundary_obligations false. Whole plant outputs were read, including diagnostics;
+the logs are CX-P2-plant-<observation>.log and CX-P2-plant-missingSelection.log in hbox logs.
+The actual diagnostic is "Tactic `decide` proved that the proposition ... is false", at log
+line 14 for typing/contract/behavior and the cost-only boundary, line 17 for cost's all-four
+check, line 4 for missing-selection. No persistent check was removed or weakened.
+
+**Critique.** The cost is key probes, not runtime: List.take/drop work is not charged. The
+eight-element experiment is not an asymptotic complexity theorem or universal search correctness.
+The guard is a decidable contract and the generic cost field needs an instance-specific connection
+to execution; this experiment computes it from the algorithm. The search CalculusData is a
+demonstration, not deployed Lang and not a new claimed CalculusLaws instance. The general typing
+license requires lawful L and applies independently to the already lawful contextual instances.
+A boundary's behavior projection is an abstraction choice; consumers reading syntax or other
+undeclared details do not receive the reuse license. Full declaration equality can preserve
+false checks, hence the explicit old-validity premises in the relevant reuse theorems.
+
+**Meta-critique.** It would be easy to encode four labels and call their equality modularity,
+or to equate a chosen fallback with a repaired performance guarantee. Concrete session outputs,
+computed costs, the actual meta-substitution theorem, arbitrary contract/cache clients, and
+mutations keep those shortcuts visible. The additive audit has a real consumer in the session
+experiment but is not a deployed protocol. Independent second-agent vacuity/disjunct review is
+still required before ROOT lands; this lane only prepares READY.
+
+**Verification correction (same unlanded change).** The source refusals gate disallows any local
+set_option budget override. The unnecessary 400000 override above was removed; both modules now
+build under Lean's finite default maxHeartbeats cap. The gate itself is unchanged.
+
+**Independent second read (2026-10-20, CX-READER-P2).** LAND: all 29 theorem statements
+read with the disjunct check; no conclusion offers an Or escape. Reflexivity and bounds are
+ordinary lattice laws, not repair evidence. Existing theorem signatures are unchanged.
+The five real mutation logs were read whole; the independent capped scoped build passed.
+The callable audit, concrete-session scope, and probe-count cost limits remain as stated above.
