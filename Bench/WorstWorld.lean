@@ -60,7 +60,7 @@ def honest (scratch : System.FilePath) (stateBytes : Nat) (control : Bool) : IO 
   let g ← match Receive.genesis X "worstworld".toUTF8 "worstworld-nonce".toUTF8 allowanceMax founders with
     | .ok g => pure g
     | .error r => return ← fail s!"genesis {r.name}"
-  let m : Kernel.Sim.Gen.Member D := ⟨founderId X g.origin 0, founderSecret, nextSecret⟩
+  let m := Who.of ⟨founderId X g.origin 0, founderSecret, nextSecret⟩
   let some key := Codec.Digest.ofBytes? (← IO.getRandomBytes 32) | return ← fail "getRandomBytes"
   let keys := Keys.ofKey key shapes
   if let .error f ← (Host.genesis dir key keys c world recorder.mark g : IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) then

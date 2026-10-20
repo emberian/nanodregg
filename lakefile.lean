@@ -144,9 +144,19 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «bench-count» where
   root := `Bench.CountMain
 
--- THE BAR's reopen at the tailMax worst cut, a sized bench row: `bench-worstcut SCRATCH [--harness-control]` (PERF-5).
-@[default_target] lean_exe «bench-worstcut» where
-  root := `Bench.WorstCutMain
+-- THE BAR's reopen at the tailMax worst cut, one sized bench row per tail shape:
+-- `bench-worstcut-<shape> SCRATCH [--harness-control]` (PERF-5, PERF-12; the shared harness is Bench.WorstCut).
+@[default_target] lean_exe «bench-worstcut-writes» where
+  root := `Bench.WorstCutWritesMain
+
+@[default_target] lean_exe «bench-worstcut-births» where
+  root := `Bench.WorstCutBirthsMain
+
+@[default_target] lean_exe «bench-worstcut-retires» where
+  root := `Bench.WorstCutRetiresMain
+
+@[default_target] lean_exe «bench-worstcut-rows» where
+  root := `Bench.WorstCutRowsMain
 
 -- THE BAR's reopen at the worst World, the reader's bound: `bench-worstworld SCRATCH synthetic N | honest [STATE_BYTES]` (PERF-8).
 @[default_target] lean_exe «bench-worstworld» where

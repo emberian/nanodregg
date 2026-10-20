@@ -660,3 +660,128 @@ pure shape. That could put the real worst above 32.217.
 log and re-ran on main 258c273 instead of on the brief's text.
 
 **Status.** landed with this entry.
+
+## PERF-12 · The worst cut, one bench per shape: every judged run bounded under the deadline (2026-10-21, PERF-5, landed by PERF-6; GATES-9's benchtrace)
+
+**Decision.** `bench-worstcut` is split into four exes, `bench-worstcut-writes`, `-births`, `-retires` and `-rows`,
+each with its own standing row `standing:bench-worstcut-<shape>`. Each builds and counts only its own Store and
+tail. The old exe, its row and Bench/WorstCutMain.lean are deleted.
+- Bench/WorstCut.lean is the shared harness. It holds the build, the count, the controls and a `Shape` record.
+  Bench/WorstCut<Shape>.lean gives one `Shape`, and Bench/WorstCut<Shape>Main.lean is the exe root, declaring
+  only `main` (closure C7). A change to one shape's module selects that shape's row only, by the static closure rule (plant below). A change to the harness selects all four, and
+  bench-worstworld, which imports it.
+- Each row has its own `--harness-control`: the impossible expectation (more than tailMax) on its own shape,
+  judged after its Store is built and both counted opens agree. All four fire by name. The honest run of the
+  same binary, without the flag, passes.
+- WASTE: each shape pins its own four rows, `worstcut-<shape> <metric>` (16 rows). The four existing `worstcut`
+  rows stay as the worst-over-shapes ceilings. Each bench prints its value on both its own row and the shared
+  row. gates/waste.py judges a row at the largest value the runs printed. So standing judges the worst of the
+  four against 32.217, and a pre-push run of one selected shape judges that shape against it too. I chose this
+  over a fifth row that reads the four. A row runs alone, so a reader row would need the four runs' outputs
+  (runs.py has no cross-row input) or would re-run them (the cost this removes).
+- The bench signer derives each member's Ed25519 key once (`Signer`): the scalar, the prefix and the public key.
+  It then signs with one base multiplication instead of three (`P.pub` per call, plus `sign`'s own re-derived
+  `pk`). The bytes are proven equal to `P.pub` and `P.sign` (`Signer.pk_eq`, `Signer.sign_eq`, in the proof-module
+  Bench/Proofs/WorstCut.lean, closure C3). This is test tooling; nothing deployed signs.
+- The host's uncounted reopen runs beside the counted opens. It marks nothing, and a follower open locks and
+  writes nothing.
+- Each bench prints `WORSTCUT <shape> wall ms (reported, never judged)`: build, reopen, counted reopen and
+  re-derivation.
+
+**Measured** (hbox, `SWARM_MEM_MAX=6G LEAN_NUM_THREADS=2 swarm-build`, the four running at once, binaries the
+tree's). PERF-5 measured on main e86f237 plus this change (logs/perf5-*). PERF-6 rebased it onto main c8ebb06 and
+re-ran the four once, honest then control (logs/perf6-*). The counts are deterministic and identical in both runs:
+steps, records, tail bytes, hashes and verifies. Every clock has its load beside it and none is a number.
+
+| shape | steps | trie hashes | h/step (reopen = audit) | verifies (reopen, audit) | honest wall (load1) | control wall (load1) | build / reopen / counted / re-derivation (s) |
+|---|---|---|---|---|---|---|---|
+| writes | 28,928 | 539,816 | 18.661 | 0, 1.000 | 123 s (23.4 → 19.7) | 236 s (18.4 → 31.2) | 80.6 / 6.7 / 6.7 / 35.3 |
+| births | 33,088 | 1,012,318 | 30.595 | 0, 1.000 | 147 s (23.4 → 19.6) | 286 s (18.4 → 21.2) | 95.8 / 9.5 / 9.5 / 41.5 |
+| retires | 32,320 | 1,041,249 | **32.217** | 0, 1.000 | 280 s (23.4 → 25.3) | 383 s (18.4 → 15.9) | 213.9 / 12.0 / 12.6 / 53.2 |
+| rows | 16,448 | 342,925 | 20.849 | 0, 1.000 | 380 s (23.4 → 26.5) | 404 s (18.4 → 13.3) | 157.5 / 25.9 / 26.4 / 196.7 |
+
+On c8ebb06 (PERF-6, logs/perf6-honest1-*, perf6-control1-*), the same counts. Clocks:
+
+| shape | honest wall (load1) | control wall (load1) | build / reopen / counted / re-derivation (s) | max RSS |
+|---|---|---|---|---|
+| writes | 117 s (11.5 → 13.4) | 142 s (17.1 → 17.8) | 93.2 / 3.9 / 3.9 / 19.8 | 153 MB |
+| births | 132 s (11.5 → 12.5) | 164 s (17.1 → 15.9) | 102.6 / 5.5 / 5.2 / 24.2 | 184 MB |
+| retires | 232 s (11.5 → 13.9) | 273 s (17.1 → 13.7) | 187.0 / 11.8 / 11.4 / 33.5 | 191 MB |
+| rows | 283 s (11.5 → 17.1) | 306 s (17.1 → 12.1) | 134.6 / 16.8 / 17.0 / 130.5 | 139 MB |
+
+Every control fired by name (`FAIL <shape>: harness-control: the cut fills … of tailMax …, and the control expects
+more than tailMax`), and every honest run read `BENCH-WORSTCUT <shape> PASS`.
+
+- writes, births and retires are PERF-11's counts at 258c273, unchanged: steps, records, tail bytes and hashes.
+  rows fell 23.516 → 20.849 (386,789 → 342,925 hashes) at KERNEL-23 R2 5e33878, where a turn's row and head writes
+  are one batch. On c15487e it fell again, 20.849 → 20.182 (342,925 → 331,960 hashes; PERF-6, logs/perf6-honest2-*):
+  in range c8ebb06..c15487e, c15487e (a retract joins the rows batch) is the commit that touches row retracts, not
+  separated. Its rows are pinned at 20.182, and the worst ceilings stay 32.217 (retires). writes, births and retires
+  are unchanged on c15487e. Clocks there (load1 11.0 → 13.1, honest only): 111 / 128 / 234 / 239 s; rows'
+  re-derivation 106.2 s.
+- RSS is under 190 MB per shape. The 746 MB was four Stores in one process.
+- The signer is measured on build time only, at loads that differ (honest2 load1 18.0 → 30.0, honest3 23.4 → 26.5):
+  writes 103.8 → 80.6 s, births 123.8 → 95.8, retires 281.4 → 213.9, rows 179.3 → 157.5.
+- Profile (perf record -F 49, logs/perf5-prof-*): retires is Ed25519-bound (Fe.mul 25 %, with the allocator
+  around it). rows is spread over the allocator, refcounts, Codec.Tree, Stream, Hash and Lang.Wire, and Ed25519
+  is 5.6 %.
+
+**Derived totals.**
+- The longest judged unit was the whole bench: 7:08 honest and 11:14 under load (PERF-4). It is now rows:
+  283-404 s at load1 11-27, 47-67 % of the 600 s deadline. Next are retires (232-383 s), births (132-286 s) and
+  writes (117-236 s).
+- rows is bounded by deployed work. 16,448 invokes are judged twice: once at admission (~8-9.6 ms/step in its
+  build) and once in the re-derivation (~8-12 ms/step). The bench cannot remove either one.
+- ROOT ruled (2026-10-21) that this is deployed cost, not bench cost. `packages-checked-per-call` is 1.000: every
+  invoke re-checks the Bell package. A follower catching up on a worst rows tail spends 130-197 s in
+  re-derivation alone, against THE BAR's 60 s follow limit. The fix is LANG's design: the package check cached per
+  (package id, call) within a run. Filed for LANG as cv task 01a1558a-1644. PERF re-pins the rows clocks and
+  `packages-checked-per-call` when it lands.
+- Standing cost: runs.py runs rows one at a time, so the four rows (control plus honest) sum to about 2,240 s
+  at this load. The old row was 16-20 min (one process with four build tasks). In four parallel slots the cost
+  would be max(rows) ≈ 13 min. The parallel slots the brief assumed do not exist in runs.py. Standing's length is
+  a cost, not a hole. ROOT ruled (2026-10-21): land the split with standing serial (about 37 min at load1 13-27,
+  about 28 min at load1 11-17 on c8ebb06), and GATES-10 builds concurrent standing rows (GATES-20g) behind it,
+  priced against the deadline: concurrent benches raise the load, and load is what pushes a row past it.
+- A pre-push run of one shape's change costs that row's control plus honest, 4-13 min. A harness change, or
+  any module in every bench's closure (Kernel, Host, Codec) when no traced read-set is valid, costs all four in
+  sequence.
+
+**Plants** (logs/perf5-plants.py, function-level over this tree's gates):
+- Selection: changed `Bench/WorstCutWrites.lean` selects only `standing:bench-worstcut-writes`, and likewise
+  for births, retires and rows. `Bench/WorstCut.lean` selects all four and bench-worstworld. `gates/waste.tsv` is
+  a data path under the static rule and selects every row. Traced, it selects none: waste.tsv is the
+  comparator, not a read. It waits for GATES-20e, which selects by the WASTE rows a read-set measured.
+  Under that rule a raised `worstcut-<shape>` ceiling selects that shape's row alone, and a raised `worstcut`
+  ceiling selects all four. GATES-20e landed at c8ebb06. These four rows have no read-set yet, so the first
+  judge runs them by the static rule. The W selection is planted by GATES (logs/gates9-20e.*), not here.
+  PERF-6 re-ran the plants below on c8ebb06 against its own runs (logs/perf6-plants.out): the same verdicts.
+- The worst check: with births planted at 32.300 and its own ceiling raised to 32.300, the four runs' lines are
+  RED `waste worstcut reopen-trie-hashes-per-step: measured 32.3 > ceiling 32.217`. Births' lines alone (a
+  pre-push run of its row) are RED the same way. writes planted at 18.700 is RED against its own 18.661 while
+  the worst stays under its ceiling. The real four runs' lines are ok, with nothing unpinned.
+- A shape that stops running is RED in standing's full check: each of its four pinned rows reads `pinned …
+  but nothing measured it`.
+
+**Alternatives.**
+- (a) Keep one exe and pass the shape as an argument. Not taken: the binary is one read-set input (X), so a
+  change to one shape would re-run every shape.
+- (b) Shorten the tails. Not taken: the cut must fill tailMax by definition.
+- (c) Build the retires grants into a synthetic genesis base, as bench-worstworld does with tombstones. Not
+  taken: the grant cells would be bytes the bench composes, not bytes admission produced, to save about 100 s
+  on a row that is not the longest.
+
+**CRITIQUE.**
+- rows at half to two thirds of the deadline is still a row that can go UNREAD on a bad day. The split takes the
+  margin from about 0 to about 1.5-2x, not to "well under". The rest is in the deployed invoke:
+  `packages-checked-per-call` is 1.000, so every invoke re-checks the Bell package (LANG, cv 01a1558a-1644).
+- The standing total got worse under the serial runner: about 37 min against 16-20. I traded that for a
+  bounded per-run clock, because a run that times out is UNREAD and a long standing is only slow.
+
+**META-CRITIQUE.**
+- The brief said each shape takes about 2 min. Measured, that holds for writes and births only. I measured
+  before I wrote the rows.
+- The signer is a factorization of CODEC's `sign` in PERF's tree, held equal by two theorems. CODEC could
+  expose `sign` in that shape itself, and then the copy goes.
+
+**Status.** Landed with this entry.

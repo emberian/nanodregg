@@ -603,17 +603,21 @@ The lines to read:
   expectations fired (limits 0, use 4 of 3, follow one step past the writer, bench-count's own control),
   or the runner reads none of its verdicts.
 
-### The worst cut (a bench, not a bar run) — RAN (c392f51; standing only, `standing:bench-worstcut`, GATES-17, never in pre-push)
+### The worst cut (benches, not a bar run) — RAN (c392f51; split per shape by PERF-12; standing only, one `standing:bench-worstcut-<shape>` row each, GATES-17)
 
-    bench-worstcut SCRATCH
+    bench-worstcut-writes SCRATCH      bench-worstcut-births SCRATCH
+    bench-worstcut-retires SCRATCH     bench-worstcut-rows SCRATCH
 
-- Writes a deployed Store whose tail past its base fills tailMax, in four tail shapes (PERF-6, PERF-9; numbers
-  measured at 258c273, PERF-11): writes (18.661 trie hashes per step), births (30.595), retires (32.217, the
-  worst, pinned) and rows (23.516: the Bell queue's ring, answer and retire cycles, LANG-59). Verifies are 0 at
-  reopen and 1 at audit in every shape. A reopen verifies no signature (HOST-22). A measurement above 32.217
-  is RED.
+- Each writes a deployed Store whose tail past its base fills tailMax in one tail shape (PERF-6, PERF-9; numbers
+  measured on main e86f237 and c15487e, PERF-12): writes (18.661 trie hashes per step), births (30.595), retires (32.217, the
+  worst) and rows (20.182: the Bell queue's ring, answer and retire cycles, LANG-59). Verifies are 0 at reopen and
+  1 at audit in every shape. A reopen verifies no signature (HOST-22). A shape above its own pinned value, or any
+  shape above the worst's 32.217, is RED.
 - The writes shape is 28,928 one-slot writes. The WORST tail is retires: 32,320 revokes over a 5,812,239 B base.
-- About 8-11 min (load-dependent) and 751 MB on hbox for all four shapes.
+- On hbox at load1 11-31 (reported, never judged; a loaded box, not a limit; PERF-12 on e86f237 and c8ebb06): writes about
+  2-4 min, births 2-5, retires 4-6.5, rows 4.5-7 (its re-derivation alone is 2-3.5 min: each Turn is an invoke the
+  follower judges again, and the Bell package is re-checked per invoke, LANG cv 01a1558a-1644). Under 200 MB each. Each prints its own
+  phase clocks (`wall ms (reported, never judged)`).
 
 ### The worst World (a bench) — RAN (PERF-10, 359e9e8; standing row `worstworld`, the 200,000-entry form)
 
@@ -722,7 +726,8 @@ v1's deterministic counts: nd-attach's per-connection fd count on the box (its W
 
 What the operator records if v2 fails a limit:
 - a write p99 over 5 s with a low ssh RTT is the box's fsync or the writer; compare v1 on the same box;
-- a cold follow reopen over 60 s: compare its bytes with `bench-worstcut`'s worst tail (19.6 MB, retires; PERF-6), read over
+- a cold follow reopen over 60 s: compare its bytes with `bench-worstcut-retires`'s tail (19.7 MB, the worst; PERF-6, PERF-12), and its clock with
+  `bench-worstcut-rows`' re-derivation (an invoke tail re-judged: the slowest follow per byte), read over
   the friend's ssh link, since a remote follow pages its catch-up over the bridge (PROTOCOL's answer to
   CLIENT-12);
 - the resident's writes slow but the friends' fast: the provider's latency is on the resident's write path,

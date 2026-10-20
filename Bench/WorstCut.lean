@@ -1,7 +1,7 @@
 /-
-# Bench.WorstCut — `bench-worstcut SCRATCH [--harness-control]` (PERF-5, PERF-6; ROOT 2026-10-18)
+# Bench.WorstCut — the worst-cut harness, shared by one bench per tail shape (PERF-5, PERF-6, PERF-12)
 
-THE BAR's reopen at its TRUE worst cut, as a sized bench row (never a bar run: ~25k records of THE
+THE BAR's reopen at its TRUE worst cut, as sized bench rows (never a bar run: ~25k records of THE
 BAR's mix are ~18.9 MB, and a socket run of that size is not a gate). Everything that writes or opens
 is the deployed definition: `Receive.genesis`/`Receive.submit` under `Host.Deployed.X`,
 `Host.genesis`, `openWriter`, `commitBatch` (each frame admitted only with `withinTail`'s proof),
@@ -10,48 +10,34 @@ is the deployed definition: `Receive.genesis`/`Receive.submit` under `Host.Deplo
 seed): a bench's fixed identity, never a custody mode, so every count below is a function of the
 code alone (the Store's random key moves MAC bytes, never a size or a count).
 
-Four Stores, one per tail SHAPE (PERF-6, PERF-9: which tail costs most is measured, never assumed), each
-under `SCRATCH/<shape>`. In each, one founder births one data object; a base is sealed; then the tail
-is filled, `recordTurnsMax` one-cell Turns per batch record, until the next frame would leave
-`tailMax` of that base (`withinTail` refuses it): the most a reopen can ever fold past its base, made
-of the smallest Turns of that shape, so the most steps.
-- `writes`: one-slot `write`s to the object;
-- `births`: one-slot data-object `create`s (the World grows by a cell per step);
-- `rows` (PERF-9): the deployed Bell queue (world/resident/Bell.ob, LANG-58/59): installed, a bell born
-  whose resident is a second founder, then ring, answer, retire, ... : every Turn a row-only invoke
-  (see `rowsCall`);
-- `retires`: `revoke`s, each retiring one grant (a cell tombstoned, its weight credited). The grants
-  are born BEFORE the base, enough for the whole tail (a revoke's frame is sampled on the World and
-  the count re-derived from the sealed base's tailMax until it suffices), sealing whenever the
-  pre-base tail is full, so the base the tail folds onto holds every grant it retires.
+One exe per tail SHAPE (PERF-12: each is its own standing row, bounded well under the runner's
+deadline, and a change to one shape's module selects that row only): `bench-worstcut-writes`,
+`-births`, `-retires`, `-rows` (Bench.WorstCut<Shape>, each a `Shape` handed to `run`). Each builds its
+Store under `SCRATCH/<shape>`: one founder births one data object (with whatever the shape's `first`
+adds to that record); a base is sealed (and whatever `beforeTail` must put in the base, sealed with
+it); then the tail is filled, `recordTurnsMax` of the shape's Turns per batch record, until the next
+frame would leave `tailMax` of that base (`withinTail` refuses it): the most a reopen can ever fold
+past its base, made of the smallest Turns of that shape, so the most steps.
 
-The counts (marks on stderr, captured, as Bench.Count), per shape: the reopen (`foldStep` under
-countingEnv with a counted verify: what `host serve` runs at restart, HOST-22) and the follower's
-re-derivation of the same tail (`auditStep`, what follow pays as it pages). Each counted open must
-reach the World the uncounted reopen reaches (steps, chain, roots digest), or `FAIL replay`.
+The counts (marks on stderr, captured, as Bench.Count): the reopen (`foldStep` under countingEnv with
+a counted verify: what `host serve` runs at restart, HOST-22) and the follower's re-derivation of the
+same tail (`auditStep`, what follow pays as it pages). Each counted open must reach the World the
+uncounted reopen reaches (steps, chain, roots digest), or `FAIL replay`.
 
-Every tail must fill at least 99 % of tailMax (`FAIL not the worst cut` otherwise); a refusal
-before it (an allowance or any other bound binding first) is `FAIL <shape> …` by name, and each shape
-prints the allowance it left, so which bound binds is printed, not assumed. Prints `WORSTCUT <shape> …`
-lines, `WORSTCUT worst <metric> …` naming the costliest shape per metric, and
-`WASTE worstcut <metric> <ratio>` at that worst (trie hashes and verifies per step, reopen and
-re-derivation); ends `BENCH-WORSTCUT PASS`.
+The tail must fill at least 99 % of tailMax (`FAIL not the worst cut` otherwise); a refusal before it
+(an allowance or any other bound binding first) is `FAIL <shape> …` by name, and the allowance it left
+is printed, so which bound binds is printed, not assumed. Prints `WORSTCUT <shape> …` lines, and per
+metric (trie hashes and verifies per step, reopen and re-derivation) two WASTE lines: `WASTE
+worstcut-<shape> <metric> <ratio>` (the shape's own row) and `WASTE worstcut <metric> <ratio>` (the
+worst-over-shapes row: gates/waste.py keeps the largest value a run set printed for a row, so the four
+benches judged together are judged at their worst); ends `BENCH-WORSTCUT <shape> PASS`.
 `--harness-control`: the cut must also fill more than tailMax (a ratio above 1, which `withinTail`
-makes impossible), judged on the ordinary path after all four shapes are built, on the LAST shape
-counted (`rows`), so the control reads red only at the end of the shape loop:
-`FAIL rows: harness-control …`.
-
-The four Stores are built at once (one dedicated task each: they share nothing but the process);
-the counts run one at a time, since each captures the process's stderr.
+makes impossible), judged after the shape's Store is built and both its counted opens agree:
+`FAIL <shape>: harness-control …`.
 -/
 import Host.Deployed
 import Kernel.Sim.Deployed
 import Bench.Count
-import Lang.Surface
-import Lang.Read
-import Lang.Print
-import Lang.Rel
-import Lang.Program
 
 namespace Nanodregg.Bench.WorstCut
 
@@ -63,20 +49,45 @@ abbrev P : Kernel.Sim.Gen.Params D := Kernel.Sim.Deployed.params
 def founderSecret : ByteArray := "worstcut-founder".toUTF8
 def nextSecret : ByteArray := "worstcut-founder-next".toUTF8
 def founders : List (ByteArray × D) := [(P.pub founderSecret, nextKeyDigest X (P.pub nextSecret))]
-/-- The `rows` shape's second founder: the Bell's resident (the first rings and retires). -/
-def residentSecret : ByteArray := "worstcut-resident".toUTF8
-def residentNext : ByteArray := "worstcut-resident-next".toUTF8
-def foundersRows : List (ByteArray × D) := founders ++ [(P.pub residentSecret, nextKeyDigest X (P.pub residentNext))]
 
-/-- The founder's signed call of `body` on World `w`: Kernel.Sim.Gen's `signed` shape, its window
-starting at the World's height (the generator's `notBefore := 0` is refused past `windowMax`). -/
-def call (w : World D) (m : Kernel.Sim.Gen.Member D) (pins : List D) (body : Body D)
+/-- A Sim secret's Ed25519 key, derived once (PERF-12): the secret scalar, the prefix and the public
+key, which `Ed25519.sign` re-derives from the seed on every call. A bench call then costs one base
+multiplication to sign, not three (`P.pub` and `sign`'s own `pk`); the bytes are `P.pub`'s and
+`P.sign`'s (`Signer.pk_eq`, `Signer.sign_eq`). -/
+structure Signer where
+  a : Nat
+  pre : ByteArray
+  pk : ByteArray
+
+def Signer.of (secret : ByteArray) : Signer :=
+  match Codec.Ed25519.expand (Kernel.Sim.Deployed.seed secret) with
+  | (a, pre) => ⟨a, pre, Codec.Ed25519.encodePoint (Codec.Ed25519.baseMul a)⟩
+
+/-- RFC 8032 §5.1.6 with the key derived: `Ed25519.sign`'s body past its `expand` and `pk`. -/
+def Signer.sign (k : Signer) (msg : ByteArray) : ByteArray :=
+  let r := Codec.Ed25519.leNat (Codec.Sha512.hash (k.pre ++ msg)).val 0 64 % Codec.Ed25519.L
+  let R := Codec.Ed25519.encodePoint (Codec.Ed25519.baseMul r)
+  let h := Codec.Ed25519.leNat (Codec.Sha512.hash (R ++ k.pk ++ msg)).val 0 64 % Codec.Ed25519.L
+  R ++ Codec.Ed25519.le32Bytes ((r + h * k.a) % Codec.Ed25519.L)
+
+/-- A bench member with its key derived once. -/
+structure Who where
+  m : Kernel.Sim.Gen.Member D
+  k : Signer
+
+def Who.of (m : Kernel.Sim.Gen.Member D) : Who := ⟨m, Signer.of m.key⟩
+def Who.id (a : Who) : D := a.m.id
+
+/-- The member's signed call of `body` on World `w`: Kernel.Sim.Gen's `signed` shape, its window
+starting at the World's height (the generator's `notBefore := 0` is refused past `windowMax`). The
+key and signature are `P.pub` and `P.sign` of the member's secret (`Signer.pk_eq`, `Signer.sign_eq`). -/
+def call (w : World D) (m : Who) (pins : List D) (body : Body D)
     (rowPins : List (RowSlot D × D) := []) : Call D :=
   let u : Unsigned D :=
-    { world := w.origin, member := m.id, key := P.pub m.key, notBefore := w.height,
+    { world := w.origin, member := m.id, key := m.k.pk, notBefore := w.height,
       validUntil := w.height + 1 + 100, pins := Kernel.Sim.Gen.S.pinsFor X.env w pins,
       maxCharge := 1000000, body, rowPins }
-  { unsigned := u, signature := P.sign m.key (X.callMessage u) }
+  { unsigned := u, signature := m.k.sign (X.callMessage u) }
 
 /-- Submit `c` on `w` under the deployed `Ctx`; the Turn's step and roots, and the World after. -/
 def admit (w : World D) (c : Call D) : Except String ((Step D × D) × World D) :=
@@ -101,132 +112,13 @@ def openWith {F : Type} (dir : System.FilePath) (keys : Keys) (step : World D �
     IO (Except String (Opening (World D))) := do
   return (← openFollower dir keys c world recorder.mark originChain step).mapError (·.text)
 
-/-- A tail's shape: the one kind of one-cell Turn it is made of. -/
-inductive Shape | writes | births | retires | rows
-  deriving BEq
-
-def Shape.name : Shape → String
-  | .writes => "writes"
-  | .births => "births"
-  | .retires => "retires"
-  | .rows => "rows"
-
-def Shape.all : List Shape := [.writes, .births, .retires, .rows]
-
-/-- What one shape's cut measured. -/
-structure Cut where
-  shape : Shape
-  steps : Nat
-  reopenHashes : Nat
-  reopenVerifies : Nat
-  auditHashes : Nat
-  auditVerifies : Nat
-
-/-- One shape's Store, built to its cut (never counted yet). -/
-structure Built where
-  shape : Shape
-  dir : System.FilePath
-  keys : Keys
-  sealed : Sealed
-  tail : Nat
-  records : Nat
-  steps : Nat
-  allowanceBefore : Nat
-  allowanceAfter : Nat
-  grants : Nat
-
-/-- The pins and body of tail step `i` of `shape` (the `retires` tail retires `grants[i]`). -/
-def tailCall (shape : Shape) (m : Kernel.Sim.Gen.Member D) (obj : D) (grants : Array D) (i : Nat) :
-    Except String (List D × Body D) :=
-  match shape with
-  | .writes => .ok ([m.id, obj], .write obj [(stateBase, some (Kernel.Sim.Gen.nat (i + 1)))] none)
-  | .births => .ok ([m.id], .create none [] [(stateBase, Kernel.Sim.Gen.nat (i + 1))])
-  | .retires =>
-    if h : i < grants.size then let g := grants[i]; .ok ([m.id, g], .revoke g)
-    else .error s!"no grant left to retire at step {i} (the base holds {grants.size})"
-  | .rows => .error "the rows tail is rowsCall's"
-
 /-- Admit the founder's call of `body` on `w`, and the cell it bore, if any. -/
-def admitBorn (w : World D) (m : Kernel.Sim.Gen.Member D) (pins : List D) (body : Body D) :
+def admitBorn (w : World D) (m : Who) (pins : List D) (body : Body D) :
     Except String ((Step D × D) × World D × Option D) := do
   let (s, w') ← admit w (call w m pins body)
   match s.1 with
   | .turn t => pure (s, w', t.creates.head?.map (·.1))
   | _ => throw "the call was not a Turn"
-
-/-! ### The `rows` shape: the deployed Bell (world/resident/Bell.ob, LANG-58/59), installed and rung
-
-A round of the Bell queue in THE BAR is a ring (2 row inserts) and its answer (1 upsert of the ring's
-`rings` row with the answer, the ring's text sent back; 1 retract of `pending`); the owner retires an
-answered ring (1 retract of `rings`), which keeps `pending` under its 64 and `rings` under its 1024
-for a whole tail. So the tail is ring, answer, retire, ring, ... : every Turn a row-only
-invoke, no cell written. -/
-
-/-- What the rows tail needs: the resident member, the package, the bell, the resident's grant, and
-the two relations' declarations. -/
-structure RowsCtx where
-  b : Kernel.Sim.Gen.Member D
-  pkg : D
-  obj : D
-  gr : D
-  dP : Lang.RelDecl
-  dR : Lang.RelDecl
-
-def bellSource : System.FilePath := "world" / "resident" / "Bell.ob"
-
-def argOf (T : Lang.Ty) (d : Lang.Data) : ByteArray := (Lang.Wire.encodeData T d).getD .empty
-
-def ringKey (nb : Nat) (ringer : D) : Lang.Data :=
-  .record [("notBefore", .nat nb), ("ringer", .digest (X.env.bytes ringer))]
-
-/-- Relation `rel`'s row at `key` on `w`, pinned at what the signer sees (Lang.Journey's `pinRow`). -/
-def pinRow (rc : RowsCtx) (w : World D) (rel : Nat) (d : Lang.RelDecl) (key : Lang.Data) : List (RowSlot D × D) :=
-  match Lang.keyBytes d key with
-  | some k =>
-    let s : RowSlot D := .row ⟨rc.obj, rel, k⟩
-    [(s, rowPin X.env (headFloor X.env w.rows rc.obj rel) (rowAt X.env w.rows s))]
-  | none => []
-
-/-- Rows tail step `j` on `w` (methods: answer 0, retire 3, ring 4); `ring` is the notBefore of the
-round's ring (set at phase 0). The call, and the ring's notBefore after it. -/
-def rowsCall (rc : RowsCtx) (a : Kernel.Sim.Gen.Member D) (w : World D) (j ring : Nat) : Call D × Nat :=
-  match j % 3 with
-  | 0 =>
-    (call w a [a.id, rc.obj, rc.pkg]
-      (.invoke rc.obj 4 (argOf (.record [("text", .bytes)]) (.record [("text", .bytes "r".toUTF8)])) 100000 none), w.height)
-  | 1 =>
-    (call w rc.b [rc.b.id, rc.obj, rc.pkg, rc.gr]
-      (.invoke rc.obj 0 (argOf (.record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)])
-        (.record [("notBefore", .nat ring), ("ringText", .bytes "r".toUTF8), ("ringer", .digest (X.env.bytes a.id)),
-          ("text", .bytes "a".toUTF8)])) 100000 (some rc.gr))
-      (pinRow rc w 0 rc.dP (ringKey ring a.id) ++ pinRow rc w 1 rc.dR (ringKey ring a.id)), ring)
-  | _ =>
-    (call w a [a.id, rc.obj, rc.pkg]
-      (.invoke rc.obj 3 (argOf (.record [("notBefore", .nat), ("ringer", .digest)]) (ringKey ring a.id)) 100000 none)
-      (pinRow rc w 1 rc.dR (ringKey ring a.id)), ring)
-
-/-- Install the Bell, create a bell whose resident is `b`, grant `b` answer and ring: three admitted
-calls on `w`, staged; the context, the steps and the World after. -/
-def bellBase (src : String) (a b : Kernel.Sim.Gen.Member D) (w : World D) :
-    Except String (RowsCtx × Array (Step D × D) × World D) := do
-  let p ← match Lang.Surface.readPackage src with
-    | .ok p => pure p
-    | .error _ => throw s!"{bellSource} does not read as a package"
-  let some pb := Lang.Wire.encodePackage p | throw "the Bell has no package bytes"
-  let some dP := p.rels.lookup "pending" | throw "the Bell has no pending"
-  let some dR := p.rels.lookup "rings" | throw "the Bell has no rings"
-  let (s1, w1, pkg?) ← admitBorn w a [a.id] (.install pb)
-  let some pkg := pkg? | throw "the install bore no package"
-  let seed ← match Lang.Read.readData p.state s!"(record (open true) (resident #{Lang.Print.hex (X.env.bytes b.id)}))" with
-    | .ok (.record ds) => match Lang.stateSlots (Lang.recordRow p.state) ds 0 with
-      | some sl => pure sl
-      | none => throw "the bell's seed has no bytes"
-    | _ => throw "the bell's seed does not read"
-  let (s2, w2, obj?) ← admitBorn w1 a [a.id, pkg] (.create (some pkg) [] seed)
-  let some obj := obj? | throw "the create bore no bell"
-  let (s3, w3, gr?) ← admitBorn w2 a [a.id, b.id, obj] (.grant obj b.id [.invoke 0, .invoke 4] none)
-  let some gr := gr? | throw "the grant bore no cell"
-  pure (⟨b, pkg, obj, gr, dP, dR⟩, #[s1, s2, s3], w3)
 
 /-- Seal a base at the Store's tail (`host seal`'s path: the writer's open, its file checkpoint,
 `sealNow`); the base it sealed, as the next writer's open reads it. Every writer this opens is dropped
@@ -244,107 +136,77 @@ def sealBase (dir : System.FilePath) (keys : Keys) : IO (Except String Sealed) :
     return .ok o.sealed
   | .error f => return .error s!"open after the seal {f.text}"
 
-/-- Bear grants of `obj` to the founder (`mutate`, unparented: the founder acts as itself) until
-`goal` of them exist or the tail past the newest base is full, `recordTurnsMax` per record; the
-World and grants after. -/
-def bearGrants (dir : System.FilePath) (keys : Keys) (m : Kernel.Sim.Gen.Member D) (obj : D) (goal : Nat)
-    (w0 : World D) (grants0 : Array D) : IO (Except String (World D × Array D)) := do
-  let wr ← match ← openWriter dir keys c world recorder.mark originChain foldStep with
-    | .ok wr => pure wr
-    | .error f => return .error s!"open for the grants {f.text}"
-  let mut w := w0
-  let mut grants := grants0
-  let mut pos := wr.opening.pos
-  -- a bound on the loop, never reached: one record per round
-  for _ in [0:(goal - grants0.size) / recordTurnsMax + 1] do
-    if grants.size ≥ goal then break
-    let mut staged : Array (Step D × D) := #[]
-    let mut w' := w
-    let mut born : Array D := #[]
-    for _ in [0:min recordTurnsMax (goal - grants.size)] do
-      match admitBorn w' m [m.id] (.grant obj m.id [.mutate] none) with
-      | .ok (s, w'', some g) => staged := staged.push s; w' := w''; born := born.push g
-      | .ok (_, _, none) => return .error "a grant bore no cell"
-      | .error e => return .error s!"grant {grants.size + born.size}: {e}"
-    match ← commit wr.opening.sealed wr.segment keys pos staged with
-    | .ok (some p) => pos := p; w := w'; grants := grants ++ born
-    | .ok none => break
-    | .error e => return .error s!"commit {e}"
-  wr.segment.sync
-  return .ok (w, grants)
+/-- A tail shape: what its module (Bench.WorstCut<Shape>) adds to the shared build. `σ` is what its
+tail carries from step to step (the retires' grants, the rows' Bell and its ring). -/
+structure Shape (σ : Type) where
+  name : String
+  founders : List (ByteArray × D) := Nanodregg.Bench.WorstCut.founders
+  /-- More steps for the object's first record, on the World after its create (`g` the genesis, `m`
+  its founder, `obj` the object), and what the tail starts from. -/
+  first : World D → Who → World D → D → IO (Except String (Array (Step D × D) × World D × σ))
+  /-- After the first base is sealed, before the tail: what else the base the tail folds onto must
+  hold, committed and sealed under `dir` (the retires' grants); the World and state after. -/
+  beforeTail : System.FilePath → Keys → Who → D → World D → σ → IO (Except String (World D × σ)) :=
+    fun _ _ _ _ w s => pure (.ok (w, s))
+  /-- Tail step `j`'s call on `w` by the founder `m` on the object, and the state after it. -/
+  step : σ → Who → D → World D → Nat → Except String (Call D × σ)
+  /-- What the shape adds to its base line (the retires: the grants the base holds). -/
+  note : σ → String := fun _ => ""
 
-/-- The frame of one record of `recordTurnsMax` revokes staged on `w` (never committed): what the
-`retires` tail pays per record. -/
-def revokeFrame (w : World D) (m : Kernel.Sim.Gen.Member D) (obj : D) (grants : Array D) : Except String Nat := do
-  let mut staged : Array (Step D × D) := #[]
-  let mut w' := w
-  for i in [0:recordTurnsMax] do
-    let (pins, body) ← tailCall .retires m obj grants i
-    let (s, w'') ← admit w' (call w' m pins body)
-    staged := staged.push s; w' := w''
-  let some rec_ := Record.encode Codec.Deployed.digestCodec staged | throw "a record past its bounds"
-  pure (frameSize rec_)
+/-- What the cut measured. -/
+structure Cut where
+  steps : Nat
+  reopenHashes : Nat
+  reopenVerifies : Nat
+  auditHashes : Nat
+  auditVerifies : Nat
 
-/-- One shape's Store under `dir`, built to its cut. Touches nothing but `dir` and marks nothing,
-so the three shapes build at once (`worstcut`); only the counts, which capture this process's
-stderr, run one at a time. -/
-def build (dir : System.FilePath) (shape : Shape) : IO (Except String Built) := do
-  let name := shape.name
+/-- The shape's Store, built to its cut (never counted yet). -/
+structure Built where
+  name : String
+  dir : System.FilePath
+  keys : Keys
+  sealed : Sealed
+  tail : Nat
+  records : Nat
+  steps : Nat
+  allowanceBefore : Nat
+  allowanceAfter : Nat
+  note : String
+
+/-- The shape's Store under `dir`, built to its cut. Touches nothing but `dir` and marks nothing. -/
+def build {σ : Type} (dir : System.FilePath) (s : Shape σ) : IO (Except String Built) := do
+  let name := s.name
   if ← dir.pathExists then return .error s!"{dir} exists (SCRATCH must be fresh)"
-  let fs := if shape == .rows then foundersRows else founders
-  let g ← match Receive.genesis X "worstcut".toUTF8 "worstcut-nonce".toUTF8 allowanceMax fs with
+  let g ← match Receive.genesis X "worstcut".toUTF8 "worstcut-nonce".toUTF8 allowanceMax s.founders with
     | .ok g => pure g
     | .error r => return .error s!"genesis {r.name}"
-  let m : Kernel.Sim.Gen.Member D := ⟨founderId X g.origin 0, founderSecret, nextSecret⟩
+  let m := Who.of ⟨founderId X g.origin 0, founderSecret, nextSecret⟩
   let some key := Codec.Digest.ofBytes? (← IO.getRandomBytes 32) | return .error "getRandomBytes"
   let keys := Keys.ofKey key shapes
   if let .error f ← (Host.genesis dir key keys c world recorder.mark g : IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) then
     return .error s!"Host.genesis {f.text}"
-  let bellSrc ← if shape == .rows then IO.FS.readFile bellSource else pure ""
-  -- the object, in its own record (for `rows`, with the Bell installed, a bell, and its grant)
+  -- the object, in its own record (with what the shape's `first` adds)
   let wr0 ← match ← openWriter dir keys c world recorder.mark originChain foldStep with
     | .ok x => pure x
     | .error f => return .error s!"openWriter {f.text}"
   let (s0, w1, obj) ← match admitBorn g m [m.id] (.create none [] [(stateBase, Kernel.Sim.Gen.nat 0)]) with
-    | .ok (s, w1, some o) => pure (s, w1, o)
+    | .ok (st, w1, some o) => pure (st, w1, o)
     | .ok (_, _, none) => return .error "the create bore no cell"
     | .error e => return .error s!"create {e}"
-  let (first, w1, rows?) ← if shape == .rows then do
-      let b : Kernel.Sim.Gen.Member D := ⟨founderId X g.origin 1, residentSecret, residentNext⟩
-      match bellBase bellSrc m b w1 with
-      | .ok (rc, ss, w') => pure (#[s0] ++ ss, w', some rc)
-      | .error e => return .error s!"the Bell: {e}"
-    else pure (#[s0], w1, none)
-  match ← commit wr0.opening.sealed wr0.segment keys wr0.opening.pos first with
+  let (more, w1, st0) ← match ← s.first g m w1 obj with
+    | .ok x => pure x
+    | .error e => return .error s!"the first record: {e}"
+  match ← commit wr0.opening.sealed wr0.segment keys wr0.opening.pos (#[s0] ++ more) with
   | .ok (some _) => pure ()
   | .ok none => return .error "the first record left tailMax"
   | .error e => return .error s!"commit {e}"
   wr0.segment.sync
-  -- the base: sealed over the object (and, for `retires`, over every grant the tail retires)
+  -- the base: sealed over the object (and over whatever the shape's `beforeTail` adds)
   if let .error e ← sealBase dir keys then return .error e
-  let mut w := w1
-  let mut grants : Array D := #[]
-  if shape == .retires then
-    -- grants until those the newest base holds cover the tail its own tailMax allows: each round
-    -- bears toward the need (or until the pre-base tail is full), seals, and re-derives the need from
-    -- that base (a bound on the rounds, never reached)
-    let mut need := recordTurnsMax
-    let mut covered := false
-    for _ in [0:32] do
-      if covered then break
-      match ← bearGrants dir keys m obj need w grants with
-      | .ok (w', gs) => w := w'; grants := gs
-      | .error e => return .error e
-      let sealed ← match ← sealBase dir keys with
-        | .ok s => pure s
-        | .error e => return .error e
-      if grants.size ≥ need then
-        let frame ← match revokeFrame w m obj grants with
-          | .ok f => pure f
-          | .error e => return .error s!"revoke sample: {e}"
-        let need' := recordTurnsMax * (c.tailMax sealed.bytes / frame + 2)
-        if grants.size ≥ need' then covered := true else need := need'
-    unless covered do return .error s!"the base holds {grants.size} grants, short of the tail's need {need}"
+  let (w, st1) ← match ← s.beforeTail dir keys m obj w1 st0 with
+    | .ok x => pure x
+    | .error e => return .error e
   let wr ← match ← openWriter dir keys c world recorder.mark originChain foldStep with
     | .ok wr => pure wr
     | .error f => return .error s!"open for the tail {f.text}"
@@ -352,53 +214,53 @@ def build (dir : System.FilePath) (shape : Shape) : IO (Except String Built) := 
   unless sealed.steps ≥ 1 do return .error s!"no base past genesis (base at step {sealed.steps})"
   unless sealed.offset = wr.opening.pos.offset do return .error "the base is not at the writer's tail"
   let allowance0 := w.allowance
+  let mut w := w
+  let mut st := st1
   let mut pos := wr.opening.pos
   let mut i := 0
   let mut records := 0
   let mut full := false
-  let mut ring := 0
   -- a bound on the loop, never reached: tailMax over the smallest frame
   for _ in [0:(c.tailMax sealed.bytes) / 64 + 1] do
     if full then break
     let mut staged : Array (Step D × D) := #[]
     let mut w' := w
     let mut j := i
-    let mut ring' := ring
+    let mut st' := st
     for _ in [0:recordTurnsMax] do
-      let cl : Except String (Call D) ← match rows? with
-        | some rc => do
-          let (cl, rg) := rowsCall rc m w' j ring'
-          ring' := rg
-          pure (Except.ok cl)
-        | none => pure (match tailCall shape m obj grants j with
-          | .ok (pins, body) => Except.ok (call w' m pins body)
-          | .error e => Except.error e)
-      let r := cl.bind (admit w')
-      match r with
-      | .ok (s, w'') => staged := staged.push s; w' := w''; j := j + 1
+      match (s.step st' m obj w' j).bind fun (cl, st'') => (admit w' cl).map (·, st'') with
+      | .ok ((stp, w''), st'') => staged := staged.push stp; w' := w''; st' := st''; j := j + 1
       | .error e => return .error s!"{name} step {j}: {e}"
     match ← commit sealed wr.segment keys pos staged with
-    | .ok (some p) => pos := p; w := w'; records := records + 1; i := j; ring := ring'
+    | .ok (some p) => pos := p; w := w'; records := records + 1; i := j; st := st'
     | .ok none => full := true
     | .error e => return .error s!"commit {e}"
   unless full do return .error "the tail never reached tailMax within the loop's bound"
   wr.segment.sync
-  return .ok ⟨shape, dir, keys, sealed, pos.offset - sealed.offset, records, i, allowance0, w.allowance, grants.size⟩
+  return .ok ⟨name, dir, keys, sealed, pos.offset - sealed.offset, records, i, allowance0, w.allowance, s.note st⟩
 
 /-- A built Store's counts: the host's reopen, then the counted reopen and re-derivation. -/
-def count (b : Built) (control : Bool) : IO (Except String Cut) := do
-  let (name, dir, keys, sealed, tail, i) := (b.shape.name, b.dir, b.keys, b.sealed, b.tail, b.steps)
+def count (b : Built) (control : Bool) : IO (Except String (Cut × Nat × Nat × Nat)) := do
+  let (name, dir, keys, sealed, tail, i) := (b.name, b.dir, b.keys, b.sealed, b.tail, b.steps)
   let tmax := c.tailMax sealed.bytes
-  IO.println s!"WORSTCUT {name} base step {sealed.steps}, base world bytes {sealed.bytes}, tailMax {tmax}{if b.shape == .retires then s!", grants in the base {b.grants}" else ""}"
+  IO.println s!"WORSTCUT {name} base step {sealed.steps}, base world bytes {sealed.bytes}, tailMax {tmax}{b.note}"
   IO.println s!"WORSTCUT {name} tail {tail} bytes, {b.records} records, {i} steps ({recordTurnsMax} per record); allowance {b.allowanceBefore} -> {b.allowanceAfter} of allowanceMax {allowanceMax}: tailMax binds first"
   -- the reopen as the host runs it, uncounted, then counted; then the follower's re-derivation
-  let host ← match ← openWith dir keys foldStep with
-    | .ok o => pure o
-    | .error e => return .error s!"reopen {e}"
+  -- the host's reopen marks nothing, so it runs beside the counted opens (a follower open locks and
+  -- writes nothing); the counted ones run one at a time, since each captures this process's stderr
+  let t0 ← IO.monoMsNow
+  let hostTask ← IO.asTask (do let r ← openWith dir keys foldStep; return (r, ← IO.monoMsNow)) (prio := .dedicated)
   let foldCounted : World D → ByteArray → Except (Record.Fault (Reject D)) (World D) :=
     Record.step Codec.Deployed.digestCodec (World.step countingX.env) (World.roots countingX.env)
+  let t1 := t0
   let (ro, rerr) ← captured (openWith dir keys foldCounted)
+  let t2 ← IO.monoMsNow
   let (ao, aerr) ← captured (openWith dir keys auditRecord)
+  let t3 ← IO.monoMsNow
+  let (host, th) ← match ← IO.wait hostTask with
+    | .ok (.ok o, th) => pure (o, th)
+    | .ok (.error e, _) => return .error s!"reopen {e}"
+    | .error e => return .error s!"reopen: io {e}"
   let same (o : Opening (World D)) : Bool :=
     o.opened.world.steps == host.opened.world.steps && o.opened.world.chain.toHex == host.opened.world.chain.toHex
       && (World.roots X.env o.opened.world).toHex == (World.roots X.env host.opened.world).toHex
@@ -412,56 +274,42 @@ def count (b : Built) (control : Bool) : IO (Except String Cut) := do
     if control then
       unless tail > tmax do
         return .error s!"harness-control: the cut fills {tail} of tailMax {tmax}, and the control expects more than tailMax"
-    let k : Cut := ⟨b.shape, steps, marks rerr '#', marks rerr '@', marks aerr '#', marks aerr '@'⟩
+    let k : Cut := ⟨steps, marks rerr '#', marks rerr '@', marks aerr '#', marks aerr '@'⟩
     IO.println s!"WORSTCUT {name} reopen (foldStep) trie-hashes {k.reopenHashes} verifies {k.reopenVerifies}; re-derivation (auditStep) trie-hashes {k.auditHashes} verifies {k.auditVerifies}"
     -- at the cut: within one record of tailMax (a floor, so it is this exe's own check, never a
     -- waste ceiling; `withinTail` is the ceiling, by proof)
     unless tail * 100 ≥ tmax * 99 do return .error s!"not the worst cut: the {name} tail fills {tail} of tailMax {tmax}"
     IO.println s!"WORSTCUT {name} tail-bytes-per-tailmax {ratio tail tmax}, reopen-bytes-per-allowed-byte {ratio (sealed.bytes + tail) (sealed.bytes + tmax)}"
     IO.println s!"WORSTCUT {name} per step: reopen trie-hashes {ratio k.reopenHashes steps} verifies {ratio k.reopenVerifies steps}; audit trie-hashes {ratio k.auditHashes steps} verifies {ratio k.auditVerifies steps}"
-    return .ok k
+    return .ok (k, th - t0, t2 - t1, t3 - t2)
 
-/-- The cut whose `count / steps` is largest (the first, on a tie), exactly (cross-multiplied). -/
-def worst (count : Cut → Nat) : List Cut → Option Cut
-  | [] => none
-  | k :: ks => some <| ks.foldl (fun a b => if count b * a.steps > count a * b.steps then b else a) k
-
-def worstcut (scratch : System.FilePath) (control : Bool) : IO UInt32 := do
+def worstcut {σ : Type} (s : Shape σ) (scratch : System.FilePath) (control : Bool) : IO UInt32 := do
   IO.FS.createDirAll scratch  -- runs.py's `{fresh}` does not exist when the run starts
-  let shapes := Shape.all
-  let tasks ← shapes.mapM fun shape => IO.asTask (build (scratch / shape.name) shape) (prio := .dedicated)
-  let mut built : Array Built := #[]
-  let mut failed : Option String := none
-  for (shape, t) in shapes.zip tasks do
-    match ← IO.wait t with
-    | .ok (.ok b) => built := built.push b
-    | .ok (.error e) => failed := failed <|> some s!"{shape.name}: {e}"
-    | .error e => failed := failed <|> some s!"{shape.name}: io {e}"
-  if let some e := failed then return ← fail e
-  let mut cuts : Array Cut := #[]
-  -- the control's impossible expectation is judged on the LAST shape counted, so it reads red only
-  -- once every shape was built and the count loop reached its end (GATES-6)
-  for (b, n) in built.toList.zipIdx do
-    match ← count b (control && n + 1 = built.size) with
-    | .ok k => cuts := cuts.push k
-    | .error e => return ← fail s!"{b.shape.name}: {e}"
-  let metrics : List (String × (Cut → Nat)) :=
-    [("reopen-trie-hashes-per-step", (·.reopenHashes)), ("reopen-verifies-per-step", (·.reopenVerifies)),
-     ("audit-trie-hashes-per-step", (·.auditHashes)), ("audit-verifies-per-step", (·.auditVerifies))]
-  for (metric, count) in metrics do
-    let some k := worst count cuts.toList | return ← fail "no shape measured"
-    let all := ", ".intercalate (cuts.toList.map fun x => s!"{x.shape.name} {ratio (count x) x.steps}")
-    IO.println s!"WORSTCUT worst {metric} {ratio (count k) k.steps} ({k.shape.name}; {all})"
-    IO.println s!"WASTE worstcut {metric} {ratio (count k) k.steps}"
-  IO.println "BENCH-WORSTCUT PASS"
+  let t0 ← IO.monoMsNow
+  let b ← match ← build (scratch / s.name) s with
+    | .ok b => pure b
+    | .error e => return ← fail s!"{s.name}: {e}"
+  let t1 ← IO.monoMsNow
+  let (k, tr, tc, ta) ← match ← count b control with
+    | .ok k => pure k
+    | .error e => return ← fail s!"{s.name}: {e}"
+  -- the box's load moves these, so they are printed and never judged (no WASTE line, no row)
+  IO.println s!"WORSTCUT {s.name} wall ms (reported, never judged): build {t1 - t0}, reopen {tr} (beside the counted opens), counted reopen {tc}, re-derivation {ta}"
+  let metrics : List (String × Nat) :=
+    [("reopen-trie-hashes-per-step", k.reopenHashes), ("reopen-verifies-per-step", k.reopenVerifies),
+     ("audit-trie-hashes-per-step", k.auditHashes), ("audit-verifies-per-step", k.auditVerifies)]
+  for (metric, n) in metrics do
+    IO.println s!"WASTE worstcut-{s.name} {metric} {ratio n k.steps}"
+    IO.println s!"WASTE worstcut {metric} {ratio n k.steps}"
+  IO.println s!"BENCH-WORSTCUT {s.name} PASS"
   return 0
 
-def run (args : List String) : IO UInt32 := do
+def run {σ : Type} (s : Shape σ) (args : List String) : IO UInt32 := do
   let (scratch, control) ← match args with
-    | [s] => pure (s, false)
-    | [s, "--harness-control"] => pure (s, true)
-    | _ => do IO.eprintln "usage: bench-worstcut SCRATCH [--harness-control]"; return 2
-  try worstcut scratch control
+    | [d] => pure (d, false)
+    | [d, "--harness-control"] => pure (d, true)
+    | _ => do IO.eprintln s!"usage: bench-worstcut-{s.name} SCRATCH [--harness-control]"; return 2
+  try worstcut s scratch control
   catch e =>
     IO.println s!"FAIL io: {e}"
     return (1 : UInt32)

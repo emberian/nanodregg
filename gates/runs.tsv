@@ -47,5 +47,8 @@ cargo:client:supervise	host	exit 0	nobin RED
 cargo:attach:attach	host	exit 0	nobin RED
 bench-count	-	PERF-3's counter over THE BAR's Store: scripts/bar.sh runs it on the Store it made (its toy-Store plant, its WASTE lines, its --harness-control under the row's control)	-
 script:scripts/bar.sh	--records 60 --standing --root {fresh}	BAR verdict PASS	--records 60 --standing --root {fresh} --harness-control
-standing:bench-worstcut	{fresh}	BENCH-WORSTCUT PASS	{fresh} --harness-control
+standing:bench-worstcut-writes	{fresh}	BENCH-WORSTCUT writes PASS	{fresh} --harness-control
+standing:bench-worstcut-births	{fresh}	BENCH-WORSTCUT births PASS	{fresh} --harness-control
+standing:bench-worstcut-retires	{fresh}	BENCH-WORSTCUT retires PASS	{fresh} --harness-control
+standing:bench-worstcut-rows	{fresh}	BENCH-WORSTCUT rows PASS	{fresh} --harness-control
 standing:bench-worstworld	{fresh} synthetic 200000	BENCH-WORSTWORLD PASS	{fresh} synthetic 200000 --harness-control
