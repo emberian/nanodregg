@@ -1013,3 +1013,15 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 **Mutations** (`logs/client9-mut3.py` → `.out`): H1–H4 are RED. H5, the loop-bound end dropping the hint, is GREEN: 72 reply patterns probed, and Lean's table always ends first, so that end is a backstop no plant reaches. It carries `why` so both uncertain ends agree. It is declared, not claimed.
 **Critique.** "Last" is not separately planted: a drive makes one confirm or probe before its uncertain end. The rows' Loopback model (PROTOCOL-58's `dropHint`) cannot see this store regress; these two plants can.
 **Size.** client library 2520 → 2528 (ROOT ruling). Status: landed (this commit).
+
+## CLIENT-33 · Test scratch belongs to its creating test thread (2026-10-20, CX-GATES; ROOT granted CLIENT item)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none.
+
+**Decision.** devtools::scratch registers each directory in a thread-local guard. The guard removes those directories when the creating test thread exits, including after an assertion panic. The existing initial removal of a same-name directory remains. This fixes the leak at creation rather than scheduling deletion of the shared cache. The integration plant spawns a test thread, observes its directory while it runs, joins it, and asserts both absence and an unchanged matching directory count. The previously leaked directories belong to Ember and are left untouched.
+
+**Alternative.** Change scratch to return an owned path guard and migrate every caller. Several callers immediately call .join() and discard the root value; a guard would delete that root before the resulting path is used. Migrating all callers is possible, but would scatter a shared test-lifetime rule across many crates.
+
+**Critique.** A test that deliberately hands its scratch path to an unjoined thread outliving the creator will see the directory removed. The existing tests use the path within the creating test's lifetime; such a handoff would need an explicit owner.
+
+**Meta-critique.** Thread-local cleanup is attractive because it preserves the PathBuf API. The plant tests the actual destructor boundary rather than assuming that a successful test assertion implies cleanup.

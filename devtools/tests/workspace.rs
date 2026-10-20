@@ -146,3 +146,37 @@ fn the_built_supervisor_runs_the_built_host() {
     assert!(!pid.exists(), "the holder removes its pid file");
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn scratch_count_does_not_grow_across_one_test_run() {
+    let prefix = format!("CX-GATES-scratch-{}-", std::process::id());
+    let base = std::env::var_os("ND_SCRATCH").map_or_else(
+        || std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".cache/nd-t"),
+        std::path::PathBuf::from,
+    );
+    let count = || {
+        fs::read_dir(&base)
+            .expect("scratch base")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
+    };
+    let before = count();
+    let p = std::thread::spawn({
+        let name = format!("{prefix}one");
+        move || {
+            let p = nanodregg_devtools::scratch(&name);
+            assert!(p.is_dir(), "scratchAbsent: {}", p.display());
+            fs::write(p.join("sentinel"), b"test").expect("write sentinel");
+            p
+        }
+    })
+    .join()
+    .expect("scratch test thread");
+    assert!(!p.exists(), "scratchLeaked: {}", p.display());
+    assert_eq!(
+        count(),
+        before,
+        "scratchCountGrew: one test run left a directory"
+    );
+}

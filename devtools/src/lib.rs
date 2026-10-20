@@ -6,6 +6,7 @@
 //!
 //! A dev-dependency only. Its `assert!`s are test failures, which is why it may panic.
 
+use std::cell::RefCell;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,23 @@ pub fn repo() -> PathBuf {
 /// custody reads accept (owned by the euid or root, writable by no one else; sshd's StrictModes):
 /// `$ND_SCRATCH`, else `$HOME/.cache/nd-t`. Not `/tmp` (sticky but world-writable) and not a
 /// target dir (umask 002 leaves it group-writable on hbox). Short, so a socket path inside fits
-/// sun_path. An old directory of the same name is removed first; the caller removes it after.
+/// sun_path. An old directory of the same name is removed first. The creating test thread removes
+/// its scratch directories when it exits, including after a test panic.
+struct ScratchDirs(RefCell<Vec<PathBuf>>);
+
+impl Drop for ScratchDirs {
+    fn drop(&mut self) {
+        for path in self.0.get_mut().drain(..).rev() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
+thread_local! {
+    static SCRATCH_DIRS: ScratchDirs = const { ScratchDirs(RefCell::new(Vec::new())) };
+}
+
+/// Create a guarded scratch directory for the current test thread.
 pub fn scratch(name: &str) -> PathBuf {
     let base = std::env::var_os("ND_SCRATCH").map_or_else(
         || {
@@ -39,7 +56,9 @@ pub fn scratch(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&d);
     let made = mkdirs(&d);
     assert!(made.is_ok(), "plant: scratch {}: {made:?}", d.display());
-    canonical(&d)
+    let d = canonical(&d);
+    SCRATCH_DIRS.with(|dirs| dirs.0.borrow_mut().push(d.clone()));
+    d
 }
 
 /// `mkdir -p` with every created directory mode 0700 (whatever the umask), so a test's workspace
