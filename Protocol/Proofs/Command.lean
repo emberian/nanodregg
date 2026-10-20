@@ -198,6 +198,21 @@ theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {
   repeat' split at h
   all_goals simp [refused, printed] at h
 
+theorem sendCancel_ne_submit {X : Ctx D} {w : World D} {argv : List ByteArray} {cb result call k : ByteArray} :
+    sendCancel X w argv cb result ≠ .submit call k := by
+  intro h
+  unfold sendCancel next at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_submit h | simp [refused] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem cancelAnswer_ne_submit {X : Ctx D} {cb result call k : ByteArray} :
+    cancelAnswer X cb result ≠ .submit call k := by
+  intro h
+  unfold cancelAnswer at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_submit h | simp [refused, printed, declined] at h
+
 omit [Ord D] [DecidableEq D] in
 theorem settled_ne_submit {X : Ctx D} {out result call k : ByteArray} :
     settled X out result ≠ .submit call k := by
@@ -307,6 +322,8 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; (try dsimp only at h); exact envelopeSign_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settled_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact sendCancel_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelAnswer_ne_submit h))
   all_goals (try (obtain ⟨h1, h0, h2⟩ := h; injection h2 with h3 h4; subst h1 h0 h3
                   exact ⟨rfl, rfl, _, _, _, _, _, _, ‹body _ _ _ _ _ = _›, ‹rangesOf _ _ _ = _›,
                     ‹plan _ _ _ _ _ _ = _›, rfl⟩))
@@ -1121,5 +1138,186 @@ theorem settled_uncertain (X : Ctx D) (out p : ByteArray) :
   unfold settled
   rw [dif_pos (by omega), hx]
   rfl
+
+/-! ## `cancel CALL` (PROTOCOL-63) -/
+
+/-- **A well-formed cancel event its own re-judge does not record is `cancelForged`**: a tag-2 event
+whose parts read and whose call decodes, but that `Receive.cancel` on follow's World does not
+record under the event's signature (it does not verify under the call's member's key there, the
+call names another World, or `World.refuse` declines it), is refused by the name the audit gives
+the same log (`Receive.forgedName`), never the positional `eventMismatch`. -/
+theorem absorbStep_cancelForged {X : Ctx D} {w : World D} {e sig cb : ByteArray} {c : Call D}
+    (h0 : e[0]? = some eventCancel) (hp : cancelParts e = some (sig, cb)) (hc : X.decodeCall cb = some c)
+    (hn : ∀ v r w', Receive.cancel X w c sig ≠ .recorded v r w') :
+    absorbStep X w e = .error (.receive .cancelForged) := by
+  have hpos : 0 < e.size := by
+    rcases Nat.eq_zero_or_pos e.size with hz | hz
+    · rw [getElem?_neg e 0 (by omega)] at h0; cases h0
+    · exact hz
+  have he : e[0] = eventCancel := by
+    rw [getElem?_pos e 0 hpos] at h0; exact Option.some.inj h0
+  unfold absorbStep
+  rw [dif_pos hpos, if_pos he, hp]
+  cases hrc : Receive.cancel X w c sig with
+  | recorded v r w' => exact absurd hrc (hn v r w')
+  | _ => simp [hc, hrc]
+
+/-- **A cancel admits nothing** (law 1 beside `Op.effect_write_iff`): `Receive.cancel` only records a
+refusal or declines. The writer's `cancel` op takes exactly its World and its staging
+(`Host.step_cancel`, HOST-66), so with this `submit` stays the one admission path. -/
+theorem cancel_never_admits (X : Ctx D) (w : World D) (c : Call D) (sig : ByteArray) (t : Turn D)
+    (w' : World D) : Receive.cancel X w c sig ≠ .admitted t w' := by
+  unfold Receive.cancel
+  split
+  · exact fun h => by cases h
+  · split <;> exact fun h => by cases h
+
+/-- **Follow sends only a cancel its own World records** (PROTOCOL-63): when phase 9 of `cancel CALL`
+(`sendCancel`) relays an op, the op is `cancel`, its payload is THE tag-2 event of custody's
+signature and the call (`cancelEvent`, the bytes the log will serve, `absorbStep_cancelEvent`), and
+`Receive.cancel` on follow's World records that cancel: the call decodes and names this World, and
+custody's signature verifies under the call's member's current key there (`cancel_recorded`'s
+`cancelAuth`) inside the call's window. So, on follow's World, a cancel of another member's
+call, of a call past its window or of one already recorded is not relayed by this phase; that no
+OTHER arm relays `cancel` is `step_host_cancel`. -/
+theorem sendCancel_host {X : Ctx D} {w : World D} {argv : List ByteArray} {cb result : ByteArray}
+    {op : Op} {p k : ByteArray} (h : sendCancel X w argv cb result = .host op p k) :
+    op = .cancel ∧ ∃ s c v r w', Signed.ofBytes result = some s ∧ X.decodeCall cb = some c ∧
+      Receive.cancel X w c s.signature = .recorded v r w' ∧ p = cancelEvent s.signature cb := by
+  unfold sendCancel at h
+  split at h
+  · rename_i s c hs hc
+    split at h
+    · rename_i v r w' hrec
+      unfold next at h
+      split at h
+      · simp only [Reply.host.injEq] at h
+        obtain ⟨rfl, rfl, -⟩ := h
+        exact ⟨rfl, s, c, v, r, w', hs, hc, hrec, rfl⟩
+      · simp [refused] at h
+    all_goals first
+      | (unfold refusedAt at h; split at h <;> simp [refused] at h)
+      | simp [refused] at h
+  all_goals simp [refused] at h
+
+/-- The tooth: a cancel `Receive.cancel` declines on follow's World is never relayed. -/
+theorem sendCancel_declined_not_host {X : Ctx D} {w : World D} {argv : List ByteArray}
+    {cb result : ByteArray} {s : Signed} {c : Call D} {v : Verdict D}
+    (hs : Signed.ofBytes result = some s) (hc : X.decodeCall cb = some c)
+    (hd : Receive.cancel X w c s.signature = .declined v) (op : Op) (p k : ByteArray) :
+    sendCancel X w argv cb result ≠ .host op p k := by
+  intro h
+  obtain ⟨-, s', c', _, _, _, hs', hc', hrec, -⟩ := sendCancel_host h
+  rw [hs] at hs'; cases hs'
+  rw [hc] at hc'; cases hc'
+  rw [hd] at hrec; cases hrec
+
+/-! ### No helper relays an op (PROTOCOL-63: `step_host_cancel`) -/
+
+omit [Ord D] [DecidableEq D] in
+theorem refusedAt_ne_host {X : Ctx D} {r : Refusal D} {op : Op} {p k : ByteArray} :
+    refusedAt X r ≠ .host op p k := by
+  unfold refusedAt; split <;> simp [refused]
+
+theorem describe_ne_host {X : Ctx D} {w : World D} {obj : D} {op : Op} {p k : ByteArray} :
+    describe X w obj ≠ .host op p k := by
+  unfold describe
+  split
+  · simp [refused]
+  · split <;> simp [refused, printed]
+
+theorem rangeRender_ne_host {X : Ctx D} {w : World D} {obj : D} {rel : String} {most : Nat}
+    {pre : Option String} {op : Op} {p k : ByteArray} : rangeRender X w obj rel most pre ≠ .host op p k := by
+  unfold rangeRender
+  split
+  · simp [refused]
+  · split <;> simp [refused, printed]
+
+omit [Ord D] [DecidableEq D] in
+theorem envelopeSign_ne_host {t : Nat} {m k' : ByteArray} {op : Op} {p k : ByteArray} :
+    envelopeSign t m k' ≠ .host op p k := by
+  unfold envelopeSign; split <;> simp
+
+omit [Ord D] [DecidableEq D] in
+theorem unknownKeyEnd_ne_host {X : Ctx D} {cmd : Cmd D} {op : Op} {p k : ByteArray} :
+    unknownKeyEnd X cmd ≠ .host op p k := by
+  intro h; unfold unknownKeyEnd at h; split at h
+  · simp [refused] at h
+  · exact refusedAt_ne_host h
+
+omit [Ord D] [DecidableEq D] in
+theorem custodyEnd_ne_host {X : Ctx D} {cmd : Cmd D} {st : State} {r : Refusal D} {op : Op}
+    {p k : ByteArray} : custodyEnd X cmd st r ≠ .host op p k := by
+  intro h; unfold custodyEnd at h; split at h
+  · split at h
+    · exact unknownKeyEnd_ne_host h
+    · simp [refused] at h
+  · simp [refused] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem envelopeRefused_ne_host {X : Ctx D} {me : Self D} {argv : List ByteArray} {cmd : Cmd D}
+    {a b c d p' : ByteArray} {op : Op} {p k : ByteArray} : envelopeRefused X me argv cmd a b c d p' ≠ .host op p k := by
+  intro h
+  unfold envelopeRefused next at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_host h | (simp [refused] at h; done) | (simp [notServed] at h; done) | exact unknownKeyEnd_ne_host h | ((try dsimp only at h); exact envelopeSign_ne_host h) | simp at h
+
+theorem receiptLines_ne_host {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w : World D}
+    {cb : ByteArray} {op : Op} {p k : ByteArray} : receiptLines X dc me w cb ≠ .host op p k := by
+  intro h
+  unfold receiptLines at h
+  repeat' split at h
+  all_goals simp [refused, printed] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem cancelAnswer_ne_host {X : Ctx D} {cb result : ByteArray} {op : Op} {p k : ByteArray} :
+    cancelAnswer X cb result ≠ .host op p k := by
+  intro h
+  unfold cancelAnswer at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_host h | simp [refused, printed, declined] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem settled_ne_host {X : Ctx D} {out result : ByteArray} {op : Op} {p k : ByteArray} :
+    settled X out result ≠ .host op p k := by
+  intro h
+  unfold settled at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_host h | simp [refused, declined] at h
+
+/-- **Every `cancel` op follow ever relays is a cancel its own World records** (PROTOCOL-63; the
+whole machine, not one phase): if `step` hands the client a `host` step for the `cancel` op, follow's
+state is unchanged and the payload is THE tag-2 event `cancelEvent s.signature cb` of a call `c`
+that `cb` decodes to, which `Receive.cancel` on follow's World records under that signature (so
+`cancelAuth` held there: the signature verifies under the CALL's member's key, inside the call's
+window ON FOLLOW'S WORLD, not yet recorded there). It is phase 9's `sendCancel` (`sendCancel_host`);
+no other arm relays `cancel`. -/
+theorem step_host_cancel {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f f' : Follow D} {p : Persist D} {kb result pl k : ByteArray}
+    (h : step X dc B me f kb result = (f', p, .host .cancel pl k)) :
+    f' = f ∧ p = .steps [] ∧ ∃ (s : Signed) (c : Call D) (v : Verdict D) (r : Refused D) (w' : World D) (cb : ByteArray),
+      X.decodeCall cb = some c ∧
+      Receive.cancel X f.world c s.signature = .recorded v r w' ∧ pl = cancelEvent s.signature cb := by
+  unfold step next at h
+  repeat' split at h
+  all_goals (try simp only [refused, printed, behind, notServed, Prod.mk.injEq, reduceCtorEq, and_false] at h)
+  all_goals (repeat' split at h)
+  all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false, Reply.host.injEq, false_and] at h)
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
+                  all_goals simp [refused, printed] at h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact custodyEnd_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact describe_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact rangeRender_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact refusedAt_ne_host h))
+  all_goals (try (exfalso; exact refusedAt_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact envelopeRefused_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; (try dsimp only at h); exact envelopeSign_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settled_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelAnswer_ne_host h))
+  all_goals (try (obtain ⟨h1, h0, h2⟩ := h; subst h1 h0
+                  obtain ⟨-, s, c, v, r, w', -, hc, hrec, hp⟩ := sendCancel_host h2
+                  exact ⟨rfl, rfl, s, c, v, r, w', _, hc, hrec, hp⟩))
+  done
 
 end Nanodregg.Protocol.Command

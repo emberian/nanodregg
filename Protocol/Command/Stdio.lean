@@ -23,7 +23,7 @@ verb does not compile until its author decides its arm, so the surface never wid
 def Verb.onStdio : Verb → Bool
   | .init | .rotate | .adopt | .invite => false
   | .enroll | .install | .create | .write | .law | .invoke | .grant | .revoke | .read | .sync
-  | .issue | .account | .transfer | .credit | .receipt => true
+  | .issue | .account | .transfer | .credit | .receipt | .cancel => true
 
 /-- The verbs a resident may run through `nd --stdio`. -/
 def stdioVerbs : List Verb := Verb.all.filter Verb.onStdio

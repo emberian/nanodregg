@@ -30,6 +30,15 @@ is the kernel's or the receive layer's.
   after the batch's sync (`Host.Page`);
 * `read` — the same envelope, then a page of the newest base's World bytes from byte `start`
   (`readReplyLayout`: height, total, digest, chain, bytes; HOST-15);
+* `cancel` — a member's cancel of its own signed call (KERNEL-60's C1, HOST-66): the payload is
+  `Protocol.cancelEvent sig call`, the very bytes of page event tag 2, read by
+  `Protocol.cancelParts` (a first byte other than `eventCancel`, or parts that do not read,
+  are declined `undecodableCall`: one encoding per cancel, on the wire as in the log); a call already
+  journaled answers `ok` with its receipt (a cancel never undoes an admitted call); past
+  `journalForgets` an unrecorded call answers `uncertain forgotten`, as `submit` does; otherwise the
+  Host decides ONCE with `Receive.cancel` and commits exactly what it returns: `recorded` commits the
+  cancel record (`refused cancelled`, final; it reaches followers as event tag 2), `declined`
+  commits nothing. `Host.Proofs.Serve.step_cancel`.
   `command`, `resume` belong to `follow.sock` and are refused `wrongSocket`.
 
 A receipt is `u64 height ‖ turn digest`. A refusal's payload is its NAME as UTF-8, from its owner's
@@ -162,6 +171,22 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Step D) :=
       match Protocol.Envelope.check X w e with
       | .error r => .reply Protocol.Status.refused.code r.payload
       | .ok () => .defer (.log e.start)
+  | some .cancel =>
+    match (if f.payload[0]? = some Protocol.eventCancel then Protocol.cancelParts f.payload else none) with
+    | none => refuse (declined FrameRefusal.undecodableCall.name)
+    | some (sig, cb) =>
+      match X.decodeCall cb with
+      | none => refuse (declined FrameRefusal.undecodableCall.name)
+      | some c =>
+        match w.journalAt X.env (txIdOf X c) with
+        | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
+        | none =>
+          if (refusedAnswer X w c).isNone && journalForgets w.height c.unsigned.notBefore then refuse forgotten else
+          match cancel X w c sig with
+          | .recorded v r w' =>
+            let (st, p) := settled X w c (.recorded v r w')
+            .commit (.refusal r) w' st p
+          | o => refuse (settled X w c o)
   | some .command => refuse (named (FrameRefusal.wrongSocket .command).name)
   | some .resume => refuse (named (FrameRefusal.wrongSocket .resume).name)
 

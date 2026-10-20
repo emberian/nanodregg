@@ -7,7 +7,10 @@
   rather than reinterpreted (`Op.code_injective`);
 * no two operations name the same receiver: no function has two wires (`Op.receiver_injective`) —
   minidregg's twin class (one receiver behind a family opcode and behind op 2, 34 beside 164);
-* exactly one operation may append (`Op.effect_write_iff`): one admission path (law 1);
+* exactly two operations may append (`Op.effect_write_iff`): `submit`, the one admission path (law
+  1), and `cancel`, which only ever records a refusal (`Command.cancel_never_admits`: its receiver
+  `Receive.cancel` admits no Turn; the writer's op takes exactly `Receive.cancel`'s World and
+  staging, `Host.step_cancel`);
 * the client's bounds fit inside one frame, and the supervisor's buffers inside 32 MiB.
 -/
 import Protocol.Table
@@ -30,11 +33,11 @@ theorem code_of_ofCode? {b : UInt8} {op : Op} (h : ofCode? b = some op) : op.cod
 theorem receiver_injective {a b : Op} (h : a.receiver = b.receiver) : a = b := by
   cases a <;> cases b <;> first | rfl | (simp [receiver] at h)
 
-theorem effect_write_iff (op : Op) : op.effect = .write ↔ op = .submit := by
+theorem effect_write_iff (op : Op) : op.effect = .write ↔ op = .submit ∨ op = .cancel := by
   cases op <;> decide
 
 theorem write_on_host (op : Op) (h : op.effect = .write) : op.socket = .host := by
-  rw [(effect_write_iff op).mp h]; rfl
+  rcases (effect_write_iff op).mp h with rfl | rfl <;> rfl
 
 end Op
 

@@ -79,8 +79,9 @@ inductive Refusal (D : Type)
   | host (name : String)
   /-- the logged step at this log position does not re-derive on follow's World: a Turn event that
   does not derive, a refusal event that `Receive.judge` does not record, or a cancel event that is
-  not one (`cancelParts`) or that `Receive.cancel` does not record under its signature (a kernel
-  rejection of a derived Turn is refused by the kernel's own name, `reject`) -/
+  not one (`cancelParts`, or a call that does not decode) (a kernel rejection of a derived Turn is
+  refused by the kernel's own name, `reject`; a well-formed cancel event that `Receive.cancel` does
+  not record under its signature by the audit's name, `receive cancelForged`) -/
   | eventMismatch (step : Nat)
   | badState
   | badResult
@@ -270,7 +271,7 @@ only (its possession signature; every other verb's phase 2 is a `log` reply), 3 
 signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature), 8 (an
 invitation's signature). -/
 def custodyPhase (isInit : Bool) (phase : UInt8) : Bool :=
-  phase == 1 || phase == 3 || phase == 5 || phase == 6 || phase == 8 || (isInit && phase == 2)
+  phase == 1 || phase == 3 || phase == 5 || phase == 6 || phase == 8 || phase == 9 || (isInit && phase == 2)
 
 /-- Custody's result (`u8 status ‖ payload`): ok hands on the payload, refused carries one of
 `CustodyRefusal` by `custodyRefusalLayout`; anything else is `badResult`. -/
@@ -344,7 +345,8 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
-  | .init _ | .read _ _ | .describe _ | .rangeRead .. | .adopt _ _ | .sync | .invite _ | .receipt _ => .error .badState
+  | .init _ | .read _ _ | .describe _ | .rangeRead .. | .adopt _ _ | .sync | .invite _ | .receipt _ | .cancel _ =>
+      .error .badState
 
 /-- The row pin follow states for a row slot of its World (KERNEL-54): the leaf's digest, or absence
 at its relation's floor, read from the rows trie it holds. -/
@@ -409,24 +411,14 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rs : List (R
 
 /-! ## Catching up -/
 
-/-- A cancel event's signature and call bytes (`eventCancel`: `2 ‖ nat64 n ‖ sig ‖ call`): the
-length read at byte 1, then `n` signature bytes, then the rest. `none` when the length does not
-read, is `0`, is past `cancelBytesMax`, or runs past the event (each is one encoding the writer's
-`stepEvent` never makes, PROTOCOL-60). -/
-def cancelParts (e : ByteArray) : Option (ByteArray × ByteArray) :=
-  match Codec.Stream.nat64.get e 1 with
-  | .ok (n, j) =>
-      if 0 < n ∧ n ≤ Kernel.Bounds.cancelBytesMax ∧ j + n ≤ e.size then
-        some (e.extract j (j + n), e.extract (j + n) e.size)
-      else none
-  | .error _ => none
-
 /-- Re-derive one logged step on follow's World by the Host's own decision functions: a Turn event
 by `Receive.submit` (receive, then admit), a refusal event by `Receive.judge`, which must RECORD it
 (the follower's `auditRefusal` rule), a cancel event by `Receive.cancel` with the event's signature,
 which must record it too (KERNEL-60; PROTOCOL-60: before tag 2 the page dropped the signature and a
 follower's chain broke on the first cancel). A Turn that derives but the kernel rejects is refused
-by the kernel's name (a writer that admits a call it recorded refused is caught `refusedFinal`);
+by the kernel's name (a writer that admits a call it recorded refused is caught `refusedFinal`); a
+well-formed cancel event that `Receive.cancel` does not record is refused `cancelForged`, the name
+the audit gives the same log (`Receive.forgedName`): one name per fault, follower and audit alike;
 anything else that does not re-derive is `eventMismatch` at its log position. -/
 def absorbStep (X : Ctx D) (w : World D) (e : ByteArray) : Except (Refusal D) (Kernel.Step D × World D) :=
   let pos := w.steps + 1
@@ -440,7 +432,7 @@ def absorbStep (X : Ctx D) (w : World D) (e : ByteArray) : Except (Refusal D) (K
           | some c =>
               match Receive.cancel X w c sig with
               | .recorded _ r w' => .ok (.refusal r, w')
-              | _ => .error (.eventMismatch pos)
+              | _ => .error (.receive .cancelForged)
     else
     match X.decodeCall (e.extract 1 e.size) with
     | none => .error (.eventMismatch pos)
@@ -1027,6 +1019,41 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
       next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
         .sign (envelopeMessage X me w.steps upTo) k
 
+/-- `cancel CALL`, phase 9: custody's signature over the call's cancel message, decided on follow's
+own World by the writer's own function (`Receive.cancel`) BEFORE anything is sent. A cancel that
+World records is relayed as the `cancel` op, its payload THE tag-2 encoding (`cancelEvent`, the
+bytes the log will serve); one it declines is refused here by the kernel's name (a cancel of a call
+that is not the member's own is `badSignature`, one outside the call's window `outsideWindow`, one
+already recorded `refusedFinal`) and never sent (`Proofs.Command.sendCancel_host`). -/
+def sendCancel (X : Ctx D) (w : World D) (argv : List ByteArray) (cb result : ByteArray) : Reply :=
+  match Signed.ofBytes result, X.decodeCall cb with
+  | some s, some c =>
+      match Receive.cancel X w c s.signature with
+      | .recorded .. => next (D := D) ⟨argv, 10, [cb]⟩ fun k => .host .cancel (cancelEvent s.signature cb) k
+      | .declined (.refused r) => refusedAt X (.receive r)
+      | .declined (.rejected r) => refusedAt X (.reject r)
+      | .admitted .. => refused (D := D) .badState
+  | none, _ => refused (D := D) .badResult
+  | _, none => refused (D := D) .badCall
+
+/-- `cancel CALL`, phase 10: the writer's answer to the `cancel` op (HOST-18's Serve arm, the
+attempt's own reading of status bytes). A RECORDED cancel is `refused cancelled` (the call's final
+verdict, `Settle.verdictReply`): it prints `cancelled HEX`, the call's transaction id, and ends `ok`.
+`ok` means the call was already ADMITTED and the cancel did nothing: the command is refused
+`committed`. A decline ends it `declined NAME` (nothing recorded); any other refusal `refused NAME`;
+`uncertain NAME` (the journal no longer answers) ends it `uncertain`. Nothing is handed on. -/
+def cancelAnswer (X : Ctx D) (cb result : ByteArray) : Reply :=
+  match hostReply result, X.decodeCall cb with
+  | some (.refused, p), some c =>
+      if hostName p = (Receive.Refusal.cancelled : Receive.Refusal D).name then
+        printed s!"cancelled {hex X (txIdOf X c)}\n"
+      else refusedAt X (.host (hostName p))
+  | some (.ok, _), _ => refusedAt X (.host "committed")
+  | some (.declined, p), _ => declined (hostName p)
+  | some (.uncertain, p), _ =>
+      .done CommandExit.uncertain.code.toUInt8 ByteArray.empty s!"uncertain {hostName p}\n".toUTF8
+  | _, _ => refused (D := D) .badResult
+
 /-- Did the state ask custody for `signIncoming`? An envelope phase (1) whose `tried` has the
 incoming bit. It holds EXACTLY when the step that handed the state on asked `signIncoming`:
 `Proofs.Incoming.step_signIncoming_asked` (every `signIncoming` comes with it) and
@@ -1127,6 +1154,11 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       -- the receipt for a signed call, against the World follow just caught up to,
                       -- and the member's settlement of it (PROTOCOL-46)
                       | .receipt cb, _ => moved w' ts (receiptLines X dc me w' cb)
+                      -- cancel: custody signs the cancel message of the call (`domCancel ‖ txId`)
+                      | .cancel cb, _ =>
+                          match X.decodeCall cb with
+                          | none => moved w' ts (refused (D := D) .badCall)
+                          | some c => moved w' ts (again 9 [cb] fun k => .sign (X.cancelMessage c) k)
                       | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
                       -- invite: the inputs make this World; pin the newest base follow verified
                       -- itself (`pinOf`), sign with the key the writer just took for this
@@ -1185,6 +1217,10 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
               | _, _ => same (refused (D := D) .badState)
       -- the settlement
       | _, 4, [_, _, _, out] => same (settled X out result)
+      -- cancel: custody's signature, decided on follow's own World before it is sent
+      | .cancel _, 9, [cb] => same (sendCancel X w st.argv cb result)
+      -- cancel: the writer's answer
+      | .cancel _, 10, [cb] => same (cancelAnswer X cb result)
       -- adopt: the envelope for the page at `off`, signed; ask for the base page
       | .adopt _ _, 6, [offB, pagesB, upToB, triedB] =>
           match Signed.ofBytes result, Text.ofU64 offB, Text.ofU64 upToB with

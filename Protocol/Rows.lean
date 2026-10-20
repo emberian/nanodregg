@@ -126,6 +126,8 @@ inductive Act
   /-- the actor's client signs every later envelope for `n` heights (its own `Self.window`, a
   client's setting; the writer's read gate bounds it by `Bounds.windowMax`) -/
   | window (n : Nat)
+  /-- the actor runs `cancel CALL` for OWNER's last call (its frozen bytes) -/
+  | cancelOf (owner : String)
   deriving Repr
 
 /-- A fault the transport or the client injects into one command. -/
@@ -166,6 +168,9 @@ inductive Fault
   under `nd --stdio`, which refuses every rotation step `noRotation` (CLIENT-8's nd-members finding:
   a resident's socket bound to another member's follower) -/
   | wrongFollower (other : String)
+  /-- this command's follow starts from genesis, and every cancel event (tag 2) a page carries has
+  the first byte of its signature flipped: a Host that serves a cancel the member never signed -/
+  | forgeCancel
   deriving Repr
 
 /-- One line of a row. -/
@@ -312,6 +317,9 @@ inductive Mutation
   | actOnBeforeLog
   /-- `read OBJ ?` prints no `doc` line (cv 01a151bc-6f0b: the description the Bell's doc line rides on) -/
   | dropDoc
+  /-- custody signs a cancel's message without its domain (`domCancel` dropped: the bare transaction
+  id), a signature that is no cancel (PROTOCOL-63) -/
+  | cancelUndomained
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -1536,9 +1544,58 @@ def uncertainHintRow : Row where
       prints := some "hint confirm: refused badResult" }])
   plant := .caught .dropHint 6 (.refused "unprinted")
 
+/-- KERNEL-60's cancel over the wire (PROTOCOL-63; HOST-18's `cancel` op, cv 01a15543-39fd): a member
+closes its own LOOSE call (sent, outcome unknown, window live) without waiting out the window. The
+sponsor's write never reaches the writer (`open`); the newcomer's cancel of it is refused
+`badSignature` (a cancel verifies under the CALL's member's key); the sponsor's own cancel is
+recorded and prints `cancelled TXID`; the attempt's next run settles `refused cancelled` by the
+member's own fold; the same bytes sent again are answered from the record; a second cancel is
+`refusedFinal`. A call whose window has passed (the newcomer signs for one height, the sponsor's
+write moves the World past it) is refused `outsideWindow`. The plant is custody signing the cancel
+without its domain: line 8 is `refused badSignature`. -/
+def cancelRow : Row where
+  name := "cancel"
+  replaces := []
+  ops := settled ++ [.cancel]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .open,
+      fault := .neverForward },
+    { actor := "newcomer", act := .cancelOf "sponsor", expect := .refused "badSignature" },
+    { actor := "sponsor", act := .cancelOf "sponsor", expect := .ok, prints := some "cancelled " },
+    { actor := "sponsor", act := .rerun, expect := .refused "cancelled" },
+    { actor := "sponsor", act := .resubmit, expect := .refused "cancelled" },
+    { actor := "sponsor", act := .cancelOf "sponsor", expect := .refused "refusedFinal" },
+    { actor := "newcomer", act := .window 1, expect := .ok },
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .open,
+      fault := .neverForward },
+    ok "sponsor" ["write", "@shared", "4", "1"],
+    { actor := "newcomer", act := .cancelOf "newcomer", expect := .refused "outsideWindow" },
+    ok "operator" ["read", "@shared", "4=1"]])
+  plant := .caught .cancelUndomained 8 (.refused "badSignature")
+
+/-- A cancel the member never signed, served by the writer (PROTOCOL-63): the sponsor's loose call
+is cancelled; a follower reading the log from genesis through a Host that flipped the cancel's
+signature refuses the log `cancelForged`, the audit's name for it (`Receive.forgedName`), and the
+honest log reads `ok`. The plant is a follower that accepts any signature: line 8 absorbs the forged
+cancel and is caught only at the page's end, where the writer's chain commits the signature it
+logged: `refused chainMismatch`, not `cancelForged`. -/
+def cancelForgedRow : Row where
+  name := "cancelForged"
+  replaces := []
+  ops := settled ++ [.cancel]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .open,
+      fault := .neverForward },
+    { actor := "sponsor", act := .cancelOf "sponsor", expect := .ok },
+    { actor := "operator", act := .cmd ["sync"], expect := .refused "cancelForged", fault := .forgeCancel },
+    ok "operator" ["read", "@shared"]])
+  plant := .caught .followVerifyAll 8 (.refused "chainMismatch")
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
-   uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow]
+   uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow]
 
 end Nanodregg.Protocol

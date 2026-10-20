@@ -91,20 +91,26 @@ inductive Verb
   call (`Protocol.Settle.ofReceipt`, PROTOCOL-46): `receipt HEX`, `head STEPS HEIGHT ROOTS`,
   `settle VERDICT`. The attempt store's `confirm` and `probe` (`Protocol.Attempt`) -/
   | receipt
+  /-- `cancel CALL`: catch up, then sign a cancel of the member's own signed call CALL (the member's
+  signature over `domCancel ‖ txId`, `Ctx.cancelMessage`) and send it to the writer as the `cancel`
+  op (KERNEL-60's record C1): the writer records the call `refused cancelled`, final, inside the
+  call's window, so a loose call (sent, outcome unknown, window still live) can be closed by its
+  member without waiting out the window. Prints `cancelled HEX`, the call's transaction id -/
+  | cancel
   deriving DecidableEq, Repr
 
 namespace Verb
 
 def all : List Verb :=
   [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt, sync, issue, account,
-   transfer, credit, invite, receipt]
+   transfer, credit, invite, receipt, cancel]
 
 def word : Verb → String
   | init => "init" | enroll => "enroll" | install => "install"
   | create => "create" | write => "write" | law => "law" | invoke => "invoke"
   | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate" | adopt => "adopt"
   | sync => "sync" | issue => "issue" | account => "account" | transfer => "transfer" | credit => "credit"
-  | invite => "invite" | receipt => "receipt"
+  | invite => "invite" | receipt => "receipt" | cancel => "cancel"
 
 def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
@@ -160,6 +166,8 @@ inductive Cmd (D : Type)
   | invite (input : ByteArray)
   /-- the signed call's bytes (`Ctx.callBytes`), decoded by the machine -/
   | receipt (call : ByteArray)
+  /-- the signed call's bytes (`Ctx.callBytes`) of the call to cancel, decoded by the machine -/
+  | cancel (call : ByteArray)
 
 /-- Every way an argv is refused. -/
 inductive ParseRefusal
@@ -211,6 +219,7 @@ def usage : Verb → String
   | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
   | .invite => "invite INPUT"
   | .receipt => "receipt CALL"
+  | .cancel => "cancel CALL"
 
 def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
@@ -368,6 +377,10 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .receipt, [c] =>
       match Text.ofHex c with
       | some call => .ok (.receipt call)
+      | none => .error (.badToken c)
+  | .cancel, [c] =>
+      match Text.ofHex c with
+      | some call => .ok (.cancel call)
       | none => .error (.badToken c)
   | .invite, [i] =>
       match Text.ofHex i with

@@ -184,6 +184,31 @@ theorem settled_cont {X : Ctx D} {out result : ByteArray} : (settled X out resul
   repeat' split
   all_goals first | exact refusedAt_cont | simp [refused, declined, Reply.cont]
 
+/-- `cancel CALL`'s phase 9 hands on only phase 10's state (the call's bytes), or nothing. -/
+theorem sendCancel_cont {X : Ctx D} {w : World D} {argv : List ByteArray} {cb result k : ByteArray}
+    (h : (sendCancel X w argv cb result).cont = some k) : State.ofBytes k = some ⟨argv, 10, [cb]⟩ := by
+  unfold sendCancel at h
+  repeat' split at h
+  all_goals first
+    | exact next_cont (fun _ => rfl) h
+    | (rw [refusedAt_cont] at h; cases h)
+    | simp [refused, Reply.cont] at h
+
+theorem sendCancel_ne_signIncoming {X : Ctx D} {w : World D} {argv : List ByteArray}
+    {cb result m k : ByteArray} : sendCancel X w argv cb result ≠ .signIncoming m k := by
+  intro h
+  unfold sendCancel next at h
+  repeat' split at h
+  all_goals first
+    | (have hc := congrArg Reply.cont h; rw [refusedAt_cont] at hc; cases hc)
+    | simp [refused] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem cancelAnswer_cont {X : Ctx D} {cb result : ByteArray} : (cancelAnswer X cb result).cont = none := by
+  unfold cancelAnswer
+  repeat' split
+  all_goals first | exact refusedAt_cont | simp [refused, printed, declined, Reply.cont]
+
 omit [Ord D] [DecidableEq D] in
 /-- **The writer's refusal of an envelope, once the incoming key is in use, is answered by the
 incoming key**: if the refused envelope's `tried` has `incomingBit`, a continuation `envelopeRefused`
@@ -263,6 +288,8 @@ theorem step_incoming_kept {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wor
   all_goals (try (rw [rangeRender_cont] at hk; cases hk; done))
   all_goals (try (rw [receiptLines_cont] at hk; cases hk; done))
   all_goals (try (rw [settled_cont] at hk; cases hk; done))
+  all_goals (try (rw [cancelAnswer_cont] at hk; cases hk; done))
+  all_goals (try (rw [sendCancel_cont hk] at hs'; cases hs'; simp; done))
   all_goals (try (obtain rfl : _ = _ := Option.some.inj ‹some _ = some _›))
   all_goals (try (obtain ⟨hn, hs0⟩ := next_spec (fun _ => rfl) hk; rw [hs0] at hs'; cases hs'; rw [hn]; simp_all [State.tried]; done))
   all_goals (try (obtain ⟨hn, hs0⟩ := next_spec (fun _ => envelopeSign_cont) hk; rw [hs0] at hs'; cases hs'; rw [hn]; simp_all [State.tried, envelopeSign]; done))
@@ -356,6 +383,8 @@ theorem step_signIncoming_asked {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base
                   | (rw [rangeRender_cont] at hc; cases hc)
                   | (rw [receiptLines_cont] at hc; cases hc)
                   | (rw [settled_cont] at hc; cases hc)
+                  | (rw [cancelAnswer_cont] at hc; cases hc)
+                  | (exact absurd h sendCancel_ne_signIncoming)
                   done))
   all_goals (try (exact envelopeRefused_signIncoming_asked h hs'))
   all_goals (try (have hc := congrArg Reply.cont h
@@ -445,6 +474,8 @@ theorem step_asked_signIncoming {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base
                   | (rw [rangeRender_cont] at hk; cases hk)
                   | (rw [receiptLines_cont] at hk; cases hk)
                   | (rw [settled_cont] at hk; cases hk)
+                  | (rw [cancelAnswer_cont] at hk; cases hk)
+                  | (rw [sendCancel_cont hk] at hs'; cases hs'; simp [askedIncoming] at hin)
                   done))
   all_goals (try (exact envelopeRefused_asked_signIncoming hk hs' hin))
   all_goals (try (obtain ⟨hn, hs0⟩ := next_spec (fun _ => rfl) hk

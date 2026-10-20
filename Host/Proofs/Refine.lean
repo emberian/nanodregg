@@ -4,14 +4,16 @@
 The Host's state's World component IS the kernel's abstract state (a projection, no abstraction
 function), and every edge the Host takes on it is one of three kinds:
 
-* **a step** — `(machine X).step`, one request of a batch, TOTAL over every frame code (the six
+* **a step** — `(machine X).step`, one request of a batch, TOTAL over every frame code (the seven
   protocol ops, a hang-up, an unknown code). `host_step_folds`: the World after it is the fold of
   ZERO or ONE kernel steps from the World before it, that list is `Honest` (each step is what
-  `judge` decides of its own signed event: the follower's audit, `audit_ok`), the staged pairs grow
-  by exactly that list (each with the roots after it), and a nonempty list comes only from a frame
-  whose op is `submit`. MEASURED at the definition (`Host.Serve.handle`): `submit` is the only op
-  whose arm commits, and only through `judge` (`step_submit` is that case, sharper: the World is
-  `judge`'s); `lookup`, `read`, `log`, `command`, `resume`, a hang-up and an unknown code reply or
+  `judge` decides of its own signed event, or `cancel` of a member's signed cancel: the follower's
+  audit, `audit_ok`), the staged pairs grow by exactly that list (each with the roots after it), and
+  a nonempty list comes only from a frame whose op writes (`Op.effect = .write`: `submit` and
+  `cancel`, `Protocol.Op.effect_write_iff`). MEASURED at the definition (`Host.Serve.handle`): those
+  two are the only ops whose arms commit, `submit` only through `judge` (`step_submit`, sharper: the
+  World is `judge`'s) and `cancel` only through `Receive.cancel` (`step_cancel`, HOST-66);
+  `lookup`, `read`, `log`, `command`, `resume`, a hang-up and an unknown code reply or
   defer and leave the World. `host_run_folds` composes a batch from any accumulator;
   `host_run_audits` says the follower's audit accepts what the Host staged, reaching the World the
   Host keeps.
@@ -39,11 +41,11 @@ what makes a logged event decode to the call the Host judged. It is discharged a
 fold; `Kept` is carried by the deployed corollaries (`kept_fold`). No landed theorem gains a
 premise: this module adds statements and changes none.
 
-Teeth, each a machine equal to the writer's except at ONE frame code (any of the six ops, a hang-up,
+Teeth, each a machine equal to the writer's except at ONE frame code (any of the seven ops, a hang-up,
 an unknown code), so one per op and more: `host_step_folds_tooth_unmoved` — an arm that stages a
 step and keeps the World (a log that lies about the World), every `Ctx`, refused by the fold and
-staged conjuncts; `host_step_folds_tooth_wrong_op` — an arm at any op but `submit` that commits
-anything, refused by the op conjunct; `host_step_folds_tooth_unjudged` — on a `Ctx` that decodes
+staged conjuncts; `host_step_folds_tooth_wrong_op` — an arm at any op that does not write
+(not `submit`, not `cancel`) that commits anything, refused by the op conjunct; `host_step_folds_tooth_unjudged` — on a `Ctx` that decodes
 no call, an arm at a `submit` frame that takes a step `World.step` accepts: it `Commits` (so
 `staged_rooted` holds of it), every other conjunct holds of `[s]`, and only `Honest` refuses it; `host_step_folds_tooth_censor` — at any `Ctx` meeting the
 premise (the deployed one), an arm that records a refusal of a call `judge` would ADMIT, again a
@@ -54,6 +56,7 @@ import Host.Proofs.Deployed
 import Kernel.Proofs.Audit
 import Kernel.Proofs.Origin
 import Protocol.Proofs.Invite
+import Protocol.Proofs.Command
 import Codec.Proofs.Deployed
 
 namespace Nanodregg.Host
@@ -62,13 +65,17 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-/-- What the writer's handler commits: only a `submit` frame's decoded call, `judge`'s admitted Turn
-or recorded refusal, to `judge`'s World. -/
+/-- What the writer's handler commits: a `submit` frame's decoded call, `judge`'s admitted Turn or
+recorded refusal, to `judge`'s World; or a `cancel` frame's call and signature, `cancel`'s recorded
+cancel, to `cancel`'s World (HOST-66). -/
 private theorem handle_commit {X : Ctx D} {w w' : World D} {f : Frame} {s : Step D} {st : UInt8}
     {p : ByteArray} (h : handle X w f = .commit s w' st p) :
-    Protocol.Op.ofCode? f.op = some .submit ∧ ∃ c, X.decodeCall f.payload = some c ∧
+    (Protocol.Op.ofCode? f.op = some .submit ∧ ∃ c, X.decodeCall f.payload = some c ∧
       ((∃ t, judge X w c = .admitted t w' ∧ s = .turn t) ∨
-        (∃ v r, judge X w c = .recorded v r w' ∧ s = .refusal r)) := by
+        (∃ v r, judge X w c = .recorded v r w' ∧ s = .refusal r))) ∨
+    (Protocol.Op.ofCode? f.op = some .cancel ∧ ∃ c sig cb, f.payload[0]? = some Protocol.eventCancel ∧
+      Protocol.cancelParts f.payload = some (sig, cb) ∧ X.decodeCall cb = some c ∧
+      ∃ v r, cancel X w c sig = .recorded v r w' ∧ s = .refusal r) := by
   unfold handle at h
   cases hop : Protocol.Op.ofCode? f.op with
   | none =>
@@ -78,7 +85,7 @@ private theorem handle_commit {X : Ctx D} {w w' : World D} {f : Frame} {s : Step
     cases op
     case submit =>
       simp only [hop] at h
-      refine ⟨rfl, ?_⟩
+      refine .inl ⟨rfl, ?_⟩
       cases hc : X.decodeCall f.payload with
       | none => simp only [hc] at h; cases h
       | some c =>
@@ -96,10 +103,44 @@ private theorem handle_commit {X : Ctx D} {w w' : World D} {f : Frame} {s : Step
               cases h
               exact .inr ⟨v, r, hj, rfl⟩
             · cases h
+    case cancel =>
+      simp only [hop] at h
+      split at h
+      · cases h
+      · rename_i sig cb hif
+        have hfp : f.payload[0]? = some Protocol.eventCancel ∧ Protocol.cancelParts f.payload = some (sig, cb) := by
+          split at hif
+          · exact ⟨‹_›, hif⟩
+          · cases hif
+        split at h
+        · cases h
+        · rename_i c hc
+          split at h
+          · cases h
+          · split at h
+            · cases h
+            · split at h
+              · rename_i v r w₁ hco
+                cases h
+                exact .inr ⟨rfl, c, sig, cb, hfp.1, hfp.2, hc, v, r, hco, rfl⟩
+              · cases h
     all_goals
       simp only [hop] at h
       repeat' split at h
       all_goals cases h
+
+/-- A cancel `cancel` records is what its record's re-judge records: its signature is non-empty
+(`cancelAuth`), so `recordedBy` re-decides it by `cancel` with that signature. -/
+private theorem recordedBy_of_cancel {X : Ctx D} {w w' : World D} {c : Call D} {sig : ByteArray}
+    {v : Verdict D} {r : Refused D} (h : cancel X w c sig = .recorded v r w') :
+    recordedBy X w c r = .recorded v r w' := by
+  obtain ⟨ha, -, hr, -⟩ := cancel_recorded h
+  subst hr
+  have hk : (cancelOf X c sig).cancel.size ≠ 0 :=
+    Nat.pos_iff_ne_zero.mp (Protocol.Command.cancelAuth_size ha).1
+  unfold recordedBy
+  rw [if_neg hk]
+  exact h
 
 /-- An `Honest` log continued by an `Honest` log from where it ends is `Honest`. -/
 private theorem honest_append {X : Ctx D} :
@@ -129,9 +170,9 @@ private theorem honest_append {X : Ctx D} :
 /-- **`Host ⊑ Kernel`, one step.** Any request, from any batch accumulator: the World the writer's
 machine keeps is the fold of at most one kernel step from the World before it; that step is
 `Honest` (what `judge` decides of its own signed event); the staged pairs grow by exactly it, with
-the roots after it; and a step is taken only for a `submit` frame. Total over every frame code by
-`handle`'s match: a new op without a case does not compile, and one whose arm commits anything but
-`judge`'s answer breaks this statement (`host_step_folds_tooth_unmoved`, `_wrong_op`, `_unjudged`,
+the roots after it; and a step is taken only for a frame whose op writes (`submit`, `cancel`).
+Total over every frame code by `handle`'s match: a new op without a case does not compile, and one
+whose arm commits anything but `judge`'s or `cancel`'s answer breaks this statement (`host_step_folds_tooth_unmoved`, `_wrong_op`, `_unjudged`,
 `_censor`). -/
 theorem host_step_folds (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
     (w : World D) (out : Out (Step D × D)) (q : Request Frame) :
@@ -139,7 +180,7 @@ theorem host_step_folds (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X
       World.fold X.env w l = .ok ((machine X).step (w, out) q).1 ∧ Honest X w l ∧
       ((machine X).step (w, out) q).2.staged.toList =
         out.staged.toList ++ l.map (fun s => (s, World.roots X.env ((machine X).step (w, out) q).1)) ∧
-      (l ≠ [] → Protocol.Op.ofCode? q.body.op = some .submit) := by
+      (l ≠ [] → ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write) := by
   cases ha : handle X w q.body with
   | reply st p =>
     refine ⟨[], by simp, ?_, trivial, ?_, fun h => absurd rfl h⟩ <;>
@@ -153,10 +194,18 @@ theorem host_step_folds (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X
                         replies := out.replies.push ⟨q.conn, st, p⟩ }) := by
       simp [Machine.step, machine, ha]
     rw [hstep]
-    obtain ⟨hop, c, hc, hj⟩ := handle_commit ha
-    have hcb : X.decodeCall (X.callBytes c) = some c := by rw [hX _ _ hc]; exact hc
     have hws : World.step X.env w s = .ok w' := machine_commits X w q.body s w' st p ha
-    refine ⟨[s], by simp, ?_, ?_, by simp, fun _ => hop⟩
+    rcases handle_commit ha with ⟨hop, c, hc, hj⟩ | ⟨hop, c, sig, cb, -, -, hc, v, r, hco, rfl⟩
+    rotate_left
+    · -- a cancel (HOST-66): `cancel`'s record, re-decided by `recordedBy`
+      have hcb : X.decodeCall (X.callBytes c) = some c := by rw [hX _ _ hc]; exact hc
+      refine ⟨[.refusal r], by simp, by simp only [World.fold, hws], ?_, by simp, fun _ => ⟨_, hop, rfl⟩⟩
+      obtain ⟨-, -, hr, -⟩ := cancel_recorded hco
+      refine ⟨c, v, w', ?_, recordedBy_of_cancel hco, fun _ _ => trivial⟩
+      rw [hr]
+      exact hcb
+    have hcb : X.decodeCall (X.callBytes c) = some c := by rw [hX _ _ hc]; exact hc
+    refine ⟨[s], by simp, ?_, ?_, by simp, fun _ => ⟨_, hop, rfl⟩⟩
     · simp only [World.fold, hws]
     · rcases hj with ⟨t, hjt, rfl⟩ | ⟨v, r, hjr, rfl⟩
       · obtain ⟨-, hr, -⟩ := submit_ok (Protocol.Settle.judge_admitted hjt)
@@ -206,7 +255,7 @@ theorem host_run_audits (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X
 
 /-- **TOOTH (`host_step_folds`, every frame code, every `Ctx`): a step that stages without moving
 the World.** A machine equal to the writer's except that its arm at `q`'s frame code (any of the
-six ops, a hang-up, an unknown code) stages a step and keeps the World: no list of at most one
+seven ops, a hang-up, an unknown code) stages a step and keeps the World: no list of at most one
 kernel step folds to that World and is what was staged (a fold of one step moves the step
 counter, `admit_steps`/`refuse_steps`). -/
 theorem host_step_folds_tooth_unmoved (X : Ctx D) (w : World D) (out : Out (Step D × D))
@@ -217,7 +266,7 @@ theorem host_step_folds_tooth_unmoved (X : Ctx D) (w : World D) (out : Out (Step
       World.fold X.env w l = .ok (m.step (w, out) q).1 ∧ Honest X w l ∧
       (m.step (w, out) q).2.staged.toList =
         out.staged.toList ++ l.map (fun s => (s, World.roots X.env (m.step (w, out) q).1)) ∧
-      (l ≠ [] → Protocol.Op.ofCode? q.body.op = some .submit) := by
+      (l ≠ [] → ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write) := by
   intro m
   have hm : m.step (w, out) q =
       (w, { out with staged := out.staged.push (s, World.roots X.env w),
@@ -237,20 +286,20 @@ theorem host_step_folds_tooth_unmoved (X : Ctx D) (w : World D) (out : Out (Step
     rw [hn] at h1
     omega
 
-/-- **TOOTH (`host_step_folds`'s op conjunct): a World-moving arm at any op but `submit`.** A machine
-equal to the writer's except that its arm at `q`'s frame code, which is not `submit`'s, commits any
-step: the step theorem fails of it (an empty list is not what was staged, a nonempty one is not
-`submit`'s). -/
+/-- **TOOTH (`host_step_folds`'s op conjunct): a World-moving arm at any op that does not write.** A
+machine equal to the writer's except that its arm at `q`'s frame code, whose op (if any) is not a
+writing one (`submit`, `cancel`), commits any step: the step theorem fails of it (an empty list is
+not what was staged, a nonempty one is not a writing op's). -/
 theorem host_step_folds_tooth_wrong_op (X : Ctx D) (w w' : World D) (out : Out (Step D × D))
     (q : Request Frame) (s : Step D) (st : UInt8) (p : ByteArray)
-    (hop : Protocol.Op.ofCode? q.body.op ≠ some .submit) :
+    (hop : ∀ op, Protocol.Op.ofCode? q.body.op = some op → op.effect ≠ .write) :
     let m : Machine (World D) (Step D) Frame D :=
       { machine X with handle := fun v f => if f.op = q.body.op then .commit s w' st p else handle X v f }
     ¬ ∃ l : List (Step D), l.length ≤ 1 ∧
       World.fold X.env w l = .ok (m.step (w, out) q).1 ∧ Honest X w l ∧
       (m.step (w, out) q).2.staged.toList =
         out.staged.toList ++ l.map (fun s => (s, World.roots X.env (m.step (w, out) q).1)) ∧
-      (l ≠ [] → Protocol.Op.ofCode? q.body.op = some .submit) := by
+      (l ≠ [] → ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write) := by
   intro m
   have hm : m.step (w, out) q =
       (w', { out with staged := out.staged.push (s, World.roots X.env w'),
@@ -260,18 +309,21 @@ theorem host_step_folds_tooth_wrong_op (X : Ctx D) (w w' : World D) (out : Out (
   rintro ⟨l, -, -, -, hs, ho⟩
   match l with
   | [] => simp at hs
-  | x :: _ => exact hop (ho (List.cons_ne_nil x _))
+  | x :: _ =>
+    obtain ⟨op, h1, h2⟩ := ho (List.cons_ne_nil x _)
+    exact hop op h1 h2
 
 /-- **TOOTH (`host_step_folds`'s `Honest` conjunct, every frame code): a step the kernel takes but
 `judge` did not decide.** On a `Ctx` that decodes no call (any `Ctx` with its decoder emptied), a
 machine equal to the writer's except that its arm at `q`'s frame code takes step `s` by
 `World.step` wherever the kernel accepts it: it `Commits` to `World.step` (so `staged_rooted`, the
-landed batch theorem, holds of it); at a `submit` frame where `s` is accepted, `[s]` meets EVERY
+landed batch theorem, holds of it); at a writing frame (`submit` or `cancel`: a forged cancel record
+as much as an unjudged Turn, HOST-66) where `s` is accepted, `[s]` meets EVERY
 other conjunct of the step theorem (fold, staged, op), and the step theorem fails of it: no
 nonempty log is `Honest` on that `Ctx`. So `Honest` alone refuses it. -/
 theorem host_step_folds_tooth_unjudged (X : Ctx D) (w w' : World D) (out : Out (Step D × D))
     (q : Request Frame) (s : Step D) (st : UInt8) (p : ByteArray) (hs : World.step X.env w s = .ok w')
-    (hop : Protocol.Op.ofCode? q.body.op = some .submit) :
+    (hop : ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write) :
     let X' : Ctx D := { X with decodeCall := fun _ => none }
     let m : Machine (World D) (Step D) Frame D :=
       { machine X' with
@@ -285,12 +337,12 @@ theorem host_step_folds_tooth_unjudged (X : Ctx D) (w w' : World D) (out : Out (
     (∃ l : List (Step D), l.length ≤ 1 ∧ World.fold X'.env w l = .ok (m.step (w, out) q).1 ∧
       (m.step (w, out) q).2.staged.toList =
         out.staged.toList ++ l.map (fun s => (s, World.roots X'.env (m.step (w, out) q).1)) ∧
-      (l ≠ [] → Protocol.Op.ofCode? q.body.op = some .submit)) ∧
+      (l ≠ [] → ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write)) ∧
     ¬ ∃ l : List (Step D), l.length ≤ 1 ∧
       World.fold X'.env w l = .ok (m.step (w, out) q).1 ∧ Honest X' w l ∧
       (m.step (w, out) q).2.staged.toList =
         out.staged.toList ++ l.map (fun s => (s, World.roots X'.env (m.step (w, out) q).1)) ∧
-      (l ≠ [] → Protocol.Op.ofCode? q.body.op = some .submit) := by
+      (l ≠ [] → ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write) := by
   intro X' m
   have hs' : World.step X'.env w s = .ok w' := hs
   have hm : m.step (w, out) q =
@@ -346,12 +398,12 @@ theorem host_step_folds_tooth_censor (X : Ctx D) (hX : ∀ b c, X.decodeCall b =
     (∃ l : List (Step D), l.length ≤ 1 ∧ World.fold X.env w l = .ok (m.step (w, out) q).1 ∧
       (m.step (w, out) q).2.staged.toList =
         out.staged.toList ++ l.map (fun s => (s, World.roots X.env (m.step (w, out) q).1)) ∧
-      (l ≠ [] → Protocol.Op.ofCode? q.body.op = some .submit)) ∧
+      (l ≠ [] → ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write)) ∧
     ¬ ∃ l : List (Step D), l.length ≤ 1 ∧
       World.fold X.env w l = .ok (m.step (w, out) q).1 ∧ Honest X w l ∧
       (m.step (w, out) q).2.staged.toList =
         out.staged.toList ++ l.map (fun s => (s, World.roots X.env (m.step (w, out) q).1)) ∧
-      (l ≠ [] → Protocol.Op.ofCode? q.body.op = some .submit) := by
+      (l ≠ [] → ∃ op, Protocol.Op.ofCode? q.body.op = some op ∧ op.effect = .write) := by
   intro m
   have hm : m.step (w, out) q =
       (w', { out with staged := out.staged.push (.refusal r, World.roots X.env w'),
@@ -359,7 +411,7 @@ theorem host_step_folds_tooth_censor (X : Ctx D) (hX : ∀ b c, X.decodeCall b =
     simp [m, Machine.step, machine, hr]
   have hr' : World.step X.env w (.refusal r) = .ok w' := hr
   refine ⟨?_, ⟨[.refusal r], by simp, by rw [hm]; simp only [World.fold, hr'], by rw [hm]; simp,
-    fun _ => hop⟩, ?_⟩
+    fun _ => ⟨_, hop, rfl⟩⟩, ?_⟩
   · intro v f s₁ v₁ st₁ p₁ h
     simp only [m] at h
     split at h

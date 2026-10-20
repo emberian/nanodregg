@@ -6,6 +6,12 @@ accumulator, leaves the World `Receive.submit` returns (or the World unchanged w
 and stages exactly the Turn `Receive.submit` derives (or nothing). The loop adds no decision of its
 own between the signed call and the log.
 
+`step_cancel` (HOST-66): one `cancel` frame whose payload reads as `Protocol.cancelEvent sig cb`, `cb`
+decoding to call `c`, keeps the World `Receive.cancel` returns and stages exactly the cancel record
+it takes (or nothing), the `forgotten` arm excepted as for `submit`; a journaled call answers its
+receipt (`step_cancel_journaled`). `handle_cancel_untagged`: a payload whose first byte is not
+`eventCancel` is declined and commits nothing (one encoding per cancel).
+
 `step_journaled`: a call already in the journal answers `ok` with its ORIGINAL receipt (height and
 turn digest from the journal) and leaves the World and the staged Turns as they were — whatever
 `receive` would now say about it (a retried rotation must not be re-judged, KERNEL-7).
@@ -75,6 +81,7 @@ theorem machine_commits (X : Ctx D) : (machine X).Commits (World.step X.env) := 
   all_goals first
     | exact (submit_ok (Protocol.Settle.judge_admitted ‹_›)).2.2
     | exact (judge_recorded ‹_›).2.2.2
+    | exact (cancel_recorded ‹_›).2.2.2
 
 /-- What `judge`'s outcome stages (`Machine.step`'s pair), given the World committed. -/
 private def judgeStaged (X : Ctx D) (out : Out (Step D × D)) : Outcome D → Array (Step D × D)
@@ -108,6 +115,73 @@ theorem step_submit (X : Ctx D) (w : World D) (out : Out (Step D × D)) (q : Req
       simp only [g] at hg
       cases ho : judge X w c <;>
         simp [Machine.step, machine, handle, hop, hc, hj, hg, ho, Protocol.Settle.keptWorld, judgeStaged]
+
+/-- What `cancel`'s outcome stages (`Machine.step`'s pair), given the World committed: only a
+recorded cancel stages a step. -/
+private def cancelStaged (X : Ctx D) (out : Out (Step D × D)) : Outcome D → Array (Step D × D)
+  | .recorded _ r w' => out.staged.push (.refusal r, World.roots X.env w')
+  | _ => out.staged
+
+/-- The World `cancel`'s outcome keeps: a recorded cancel's, else the World before it. -/
+private def cancelKept (w : World D) : Outcome D → World D
+  | .recorded _ _ w' => w'
+  | _ => w
+
+/-- A journaled call is never recorded by `cancel`: `World.refuse` refuses a journaled id. -/
+theorem cancel_journaled {X : Ctx D} {w : World D} {c : Call D} {sig : ByteArray} {h : Nat} {d : D}
+    (hj : w.journalAt X.env (txIdOf X c) = some (h, d)) : ∀ v r w', cancel X w c sig ≠ .recorded v r w' := by
+  intro v r w' hc
+  obtain ⟨-, -, rfl, hr⟩ := cancel_recorded hc
+  unfold World.refuse checkRefusal at hr
+  simp only [cancelOf, recordOf, hj] at hr
+  split at hr
+  · rename_i hok
+    simp only [bind, Except.bind] at hok
+    repeat' split at hok
+    all_goals cases hok
+  · cases hr
+
+/-- **The loop decides a cancel exactly as `Receive.cancel` does (HOST-66).** One `cancel` frame
+whose payload begins with `eventCancel` and reads (`Protocol.cancelParts`, whose shape is
+`Command.cancelParts_some`: `cancelEvent sig cb`) as signature `sig` and call bytes `cb` decoding to `c`, stepped by the writer's machine
+from any batch accumulator, keeps the World `cancel` returns (unchanged unless it records) and stages
+exactly the cancel record it takes, each with the roots after it; the one exception is the
+`forgotten` arm, which answers `uncertain` and changes nothing. -/
+theorem step_cancel (X : Ctx D) (w : World D) (out : Out (Step D × D)) (q : Request Frame) (c : Call D)
+    (sig cb : ByteArray)
+    (hop : Protocol.Op.ofCode? q.body.op = some .cancel)
+    (h0 : q.body.payload[0]? = some Protocol.eventCancel)
+    (hparts : Protocol.cancelParts q.body.payload = some (sig, cb))
+    (hc : X.decodeCall cb = some c) :
+    let g := (refusedAnswer X w c).isNone && journalForgets w.height c.unsigned.notBefore
+    ((machine X).step (w, out) q).1 = (if g then w else cancelKept w (cancel X w c sig)) ∧
+      ((machine X).step (w, out) q).2.staged = (if g then out.staged else cancelStaged X out (cancel X w c sig)) := by
+  intro g
+  cases hj : w.journalAt X.env (txIdOf X c) with
+  | some p =>
+    obtain ⟨h, d⟩ := p
+    have hn := cancel_journaled (sig := sig) hj
+    cases ho : cancel X w c sig with
+    | recorded v r w' => exact absurd ho (hn v r w')
+    | _ =>
+      simp [Machine.step, machine, handle, hop, h0, hparts, hc, hj, cancelKept, cancelStaged]
+  | none =>
+    cases hg : g with
+    | true =>
+      simp only [g] at hg
+      simp [Machine.step, machine, handle, hop, h0, hparts, hc, hj, hg]
+    | false =>
+      simp only [g] at hg
+      cases ho : cancel X w c sig <;>
+        simp [Machine.step, machine, handle, hop, h0, hparts, hc, hj, hg, ho, cancelKept, cancelStaged]
+
+/-- **One encoding per cancel, on the wire** (HOST-66): a `cancel` frame whose payload does not begin
+with `eventCancel` is declined `undecodableCall`, whatever follows, and commits nothing. -/
+theorem handle_cancel_untagged (X : Ctx D) (w : World D) (f : Frame)
+    (hop : Protocol.Op.ofCode? f.op = some .cancel) (h0 : f.payload[0]? ≠ some Protocol.eventCancel) :
+    handle X w f = .reply (declined FrameRefusal.undecodableCall.name).1
+      (declined FrameRefusal.undecodableCall.name).2 := by
+  simp [handle, hop, h0]
 
 theorem step_journaled (X : Ctx D) (w : World D) (out : Out (Step D × D)) (q : Request Frame) (c : Call D)
     (h : Nat) (d : D)

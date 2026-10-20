@@ -1,11 +1,11 @@
 /-
 # Protocol.Table — the one operation table, as data
 
-Two sockets, six operations. Everything a client or a supervisor needs to know about the wire is
+Two sockets, seven operations. Everything a client or a supervisor needs to know about the wire is
 on this page, and CODEC generates the Rust copy from it (law 2): op bytes, status bytes, step tags
 and the four client bounds.
 
-* `host.sock` (`host serve STORE`, the one writer): `submit`, `lookup`, `read`, `log`.
+* `host.sock` (`host serve STORE`, the one writer): `submit`, `lookup`, `read`, `log`, `cancel`.
 * `follow.sock` (`host follow STORE`, the member's own fold): `command`, `resume`.
 
 What is NOT an operation, and where it went (minidregg's 186 opcodes, `DELETE-PROTOCOL-20261016.md`):
@@ -50,11 +50,15 @@ inductive Op
   | command
   /-- a continuation echoed back with the result of the step it asked for -/
   | resume
+  /-- a member's cancel of its own call (`cancelEvent`: its signature over `domCancel ‖ txId` and
+  the call's bytes): recorded `refused cancelled` inside the call's window, or declined by name
+  (KERNEL-60, design C1) -/
+  | cancel
   deriving DecidableEq, Repr
 
 namespace Op
 
-def all : List Op := [submit, lookup, read, log, command, resume]
+def all : List Op := [submit, lookup, read, log, command, resume, cancel]
 
 def code : Op → UInt8
   | submit => 1
@@ -63,13 +67,14 @@ def code : Op → UInt8
   | log => 4
   | command => 5
   | resume => 6
+  | cancel => 7
 
 def socket : Op → Socket
-  | submit | lookup | read | log => .host
+  | submit | lookup | read | log | cancel => .host
   | command | resume => .follow
 
 def effect : Op → Effect
-  | submit => .write
+  | submit | cancel => .write
   | lookup | read | log | command | resume => .read
 
 /-- The declaration that answers the operation. -/
@@ -80,15 +85,20 @@ def receiver : Op → String
   | log => "Nanodregg.Host.Page.build"
   | command => "Nanodregg.Protocol.Command.start"
   | resume => "Nanodregg.Protocol.Command.step"
+  | cancel => "Nanodregg.Kernel.Receive.cancel"
 
 /-- The operations a `host` step may ask the client to relay. Not `submit`: a call reaches the
 writer only through a `submit` step, which the client freezes as an attempt first (CLIENT-3), so
-follow cannot make the client send a call outside the attempt store (PROTOCOL-9). -/
-def relayable : List Op := [lookup, read, log]
+follow cannot make the client send a call outside the attempt store (PROTOCOL-9). `cancel` is
+relayable: its payload carries a call's bytes, but the writer only ever records that call
+`refused cancelled` or declines (`Receive.cancel` admits nothing), and a lost cancel reply needs no
+attempt: the member's next `cancel` of the same call catches up and is answered by its own follow
+(`refusedFinal` once recorded). -/
+def relayable : List Op := [lookup, read, log, cancel]
 
 def name : Op → String
   | submit => "submit" | lookup => "lookup" | read => "read" | log => "log"
-  | command => "command" | resume => "resume"
+  | command => "command" | resume => "resume" | cancel => "cancel"
 
 /-- Decode a request byte; anything else is refused before a payload is read. -/
 def ofCode? (b : UInt8) : Option Op := all.find? (·.code == b)
@@ -476,8 +486,21 @@ design C1; `0 < n ≤ cancelBytesMax`): a recorded CANCEL, re-recorded by `Recei
 def eventCancel : UInt8 := 2
 
 /-- THE tag-2 event: a cancel signature `sig` and the cancelled call's bytes `call`, as
-`Host.Page.stepEvent` writes it and `Command.cancelParts` reads it back. -/
+`Host.Page.stepEvent` writes it and `cancelParts` (below) reads it back. -/
 def cancelEvent (sig call : ByteArray) : ByteArray :=
   ⟨#[eventCancel]⟩ ++ Codec.Stream.nat64.bytes sig.size ++ sig ++ call
+
+/-- A cancel event's signature and call bytes (`eventCancel`: `2 ‖ nat64 n ‖ sig ‖ call`): the
+length read at byte 1, then `n` signature bytes, then the rest. `none` when the length does not
+read, is `0`, is past `cancelBytesMax`, or runs past the event (each is one encoding the writer's
+`stepEvent` never makes, PROTOCOL-60). Beside `cancelEvent` so the one encoding's writer and
+reader sit together: follow's `absorbStep` and the Host's `cancel` op both read with it (HOST-66). -/
+def cancelParts (e : ByteArray) : Option (ByteArray × ByteArray) :=
+  match Codec.Stream.nat64.get e 1 with
+  | .ok (n, j) =>
+      if 0 < n ∧ n ≤ Kernel.Bounds.cancelBytesMax ∧ j + n ≤ e.size then
+        some (e.extract j (j + n), e.extract (j + n) e.size)
+      else none
+  | .error _ => none
 
 end Nanodregg.Protocol

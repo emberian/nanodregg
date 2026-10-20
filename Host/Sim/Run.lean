@@ -867,10 +867,11 @@ def sealPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO U
   let free := (List.range 256).filter fun b => (Protocol.Op.ofCode? b.toUInt8).isNone && (Protocol.childKindOf? b.toUInt8).isNone
   -- the tooth: the member op table is pinned; a new op (a seal request among them) reds this until
   -- HOST re-reads it, so an op that seals cannot arrive unseen
-  check "plant-member-seal fires: PROTOCOL's member op table is exactly submit, lookup, read, log, command, resume (no op seals)"
-    (Protocol.Op.all.map Protocol.Op.code == [1, 2, 3, 4, 5, 6].map Nat.toUInt8) failures
+  -- re-read at HOST-66: `cancel` (7) records a member's cancel through `Receive.cancel` and seals nothing
+  check "plant-member-seal fires: PROTOCOL's member op table is exactly submit, lookup, read, log, command, resume, cancel (no op seals)"
+    (Protocol.Op.all.map Protocol.Op.code == [1, 2, 3, 4, 5, 6, 7].map Nat.toUInt8) failures
   check s!"plant-member-seal fires: {free.length} op codes name no op (any of them is what a seal request would be)"
-    (free.length = 249) failures
+    (free.length = 248) failures
   check "plant-member-seal: every frame naming no op is refused `unknownOp` and stages nothing"
     (free.all fun b => match handle kx kw ⟨0, b.toUInt8, ByteArray.empty⟩ with
       | .reply st p => st == Protocol.Status.refused.code && p == "unknownOp".toUTF8
@@ -1026,13 +1027,69 @@ def judgePlant (failures : IO.Ref Nat) : IO Unit := do
   check s!"{p}: the follower's fold refuses the lying writer's Turn at step 0 `refusedFinal` ({shownF})"
     (match fold w2 o3.staged with | .error (.step 0 r) => r.name == "refusedFinal" | _ => false) failures
 
+/-- plant-cancel-op (HOST-66): the writer's `cancel` op over Kernel.Sim's ctx (toy signatures, CODEC's
+call codec). The member's honest cancel frame (`Protocol.cancelEvent sig call`, op 7) commits exactly
+`Receive.cancel`'s record, answered `refused cancelled`; the same bytes with tag 1 (one encoding per
+cancel), and a flipped signature, commit nothing and are declined by name; a call already admitted
+answers `ok` with its receipt and commits nothing (a cancel never undoes an admitted call). -/
+def cancelOpPlant (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-cancel-op"
+  let kx := Kernel.Sim.ctx
+  let key := "f0".toUTF8
+  let founders := [(key, Receive.nextKeyDigest kx "f0-next".toUTF8)]
+  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders with
+  | .error r => check s!"{p}: genesis ({r.name})" false failures
+  | .ok g =>
+  let me := Receive.founderId kx g.origin 0
+  let u : Receive.Unsigned Kernel.Sim.D :=
+    { world := g.origin, member := me, key, notBefore := 0, validUntil := g.height + 101,
+      pins := Kernel.Sim.S.pinsFor g [me], maxCharge := 1000000, body := .install Kernel.Sim.Gen.denyAll }
+  let c : Receive.Call Kernel.Sim.D := { unsigned := u, signature := Kernel.Sim.toySign key (kx.callMessage u) }
+  let sig := Kernel.Sim.toySign key (kx.cancelMessage c)
+  let cb := kx.callBytes c
+  let frame (b : ByteArray) : Frame := ⟨1, Protocol.Op.cancel.code, b⟩
+  let shown (a : Answer (World Kernel.Sim.D) (Step Kernel.Sim.D)) : String :=
+    match a with
+    | .commit (.refusal _) _ st pl => s!"commit refusal {st} {String.fromUTF8! pl}"
+    | .commit (.turn _) _ st _ => s!"commit turn {st}"
+    | .reply st pl => s!"reply {st} {(String.fromUTF8? pl).getD "bytes"}"
+    | .defer _ => "defer"
+  let honest := handle kx g (frame (Protocol.cancelEvent sig cb))
+  check s!"{p}: the member's cancel frame commits Receive.cancel's record, answered refused cancelled ({shown honest})"
+    (match honest, Receive.cancel kx g c sig with
+      | .commit (.refusal r) w1 st pl, .recorded _ r' w1' =>
+          r == r' && Kernel.Sim.same w1 w1' && r.cancel == sig &&
+          st == Protocol.Status.refused.code && pl == "cancelled".toUTF8
+      | _, _ => false) failures
+  let untagged := handle kx g (frame (⟨#[Protocol.eventRefusal]⟩ ++ (Protocol.cancelEvent sig cb).extract 1 (Protocol.cancelEvent sig cb).size))
+  check s!"{p}: the same bytes under tag 1 are declined undecodableCall and commit nothing ({shown untagged})"
+    (match untagged with
+      | .reply st pl => st == Protocol.Status.declined.code && pl == "undecodableCall".toUTF8
+      | _ => false) failures
+  let flipped := ByteArray.mk (sig.data.set! 0 (sig.data[0]! ^^^ 1))
+  let forged := handle kx g (frame (Protocol.cancelEvent flipped cb))
+  check s!"{p}: a flipped cancel signature commits nothing and is declined by name ({shown forged})"
+    (match forged with
+      | .reply st pl => st == Protocol.Status.declined.code && pl == "badSignature".toUTF8
+      | _ => false) failures
+  match handle kx g ⟨1, Protocol.Op.submit.code, cb⟩ with
+  | .commit (.turn _) g2 st rc =>
+    let late := handle kx g2 (frame (Protocol.cancelEvent sig cb))
+    check s!"{p}: a cancel of a call already admitted answers ok with the submit's own receipt and commits nothing ({shown late})"
+      (st == Protocol.Status.ok.code &&
+        match late with
+        | .reply st2 rc2 => st2 == Protocol.Status.ok.code && rc2 == rc
+        | _ => false) failures
+  | a => check s!"{p}: the control submit was not admitted ({shown a})" false failures
+
 /-- plant-cancel-page (PROTOCOL-60; KERNEL-60's C1 gap, HOST-17's conditions): a member's cancel the
 writer records (`Receive.cancel` over Kernel.Sim's ctx, toy signatures, CODEC's call codec), served
 as the page event `Page.stepEvent` writes (tag 2, `2 ‖ nat64 n ‖ sig ‖ call`), is absorbed by the
 follower's `Command.absorbStep` into the writer's exact record and World (its chain). The teeth, each
-refused `eventMismatch` at the event's step by name: the event as tag 1 carried it before PROTOCOL-60 (the
-signature dropped: the follower's `judge` admits the call, so its chain broke on the first cancel),
-a signature flipped (the follower verifies it, never the writer's word), and the three encodings
+refused by name: a signature flipped is `cancelForged`, the audit's name for the same log (the
+follower verifies it, never the writer's word; PROTOCOL-63); refused `eventMismatch` at the event's
+step: the event as tag 1 carried it before PROTOCOL-60 (the signature dropped: the follower's
+`judge` admits the call, so its chain broke on the first cancel), and the three encodings
 `stepEvent` never makes: an empty signature, one past `cancelBytesMax`, and a length that runs past
 the event. Those three are end-to-end refusals: `verify` and the call decoder refuse them too, so
 they cannot tell `cancelParts`' length checks apart: those checks' tooth is the theorem
@@ -1072,8 +1129,10 @@ def cancelPagePlant (failures : IO.Ref Nat) : IO Unit := do
       ⟨#[Protocol.eventCancel]⟩ ++ Codec.Stream.nat64.bytes n ++ s ++ r.event
     let flipped := ByteArray.mk (sig.data.set! 0 (sig.data[0]! ^^^ 1))
     let short := ⟨#[Protocol.eventCancel]⟩ ++ Codec.Stream.nat64.bytes Kernel.Bounds.cancelBytesMax ++ sig.extract 0 1
+    let xf := Protocol.Command.absorbStep kx g (tag2 flipped.size flipped)
+    check s!"{p}: a flipped signature is refused `cancelForged` ({shown xf})"
+      (match xf with | .error (.receive .cancelForged) => true | _ => false) failures
     for (name, e) in [("tag 1, the signature dropped (the event before PROTOCOL-60)", ⟨#[Protocol.eventRefusal]⟩ ++ r.event),
-        ("a flipped signature", tag2 flipped.size flipped),
         ("an empty signature", tag2 0 ByteArray.empty),
         (s!"a signature of {Kernel.Bounds.cancelBytesMax + 1} bytes", tag2 (Kernel.Bounds.cancelBytesMax + 1) (pad (Kernel.Bounds.cancelBytesMax + 1))),
         ("a length past the event's end", short)] do
@@ -1128,6 +1187,7 @@ def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO 
   beforeLogPlant seed failures
   judgePlant failures
   cancelPagePlant failures
+  cancelOpPlant failures
 
 /-- `host-sim [SEED] [--harness-control]`; any other argument is refused (exit 2), never read as seed 1.
 `--harness-control` (GATES-15) adds one check nothing meets to the ordinary run, so the run must end

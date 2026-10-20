@@ -19,7 +19,8 @@ pub mod host_op {
     pub const LOOKUP: u8 = 2;
     pub const READ: u8 = 3;
     pub const LOG: u8 = 4;
-    pub const ALL: &[u8] = &[1, 2, 3, 4];
+    pub const CANCEL: u8 = 7;
+    pub const ALL: &[u8] = &[1, 2, 3, 4, 7];
 }
 
 pub mod follow_op {
@@ -242,7 +243,7 @@ pub const ENVELOPE_DOMAIN: &[u8] = &[
 /// The verbs a hosted resident may run through `nd --stdio` (Protocol.Command.stdioVerbs).
 pub const STDIO_VERBS: &[&str] = &[
     "enroll", "install", "create", "write", "law", "invoke", "grant", "revoke", "read", "sync",
-    "issue", "account", "transfer", "credit", "receipt",
+    "issue", "account", "transfer", "credit", "receipt", "cancel",
 ];
 
 /// Why `nd --stdio` refuses a request before follow sees it (Protocol.StdioRefusal).
@@ -390,6 +391,7 @@ pub mod layout {
         Lookup,
         Read,
         Log,
+        Cancel,
     }
 
     impl Op {
@@ -398,6 +400,7 @@ pub mod layout {
                 Op::Lookup => 2,
                 Op::Read => 3,
                 Op::Log => 4,
+                Op::Cancel => 7,
             }
         }
 
@@ -406,6 +409,7 @@ pub mod layout {
                 2 => Some(Op::Lookup),
                 3 => Some(Op::Read),
                 4 => Some(Op::Log),
+                7 => Some(Op::Cancel),
                 _ => None,
             }
         }
@@ -416,6 +420,7 @@ pub mod layout {
                 Op::Lookup => "lookup",
                 Op::Read => "read",
                 Op::Log => "log",
+                Op::Cancel => "cancel",
             }
         }
     }

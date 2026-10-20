@@ -105,6 +105,8 @@ structure Sys (D : Type) [Ord D] where
   actOnBeforeLog : Bool := false
   /-- `read OBJ ?` drops its `doc` line (a plant, cv 01a151bc-6f0b) -/
   dropDoc : Bool := false
+  /-- custody signs a cancel's message with `domCancel` dropped (a plant, PROTOCOL-63) -/
+  cancelUndomained : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -159,6 +161,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .dropRange => { writer := { R, X := R.ctx }, follow := R.ctx, dropRange := true }
   | some .actOnBeforeLog => { writer := { R, X := R.ctx }, follow := R.ctx, actOnBeforeLog := true }
   | some .dropDoc => { writer := { R, X := R.ctx }, follow := R.ctx, dropDoc := true }
+  | some .cancelUndomained => { writer := { R, X := R.ctx }, follow := R.ctx, cancelUndomained := true }
 
 /-! ## Actors -/
 
@@ -508,8 +511,16 @@ def editPage (f : List ByteArray → List ByteArray) (reply : ByteArray) : ByteA
       | .error _ => reply
   | _ => reply
 
+/-- A cancel event (tag 2) with the first byte of its signature (byte 9, after the tag and the
+eight-byte length) flipped; any other event as it is. -/
+def forgeCancelSig (e : ByteArray) : ByteArray :=
+  if h : 9 < e.size then
+    if e[0]'(by omega) = eventCancel then e.set 9 (e[9] ^^^ 1) (by omega) else e
+  else e
+
 def pageFault : Fault → ByteArray → ByteArray
   | .flipEvent i => editPage fun evs => evs.mapIdx fun j e => if j = i then flipLast e else e
+  | .forgeCancel => editPage fun evs => evs.map forgeCancelSig
   | .dropLastEvent => editPage List.dropLast
   | .inflateExpired n => fun reply =>
       match Command.hostReply reply with
@@ -520,7 +531,7 @@ def pageFault : Fault → ByteArray → ByteArray
   | _ => id
 
 def coldFault : Fault → Bool
-  | .flipEvent _ | .dropLastEvent | .cold | .inflateExpired _ => true
+  | .flipEvent _ | .dropLastEvent | .cold | .inflateExpired _ | .forgeCancel => true
   | _ => false
 
 /-! ## The attempt store -/
@@ -630,6 +641,9 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
       | some (.sign msg k) =>
           let (n, a, key) ← custodyOf name fault
+          -- the plant: a cancel's message signed without its domain (the bare transaction id)
+          let msg := if (← get).sys.cancelUndomained && msg.extract 0 domCancel.size == domCancel then
+              msg.extract domCancel.size msg.size else msg
           resume name argv fault depth k (signWith (← params) key (a.next n) msg) fuel
       | some (.precommit k) =>
           let a ← actor name
@@ -1058,6 +1072,11 @@ def runAct (l : Line) : M D (Expect × String) := do
       match (← actor owner).last >>= st.sys.follow.decodeCall with
       | none => pure (.refused "noAttempt", "")
       | some _ => command l.actor ["receipt", Text.toHex ((← actor owner).last.getD ByteArray.empty)] .none 4
+  | .cancelOf owner => do
+      let st ← get
+      match (← actor owner).last >>= st.sys.follow.decodeCall with
+      | none => pure (.refused "noAttempt", "")
+      | some _ => command l.actor ["cancel", Text.toHex ((← actor owner).last.getD ByteArray.empty)] l.fault 4
   | .verify owner rc => do
       let st ← get
       let X := st.sys.follow
