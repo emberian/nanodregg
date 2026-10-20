@@ -655,8 +655,8 @@ The lines to read:
 - The bound is `worldBytesMax` = 91,914,346 B (HOST-57, derived): 2,626,114 entries, 5,252,227 hashes. By hand at
   the bound the reopen took 56.3 s on a loaded hbox (load1 12-15; reported, never judged; THE BAR's 60 s is a
   quiet-box limit, v2, so the margin there is unmeasured). One entry more (synthetic 2626113) is refused at the
-  seal, `Host.genesis worldTooLarge`; no World an admitted turn reaches comes near it. A base file past
-  91,914,458 B is refused `baseTooLarge` (21) by a reader.
+  seal, `Host.genesis worldTooLarge`; no World an admitted turn reaches comes near it. A base record past
+  `baseRecordMax` 91,914,474 B (HOST-64; its frame past `Log.frameMax`, the record + 36) is refused `baseTooLarge` (21) by a reader.
 
 A bar.sh killed hard leaves its supervisors findable: its PID files live in `$HOME/.nd-bar/run.XXXXXX/NAME.pid`,
 outside the run root. Stop them by those files only (never by pattern).

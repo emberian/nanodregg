@@ -524,7 +524,7 @@ retract). A value transfer, which touches two cells, enrol and install are not m
 - `worstworld decode-trie-hashes-per-entry` stays 2.000. Its text names the bound HOST-57 derived:
   `worldBytesMax = worldBytesDerived = 91,914,346 B` (Host/Proofs/Size.lean `worldBytesDerived_eq`;
   `reached_size_le`: every World the deployed writer reaches encodes within it; open refuses a base file past
-  `Log.frameMax` of `baseRecordMax` 91,914,458, `baseTooLarge`). The derived total is re-pinned there.
+  `Log.frameMax` of `baseRecordMax` 91,914,458, `baseTooLarge`; 91,914,474 since HOST-64 eb7028d, two u64 fields in the base record). The derived total is re-pinned there.
 - The two worst-cut hash ceilings fall 33.938 → 32.938.
 - THE BAR's `bar trie-hashes-per-required` reads 1.000 on a clean standing run. Its four controls fire.
 
