@@ -3677,3 +3677,125 @@ All ten actual mutation failures and their restored controls were read whole, an
 all saved mutants inspected. Independent scoped build and separate elaboration of
 all eleven added source files passed at 6G/two threads, maxHeartbeats 200000.
 No theorem correction was required; the critique and meta-critique above stand.
+
+## LANG-P9 All-environment provenance, computed minimal repairs and recorded nogoods (2026-10-20 real; CX-P9; contextual program CARD P9)
+**Purpose and evidence.** A demonstration Mini can take. The first built theorem,
+provenance_env_specialized, exhibits the actual LANG-66 boundary: setEnv true verifies
+a CMTT candidate absent from the old environment-specialized polynomial. It precedes
+the new implementation. Sources read in the original PDFs: Grädel–Tannen (2024),
+Def4 p9, update pitfall p19, Prop15 p20, Prop16 p23 (also the examples p22);
+de Kleer (1986), pp144–145 (PDF18–19); Green–Karvounarakis–Tannen (2007), pp3–4.
+The latter supports the positive-fragment provenance analogy only; negative literals
+use Grädel–Tannen. Candidate is a Doyle IN/OUT justification, not an ATMS label.
+The existing reissue_never_reenables deliberately rejects recovery of an old version:
+AGM recovery is not a law of immutable versioned tokens.
+
+**Decision.** Three new data modules and five proof modules, no existing Lean edits.
+P9.provenance keeps guard(filling) and budget(cost) as explicit envLits. It has no
+environment argument, and prefilters only the immutable typing problem.
+P9.provenance_iff relates this one polynomial to the original judge at EVERY world.
+specialize_eq recovers the landed polynomial with its exact order and multiplicity;
+provenance_update states that equation after actual Edit.apply.
+The third monomial component is the card's permitted route for opaque E: an environment
+key model would require a new declared-key interface which this layer does not invent.
+Budget is fixed by Iface but retained as a literal rather than erasing its candidate.
+
+Complementary products never verify. label first removes them and then absorbs larger
+literal sets, including both polarities and envLits. minimal_subset/minimal_covers
+prove that retained products are original and cover every original product;
+minimal_eval/label_iff preserve the original semantic bridge. provenance_minimal
+proves the antichain property modulo equality of literal sets. This is the Boolean
+image, not an arithmetic semiring implementation or a minimal Boolean-formula solver.
+It does not decide semantic implication between arbitrary guard programs.
+
+**Reverse provenance.** repairTerms specializes the uneditable environment and budget,
+then removes complementary products. Every remaining monomial computes changes:
+currently missing positive tokens plus currently live blockers. tokenEdits maps
+them to actual assert/withdraw edits; applyAll semantics are proved even with repeated
+input tokens. repairs_of_provenance verifies an original retained candidate.
+The converse provenance_of_repair finds a subrepair in every successful token update.
+repairPlans applies the SAME absorption algorithm to edit sets; repairPlans_minimal
+is global inclusion-minimality among all token updates, not just minimality in the
+candidate list. repairPlans_complete covers every minimal repair up to set equality.
+residualRepairPlans consumes P4's actual saved Residual world, closure and candidates;
+its theorem gives global minimality for every returned plan. Unknown hole and no plan
+are different results. Plans are proposed values; this does not authorize token edits
+or execute committed effects.
+
+**Recorded consistency.** RecordedClosure extends the landed Closure with nogoods.
+judgeRecorded checks for a recorded subset of EFFECTIVE supports before consulting
+the original judge. It returns the old guard-conflict status plus the exact recorded
+core; missing supports never downgrade this conflict to suspension.
+recordedLabel_iff and recordedRepairs_sound connect labels and repairs to this same
+policy. classifyRecorded constructs P5.refuted only with a found recorded core;
+recorded_refuted shows membership, subset evidence, and non-verification at EVERY
+world. This refutes that candidate relative to the recorded database, not the whole
+hole or arbitrary propositions assigned to tokens. selectRecorded consumes the policy
+and then delegates authority/accepted-history/current judgment to the landed select.
+The database remains attached to successful results.
+
+**Price premises.** LANDED theorems gaining hypotheses: none. LANDED statements
+restated or renamed: none. The original provenance_iff and all original Closure/Judge/
+Repair declarations remain byte-identical. P9.provenance_iff is a new namespaced theorem.
+New repair statements explicitly operate on the token-repairable specialization,
+because no token edit can repair an opaque false guard or over-budget candidate:
+that is Prop16's fixed uneditable facts, not an omitted proof of arbitrary env synthesis.
+No wire/Store/pin/gate changes; no existing refusal becomes acceptance.
+
+**Alternatives and limits.** Editing the landed Closure/Status constructors would
+violate this wave's append-only discipline and require restating all exhaustive
+consumers. The namespaced record extension follows P4's accepted additive pattern.
+Erasing it toClosure deliberately loses the nogood policy; ordinary select/repair
+are not silently upgraded. Callers needing it use the recorded operations.
+Nogoods are recorded premises of the ATMS policy, not checked Lean derivations of
+logical False. Empty nogoods are allowed and refute every support. The full EnvLit
+theory is generic in E but environment synthesis is not implemented. Flat finite
+candidate lists and quadratic absorption are a reference computation; no cyclic-hole
+or polynomial-time enumeration claim is made. No full semiring carrier was added.
+
+**Verification.** Scoped Lang.Proofs.Contextual.ProvenanceExperiments builds GREEN
+under SWARM_MEM_MAX=6G, LEAN_NUM_THREADS=2, Lean default maxHeartbeats 200000.
+Thirteen concrete experiments use the actual CMTT checker. Seventeen temporary
+mutants each BUILT their definitions, then failed a def-only Lean probe; control
+and restored probe passed. Full outputs were read, including the successful mutant
+builds, not only a summary grep. Logs are hbox logs/CX-P9-plant-<name>.log and
+CX-P9-plant-<name>-build.log; driver CX-P9-plants.py, source probe CX-P9-probe.lean.
+Actual kernel failures say the decide tactic proved the proposition false for
+16 mutations; the refutation mutation fails the expected constructor equality
+with "error: Application type mismatch". The named probes cover guard, budget,
+typing, complements, absorption and its three literal sets, edit polarity, missing
+edits, repair environment/consistency, nogood bypass/partial matching, hypothesis
+supports, P5 refutation and selection. Source gates and all 52 theorem disjunct
+reads are recorded in CX-P9's private report. ROOT's independent reader and landing
+remain separate: this lane only prepares READY.
+
+**Critique.** Literal-set minimality does not remove semantically equivalent arbitrary
+guard programs; doing so would require their own equivalence evidence. Guards and
+budgets are immutable inputs of a token-only repair problem. Treating a database
+entry as a mathematical contradiction would overstate recorded_refuted; its scope
+is explicitly policy-relative and candidate-specific. The extension has concrete
+selection and residual consumers, but is not a new deployed protocol or automatic
+replacement of every old closure operation.
+
+**Meta-critique.** The tempting shortcuts were to prove another fixed-env bridge,
+to call a necessary edit list a repair without running applyAll, or to call a search
+failure refutation. The first tooth, all-env theorem, two-way global minimality,
+actual residual consumer, and nogood selection/refutation plants reject these
+shortcuts. Another temptation is to treat the successful symbolic demonstration as
+permission to edit old shared constructors; retaining the additive boundary keeps
+that migration a separate, explicit integration decision.
+
+**Independent second reader (CX-READER-P9, 2026-10-20 real).** LAND. All 52 new
+statements and proofs read with the disjunct check; no escape disjunct, no landed
+signature changed. The original fixed-env polynomial and bridge remain byte-identical.
+The first tooth uses the original polynomial and an actual setEnv edit. The new
+polynomial retains guard/budget literals and works at every world. Absorption preserves
+both directions through minimal_eval/label_iff. Minimal repairs quantify over every
+successful token-update set; the converse returns equality of token sets, not merely
+an already chosen witness. Recorded nogoods produce conflict before missing-support
+suspension; classifyRecorded constructs P5.refuted from the recorded core, and
+recorded_refuted proves candidate-specific exclusion at every world under that policy.
+All 17 full mutation outputs, successful mutant builds, and control/restored outputs
+were read; failures are semantic Lean diagnostics, not driver failures. Restored source
+matches all saved mutation originals. No theorem correction required. The finite-list,
+fixed-environment token-repair and recorded-policy limits above remain explicit.
