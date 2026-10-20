@@ -312,3 +312,15 @@ theorem counting_keeps_cycle_over_worlds :
 
 end Experiment
 end Nanodregg.Lang.Contextual.Worlds
+
+/-! ## P11a literature restatement (append-only; statements preserved)
+cycle_loses_grounding_over_worlds and counting_keeps_cycle_over_worlds retain
+their names and premises. They express unfounded-set exclusion (Lifschitz,
+Thirteen Definitions, Definition D, PDF p8) and the boundary of immediate-support
+counting (Gupta–Mumick–Subrahmanian 1993, printed pp158,164–166).
+The new WorldsField proof module proves stable_iff_labelling independently:
+model closure plus absence of unfounded IN sets equals reduct semantics.
+This is the finite propositional JTMS/stable-model correspondence identified
+by Elkan (1990), p219, abstract; NP-completeness concerns the general existence
+problem, not a proof that a particular finite search cannot complete.
+An unfinished fuel-bounded reduct remains an operational observation. -/

@@ -675,3 +675,15 @@ theorem rejudged_only_touched : (repair w0 (.withdraw tA) (clOf s1)).2.2 = [(0, 
   decide
 
 end Nanodregg.Lang.Contextual.Toy
+
+/-! ## P11a literature restatement (append-only; theorem names and premises unchanged)
+cycle_loses_grounding is the unfounded-set exclusion of Lifschitz,
+Thirteen Definitions, Definition D, PDF p8. Its existing proof explicitly uses
+the unfounded set {0,1,2}; the independent surviving fact is not removed.
+counting_keeps_cycle is a counterexample to NAIVE IMMEDIATE-support counting.
+Gupta–Mumick–Subrahmanian, Maintaining Views Incrementally (1993), printed
+pp158,164–166, distinguish full-derivation counting from DRed for recursion;
+they explicitly allow some recursive counting and warn of nontermination.
+Our countRun is not their full-derivation-count algorithm. The correct repair
+here is well-founded re-derivation (lfpIter), not a claimed implementation of DRed.
+No theorem declaration above is replaced, renamed, or given a new hypothesis. -/

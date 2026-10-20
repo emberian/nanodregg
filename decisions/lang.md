@@ -3799,3 +3799,113 @@ All 17 full mutation outputs, successful mutant builds, and control/restored out
 were read; failures are semantic Lean diagnostics, not driver failures. Restored source
 matches all saved mutation originals. No theorem correction required. The finite-list,
 fixed-environment token-repair and recorded-policy limits above remain explicit.
+
+## LANG-P11a Stable labellings, interface substitution and evidence-bearing game statuses (2026-10-20 real; CX-P11a)
+
+**Purpose.** A demonstration Mini can take. The sources name the landed rule semantics
+and strengthen its connections to independent judgments. No wire, Store, key, pin or
+admission-format change. ROOT owns landing; this lane supplies a green candidate only.
+
+**Decision.** WorldsField states model closure and relative unfoundedness separately
+from Derives and proves Lifschitz Definitions C/D equivalent. A completed analyze result
+is exactly the canonical stable IN/OUT labellings; the unfounded cycle and non-union
+examples consume this correspondence. Existing cycle_loses_grounding,
+counting_keeps_cycle and their Worlds variants retain their exact names, statements
+and proofs. Literature notes are appended to their files. Elkan (1990), p219 abstract,
+identifies the JTMS/stable-set connection and the general NP-completeness result.
+That complexity result is not a termination theorem for any individual run.
+
+Interfaces spells out de Alfaro–Henzinger Definition 14's input/output inclusions
+AND implementation-successor matching and proves equivalence to the landed relation.
+Deterministic input transitions justify the reversed input matching formulation.
+Substitutivity proves peer compatibility and a successor-closed simulation of
+synchronized products. This is the fixed-alphabet, closed binary-product, no-hidden-action
+specialization of Theorem 4. The no-new-peer-input side condition is automatic here;
+we do not claim the full open-interface theorem. A repeated seven-price peer is an
+inhabited consumer. A two-input counterexample excludes mere current label inclusion.
+
+Games checks a finite closed region without sinks, with root membership. The independent
+Solved inductive judgment formalizes backward induction (win by a move to a loss;
+lose when every move reaches a win). A checked trap rules out both derivations, giving
+a semantic draw. The certificate is sufficient, not complete: a true draw may also have
+bad exits. An operational budget/fragment limit is NOT evidence for draw. The original
+P5 constructors and reasons are unchanged. Köhler et al. explicitly say FO provenance
+games are draw-free; the loop arena is a separate cyclic game.
+
+NogoodGames combines finite-domain completion with recorded explanations. Each excluded
+candidate must be covered, cite a member of the actual nogood database, contain that
+nogood in its effective assumptions, and fail the current acceptance test on replay.
+The returned refutation proves loss in an independently defined finite completion game.
+A witness proves win. The P9 bridge consumes actual classifyRecorded/recorded_refuted
+and constructs a checked singleton completion refutation from the recorded token set.
+The singleton theorem concerns that candidate, not every possible filling of a hole;
+the generic checker covers an explicitly supplied finite domain.
+
+**Price premises.** LANDED theorems gaining a hypothesis: none. Restated existing names
+are cycle_loses_grounding, counting_keeps_cycle, cycle_loses_grounding_over_worlds and
+counting_keeps_cycle_over_worlds, through appended literature annotations only; no Lean
+signature changes. Every new theorem is in a new proof module. Owned change: eight
+new modules (three data, five proof), 731 new Lean lines plus 24 appended comment lines,
+115 deployed lines, 34 new theorems. P9's six source dependency snapshots are not this
+lane's contribution or landing paths; the bridge requires P9 integration first.
+
+**Cyclic-hole policy / separate card.** After this worker stopped, ROOT selected (B):
+an additive certified acyclic adapter with explicit ranks/unrolling and a named refusal
+plus boundary theorem for dependencies it cannot represent. CX-P12 owns that separate
+implementation; none of it is in this bundle. Worlds retains stable semantics for cyclic
+rule analysis. The alternative (A), a fully continuous absorptive carrier (Dannert et al.),
+requires carrier/evaluation/fixed-point proofs and is deferred to the first deployed hole
+requiring self-dependence through a fixed point. Neither additive design gains a landed
+hypothesis; retrofitting acyclicity into existing arbitrary-hole interfaces is not performed.
+The current one-level closure still has token supports, not cyclic selection dependencies.
+
+**Source accuracy.** GMS93, printed pp158,164–166, counts derivations, proposes counting
+for nonrecursive views and DRed for recursion, and allows some recursive counting while
+warning of nontermination. Our immediate-support countRun is NOT their algorithm, so
+its counterexample does not refute GMS. Our repair is well-founded re-derivation, not a
+claimed DRed implementation. Primary sources read: Lifschitz PDF pp7–8; de Alfaro–Henzinger
+PDF pp5–6 and p10 (printed118); Köhler et al. PDF pp2–4; de Kleer PDF p19 (printed145);
+Dannert PDF pp1–2; Stein PDF p13; GMS93 original PDF sections1/7/8; Elkan publisher abstract
+only (full text unavailable locally). No quotations from private exchanges are included.
+
+**Validation.** Scoped builds with 6G/two threads/default maxHeartbeats 200000 are green.
+Seven real mutation teeth compile their mutated definitions, then fail the corresponding
+kernel decide theorem: draw root coverage, nonsinkness and successor closure; refutation
+domain coverage, record membership, assumption inclusion and current-verdict replay.
+Unmutated controls pass. Full outputs, not summary-only greps, were read. Each real log
+reports that tactic decide proved the probe proposition false. The first draw harness
+used an incorrect package root and is excluded from the evidence. Source gates and the
+per-theorem disjunct read are in the lane report. No independent second-reader claim is made.
+
+**Critique.** The world theorem is finite propositional JTMS semantics with frozen external
+tokens, not a complete implementation of Elkan's TMS or an NP-completeness formalization.
+Interfaces do not model hidden actions or partial-overlap alphabets. The trap checker
+does not solve arbitrary games. Nogoods are a recorded consistency policy; they are not
+new axioms asserting token propositions imply False. Replaying acceptance prevents
+untrusted or stale explanations from refuting a currently accepted candidate. The P9
+bridge has been built against explicit source snapshots; ROOT must integrate its owner
+before landing this consumer. The separately ruled cyclic-hole adapter remains outside this bundle.
+
+**Meta-critique.** Renaming a checker result as a field term can hide a tautology. The
+independent model/unfounded predicates, reversed successor matching, game derivations
+and mutated executable checks make the connection refutable. Conversely, forcing the
+literature to endorse a budget timeout as draw, or blaming GMS for our naive counter,
+would make the vocabulary less accurate. The remaining limitation is scope: these are
+small, explicit specializations, not claims to have mechanized every result in the papers.
+
+**Independent second reader (CX-READER-P11a, 2026-10-20 real).** LAND-WITH-FIXES:
+the only correction is the policy paragraph above and matching message, which now reflect
+ROOT's subsequent B ruling without claiming CX-P12's adapter. All 34 new statements were
+read with the disjunct check; no vacuous escape or altered landed premise was found.
+The two old proof files are byte-prefix extensions of main, preserving every declaration.
+A warm dependency build and fresh elaboration of all ten owned Lean source files passed
+under 6G/two threads and maxHeartbeats 200000. Both mutation controls and all seven real
+mutant-definition/probe logs were read whole; only the expected kernel false-proposition
+errors occur. Closure C3 is respected: executable definitions in data modules and Prop
+judgments/theorems in proof modules. The fixed-alphabet, no-hidden-action and universal
+refusal-safety scope of interface substitution is explicit; it is not the full open-interface
+theorem. The canonical-world restriction and finite sufficient draw certificate are explicit.
+
+**Integration receipt (CX-READER-P11a).** P9 landed as c58757f6ad04c5cef4877350962cb6a748d4fdc4;
+its six dependency modules are consumed from main and excluded from P11a landing paths.
+The earlier worker-snapshot integration blocker is resolved.
