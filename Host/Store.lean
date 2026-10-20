@@ -152,6 +152,10 @@ header must verify, name its own start, the Store's origin and its predecessor (
 def Segs.size (s : Segs) : IO (Except SegFault Nat) := do
   let mut starts ← s.starts.get
   let some last := starts.back? | return .ok s.floor
+  -- the newest known file must still exist: a reader standing in a file a finite retention since
+  -- unlinked is refused by name (`missing`) in the steady state, not thrown out of; a drop racing
+  -- this very read still throws (HOST-70, HOST-50's WEAK (v))
+  unless ← (segPath s.dir last).pathExists do return .error (.missing last)
   let mut cur := last
   let mut stop := cur + (← s.body cur)
   for _ in [0:1 <<< 20] do
@@ -200,6 +204,14 @@ def Segs.read (s : Segs) (off len : Nat) : IO (Except SegFault ByteArray) := do
   if let .error e ← s.cover off then return .error e
   if let .error e ← s.size then return .error e
   let starts ← s.starts.get
+  -- the file the read begins in (the last start at or before `off`, else the oldest known) must
+  -- still exist: a reader standing in a file a finite retention since unlinked is refused by name
+  -- (`missing seg.<o>.log`) in the steady state, not thrown out of; a drop racing this very read
+  -- still throws (HOST-70, HOST-50's WEAK (v); host-file-sim plant-tail-dropped measured an
+  -- `open: No such file or directory` exception out of `size` before this, plant-segs-dropped
+  -- reaches this guard: `size` sees the newest file, the read begins in an unlinked older one)
+  if let some o := ((starts.filter (· ≤ off)).back?).orElse (fun _ => starts[0]?) then
+    unless ← (segPath s.dir o).pathExists do return .error (.missing o)
   segRead (fun o => return (← readHeader s.dir s.keys o).map (·.1.tag.bytes))
     (fun o p n => do
       let f ← File.open (segPath s.dir o) .read

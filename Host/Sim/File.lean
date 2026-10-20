@@ -811,6 +811,81 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
       (1 < b.indexCount - k0 && opened == "indexCorrupt" && checked == "indexCorrupt" &&
         control == "opened" && controlChecked == "checked") failures
   IO.println s!"plant-first-entry-steps: {firstSteps}; plant-index-from-off: {fromOff}"
+  -- plant-tail-rotation (HOST-70; HOST-50's WEAK (v) trigger, fired at HOST-64): a Tail opened
+  -- before the writer rotates into new segment files absorbs across the rotation through `Segs`
+  -- and reaches the writer's World and position (what a reopen reaches). plant-tail-dropped: a
+  -- Tail standing in a file a finite retention then unlinks is refused by NAME at its next read
+  -- (`missing seg.<o>.log`), never served stale and never silent. The failure is captured as the
+  -- binary answers it (an IO exception is its text, rule 16).
+  let tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × Unit) :=
+    fun w r => (foldStep w r).map fun w' => (w', ())
+  let half := frames.length / 4
+  let absorbAll (seg : Segs) (t : Tail (World Nat)) : IO (Except String (Tail (World Nat))) := do
+    let mut t := t
+    for _ in [0:100000] do
+      let r : Except String (Except Fault (Tail (World Nat) × Array Unit)) ←
+        try pure (Except.ok (← Tail.next keys cadence tailStep seg t))
+        catch e => pure (Except.error s!"exception: {e}")
+      match r with
+      | Except.error msg => return Except.error msg
+      | Except.ok (Except.error f) => return Except.error f.text
+      | Except.ok (Except.ok (t', os)) =>
+        if os.isEmpty && t'.pos.offset == t.pos.offset then return .ok t'
+        t := t'
+    return .error "unbounded"
+  for (tag, retain) in [("rotation", (none : Retain)), ("dropped", some retainFloor)] do
+    let d := root / s!"tail-{tag}"
+    let _ ← (Host.genesis d key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    match ← serveDir d keys cadence seed (frames.take half) (retain := retain) with
+    | .error e => check s!"plant-tail-{tag}: the first serve ({e})" false failures
+    | .ok _ =>
+    let filesBefore ← segFiles d
+    match ← (Tail.open d keys cadence world recorder.mark originChain tailStep : IO (Except Fault _)) with
+    | .error e => check s!"plant-tail-{tag}: the tail opens ({e.name})" false failures
+    | .ok (t0, seg) =>
+    match ← serveDir d keys cadence seed (frames.drop half) (retain := retain) with
+    | .error e => check s!"plant-tail-{tag}: the second serve ({e})" false failures
+    | .ok _ =>
+    let filesAfter ← segFiles d
+    let fo ← follow d keys cadence
+    let (rf, k0) := match ← (openAt d keys cadence world recorder.mark originChain foldStep : IO (Except Fault _)) with
+      | .ok (_, fs) => (fs.retainedFrom, fs.indexFrom) | .error _ => (0, 0)
+    let known ← seg.starts.get
+    let got ← try absorbAll seg t0 catch e => pure (.error (toString e))
+    match tag, fo, got with
+    | "rotation", .ok o, .ok t =>
+      check s!"plant-tail-rotation: a tail opened at {t0.pos.offset} before {filesAfter.size - filesBefore.size} more segment files were started absorbs across them to the writer's World and position {o.pos.offset} ({t.pos.offset}; {filesBefore.size} → {filesAfter.size} files)"
+        (filesBefore.size < filesAfter.size && (filesAfter.toList.map (·.1)).any (fun o => t0.pos.offset < o) &&
+          sameWorld t.world o.opened.world && t.pos.offset == o.pos.offset) failures
+    | "rotation", .ok _, .error e =>
+      check s!"plant-tail-rotation: the tail absorbs across the rotation ({e})" false failures
+    | "dropped", .ok _, r =>
+      let shown := match r with | .ok t => s!"absorbed to {t.pos.offset}" | .error e => e
+      check s!"plant-tail-dropped: a tail at {t0.pos.offset}, below the floor {rf} a retention of {retainFloor} then set (first kept entry {k0}; {filesBefore.size} → {filesAfter.size} files), is refused by name at its next read ({shown})"
+        (t0.pos.offset < rf && (match r with | .error e => e == s!"missing seg.{known.back?.getD 0}.log" | .ok _ => false)) failures
+    | _, .error e, _ => check s!"plant-tail-{tag}: the follower opens after ({e.name})" false failures
+    | _, _, _ => check s!"plant-tail-{tag}: unreached" false failures
+  -- plant-segs-dropped (HOST-70): `Segs.read`'s own guard, which a Tail does not reach (`Tail.next`
+  -- calls `size` first, whose guard answers for the tail's newest known file). A `Segs` knowing
+  -- three files of the full Store, its oldest known file unlinked: `size` passes (the newest
+  -- exists), a read beginning in the unlinked file is refused `missing seg.<a>.log`. RED control:
+  -- the guard removed, the read throws `open: No such file or directory` (captured as its text).
+  let d3 := root / "segs-dropped"
+  copyStore all d3
+  let fs3 ← segFiles d3
+  match fs3.toList.map (·.1) with
+  | a :: b :: cc :: _ =>
+    let segs : Segs := ⟨d3, keys, originChain oa.opened.world, ← IO.mkRef #[a, b, cc], 0⟩
+    IO.FS.removeFile (segPath d3 a)
+    let sized ← match ← segs.size with | .ok n => pure s!"size {n}" | .error e => pure e.text
+    let got : String ← try
+        match ← segs.read a 1 with
+        | .ok bs => pure s!"served {bs.size} bytes"
+        | .error e => pure e.text
+      catch e => pure s!"exception: {e}"
+    check s!"plant-segs-dropped: a Segs knowing files {a}, {b}, {cc} with seg.{a}.log unlinked: `size` passes ({sized}), a read beginning in the unlinked file is refused `missing seg.{a}.log` ({got})"
+      (sized.startsWith "size " && got == s!"missing seg.{a}.log") failures
+  | _ => check s!"plant-segs-dropped: the full Store has at least three segment files ({fs3.size})" false failures
 
 def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : IO UInt32 := do
   let failures ← IO.mkRef 0
