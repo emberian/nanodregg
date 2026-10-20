@@ -564,11 +564,20 @@ def lastFrame (s : Log.Sealer) (recordMax : Nat) (bytes : ByteArray) : Option Ba
 `offsets` the offsets of the record frames before its offset (`Log.recover` of the history, the
 origin frame left out). There are as many as the base counts, `bytes` is exactly them, every
 entry reads back at its position (`Entry.read`), names its record's offset, and its step count does
-not fall. The first entry that fails, or none. -/
-def indexClean (keys : Keys) (bytes : ByteArray) (k0 count : Nat) (offsets : List Nat) : Option Nat :=
+not fall; and the first kept entry's step count is `steps`, the oldest kept file's header's (HOST-68:
+the run begins at the step count the header states; `Host.Proofs.StoreIndex`). The first entry that
+fails, or none. -/
+def indexClean (keys : Keys) (bytes : ByteArray) (k0 count : Nat) (offsets : List Nat) (steps : Nat) : Option Nat :=
   if k0 + offsets.length ≠ count ∨ bytes.size ≠ (count - k0) * entryBytes keys then
     some (k0 + min (count - k0) offsets.length) else
-  go k0 0 offsets
+  match offsets with
+  | [] => none
+  | _ :: _ =>
+    -- the first kept entry's record is the first after the oldest kept file's header, which states
+    -- the step count there (HOST-68): entry k0 claims exactly it, or is refused at k0
+    match Entry.read keys k0 (bytes.extract 0 (entryBytes keys)) with
+    | some e => if e.steps = steps then go k0 0 offsets else some k0
+    | none => some k0
 where
   go : Nat → Nat → List Nat → Option Nat
     | _, _, [] => none

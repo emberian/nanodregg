@@ -316,7 +316,7 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   let offsets := recordOffsets (records.take (count + 1))
   check s!"index control: the newest base counts {count} entries, index.log holds exactly them, every one reads back and names its record's offset (`indexClean` none)"
     (1 < count && r.bases.index.size = named && honest.length = count &&
-      indexClean sk r.bases.index 0 count offsets == none) failures
+      indexClean sk r.bases.index 0 count offsets (recorder.mark genesis).1 == none) failures
   check "plant-index-short: index.log one byte short of the entries the base counts is refused `indexShort`"
     (faultName (reopenIn r.bases.headers (r.bases.index.extract 0 (named - 1)) r.bases.file r.disk.synced) = "indexShort") failures
   check "plant-index-last-flip: a flipped byte in the last entry (the one open reads) is refused `indexCorrupt`"
@@ -339,7 +339,7 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     (originChain otherWorld != originChain genesis && foreign.size = named && spliced != r.bases.index &&
       faultName (reopenIn r.bases.headers foreign r.bases.file r.disk.synced) = "indexCorrupt" &&
       faultName (reopenIn r.bases.headers spliced r.bases.file r.disk.synced) = "opened" &&
-      indexClean sk spliced 0 count offsets == some midK) failures
+      indexClean sk spliced 0 count offsets (recorder.mark genesis).1 == some midK) failures
   -- plant-index-ahead (HOST-53): the newest base re-sealed naming a last entry re-tagged with a step
   -- count AT the base's own (the record it indexes would begin at or after the base's World). Every
   -- tag verifies; open refuses `indexCorrupt`. CONTROLS through the same forging path: the honest
@@ -409,7 +409,7 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     | a :: b :: rest => Entry.run sk 0 (b :: a :: rest) | _ => r.bases.index
   check "plant-index-swap: entries 0 and 1 swapped are refused by `host check` at entry 0: as bytes (each tag names its own position), and re-tagged at the new positions (each names another record's offset)"
     (raw != r.bases.index && retagSwap != r.bases.index &&
-      indexClean sk raw 0 count offsets == some 0 && indexClean sk retagSwap 0 count offsets == some 0) failures
+      indexClean sk raw 0 count offsets (recorder.mark genesis).1 == some 0 && indexClean sk retagSwap 0 count offsets (recorder.mark genesis).1 == some 0) failures
   -- the ruled move: every entry the base counts flipped in turn (one at a time). Open still opens;
   -- `host check` refuses that entry; and EVERY page from every height is either refused
   -- `badIndex k` (it read the entry) or is byte for byte the honest page (it did not): no page is
@@ -423,7 +423,7 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     let bad := flipByte r.bases.index (k * eb + 9)
     unless k + 1 = count do
       opens := opens && faultName (reopenIn r.bases.headers bad r.bases.file r.disk.synced) == "opened"
-    checked := checked && indexClean sk bad 0 count offsets == some k
+    checked := checked && indexClean sk bad 0 count offsets (recorder.mark genesis).1 == some k
     for s in (List.range r.resident.world.height).filter (· % 5 = k % 5) do
       match (memPage bad r.disk.synced r.resident 40 s).1, honestPage s with
       | .error (.badIndex j), _ => neverServed := neverServed && j == k; refusedSome := refusedSome + 1

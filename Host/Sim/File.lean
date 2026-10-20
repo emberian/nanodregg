@@ -651,7 +651,15 @@ twice: keeping every file (the default) and keeping the `retainFloor` = 2 newest
   opens) and is refused `corrupt history` by the check (HOST-25's check moved from the open to
   `host check`, which reads the kept history);
 * plant-missing-kept: the base's own file removed, the open refuses `missing seg.<o>.log`; the older
-  kept file removed, the open or the check refuses `missing seg.<o>.log` naming it. -/
+  kept file removed, the open or the check refuses `missing seg.<o>.log` naming it;
+* plant-first-entry-steps (HOST-68): the first kept entry of the kept Store re-tagged at its position
+  claiming one step more than the oldest kept header states is refused by the check
+  `indexCorrupt entry <k0>` (the open does not read it); the same on the full Store at entry 0;
+* plant-index-from-off (HOST-68): the kept Store's base re-sealed naming the first kept entry one
+  past the true one (its index file renamed to match, every tag verifying) is refused by the open
+  `indexCorrupt` (the last entry read one entry early fails its position tag), and by the check,
+  which opens first, the same (`keptHeaders`' own `indexCorrupt from`, the oldest kept header
+  counting another first entry, is behind that open). -/
 def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed : Nat) (frames : List Frame)
     (failures : IO.Ref Nat) : IO Unit := do
   let all := root / "retain-all"
@@ -749,6 +757,60 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
   let m2 ← match ← checkKept d2 keys with | .ok _ => pure "checked" | .error e => pure e
   check s!"plant-missing-kept: the older kept file removed, the open or the check refuses `missing seg.{older}.log` ({m2})"
     (m2 == s!"missing seg.{older}.log") failures
+  -- plant-first-entry-steps (HOST-68): entry k0 (the kept Store's first kept entry; entry 0 of the
+  -- full Store) re-tagged at its own position under the Store's index key, claiming one step more
+  -- than the oldest kept header states. Every tag verifies and the offset is honest, so the open
+  -- (which reads only the last entry) opens; `indexClean`'s first-entry check refuses it by name.
+  let sk := keys.forStore (originChain ob.opened.world)
+  let eb := entryBytes keys
+  let mut firstSteps : List (String × String × String) := []
+  for (src, tag, k0, hdrSteps) in [(two, "kept", fsb.indexFrom, hb.steps), (all, "full", fsa.indexFrom, ha.steps)] do
+    let d := root / s!"first-entry-steps-{tag}"
+    copyStore src d
+    let ip := indexPathAt d k0
+    let ibytes ← IO.FS.readBinFile ip
+    match Entry.read sk k0 (ibytes.extract 0 eb) with
+    | none => firstSteps := firstSteps ++ [(tag, "unread", "unread")]
+    | some e =>
+      let forged := Entry.bytes sk k0 { e with steps := e.steps + 1 }
+      IO.FS.writeBinFile ip (forged ++ ibytes.extract eb ibytes.size)
+      let opened := match ← follow d keys cadence with | .ok _ => "opened" | .error f => f.name
+      let checked ← match ← checkKept d keys with | .ok _ => pure "checked" | .error f => pure f
+      firstSteps := firstSteps ++ [(tag, opened, checked)]
+      check s!"plant-first-entry-steps-{tag}: entry {k0} re-tagged claiming step {e.steps + 1} where the oldest kept header states {hdrSteps} (honest {e.steps}): the open never reads it ({opened}), the check refuses `indexCorrupt entry {k0}` ({checked})"
+        (e.steps == hdrSteps && opened == "opened" && checked == s!"indexCorrupt entry {k0}") failures
+  -- plant-index-from-off (HOST-68): the kept Store's base re-sealed with `indexFrom` one past the
+  -- true first kept entry, its index file renamed to match. The open reads the base's last entry at
+  -- the file offset the base implies, one entry early, and that entry's tag names another position:
+  -- `indexCorrupt`. The check opens first, so it refuses the same (measured: `indexCorrupt`, not
+  -- `keptHeaders`' `indexCorrupt from`, which sits behind the open). Control: the same re-seal at
+  -- the honest `indexFrom` opens and checks.
+  let k0 := fsb.indexFrom
+  let mut fromOff : String × String × String := ("unforged", "unforged", "unforged")
+  match Base.read keys cadence world (← IO.FS.readBinFile (basePath two)) with
+  | .error _ => pure ()
+  | .ok (b, _, _) =>
+    let reseal (d : System.FilePath) (k : Nat) : IO String := do
+      copyStore two d
+      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨b.indexCount, b.indexLast⟩ ⟨b.retainedFrom, k⟩ with
+      | .error f => return f.name
+      | .ok file =>
+        IO.FS.writeBinFile (basePath d) file
+        if k ≠ k0 then IO.FS.rename (indexPathAt d k0) (indexPathAt d k)
+        return "resealed"
+    let dOff := root / "index-from-off"
+    let dCtl := root / "index-from-control"
+    let r1 ← reseal dOff (k0 + 1)
+    let r2 ← reseal dCtl k0
+    let opened := match ← follow dOff keys cadence with | .ok _ => "opened" | .error f => f.name
+    let checked ← match ← checkKept dOff keys with | .ok _ => pure "checked" | .error f => pure f
+    let control := match ← follow dCtl keys cadence with | .ok _ => "opened" | .error f => f.name
+    let controlChecked ← match ← checkKept dCtl keys with | .ok _ => pure "checked" | .error f => pure f
+    fromOff := (opened, checked, s!"{control}/{controlChecked}")
+    check s!"plant-index-from-off: the kept Store's base naming entry {k0 + 1} as its first kept (honest {k0}; {b.indexCount - k0} kept entries) is refused by the open `indexCorrupt` ({opened}) and by the check, which opens first, the same ({checked}); control: re-sealed at {k0} it opens and checks ({control}, {controlChecked}; {r1}, {r2})"
+      (1 < b.indexCount - k0 && opened == "indexCorrupt" && checked == "indexCorrupt" &&
+        control == "opened" && controlChecked == "checked") failures
+  IO.println s!"plant-first-entry-steps: {firstSteps}; plant-index-from-off: {fromOff}"
 
 def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : IO UInt32 := do
   let failures ← IO.mkRef 0

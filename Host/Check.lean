@@ -184,7 +184,8 @@ def keptHeaders (store : System.FilePath) (keys : Keys) (origin : ByteArray) (ba
 check` runs it at the deployed one, host-file-sim at the toy one): the kept files' headers
 (`keptHeaders`), the kept segment before the base recovering clean (`historyClean`) and, kept from
 genesis, opening with the origin frame stating `origin` (`foreignOrigin`), and every index entry the
-base keeps reading back at its position and naming its record's offset (`indexClean`). The oldest
+base keeps reading back at its position and naming its record's offset, the first at the oldest kept
+header's step count (`indexClean`, HOST-68). The oldest
 kept header and the kept segment `[oldest.start, o.pos.offset)`; a refusal is its status and name. -/
 def keptClean {W : Type} (store : System.FilePath) (keys : Keys) (recordMax : Nat) (origin : ByteArray)
     (o : Opening W) (fs : Files) : IO (Except (Status × String) (Header × ByteArray)) := do
@@ -212,7 +213,7 @@ def keptClean {W : Type} (store : System.FilePath) (keys : Keys) (recordMax : Na
   let ib ← (← File.open (indexPathAt store k0) .read).readAt 0 ((n - k0) * entryBytes keys).toUSize
   let offs := recordOffsetsFrom oldest.start records
   let offs := if oldest.start = 0 then offs.drop 1 else offs
-  match indexClean (keys.forStore origin) ib k0 n offs with
+  match indexClean (keys.forStore origin) ib k0 n offs oldest.steps with
   | some j => return .error (.indexCorrupt, s!"indexCorrupt entry {j}")
   | none => return .ok (oldest, bytes)
 

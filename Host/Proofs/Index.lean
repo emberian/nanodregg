@@ -22,7 +22,7 @@ the index file is fixed-width entries, entry k at byte k · entryBytes, each tag
 * (`Host.Proofs.Base.openWith_verifies_named`) — an open that succeeds found the index file holding every entry the base
   counts, and its last entry reading back at its position with the tag the base names, its record
   begun before the base's World (HOST-53);
-* `indexClean_none` / `indexClean_unread` — `host check` reads EVERY entry: when it passes, each
+* `indexClean_none` / `indexClean_unread` / `indexClean_first_steps` — `host check` reads EVERY entry: when it passes, each
   reads back at its position and names its record's offset.
 -/
 import Host.Open
@@ -369,12 +369,14 @@ theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (k0 : Nat) (offs : 
 /-- **`host check` reads every entry it keeps** (HOST-33 condition 1, HOST-64): when `indexClean`
 passes, the index file holds exactly the entries `k0 … count - 1` the base keeps, one per offset of
 `offsets`, EVERY one reads back at its absolute position `k0 + i` under the Store's keys (its tag
-verified there) and names the `i`-th offset, and step counts never fall from one entry to the next.
-At `k0 = 0` it is the whole index. That `offsets` are the record frames between the oldest kept file
-and the base is the caller's (`Check.keptClean` hands `recordOffsetsFrom` of the recovered kept
-history), not this theorem's. -/
-theorem indexClean_none {keys : Keys} {bytes : ByteArray} {k0 count : Nat} {offsets : List Nat}
-    (h : indexClean keys bytes k0 count offsets = none) :
+verified there) and names the `i`-th offset, step counts never fall from one entry to the next, and
+the first kept entry's step count is `steps` (HOST-68: the oldest kept header's, the step count the
+kept run begins at). At `k0 = 0` it is the whole index. That `offsets` are the record frames between
+the oldest kept file and the base, and `steps` that header's, is the caller's (`Check.keptClean`
+hands `recordOffsetsFrom` of the recovered kept history and the oldest header's `steps`), not this
+theorem's. -/
+theorem indexClean_none {keys : Keys} {bytes : ByteArray} {k0 count : Nat} {offsets : List Nat} {steps : Nat}
+    (h : indexClean keys bytes k0 count offsets steps = none) :
     k0 + offsets.length = count ∧ bytes.size = (count - k0) * entryBytes keys ∧
     (∀ (i : Nat) (hi : i < offsets.length), ∃ e,
       Entry.read keys (k0 + i) (bytes.extract (i * entryBytes keys) (i * entryBytes keys + entryBytes keys)) = some e ∧
@@ -382,35 +384,58 @@ theorem indexClean_none {keys : Keys} {bytes : ByteArray} {k0 count : Nat} {offs
     (∀ (i : Nat) (_ : i + 1 < offsets.length) (e e' : Entry),
       Entry.read keys (k0 + i) (bytes.extract (i * entryBytes keys) (i * entryBytes keys + entryBytes keys)) = some e →
       Entry.read keys (k0 + i + 1) (bytes.extract ((i + 1) * entryBytes keys)
-        ((i + 1) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps) := by
+        ((i + 1) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps) ∧
+    (offsets ≠ [] → ∃ e, Entry.read keys k0 (bytes.extract 0 (entryBytes keys)) = some e ∧ e.steps = steps) := by
   unfold indexClean at h
   by_cases hc : k0 + offsets.length ≠ count ∨ bytes.size ≠ (count - k0) * entryBytes keys
   · rw [if_pos hc] at h; cases h
   · rw [if_neg hc] at h
     obtain ⟨h1, h2⟩ := not_or.mp hc
-    refine ⟨Classical.not_not.mp h1, Classical.not_not.mp h2, fun i hi => ?_, fun i hi e e' he he' => ?_⟩
-    · have := indexClean_go_none keys bytes k0 offsets k0 0 h i hi
+    have hgo : indexClean.go keys bytes k0 k0 0 offsets = none ∧
+        (offsets ≠ [] → ∃ e, Entry.read keys k0 (bytes.extract 0 (entryBytes keys)) = some e ∧ e.steps = steps) := by
+      cases offsets with
+      | nil => exact ⟨by simp [indexClean.go], fun hne => absurd rfl hne⟩
+      | cons off rest =>
+        simp only at h
+        split at h
+        · rename_i e he
+          split at h
+          · rename_i hs; exact ⟨h, fun _ => ⟨e, he, hs⟩⟩
+          · cases h
+        · cases h
+    refine ⟨Classical.not_not.mp h1, Classical.not_not.mp h2, fun i hi => ?_, fun i hi e e' he he' => ?_, hgo.2⟩
+    · have := indexClean_go_none keys bytes k0 offsets k0 0 hgo.1 i hi
       rw [Nat.add_sub_cancel_left] at this
       exact this
     · have e1 : k0 + i + 1 - k0 = i + 1 := by rw [Nat.add_assoc, Nat.add_sub_cancel_left]
-      refine indexClean_go_rise keys bytes k0 offsets k0 0 h i hi e e' ?_ ?_
+      refine indexClean_go_rise keys bytes k0 offsets k0 0 hgo.1 i hi e e' ?_ ?_
       · rw [Nat.add_sub_cancel_left]; exact he
       · rw [e1]; exact he'
 
 /-- **The tooth of `indexClean_none`**: when the sizes agree, a first entry that does not read back
 is refused at 0. -/
-theorem indexClean_unread (keys : Keys) (bytes : ByteArray) (k0 off : Nat) (rest : List Nat)
+theorem indexClean_unread (keys : Keys) (bytes : ByteArray) (k0 off : Nat) (rest : List Nat) (steps : Nat)
     (hs : bytes.size = (rest.length + 1) * entryBytes keys)
     (h : Entry.read keys k0 (bytes.extract 0 (entryBytes keys)) = none) :
-    indexClean keys bytes k0 (k0 + (rest.length + 1)) (off :: rest) = some k0 := by
+    indexClean keys bytes k0 (k0 + (rest.length + 1)) (off :: rest) steps = some k0 := by
   unfold indexClean
   rw [if_neg (by simp [hs])]
-  simp only [indexClean.go, Nat.sub_self, Nat.zero_mul, Nat.zero_add, h]
+  simp only [h]
+
+/-- **The step-count tooth** (HOST-68): a first kept entry that reads back claiming another step count
+than the oldest kept header's is refused at `k0`, whatever the rest of the index. -/
+theorem indexClean_first_steps (keys : Keys) (bytes : ByteArray) (k0 off : Nat) (rest : List Nat) (steps : Nat)
+    (hs : bytes.size = (rest.length + 1) * entryBytes keys) {e : Entry}
+    (h : Entry.read keys k0 (bytes.extract 0 (entryBytes keys)) = some e) (hne : e.steps ≠ steps) :
+    indexClean keys bytes k0 (k0 + (rest.length + 1)) (off :: rest) steps = some k0 := by
+  unfold indexClean
+  rw [if_neg (by simp [hs])]
+  simp only [h, if_neg hne]
 
 /-- **The count tooth**: an index of another length than the base's count is refused. -/
-theorem indexClean_count (keys : Keys) (bytes : ByteArray) (k0 count : Nat) (offsets : List Nat)
+theorem indexClean_count (keys : Keys) (bytes : ByteArray) (k0 count : Nat) (offsets : List Nat) (steps : Nat)
     (h : k0 + offsets.length ≠ count) :
-    indexClean keys bytes k0 count offsets = some (k0 + min (count - k0) offsets.length) := by
+    indexClean keys bytes k0 count offsets steps = some (k0 + min (count - k0) offsets.length) := by
   unfold indexClean
   rw [if_pos (Or.inl h)]
 

@@ -13,9 +13,12 @@ The coherence:
   before it (`Page.frameOf`, what a page reads) and decodes to steps, and the next entry (the tip,
   after the last) sits at that frame's end, at the step count those steps leave.
   `Page.Indexes.not_dup` is its tooth: one entry twice in a row is not coherent.
-* `StoreIndexes` (`Host.Proofs.StoreIndex`) — the Store's: the entries the base counts read back
-  at their positions under the Store's index key and are a coherent run to the base
-  (`Deployed.Coherent` at the deployed instance).
+* `StoreIndexes` (`Host.Proofs.StoreIndex`) — the Store's: the entries the base keeps (from
+  `indexFrom`, HOST-64) read back at their logical positions under the Store's index key and are a
+  coherent run to the base, beginning at the run start: the oldest kept file's start (the origin
+  frame's end for a Store keeping everything) at the step count `s₀` the run began at, a ghost
+  pinned at genesis and import and carried by every write (`Deployed.Coherent` at the deployed
+  instance; HOST-65, HOST-68).
 
 The open checks the one entry it reads (HOST-63, `lastFrameFault`):
 * `openWith_lastFrame` — an open that succeeds over a base counting an entry found that entry's
@@ -36,14 +39,21 @@ What a page gets from it:
   needs no coherence (`locate` moves only to entries at or below `start`); with
   `build_nonempty`, a page from `start` in [entry 0's step count, the tip) is served non-empty or
   refused by another name.
-* `Deployed.page_nonempty` (at the deployed open and the deployed pager, over a coherent Store)
-  and `Deployed.page_beforeLog_first` (the deployed pager over any Store).
-* `Deployed.page_beforeLog_origin` — **entry 0 is the Store's first record** (HOST-65): over a
-  coherent Store the run begins at the origin frame's end (`StoreIndexes`' `RunFrom`), so the entry
-  a `beforeLog` refusal reads first sits right after the origin frame (that [0, its end) IS the
-  origin frame is the open's origin check, HOST-25/HOST-64's header). The open checks the run start
-  of a base counting none (`openWith_originEnd`; tooth `lastFrameFault_none_off`; host-sim
-  `plant-base-past-origin`). The OFFSET is proved; the step count is not (below).
+* `Deployed.page_nonempty` (at the deployed open and the deployed pager `Page.kept` over the
+  kept files, over a coherent Store) and `Deployed.page_beforeLog_first` (the deployed pager over
+  any Store). `kept_ok`, `kept_beforeLog`, `kept_checkpointed` and `build_error_shape` relate
+  `Page.kept` to `Page.build`.
+* `Deployed.page_beforeLog_origin` — **the first kept entry is the Store's first kept record, at
+  the step count the run began** (HOST-65, HOST-68): over a coherent Store the run begins at the
+  oldest kept file's start (the origin frame's end for a Store keeping everything: `StoreIndexes`'
+  `RunFrom`) at `s₀`, so the entry a `beforeLog` or `checkpointed` refusal reads first sits there
+  (that [0, the origin frame's end) IS the origin frame is the open's origin check, HOST-25/HOST-64's
+  header), its step count is `s₀` (0 for a Store genesis made, the carried height for an import:
+  `genesis_indexes`, `import_indexes`), and the refusal is from a `start` below `s₀`. The open checks
+  the run start of a base counting none (`openWith_originEnd`; tooth `lastFrameFault_none_off`;
+  host-sim `plant-base-past-origin`); `host check` checks the step count of the first kept entry
+  against the oldest kept header's (`indexClean`, `indexClean_first_steps`; host-file-sim
+  `plant-first-entry-steps`).
 
 Both page theorems are about a page `build` returns: neither says a page over a coherent Store is
 served rather than refused (`badIndex`, `corrupt`).
@@ -56,7 +66,11 @@ Every Store written at an open is coherent (the completeness side, in `Host.Proo
   adopted base): `Deployed.genesis_indexes`, `Deployed.import_indexes`;
 * `StoreIndexes.append` — records and entries (or orphans) appended;
 * `StoreIndexes.cut_open` — the writer's truncation at open;
-* `sealed_indexes` — a seal: the old base's entries, then the open's (`Deployed.sealed_indexes_deployed`);
+* `sealed_indexes` — a seal: the old base's entries, then the open's, from the first entry the seal's
+  `Keep` names (`KeepNames`; `Deployed.sealed_indexes_deployed`): a seal keeping what the base kept
+  (`sealed_indexes_same`, no premise beyond the open and the seal), or a drop whose `Keep` comes from
+  the header this writer wrote at the oldest kept file (`keep_of_header`, carried by
+  `keepNames_append` / `keepNames_cut` / `keepNames_seal` through every later write);
 * `Page.Indexes.snoc` — the pure core of the loop's append (one record's frame and its entry).
 
 Not proved:
@@ -71,9 +85,10 @@ Not proved:
 * that an entry's chain is the chain before its record: `Indexes` pins the offset and the step
   count, not `e.chain` (from which a page states its chain). A wrong chain field is caught by the
   follower's chain check, not here;
-* that entry 0's step count is the first World's (0 at genesis, the import's step): `Indexes` pins
-  it only backward from the base's step count through the records after it, and a count-0 base
-  names no step count but its own World's.
+* that the `Keep` a drop names is the one `keepFrom` read from the oldest kept header: `keep_of_header`
+  states what such a header names, and the `keepNames_*` steps carry it through the writes between
+  that seal and the drop; that the writer's drop hands `Base.seal` exactly `(start, indexCount)` of
+  that header is `Store.keepFrom`, IO read off the code (host-file-sim `plant-retain-two` runs it).
 -/
 import Host.Proofs.Page
 import Host.Proofs.Backup
@@ -380,6 +395,98 @@ theorem build_beforeLog_first [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : C
       simp only [bind, hnl, hd, ↓reduceIte] at h
       obtain ⟨o, ho⟩ := walk_error _ _ _ _ _ h
       cases ho
+
+/-- **The shape of a page `build` refuses**: `beforeLog` (its own two refusals), a fault its reader
+`get` returned, `badIndex` (a chain that is no digest), or `corrupt` (the walk's). Never
+`checkpointed`: that name is `kept`'s rendering of `beforeLog` over a Store that dropped. -/
+theorem build_error_shape [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget : Nat}
+    {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
+    {now : Nat × ByteArray} {start : Nat} {f : Fault}
+    (h : build E dc digestOf s recordMax budget read get count endOff now start = .error f) :
+    (∃ st fs, f = .beforeLog st fs) ∨ (∃ k, get k = .error f) ∨ (∃ k, f = .badIndex k) ∨ (∃ o, f = .corrupt o) := by
+  by_cases hn : now.1 ≤ start
+  · simp [build, hn] at h
+  by_cases hc : count = 0
+  · simp [build, hn, hc] at h
+    simp only [pure] at h
+    cases h
+    exact .inl ⟨_, _, rfl⟩
+  rcases hl : locate get count start with f' | ⟨k, e⟩
+  · simp [build, hn, hc, hl] at h
+    simp only [bind, pure] at h
+    cases h
+    obtain ⟨k, hk⟩ := locate_error hl
+    exact .inr (.inl ⟨k, hk⟩)
+  · by_cases hs : start < e.steps
+    · simp [build, hn, hc, hl] at h
+      simp only [bind, hs, ↓reduceIte, pure] at h
+      cases h
+      exact .inl ⟨_, _, rfl⟩
+    cases hd : digestOf e.chain with
+    | none =>
+      simp [build, hn, hc, hl] at h
+      simp only [bind, hs, hd, ↓reduceIte, pure] at h
+      cases h
+      exact .inr (.inr (.inl ⟨k, rfl⟩))
+    | some c =>
+      simp [build, hn, hc, hl] at h
+      simp only [bind, hs, hd, ↓reduceIte] at h
+      obtain ⟨o, ho⟩ := walk_error _ _ _ _ _ h
+      exact .inr (.inr (.inr ⟨o, ho⟩))
+
+/-- A served `kept` page is `build`'s over the kept entries (`get (k0 + k)`, `count - k0` of them). -/
+theorem kept_ok [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget k0 : Nat}
+    {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
+    {now : Nat × ByteArray} {start : Nat} {a : Acc}
+    (h : kept E dc digestOf s recordMax budget k0 read get count endOff now start = .ok a) :
+    build E dc digestOf s recordMax budget read (fun k => get (k0 + k)) (count - k0) endOff now start = .ok a := by
+  simp only [kept, bind] at h
+  split at h
+  · simp only [pure] at h; cases h
+  · simp only [pure] at h; exact h
+
+/-- A `kept` page refused `beforeLog` is `build`'s refusal over a Store keeping everything (`k0 = 0`). -/
+theorem kept_beforeLog [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget k0 : Nat}
+    {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
+    {now : Nat × ByteArray} {start x y : Nat}
+    (h : kept E dc digestOf s recordMax budget k0 read get count endOff now start = .error (.beforeLog x y)) :
+    k0 = 0 ∧ build E dc digestOf s recordMax budget read (fun k => get (k0 + k)) (count - k0) endOff now start =
+      .error (.beforeLog x y) := by
+  simp only [kept, bind] at h
+  split at h
+  · rename_i st fs hb
+    simp only [pure] at h
+    split at h
+    · cases h
+    · rename_i hk; cases h; exact ⟨by omega, hb⟩
+  · simp only [pure] at h; rename_i hne; exact absurd h (hne x y)
+
+/-- A `kept` page refused `checkpointed` is `build`'s `beforeLog` over a Store that dropped (`0 < k0`),
+when its reader never answers `checkpointed` itself (`entryAt` does not, `entryAt_error`). -/
+theorem kept_checkpointed [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget k0 : Nat}
+    {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
+    {now : Nat × ByteArray} {start x y : Nat}
+    (hget : ∀ k st fs, get k ≠ .error (.checkpointed st fs))
+    (h : kept E dc digestOf s recordMax budget k0 read get count endOff now start = .error (.checkpointed x y)) :
+    0 < k0 ∧ build E dc digestOf s recordMax budget read (fun k => get (k0 + k)) (count - k0) endOff now start =
+      .error (.beforeLog x y) := by
+  simp only [kept, bind] at h
+  split at h
+  · rename_i st fs hb
+    simp only [pure] at h
+    split at h
+    · rename_i hk; cases h; exact ⟨hk, hb⟩
+    · cases h
+  · simp only [pure] at h
+    rcases build_error_shape h with ⟨st, fs, hf⟩ | ⟨k, hk⟩ | ⟨k, hf⟩ | ⟨o, hf⟩
+    · cases hf
+    · exact absurd hk (hget (k0 + k) x y)
+    · cases hf
+    · cases hf
 
 end Nanodregg.Host.Page
 
