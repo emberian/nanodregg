@@ -255,6 +255,9 @@ judge_runs() {
   if [ -s "$G/runs.cand.crash" ]; then
     sed 's/^/  runs: NO VERDICT /' "$G/runs.cand.crash"; echo "  runs: RED"; fail="$fail runs"; return
   fi
+  # GATES-20j (ROOT 10-21): a skipped cargo test is pending here, and the verdict line names the first skip
+  local sk; sk=$(grep -m1 -o 'INCOMPLETE(skipped: .*' "$G/runs.cand" || true)
+  [ -n "$sk" ] && note="$note (pending: ${sk:0:240})"
   if [ ! -s "$G/runs.cand.keys" ]; then
     echo "  runs: ok$( [ $rc -eq 3 ] && echo ', with pending rows') ($(tail -1 "$G/runs.cand" | sed 's/^runs: [A-Za-z]* //'))"; return
   fi

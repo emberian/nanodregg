@@ -27,6 +27,19 @@ first such row when none is selected). It runs `cargo test --locked --manifest-p
 ND_LEAN_BIN = the tree's built bin directory, after the build; it is selected when CRATE/ changed or
 any exe it drives is selected.
 
+A row `cargo-untraced:CRATE:TEST` (GATES-20j, HOSTING-15's fence) is a cargo row that runs WITHOUT the GATES-20
+tracer: a test that must cross a setuid boundary (sudo to the deployed uids) cannot run under it, since strace
+--seccomp-bpf sets no_new_privs and sudo refuses (measured on hbox 10-21: `sudo -n -u nd true` exit 0 plain, exit 1
+traced). It holds no read-set, so it is selected by the static rules alone (its crate, its drives' closures, and
+every non-.lean change) and its verdict is carried only under GATES-19's byte-identical static key.
+A cargo run (either kind) that prints a line starting `skipped: ` (stdout or stderr) is never ok, whatever its exit
+and libtest's summary: libtest counts a test that returned early as PASSED, so a test whose environment is absent
+would read ok on a box without it (HOSTING-15: the fence absent). ROOT 10-21: in pre-push it reads
+INCOMPLETE(skipped: N, first: LINE), pending, named in the verdict line, and the landing proceeds; in standing
+(--standing) it reads RED(skipped: N, first: LINE), so an environment that went missing (a reboot cleared /run) is a
+standing red until restored. The test's skip line carries its restore command. Neither is recorded or carried; on a
+`nobin RED` control a skip is a control that did not read red.
+
 A row `script:PATH` is a script of this tree that drives the built Lean exes and the client binaries
 over real sockets (PERF-2: scripts/bar.sh, THE BAR at a bounded scale). `runs` are its argument lists
 as for an exe (`{fresh}` is a fresh directory that exists when the run starts and is removed after),
@@ -96,6 +109,9 @@ DEADLINE = int(os.environ.get("ND_RUN_DEADLINE", "600"))
 
 
 CONTROL = "harness-control"
+CARGO = ("cargo:", "cargo-untraced:")
+STANDING_RUN = {"on": False}   # set by --standing: a skipped cargo run is RED there, INCOMPLETE in pre-push
+SKIPPED = re.compile(r"(?m)^skipped: .*$")
 NOBIN = ("nobin RED", "nobin ok")
 STANDING = "standing:"
 
@@ -115,7 +131,7 @@ def table(root: str) -> dict[str, tuple[list[list[str]] | None, str, list[str] |
             raise ValueError(f"{RUNS}:{n}: need exe<TAB>runs<TAB>pass<TAB>control: {line.rstrip()!r}")
         if f[0] in out or f[0].removeprefix(STANDING) in out or STANDING + f[0] in out:
             raise ValueError(f"{RUNS}:{n}: second row for {f[0].removeprefix(STANDING)}")
-        if f[0].startswith("cargo:"):
+        if f[0].startswith(CARGO):
             if len(f[0].split(":")) != 3 or f[2] != "exit 0" or f[3] not in NOBIN:
                 raise ValueError(f"{RUNS}:{n}: a cargo row is cargo:CRATE:TEST<TAB>EXE,…<TAB>exit 0<TAB>nobin RED|nobin ok: {line.rstrip()!r}")
             out[f[0]] = ([[x.strip() for x in f[1].split(",") if x.strip()]], f[2], f[3])
@@ -142,7 +158,7 @@ def check(t: tree.Tree) -> list[str]:
     except ValueError as e:
         return [str(e)]
     exes = set(t.exes)
-    cargo = {k for k in rows if k.startswith("cargo:")}
+    cargo = {k for k in rows if k.startswith(CARGO)}
     script = {k for k in rows if k.startswith("script:")}
     standing = {k for k in rows if k.startswith(STANDING)}
     named = (set(rows) - standing) | {k.removeprefix(STANDING) for k in standing}
@@ -239,7 +255,7 @@ def no_second_door(root: str) -> list[str]:
 
 
 def selected(t: tree.Tree, changed: list[str] | None, rows: dict) -> set[str]:
-    cargo = {k: rows[k][0][0] for k in rows if k.startswith("cargo:")}
+    cargo = {k: rows[k][0][0] for k in rows if k.startswith(CARGO)}
     script = {k for k in rows if k.startswith("script:")}
     if changed is None or data_paths(t.root, changed):
         return set(t.exes) | set(cargo) | script
@@ -292,7 +308,7 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
     shutil.rmtree(fresh, ignore_errors=True)
     os.makedirs(os.path.dirname(fresh), exist_ok=True)
     env = None
-    if exe.startswith("cargo:"):
+    if exe.startswith(CARGO):
         _, crate, test = exe.split(":")
         # One workspace (ROOT 10-17): the member is named by its [package] name under the
         # root manifest, so every test shares the root lock and target dir.
@@ -322,7 +338,8 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         if not os.path.isfile(argv[0]):
             return "", "ABSENT(no binary: " + name + ")"
     tr = fresh.rstrip("/") + ".trace"
-    if TRACING["strace"]:
+    traced = TRACING["strace"] and not exe.startswith("cargo-untraced:")
+    if traced:
         try:
             os.remove(tr)
         except FileNotFoundError:
@@ -331,7 +348,7 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
     try:
         r = subprocess.run(argv, cwd=t.root, capture_output=True, text=True, timeout=DEADLINE, env=env)
         out = r.stdout + r.stderr
-        if exe.startswith("cargo:"):
+        if exe.startswith(CARGO):
             failed = re.findall(r"(?m)^---- (\S+) stdout ----", out)
             n = summary(r.stdout)
             if r.returncode == 0 and (n is None or n[0] == 0):
@@ -353,12 +370,16 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
     # …): Input/output error`, and the run exits non-zero. That is no verdict about the run: UNREAD(tracer), re-run once
     # (run_once_more), twice is NOT JUDGED, never RED. Only strace's own lines (`strace: ` at a line start) count, and
     # only on a run that did not read ok.
-    if TRACING["strace"] and not v.startswith("ok"):
+    if traced and not v.startswith("ok"):
         tl = TRACER.search(out)
         if tl:
             v = f"UNREAD(tracer: {tl.group(0)[:200]})"
+    if exe.startswith(CARGO) and not v.startswith(("RED", "KILLED", "UNREAD")):
+        sk = SKIPPED.findall(out)
+        if sk:
+            v = f"{'RED' if STANDING_RUN['on'] else 'INCOMPLETE'}(skipped: {len(sk)}, first: {sk[0][:200]})"
     shutil.rmtree(fresh, ignore_errors=True)
-    if TRACING["strace"]:
+    if traced:
         TRACING["sets"].append(readset.reduce(tr, t.root))
         try:
             os.remove(tr)
@@ -428,7 +449,7 @@ def valid_readset(t: tree.Tree, exe: str, store: str, gitdir: str, base: str, li
 def reach_of(t: tree.Tree, exe: str) -> set[str]:
     """The modules whose change can move a row: a Lean row's reach; a cargo row's drives' reach; a
     script row every exe's closure (it has no closure of its own)."""
-    if exe.startswith("cargo:"):
+    if exe.startswith(CARGO):
         rows = table(t.root)
         drives = rows.get(exe, ([[]],))[0][0] if rows.get(exe) and rows[exe][0] else []
         return set().union(*(reach(t, e) for e in drives if e in t.exes)) if drives else set()
@@ -469,7 +490,7 @@ def traced_selected(t: tree.Tree, changed: list[str], rows: dict, store: str, gi
                 out.add(exe); why[exe] = "no read-set valid for the parent: the static rule"
             continue
         hit = sorted(reach_of(t, exe) & mods)
-        crate = exe.split(":")[1] + "/" if exe.startswith("cargo:") else None
+        crate = exe.split(":")[1] + "/" if exe.startswith(CARGO) else None
         if base_table and row_line(t.root, base_table, exe) != line:
             why[exe] = "its row changed"
         elif any(x in readset.RUNNER for x in changed):
@@ -523,7 +544,7 @@ def run_once_more(t: tree.Tree, exe: str, args: list[str], passline: str, fresh:
 
 def redlines(exe: str, out: str) -> list[str]:
     """The lines that name a failure: a cargo row's failed test names, an exe's FAIL/BLIND/RED lines."""
-    if exe.startswith("cargo:"):
+    if exe.startswith(CARGO):
         return sorted(set(re.findall(r"(?m)^---- (\S+) stdout ----", out)))
     return [l.strip() for l in out.splitlines()
             if not l.startswith("WASTE ") and re.search(r"\b(FAIL|FAILED|BLIND|RED)\b", l)]
@@ -535,9 +556,9 @@ def control_reads_red(exe: str, v: str, out: str) -> str | None:
         return None if v.startswith("ABSENT") else v
     if not v.startswith("RED"):
         return f"RED(harness: the known-red control passed: {v})"
-    if exe.startswith("cargo:") and not v.startswith("RED(FAIL "):
+    if exe.startswith(CARGO) and not v.startswith("RED(FAIL "):
         return f"RED(harness: the known-red control named no failed test: {v})"
-    if not exe.startswith("cargo:") and CONTROL not in out:
+    if not exe.startswith(CARGO) and CONTROL not in out:
         return f"RED(harness: the known-red control read red without naming {CONTROL}: {v})"
     return None
 
@@ -561,6 +582,7 @@ def main() -> int:
     ap.add_argument("--tree-oid", help="GATES-20: the tree object judged here (a stored read-set names it)")
     a = ap.parse_args()
     t = tree.read(a.root)
+    STANDING_RUN["on"] = a.standing
     rows = table(os.path.dirname(os.path.dirname(os.path.abspath(a.table)))) if a.table else table(t.root)
     # Judging a PARENT with the candidate's table (pre-push): a run the parent's own table does not
     # hold, row for row (same exe, same argument list, same pass line, same control; for a cargo
@@ -613,7 +635,7 @@ def main() -> int:
 
     def mine(exe: str) -> bool:
         m = own.get(exe)
-        return m is not None and m[1:] == rows[exe][1:] and (not exe.startswith("cargo:") or os.path.isfile(
+        return m is not None and m[1:] == rows[exe][1:] and (not exe.startswith(CARGO) or os.path.isfile(
             os.path.join(t.root, exe.split(":")[1], "tests", exe.split(":")[2] + ".rs"))) and (
             not exe.startswith("script:") or os.path.isfile(os.path.join(t.root, exe[len("script:"):])))
 
@@ -659,9 +681,9 @@ def main() -> int:
             print(f"  reuse {exe}: re-run (key changed)")
     todo = [e for e in todo if e not in reused]
     # The cargo reader's own control: whenever a cargo row runs, some `nobin RED` control runs first.
-    cargo = [e for e in todo if e.startswith("cargo:")]
+    cargo = [e for e in todo if e.startswith(CARGO)]
     if cargo and not any(rows[e][2] == "nobin RED" for e in cargo):
-        first = next((e for e in sorted(rows) if e.startswith("cargo:") and rows[e][2] == "nobin RED"), None)
+        first = next((e for e in sorted(rows) if e.startswith(CARGO) and rows[e][2] == "nobin RED"), None)
         if first is None:
             report("cargo", [], f"RED(harness: no `nobin RED` row proves the cargo reader)", "", " (control)")
         elif mine(first):
@@ -678,7 +700,7 @@ def main() -> int:
                 print(f"  run {exe} {' '.join(args)}: NOT RUN(not in this tree's own table)")
             continue
         # The known-red control runs FIRST: a runner that cannot read a failure has no verdict to read.
-        if exe.startswith("cargo:"):
+        if exe.startswith(CARGO):
             out, v = run_once_more(t, exe, [], passline, os.path.join(scratch, f"{exe}-control"), nobin)
             if control == "nobin RED":
                 bad = control_reads_red(exe, v, out)
@@ -698,15 +720,17 @@ def main() -> int:
             continue
         for k, args in enumerate(runs):
             out, v = run_once_more(t, exe, args, passline, os.path.join(scratch, f"{exe}-{k}"), bindir,
-                         args if exe.startswith("cargo:") else ())
+                         args if exe.startswith(CARGO) else ())
             waste += [l for l in out.splitlines() if l.startswith("WASTE ")]
-            report(exe, [] if exe.startswith("cargo:") else args, v, out)
+            report(exe, [] if exe.startswith(CARGO) else args, v, out)
         ok_all = bool(lines) and all(v.startswith("ok") for _, v in lines)
         rs = readset.union(TRACING["sets"]) if TRACING["strace"] else None
         if rs is not None:
             # GATES-20e: the waste rows this row measured, a judge input no trace can show
             rs["W"] = sorted({"\t".join(l.split()[1:3]) for l in waste[w0:] if len(l.split()) >= 4})
-        if TRACING["strace"] and rs is None:
+        if exe.startswith("cargo-untraced:"):
+            rs = None   # untraced by its row's kind: static selection and the static key, never a read-set
+        elif TRACING["strace"] and rs is None:
             # GATES-20d: a run whose trace could not be read: the static rules apply to this row, and
             # standing's re-trace check cannot run on it (standing counts these lines: INCOMPLETE).
             print(f"  untraced {exe}: no read-set ({readset.WHY[0] if readset.WHY else 'a run held none'}); "

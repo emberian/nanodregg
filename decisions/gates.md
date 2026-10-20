@@ -702,3 +702,16 @@ Measured before the column was written: 10 of the 11 cargo rows go red with no L
 **Plant** (hbox logs/gates11-tracer-plant.sh, `.out` main vs patched, `-new.out` this commit; a fake strace that prints strace's error and exits 1, once or always, over a one-line exe): main's runner reads `RED(exit 1, last line: strace: ptrace(PTRACE_LISTEN …))` both times. This one reads `once` → `flake x …`, `ok` (2 calls), and `always` → `UNREAD(tracer twice: …)` (2 calls).
 
 **Critique.** A run whose real failure also makes strace print a line (the tracee dies under it) is re-run, and if it fails again it is NOT JUDGED, not RED: a false refusal is traded for a withheld verdict. The convergence's UNJUDGED stage then names it, and an untraced re-run settles it.
+
+## GATES-20j · A skipped cargo test is never ok: INCOMPLETE in pre-push, RED in standing; `cargo-untraced:` rows run without the tracer (2026-10-21, ROOT ruling; HOSTING-15's fence, built and planted by GATES-10)
+
+**Why.** HOSTING-15's two-uid fence checks (a test that `sudo`s to the deployed uids) skip themselves when the fence is absent (no nd-hosted uid, /run cleared by a reboot): the test prints `skipped: …` and returns, and libtest counts it PASSED. A box without the fence would read every such row `ok`: the fail-open shape (an absent verdict read as a pass). And such a test cannot run under the GATES-20 tracer at all: strace --seccomp-bpf sets no_new_privs, so sudo refuses (measured on hbox 10-21: `sudo -n -u nd true` exit 0 plain, exit 1 traced).
+
+**Decision.** gates/runs.py:
+- A cargo run (either kind) that prints a line starting `skipped: ` (stdout or stderr) is never ok, whatever its exit and libtest's summary. In pre-push it reads `INCOMPLETE(skipped: N, first: LINE)`: pending, named in the verdict line `(pending: …)`, and the landing proceeds (ROOT). In standing (`--standing`) it reads `RED(skipped: N, first: LINE)`: an environment that went missing is a standing red until restored (the test's skip line carries its restore command). Neither is recorded or carried; on a `nobin RED` control a skip is a control that did not read red.
+- A row `cargo-untraced:CRATE:TEST` is a cargo row run WITHOUT the tracer. It holds no read-set, so it is selected by the static rules alone (its crate, its drives' closures, every non-.lean change) and carried only under GATES-19's static key (every non-.lean source, the built binaries, the toolchain).
+Under GATES-22 a row runs at the convergence (standing: a skip is RED) and on a full landing (pending); a fast landing runs no row.
+
+**Plants** (hbox logs/gates11-fence-plant.sh/.out, GATES-10's logs/gates10-fence-plant.sh plus a standing case; the standing tree under the standing lock, planted test files and a trimmed runs.tsv, restored): main's runner reads the planted skipping test `cargo:launcher:gplantskip : ok` (the fail-open); this runner `INCOMPLETE(skipped: 1, first: skipped: no nd-hosted uid …)`; the sudo test traced `RED(FAIL sudo_reaches_nd)`, as `cargo-untraced:` `ok`; with `--standing` the skip reads `RED(skipped: 1, …)`.
+
+**Critique.** A test that skips without printing `skipped: ` still reads ok: the rule reads the convention, and the convention is HOSTING's to keep (its tests print it). An untraced row is selected and keyed only statically, so it runs more often than a traced one, which is the safe side.
