@@ -782,4 +782,61 @@ theorem extract_knot_ok : ∃ f, (Machine.mk []).extract (.record [("a", .nat), 
     (.knot knotBody []) = .ok (.record [("a", .nat 1), ("g", .nat 1)], f) :=
   ⟨_, rfl⟩
 
+section
+variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+
+/-- The receiver's run of a package field: a law field `λ λ λ b` of the record body at `lib[g]`
+is evaluated by `ref` in the EMPTY environment, so its body runs with request, new and old above
+nothing (`cenv = []`, where `Std.Admits` allows any). -/
+private theorem runLaw_ref_body {g : Nat} {fs : List (Label × Term)} {ℓ : Label} {A B C : Ty}
+    {b : Term} {o n r : Data} (hg : lib[g]? = some (.record fs))
+    (hℓ : Row.find? ℓ fs = some (.lam A (.lam B (.lam C b))))
+    (h : runLaw lib (.get (.ref g) ℓ) o n r = .ok (.ok ())) :
+    ∃ w, BigStep lib [r.toVal, n.toVal, o.toVal] b (.ok (.inj "ok" w)) := by
+  have hf : BigStep lib [r.toVal, n.toVal, o.toVal] (.get (.ref g) ℓ) (.ok (.clo (.lam B (.lam C b)) [])) :=
+    .get (.ref hg .record) (.field (Std.find_suspend hℓ) .lam)
+  unfold runLaw at h
+  split at h
+  · cases h
+  · rename_i v used hrun
+    split at h
+    · rename_i d f hx
+      obtain ⟨w, rfl⟩ := Std.extract_sum_inj hx
+      exact ⟨w, Std.applyAt_of_fn hf (run_bigStep hrun)⟩
+    all_goals simp at h
+
+/-- **The receiver's verdict on a no-ref law is its meaning under every lib.** If `judgeOne`
+admits `old → new` under `r` for the package `p` the pinned cell holds, then every law label of
+`p` whose body field `t` is a law with no closure reference (every stdlib law, `NoRefStd`)
+`Admits` the transition under ANY lib, `[]` included: the receiver runs its body over request,
+new and old alone (`runLaw_ref_body`), and a no-ref derivation over no-ref data is one under every
+lib (`bigStep_relib`). So a history of judged turns is a `Std.Chain (Std.Admits lib t)` at one
+fixed lib, whatever closure each turn's view loaded. -/
+theorem judgeOne_admits_relib {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
+    {p : Package} {fs : List (Label × Term)}
+    (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok p) (hb : p.body = .record fs)
+    (h : judgeOne bytesOf digestOf look law old new r = .ok ()) :
+    ∃ o n, readState digestOf (recordRow p.state) old = .ok o ∧
+      readState digestOf (recordRow p.state) new = .ok n ∧
+      ∀ ℓ ∈ p.laws, ∀ t, Row.find? ℓ fs = some t → IsLaw t → NoRef t → ∀ lib' : List Term,
+        Std.Admits lib' t (reqData bytesOf r) n o := by
+  obtain ⟨L, g, p', o, n, hload, hpg, ho, hn, hall⟩ := judgeOne_ok bytesOf digestOf h
+  obtain ⟨hpg', f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hload
+  rw [hpg'] at hpg
+  cases hpg
+  refine ⟨o, n, ho, hn, fun ℓ hℓ t hf hlaw hnr lib' => ?_⟩
+  obtain ⟨A, B, C, b, rfl⟩ := hlaw
+  have hrel : (Term.lam A (.lam B (.lam C b))).relocate f = .lam A (.lam B (.lam C b)) :=
+    relocate_noRef f _ hnr
+  have hg : L.lib[g]? = some (.record (Term.relocateRow f fs)) := by rw [hlib, hb]; rfl
+  have hf' : Row.find? ℓ (Term.relocateRow f fs) = some (.lam A (.lam B (.lam C b))) := by
+    rw [find_relocateRow, hf]; simp only [Option.map_some]; rw [hrel]
+  obtain ⟨w, hw⟩ := runLaw_ref_body hg hf' (hall ℓ hℓ)
+  have hbn : NoRef b := by simpa only [NoRef] using hnr
+  exact ⟨[], w, (bigStep_relib (lib' := lib') hw hbn (fun v hv => by
+    simp only [List.mem_cons, List.mem_nil_iff, or_false] at hv
+    rcases hv with rfl | rfl | rfl <;> exact toVal_noRef _)).1⟩
+
+end
+
 end Nanodregg.Lang
