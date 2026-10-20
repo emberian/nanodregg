@@ -11,15 +11,18 @@ it verified, and a forger may send any public intermediate beside a mis-issued l
 (`gates/generated.tsv`), as `deploy/tls/anchors.pem` is. The installed copy is the operator's: a
 provider's key rotation is an operator act by the RUNBOOK's recipe, with no rebuild.
 
-`pins` is EMPTY: no leaf key has been read from any provider, so keybroker refuses every real call
-`pinMismatch` until the operator computes the pin at the first real call (Ember's act; nothing in
-this tree contacts a provider).
+`pins` holds ONE pin, `api.anthropic.com`, taken 2026-10-21 by the RUNBOOK §2a recipe (Ember approved
+THE PIN; decisions/ops.md OPS-19): leaf CN=api.anthropic.com, issuer Google Trust Services WE1, valid
+2026-09-21 18:15:27Z to 2026-12-20 19:15:03Z. The leaf rotates: after 2026-12-20 (sooner if renewed
+early) every real call is refused `pinMismatch` until the operator pins the new leaf; the installed
+file is the operator's, and a rotation needs no rebuild.
 -/
 
 namespace Nanodregg.Hosting.Pins
 
 /-- (host, lowercase hex SHA-256 of a leaf SubjectPublicKeyInfo), in file order. -/
-def pins : List (String × String) := []
+def pins : List (String × String) :=
+  [("api.anthropic.com", "9fe3851dbd7a61523c284bb1e372e4e238c5b0aefac4ba256af95c0024045eae")]
 
 /-- The PINS file: one `HOST HEX` line per pin, each ended by LF; empty when no pin is shipped. -/
 def text : String := String.join (pins.map fun (h, p) => h ++ " " ++ p ++ "\n")

@@ -539,3 +539,22 @@ corrected here:
 **CRITIQUE.** The sentences are checked against the code's names and constants, not run: no unit has run under
 systemd since 5771c74.
 **Status.** landed (this commit).
+
+
+## OPS-19 · THE PIN: api.anthropic.com's leaf key is shipped in deploy/tls/pins (OPS-6, 2026-10-21; Ember approved B1, ROOT for HOSTING)
+
+**Decision.** `Hosting.Pins.pins` holds `("api.anthropic.com", 9fe3851dbd7a61523c284bb1e372e4e238c5b0aefac4ba256af95c0024045eae)`;
+`emit-pins` re-emits `deploy/tls/pins`. This is HOSTING-28's recipe, exactly, and the first outward contact with the
+provider: `openssl s_client -connect api.anthropic.com:443 -servername api.anthropic.com </dev/null | openssl x509 -pubkey
+-noout | openssl pkey -pubin -outform der | sha256sum`, four fetches (two from hbox, two from another network, a Mac),
+all equal. Certificate: subject CN=api.anthropic.com, issuer C=US O=Google Trust Services CN=WE1, notBefore
+2026-09-21 18:15:27 GMT, notAfter 2026-12-20 19:15:03 GMT, certificate SHA-256
+BF:92:EB:A5:7D:8C:E9:D8:9B:26:B2:74:3A:CC:F9:66:B3:F0:D7:B8:BC:11:85:37:DB:B0:75:4E:14:2A:33:71. No request was
+sent and no key was used or touched: the provider KEY is a separate act Ember has not given.
+**Alternatives.** Keep the file empty (every call refused: safe, and useless). Not taken: Ember approved the pin.
+**CRITIQUE.** A pin taken during an attack pins the attacker, and nothing checks it. The four fetches share what
+they can: the same DNS-routed CDN edge may serve one certificate to every vantage point I have, so agreement shows
+no per-path forgery, not that the key is the provider's. The leaf expires 2026-12-20 and Let's Encrypt-style renewal
+may or may not keep the key; if it changes, every call is refused `pinMismatch` until the operator re-pins
+(RUNBOOK §2a). The shipped file is only the default: the installed /etc/nd/keybroker/pins is the operator's.
+**Status.** landed (this commit); no provider call has been made.
