@@ -43,11 +43,13 @@ inductive Verb
   range is handed the range `--range` names, signed at follow's listing -/
   | invoke
   /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object, a value account
-  (`well:ASSET` | `of:OWNER:ASSET`: a mutate grant over it lends its balance, LEDGER-6), or `world` (the World,
+  (`well:ASSET` | `of:OWNER:ASSET`: a `transfer:N` grant over it lends at most N of its balance, a
+  `credit:N` grant over a well at most N of its floor, KERNEL-60), or `world` (the World,
   KERNEL-20: `observe` on it is following the log, `enroll:N` is sponsoring N members); MEMBER is a
   member or `anyone` (a grant whose grantee is the World: every enrolled member, including members
   enrolled later, KERNEL-26: a public object); RIGHTS is
-  `observe`, `mutate`, `invoke:N`, `enroll:N`, comma-separated; PARENT is the grant attenuated -/
+  `observe`, `mutate`, `invoke:N`, `enroll:N`, `transfer:N`, `credit:N`, comma-separated; PARENT is the
+  grant attenuated -/
   | grant
   /-- `revoke GRANT` -/
   | revoke
@@ -250,7 +252,11 @@ def rightArg (s : String) : Except ParseRefusal Right :=
     | some m => .ok (.invoke m)
     | none => match (s.dropPrefix? "enroll:").bind (·.toString.toNat?) with
       | some n => .ok (.enroll n)
-      | none => .error (.badRight s)
+      | none => match (s.dropPrefix? "transfer:").bind (·.toString.toNat?) with
+        | some n => .ok (.transfer n)
+        | none => match (s.dropPrefix? "credit:").bind (·.toString.toNat?) with
+          | some n => .ok (.credit n)
+          | none => .error (.badRight s)
 
 def expectArg (s : String) : Except ParseRefusal (Nat × ByteArray) :=
   match s.splitOn "=" with

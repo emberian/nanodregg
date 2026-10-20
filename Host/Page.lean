@@ -83,11 +83,15 @@ structure Acc where
 
 variable {m : Type → Type} [Monad m]
 
-/-- A step's event on a page (PROTOCOL-8): `0 ‖ call` for an admitted Turn, `1 ‖ call` for a
-recorded refusal. -/
+/-- A step's event on a page (PROTOCOL-8, PROTOCOL-60; the tags are `Protocol.eventTurn`, …):
+`0 ‖ call` for an admitted Turn, `1 ‖ call` for a recorded refusal with no cancel signature, and
+`2 ‖ nat64 n ‖ sig ‖ call` for a recorded cancel, whose `n`-byte signature the follower needs to
+re-record the writer's exact record (KERNEL-60). -/
 def stepEvent : Step D → ByteArray
-  | .turn t => ⟨#[0]⟩ ++ t.event
-  | .refusal r => ⟨#[1]⟩ ++ r.event
+  | .turn t => ⟨#[Protocol.eventTurn]⟩ ++ t.event
+  | .refusal r =>
+      if r.cancel.size = 0 then ⟨#[Protocol.eventRefusal]⟩ ++ r.event
+      else Protocol.cancelEvent r.cancel r.event
 
 /-- One (step, roots) pair against what the page holds, the chain and the step count before it: a
 step at or below `start` is skipped (the count and chain move); past it, the step's event is served

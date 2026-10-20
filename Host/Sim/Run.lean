@@ -38,6 +38,7 @@ import Host.Serve
 import Host.Tail
 import Kernel.Sim
 import Host.Carry
+import Protocol.Command.Machine
 
 namespace Nanodregg.Host.Sim
 
@@ -611,7 +612,8 @@ def forgottenPlants (failures : IO.Ref Nat) : IO Unit := do
 /-- A recorded refusal as the toy log carries it (KERNEL-44): authenticated and in its window by
 construction; the toy machine records it through `World.step` like any step. -/
 def refusedAt (i : Nat) : Refused Nat :=
-  { txId := 70000 + i, member := 9, notBefore := 0, validUntil := 1024, code := 3, event := "refused".toUTF8 }
+  { txId := 70000 + i, member := 9, notBefore := 0, validUntil := 1024, code := 3, event := "refused".toUTF8,
+    cancel := ByteArray.empty }
 
 /-- The refusals day's plants (KERNEL-44, KERNEL-47; HOST-42 in decisions/host.md):
 * `plant-refusal-survives-reopen`: three refusals recorded between thirty Turns, served across fuel
@@ -968,6 +970,63 @@ def judgePlant (failures : IO.Ref Nat) : IO Unit := do
   check s!"{p}: the follower's fold refuses the lying writer's Turn at step 0 `refusedFinal` ({shownF})"
     (match fold w2 o3.staged with | .error (.step 0 r) => r.name == "refusedFinal" | _ => false) failures
 
+/-- plant-cancel-page (PROTOCOL-60; KERNEL-60's C1 gap, HOST-17's conditions): a member's cancel the
+writer records (`Receive.cancel` over Kernel.Sim's ctx, toy signatures, CODEC's call codec), served
+as the page event `Page.stepEvent` writes (tag 2, `2 ‖ nat64 n ‖ sig ‖ call`), is absorbed by the
+follower's `Command.absorbStep` into the writer's exact record and World (its chain). The teeth, each
+refused `eventMismatch` at the event's step by name: the event as tag 1 carried it before PROTOCOL-60 (the
+signature dropped: the follower's `judge` admits the call, so its chain broke on the first cancel),
+a signature flipped (the follower verifies it, never the writer's word), and the three encodings
+`stepEvent` never makes: an empty signature, one past `cancelBytesMax`, and a length that runs past
+the event. Those three are end-to-end refusals: `verify` and the call decoder refuse them too, so
+they cannot tell `cancelParts`' length checks apart: those checks' tooth is the theorem
+`Command.cancelParts_some`, and one encoding per record is `absorbStep_cancel_canonical`. -/
+def cancelPagePlant (failures : IO.Ref Nat) : IO Unit := do
+  let p := "plant-cancel-page"
+  let kx := Kernel.Sim.ctx
+  let key := "f0".toUTF8
+  let founders := [(key, Receive.nextKeyDigest kx "f0-next".toUTF8)]
+  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders with
+  | .error r => check s!"{p}: genesis ({r.name})" false failures
+  | .ok g =>
+  let me := Receive.founderId kx g.origin 0
+  let u : Receive.Unsigned Kernel.Sim.D :=
+    { world := g.origin, member := me, key, notBefore := 0, validUntil := g.height + 101,
+      pins := Kernel.Sim.S.pinsFor g [me], maxCharge := 1000000, body := .install Kernel.Sim.Gen.denyAll }
+  let c : Receive.Call Kernel.Sim.D := { unsigned := u, signature := Kernel.Sim.toySign key (kx.callMessage u) }
+  let sig := Kernel.Sim.toySign key (kx.cancelMessage c)
+  match Receive.cancel kx g c sig with
+  | .recorded _ r w1 =>
+    let shown (x : Except (Protocol.Command.Refusal Kernel.Sim.D) (Step Kernel.Sim.D × World Kernel.Sim.D)) : String :=
+      match x with
+      | .ok (Step.refusal _, _) => "recorded"
+      | .ok (Step.turn _, _) => "admitted"
+      | .error (.eventMismatch i) => s!"eventMismatch {i}"
+      | .error e => e.name
+    let ev := Page.stepEvent (Step.refusal r)
+    let honest := Protocol.Command.absorbStep kx g ev
+    check s!"{p}-control: the writer's cancel is page event tag 2 with its {sig.size}-byte signature ({ev[0]?})"
+      (ev[0]? == some Protocol.eventCancel && r.cancel == sig && 0 < sig.size) failures
+    check s!"{p}: the follower absorbs the tag-2 event into the writer's exact record and World ({shown honest})"
+      (match honest with
+        | .ok (Step.refusal r', w') => r' == r && Kernel.Sim.same w' w1
+        | _ => false) failures
+    let pad (n : Nat) : ByteArray := ByteArray.mk (Array.replicate n 7)
+    let tag2 (n : Nat) (s : ByteArray) : ByteArray :=
+      ⟨#[Protocol.eventCancel]⟩ ++ Codec.Stream.nat64.bytes n ++ s ++ r.event
+    let flipped := ByteArray.mk (sig.data.set! 0 (sig.data[0]! ^^^ 1))
+    let short := ⟨#[Protocol.eventCancel]⟩ ++ Codec.Stream.nat64.bytes Kernel.Bounds.cancelBytesMax ++ sig.extract 0 1
+    for (name, e) in [("tag 1, the signature dropped (the event before PROTOCOL-60)", ⟨#[Protocol.eventRefusal]⟩ ++ r.event),
+        ("a flipped signature", tag2 flipped.size flipped),
+        ("an empty signature", tag2 0 ByteArray.empty),
+        (s!"a signature of {Kernel.Bounds.cancelBytesMax + 1} bytes", tag2 (Kernel.Bounds.cancelBytesMax + 1) (pad (Kernel.Bounds.cancelBytesMax + 1))),
+        ("a length past the event's end", short)] do
+      let x := Protocol.Command.absorbStep kx g e
+      check s!"{p}: {name} is refused `eventMismatch {g.steps + 1}` ({shown x})"
+        (match x with | .error (.eventMismatch i) => i == g.steps + 1 | _ => false) failures
+  | .declined v => check s!"{p}: the member's cancel was declined {v.name}" false failures
+  | .admitted _ _ => check s!"{p}: the member's cancel was admitted" false failures
+
 /-- plant-before-log (HOST-61): a Store whose log begins at step 7, the shape `host import` makes
 from a World at height 7 (`Host.Cli.importWorld_steps`: the carry sets steps to the height), one
 Turn served into it through the loop, then paged through the deployed `Page.build` and
@@ -1012,6 +1071,7 @@ def laterPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO 
   sealCountPlant seed frames failures
   beforeLogPlant seed failures
   judgePlant failures
+  cancelPagePlant failures
 
 /-- `host-sim [SEED] [--harness-control]`; any other argument is refused (exit 2), never read as seed 1.
 `--harness-control` (GATES-15) adds one check nothing meets to the ordinary run, so the run must end

@@ -51,10 +51,11 @@ def refusalNames : List String :=
   ["wrongWorld", "badSignature", "unknownKey", "notPrecommitted", "badPossession", "unpinned",
    "missingCell", "wrongKind", "malformedCell", "lawDenied", "program", "stateKey", "tooManyLaws",
    "hasMethods", "noMethods", "noGrant", "grantTarget", "grantRight", "grantWidens", "unrooted",
-   "enrollSpent", "notIssuer", "grantTooDeep", "overPrice", "undecodableEvent", "eventMismatch",
+   "enrollSpent", "transferSpent", "creditSpent", "rightTarget", "notIssuer", "grantTooDeep", "overPrice", "undecodableEvent", "eventMismatch",
    "duplicateEffect", "sameAccount", "zeroAmount", "assetMismatch", "overflow", "notWell",
    "notCallable", "callTooDeep", "revisited", "tooManyCalls", "overTicks", "rowUnpinned", "rangeUnpinned",
-   "rangeTooLong", "rowParent", "duplicateRow", "staleRecorded"]
+   "rangeTooLong", "rowParent", "duplicateRow", "staleRecorded",
+   "cancelled", "cancelForged"]
 
 /-- The wire names of the kernel's rejections, in constructor order (checked against `Reject.name`). -/
 def rejectNames : List String :=
@@ -90,10 +91,14 @@ def staleCode : Nat := refusalNames.length + rejectNames.idxOf "stale"
 def codeName (k : Nat) : Option String :=
   if k < refusalNames.length then refusalNames[k]? else rejectNames[k - refusalNames.length]?
 
-/-- What `World.refuse` records for a call refused with `v`. -/
-def refusedOf (X : Ctx D) (c : Call D) (v : Verdict D) : Refused D :=
+/-- What `World.refuse` records for call `c` with verdict `v` and cancel field `a` (KERNEL-60): the
+call's own transaction id, member, window and bytes, whoever asks for the record. -/
+def recordOf (X : Ctx D) (c : Call D) (v : Verdict D) (a : ByteArray) : Refused D :=
   { txId := txIdOf X c, member := c.unsigned.member, notBefore := c.unsigned.notBefore,
-    validUntil := c.unsigned.validUntil, code := v.code, event := X.callBytes c }
+    validUntil := c.unsigned.validUntil, code := v.code, event := X.callBytes c, cancel := a }
+
+/-- What `World.refuse` records for a call refused with `v`: its record with no cancel signature. -/
+def refusedOf (X : Ctx D) (c : Call D) (v : Verdict D) : Refused D := recordOf X c v ByteArray.empty
 
 /-- The signer's key, as the receive layer checks it: the member's current key, or for a rotation
 the precommitted next key (`rotate`'s own check: KERNEL-47 amendment 7). -/
@@ -169,5 +174,53 @@ recorded refusal costs what its admission would have, one verify per signature i
 `judge_eq`: the same Outcome as authenticating by `authenticated` (the two-verify judge). -/
 def judge (X : Ctx D) (w : World D) (c : Call D) : Outcome D :=
   judgeBy X w c fun v => authenticatedBy X w c v.verified
+
+/-! ## Cancelling a call (KERNEL-60, design C1)
+
+A member ends one of its own outstanding calls before it lands by recording the refusal of that
+very call, code `cancelled`: the record is the call's own (`recordOf`: its transaction id, member,
+window and bytes), so every reader of refusals settles it as it settles a judged refusal: final, not
+admitted. What authorises it is the member's signature over `domCancel ‖ txId` under the member's
+CURRENT key on the World it is recorded on; the call's own signature is not needed (burning a txId
+whose call was never validly signed harms nobody). `World.refuse` judges it unchanged: inside the
+call's window only, never once the call is journaled (`replayed`) or already recorded
+(`refusedFinal`), and charged like any record to the member's `refusalsPerWindow` and the World's
+`refusalsPerWindowMax`: a cancel is SPAM-CLASS by decision, so a member that cancels sixteen calls
+in a window has its later refusals declined `refusalBudget` until the window turns. -/
+
+/-- The cancel signature's domain: distinct from `domCall`, so a cancel is never a call signature. -/
+def domCancel : ByteArray := "nanodregg/kernel/cancel-signature".toUTF8
+
+/-- What a cancel of `c` is a signature over: `domCancel`, then `c`'s transaction id's bytes. -/
+def Ctx.cancelMessage (X : Ctx D) (c : Call D) : ByteArray := domCancel ++ X.env.bytes (txIdOf X c)
+
+/-- The record a cancel of `c` with signature `sig` makes. -/
+def cancelOf (X : Ctx D) (c : Call D) (sig : ByteArray) : Refused D :=
+  recordOf X c (.refused .cancelled) sig
+
+/-- A cancel's authority on `w`: the call names this World, the signature is non-empty and within
+`cancelBytesMax`, and it verifies under the member's current key on `w`. -/
+def cancelAuth (X : Ctx D) (w : World D) (c : Call D) (sig : ByteArray) : Except (Refusal D) Unit := do
+  req (c.unsigned.world = w.origin) .wrongWorld
+  req (decide (0 < sig.size ∧ sig.size ≤ Bounds.cancelBytesMax)) .badSignature
+  match w.live X.env c.unsigned.member with
+  | some m =>
+      match m.slots.get slotKey with
+      | some k =>
+          if m.kind = kindMember then req (X.verify k (X.cancelMessage c) sig) .badSignature
+          else .error (.unknownKey c.unsigned.member)
+      | none => .error (.unknownKey c.unsigned.member)
+  | none => .error (.unknownKey c.unsigned.member)
+
+/-- The Host's decision on a cancel of `c` signed `sig`: recorded as `cancelOf X c sig`, or declined
+(an unauthorised cancel by its receive name; one `World.refuse` refuses by its kernel name:
+`outsideWindow`, `replayed`, `refusedFinal`, `refusalBudget`, `refusalsFull`). -/
+def cancel (X : Ctx D) (w : World D) (c : Call D) (sig : ByteArray) : Outcome D :=
+  match cancelAuth X w c sig with
+  | .error e => .declined (.refused e)
+  | .ok () =>
+      match World.refuse X.env w (cancelOf X c sig) with
+      | .ok w' => .recorded (.refused .cancelled) (cancelOf X c sig) w'
+      | .error e => .declined (.rejected e)
 
 end Nanodregg.Kernel.Receive

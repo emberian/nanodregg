@@ -6,7 +6,7 @@ an operation to `Op` without a row that exercises it breaks this proof by name.
 
 The rows' writer serves every event the kernel admits (PROTOCOL-55): both parameter sets' budgets
 meet the premise of HOST's `Host.Page.walkTurnsAt_serves` and `Host.Page.walk_serves` (a budget of
-`eventBytesMax + 5`; the tooth at `+ 4` is `Host.Page.walkTurnsAt_one_short`).
+`pageEventBytesMax + 4`; the tooth at `+ 3` is `Host.Page.walkTurnsAt_one_short`).
 -/
 import Protocol.Rows
 import Protocol.Rows.Writer
@@ -29,10 +29,10 @@ namespace Nanodregg.Protocol.Rows.Params
 
 /-- The toy rows' budget is `Host.Page.walkTurnsAt_serves`' premise: a record's walk that has
 served nothing serves the first step past its start, whatever event the kernel admitted there. -/
-theorem toy_budget_serves : Kernel.Bounds.eventBytesMax + 5 ≤ toy.pageBudget := Nat.le_refl _
+theorem toy_budget_serves : Protocol.Bounds.pageEventBytesMax + 4 ≤ toy.pageBudget := Nat.le_refl _
 
 /-- The deployed rows' budget is `Host.Page.walkTurnsAt_serves`' premise. -/
-theorem deployed_budget_serves : Kernel.Bounds.eventBytesMax + 5 ≤ deployed.pageBudget :=
+theorem deployed_budget_serves : Protocol.Bounds.pageEventBytesMax + 4 ≤ deployed.pageBudget :=
   Nat.le_refl _
 
 end Nanodregg.Protocol.Rows.Params

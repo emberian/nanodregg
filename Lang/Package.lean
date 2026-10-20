@@ -86,10 +86,13 @@ account by its owner and denomination. -/
 def acctRefTy : Ty := .sum [("of", .record [("asset", .digest), ("owner", .digest)]), ("well", .digest)]
 
 /-- A right a granted call carries (KERNEL's `Right`). -/
-def rightTy : Ty := .sum [("enroll", .nat), ("invoke", .nat), ("mutate", .record []), ("observe", .record [])]
+def rightTy : Ty := .sum [("credit", .nat), ("enroll", .nat), ("invoke", .nat), ("mutate", .record []),
+  ("observe", .record []), ("transfer", .nat)]
 
-/-- The rights one granted call may carry: KERNEL's `Right` has four constructors, and a grant
-naming one twice says nothing more. -/
+/-- The rights one granted call may carry. KERNEL's `Right` has six constructors, but a grant carries
+at most one COUNTED kind (`enroll`, `transfer`, `credit`: KERNEL-60's `rightTarget` refuses two), so
+four slots hold `observe`, `mutate`, an `invoke` and the one counted right; a grant naming one twice
+says nothing more. -/
 def rightsMax : Nat := 4
 
 /-- The slot labels `r0 …` of `rightsTy` and `c0 …` of a calls row, in slot order. -/

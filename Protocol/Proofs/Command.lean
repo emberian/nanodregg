@@ -341,7 +341,7 @@ The premise that lets a follower reopen its own Store exactly as the writer does
 no signature verified at reopen; ROOT's ruling on HOST-22): every step `host follow` appends was
 re-derived from the writer's logged event and taken by follow's OWN `World.step` before the
 append. A Turn was admitted by `World.admit`; a refusal was recorded by `World.refuse` after
-follow's own `judge` recorded it. The follow-time teeth are the rows' `audit` row (plant
+follow's own `judge` recorded it, or its own `cancel` recorded it under the event's signature. The follow-time teeth are the rows' `audit` row (plant
 `followVerifyAll`, line 13) and the `refusedFinal` row (plant `admitsRecorded`). -/
 
 /-- One absorbed step is a step of follow's own World. -/
@@ -351,8 +351,10 @@ theorem absorbStep_step {X : Ctx D} {w w' : World D} {e : ByteArray} {s : Kernel
   repeat' split at h
   all_goals (try simp only [Except.ok.injEq, Prod.mk.injEq, reduceCtorEq] at h)
   all_goals (obtain ⟨rfl, rfl⟩ := h)
-  · exact (submit_ok ‹_›).2.2
-  · exact (judge_recorded ‹_›).2.2.2
+  all_goals first
+    | exact (cancel_recorded ‹_›).2.2.2
+    | exact (submit_ok ‹_›).2.2
+    | exact (judge_recorded ‹_›).2.2.2
 
 theorem absorb_admits {X : Ctx D} :
     ∀ (evs : List ByteArray) {w w' : World D} {acc ts : Array (Kernel.Step D × D)},
@@ -561,8 +563,24 @@ theorem absorbStep_refusedFinal {X : Ctx D} {w : World D} {e : ByteArray} {c : C
     absorbStep X w e = .error (.reject (.refusedFinal code)) := by
   have hs : submit X w c = .error (.rejected (.refusedFinal code)) := by
     unfold submit; rw [hj, hr]
+  have hne : ¬ eventTurn = eventCancel := by decide
   unfold absorbStep
-  simp only [hpos, ↓reduceDIte, hdec, htag, ↓reduceIte, hs]
+  simp only [hpos, ↓reduceDIte, hdec, htag, hne, ↓reduceIte, hs]
+
+/-- What `World.refuse` recorded for `c`'s record (`recordOf`, any cancel field) is in the World it
+reached: `c` answers the verdict's code, which names the verdict; nothing else about the World but
+the refusals and the step count moved. -/
+theorem refuse_answers {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D} {a : ByteArray}
+    (href : World.refuse X.env w (recordOf X c v a) = .ok w') :
+    refusedAnswer X w' c = some v.code ∧ codeName v.code = some v.name ∧
+      w'.height = w.height ∧ w'.steps = w.steps + 1 ∧ w'.journalAt X.env (txIdOf X c) = none := by
+  have hrec := refuse_recorded href
+  obtain ⟨-, -, -, hjn, -, -⟩ := refuse_facts href
+  refine ⟨?_, codeName_code v, (refuse_frame href).2.2.1, refuse_steps href, ?_⟩
+  · unfold refusedAnswer
+    rw [show (recordOf X c v a).txId = txIdOf X c from rfl] at hrec
+    rw [hrec]; rfl
+  · rw [refuse_journalAt href]; exact hjn
 
 /-- What `judge` recorded for `c` is in the World it reached: `c` answers the verdict's code, which
 names the verdict; nothing else about the World but the refusals and the step count moved. -/
@@ -571,30 +589,162 @@ theorem recorded_answers {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict 
     r = refusedOf X c v ∧ refusedAnswer X w' c = some v.code ∧ codeName v.code = some v.name ∧
       w'.height = w.height ∧ w'.steps = w.steps + 1 ∧ w'.journalAt X.env (txIdOf X c) = none := by
   obtain ⟨-, -, rfl, href⟩ := judge_recorded hj
-  have hrec := refuse_recorded href
-  obtain ⟨-, -, -, hjn, -, -⟩ := refuse_facts href
-  refine ⟨rfl, ?_, codeName_code v, (refuse_frame href).2.2.1, refuse_steps href, ?_⟩
-  · unfold refusedAnswer
-    rw [show (refusedOf X c v).txId = txIdOf X c from rfl] at hrec
-    rw [hrec]; rfl
-  · rw [refuse_journalAt href]; exact hjn
+  exact ⟨rfl, refuse_answers href⟩
 
-/-- **An absorbed refusal answers its call by name.** After follow absorbs a refusal event for
-call `c`, its World holds `c`'s recorded code (and no journal entry for it), and that code names the
-verdict `judge` refused it with: so a later `submit` of `c` on that World is `refusedFinal`
-(`Receive.submit`'s second arm) without re-deriving, and `lookup` answers `refused NAME`
-(`Receive.codeName_code`). -/
+/-- The signature length a cancel's authority admits: non-empty, at most `cancelBytesMax`. -/
+theorem cancelAuth_size {X : Ctx D} {w : World D} {c : Call D} {sig : ByteArray}
+    (h : cancelAuth X w c sig = .ok ()) : 0 < sig.size ∧ sig.size ≤ Kernel.Bounds.cancelBytesMax := by
+  unfold cancelAuth at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, ⟨⟩, h2, -⟩ := h
+  rw [req_ok] at h2
+  simpa using h2
+
+/-- **An absorbed refusal answers its call by name.** After follow absorbs a refusal event (tag 1, a
+judged refusal: its call is the event past the tag and the record carries no cancel signature) or a
+cancel event (tag 2: `cancelParts` reads the signature and the call, and the record carries exactly
+that signature, which `cancelAuth` verified on follow's World), its World holds `c`'s recorded code (and no journal entry for it), and that code
+names the verdict: so a later `submit` of `c` on that World is `refusedFinal` (`Receive.submit`'s
+second arm) without re-deriving, and `lookup` answers `refused NAME` (`Receive.codeName_code`). -/
 theorem absorbStep_refusal_recorded {X : Ctx D} {w w' : World D} {e : ByteArray} {r : Refused D}
     (h : absorbStep X w e = .ok (.refusal r, w')) :
-    ∃ c v, X.decodeCall (e.extract 1 e.size) = some c ∧ r = refusedOf X c v ∧
+    ∃ c v a, r = recordOf X c v a ∧
+      ((e[0]? = some eventRefusal ∧ a = ByteArray.empty ∧ X.decodeCall (e.extract 1 e.size) = some c) ∨
+        (e[0]? = some eventCancel ∧ v = .refused .cancelled ∧ cancelAuth X w c a = .ok () ∧
+          ∃ cb, cancelParts e = some (a, cb) ∧ X.decodeCall cb = some c)) ∧
       refusedAnswer X w' c = some v.code ∧ codeName v.code = some v.name ∧ w'.height = w.height ∧
       w'.steps = w.steps + 1 ∧ w'.journalAt X.env (txIdOf X c) = none := by
   unfold absorbStep at h
   repeat' split at h
   all_goals (try simp only [Except.ok.injEq, Prod.mk.injEq, reduceCtorEq, false_and,
     Kernel.Step.refusal.injEq] at h)
-  obtain ⟨rfl, rfl⟩ := h
-  exact ⟨_, _, ‹_›, recorded_answers ‹_›⟩
+  all_goals (obtain ⟨rfl, rfl⟩ := h)
+  all_goals first
+    | (obtain ⟨ha, rfl, rfl, href⟩ := cancel_recorded ‹Receive.cancel _ _ _ _ = _›
+       exact ⟨_, _, _, rfl, .inr ⟨by rw [getElem?_pos e 0 ‹0 < e.size›]; exact congrArg some ‹_›, rfl, ha, _,
+         ‹cancelParts e = _›, ‹X.decodeCall _ = _›⟩, refuse_answers href⟩)
+    | (obtain ⟨-, -, rfl, href⟩ := judge_recorded ‹judge _ _ _ = _›
+       exact ⟨_, _, ByteArray.empty, rfl, .inl ⟨by rw [getElem?_pos e 0 ‹0 < e.size›]; exact congrArg some ‹_›,
+         rfl, ‹_›⟩, refuse_answers href⟩)
+
+/-- **What `cancelParts` reads back is the tag-2 shape**: an event it splits into `s` and `cb` IS its
+first byte, `s`'s eight-byte length, `s` and `cb`, with `0 < s.size ≤ cancelBytesMax`. -/
+theorem cancelParts_some {e s cb : ByteArray} (h : cancelParts e = some (s, cb)) (h0 : 0 < e.size) :
+    e = ⟨#[e[0]]⟩ ++ Codec.Stream.nat64.bytes s.size ++ s ++ cb ∧
+      0 < s.size ∧ s.size ≤ Kernel.Bounds.cancelBytesMax := by
+  unfold cancelParts at h
+  split at h
+  · rename_i n j hg
+    split at h
+    · rename_i hc
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨-, hj, hn⟩ := Codec.Stream.nat64_lawfulOn.occurs_of_get hg
+      have h8 : (Codec.Stream.nat64.bytes n).size = 8 := by
+        rw [Codec.Stream.nat64_bytes]; rfl
+      rw [h8] at hj
+      subst hj
+      have hs : (e.extract (1 + 8) (1 + 8 + n)).size = n := by
+        rw [ByteArray.size_extract]; omega
+      have hcb : (e.extract (1 + 8 + n) e.size).size = e.size - (1 + 8 + n) := by
+        rw [ByteArray.size_extract]; omega
+      have h1 : (⟨#[e[0]]⟩ : ByteArray).size = 1 := rfl
+      rw [hs]
+      refine ⟨?_, hc.1, hc.2.1⟩
+      have ho : Codec.Stream.OccursAt e 0 (⟨#[e[0]]⟩ ++ Codec.Stream.nat64.bytes n ++
+          e.extract (1 + 8) (1 + 8 + n) ++ e.extract (1 + 8 + n) e.size) := by
+        refine Codec.Stream.occursAt_append.mpr ⟨Codec.Stream.occursAt_append.mpr
+          ⟨Codec.Stream.occursAt_append.mpr ⟨?_, ?_⟩, ?_⟩, ?_⟩
+        · refine Codec.Stream.occursAt_iff_getElem.mpr ⟨by rw [h1]; omega, fun k hk => ?_⟩
+          have hk0 : k = 0 := by rw [h1] at hk; omega
+          subst hk0
+          rfl
+        · rw [h1, Nat.zero_add]; exact hn
+        · refine ⟨?_, ?_⟩
+          · simp only [ByteArray.size_append, h1, h8, hs]; omega
+          · simp only [ByteArray.size_append, h1, h8, hs, Nat.zero_add]
+        · refine ⟨?_, ?_⟩
+          · simp only [ByteArray.size_append, h1, h8, hs, hcb]; omega
+          · simp only [ByteArray.size_append, h1, h8, hs, hcb, Nat.zero_add]
+            congr 1; omega
+      exact Codec.Stream.eq_of_occursAt_zero ho (by simp only [ByteArray.size_append, h1, h8, hs, hcb]; omega)
+    · cases h
+  · cases h
+
+/-- **One encoding per record** (PROTOCOL-60, HOST-17's condition): a tag-2 event that follow absorbs
+into a record `r` IS `cancelEvent r.cancel r.event`, byte for byte, whenever the call codec reads
+only its own bytes (`hcanon`; deployed: `Codec.Kernel.eq_callBytes_of_decodeCall`). So the writer's
+`stepEvent` is the only tag-2 encoding of a cancel: no other length, padding or split re-records it.
+This is the tooth of `cancelParts`' length checks, which no plant can see (an event they refuse
+fails to decode or to verify anyway). -/
+theorem absorbStep_cancel_canonical {X : Ctx D} {w w' : World D} {e : ByteArray} {r : Refused D}
+    (hcanon : ∀ b c, X.decodeCall b = some c → b = X.callBytes c)
+    (h : absorbStep X w e = .ok (.refusal r, w')) (htag : e[0]? = some eventCancel) :
+    e = cancelEvent r.cancel r.event := by
+  obtain ⟨c, v, a, rfl, hsrc, -⟩ := absorbStep_refusal_recorded h
+  rcases hsrc with ⟨ht, -, -⟩ | ⟨-, -, -, cb, hp, hdec⟩
+  · rw [ht] at htag
+    exact absurd (Option.some.inj htag) (by decide)
+  · have h0 : 0 < e.size := by
+      by_cases hn : 0 < e.size
+      · exact hn
+      · rw [getElem?_neg e 0 hn] at htag; cases htag
+    have htag0 : e[0] = eventCancel := by
+      rw [getElem?_pos e 0 h0] at htag; exact Option.some.inj htag
+    obtain ⟨he, -, -⟩ := cancelParts_some hp h0
+    show e = cancelEvent a (X.callBytes c)
+    unfold cancelEvent
+    rw [← hcanon cb c hdec, ← htag0]
+    exact he
+
+/-- **A cancel event re-records exactly the writer's cancel** (PROTOCOL-60, the C1 gap): when the
+writer's `cancel` of `c` signed `sig` recorded `r` and reached `w'`, the follower absorbing THE
+tag-2 event of that record (`cancelEvent r.cancel r.event`, which `Host.Page.stepEvent` serves for
+it: `Host.Page.stepEvent_cancel`) takes the same record to the same World, so its chain keeps the
+writer's. Before tag 2 the page served `1 ‖ call`: the follower's `judge` re-derived a record with
+no signature (or admitted the call), and its chain broke on the first cancel. -/
+theorem absorbStep_cancelEvent {X : Ctx D} {w w' : World D} {c : Call D} {sig : ByteArray}
+    {v : Verdict D} {r : Refused D} (hdec : X.decodeCall (X.callBytes c) = some c)
+    (hc : Receive.cancel X w c sig = .recorded v r w') :
+    absorbStep X w (cancelEvent r.cancel r.event) = .ok (.refusal r, w') := by
+  obtain ⟨ha, -, rfl, -⟩ := cancel_recorded hc
+  obtain ⟨hpos, hle⟩ := cancelAuth_size ha
+  have h8 : (Codec.Stream.nat64.bytes sig.size).size = 8 := by
+    rw [Codec.Stream.nat64_bytes]; rfl
+  show absorbStep X w (cancelEvent sig (X.callBytes c)) = _
+  unfold cancelEvent
+  generalize hE : (⟨#[eventCancel]⟩ ++ Codec.Stream.nat64.bytes sig.size ++ sig ++ X.callBytes c : ByteArray) = e
+  have ho : Codec.Stream.OccursAt e 0 e := Codec.Stream.occursAt_self e
+  rw [← hE] at ho
+  obtain ⟨ho, hcb⟩ := Codec.Stream.occursAt_append.mp ho
+  obtain ⟨ho, hsig⟩ := Codec.Stream.occursAt_append.mp ho
+  obtain ⟨ht, hn⟩ := Codec.Stream.occursAt_append.mp ho
+  rw [hE] at ht hn hsig hcb
+  have h1 : (⟨#[eventCancel]⟩ : ByteArray).size = 1 := rfl
+  simp only [ByteArray.size_append, h1, h8, Nat.zero_add] at hn hsig hcb
+  have hsize : e.size = 1 + 8 + sig.size + (X.callBytes c).size := by
+    rw [← hE]; simp only [ByteArray.size_append, h1, h8]
+  have hget : Codec.Stream.nat64.get e 1 = .ok (sig.size, 9) := by
+    have := Codec.Stream.nat64_lawfulOn.get_of_occurs sig.size e 1 (by
+      have : Kernel.Bounds.cancelBytesMax < 2 ^ 64 := by decide
+      omega) hn
+    rw [this, h8]
+  have hx1 : e.extract 9 (9 + sig.size) = sig := by
+    have := hsig.2; simpa using this
+  have hx2 : e.extract (9 + sig.size) e.size = X.callBytes c := by
+    have := hcb.2
+    rw [show 1 + 8 + sig.size + (X.callBytes c).size = e.size by omega] at this
+    simpa using this
+  have hparts : cancelParts e = some (sig, X.callBytes c) := by
+    unfold cancelParts
+    simp only [hget]
+    rw [if_pos ⟨hpos, hle, by omega⟩, hx1, hx2]
+  have h0 : 0 < e.size := by omega
+  have htag : e[0] = eventCancel := by
+    obtain ⟨_, hk⟩ := Codec.Stream.occursAt_iff_getElem.mp ht
+    exact hk 0 (by decide)
+  unfold absorbStep
+  simp only [h0, ↓reduceDIte, htag, ↓reduceIte, hparts, hdec, hc]
 
 /-! ## `read OBJ` of a programmed object (PROTOCOL-48) -/
 

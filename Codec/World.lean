@@ -299,14 +299,15 @@ def world [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (World D) :=
   refine "kernel/world-budget" (parentedWire E dc)
     (fun x => if (ofWire x).weight + (ofWire x).allowance < 2 ^ 64 then some (ofWire x) else none) toWire
 
-/-- A recorded refusal as the log carries it (KERNEL-44): transaction id, signer, window, code, and the
+/-- A recorded refusal as the log carries it (KERNEL-44): transaction id, signer, window, code, the
 signed call's bytes (at most `callMax`, KERNEL's `checkRefusedBounds`), which the follower decodes and
-re-derives. -/
+re-derives, and a cancel's signature (at most `cancelBytesMax`, empty for a judged refusal, KERNEL-60). -/
 def refused (dc : Stream D) : Stream (Refused D) :=
   refine "kernel/refused"
-    (product dc (product dc (product nat64 (product nat64 (product nat64 (rawBytes callMax))))))
-    (fun (i, m, nb, vu, c, e) => some ⟨i, m, nb, vu, c, e⟩)
-    (fun r => (r.txId, r.member, r.notBefore, r.validUntil, r.code, r.event))
+    (product dc (product dc (product nat64 (product nat64 (product nat64 (product (rawBytes callMax)
+      (rawBytes Bounds.cancelBytesMax)))))))
+    (fun (i, m, nb, vu, c, e, a) => some ⟨i, m, nb, vu, c, e, a⟩)
+    (fun r => (r.txId, r.member, r.notBefore, r.validUntil, r.code, r.event, r.cancel))
 
 abbrev StepF (D : Type) : Fin 2 → Type
   | 0 => Turn D

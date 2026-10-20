@@ -151,7 +151,9 @@ def right (k : Nat) : G Right := do
   | 0 => return .observe
   | 1 => return .mutate
   | 2 => return .invoke (← nat64)
-  | _ => return .enroll (← nat64)
+  | 3 => return .enroll (← nat64)
+  | 4 => return .transfer (← nat64)
+  | _ => return .credit (← nat64)
 def acctRef (k : Nat) : G (AcctRef Sim.D) := do
   if k = 0 then return .well (← dig) else return .of (← dig) (← dig)
 def body (k : Nat) : G (Body Sim.D) := do
@@ -163,7 +165,7 @@ def body (k : Nat) : G (Body Sim.D) := do
   | 4 => return .write (← dig) (← list 2 (do return (← nat32, ← opt (bytes 4)))) (← opt dig)
   | 5 => return .law (← dig) (← list 2 dig) (← opt dig)
   | 6 => return .invoke (← dig) (← nat64) (← bytes 4) (← nat64) (← opt dig)
-  | 7 => return .grant (← dig) (← dig) (← list 3 (do right (← below 4))) (← opt dig)
+  | 7 => return .grant (← dig) (← dig) (← list 3 (do right (← below 6))) (← opt dig)
   | 8 => return .revoke (← dig)
   | 9 => return .issue (← nat64)
   | 10 => return .account (← dig) (← dig)
@@ -277,7 +279,7 @@ def addRecord (w : World Sim.D) (k m : Sim.D) (code : Nat) : World Sim.D :=
     steps := w.steps + 1 }
 
 def refused : G (Refused Sim.D) := do
-  return ⟨← dig, ← dig, ← nat64, ← nat64, ← below 40, ← bytes 8⟩
+  return ⟨← dig, ← dig, ← nat64, ← nat64, ← below 40, ← bytes 8, ← bytes 64⟩
 
 def step (k : Nat) : G (Step Sim.D) := do
   if k = 0 then return .turn (← turn) else return .refusal (← refused)
@@ -431,6 +433,15 @@ def countedVecs : G (List (WorldWire Sim.D)) := do
     { w₁ with
       refusals := w₁.refusals.insert (refusalSpec Sim.env) (.total w₁.origin win) (.count (refusalTotal Sim.env w₁ + 1)) }
   return drawn ++ [toWire w₁, toWire moved, toWire over]
+
+/-- `kernel/refused`'s vectors: two drawn, then the cancel signature's boundary pair (KERNEL-60): a
+signature of exactly `Bounds.cancelBytesMax` (64) bytes reads back, one of 65 is refused by the codec
+(`pastBound` at its length; `World.refuse`'s own refusal of a wider one is `overBound event`). -/
+def refusedVecs : G (List (Refused Sim.D)) := do
+  let drawn ← each 2 fun _ => refused
+  let r ← refused
+  return drawn ++ [{ r with cancel := ← bytesN Bounds.cancelBytesMax },
+    { r with cancel := ← bytesN (Bounds.cancelBytesMax + 1) }]
 
 /-- `kernel/row-key`'s vectors: a head and a drawn row, then the key width's boundary pair: a row key of
 exactly `Bounds.keyBytesMax` (128) bytes reads back, one of 129 is refused by the codec (`pastBound` at
@@ -710,7 +721,7 @@ def sites : List Site :=
     site "kernel/act" Codec.Kernel.act (each 3 Vectors.act) text,
     site "kernel/touch" (Codec.Kernel.touch Sim.dc) (each 2 fun _ => Vectors.touch) text,
     site "kernel/turn" (Codec.Kernel.turn Sim.dc) (each 2 fun _ => Vectors.turn) text,
-    site "kernel/right" Codec.Kernel.right (each 4 Vectors.right) text,
+    site "kernel/right" Codec.Kernel.right (each 6 Vectors.right) text,
     site "kernel/acct-ref" (Codec.Kernel.acctRef Sim.dc) (each 2 Vectors.acctRef) text,
     site "kernel/body" (Codec.Kernel.body Sim.dc) (each 13 Vectors.body) text,
     site "kernel/unsigned" (Codec.Kernel.unsigned Sim.dc) (each 2 fun k => Vectors.unsigned (k * 6)) text,
@@ -757,7 +768,7 @@ def sites : List Site :=
     site "kernel/refusals-disjoint" (disjointWire Sim.env Sim.dc) disjointVecs printWire,
     site "kernel/steps" (stepsWire Sim.env Sim.dc) stepsVecs printWire,
     site "kernel/refusals-counted" (countedWire Sim.env Sim.dc) countedVecs printWire,
-    site "kernel/refused" (Codec.Kernel.refused Sim.dc) (each 2 fun _ => Vectors.refused) text,
+    site "kernel/refused" (Codec.Kernel.refused Sim.dc) Vectors.refusedVecs text,
     site "kernel/step" (Codec.Kernel.step Sim.dc) (each 2 Vectors.step) text,
     site "kernel/world-budget" (Codec.Kernel.world Sim.env Sim.dc) worldVecs printWorld,
     site "kernel/carried-journal" (carriedJournalWire Sim.env Sim.dc)

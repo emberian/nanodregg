@@ -142,21 +142,35 @@ theorem refusedDigest_inj [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {r₁ 
     have := req_ok.mp hc
     simp only [Bool.and_eq_true, decide_eq_true_eq, counterLimit_eq] at this
     omega
+  have bndK : ∀ {r : Refused D}, checkRefusedBounds r = .ok () → r.cancel.size < 2 ^ 64 := by
+    intro r hb
+    unfold checkRefusedBounds at hb
+    simp only [except_bind_ok] at hb
+    obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, hk⟩ := hb
+    have := req_ok.mp hk
+    simp only [decide_eq_true_eq, Bounds.cancelBytesMax] at this
+    omega
   obtain ⟨a₁, b₁, c₁⟩ := bnd hb₁
   obtain ⟨a₂, b₂, c₂⟩ := bnd hb₂
+  have k₁ := bndK hb₁
+  have k₂ := bndK hb₂
   unfold refusedDigest at h
   by_cases hin : refusedBytes E r₁ = refusedBytes E r₂
   · unfold refusedBytes at hin
-    obtain ⟨h5, hev⟩ := bytes_append_inj hin (by simp [hE.size, nat64_size])
-    obtain ⟨h4, hco⟩ := bytes_append_inj h5 (by simp [hE.size, nat64_size])
-    obtain ⟨h3, hvu⟩ := bytes_append_inj h4 (by simp [hE.size, nat64_size])
-    obtain ⟨h2, hnb⟩ := bytes_append_inj h3 (by simp [hE.size])
-    obtain ⟨h1, hm⟩ := bytes_append_inj h2 (by simp [hE.size])
+    simp only [ByteArray.append_assoc] at hin
+    obtain ⟨h1, hin⟩ := bytes_append_inj hin (by simp [hE.size])
+    obtain ⟨hm, hin⟩ := bytes_append_inj hin (by simp [hE.size])
+    obtain ⟨hnb, hin⟩ := bytes_append_inj hin (by simp [nat64_size])
+    obtain ⟨hvu, hin⟩ := bytes_append_inj hin (by simp [nat64_size])
+    obtain ⟨hco, hin⟩ := bytes_append_inj hin (by simp [nat64_size])
+    obtain ⟨hlen, hin⟩ := bytes_append_inj hin (by simp [nat64_size])
+    have hsz := Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective k₁ k₂ hlen
+    obtain ⟨hca, hev⟩ := bytes_append_inj hin hsz
     cases r₁; cases r₂
     simp only [Refused.mk.injEq]
     exact .inl ⟨hE.bytes_inj h1, hE.bytes_inj hm, Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective a₁ a₂ hnb,
       Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective b₁ b₂ hvu,
-      Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective c₁ c₂ hco, hev⟩
+      Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective c₁ c₂ hco, hev, hca⟩
   · exact .inr (.pair (fun he => hin (congrArg Prod.snd he)) h)
 
 /-- One chain step between bounded steps determines its predecessor, its step and the roots digest

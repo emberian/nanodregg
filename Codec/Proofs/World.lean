@@ -273,7 +273,7 @@ theorem refusalLeaf_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD
 2^64, the call's bytes at most `callMax` (what KERNEL's `checkRefusedBounds` checks). -/
 def Refused.Fits (PD : D → Prop) (r : Refused D) : Prop :=
   PD r.txId ∧ PD r.member ∧ r.notBefore < 2 ^ 64 ∧ r.validUntil < 2 ^ 64 ∧ r.code < 2 ^ 64 ∧
-    r.event.size ≤ callMax
+    r.event.size ≤ callMax ∧ r.cancel.size ≤ Bounds.cancelBytesMax
 
 omit [Ord D] in
 theorem refused_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
@@ -281,7 +281,8 @@ theorem refused_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
   unfold refused
   refine (refine_lawfulOn
     (product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
-      (product_lawfulOn nat64_lawfulOn (rawBytes_lawfulOn _ (by decide)))))))
+      (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
+        (rawBytes_lawfulOn _ (by decide))))))))
     "kernel/refused" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
@@ -294,9 +295,9 @@ theorem checkRefusedBounds_fits (r : Refused D) (h : checkRefusedBounds r = .ok 
     Refused.Fits (fun _ => True) r := by
   simp only [checkRefusedBounds, req, decide_eq_true_eq] at h
   simp only [bind_req, ite_req, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨hE, ⟨⟨hN, hV⟩, hC⟩, -⟩ := h
+  obtain ⟨hE, ⟨⟨hN, hV⟩, hC⟩, -, hK⟩ := h
   exact ⟨trivial, trivial, by simpa [Bounds.counterLimit] using hN, by simpa [Bounds.counterLimit] using hV,
-    by simpa [Bounds.counterLimit] using hC, hE⟩
+    by simpa [Bounds.counterLimit] using hC, hE, hK⟩
 
 def Step.Fits (PD : D → Prop) : Step D → Prop
   | .turn t => Turn.Fits PD t

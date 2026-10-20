@@ -60,4 +60,37 @@ def ownerAuthority (X : Ctx D) (look : Pinned D) (actor : D) (obj : D) (cell : C
   req (principal = owner) (.noGrant obj)
   pure principal
 
+/-! ## Counted rights: one ledger mechanism (KERNEL-16's enrolment, KERNEL-60's transfer and credit) -/
+
+/-- The ledger of a grant's counted right whose first slot is `base`: its next index and what is
+left (its last entry). `grantRight` when the grant carries no such right. -/
+def ledgerLeft (base : Nat) (g : D) (cell : Cell) : Except (Refusal D) (Nat × Nat) :=
+  let led := cell.slots.filter fun p => base ≤ p.1 && p.1 ≤ base + ledgerSpendsMax
+  match led.getLast? with
+  | none => .error (.grantRight g)
+  | some (k, v) => match countOf v with
+    | some n => .ok (led.length, n)
+    | none => .error (.malformedCell g k)
+
+/-- Spend `units` of grant `g`'s counted right at `base` (refused `short` past what is left, and
+past the ledger's last slot: a spend is never written where `ledgerLeft` does not read): the write
+appending what is left to its ledger, or no effect for nothing. -/
+def spendAt (base : Nat) (g : D) (cell : Cell) (units : Nat) (short : Refusal D) :
+    Except (Refusal D) (Option (D × Act)) := do
+  let (i, left) ← ledgerLeft base g cell
+  req (units ≤ left) short
+  if units = 0 then pure none else do
+    req (decide (i ≤ ledgerSpendsMax)) short
+    pure (some (g, .write [.set (base + i) (countBytes (left - units))]))
+
+/-- A use of a counted right through `via` (none: the owner's own authority, nothing to spend): the
+pinned live grant's spend of `units` at `base`, refused `short g` past it. -/
+def spendVia (look : Pinned D) (base : Nat) (via : Option D) (units : Nat) (short : D → Refusal D) :
+    Except (Refusal D) (Option (D × Act)) :=
+  match via with
+  | none => pure none
+  | some g => do
+      let gc ← readKind look g kindGrant
+      spendAt base g gc units (short g)
+
 end Nanodregg.Kernel.Receive

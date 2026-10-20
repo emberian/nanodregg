@@ -58,10 +58,12 @@ and decides it here:
 
 * `committed h td`: the journal holds it; final;
 * `refused code`: the refusals hold its recorded refusal, and the call's window closes before the
-  record can be pruned (`validUntil ≤ h + 2 · windowMax`); final. Otherwise the answer is `open`,
+  record can be pruned (`validUntil ≤ h + 2 · windowMax`); final. A member's CANCEL (KERNEL-60) is
+  such a record, code `cancelled`, reaching follow as page event tag 2 with its signature
+  (`Command.absorbStep`, PROTOCOL-60): the call settles `refused cancelled`, final, by this same arm. Otherwise the answer is `open`,
   the safe side. On a World follow absorbed from a genesis that `open` is dead: the kernel records
   only a window no wider than `windowMax` (`checkRefusedBounds`, 8ad3982), and follow takes a
-  refusal only as its own `judge` records it, so the member's own call refused at `h` closes by
+  refusal only as its own `judge` (or, for a cancel, its own `cancel`) records it, so the member's own call refused at `h` closes by
   `h + windowMax`, unless follow's own log carries a different call under the member's id (a
   hash collision, or a call outside the codec's domain) (`settle_refused_absorbed`). A World carried from a base keeps only
   `(h, code)` per refusal, so there this check is what keeps the arm safe, and it stays: it also

@@ -391,9 +391,10 @@ def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
   -- the DERIVED number (from Kernel's and CODEC's bounds), not the cadence's field: the plant reads
   -- red if the deployed cadence stops being it
   let bound := recordBytesDerived
-  -- a record of `n` bytes: count, choice byte, five u64 fields, the call's length, the call, the roots
+  -- a record of `n` bytes: count, choice byte, five u64 fields, the call's length, the call, the
+  -- (empty) cancel signature's length (KERNEL-60), the roots
   let pair (n : Nat) : Step Nat × Nat :=
-    (.refusal ⟨1, 2, 0, 1, 0, ByteArray.mk (Array.replicate (n - 57) 0)⟩, 0)
+    (.refusal ⟨1, 2, 0, 1, 0, ByteArray.mk (Array.replicate (n - 61) 0), ByteArray.empty⟩, 0)
   let p := "plant-record-over-bound"
   for (tag, n) in [("", bound + 1), ("-control", bound)] do
     let dir := root / s!"writer{tag}"

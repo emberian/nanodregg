@@ -453,7 +453,31 @@ def replyMsMax : Nat := 120000
 `uncertain` end (cv 01a150b1): a longer one is handed as none, never cut, so the hint follow prints
 is the refusal's whole first line or nothing. 512: past every `refused NAME` line Lean prints. -/
 def hintBytesMax : Nat := 512
+/-- The widest step event a `log` page carries (`Host.Page.stepEvent`, PROTOCOL-60): the 1-byte tag,
+a cancel signature's eight-byte length and the signature at `cancelBytesMax` (tag 2 only), and the
+call at `eventBytesMax`. A page budget of this plus the page's 4-byte length serves every event a
+record decodes to (`Host.Page.budget_fits_event`). -/
+def pageEventBytesMax : Nat := Kernel.Bounds.eventBytesMax + 1 + 8 + Kernel.Bounds.cancelBytesMax
 
 end Bounds
+
+/-! ## A page's step events (PROTOCOL-8, PROTOCOL-41, PROTOCOL-60)
+
+The one source of the tags: `Host.Page.stepEvent` writes them, `Command.absorbStep` reads them. A
+recorded refusal is tag 1 when it carries no cancel signature and tag 2 when it does, the same
+discriminator the kernel's audit uses (`Receive.recordedBy`: the FIELD, never the code). -/
+
+/-- `0 ‖ call`: an admitted Turn. -/
+def eventTurn : UInt8 := 0
+/-- `1 ‖ call`: a recorded refusal with no cancel signature (judged by `Receive.judge`). -/
+def eventRefusal : UInt8 := 1
+/-- `2 ‖ nat64 n ‖ sig ‖ call`, `sig` the `n` bytes of the member's cancel signature (KERNEL-60,
+design C1; `0 < n ≤ cancelBytesMax`): a recorded CANCEL, re-recorded by `Receive.cancel`. -/
+def eventCancel : UInt8 := 2
+
+/-- THE tag-2 event: a cancel signature `sig` and the cancelled call's bytes `call`, as
+`Host.Page.stepEvent` writes it and `Command.cancelParts` reads it back. -/
+def cancelEvent (sig call : ByteArray) : ByteArray :=
+  ⟨#[eventCancel]⟩ ++ Codec.Stream.nat64.bytes sig.size ++ sig ++ call
 
 end Nanodregg.Protocol

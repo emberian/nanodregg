@@ -833,3 +833,6 @@ for v1's simplicity, so a reclaim arrives only as a new entry with a row that ne
 reinterpretation of this one.
 **Status.** ruled by Ember 2026-10-21 (recorded by ROOT for LEDGER; no LEDGER lane live). Nothing moves:
 no code, wire or package byte changes.
+
+## LEDGER-16 · LEDGER-6 (c)'s v0 whole-balance grant is superseded by KERNEL-60's `transfer (cap)` (KERNEL-24 with LEDGER-6's agreement, 2026-10-21)
+The depositor grants the escrow object `transfer amount` on its own account, no longer `mutate`. The kernel spends each transfer through the grant from the grant's ledger: `transferSpent` past the cap. So what a deposit can move is bounded by the grant, not by the package text. `mutate` moves no value at all now. The package bytes are unchanged (`escrowDoc` and the methods; E0 stays byte for byte). Only the Escrow header comment changed. ledger-sim: E7 grants `transfer 30`. In the skip-judge plants a second deposit is now refused by the spent cap (`transferSpent`) before the once key. The new plant short-cap grants 29 for a deposit of 30, so the package asks for `amount + 1` of what it was lent: E8 is refused `transferSpent`, and the escrow stays `open` and empty. `ledger-sim 1` ends ALL PASS. `ledger-sim --harness-control 1` reads RED.

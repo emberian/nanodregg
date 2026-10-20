@@ -236,6 +236,10 @@ structure Refused (D : Type) where
   validUntil : Nat
   code : Nat
   event : ByteArray
+  /-- empty for a judged refusal; for a CANCEL (KERNEL-60, design C1: code `cancelled`, the event the
+  cancelled call's own bytes), the member's signature over `domCancel ‖ txId`, which the follower's
+  audit re-verifies (`cancelForged`) -/
+  cancel : ByteArray
   deriving DecidableEq
 
 /-- One step of a log (KERNEL-47): an admitted Turn, or a recorded refusal. -/
@@ -345,10 +349,12 @@ def pinOf (E : Env D) : Option Entry → D
 def turnDigest (E : Env D) (t : Turn D) : D := E.hash domTurn (E.turnBytes t)
 
 /-- What a recorded refusal commits in the chain: every field, the counters as CODEC's eight
-little-endian bytes (injective below 2^64, which `World.refuse` checks), the event last. -/
+little-endian bytes (injective below 2^64, which `World.refuse` checks), the cancel signature after
+its eight-byte length, the event last. -/
 def refusedBytes (E : Env D) (r : Refused D) : ByteArray :=
   E.bytes r.txId ++ E.bytes r.member ++ Nanodregg.Codec.Stream.nat64.bytes r.notBefore ++
-    Nanodregg.Codec.Stream.nat64.bytes r.validUntil ++ Nanodregg.Codec.Stream.nat64.bytes r.code ++ r.event
+    Nanodregg.Codec.Stream.nat64.bytes r.validUntil ++ Nanodregg.Codec.Stream.nat64.bytes r.code ++
+    Nanodregg.Codec.Stream.nat64.bytes r.cancel.size ++ r.cancel ++ r.event
 
 def refusedDigest (E : Env D) (r : Refused D) : D := E.hash domRefused (refusedBytes E r)
 
@@ -1563,6 +1569,8 @@ def checkRefusedBounds (r : Refused D) : Except (Reject D) Unit := do
   -- a window no admissible call has (`checkBounds`) is not recorded: its refusal could never be
   -- final within the horizon a receipt reads (`refuse_window`; PROTOCOL's settle)
   req (r.validUntil ≤ r.notBefore + Bounds.windowMax) (.overBound .window)
+  -- a cancel's signature (KERNEL-60): bounded, so `refusedBytes`' length prefix is injective
+  req (r.cancel.size ≤ Bounds.cancelBytesMax) (.overBound .event)
 
 /-- A member's recorded refusals in the window of height `H`. -/
 def refusalCount (E : Env D) (w : World D) (m : D) : Nat :=

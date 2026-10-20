@@ -74,21 +74,12 @@ def checkLaws (look : Pinned D) (laws : List D) : Except (Refusal D) Unit := do
 
 /-- The ledger of a grant's enrolment right: its next index and the count left (its last
 entry). `grantRight` when the grant carries no enrolment right. -/
-def enrollLeft (g : D) (cell : Cell) : Except (Refusal D) (Nat × Nat) :=
-  let led := cell.slots.filter fun p => enrollBase ≤ p.1 && p.1 ≤ enrollBase + enrollMax
-  match led.getLast? with
-  | none => .error (.grantRight g)
-  | some (k, v) => match countOf v with
-    | some n => .ok (led.length, n)
-    | none => .error (.malformedCell g k)
+def enrollLeft (g : D) (cell : Cell) : Except (Refusal D) (Nat × Nat) := ledgerLeft enrollBase g cell
 
 /-- Spend `units` of grant `g`'s enrolment count (refused `short` past what is left): the write
 appending the count left to its ledger, or no effect for nothing. -/
 def spendEnroll (g : D) (cell : Cell) (units : Nat) (short : Refusal D) :
-    Except (Refusal D) (Option (D × Act)) := do
-  let (i, left) ← enrollLeft g cell
-  req (units ≤ left) short
-  pure (if units = 0 then none else some (g, .write [.set (enrollBase + i) (countBytes (left - units))]))
+    Except (Refusal D) (Option (D × Act)) := spendAt enrollBase g cell units short
 
 /-- Enrolment is a right (KERNEL-16): the sponsor acts through a World grant chain carrying
 `enroll`, rooted at a founder's genesis grant, and spends one of its own grant's count. -/
@@ -245,18 +236,54 @@ def enrollUnits : List Right → Nat
   | .enroll n :: rest => n + enrollUnits rest
   | _ :: rest => enrollUnits rest
 
+/-- The transfer cap a list of rights grants (several add up). -/
+def transferUnits : List Right → Nat
+  | [] => 0
+  | .transfer n :: rest => n + transferUnits rest
+  | _ :: rest => transferUnits rest
+
+/-- The credit cap a list of rights grants (several add up). -/
+def creditUnits : List Right → Nat
+  | [] => 0
+  | .credit n :: rest => n + creditUnits rest
+  | _ :: rest => creditUnits rest
+
 def isEnroll : Right → Bool
   | .enroll _ => true
   | _ => false
 
-/-- A grant's right slots: every right but `enroll` as a key, and one ledger entry with the sum
-of the `enroll` counts. -/
-def rightSlots (rights : List Right) : List (Nat × ByteArray) :=
-  (rights.filter (!isEnroll ·)).map (fun r => (rightKey r, ByteArray.empty)) ++
-    if rights.any isEnroll then [(enrollBase, countBytes (enrollUnits rights))] else []
+def isTransfer : Right → Bool
+  | .transfer _ => true
+  | _ => false
 
-/-- An attenuated grant narrows a parent the signer holds on the same target; an enrolment count
-is carved out of the parent's (the parent's ledger is the effect). World rights and enrolment
+def isCredit : Right → Bool
+  | .credit _ => true
+  | _ => false
+
+/-- A counted right: one whose grant holds a ledger. -/
+def isCounted (r : Right) : Bool := isEnroll r || isTransfer r || isCredit r
+
+/-- A grant's right slots: every uncounted right as a key, and for each counted kind one ledger
+entry with the sum of its counts. -/
+def rightSlots (rights : List Right) : List (Nat × ByteArray) :=
+  (rights.filter (!isCounted ·)).map (fun r => (rightKey r, ByteArray.empty)) ++
+    ((if rights.any isEnroll then [(enrollBase, countBytes (enrollUnits rights))] else []) ++
+     (if rights.any isTransfer then [(transferBase, countBytes (transferUnits rights))] else []) ++
+     (if rights.any isCredit then [(creditBase, countBytes (creditUnits rights))] else []))
+
+/-- A grant's counted rights fit its target (KERNEL-60), refused `rightTarget` otherwise: at most
+one counted kind (one ledger per grant, so a carve never skips one), `enroll` only on the World,
+`transfer` and `credit` never on it. A cap an account cannot hold (past `capMax`) is `overflow`. -/
+def checkRights (X : Ctx D) (target : D) (rights : List Right) : Except (Refusal D) Unit := do
+  let e := rights.any isEnroll
+  let v := rights.any isTransfer || rights.any isCredit
+  req (!(rights.any isTransfer && rights.any isCredit) && !(e && v) &&
+    (!e || decide (target = worldId X)) && (!v || decide (target ≠ worldId X))) (.rightTarget target)
+  req (decide (transferUnits rights ≤ capMax ∧ creditUnits rights ≤ capMax)) (.overflow target)
+
+/-- An attenuated grant narrows a parent the signer holds on the same target; a counted right's
+count (an enrolment count, a transfer or credit cap) is carved out of the parent's (the parent's
+ledger is the effect; `checkRights` has made it the grant's only counted kind). World rights and enrolment
 rights are never rooted here (`unrooted`): only genesis roots them. -/
 def checkParent (X : Ctx D) (look : Pinned D) (actor : D) (target : D) (rights : List Right) :
     Option D → Except (Refusal D) (Option (D × Act))
@@ -271,6 +298,8 @@ def checkParent (X : Ctx D) (look : Pinned D) (actor : D) (target : D) (rights :
       req (pg = actor) (.noGrant p)
       forEx (fun r => req (pc.slots.get (rightKey r)).isSome (.grantWidens p)) rights
       if rights.any isEnroll then spendEnroll p pc (enrollUnits rights) (.grantWidens p)
+      else if rights.any isTransfer then spendAt transferBase p pc (transferUnits rights) (.grantWidens p)
+      else if rights.any isCredit then spendAt creditBase p pc (creditUnits rights) (.grantWidens p)
       else pure none
 
 /-- A grant names a live member, a live object (an object acts through grants naming it,
@@ -285,6 +314,7 @@ def checkGrantee (X : Ctx D) (look : Pinned D) (grantee : D) : Except (Refusal D
 def grant (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (target grantee : D) (rights : List Right)
     (parent : Option D) : Except (Refusal D) (Draft D) := do
   checkGrantee X look grantee
+  checkRights X target rights
   let carve ← checkParent X look a.actor target rights parent
   let slots := slotsOf ([(grantTarget, X.env.bytes target), (grantGrantee, X.env.bytes grantee),
       (grantIssuer, X.env.bytes a.actor)] ++

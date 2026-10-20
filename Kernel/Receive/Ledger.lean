@@ -6,7 +6,9 @@ derive, `World.admit` refuses a turn that moves a balance sum (`notConserved`), 
 below minus its floor (`belowFloor`), or sets a floor outside a denomination's birth. These
 receivers decide only AUTHORITY: who may bear a denomination and its cap (anyone, for a fresh
 one), who may hold (anyone, an account of their own), and who may move value out of an account
-(its owner, or a grantee of `mutate` through a chain that reaches it). There is no solvency
+(its owner, or a grantee of a COUNTED right through a chain that reaches it: `transfer cap` for a
+balance, `credit cap` for a well's floor, each use spending the grant's ledger, KERNEL-60; `mutate`
+moves no value). There is no solvency
 check here: `belowFloor` is the one name for an overdraft, as `stale` is for a stale read.
 
 A denomination is the bytes of its WELL's id. The well is an ordinary account whose floor is the
@@ -92,13 +94,15 @@ def account (X : Ctx D) (asset owner : D) : Except (Refusal D) (Draft D) :=
 def setBalance (b : Int) : Act := .write [.set Value.balanceKey (Value.balanceBytes b)]
 
 /-- `transfer src dst amount via once`: both referenced accounts pinned, live and of one
-denomination; the signer has `src`'s owner's authority; both post balances are `i64`s. Two
-effects, and the once key's nullifier. -/
+denomination; the signer has `src`'s owner's authority, directly or through `via`'s chain for
+`transfer` (KERNEL-60), whose grant then spends `amount` of its cap (`transferSpent` past what is
+left); both post balances are `i64`s. Two effects, the grant's ledger the third, and the once key's
+nullifier. -/
 def transfer (X : Ctx D) (look : Pinned D) (a : At D) (srcR dstR : AcctRef D) (amount : Nat)
     (via : Option D) (once : Option ByteArray) : Except (Refusal D) (Draft D) := do
   let (src, scell, sv) ← readRef X look srcR
   let (dst, _, dv) ← readRef X look dstR
-  let _ ← ownerAuthority X look a.actor src scell .mutate via
+  let _ ← ownerAuthority X look a.actor src scell (.transfer 0) via
   req (decide (src ≠ dst)) .sameAccount
   req (decide (0 < amount)) .zeroAmount
   req (decide (dv.denom = sv.denom)) (.assetMismatch dst)
@@ -106,7 +110,9 @@ def transfer (X : Ctx D) (look : Pinned D) (a : At D) (srcR dstR : AcctRef D) (a
   let db := dv.balance + amount
   req (Value.fits sb) (.overflow src)
   req (Value.fits db) (.overflow dst)
-  pure ⟨[], [(src, setBalance sb), (dst, setBalance db)], (once.map (onceNullifier X src)).toList, []⟩
+  let spend ← spendVia look transferBase via amount .transferSpent
+  pure ⟨[], [(src, setBalance sb), (dst, setBalance db)] ++ spend.toList,
+    (once.map (onceNullifier X src)).toList, []⟩
 
 /-- The write setting an account's floor. -/
 def setFloor (f : Nat) : Act := .write [.set Value.floorKey (Value.floorBytes f)]
@@ -115,18 +121,21 @@ def setFloor (f : Nat) : Act := .write [.set Value.floorKey (Value.floorBytes f)
 Extending credit IS issuing (minidregg FLOORS-LOG: setFloor's verb was mintAsset), so it is the
 issuer's: the well's owner. The kernel conserves the denomination's floor sum, so a credit line
 can only be carved from the well's unissued headroom: past it the well goes below its own floor,
-`belowFloor`. Past the well's whole floor (a Nat cannot go negative), `overflow`. -/
+`belowFloor`. Past the well's whole floor (a Nat cannot go negative), `overflow`. Through `via`, the
+chain is for `credit` and its grant spends `amount` of its cap (`creditSpent`, KERNEL-60). -/
 def credit (X : Ctx D) (look : Pinned D) (a : At D) (well : D) (acctR : AcctRef D) (amount : Nat)
     (via : Option D) : Except (Refusal D) (Draft D) := do
   let (wcell, wv) ← readAccount look well
   let (acct, _, av) ← readRef X look acctR
-  let _ ← ownerAuthority X look a.actor well wcell .mutate via
+  let _ ← ownerAuthority X look a.actor well wcell (.credit 0) via
   req (decide (wv.denom = X.env.bytes well)) (.notWell well)
   req (decide (well ≠ acct)) .sameAccount
   req (decide (0 < amount)) .zeroAmount
   req (decide (av.denom = wv.denom)) (.assetMismatch acct)
   req (decide (amount ≤ wv.floor)) (.overflow well)
   req (decide (av.floor + amount ≤ capMax)) (.overflow acct)
-  pure ⟨[], [(well, setFloor (wv.floor - amount)), (acct, setFloor (av.floor + amount))], [], []⟩
+  let spend ← spendVia look creditBase via amount .creditSpent
+  pure ⟨[], [(well, setFloor (wv.floor - amount)), (acct, setFloor (av.floor + amount))] ++ spend.toList,
+    [], []⟩
 
 end Nanodregg.Kernel.Receive

@@ -2,7 +2,7 @@
 # Host.Proofs.Page — a log page always has room for the next event, is never built from an entry that failed, and never holds more steps than one record
 
 `Page.walkStep` stops a page (`full`) when the next event does not fit the budget. At a budget of
-`eventBytesMax + 5` (`budget_fits_event` for the deployed one) that never happens to an empty
+`pageEventBytesMax + 4` (`budget_fits_event` for the deployed one) that never happens to an empty
 page: the first record past `start` the walk reads, the page serves from (`walk_serves`), and a
 page `build` returns empty was never full and holds no bytes (`build_empty`). It ran out of segment.
 That a page short of the tip is non-empty also needs the Store's index-segment coherence: that
@@ -42,10 +42,11 @@ import Codec.Proofs.World
 
 namespace Nanodregg.Host.Page
 
-/-- **The deployed budget holds every event the codec admits**: an event of `eventBytesMax` bytes
-behind its 1-byte tag (`stepEvent`) and the page's 4-byte length (cv 01a150c0: `+ 4` was one short).
-`walkTurnsAt_one_short` and `walk_one_short` are the tooth at `+ 4`. -/
-theorem budget_fits_event : Kernel.Bounds.eventBytesMax + 5 ≤ budget := by decide
+/-- **The deployed budget holds every event the codec admits**: an event of `pageEventBytesMax`
+bytes (`stepEvent_size_le`: a call of `eventBytesMax` bytes behind its 1-byte tag, and for a cancel
+its signature's length and the signature) and the page's 4-byte length (cv 01a150c0: one byte less
+was one short). `walkTurnsAt_one_short` and `walk_one_short` are the tooth at `+ 3`. -/
+theorem budget_fits_event : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget := by decide
 
 theorem locate_go_got (get : Nat → Id (Except Fault Entry)) (start : Nat) :
     ∀ (fuel lo hi : Nat) (e : Entry), get lo = .ok e → ∀ {k : Nat} {e' : Entry},
@@ -234,26 +235,31 @@ theorem build_events_le {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {d
 /-! ## A page is never stopped for room before it serves (cv 01a150c0)
 
 `walkStep` marks a page `full` when the next event does not fit its budget. Under a budget of
-`eventBytesMax + 5` that never happens to a page that holds no event: every event a record decodes
+`pageEventBytesMax + 4` that never happens to a page that holds no event: every event a record decodes
 to is at most `eventBytesMax` bytes (`Codec.Kernel.batch_lawfulOn`), and a page carries it behind a
-1-byte tag (`stepEvent`) and a 4-byte length.
+1-byte tag (a cancel's also behind its signature and that signature's length, `stepEvent_size_le`)
+and a 4-byte length.
 
 * `walkTurnsAt_serves` — a record's walk from an empty page serves the first step past `start`;
 * `walk_serves` — the first record past `start` that `walk` reads, the page serves from;
 * `walk_empty` / `build_empty` — a page that comes back empty was never `full` and holds no bytes:
   it ran out of segment (or fuel) before any step past `start`;
-* `walkTurnsAt_one_short` / `walk_one_short` — the tooth: at `+ 4`, a first event of the codec's
+* `walkTurnsAt_one_short` / `walk_one_short` — the tooth: at `+ 3`, a first event of the codec's
   full size leaves the page `full` and EMPTY.
 
 That the segment from the entry `locate` returns holds the step `start + 1` (the Store's
 index-segment coherence), and so that a page short of the tip is non-empty, is
 `Host.Proofs.Coherence` (`Page.build_nonempty`). -/
 
-/-- **A page's event is at most the codec's bound and its tag**: an event a record decodes to
+/-- **A page's event is at most `pageEventBytesMax`** (PROTOCOL-60): an event a record decodes to
 (`Step.Fits`: a Turn's `event` at most `eventBytesMax`, a refusal's at most `callMax`, the same
-number) is at most `eventBytesMax + 1` bytes on a page. -/
+number, and its cancel signature at most `cancelBytesMax`) is on a page behind its 1-byte tag, and a
+cancel's also behind its signature's eight-byte length and the signature. STATEMENT CHANGE: the
+bound was `eventBytesMax + 1` while a page carried no cancel signature; it is now
+`eventBytesMax + 1 + 8 + cancelBytesMax` (`Protocol.Bounds.pageEventBytesMax`, 65609). -/
 theorem stepEvent_size_le {D : Type} {PD : D → Prop} {s : Kernel.Step D}
-    (h : Codec.Kernel.Step.Fits PD s) : (stepEvent s).size ≤ Kernel.Bounds.eventBytesMax + 1 := by
+    (h : Codec.Kernel.Step.Fits PD s) : (stepEvent s).size ≤ Protocol.Bounds.pageEventBytesMax := by
+  unfold Protocol.Bounds.pageEventBytesMax
   cases s with
   | turn t =>
     have hf : Codec.Kernel.Turn.Fits PD t := h
@@ -263,10 +269,23 @@ theorem stepEvent_size_le {D : Type} {PD : D → Prop} {s : Kernel.Step D}
     omega
   | refusal r =>
     have hf : Codec.Kernel.Refused.Fits PD r := h
-    have he : r.event.size ≤ Kernel.Bounds.eventBytesMax := hf.2.2.2.2.2
-    have hs : (stepEvent (.refusal r)).size = r.event.size + 1 := by
-      simp only [stepEvent, ByteArray.size_append]; exact Nat.add_comm _ _
-    omega
+    have he : r.event.size ≤ Kernel.Bounds.eventBytesMax := hf.2.2.2.2.2.1
+    have hc : r.cancel.size ≤ Kernel.Bounds.cancelBytesMax := hf.2.2.2.2.2.2
+    have h8 : (Codec.Stream.nat64.bytes r.cancel.size).size = 8 := by
+      rw [Codec.Stream.nat64_bytes]; rfl
+    by_cases h0 : r.cancel.size = 0
+    · have hs : (stepEvent (.refusal r)).size = r.event.size + 1 := by
+        simp only [stepEvent, h0, ↓reduceIte, ByteArray.size_append]; exact Nat.add_comm _ _
+      omega
+    · have hs : (stepEvent (.refusal r)).size = 1 + 8 + r.cancel.size + r.event.size := by
+        simp only [stepEvent, h0, ↓reduceIte, Protocol.cancelEvent, ByteArray.size_append, h8]; rfl
+      omega
+
+/-- A recorded refusal that carries a cancel signature is served as THE tag-2 event
+(`Protocol.cancelEvent`), which `Command.absorbStep` reads back (`absorbStep_cancelEvent`). -/
+theorem stepEvent_cancel {D : Type} {r : Kernel.Refused D} (h : r.cancel.size ≠ 0) :
+    stepEvent (.refusal r) = Protocol.cancelEvent r.cancel r.event := by
+  simp only [stepEvent, h, ↓reduceIte]
 
 theorem foldl_walkStep_events_ge {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D)
     (budget start : Nat) (ts : List (Kernel.Step D × D)) (st : Acc × D × Nat) :
@@ -306,8 +325,8 @@ def EmptyOk {D : Type} (start h₀ : Nat) (st : Acc × D × Nat) : Prop :=
   st.1.events = #[] → st.1.full = false ∧ st.1.bytes = 0 ∧ st.1.steps = st.2.2 ∧ st.2.2 ≤ max start h₀
 
 theorem walkStep_empty {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) {budget : Nat}
-    (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) (start h₀ : Nat) (st : Acc × D × Nat)
-    (x : Kernel.Step D × D) (hx : (stepEvent x.1).size ≤ Kernel.Bounds.eventBytesMax + 1)
+    (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) (start h₀ : Nat) (st : Acc × D × Nat)
+    (x : Kernel.Step D × D) (hx : (stepEvent x.1).size ≤ Protocol.Bounds.pageEventBytesMax)
     (h : EmptyOk start h₀ st) : EmptyOk start h₀ (walkStep E budget start st x) := by
   obtain ⟨a, c, k⟩ := st
   obtain ⟨t, root⟩ := x
@@ -336,9 +355,9 @@ theorem walkStep_empty {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) {bu
         exact absurd (congrArg Array.size he) (by simp)
 
 theorem foldl_walkStep_empty {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) {budget : Nat}
-    (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) (start h₀ : Nat) :
+    (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) (start h₀ : Nat) :
     ∀ (ts : List (Kernel.Step D × D)) (st : Acc × D × Nat),
-      (∀ p ∈ ts, (stepEvent p.1).size ≤ Kernel.Bounds.eventBytesMax + 1) →
+      (∀ p ∈ ts, (stepEvent p.1).size ≤ Protocol.Bounds.pageEventBytesMax) →
       EmptyOk start h₀ st → EmptyOk start h₀ (ts.foldl (walkStep E budget start) st)
   | [], _, _, h => h
   | x :: ts, st, hs, h =>
@@ -348,9 +367,9 @@ theorem foldl_walkStep_empty {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env 
 /-- An empty, not full page that walks a record and stays empty skipped every step of it: its
 count before the record plus the record's length is at most `start`. -/
 theorem foldl_walkStep_empty_count {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D)
-    {budget : Nat} (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) (start : Nat) :
+    {budget : Nat} (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) (start : Nat) :
     ∀ (ts : List (Kernel.Step D × D)) (a : Acc) (c : D) (k : Nat),
-      (∀ p ∈ ts, (stepEvent p.1).size ≤ Kernel.Bounds.eventBytesMax + 1) →
+      (∀ p ∈ ts, (stepEvent p.1).size ≤ Protocol.Bounds.pageEventBytesMax) →
       a.events = #[] → a.bytes = 0 → a.full = false → k ≤ start →
       (ts.foldl (walkStep E budget start) (a, c, k)).1.events = #[] → k + ts.length ≤ start
   | [], _, _, _, _, _, _, _, hk, _ => by simpa using hk
@@ -378,13 +397,13 @@ theorem foldl_walkStep_empty_count {D : Type} [Ord D] [DecidableEq D] (E : Kerne
       simp at hge
 
 /-- **A record's walk from an empty page serves the first step past `start`** whenever the budget
-holds `eventBytesMax + 5` and every event in the record is at most `eventBytesMax` (behind its tag):
+holds `pageEventBytesMax + 4` and every event in the record is at most `eventBytesMax` (behind its tag):
 the walk may first skip steps at or below `start`, and the page may carry an accumulator from records
 it skipped whole (no events, no bytes, not full). -/
 theorem walkTurnsAt_serves {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) {budget : Nat}
-    (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) (start : Nat) (c : D) (h₀ : Nat)
+    (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) (start : Nat) (c : D) (h₀ : Nat)
     (ts : List (Kernel.Step D × D)) (acc : Acc)
-    (hs : ∀ p ∈ ts, (stepEvent p.1).size ≤ Kernel.Bounds.eventBytesMax + 1)
+    (hs : ∀ p ∈ ts, (stepEvent p.1).size ≤ Protocol.Bounds.pageEventBytesMax)
     (hev : acc.events = #[]) (hb : acc.bytes = 0) (hf : acc.full = false) (hst : h₀ ≤ start)
     (hpast : start < h₀ + ts.length) :
     0 < (walkTurnsAt E budget start c h₀ ts acc).1.events.size := by
@@ -397,9 +416,9 @@ theorem walkTurnsAt_serves {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D)
 holds no event after the record is not `full`, holds no bytes, and its count is at most `start` or
 where it began. -/
 theorem walkTurnsAt_empty {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) {budget : Nat}
-    (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) (start : Nat) (c : D)
+    (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) (start : Nat) (c : D)
     (ts : List (Kernel.Step D × D)) (acc : Acc)
-    (hs : ∀ p ∈ ts, (stepEvent p.1).size ≤ Kernel.Bounds.eventBytesMax + 1)
+    (hs : ∀ p ∈ ts, (stepEvent p.1).size ≤ Protocol.Bounds.pageEventBytesMax)
     (hacc : acc.events = #[] → acc.full = false ∧ acc.bytes = 0)
     (he : (walkTurnsAt E budget start c acc.steps ts acc).1.events = #[]) :
     (walkTurnsAt E budget start c acc.steps ts acc).1.full = false ∧
@@ -410,16 +429,16 @@ theorem walkTurnsAt_empty {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) 
   obtain ⟨hf, hb, hst, hk⟩ := foldl_walkStep_empty E hB start acc.steps ts _ hs h0 he
   exact ⟨hf, hb, Nat.le_trans (Nat.le_of_eq hst) hk⟩
 
-/-- **The tooth**: one byte less (`eventBytesMax + 4`, what `budget_fits_event` stated before
-cv 01a150c0) and a first event past `start` of the codec's full size leave the record's walk `full`
+/-- **The tooth**: one byte less (`pageEventBytesMax + 3`; before cv 01a150c0 `budget_fits_event`
+stated one byte less too) and a first event past `start` of the codec's full size leave the record's walk `full`
 and EMPTY: nothing after it is served. -/
 theorem walkTurnsAt_one_short {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (start : Nat)
     (c : D) (h₀ : Nat) (t : Kernel.Step D) (root : D) (rest : List (Kernel.Step D × D)) (acc : Acc)
     (hev : acc.events = #[]) (hb : acc.bytes = 0) (hf : acc.full = false)
-    (hx : (stepEvent t).size = Kernel.Bounds.eventBytesMax + 1) (hst : start < h₀ + 1) :
-    (walkTurnsAt E (Kernel.Bounds.eventBytesMax + 4) start c h₀ ((t, root) :: rest) acc).1.full = true ∧
-      (walkTurnsAt E (Kernel.Bounds.eventBytesMax + 4) start c h₀ ((t, root) :: rest) acc).1.events = #[] := by
-  have hw : walkStep E (Kernel.Bounds.eventBytesMax + 4) start (acc, c, h₀) (t, root) =
+    (hx : (stepEvent t).size = Protocol.Bounds.pageEventBytesMax) (hst : start < h₀ + 1) :
+    (walkTurnsAt E (Protocol.Bounds.pageEventBytesMax + 3) start c h₀ ((t, root) :: rest) acc).1.full = true ∧
+      (walkTurnsAt E (Protocol.Bounds.pageEventBytesMax + 3) start c h₀ ((t, root) :: rest) acc).1.events = #[] := by
+  have hw : walkStep E (Protocol.Bounds.pageEventBytesMax + 3) start (acc, c, h₀) (t, root) =
       ({ acc with full := true }, c, h₀) := by
     simp only [walkStep, hf, Bool.false_eq_true, ↓reduceIte]
     rw [if_neg (by omega), if_pos (Or.inr (by rw [hb, hx]; omega))]
@@ -460,21 +479,21 @@ theorem walk_full {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Co
   | succ fuel => simp only [walk, hf, Bool.true_or, ↓reduceIte, pure]
 
 /-- The steps of a record `walk` decodes: each is in the codec's domain, so its event on a page is at
-most `eventBytesMax + 1` bytes. -/
+most `pageEventBytesMax` bytes. -/
 theorem decode_stepEvent_le {D : Type} {PD : D → Prop} {dc : Codec.Stream D}
     (hd : Codec.Stream.LawfulOn PD dc) {r : ByteArray} {ts : List (Kernel.Step D × D)}
     (hdec : (Record.codec dc).decode r = .ok ts) :
-    ∀ p ∈ ts, (stepEvent p.1).size ≤ Kernel.Bounds.eventBytesMax + 1 := fun p hp =>
+    ∀ p ∈ ts, (stepEvent p.1).size ≤ Protocol.Bounds.pageEventBytesMax := fun p hp =>
   stepEvent_size_le
     (((Codec.Kernel.batch_lawfulOn hd recordTurnsMax (by decide)).eq_bytes_of_decode hdec).1.2 p hp).1
 
 /-- **A page `walk` returns empty was never stopped for room** (cv 01a150c0, the lift through the
-segment): with the digest codec lawful and a budget of `eventBytesMax + 5`, a page that holds no
+segment): with the digest codec lawful and a budget of `pageEventBytesMax + 4`, a page that holds no
 event is not `full`, holds no bytes, and its count is at most `start` or where the walk began. -/
 theorem walk_empty {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
     {PD : D → Prop} (hd : Codec.Stream.LawfulOn PD dc)
     {s : Log.Sealer} {recordMax budget : Nat} {read : Nat → Nat → Id ByteArray} {endOff start : Nat}
-    (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) :
+    (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) :
     ∀ (fuel off : Nat) (c : D) (acc a : Acc), (acc.events = #[] → acc.full = false ∧ acc.bytes = 0) →
       walk E dc s recordMax budget read endOff start fuel off c acc = .ok a → a.events = #[] →
       a.full = false ∧ a.bytes = 0 ∧ a.steps ≤ max start acc.steps := by
@@ -512,7 +531,7 @@ reaching past `start` leaves the page holding at least one event. -/
 theorem walk_serves {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
     {PD : D → Prop} (hd : Codec.Stream.LawfulOn PD dc)
     {s : Log.Sealer} {recordMax budget : Nat} {read : Nat → Nat → Id ByteArray} {endOff start : Nat}
-    (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) {fuel off : Nat} {c : D} {acc a : Acc}
+    (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) {fuel off : Nat} {c : D} {acc a : Acc}
     {r : ByteArray} {ts : List (Kernel.Step D × D)}
     (hev : acc.events = #[]) (hb : acc.bytes = 0) (hf : acc.full = false) (hoff : off < endOff)
     (hr : frameOf s recordMax read off = some r) (hdec : (Record.codec dc).decode r = .ok ts)
@@ -533,7 +552,7 @@ theorem walk_serves {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : 
     (walkTurnsAt_serves E hB start c acc.steps ts acc (decode_stepEvent_le hd hdec) hev hb hf hst hpast)
     (walk_events_ge _ _ _ _ _ h)
 
-/-- **The walk-level tooth**: at `eventBytesMax + 4`, a first record past `start` whose first event
+/-- **The walk-level tooth**: at `pageEventBytesMax + 3`, a first record past `start` whose first event
 is of the codec's full size leaves the page `walk` returns `full` and EMPTY. -/
 theorem walk_one_short {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
     {s : Log.Sealer} {recordMax : Nat} {read : Nat → Nat → Id ByteArray} {endOff start : Nat}
@@ -541,8 +560,8 @@ theorem walk_one_short {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc
     {rest : List (Kernel.Step D × D)}
     (hev : acc.events = #[]) (hb : acc.bytes = 0) (hf : acc.full = false) (hoff : off < endOff)
     (hr : frameOf s recordMax read off = some r) (hdec : (Record.codec dc).decode r = .ok ((t, root) :: rest))
-    (hx : (stepEvent t).size = Kernel.Bounds.eventBytesMax + 1) (hst : start < acc.steps + 1) :
-    ∃ a, walk E dc s recordMax (Kernel.Bounds.eventBytesMax + 4) read endOff start (fuel + 1) off c acc = .ok a ∧
+    (hx : (stepEvent t).size = Protocol.Bounds.pageEventBytesMax) (hst : start < acc.steps + 1) :
+    ∃ a, walk E dc s recordMax (Protocol.Bounds.pageEventBytesMax + 3) read endOff start (fuel + 1) off c acc = .ok a ∧
       a.full = true ∧ a.events = #[] := by
   obtain ⟨hfull, hempty⟩ := walkTurnsAt_one_short E start c acc.steps t root rest acc hev hb hf hx hst
   refine ⟨_, ?_, hfull, hempty⟩
@@ -553,13 +572,13 @@ theorem walk_one_short {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc
   exact walk_full _ _ _ _ hfull
 
 /-- **A page `build` returns empty was never stopped for room**: with the digest codec lawful and a
-budget of `eventBytesMax + 5` (`budget_fits_event` for the deployed one), an empty page is not
+budget of `pageEventBytesMax + 4` (`budget_fits_event` for the deployed one), an empty page is not
 `full` and holds no bytes. The tooth is `walk_one_short`. -/
 theorem build_empty {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
     {PD : D → Prop} (hd : Codec.Stream.LawfulOn PD dc)
     {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget : Nat}
     {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
-    {now : Nat × ByteArray} {start : Nat} {a : Acc} (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget)
+    {now : Nat × ByteArray} {start : Nat} {a : Acc} (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget)
     (h : build E dc digestOf s recordMax budget read get count endOff now start = .ok a)
     (he : a.events = #[]) : a.full = false ∧ a.bytes = 0 ∧ a.steps ≤ start := by
   rcases build_located h with ⟨hn, rfl⟩ | ⟨k, e, c, _, _, hle, _, hw⟩

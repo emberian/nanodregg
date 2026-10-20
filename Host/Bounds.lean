@@ -44,7 +44,8 @@ writer or follower encodes from steps `World.step` took is within `recordBytesDe
 def digestBytes : Nat := 32
 
 /-- The widest recorded refusal on the wire. -/
-def refusedBytesMax : Nat := 2 * digestBytes + 3 * 8 + 4 + Codec.Kernel.callMax
+def refusedBytesMax : Nat :=
+  2 * digestBytes + 3 * 8 + 4 + Codec.Kernel.callMax + 4 + Kernel.Bounds.cancelBytesMax
 
 /-- The widest step on the wire: the choice byte and the wider of a Turn and a refusal. -/
 def stepBytesMax : Nat := 1 + max Kernel.Bounds.weightMax refusedBytesMax

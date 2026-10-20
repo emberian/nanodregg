@@ -1867,3 +1867,35 @@ The writer's fact was masked by custody's reason (law 7).
 **Critique.**
 - The prefix is read at the first key-field count whose prefix type reads the text (`prefixBytes`, the read verb's rule). A method declaring `range m k` with a different `m` is refused by the receiver's `keyOf`, by LANG's text, not here.
 - The hint names no relation: the refusal carries the relation's index, and `hint` has no World to look up its label.
+
+## PROTOCOL-60 · A cancel reaches a follower: page event tag 2 `2 ‖ nat64 n ‖ sig ‖ call` and absorbStep's cancel arm (2026-10-19, PROTOCOL-22; PROTOCOL's half of KERNEL-60's C1, inside KERNEL-26's commit; HOST-17 agreed the Host paths on three conditions)
+
+**The gap.** KERNEL-60 records a member's cancel as a `Refused` carrying the cancel signature (`Refused.cancel`), and `refusedBytes` commits it. A page carried a recorded refusal as `1 ‖ call`, without the signature. The follower re-derived it with `judge`, which records no signature, or which admits the call outright. So on the first cancel its record, its digest and its chain differed from the writer's, and follow broke.
+
+**Decision.**
+- The tags have ONE source, `Protocol.eventTurn / eventRefusal / eventCancel` in Table.lean. `Host.Page.stepEvent` writes them and `Command.absorbStep` reads them. The tag-2 bytes are THE function `Protocol.cancelEvent sig call := 2 ‖ nat64 sig.size ‖ sig ‖ call`.
+- `stepEvent` writes tag 1 for a refusal with an EMPTY cancel field and tag 2 otherwise. That is the kernel audit's discriminator (`Receive.recordedBy`): the field, never the code. A program refusal spelled `cancelled` is tag 1 and is re-judged by `judge`.
+- `absorbStep`'s tag-2 arm: `cancelParts` reads the length at byte 1. It refuses a length of 0, one past `cancelBytesMax`, or one that runs past the event, so tag 2 has one encoding per record. Then it decodes the call and re-records it with `Receive.cancel` under the event's signature, which the follower VERIFIES under the member's key on its own World. Anything that does not record is `eventMismatch` at its position.
+- Bound: `Protocol.Bounds.pageEventBytesMax := eventBytesMax + 1 + 8 + cancelBytesMax` (65609). STATEMENT CHANGE (HOST-17 condition 2): `Host.Page.stepEvent_size_le` was `≤ eventBytesMax + 1` and is now `≤ pageEventBytesMax`. Every page theorem's budget premise moves from `eventBytesMax + 5` to `pageEventBytesMax + 4`, and the teeth from `+ 4` to `+ 3`.
+  - The deployed serve frame does NOT move. `Page.budget = frameBytesMax − 1024 = 261120 ≥ 65613` (`budget_fits_event`, by decide).
+  - The rows' `pageBudget` (toy and deployed) moves from 65541 to 65613. Every row and COST line is byte-identical.
+- Proofs:
+  - `Settle.WindowedIn` and the three settle theorems now read `∃ c v a, refusal (recordOf X c v a) ∈ S`. A cancel's record is `recordOf … sig`. The 5 Settle sites are `WindowedIn`, `windowedIn_mono`, `windowedIn_refused`, `settle_refused_final` and `settle_refused_absorbed`.
+  - `refuse_windowedIn` is the one step lemma: `judge_windowedIn` and `cancel_windowedIn` are its instances.
+  - Command: `refuse_answers`, from which `recorded_answers` follows. `absorbStep_refusal_recorded` now names the tag and the source of the call (tag 1: `a = empty` and the call past the tag; tag 2: `v = cancelled`, `cancelAuth X w c a = .ok ()` (follow verified the signature on its own World) and `cancelParts e = some (a, cb)`). `cancelParts_some`: what it splits IS `e[0] ‖ nat64 n ‖ s ‖ cb` with `0 < n ≤ cancelBytesMax`. `absorbStep_cancel_canonical`, ONE ENCODING PER RECORD: a tag-2 event follow absorbs into `r` IS `cancelEvent r.cancel r.event` (premise: the call codec reads only its own bytes; deployed: `Codec.Kernel.eq_callBytes_of_decodeCall`).
+  - `absorbStep_step` takes the cancel arm (`cancel_recorded`).
+  - NEW `absorbStep_cancelEvent`: the writer's cancel of `c` signed `sig`, recorded as `r` reaching `w'`, is absorbed from `cancelEvent r.cancel r.event` into the same `r` and the same `w'`, so the chain is kept. `Host.Page.stepEvent_cancel`: that IS the event the page serves.
+  - `cancelAuth_size`.
+  - Domains: `domCancel` against the five other domains, plus `cancel_not_call` / `cancel_not_envelope` / `cancel_not_possession` / `cancel_not_whoami` / `cancel_not_invite`.
+- Plant `plant-cancel-page` (host-sim, HOST-17 condition 1). The honest tag-2 event re-records the writer's exact record and World. Each of the following is refused `eventMismatch 1` by name:
+  - tag 1 with the signature dropped (the pre-PROTOCOL-60 event);
+  - a flipped signature;
+  - an empty signature;
+  - 65 bytes;
+  - a length past the event's end.
+- `Settle.ofReceipt`: a cancelled call settles `refused cancelled`, final, through the refused arm unchanged (doc only).
+
+**Critique.**
+- The length checks in `cancelParts` change no `absorbStep` result, and no plant can see them. A 0- or 65-byte signature is refused by `cancelAuth`'s size check and by `verify`. A length past the event's end leaves an empty call, which does not decode. So of plant-cancel-page's lines, only tag 1, the flipped signature and the honest control can go red on their own. The empty, 65-byte and past-end lines are end-to-end refusals, not teeth of the checks. The checks' only tooth is the theorem `cancelParts_some`, which fails without each of them. `absorbStep_cancel_canonical` backs "one encoding per record", but it would stay true without the checks, because `cancelAuth` and the decoder refuse those events too (the second agent's reading).
+- `walkTurnsAt_one_short`'s premise (an event of exactly `pageEventBytesMax`) is now met only by a cancel with a 64-byte signature and a full-size call. No theorem exhibits a recordable one, and host-sim's toy signature is 8 bytes.
+- No Host op or nd verb records a cancel yet (cv 01a15543-39fd). The arm is reached from host-sim's plant and from the theorems, not from a row through nd. The rows line comes with `nd cancel`.

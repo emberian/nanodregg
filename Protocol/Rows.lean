@@ -1176,7 +1176,7 @@ def well : Row where
 arbiter) births an escrow over 30 of the sponsor's denomination for the hunter; the escrow's own
 account and the hunter's are opened top-level first (the pinned view forbids a birth in the
 deposit's tree); the poster grants the depositor `invoke:0`; the depositor lends its account to
-the object (a mutate grant over `of:SPONSOR:W`, LEDGER-6). A deposit through a grant that is not
+the object (a `transfer:30` grant over `of:SPONSOR:W`: exactly the deposit, KERNEL-60). A deposit through a grant that is not
 that lend is refused `grantTarget`; the real deposit moves 30 into the escrow; the arbiter's
 release pays the hunter; a second release is `lawDenied` (the escrow is settled). Plant: without
 the law, the kernel still refuses the second payout by its own name (an empty escrow account),
@@ -1197,7 +1197,7 @@ def bounty : Row where
     ok "poster" ["account", "@w", "--owner", "@bounty"],
     ok "poster" ["account", "@w", "--owner", "@hunter"],
     okBind "poster" ["grant", "@bounty", "@sponsor", "invoke:0"] "gd",
-    okBind "sponsor" ["grant", "of:{@sponsor}:{@w}", "@bounty", "mutate"] "gm",
+    okBind "sponsor" ["grant", "of:{@sponsor}:{@w}", "@bounty", "transfer:30"] "gm",
     no "sponsor" ["invoke", "@bounty", "0", "(record (grant #{@gd}))", "--via", "@gd"] "grantTarget",
     ok "sponsor" ["invoke", "@bounty", "0", "(record (grant #{@gm}))", "--via", "@gd"],
     ok "poster" ["invoke", "@bounty", "2", "(record)"],

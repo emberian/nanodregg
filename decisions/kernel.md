@@ -2915,3 +2915,109 @@ The cap is not reached through `judge`, because C records need over a thousand e
 **The 47.** Of today's 93 never/once/first/after/mono-named theorems, one is an object-history fact: `escrow_runs_after_payout`, now a `chain_stops` corollary. The rest are journal/nullifier "once", rows/trie/order "mono"/"first", hosting loop clocks, protocol attempts, Lang `never_stuck`: not about one object's state under laws.
 **Re-genesis / re-emit.** None. Proof-side only.
 **Critique.** The lift needs the object live at the history's start; a history from birth splits the log at the birth. `effect_at_object_needs_kind` shows the check on one receiver (revoke), not wired into `dispatch`.
+
+## KERNEL-60 · Counted value rights in the grant (KERNEL-28's amount right, with credit) and the CANCEL record (design C1), re-priced after KERNEL-54; `rotate_stales_outstanding` (KERNEL-24, 2026-10-21; ROOT ruled on SCHOLAR-COMPARE §2–3)
+**(2) The amount right.**
+- `Right` gains `transfer (cap)` and `credit (cap)`, the counted value rights. They are carved and spent exactly like `enroll (count)`, through ONE ledger mechanism: `ledgerLeft`, `spendAt` and `spendVia` in `Kernel/Receive/Authority.lean`. `enrollLeft` and `spendEnroll` are now its enrolment instance.
+- Each ledger is an append-only slot series in the grant cell: `transferBase = 2048`, `creditBase = 2560`, at most `ledgerSpendsMax = enrollMax = 256` spends. The ranges are disjoint from 16, 17, 1024..1280 and 4096+m. A spend that would be written past the last slot the ledger reads is refused, never written.
+- `transfer src dst amount (via := some g)` walks a chain for `.transfer _`. It then appends `left - amount` to g's ledger as the Turn's third effect. More than what is left is refused `transferSpent g`.
+- `credit` works the same on a well's floor, refused `creditSpent g`.
+- A derived grant carves its cap from its parent's ledger. A cap past the parent's is `grantWidens`.
+- A root transfer or credit grant (no parent) is allowed: the owner is the root issuer the walk requires.
+- `checkRights` (the ruled target typing) refuses `rightTarget`:
+  - a grant carrying two counted kinds, so no carve can skip a ledger;
+  - `enroll` anywhere but the World;
+  - `transfer` or `credit` on the World.
+- A total cap past `capMax` (2^63) is `overflow`.
+- **`mutate` moves no value.** It authorises neither a transfer nor a credit line. ROOT refused to keep credit on mutate: it lent the whole floor headroom.
+- These calls relied on mutate-for-transfer, and each was moved:
+  - ledger-sim E7 now grants `transfer 30`.
+  - Protocol/Rows.lean's bounty deposit grant is now `transfer:30`.
+  - The escrow header and Verb.lean docs drop the v0 label.
+  - There is no Rust caller.
+- LEDGER-16 records the escrow side, with LEDGER-6's agreement.
+
+**Theorems (2)** (`Kernel/Proofs/Authority.lean`, `Kernel/Proofs/Ledger.lean`):
+- `spendAt_ok`: a spend is within what is left, and for a nonzero spend at a ledger index the ledger reads.
+- `spendEnroll_ok`: the statement is unchanged, now derived from `spendAt_ok`.
+- `spendVia_ok`.
+- `transfer_ok`, `credit_ok`: every step the receiver passed.
+- `transfer_authorized`, `effect_transfer_authorized`, `credit_authorized`: the chain is for `(.transfer 0)` / `(.credit 0)`, and through a grant the grant had at least `amount` left and the Turn appends the remainder.
+- `transfer_exact`, `credit_exact`: through a grant, the grant's ledger after the turn holds the remainder. The frame excludes exactly that grant (`via ≠ some k`).
+- `sealed_writes`, the n-write generalisation. `sealed_two_writes` is kept with an unchanged statement and is its instance.
+- `grant_ne_account`, `admit_written_entry`.
+- `checkRights_ok`: one counted kind, and the targets. This is why no carve skips a ledger.
+- The carve twins `grant_carves_transfer` and `grant_carves_credit`: a child's cap is carved from the parent's remaining ledger, so the cap binds along the whole chain, not only at the leaf.
+
+Teeth (kernel-sim `capArms`):
+- transfer-via:ok and transfer-past-cap:transferSpent;
+- transfer-mutate:grantRight;
+- right-target:rightTarget;
+- credit-via:ok and credit-past-cap:creditSpent.
+
+Teeth (ledger-sim):
+- short-cap: a grant one less than the deposit moves, which is the package asking for `amount + 1` of what it was lent, so E8 is refused `transferSpent`.
+- skip-judge E9: a second deposit is refused `transferSpent`, because the cap refuses before the once key.
+
+**(3) The cancel record (C1).**
+- A member ends one of its outstanding calls by recording the refusal of THAT call.
+- `recordOf X c v a` is the call's own transaction id, member, window and bytes. It generalises `refusedOf`, which is `recordOf … ByteArray.empty`. The code is `cancelled`.
+- The ONE new field `Refused.cancel` holds the member's signature over `domCancel ‖ txId`, verified under the member's CURRENT key on the World it is recorded on (`cancelAuth`). The call's own signature is not needed.
+- `World.refuse` judges it unchanged: inside the call's window only (an early cancel is `outsideWindow`), never once the call is journaled or already recorded, and charged to the member's `refusalsPerWindow` and the World's R1 total.
+- **The budget class is SPAM, by decision.** A member that cancels sixteen calls in a window has its later records declined `refusalBudget` until the window turns. Measured: in kernel-sim's 16 seeds the cancelling member had already spent its 16 records in 7 of them (`cancel-budget:refusalBudget`), so its cancel was declined there. That is the stated cost of the class, not a defect.
+- The audit re-judges a record with a non-empty cancel by `cancel` (`recordedBy`). A forged one is refused `cancelForged`.
+- `judge` is unchanged (ROOT ruled (i)). The audit tells a member's cancel from a program-named `cancelled` by the FIELD, never by the code. A record carrying a cancel signature is re-verified as a cancel, `cancelForged` on failure. A record without one is a program refusal, re-judged by `judge` and never read as a member's act.
+- C1 said "no new kernel check". That was wrong. `refusedBytes` must commit the field, or two records differing only in it share a digest and the chain binds neither. So `checkRefusedBounds` bounds it (`cancelBytesMax = 64`), and `refusedDigest_inj` covers it.
+- A cancel reaches followers as page event tag 2, `[2] ‖ nat64 size ‖ sig ‖ call`. That is PROTOCOL-21's half, with HOST-17's yes. Tag 1 carries only the call, so without tag 2 every follower would break its chain on the first cancel.
+
+**Theorems (3)** (`Kernel/Proofs/Audit.lean`, `Refusals.lean`):
+- `cancel_recorded`, `recordedBy_recorded`.
+- `audit_cancel_signed`: a cancel the audit accepts verifies under the member's live key, and the record IS `cancelOf` its own event.
+- `audit_cancel_forged` (its tooth).
+- `audit_unsigned_is_judged`: a record with no field passes exactly when `judge` records it.
+- `audit_program_cancelled_forged`, ROOT's tooth: a program refusal spelled `cancelled` that carries a forged field is `cancelForged`.
+- `cancel_early_declined`.
+- `cancel_final`: after a recorded cancel, `submit` of the call is `refusedFinal cancelled` below the prune height.
+- `refusedDigest_inj` covers the new field (length-prefixed in `refusedBytes`).
+
+Teeth (kernel-sim): cancel:recorded, cancel-final:refusedFinal, cancel-other:badSignature, cancel-early:outsideWindow, cancel-forged:cancelForged.
+
+**The free theorem.**
+- `rotate_stales_outstanding` (`Kernel/Proofs/RotateStale.lean`) is breadstuffs' `SelfNonceBump` recovered. A call that pinned its member cell before a rotation of that member is never admitted at any World the fold reaches from the rotation, or the hash collides on the two pin inputs compared (`CollidesAmong` over exactly that pair).
+- `_sep` is the binding form.
+- The tooth is kernel-sim `rotate-stales:stale`: a call signed with the member's NEW key but pinning the pre-rotation member cell is declined `stale`.
+- So a rotation after a key compromise ends every in-flight call the stolen key signed. That is a theorem of the fold, not only of the key check.
+- Versions.lean's entry-order lemmas are now public (`EAdv`, `EStep`, `eAdv_trans`, `eStep_trans`, `fold_entryStep`, `VerFit`, `cellsFit_verFit`, `pinPre_adv_ne`). KERNEL-23 agreed.
+
+**Flag day (`kernel!`).**
+- What refuses now:
+  - a transfer past its grant's cap (`transferSpent`) and a credit past its cap (`creditSpent`);
+  - a transfer or credit through a `mutate` grant (`grantRight`);
+  - a counted right off its target, or two counted kinds in one grant (`rightTarget`);
+  - a forged cancel in a log (`cancelForged`);
+  - a cancel outside its call's window (`outsideWindow`, declined).
+- What moves on the wire:
+  - Right codec tags 4 and 5.
+  - The Refused/Step record gains the cancel bytes: rawBytes ≤ 64, plus 4 + 64 bytes in `Host.refusedBytesMax`.
+  - Every receive refusal past `enrollSpent` shifts its code (three inserted names, two appended). Every reject code shifts by +5.
+  - LANG's `rightTy` gains `credit` and `transfer`, so every package whose type embeds it re-ids.
+- What re-geneses: every Store.
+- What re-emits: `gates/codec-vectors.tsv` (`kernel/right` covers six tags; `kernel/refused` gains the cancel's boundary pair, 64 read back and 65 refused `pastBound`). CODEC is not live, so ROOT signs for CODEC on its two table rules: `right_lawfulOn`/`refused_lawfulOn` restated for the moved sites, and the boundary pair. `generated.rs` is unchanged: no refusal name is generated into Rust.
+
+**Premises.** No landed theorem gained a premise. The second-agent read K24-READER-2 was LAND-WITH-FIXES, and every fix was taken.
+- Changed statements, SHAPE:
+  - `transfer_authorized`, `effect_transfer_authorized`, `credit_authorized`, `transfer_exact`, `credit_exact`. Each is no weaker, except for the forced exclusion of the grant cell, which its new conjunct describes (LEDGER-6's condition).
+  - `auditRefusal_ok` and `Honest`: `judge` becomes `recordedBy`, which IS `judge` for a record with no field.
+  - `refusedBounds_wide`: one more constructor argument.
+- Tightened by DEFINITION, forced by the field:
+  - `Refused.Fits` gains `cancel.size ≤ cancelBytesMax`. It sits behind Host's `Step.Fits` premises and is discharged by `checkRefusedBounds_fits`.
+  - `checkRefusedBounds` gains the same bound. It sits behind `refusedDigest_inj`'s `hb` and is discharged by `World.refuse`.
+- Versions.lean's entry lemmas lost `private`; their statements are unchanged.
+**Not yet reached.** No Host op or client verb records a cancel yet: only kernel-sim reaches `Receive.cancel`. HOST-17 designs the op after HOST-63, starting from the shape `call bytes ‖ signature`. PROTOCOL-21 then adds the `nd cancel` verb and a rows line with a plant.
+**Critique.**
+- There are two counted value rights where the scholar named one. ROOT refused to keep `credit` on `mutate`, because it was the same unbounded-authority class.
+- The cancel is spam-class, so an honest member who cancels a lot is throttled along with flooders. KERNEL-54's honest-contention exemption was for a structurally final class. A cancel is a member's act, not contention.
+- `rotate_stales_outstanding` makes cancel-all free. That leaves C1 for exactly the call that pins nothing the member owns.
+**Meta-critique.**
+- My first cancel build had `judge` decline a program-named `cancelled`, so that the code alone would mean "signed". That put a premise on a landed theorem. The field, not the code, was always the right discriminator.
+- I also nearly shipped C1's "no new kernel check" without reading what the chain commits.

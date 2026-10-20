@@ -39,7 +39,7 @@ theorem judge_journaled {X : Ctx D} {w : World D} {c : Call D} {h : Nat} {d : D}
   have hr : ∀ v, ∃ e, World.refuse X.env w (refusedOf X c v) = .error e := by
     intro v
     unfold World.refuse checkRefusal
-    simp only [refusedOf, hj]
+    simp only [refusedOf, recordOf, hj]
     split
     · rename_i hok
       simp only [bind, Except.bind] at hok
@@ -179,10 +179,10 @@ theorem lookup_recorded_answers (X : Ctx D) {w₀ w₁ w : World D} {f : Frame} 
     unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hjc
   simp only [journalForgets, decide_eq_false_iff_not, Nat.not_le] at hnf
   obtain ⟨hr₂, hj₂⟩ := fold_refused_retains (refuse_refusalsCanon hrc h₁) hjc₁ hf (refuse_recorded h₁)
-    ((refuse_journalAt h₁ _).trans hj₀) (by simp only [refusedOf] at hnb; omega)
+    ((refuse_journalAt h₁ _).trans hj₀) (by simp only [refusedOf, recordOf] at hnb; omega)
   have hra : refusedAnswer X w c = some v.code := by
-    unfold refusedAnswer; simp only [refusedOf] at hr₂; rw [hr₂]
-  simp only [refusedOf] at hj₂
+    unfold refusedAnswer; simp only [refusedOf, recordOf] at hr₂; rw [hr₂]
+  simp only [refusedOf, recordOf] at hj₂
   rw [handle_lookup_refused X w f c v.code hop hc hj₂ hra, recordedName, codeName_code]
   rfl
 

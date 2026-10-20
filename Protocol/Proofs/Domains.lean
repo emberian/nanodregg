@@ -1,15 +1,18 @@
 /-
 # Protocol.Proofs.Domains — every message a member key signs begins with its own domain (KERNEL-42)
 
-A member key signs five shapes: a call (`Receive.Ctx.callMessage`, `domCall`), a possession
+A member key signs six shapes: a call (`Receive.Ctx.callMessage`, `domCall`), a possession
 proof (`Receive.possessionMessage`, `tagPossession`), a read envelope (`Envelope.message`,
-`domEnvelope`), `init`'s identity probe (`Command.whoami`, a constant) and an invitation
-(`Invite.message`, `domInvite`, PROTOCOL-42). Each pair of domains
+`domEnvelope`), `init`'s identity probe (`Command.whoami`, a constant), an invitation
+(`Invite.message`, `domInvite`, PROTOCOL-42) and a cancel (`Receive.Ctx.cancelMessage`,
+`domCancel`, KERNEL-60; PROTOCOL-60). Each pair of domains
 differs at a byte both hold, so no message of one shape is a message of another, whatever follows
 the domain: a signature made for one is never one over another, with no hash premise. An observer
 custody that signs only messages beginning with `domEnvelope` (HOSTING-17 §7, CLIENT-22) therefore
-never signs a call, a possession proof, a probe or an invitation (`call_not_envelope`,
-`possession_not_envelope`, `whoami_not_envelope`, `invite_not_envelope`).
+never signs a call, a possession proof, a probe, an invitation or a cancel (`call_not_envelope`,
+`possession_not_envelope`, `whoami_not_envelope`, `invite_not_envelope`, `cancel_not_envelope`), and
+a cancel signature is never a call's (`cancel_not_call`): a member's cancel of one call cannot be
+replayed as a signed call, nor a signed call as a cancel.
 -/
 import Protocol.Command.Machine
 
@@ -117,5 +120,48 @@ theorem invite_not_possession (X : Ctx D) (sponsor next : D) (key u : ByteArray)
   unfold possessionMessage
   simp only [ByteArray.append_assoc]
   exact invite_possession_disjoint _ _
+
+/-! ## The cancel's domain against the other five (KERNEL-60; byte 19, 17 or 10 differs) -/
+
+theorem cancel_call_disjoint (r s : ByteArray) : domCancel ++ r ≠ domCall ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+theorem cancel_possession_disjoint (r s : ByteArray) : domCancel ++ r ≠ tagPossession ++ s :=
+  append_ne_of_byte (i := 17) (by decide) (by decide) (by decide)
+
+theorem cancel_envelope_disjoint (r s : ByteArray) : domCancel ++ r ≠ domEnvelope ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem cancel_whoami_disjoint (r s : ByteArray) : domCancel ++ r ≠ Command.whoami ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem cancel_invite_disjoint (r s : ByteArray) : domCancel ++ r ≠ Invite.domInvite ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+/-- **No cancel message begins with the envelope domain**: an envelope-only custody never signs a
+cancel. -/
+theorem cancel_not_envelope (X : Ctx D) (c : Call D) (r : ByteArray) :
+    domEnvelope ++ r ≠ X.cancelMessage c :=
+  fun h => cancel_envelope_disjoint (X.env.bytes (txIdOf X c)) r (by simp only [Ctx.cancelMessage] at h; exact h.symm)
+
+/-- **A cancel's message is never a call's**: a cancel signature is never a call signature, for
+every call either names. -/
+theorem cancel_not_call (X : Ctx D) (c : Call D) (u : Unsigned D) : X.cancelMessage c ≠ X.callMessage u := by
+  unfold Ctx.cancelMessage Ctx.callMessage
+  exact cancel_call_disjoint _ _
+
+theorem cancel_not_possession (X : Ctx D) (c : Call D) (sponsor next : D) (key : ByteArray) :
+    X.cancelMessage c ≠ possessionMessage X sponsor next key := by
+  unfold Ctx.cancelMessage possessionMessage
+  simp only [ByteArray.append_assoc]
+  exact cancel_possession_disjoint _ _
+
+theorem cancel_not_whoami (X : Ctx D) (c : Call D) : X.cancelMessage c ≠ Command.whoami := by
+  intro h
+  exact cancel_whoami_disjoint (X.env.bytes (txIdOf X c)) ByteArray.empty
+    (by rw [ByteArray.append_empty]; exact h)
+
+theorem cancel_not_invite (X : Ctx D) (c : Call D) (u : ByteArray) : X.cancelMessage c ≠ Invite.message u :=
+  fun h => cancel_invite_disjoint _ u h
 
 end Nanodregg.Protocol

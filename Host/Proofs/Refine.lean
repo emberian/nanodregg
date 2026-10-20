@@ -164,7 +164,7 @@ theorem host_step_folds (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X
         rw [(receive_derived hr).event]
         exact hcb
       · obtain ⟨-, -, hr, -⟩ := judge_recorded hjr
-        refine ⟨c, v, w', ?_, hjr, fun _ _ => trivial⟩
+        refine ⟨c, v, w', ?_, recordedBy_of_judge hjr, fun _ _ => trivial⟩
         rw [hr]
         exact hcb
 
@@ -320,7 +320,8 @@ theorem host_step_folds_tooth_unjudged (X : Ctx D) (w w' : World D) (out : Out (
 
 /-- **TOOTH (`host_step_folds`'s `Honest` conjunct at a decoding `Ctx`): a censoring writer.** At
 any `Ctx` meeting the step theorem's premise (the deployed one: `deployed_canonical`), take a frame
-carrying call `c` that `judge` would ADMIT on `w`, and a refusal record `r` of that very event
+carrying call `c` that `judge` would ADMIT on `w`, and a judged-refusal record `r` of that very event (no cancel field, `hk`: a record carrying one is
+a member’s cancel, which `recordedBy` re-judges by `cancel`, and whose forgery is `audit_cancel_forged`’s tooth)
 which `World.refuse` accepts on `w`. A machine equal to the writer's except that its arm at the
 frame's code records `r` wherever `World.refuse` accepts it `Commits` to `World.step`; at a `submit`
 frame `[.refusal r]` meets every other conjunct of the step theorem, and the step theorem fails of
@@ -331,7 +332,7 @@ theorem host_step_folds_tooth_censor (X : Ctx D) (hX : ∀ b c, X.decodeCall b =
     (w w₁ w' : World D) (out : Out (Step D × D)) (q : Request Frame) (c : Call D) (t : Turn D)
     (r : Refused D) (st : UInt8) (p : ByteArray)
     (hc : X.decodeCall q.body.payload = some c) (hj : judge X w c = .admitted t w₁)
-    (he : r.event = X.callBytes c) (hr : World.refuse X.env w r = .ok w')
+    (he : r.event = X.callBytes c) (hk : r.cancel.size = 0) (hr : World.refuse X.env w r = .ok w')
     (hop : Protocol.Op.ofCode? q.body.op = some .submit) :
     let m : Machine (World D) (Step D) Frame D :=
       { machine X with
@@ -378,7 +379,7 @@ theorem host_step_folds_tooth_censor (X : Ctx D) (hX : ∀ b c, X.decodeCall b =
     obtain ⟨c', v, u, hd, hjr, -⟩ := hh
     rw [he, hX _ _ hc, hc] at hd
     cases hd
-    rw [hj] at hjr
+    rw [recordedBy, if_pos hk, hj] at hjr
     cases hjr
 
 end Nanodregg.Host

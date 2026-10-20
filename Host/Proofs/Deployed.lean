@@ -892,12 +892,13 @@ theorem step_size_le {w w' : World D} {s : Step D} (h : World.step X.env w s = .
     omega
   | refusal r =>
     have hf := Codec.Kernel.checkRefusedBounds_fits r (refuse_facts h).1
-    have he : r.event.size ≤ Codec.Kernel.callMax := hf.2.2.2.2.2
+    have he : r.event.size ≤ Codec.Kernel.callMax := hf.2.2.2.2.2.1
+    have hk : r.cancel.size ≤ Kernel.Bounds.cancelBytesMax := hf.2.2.2.2.2.2
     show 1 + (Codec.Kernel.refused Codec.Deployed.digestCodec).size r ≤ stepBytesMax
     have e : ∀ d : Codec.Digest, Codec.Deployed.digestCodec.size d = 32 := fun _ => rfl
     simp only [Codec.Kernel.refused, Codec.Stream.refine, Codec.Stream.product, Codec.Stream.nat64,
       Codec.Stream.rawBytes, e]
-    simp only [stepBytesMax, refusedBytesMax, digestBytes]
+    simp only [stepBytesMax, refusedBytesMax, digestBytes] at hk ⊢
     omega
 
 /-- Every pair a rooted run takes is at most `stepBytesMax + digestBytes` bytes (`step_size_le`). -/

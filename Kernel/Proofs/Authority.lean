@@ -305,18 +305,40 @@ theorem rotate_precommitted {X : Ctx D} {look : Pinned D} {c : Call D} {key : By
   exact ⟨hkey, m, hm, heq ▸ hc⟩
 
 omit [Ord D] [DecidableEq D] in
+/-- **A spend of a counted right** (KERNEL-60: one mechanism for enrolment, transfer and credit):
+within what the grant's ledger at `base` says is left; for a spend of something, at a ledger index
+the ledger still reads (`ledgerSpendsMax`), appending the remainder there; for a spend of none,
+nothing. -/
+theorem spendAt_ok {base : Nat} {g : D} {cell : Cell} {units : Nat} {short : Refusal D}
+    {ef : Option (D × Act)} (h : spendAt base g cell units short = .ok ef) :
+    ∃ i left, ledgerLeft base g cell = .ok (i, left) ∧ units ≤ left ∧
+      (units = 0 ∧ ef = none ∨
+        units ≠ 0 ∧ i ≤ ledgerSpendsMax ∧ ef = some (g, .write [.set (base + i) (countBytes (left - units))])) := by
+  unfold spendAt at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨i, left⟩, hl, ⟨⟩, hu, h⟩ := h
+  rw [req_ok, decide_eq_true_eq] at hu
+  split at h
+  · rename_i h0
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    exact ⟨i, left, hl, hu, .inl ⟨h0, h.symm⟩⟩
+  · rename_i h0
+    simp only [except_bind_ok] at h
+    obtain ⟨⟨⟩, hi, h⟩ := h
+    rw [req_ok, decide_eq_true_eq] at hi
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    exact ⟨i, left, hl, hu, .inr ⟨h0, hi, h.symm⟩⟩
+
+omit [Ord D] [DecidableEq D] in
 /-- A spend of an enrolment count: within what the grant's ledger says is left, appending the
 remainder at the ledger's next index (nothing for a spend of none). -/
 theorem spendEnroll_ok {g : D} {cell : Cell} {units : Nat} {short : Refusal D}
     {ef : Option (D × Act)} (h : spendEnroll g cell units short = .ok ef) :
     ∃ i left, enrollLeft g cell = .ok (i, left) ∧ units ≤ left ∧
       ef = if units = 0 then none else some (g, .write [.set (enrollBase + i) (countBytes (left - units))]) := by
-  unfold spendEnroll at h
-  simp only [except_bind_ok] at h
-  obtain ⟨⟨i, left⟩, hl, ⟨⟩, hu, h⟩ := h
-  rw [req_ok, decide_eq_true_eq] at hu
-  simp only [pure, Except.pure, Except.ok.injEq] at h
-  exact ⟨i, left, hl, hu, h.symm⟩
+  obtain ⟨i, left, hl, hu, hc⟩ := spendAt_ok h
+  refine ⟨i, left, hl, hu, ?_⟩
+  rcases hc with ⟨h0, rfl⟩ | ⟨h0, _, rfl⟩ <;> simp [h0]
 
 omit [Ord D] in
 /-- **Enrolment authority** (KERNEL-16, the twin of `write_authorized`). A derived enrolment comes
@@ -354,7 +376,7 @@ theorem grant_rooted {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {targ
   | none =>
       unfold grant at h
       simp only [except_bind_ok] at h
-      obtain ⟨_, _, ef, hp, _⟩ := h
+      obtain ⟨_, _, ⟨⟩, _, ef, hp, _⟩ := h
       simp only [checkParent, except_bind_ok] at hp
       obtain ⟨⟨⟩, hr, _⟩ := hp
       rw [req_ok] at hr
@@ -373,8 +395,85 @@ theorem grant_carves {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {targ
       d.effects = ef.toList ∧ d.nullifiers = [] := by
   unfold grant at h
   simp only [except_bind_ok] at h
-  obtain ⟨_, _, ef, hp, h⟩ := h
+  obtain ⟨_, _, ⟨⟩, _, ef, hp, h⟩ := h
   simp only [checkParent, except_bind_ok, he, if_true] at hp
+  obtain ⟨pc, hpc, pt, hpt, ⟨⟩, hteq, pg, hpg, ⟨⟩, hgeq, ⟨⟩, _, hs⟩ := hp
+  rw [req_ok, decide_eq_true_eq] at hteq hgeq
+  subst hteq; subst hgeq
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  subst h
+  exact ⟨pc, ef, hpc, hpt, hpg, hs, rfl, rfl⟩
+
+omit [Ord D] in
+/-- **What `checkRights` admits** (KERNEL-60's target typing, the reason no carve skips a ledger): at
+most one counted kind, `enroll` only on the World, `transfer` and `credit` never on it, and caps an
+account can hold. -/
+theorem checkRights_ok {X : Ctx D} {target : D} {rights : List Right}
+    (h : checkRights X target rights = .ok ()) :
+    ¬ (rights.any isTransfer = true ∧ rights.any isCredit = true) ∧
+      ¬ (rights.any isEnroll = true ∧ (rights.any isTransfer = true ∨ rights.any isCredit = true)) ∧
+      (rights.any isEnroll = true → target = worldId X) ∧
+      (rights.any isTransfer = true ∨ rights.any isCredit = true → target ≠ worldId X) ∧
+      transferUnits rights ≤ capMax ∧ creditUnits rights ≤ capMax := by
+  unfold checkRights at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, h1, h2⟩ := h
+  rw [req_ok] at h1 h2
+  simp only [decide_eq_true_eq] at h2
+  refine ⟨?_, ?_, ?_, ?_, h2.1, h2.2⟩ <;>
+    cases ht : rights.any isTransfer <;> cases hc : rights.any isCredit <;> cases he : rights.any isEnroll <;>
+    simp_all
+
+omit [Ord D] in
+/-- **Transfer caps attenuate** (the twin of `grant_carves`, KERNEL-60). A derived grant carrying
+`transfer` with a parent carves its cap out of the parent's transfer ledger: the parent is a grant
+the signer holds on the same target, it had at least that much left, and the Turn's effect is the
+parent's spend. -/
+theorem grant_carves_transfer {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {target grantee p : D}
+    {rights : List Right} {d : Draft D}
+    (h : grant X look c a target grantee rights (some p) = .ok d) (ht : rights.any isTransfer = true) :
+    ∃ pc ef, readKind look p kindGrant = .ok pc ∧ slotDigest X p pc grantTarget = .ok target ∧
+      slotDigest X p pc grantGrantee = .ok a.actor ∧
+      spendAt transferBase p pc (transferUnits rights) (.grantWidens p) = .ok ef ∧
+      d.effects = ef.toList ∧ d.nullifiers = [] := by
+  unfold grant at h
+  simp only [except_bind_ok] at h
+  obtain ⟨_, _, ⟨⟩, hr, ef, hp, h⟩ := h
+  have he : rights.any isEnroll = false := by
+    cases he : rights.any isEnroll
+    · rfl
+    · exact absurd ⟨he, .inl ht⟩ (checkRights_ok hr).2.1
+  simp only [checkParent, except_bind_ok, he, ht, if_true, Bool.false_eq_true, if_false] at hp
+  obtain ⟨pc, hpc, pt, hpt, ⟨⟩, hteq, pg, hpg, ⟨⟩, hgeq, ⟨⟩, _, hs⟩ := hp
+  rw [req_ok, decide_eq_true_eq] at hteq hgeq
+  subst hteq; subst hgeq
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  subst h
+  exact ⟨pc, ef, hpc, hpt, hpg, hs, rfl, rfl⟩
+
+omit [Ord D] in
+/-- **Credit caps attenuate** (KERNEL-60): as `grant_carves_transfer`, from the parent's credit
+ledger. -/
+theorem grant_carves_credit {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {target grantee p : D}
+    {rights : List Right} {d : Draft D}
+    (h : grant X look c a target grantee rights (some p) = .ok d) (hk : rights.any isCredit = true) :
+    ∃ pc ef, readKind look p kindGrant = .ok pc ∧ slotDigest X p pc grantTarget = .ok target ∧
+      slotDigest X p pc grantGrantee = .ok a.actor ∧
+      spendAt creditBase p pc (creditUnits rights) (.grantWidens p) = .ok ef ∧
+      d.effects = ef.toList ∧ d.nullifiers = [] := by
+  unfold grant at h
+  simp only [except_bind_ok] at h
+  obtain ⟨_, _, ⟨⟩, hr, ef, hp, h⟩ := h
+  have hr' := checkRights_ok hr
+  have he : rights.any isEnroll = false := by
+    cases he : rights.any isEnroll
+    · rfl
+    · exact absurd ⟨he, .inr hk⟩ hr'.2.1
+  have ht : rights.any isTransfer = false := by
+    cases ht : rights.any isTransfer
+    · rfl
+    · exact absurd ⟨ht, hk⟩ hr'.1
+  simp only [checkParent, except_bind_ok, he, ht, hk, if_true, Bool.false_eq_true, if_false] at hp
   obtain ⟨pc, hpc, pt, hpt, ⟨⟩, hteq, pg, hpg, ⟨⟩, hgeq, ⟨⟩, _, hs⟩ := hp
   rw [req_ok, decide_eq_true_eq] at hteq hgeq
   subst hteq; subst hgeq

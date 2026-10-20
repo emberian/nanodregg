@@ -174,8 +174,10 @@ theorem right_ok {d : Data} (h : Conforms d rightTy) : ∃ r, rightOf d = .ok r 
     all_goals subst_vars
     · obtain ⟨n, rfl⟩ := conf_nat hd; exact ⟨_, rfl⟩
     · obtain ⟨n, rfl⟩ := conf_nat hd; exact ⟨_, rfl⟩
+    · obtain ⟨n, rfl⟩ := conf_nat hd; exact ⟨_, rfl⟩
     · rw [conf_unit hd]; exact ⟨_, rfl⟩
     · rw [conf_unit hd]; exact ⟨_, rfl⟩
+    · obtain ⟨n, rfl⟩ := conf_nat hd; exact ⟨_, rfl⟩
 
 theorem rights_live : ∀ {rs : List (Label × Data)} {ls : List Label},
     RowConforms rs (ls.map fun l => (l, optTy rightTy)) → Live digestOf d0 (rightsOf rs)

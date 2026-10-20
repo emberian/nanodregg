@@ -24,13 +24,21 @@ open Nanodregg.Kernel
 inductive Right
   /-- read the cell -/
   | observe
-  /-- write state slots and replace laws of a data object -/
+  /-- write state slots and replace laws of a data object (on an account it authorises nothing:
+  value moves only through the counted rights `transfer` and `credit`, KERNEL-60) -/
   | mutate
   /-- run a method of a programmed object -/
   | invoke (method : Nat)
   /-- enrol at most `count` members, directly or through grants carved from this one (meaningful
   on the World target only: a World right is only ever attenuated from a founder's, KERNEL-16) -/
   | enroll (count : Nat)
+  /-- move at most `cap` out of the target ACCOUNT in all, directly or through grants carved from
+  this one (KERNEL-60): spent per transfer from the grant's ledger, like `enroll`'s count; never
+  on the World target (`rightTarget`) -/
+  | transfer (cap : Nat)
+  /-- extend at most `cap` of credit out of the target WELL's floor in all (KERNEL-60), spent per
+  credit line from the grant's ledger; never on the World target (`rightTarget`) -/
+  | credit (cap : Nat)
   deriving DecidableEq, Repr
 
 /-- How a call names a value account (LEDGER-7): a WELL by its denomination (its id IS the
@@ -148,6 +156,15 @@ inductive Refusal (D : Type)
   | unrooted (target : D)
   /-- the grant's enrolment count is used up -/
   | enrollSpent (grant : D)
+  /-- a transfer through the grant moves more than its transfer cap has left, or its ledger is full
+  (`ledgerSpendsMax` spends) (KERNEL-60) -/
+  | transferSpent (grant : D)
+  /-- a credit line through the grant extends more than its credit cap has left, or its ledger is
+  full (KERNEL-60) -/
+  | creditSpent (grant : D)
+  /-- a grant carries a counted right its target cannot have: `enroll` off the World, `transfer`
+  or `credit` on it (KERNEL-60: so no grant carries two ledgers, and no carve can skip one) -/
+  | rightTarget (target : D)
   | notIssuer (grant : D)
   | grantTooDeep
   | overPrice (charge : Nat)
@@ -194,6 +211,12 @@ inductive Refusal (D : Type)
   /-- a log records a `stale` refusal (KERNEL-54): `judge` never records one (a stale pin observed on
   the fold is final without a record, `stale_behind_forever`), so the follower's audit refuses it -/
   | staleRecorded
+  /-- the member withdrew the call before it landed (KERNEL-60, design C1): the code of a CANCEL
+  record, which carries the member's signature over `domCancel ‖ txId`; no receiver refuses with it -/
+  | cancelled
+  /-- a log records a cancel whose signature does not verify under the member's key on the World
+  before it, or that is not exactly the cancel of its own event (the follower's audit) -/
+  | cancelForged
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -220,6 +243,9 @@ def Refusal.name {D : Type} : Refusal D → String
   | .grantWidens _ => "grantWidens"
   | .unrooted _ => "unrooted"
   | .enrollSpent _ => "enrollSpent"
+  | .transferSpent _ => "transferSpent"
+  | .creditSpent _ => "creditSpent"
+  | .rightTarget _ => "rightTarget"
   | .notIssuer _ => "notIssuer"
   | .grantTooDeep => "grantTooDeep"
   | .overPrice _ => "overPrice"
@@ -242,6 +268,8 @@ def Refusal.name {D : Type} : Refusal D → String
   | .rowParent _ => "rowParent"
   | .duplicateRow _ => "duplicateRow"
   | .staleRecorded => "staleRecorded"
+  | .cancelled => "cancelled"
+  | .cancelForged => "cancelForged"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
@@ -349,23 +377,31 @@ def slotKey : Nat := 0
 def slotNext : Nat := 1
 def slotSponsor : Nat := 2
 /-- Grant: 0 target, 1 grantee, 2 issuer, 3 parent (absent at a root), the rights at `rightKey`.
-`enroll`'s slot is the first of its LEDGER, `enrollBase + i` for `i ≤ enrollMax`: slot `i` holds
-the count left after the grant's `i`-th spend (slot 0: as granted). The grant is append-only, so
-the ledger only grows and the count left only falls; every spend takes at least one, and a
-grant's count is at most `enrollMax`, so the ledger fits its range. The ranges are disjoint. -/
+A COUNTED right's (`enroll`, `transfer`, `credit`) slot is the first of its LEDGER, `base + i` for
+`i ≤ ledgerSpendsMax`: slot `i` holds what is left after the grant's `i`-th spend (slot 0: as
+granted). The grant is append-only, so the ledger only grows and what is left only falls; a spend
+past the ledger's last slot is refused, never written where the ledger is not read
+(`spendAt`). The ranges are disjoint (KERNEL-60). -/
 def grantTarget : Nat := 0
 def grantGrantee : Nat := 1
 def grantIssuer : Nat := 2
 def grantParent : Nat := 3
 def enrollBase : Nat := 1024
+def transferBase : Nat := 2048
+def creditBase : Nat := 2560
 def invokeBase : Nat := 4096
 def rightKey : Right → Nat
   | .observe => 16
   | .mutate => 17
   | .enroll _ => enrollBase
   | .invoke m => invokeBase + m
+  | .transfer _ => transferBase
+  | .credit _ => creditBase
 /-- The most one grant may enrol (a founder's genesis grant has exactly this). -/
 def enrollMax : Nat := 256
+/-- The spends one counted right's ledger holds past its first entry (each spend appends one), the
+same for every counted right: `enrollMax`, which an enrolment count never outlasts. -/
+def ledgerSpendsMax : Nat := enrollMax
 /-- The longest grant chain a call walks. -/
 def grantDepthMax : Nat := 8
 

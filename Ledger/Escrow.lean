@@ -16,7 +16,8 @@ asset}` (LEDGER-7, LANG-25). Anyone opens it, before the deposit, with a top-lev
 
 * 0 `deposit {grant}`: `open → held`, and ONE call: `transfer (of depositor asset) (of self
   asset) amount (via := some grant) (once := some nonce)`. `grant` is the depositor's grant to `e`
-  of `mutate` on its own account (v0: the whole balance, LEDGER-6 (c)); the transfer is in the same
+  of `transfer amount` on its own account (KERNEL-60, LEDGER-16): the kernel spends the transfer from
+  the grant's cap, so what the deposit moves is bounded by the grant, not by this text; the transfer is in the same
   tree as the phase change, so `held` is reached exactly when the funds moved.
 * 1 `refund {}`: `held → refunded`, `transfer (of self asset) (of depositor asset) amount none
   (once := some "payout")`.

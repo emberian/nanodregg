@@ -448,10 +448,14 @@ private def ReadOther (look : Pinned D) (x : D) : Prop :=
   ∃ k cl, k ≠ kindObject ∧ readKind look x k = .ok cl
 
 omit [Ord D] [DecidableEq D] in
+private theorem spendAt_at {base : Nat} {g : D} {cell : Cell} {units : Nat} {short : Refusal D}
+    {ef : Option (D × Act)} (h : spendAt base g cell units short = .ok ef) : ∀ e ∈ ef.toList, e.1 = g := by
+  obtain ⟨_, _, _, _, hc⟩ := spendAt_ok h
+  rcases hc with ⟨-, rfl⟩ | ⟨-, -, rfl⟩ <;> simp
+
+omit [Ord D] [DecidableEq D] in
 private theorem spendEnroll_at {g : D} {cell : Cell} {units : Nat} {short : Refusal D} {ef : Option (D × Act)}
-    (h : spendEnroll g cell units short = .ok ef) : ∀ e ∈ ef.toList, e.1 = g := by
-  obtain ⟨i, left, -, -, rfl⟩ := spendEnroll_ok h
-  split <;> simp
+    (h : spendEnroll g cell units short = .ok ef) : ∀ e ∈ ef.toList, e.1 = g := spendAt_at h
 
 omit [Ord D] [DecidableEq D] in
 private theorem readAccount_kind {look : Pinned D} {x : D} {cell : Cell} {v : Value}
@@ -499,8 +503,27 @@ private theorem checkParent_at {X : Ctx D} {look : Pinned D} {actor target : D} 
       intro e he
       split at h
       · rw [spendEnroll_at h e he]; exact ⟨kindGrant, pc, by decide, hpc⟩
-      · simp only [pure, Except.pure, Except.ok.injEq] at h
-        subst h; simp at he
+      · split at h
+        · rw [spendAt_at h e he]; exact ⟨kindGrant, pc, by decide, hpc⟩
+        · split at h
+          · rw [spendAt_at h e he]; exact ⟨kindGrant, pc, by decide, hpc⟩
+          · simp only [pure, Except.pure, Except.ok.injEq] at h
+            subst h; simp at he
+
+omit [Ord D] [DecidableEq D] in
+/-- A counted right's spend through `via` writes only the grant it read (as a grant). -/
+private theorem spendVia_other {look : Pinned D} {base : Nat} {via : Option D} {units : Nat}
+    {short : D → Refusal D} {ef : Option (D × Act)} (h : spendVia look base via units short = .ok ef) :
+    ∀ e ∈ ef.toList, ReadOther look e.1 := by
+  cases via with
+  | none =>
+      simp only [spendVia, pure, Except.pure, Except.ok.injEq] at h
+      subst h; simp
+  | some g =>
+      simp only [spendVia, except_bind_ok] at h
+      obtain ⟨gc, hgc, h⟩ := h
+      intro e he
+      rw [spendAt_at h e he]; exact ⟨kindGrant, gc, by decide, hgc⟩
 
 omit [Ord D] in
 /-- **Every receiver but `write`, `law` and `invoke` writes only cells it read as another kind**: a
@@ -563,7 +586,7 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       have hd := stepped_draft h
       unfold grant at hd
       simp only [except_bind_ok] at hd
-      obtain ⟨⟨⟩, -, carve, hcv, hd⟩ := hd
+      obtain ⟨⟨⟩, -, ⟨⟩, -, carve, hcv, hd⟩ := hd
       simp only [pure, Except.pure, Except.ok.injEq] at hd
       intro e he
       rw [← hd] at he
@@ -594,26 +617,30 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       have hd := stepped_draft h
       unfold transfer at hd
       simp only [except_bind_ok] at hd
-      obtain ⟨⟨s, scell, sv⟩, hs, ⟨d, dcell, dv⟩, hdr, _, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, hd⟩ := hd
+      obtain ⟨⟨s, scell, sv⟩, hs, ⟨d, dcell, dv⟩, hdr, _, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, spend, hsp,
+        hd⟩ := hd
       simp only [pure, Except.pure, Except.ok.injEq] at hd
       intro e he
       rw [← hd] at he
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at he
-      rcases he with rfl | rfl
+      simp only [List.cons_append, List.nil_append, List.mem_cons] at he
+      rcases he with rfl | rfl | he
       · exact ⟨kindAccount, scell, by decide, readRef_kind hs⟩
       · exact ⟨kindAccount, dcell, by decide, readRef_kind hdr⟩
+      · exact spendVia_other hsp e he
   | credit well acct amount via =>
       have hd := stepped_draft h
       unfold credit at hd
       simp only [except_bind_ok] at hd
-      obtain ⟨⟨wcell, wv⟩, hwl, ⟨a, acell, av⟩, har, _, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, hd⟩ := hd
+      obtain ⟨⟨wcell, wv⟩, hwl, ⟨a, acell, av⟩, har, _, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -,
+        spend, hsp, hd⟩ := hd
       simp only [pure, Except.pure, Except.ok.injEq] at hd
       intro e he
       rw [← hd] at he
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at he
-      rcases he with rfl | rfl
+      simp only [List.cons_append, List.nil_append, List.mem_cons] at he
+      rcases he with rfl | rfl | he
       · exact ⟨kindAccount, wcell, by decide, readAccount_kind hwl⟩
       · exact ⟨kindAccount, acell, by decide, readRef_kind har⟩
+      · exact spendVia_other hsp e he
 
 /-- What a Draft's effects are, for the totality: at a cell read as another kind, or at an object
 an invoke the walk dispatched ran. -/

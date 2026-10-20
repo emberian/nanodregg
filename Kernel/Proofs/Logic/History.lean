@@ -248,7 +248,7 @@ theorem object_history_of_audit [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
               simp only [hs, ha, Except.ok.injEq] at h
               subst h
               obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
-              have hrf := (judge_recorded hj).2.2.2
+              have hrf := (recordedBy_recorded hj).1
               have hstep : ObjectStep X obj w w₁ none := .refusal hrf
               obtain ⟨tr, htr⟩ := object_history_of_audit ha
                 (fun id cl hl' => hcan id cl ((refuse_live hrf id).symm.trans hl'))

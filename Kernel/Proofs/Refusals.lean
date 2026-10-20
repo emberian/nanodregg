@@ -78,7 +78,7 @@ theorem refusedBounds_window {r : Refused D} (h : checkRefusedBounds r = .ok ())
     r.validUntil ≤ r.notBefore + Bounds.windowMax := by
   unfold checkRefusedBounds at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, -, ⟨⟩, -, hw⟩ := h
+  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, hw, -⟩ := h
   simpa using req_ok.mp hw
 
 /-- **A recorded refusal's window ends within `windowMax` of the height it was refused at** (cv
@@ -96,7 +96,7 @@ omit [Ord D] [DecidableEq D] in
 /-- TOOTH (`refuse_window_width`): a call whose window is one wider than `windowMax` is not recorded, so
 the bound is the check's, not an accident of the workload. -/
 theorem refusedBounds_wide (txId member : D) :
-    checkRefusedBounds (Refused.mk txId member 0 (Bounds.windowMax + 1) 0 ByteArray.empty) =
+    checkRefusedBounds (Refused.mk txId member 0 (Bounds.windowMax + 1) 0 ByteArray.empty ByteArray.empty) =
       .error (.overBound .window) := by
   simp [checkRefusedBounds, req, Bounds.windowMax, Bounds.counterLimit, Bounds.eventBytesMax, bind,
     Except.bind]
@@ -558,5 +558,16 @@ theorem codeName_code (v : Verdict D) : codeName v.code = some v.name := by
   cases v with
   | refused r => cases r <;> rfl
   | rejected r => cases r <;> rfl
+
+/-- **A recorded cancel is final** (the cancel's purpose): after `cancel` records, every World a
+later log reaches below the record's prune height answers `submit` of the cancelled call
+`refusedFinal` with `cancelled`'s code, whatever the World would derive for it now. -/
+theorem cancel_final {X : Ctx D} {w₀ w₁ w₂ : World D} {c : Call D} {sig : ByteArray} {v : Verdict D}
+    {r : Refused D} {l : List (Step D)} (hc : w₀.RefusalsCanon X.env) (hjc : w₀.JournalCanon X.env)
+    (h : cancel X w₀ c sig = .recorded v r w₁) (hf : World.fold X.env w₁ l = .ok w₂)
+    (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax) :
+    submit X w₂ c = .error (.rejected (.refusedFinal (Verdict.refused (D := D) .cancelled).code)) := by
+  obtain ⟨-, -, rfl, hr⟩ := cancel_recorded h
+  exact submit_refused_final hc hjc hr rfl hf hlt
 
 end Nanodregg.Kernel.Receive

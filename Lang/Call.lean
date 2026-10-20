@@ -43,6 +43,8 @@ def fillSlots {α : Type} (f : α → Data) : List Label → List α → Option 
   | l :: ls, a :: as => (fillSlots f ls as).map ((l, optData f (some a)) :: ·)
 
 def rightData : Right → Data
+  | .credit n => .inj "credit" (.nat n)
+  | .transfer n => .inj "transfer" (.nat n)
   | .enroll n => .inj "enroll" (.nat n)
   | .invoke m => .inj "invoke" (.nat m)
   | .mutate => .inj "mutate" (.record [])
@@ -85,7 +87,7 @@ end
 /-- The Body's literal fields are values of the language (naturals below `natLimit`, byte
 strings within `bytesMax`); its digests are bounded by the digest codec (`callData_conforms`). -/
 def rightFits : Right → Bool
-  | .enroll n | .invoke n => decide (n < Bounds.natLimit)
+  | .enroll n | .invoke n | .transfer n | .credit n => decide (n < Bounds.natLimit)
   | .mutate | .observe => true
 
 def callFits : Body D → Bool
@@ -129,6 +131,8 @@ def acctRefOf (f : String) : Data → Except String (AcctRef D)
   | _ => .error s!"{f}: not an account"
 
 def rightOf : Data → Except String Right
+  | .inj "credit" (.nat n) => .ok (.credit n)
+  | .inj "transfer" (.nat n) => .ok (.transfer n)
   | .inj "enroll" (.nat n) => .ok (.enroll n)
   | .inj "invoke" (.nat m) => .ok (.invoke m)
   | .inj "mutate" (.record []) => .ok .mutate

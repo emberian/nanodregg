@@ -51,11 +51,12 @@ structure Params (D : Type) [Ord D] where
   sealMinBytes : Nat
   /-- the page budget the rows' writer pages with: HOST's `Page.budget` is a frame, which no row's
   log reaches, so a row would never see a page end before the tip. It must hold every event the
-  kernel admits: `Kernel.Bounds.eventBytesMax + 5`, DERIVED from the kernel bound (a page's 4-byte
-  event length and the event's 1-byte step tag, `Host.Page.stepEvent`). The theorem is
+  kernel admits: `Protocol.Bounds.pageEventBytesMax + 4`, DERIVED from the kernel bounds (a page's 4-byte
+  event length, the event's 1-byte step tag, and a cancel's signature behind its eight-byte length,
+  `Host.Page.stepEvent`, PROTOCOL-60). The theorem is
   HOST's `Host.Page.walkTurnsAt_serves` (and `walk_serves`, through the segment): under such a budget a
   record's walk that has served nothing serves the first step past its start.
-  `Host.Page.walkTurnsAt_one_short` is the tooth at `+ 4`. An event past the budget is never served, the follower refuses the empty page short of
+  `Host.Page.walkTurnsAt_one_short` is the tooth at `+ 3`. An event past the budget is never served, the follower refuses the empty page short of
   the tip `badResult`, and the attempt's confirm reads that as `uncertain`. A guess at the largest
   event the rows happen to log broke twice: 4096 (the grain row's lifecycle package) and 16384 (the
   queue Bell's install, 31.5 KB, PROTOCOL-18); the `bigEvent` row's plant is the old 16384. It still
@@ -80,7 +81,7 @@ def toy : Params UInt64 :=
     sign := Kernel.Sim.toySign
     keys := Host.Sim.keys
     sealMinBytes := 8192
-    pageBudget := Kernel.Bounds.eventBytesMax + 5 }
+    pageBudget := Protocol.Bounds.pageEventBytesMax + 4 }
 
 /-- The widths of what a parameter set's functions produce, measured by calling them: a digest's
 bytes, a public key, a signature, a base's digest and a Store tag. -/

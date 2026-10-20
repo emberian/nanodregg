@@ -305,10 +305,11 @@ theorem rightSlots_keys (rights : List Right) : ∀ q ∈ rightSlots rights, 16 
   unfold rightSlots at hq
   rcases List.mem_append.mp hq with hq | hq
   · obtain ⟨r, _, rfl⟩ := List.mem_map.mp hq
-    cases r <;> simp [rightKey, enrollBase, invokeBase] <;> omega
-  · split at hq
-    · simp at hq; subst hq; simp [enrollBase]
-    · simp at hq
+    cases r <;> simp [rightKey, enrollBase, invokeBase, transferBase, creditBase] <;> omega
+  · have : q.1 = enrollBase ∨ q.1 = transferBase ∨ q.1 = creditBase := by
+      simp only [List.mem_append] at hq
+      rcases hq with (hq | hq) | hq <;> split at hq <;> simp at hq <;> simp [hq]
+    rcases this with h | h | h <;> simp [h, enrollBase, transferBase, creditBase]
 
 omit [Ord D] [DecidableEq D] in
 theorem slotsOf_get (ps : List (Nat × ByteArray)) (k : Nat) :
@@ -410,7 +411,7 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
         have hd := stepped_draft h
         have hroot := grant_rooted hd
         simp only [grant, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
-        obtain ⟨_, _, _, _, hr⟩ := hd
+        obtain ⟨_, _, ⟨⟩, _, _, _, hr⟩ := hd
         rw [← hr]
         intro x hx _
         have := mem_bornAt_cell hx
@@ -445,13 +446,13 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
     | transfer src dst amount via once =>
         have hd := stepped_draft h
         simp only [transfer, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
-        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, _, _, hr⟩ := hd
         rw [← hr]
         simp
     | credit well acct amount via =>
         have hd := stepped_draft h
         simp only [credit, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
-        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, _, _, hr⟩ := hd
         rw [← hr]
         simp
 
@@ -498,7 +499,7 @@ theorem audit_rooted {X : Ctx D} {R : D → Prop}
               simp only [hs, ha, Except.ok.injEq] at h
               subst h
               obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
-              have hrf := (judge_recorded hj).2.2.2
+              have hrf := (recordedBy_recorded hj).1
               exact audit_rooted hE (fun id cell hl => hw id cell ((refuse_live hrf id).symm.trans hl)) ha
   | w, w', .turn t :: rest, hw, h => by
       unfold audit at h

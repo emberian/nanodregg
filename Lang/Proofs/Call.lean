@@ -243,6 +243,8 @@ theorem conf_acct (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) :
 theorem conf_right : ∀ r : Right, rightFits r = true → Conforms (rightData r) rightTy
   | .enroll n, h => .inj (A := .nat) rfl (.nat (by simpa [rightFits] using h))
   | .invoke n, h => .inj (A := .nat) rfl (.nat (by simpa [rightFits] using h))
+  | .transfer n, h => .inj (A := .nat) rfl (.nat (by simpa [rightFits] using h))
+  | .credit n, h => .inj (A := .nat) rfl (.nat (by simpa [rightFits] using h))
   | .mutate, _ => .inj (A := .record []) rfl (.record .nil)
   | .observe, _ => .inj (A := .record []) rfl (.record .nil)
 

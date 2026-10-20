@@ -56,20 +56,20 @@ says `b` is strictly past `a` in that order; every step either keeps an entry or
 forward (`admit_entryStep`), so an entry that has moved never comes back (`entry_behind_forever`). -/
 
 /-- The entry `b` is strictly past the entry `a`. -/
-private def EAdv : Option Entry → Option Entry → Prop
+def EAdv : Option Entry → Option Entry → Prop
   | none, some _ => True
   | some (.live _ v), some (.live _ v') => v < v'
   | some (.live _ _), some .tomb => True
   | _, _ => False
 
-private theorem eAdv_trans {a b c : Option Entry} (h₁ : EAdv a b) (h₂ : EAdv b c) : EAdv a c := by
+theorem eAdv_trans {a b c : Option Entry} (h₁ : EAdv a b) (h₂ : EAdv b c) : EAdv a c := by
   rcases a with _ | (⟨_, _⟩ | _) <;> rcases b with _ | (⟨_, _⟩ | _) <;>
     rcases c with _ | (⟨_, _⟩ | _) <;> simp only [EAdv] at h₁ h₂ ⊢ <;> omega
 
 /-- One step keeps the entry or moves it strictly forward. -/
-private def EStep (a b : Option Entry) : Prop := a = b ∨ EAdv a b
+def EStep (a b : Option Entry) : Prop := a = b ∨ EAdv a b
 
-private theorem eStep_trans {a b c : Option Entry} (h₁ : EStep a b) (h₂ : EStep b c) : EStep a c := by
+theorem eStep_trans {a b c : Option Entry} (h₁ : EStep a b) (h₂ : EStep b c) : EStep a c := by
   rcases h₁ with rfl | h₁
   · exact h₂
   · rcases h₂ with rfl | h₂
@@ -167,7 +167,7 @@ private theorem admit_entryStep {E : Env D} {w w' : World D} {t : Turn D}
       rfl
 
 /-- **Along a fold each entry is kept or moves strictly forward** (a refusal moves no cell). -/
-private theorem fold_entryStep {E : Env D} (c : D) :
+theorem fold_entryStep {E : Env D} (c : D) :
     ∀ {w w' : World D} {l : List (Step D)}, World.fold E w l = .ok w' →
       EStep (w.entry E c) (w'.entry E c)
   | w, w', [], h => by
@@ -204,11 +204,11 @@ theorem pinOf_eq_pre (E : Env D) (e : Option Entry) : pinOf E e = E.hash (pinPre
   rcases e with _ | (⟨_, _⟩ | _) <;> rfl
 
 /-- An entry's version fits `nat64` (what `pinOf` spells; `Leaf.CellFit` holds it of a fit World). -/
-private def VerFit : Option Entry → Prop
+def VerFit : Option Entry → Prop
   | some (.live _ v) => v < 2 ^ 64
   | _ => True
 
-private theorem cellsFit_verFit {E : Env D} {w : World D} (hf : w.CellsFit Cell.Fits E) (c : D) :
+theorem cellsFit_verFit {E : Env D} {w : World D} (hf : w.CellsFit Cell.Fits E) (c : D) :
     VerFit (w.entry E c) := by
   cases he : w.entry E c with
   | none => trivial
@@ -220,7 +220,7 @@ private theorem cellsFit_verFit {E : Env D} {w : World D} (hf : w.CellsFit Cell.
 omit [Ord D] [DecidableEq D] in
 /-- **An entry strictly past another has another pin input**: absent, tombstone and live are three
 domains, and two live entries differ in their eight version bytes. -/
-private theorem pinPre_adv_ne {E : Env D} {a b : Option Entry} (ha : VerFit a) (hb : VerFit b)
+theorem pinPre_adv_ne {E : Env D} {a b : Option Entry} (ha : VerFit a) (hb : VerFit b)
     (hadv : EAdv a b) : pinPre E b ≠ pinPre E a := by
   rcases a with _ | (⟨c, v⟩ | _) <;> rcases b with _ | (⟨c', v'⟩ | _) <;> simp only [EAdv] at hadv
   · intro h; have h1 := congrArg Prod.fst h; simp only [pinPre] at h1; exact absurd h1 (by decide)

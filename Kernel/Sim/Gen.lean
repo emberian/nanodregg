@@ -180,6 +180,8 @@ structure State (D : Type) [Ord D] where
   cellInserts : Nat := 0
   /-- the call-tree arms (D5c) ran in this seed -/
   treeDone : Bool := false
+  /-- KERNEL-60's counted-right and cancel arms ran (once a seed) -/
+  capDone : Bool := false
   /-- admitted turns whose record bytes were compared with `Turn.logWeight` (at a 32-byte digest) -/
   weighed : Nat := 0
   /-- KERNEL-33's journal probe: the most entries any probe World held, the entries its prunes
@@ -970,6 +972,102 @@ def grantObj (P : Params D) (st : State D) (m : Member D) (target grantee : D) :
   let (st, t) := submit P st c .ok "grant-to-object"
   (st, t.map fun t => (createdIds t).headD P.zero)
 
+/-- KERNEL-60's arms (once a seed): a COUNTED transfer right in the grant, spent per transfer and
+refused past its cap (`transferSpent`); a `mutate` grant moves no value (`grantRight`); a counted
+right off its target (`rightTarget`); and the CANCEL record (design C1): the member's cancel is
+recorded and the call is then `refusedFinal`; another key's cancel is declined `badSignature`; a
+cancel before the call's window opens is declined `outsideWindow`; the follower's audit refuses a
+cancel record with a forged signature `cancelForged`. -/
+def capArms (P : Params D) (st : State D) : State D :=
+  let X := P.ctx
+  let acs := st.accounts.filter fun a => st.members.any (·.id = a.2.1) ∧ balOf st a.1 + floorOfAcct st a.1 ≥ 2
+  match acs with
+  | [] => st
+  | src :: _ =>
+    match (st.accounts.filter fun a => a.2.2 = src.2.2 ∧ a.1 ≠ src.1), st.members.find? (·.id ≠ src.2.1) with
+    | d :: _, some g =>
+      let st := { st with capDone := true }
+      let o := memberOf P st src.2.1
+      -- a root transfer grant of 1 on the owner's account
+      let c := signed P st o o.key (S.pinsFor P.env st.host [o.id, g.id]) (.grant src.1 g.id [.transfer 1] none)
+      let (st, t) := submit P st c .ok "transfer-grant"
+      match t with
+      | none => st
+      | some t =>
+        let gid := (createdIds t).headD P.zero
+        let pins := fun (st : State D) => S.pinsFor P.env st.host [g.id, src.1, d.1, gid]
+        let c := signed P st g g.key (pins st) (.transfer (refOf src) (refOf d) 1 (some gid) none)
+        let (st, t) := submit P st c .ok "transfer-via"
+        let st := if t.isSome then setBal (setBal st src.1 (balOf st src.1 - 1)) d.1 (balOf st d.1 + 1) else st
+        let c := signed P st g g.key (pins st) (.transfer (refOf src) (refOf d) 1 (some gid) none)
+        let st := (submit P st c (.refused "transferSpent") "transfer-past-cap").1
+        -- a mutate grant on an account lends nothing
+        let c := signed P st o o.key (S.pinsFor P.env st.host [o.id, g.id]) (.grant src.1 g.id [.mutate] none)
+        let (st, t) := submit P st c .ok "mutate-grant"
+        let st := match t with
+          | some t =>
+              let mid := (createdIds t).headD P.zero
+              let c := signed P st g g.key (S.pinsFor P.env st.host [g.id, src.1, d.1, mid])
+                (.transfer (refOf src) (refOf d) 1 (some mid) none)
+              (submit P st c (.refused "grantRight") "transfer-mutate").1
+          | none => st
+        -- a counted right off its target: enroll on an account
+        let c := signed P st o o.key (S.pinsFor P.env st.host [o.id, g.id]) (.grant src.1 g.id [.enroll 1] none)
+        let st := (submit P st c (.refused "rightTarget") "right-target").1
+        -- a counted credit right on a well: spent per credit line, refused past its cap
+        let st := match st.wells.find? fun wl => floorOfAcct st wl.1 ≥ 2 ∧
+            (st.accounts.any fun a => a.1 = wl.1 ∧ st.members.any (·.id = a.2.1)) ∧
+            (st.accounts.any fun a => a.2.2 = wl.1 ∧ a.1 ≠ wl.1) with
+          | none => st
+          | some wl =>
+            let iss := memberOf P st (((st.accounts.find? fun a => a.1 = wl.1).map fun a => a.2.1).getD (founder0 P st).id)
+            match st.accounts.find? (fun a => a.2.2 = wl.1 ∧ a.1 ≠ wl.1), st.members.find? (·.id ≠ iss.id) with
+            | some acct, some cg =>
+              let c := signed P st iss iss.key (S.pinsFor P.env st.host [iss.id, cg.id]) (.grant wl.1 cg.id [.credit 1] none)
+              let (st, t) := submit P st c .ok "credit-grant"
+              match t with
+              | some t =>
+                let cid := (createdIds t).headD P.zero
+                let c := signed P st cg cg.key (S.pinsFor P.env st.host [cg.id, wl.1, acct.1, cid])
+                  (.credit wl.1 (refOf acct) 1 (some cid))
+                let (st, t) := submit P st c .ok "credit-via"
+                let st := if t.isSome then
+                    setFloorM (setFloorM st wl.1 (floorOfAcct st wl.1 - 1)) acct.1 (floorOfAcct st acct.1 + 1)
+                  else st
+                let c := signed P st cg cg.key (S.pinsFor P.env st.host [cg.id, wl.1, acct.1, cid])
+                  (.credit wl.1 (refOf acct) 1 (some cid))
+                (submit P st c (.refused "creditSpent") "credit-past-cap").1
+              | none => st
+            | _, _ => st
+        -- the cancel record: g withdraws a call it signed, before it lands
+        let call := signed P st g g.key (S.pinsFor P.env st.host [g.id]) (.issue 7)
+        let sig := P.sign g.key (X.cancelMessage call)
+        -- another key over the same transaction id: declined, not recorded
+        let st := match Receive.cancel X st.host call (P.sign o.key (X.cancelMessage call)) with
+          | .declined (.refused .badSignature) => meet st "cancel-other:badSignature"
+          | _ => failWith st "cancel: another member's signature was not declined badSignature"
+        -- a cancel of a call whose window has not opened: declined
+        let eu : Unsigned D := { call.unsigned with notBefore := st.host.height + 5, validUntil := st.host.height + 50 }
+        let early : Call D := { call with unsigned := eu }
+        let st := match Receive.cancel X st.host early (P.sign g.key (X.cancelMessage early)) with
+          | .declined (.rejected .outsideWindow) => meet st "cancel-early:outsideWindow"
+          | _ => failWith st "cancel: an early cancel was not declined outsideWindow"
+        -- a forged cancel record is refused by the follower's audit
+        let forged := cancelOf X call (P.sign o.key (X.cancelMessage call))
+        let st := match Receive.auditRefusal X st.host forged with
+          | .error (.refused .cancelForged) => meet st "cancel-forged:cancelForged"
+          | _ => failWith st "cancel: the audit did not refuse a forged cancel cancelForged"
+        match Receive.cancel X st.host call sig with
+        | .recorded _ r w' =>
+            let st := meet { st with host := w', log := st.log ++ [.refusal r] }
+              "cancel:recorded"
+            (submit P st call (.rejected "refusedFinal") "cancel-final").1
+        -- a cancel is spam-class (KERNEL-60): a member past its window budget cannot record one
+        | .declined (.rejected .refusalBudget) => meet st "cancel-budget:refusalBudget"
+        | .declined v => failWith st s!"cancel: the member's own cancel was declined {vname v}"
+        | _ => failWith st "cancel: the member's own cancel was admitted"
+    | _, _ => st
+
 /-- The call-tree arms (D5c, once a seed): an object pays out of the account IT owns, through its
 own call (`effect_as_signed`'s tooth: derived as the invoker it is `noGrant`), and a second payout
 under the same once key is `spent`; re-entry is `revisited`; a call no object may make is
@@ -1060,7 +1158,7 @@ def act (P : Params D) (st : State D) : State D :=
   | 15 | 16 => ledgerAct P st (k - 15)
   | 17 | 18 => ledgerAct P st 2
   | 19 => probeRom P (probeValue P st)
-  | 23 => if st.treeDone then st else treeArms P st
+  | 23 => if !st.treeDone then treeArms P st else if st.capDone then st else capArms P st
   | 20 => ledgerAct P st 3
   | 21 => -- birth a programmed object; half the time its owner makes method 0 public (KERNEL-26:
           -- a grant whose grantee is the World)
@@ -1261,7 +1359,12 @@ def act (P : Params D) (st : State D) : State D :=
           let st := { st with members }
           -- the old key is no longer the member's
           let old := signed P st m m.key (S.pinsFor P.env st.host [m.id]) (.create none [] [])
-          (submit P st old (.refused "unknownKey") "old-key").1
+          let st := (submit P st old (.refused "unknownKey") "old-key").1
+          -- KERNEL-60 `rotate_stales_outstanding`: a call that pinned the member before the rotation is
+          -- never admitted after it, even signed with the member's current key: its member pin is
+          -- behind for ever (declined `stale`, never recorded)
+          let outstanding := signed P st m m.nextKey (S.pinsFor P.env w [m.id]) (.create none [] [])
+          (submit P st outstanding (.rejected "stale") "rotate-stales").1
       | none => st
   | 9 => -- the owner grants `mutate` on its object to another member
       match st.objects with
@@ -2630,7 +2733,7 @@ no receiver derives and `probeValue` meets straight at `World.admit` with forged
 `founderKeyTooLong`, genesis's refusal, which `probeGenesis` meets at `genesis`. -/
 def planted : List String :=
   ["wrongWorld", "lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
-   "missingCell", "enrollSpent", "grantRight", "grantWidens", "unrooted", "duplicateEffect",
+   "missingCell", "enrollSpent", "transferSpent", "creditSpent", "rightTarget", "grantRight", "grantWidens", "unrooted", "duplicateEffect",
    "overflow", "sameAccount", "zeroAmount", "assetMismatch", "belowFloor", "spent",
    "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell", "founderKeyTooLong"]
 
@@ -2638,7 +2741,9 @@ def planted : List String :=
 refusal name met somewhere else does not test the receiver this arm exercises. -/
 def plantedArms : List String :=
   ["invoke-owner:ok", "invoke-no-grant:noGrant", "invoke-public:ok", "invoke-public-method-1:grantRight", "carve-public:noGrant",
-   "law-self:lawDenied", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant",
+   "law-self:lawDenied", "transfer-via:ok", "transfer-past-cap:transferSpent", "transfer-mutate:grantRight", "credit-via:ok", "credit-past-cap:creditSpent",
+   "right-target:rightTarget", "cancel:recorded", "cancel-final:refusedFinal", "cancel-other:badSignature",
+   "cancel-early:outsideWindow", "cancel-forged:cancelForged", "rotate-stales:stale", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant",
    "rom-id:notContentId", "genesis-founder-key:founderKeyTooLong",
    "proof-sibling:refused", "proof-leaf:refused", "proof-tomb-live:refused", "proof-spent-unspent:refused",
    "proof-stale:refused", "proof-overlong:refused", "proof-spent-empty:refused",

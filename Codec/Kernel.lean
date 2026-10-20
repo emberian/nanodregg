@@ -221,12 +221,16 @@ def turn (dc : Stream D) : Stream (Turn D) :=
 
 /-! ## Calls -/
 
+/-- A right: observe 0, mutate 1, invoke 2, enroll 3, and KERNEL-60's counted value rights,
+transfer 4 and credit 5, each with its count as a `u64`. -/
 def right : Stream Right :=
-  refine "kernel/right" (choice 4 (F := fun s => match s with | 2 => Nat | 3 => Nat | _ => Unit)
-      (fun s => match s with | 0 => unit | 1 => unit | 2 => nat64 | 3 => nat64))
+  refine "kernel/right" (choice 6 (F := fun s => match s with
+      | 0 => Unit | 1 => Unit | 2 => Nat | 3 => Nat | 4 => Nat | 5 => Nat)
+      (fun s => match s with | 0 => unit | 1 => unit | 2 => nat64 | 3 => nat64 | 4 => nat64 | 5 => nat64))
     (fun | ⟨0, ()⟩ => some .observe | ⟨1, ()⟩ => some .mutate | ⟨2, m⟩ => some (.invoke m)
-         | ⟨3, n⟩ => some (.enroll n))
-    (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩ | .enroll n => ⟨3, n⟩)
+         | ⟨3, n⟩ => some (.enroll n) | ⟨4, n⟩ => some (.transfer n) | ⟨5, n⟩ => some (.credit n))
+    (fun | .observe => ⟨0, ()⟩ | .mutate => ⟨1, ()⟩ | .invoke m => ⟨2, m⟩ | .enroll n => ⟨3, n⟩
+         | .transfer n => ⟨4, n⟩ | .credit n => ⟨5, n⟩)
 
 abbrev AcctRefF (D : Type) : Fin 2 → Type
   | 0 => D

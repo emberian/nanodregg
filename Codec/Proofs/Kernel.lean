@@ -144,18 +144,24 @@ theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
 def Right.Fits : Right → Prop
   | .invoke m => m < 2 ^ 64
   | .enroll n => n < 2 ^ 64
+  | .transfer n => n < 2 ^ 64
+  | .credit n => n < 2 ^ 64
   | _ => True
 
 theorem right_lawfulOn : LawfulOn Right.Fits right := by
   unfold right
-  refine (refine_lawfulOn (choice_lawfulOn 4 (by decide)
+  refine (refine_lawfulOn (choice_lawfulOn 6 (by decide)
       (P := fun s => match s with
-        | 2 => fun (m : Nat) => m < 2 ^ 64 | 3 => fun (n : Nat) => n < 2 ^ 64 | _ => fun _ => True)
+        | 0 => fun (_ : Unit) => True | 1 => fun (_ : Unit) => True | 2 => fun (n : Nat) => n < 2 ^ 64
+        | 3 => fun (n : Nat) => n < 2 ^ 64 | 4 => fun (n : Nat) => n < 2 ^ 64
+        | 5 => fun (n : Nat) => n < 2 ^ 64)
       (fun s => match s with
         | 0 => unit_lawful.on
         | 1 => unit_lawful.on
         | 2 => nat64_lawfulOn
-        | 3 => nat64_lawfulOn)) "kernel/right" ?_ ?_).mono ?_ ?_
+        | 3 => nat64_lawfulOn
+        | 4 => nat64_lawfulOn
+        | 5 => nat64_lawfulOn)) "kernel/right" ?_ ?_).mono ?_ ?_
   · intro y _; cases y <;> rfl
   · intro x y h
     obtain ⟨s, v⟩ := x
@@ -164,6 +170,8 @@ theorem right_lawfulOn : LawfulOn Right.Fits right := by
     | 1, (), h => simp at h; subst h; rfl
     | 2, m, h => simp at h; subst h; rfl
     | 3, n, h => simp at h; subst h; rfl
+    | 4, n, h => simp at h; subst h; rfl
+    | 5, n, h => simp at h; subst h; rfl
   · intro y h; cases y <;> simp_all [Right.Fits]
   · intro y h; cases y <;> simp_all [Right.Fits]
 

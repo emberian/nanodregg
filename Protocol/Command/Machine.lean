@@ -78,8 +78,9 @@ inductive Refusal (D : Type)
   /-- the Host refused, by its name -/
   | host (name : String)
   /-- the logged step at this log position does not re-derive on follow's World: a Turn event that
-  does not derive, or a refusal event that `Receive.judge` does not record (a kernel rejection of a
-  derived Turn is refused by the kernel's own name, `reject`) -/
+  does not derive, a refusal event that `Receive.judge` does not record, or a cancel event that is
+  not one (`cancelParts`) or that `Receive.cancel` does not record under its signature (a kernel
+  rejection of a derived Turn is refused by the kernel's own name, `reject`) -/
   | eventMismatch (step : Nat)
   | badState
   | badResult
@@ -408,19 +409,39 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rs : List (R
 
 /-! ## Catching up -/
 
-/-- The step a page event states: byte 0 then the signed call of an admitted Turn, byte 1 then
-the signed call of a recorded refusal (PROTOCOL-41). -/
-def eventTurn : UInt8 := 0
-def eventRefusal : UInt8 := 1
+/-- A cancel event's signature and call bytes (`eventCancel`: `2 ‖ nat64 n ‖ sig ‖ call`): the
+length read at byte 1, then `n` signature bytes, then the rest. `none` when the length does not
+read, is `0`, is past `cancelBytesMax`, or runs past the event (each is one encoding the writer's
+`stepEvent` never makes, PROTOCOL-60). -/
+def cancelParts (e : ByteArray) : Option (ByteArray × ByteArray) :=
+  match Codec.Stream.nat64.get e 1 with
+  | .ok (n, j) =>
+      if 0 < n ∧ n ≤ Kernel.Bounds.cancelBytesMax ∧ j + n ≤ e.size then
+        some (e.extract j (j + n), e.extract (j + n) e.size)
+      else none
+  | .error _ => none
 
 /-- Re-derive one logged step on follow's World by the Host's own decision functions: a Turn event
 by `Receive.submit` (receive, then admit), a refusal event by `Receive.judge`, which must RECORD it
-(the follower's `auditRefusal` rule). A Turn that derives but the kernel rejects is refused by the
-kernel's name (a writer that admits a call it recorded refused is caught `refusedFinal`); anything
-else that does not re-derive is `eventMismatch` at its log position. -/
+(the follower's `auditRefusal` rule), a cancel event by `Receive.cancel` with the event's signature,
+which must record it too (KERNEL-60; PROTOCOL-60: before tag 2 the page dropped the signature and a
+follower's chain broke on the first cancel). A Turn that derives but the kernel rejects is refused
+by the kernel's name (a writer that admits a call it recorded refused is caught `refusedFinal`);
+anything else that does not re-derive is `eventMismatch` at its log position. -/
 def absorbStep (X : Ctx D) (w : World D) (e : ByteArray) : Except (Refusal D) (Kernel.Step D × World D) :=
   let pos := w.steps + 1
   if h : 0 < e.size then
+    if e[0] = eventCancel then
+      match cancelParts e with
+      | none => .error (.eventMismatch pos)
+      | some (sig, cb) =>
+          match X.decodeCall cb with
+          | none => .error (.eventMismatch pos)
+          | some c =>
+              match Receive.cancel X w c sig with
+              | .recorded _ r w' => .ok (.refusal r, w')
+              | _ => .error (.eventMismatch pos)
+    else
     match X.decodeCall (e.extract 1 e.size) with
     | none => .error (.eventMismatch pos)
     | some c =>

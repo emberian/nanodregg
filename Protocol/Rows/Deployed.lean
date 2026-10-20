@@ -31,6 +31,6 @@ def deployed : Params Digest :=
     -- signatures, against 8 and 8): the toy's seal threshold times four keeps every row's shape
     sealMinBytes := 4 * 8192
     -- every event the kernel admits (`Params.pageBudget`); the 4 * 16384 this replaced was 5 short
-    pageBudget := Kernel.Bounds.eventBytesMax + 5 }
+    pageBudget := Protocol.Bounds.pageEventBytesMax + 4 }
 
 end Nanodregg.Protocol.Rows.Params

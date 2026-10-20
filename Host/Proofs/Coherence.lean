@@ -155,7 +155,7 @@ theorem foldl_walkStep_skip (E : Kernel.Env D) (budget start : Nat) :
 `start`, with one fuel per entry from it on, a tip past `start` leaves the page holding an event. -/
 theorem walk_indexes [Ord D] [DecidableEq D] {dc : Codec.Stream D} {PD : D → Prop} (hd : Codec.Stream.LawfulOn PD dc)
     {E : Kernel.Env D} {s : Log.Sealer} {recordMax budget : Nat} {read : Nat → Nat → Id ByteArray}
-    {endOff now start : Nat} (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget) (hs : start < now) :
+    {endOff now start : Nat} (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget) (hs : start < now) :
     ∀ (rest : List Entry) (e : Entry) (c : D) (acc a : Acc),
       Indexes dc s recordMax read (e :: rest) (endOff, now) →
       acc.events = #[] → acc.bytes = 0 → acc.full = false → acc.steps = e.steps → e.steps ≤ start →
@@ -207,13 +207,13 @@ theorem walk_indexes [Ord D] [DecidableEq D] {dc : Codec.Stream D} {PD : D → P
 index `L` (`Indexes`, to the durable end and the World's step count) whose reader returns, at each
 position it answers, the entry `L` holds there, every page `build` serves from a `start` short of
 the tip holds at least one event (with the digest codec lawful and a budget of
-`eventBytesMax + 5`, `budget_fits_event` for the deployed one). The tooth is
+`pageEventBytesMax + 4`, `budget_fits_event` for the deployed one). The tooth is
 `build_empty_incoherent`. -/
 theorem build_nonempty [Ord D] [DecidableEq D] {dc : Codec.Stream D} {PD : D → Prop} (hd : Codec.Stream.LawfulOn PD dc)
     {E : Kernel.Env D} {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget : Nat}
     {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {endOff : Nat}
     {now : Nat × ByteArray} {start : Nat} {a : Acc} {L : List Entry}
-    (hB : Kernel.Bounds.eventBytesMax + 5 ≤ budget)
+    (hB : Protocol.Bounds.pageEventBytesMax + 4 ≤ budget)
     (hget : ∀ k e, get k = .ok e → L[k]? = some e)
     (hL : Indexes dc s recordMax read L (endOff, now.1)) (hs : start < now.1)
     (h : build E dc digestOf s recordMax budget read get L.length endOff now start = .ok a) :

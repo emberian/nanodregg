@@ -93,6 +93,23 @@ theorem authenticatedBy_verify_irrel (X : Ctx D) (f : ByteArray → ByteArray �
     (w : World D) (c : Call D) :
     authenticatedBy { X with verify := f } w c true = authenticatedBy X w c true := rfl
 
+/-- What `cancel` recording means (KERNEL-60): its authority held on this World, the verdict is
+`cancelled`, the record is `cancelOf` the call and the signature, and `World.refuse` took it. -/
+theorem cancel_recorded {X : Ctx D} {w w' : World D} {c : Call D} {sig : ByteArray} {v : Verdict D}
+    {r : Refused D} (h : cancel X w c sig = .recorded v r w') :
+    cancelAuth X w c sig = .ok () ∧ v = .refused .cancelled ∧ r = cancelOf X c sig ∧
+      World.refuse X.env w r = .ok w' := by
+  unfold cancel at h
+  split at h
+  · cases h
+  · rename_i ha
+    split at h
+    · rename_i w'' hr
+      simp only [Outcome.recorded.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      exact ⟨ha, rfl, rfl, hr⟩
+    · cases h
+
 /-- What `judge` recording a refusal means: the call was refused with `v`, it was authenticated, the
 record is `refusedOf` the call and the verdict, and `World.refuse` took it. -/
 theorem judge_recorded {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D} {r : Refused D}
@@ -150,6 +167,28 @@ theorem judge_recorded_not_stale {X : Ctx D} {w w' : World D} {c : Call D} {v : 
   obtain rfl := (judge_recorded h).2.2.1
   exact ⟨hv, code_ne_staleCode hv⟩
 
+/-- **A judged refusal is its own re-judge.** What `judge` records carries no cancel field
+(`refusedOf` is `recordOf … ByteArray.empty`), so `recordedBy` of that record IS `judge`: the
+audit re-judges a judged refusal by `judge`, never as a member's cancel. -/
+theorem recordedBy_of_judge {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D} {r : Refused D}
+    (h : judge X w c = .recorded v r w') : recordedBy X w c r = .recorded v r w' := by
+  obtain ⟨-, -, hr, -⟩ := judge_recorded h
+  have hk : r.cancel.size = 0 := by rw [hr]; rfl
+  unfold recordedBy
+  rw [if_pos hk]
+  exact h
+
+/-- **What a log's re-judge records**: `World.refuse` took it, and its code is not the stale code
+(`judge`'s by `judge_recorded_not_stale`; a cancel's is `cancelled`'s). -/
+theorem recordedBy_recorded {X : Ctx D} {w w' : World D} {c : Call D} {r r' : Refused D} {v : Verdict D}
+    (h : recordedBy X w c r = .recorded v r' w') :
+    World.refuse X.env w r' = .ok w' ∧ r'.code ≠ staleCode := by
+  unfold recordedBy at h
+  split at h
+  · exact ⟨(judge_recorded h).2.2.2, (judge_recorded_not_stale h).2⟩
+  · obtain ⟨-, rfl, rfl, hr⟩ := cancel_recorded h
+    exact ⟨hr, code_ne_staleCode (D := D) (v := .refused .cancelled) rfl⟩
+
 /-- A log every step of which is exactly what its own event is judged to, on the World before it: a
 Turn is what `receive` derives from its event, a recorded refusal is what `judge` records for its
 event. A log in which the writer decided nothing. -/
@@ -157,7 +196,7 @@ def Honest (X : Ctx D) : World D → List (Step D) → Prop
   | _, [] => True
   | w, .turn t :: rest => ∃ c, X.decodeCall t.event = some c ∧ receive X w c = .ok t ∧
       ∀ w', World.admit X.env w t = .ok w' → Honest X w' rest
-  | w, .refusal r :: rest => ∃ c v w₁, X.decodeCall r.event = some c ∧ judge X w c = .recorded v r w₁ ∧
+  | w, .refusal r :: rest => ∃ c v w₁, X.decodeCall r.event = some c ∧ recordedBy X w c r = .recorded v r w₁ ∧
       ∀ w', World.refuse X.env w r = .ok w' → Honest X w' rest
 
 
@@ -202,11 +241,12 @@ theorem auditTurn_ok {X : Ctx D} {w w' : World D} {t : Turn D} :
   · rintro ⟨hr, ha⟩
     simp [hr, ha]
 
-/-- A logged refusal passes exactly when its event decodes to a call that `judge` records as this
-very refusal, on the World before it; the World it reaches is `World.refuse`'s. -/
+/-- A logged refusal passes exactly when its event decodes to a call that its re-judge
+(`recordedBy`: `judge`, or `cancel` for a record carrying a cancel signature) records as this very
+refusal, on the World before it; the World it reaches is `World.refuse`'s. -/
 theorem auditRefusal_ok {X : Ctx D} {w w' : World D} {r : Refused D} :
     auditRefusal X w r = .ok w' ↔
-      ∃ c v, X.decodeCall r.event = some c ∧ judge X w c = .recorded v r w' := by
+      ∃ c v, X.decodeCall r.event = some c ∧ recordedBy X w c r = .recorded v r w' := by
   unfold auditRefusal
   constructor
   · intro h
@@ -226,7 +266,7 @@ theorem auditRefusal_ok {X : Ctx D} {w w' : World D} {r : Refused D} :
           · simp at h
         · simp at h
   · rintro ⟨c, v, hd, hj⟩
-    have hc : r.code ≠ staleCode := (judge_recorded_not_stale hj).2
+    have hc : r.code ≠ staleCode := (recordedBy_recorded hj).2
     simp [hc, hd, hj]
 
 /-- **The audit theorem.** A follower's audit accepts a log exactly when folding it succeeds and
@@ -261,7 +301,7 @@ theorem audit_ok {X : Ctx D} :
                     exact hh
                 | refusal r =>
                     obtain ⟨c, v₀, hd, hj⟩ := auditRefusal_ok.mp hs
-                    have hrf := (judge_recorded hj).2.2.2
+                    have hrf := (recordedBy_recorded hj).1
                     refine ⟨⟨w₁, hrf, hf⟩, c, v₀, w₁, hd, hj, ?_⟩
                     intro w'' hr''
                     rw [hrf] at hr''
@@ -277,13 +317,81 @@ theorem audit_ok {X : Ctx D} :
             simp [hs, hr]
         | refusal r =>
             obtain ⟨c, v₀, w₂, hd, hj, hh⟩ := hhon
-            have hrf := (judge_recorded hj).2.2.2
+            have hrf := (recordedBy_recorded hj).1
             have : w₂ = w₁ := by
               have := hrf.symm.trans ha; exact (Except.ok.inj this)
             subst this
             have hs : auditStep X w (.refusal r) = .ok w₂ := auditRefusal_ok.mpr ⟨c, v₀, hd, hj⟩
             have hr : audit X w₂ rest = .ok w' := audit_ok.mpr ⟨hf, hh w₂ hrf⟩
             simp [hs, hr]
+
+/-! ## The cancel record (KERNEL-60, design C1) -/
+
+/-- **A cancel the audit accepts was signed by the member** (the binding fact): a logged record
+carrying a cancel signature passes the audit only if its event decodes to a call `c`, the record IS
+`cancelOf` `c` and that signature (`c`'s own transaction id, member and window, code `cancelled`),
+and the signature verifies over `domCancel ‖ txId` under the key the member's live cell holds on
+the World before it. -/
+theorem audit_cancel_signed {X : Ctx D} {w w' : World D} {r : Refused D}
+    (h : auditRefusal X w r = .ok w') (hk : r.cancel.size ≠ 0) :
+    ∃ c m k, X.decodeCall r.event = some c ∧ r = cancelOf X c r.cancel ∧
+      w.live X.env c.unsigned.member = some m ∧ m.kind = kindMember ∧ m.slots.get slotKey = some k ∧
+      X.verify k (X.cancelMessage c) r.cancel = true := by
+  obtain ⟨c, v, hd, hj⟩ := auditRefusal_ok.mp h
+  simp only [recordedBy, hk, if_false] at hj
+  obtain ⟨ha, -, hr, -⟩ := cancel_recorded hj
+  unfold cancelAuth at ha
+  simp only [except_bind_ok] at ha
+  obtain ⟨⟨⟩, -, ⟨⟩, -, ha⟩ := ha
+  split at ha
+  · rename_i m hm
+    split at ha
+    · rename_i k hkey
+      split at ha
+      · rename_i hkind
+        exact ⟨c, m, k, hd, hr.symm ▸ rfl, hm, hkind, hkey, req_ok.mp ha⟩
+      · cases ha
+    · cases ha
+  · cases ha
+
+/-- **A forged cancel is refused by name** (the tooth of `audit_cancel_signed`): a logged record
+with a cancel signature whose authority fails on the World before it (another key's signature, no
+member, an empty or overlong signature, another World) is refused `cancelForged`. -/
+theorem audit_cancel_forged {X : Ctx D} {w : World D} {r : Refused D} {c : Call D} {e : Refusal D}
+    (hs : r.code ≠ staleCode) (hd : X.decodeCall r.event = some c) (hk : r.cancel.size ≠ 0)
+    (ha : cancelAuth X w c r.cancel = .error e) :
+    auditRefusal X w r = .error (.refused .cancelForged) := by
+  simp [auditRefusal, hs, hd, recordedBy, hk, cancel, ha, forgedName]
+
+/-- **A record with no cancel signature is never a cancel** (ROOT's condition on KERNEL-60 (i)): it
+passes the audit exactly when `judge` records it, whatever its code, so a program refusal spelled
+`cancelled` is read as a program refusal and never as a member's act. -/
+theorem audit_unsigned_is_judged {X : Ctx D} {w w' : World D} {r : Refused D} (hk : r.cancel.size = 0) :
+    auditRefusal X w r = .ok w' ↔
+      ∃ c v, X.decodeCall r.event = some c ∧ judge X w c = .recorded v r w' := by
+  rw [auditRefusal_ok]
+  simp only [recordedBy, hk, if_true]
+
+/-- **A program refusal spelled `cancelled` carrying a forged cancel field is `cancelForged`** (ROOT's
+tooth on KERNEL-60 (i)): the field makes it a cancel, and the audit re-verifies it as one. -/
+theorem audit_program_cancelled_forged {X : Ctx D} {w : World D} {c : Call D} {a : ByteArray}
+    {e : Refusal D} (hd : X.decodeCall (recordOf X c (.refused .cancelled) a).event = some c)
+    (hk : a.size ≠ 0) (ha : cancelAuth X w c a = .error e) :
+    auditRefusal X w (recordOf X c (.refused .cancelled) a) = .error (.refused .cancelForged) :=
+  audit_cancel_forged (by
+    have := code_ne_staleCode (D := D) (v := .refused .cancelled) rfl
+    simpa [recordOf] using this) hd hk ha
+
+/-- **A cancel outside its call's window is declined** (KERNEL-47 amendment 5's reason: a record
+made before the call's window opens could be pruned before it closes): early, `outsideWindow`. -/
+theorem cancel_early_declined {X : Ctx D} {w : World D} {c : Call D} {sig : ByteArray}
+    (ha : cancelAuth X w c sig = .ok ()) (hb : checkRefusedBounds (cancelOf X c sig) = .ok ())
+    (hs : checkSteps w = .ok ()) (he : w.height + 1 < c.unsigned.notBefore) :
+    cancel X w c sig = .declined (.rejected .outsideWindow) := by
+  have hn : ¬ (c.unsigned.notBefore ≤ w.height + 1) := by omega
+  have hw : (cancelOf X c sig).notBefore = c.unsigned.notBefore := rfl
+  simp only [cancel, ha, World.refuse, checkRefusal, hb, hs, bind, Except.bind]
+  simp [req, hw, hn]
 
 /-- **A recorded stale is refused by name**: the follower's audit refuses a log step recording a
 refusal with the stale code, `staleRecorded`, before decoding anything. -/

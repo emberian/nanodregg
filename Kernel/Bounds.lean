@@ -23,6 +23,8 @@ def opsPerWriteMax : Nat := 256
 def createsMax : Nat := 64
 def nullifiersMax : Nat := 64
 def eventBytesMax : Nat := 65536
+/-- A cancel record's signature (KERNEL-60): an Ed25519 signature is 64 bytes. -/
+def cancelBytesMax : Nat := 64
 def slotsPerCellMax : Nat := 1024
 /-- Slot keys are below `2^32`, so they encode in four bytes. -/
 def slotKeyLimit : Nat := 4294967296
