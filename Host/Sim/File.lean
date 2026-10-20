@@ -631,6 +631,25 @@ def keptPage (dir : System.FilePath) (keys : Keys) (o : Opening (World Nat)) (fs
     (Page.entryAt (keys.forStore (originChain o.opened.world)) readIndex o.sealed.index.count o.index)
     (o.sealed.index.count + o.index.size) o.pos.offset (recorder.mark o.opened.world) start
 
+/-- Reach keptHeaders after a successful open: only the oldest retained header's count changes. -/
+def oldestHeaderIndexPlant (root src : System.FilePath) (keys : Keys) (oldest : Header)
+    (indexFrom baseOffset : Nat) (failures : IO.Ref Nat) : IO Unit := do
+  for (tag, count) in [("control", indexFrom), ("off", indexFrom + 1)] do
+    let d := root / s!"oldest-header-index-{tag}"
+    copyStore src d
+    let path := segPath d oldest.start
+    let bytes ← IO.FS.readBinFile path
+    IO.FS.writeBinFile path (Header.bytes keys { oldest with indexCount := count } ++
+      bytes.extract (headerBytes keys) bytes.size)
+    let opened := match ← follow d keys cadence with | .ok _ => "opened" | .error f => f.name
+    let checked := match ← checkKept d keys with | .ok _ => "checked" | .error f => f
+    IO.println s!"oldest-header-index-{tag}: count={count} indexFrom={indexFrom} oldest={oldest.start} base={baseOffset} open={opened} check={checked}"
+    -- Real probe: logs/CX-HOST-index-probe.log, oldest-header-index-off:
+    -- open=opened check=indexCorrupt from (count 50 vs indexFrom 49, seed 1).
+    let expected := if tag == "control" then "checked" else "indexCorrupt from"
+    check s!"plant-oldest-header-index-{tag}: open={opened} check={checked}"
+      (oldest.start < baseOffset && opened == "opened" && checked == expected) failures
+
 /-- The checkpoint plants (HOST-64, KERNEL-44 Part 2). The same frames are served under the same key
 twice: keeping every file (the default) and keeping the `retainFloor` = 2 newest (`--retain 2`).
 
@@ -659,7 +678,10 @@ twice: keeping every file (the default) and keeping the `retainFloor` = 2 newest
   past the true one (its index file renamed to match, every tag verifying) is refused by the open
   `indexCorrupt` (the last entry read one entry early fails its position tag), and by the check,
   which opens first, the same (`keptHeaders`' own `indexCorrupt from`, the oldest kept header
-  counting another first entry, is behind that open). -/
+  counting another first entry, is behind that open);
+* plant-oldest-header-index: re-seal only the oldest retained header with count indexFrom+1.
+  The open passes, then keptHeaders refuses indexCorrupt from. The unchanged-header control
+  opens and checks; disabling that guard alone makes this plant fail. -/
 def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed : Nat) (frames : List Frame)
     (failures : IO.Ref Nat) : IO Unit := do
   let all := root / "retain-all"
@@ -680,6 +702,7 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
   | .error e, _ => check s!"plant-retain-all: the full Store passes the check ({e})" false failures
   | _, .error e => check s!"plant-retain-two: the kept Store passes the check ({e})" false failures
   | .ok (oa, fsa, ha, _), .ok (ob, fsb, hb, _) =>
+  oldestHeaderIndexPlant root two keys hb fsb.indexFrom ob.sealed.offset failures
   let la ← logical all (headerBytes keys)
   let rv := Log.recover keys.segment cadence.recordBytesMax segmentInitial la
   check s!"plant-retain-all: every file kept from seg.0.log, the logical segment a clean seg.log from segmentInitial with the origin frame first, index.0.log, checked from 0"

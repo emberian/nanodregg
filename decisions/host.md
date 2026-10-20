@@ -3182,3 +3182,31 @@ NOT PROVED:
 **Flag day.** A new op code (7) on `host.sock`: a Host built before this commit answers it `unknownOp`, by name. Nothing on disk changes (the cancel record and event tag 2 landed with KERNEL-60).
 
 **Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.** No disjunct provable from premises or instance: each needs `judge` or `cancel` to return `.recorded`/`.admitted`; the op conjunct is exactly `submit ∨ cancel` by `effect_write_iff` (decided over the table). Nothing weakened: `_wrong_op` drops only `cancel` from its scope; `Honest` unchanged. `step_cancel` non-trivial and its forgotten exception is the arm's condition verbatim. Arm semantics: the only commit is `cancel`'s own record and World. One wire encoding per cancel holds. Taken: `client/src/generated.rs` re-emitted (PROTOCOL-23's half carries it); the two stale docs (`effect_write_iff`'s module line, `cancelEvent`'s reader name); `handle_commit`'s cancel disjunct now tied to the frame (`payload[0]? = eventCancel ∧ cancelParts payload = some (sig, cb)`); `host_step_folds_tooth_unjudged` generalised to any writing frame, so it is the Lean tooth for a forged cancel arm too; the plant checks the decline's name (`badSignature`) and that a late cancel answers the submit's own receipt. Named, not taken: the op conjunct does not pair the op with the kind of step (a `submit` arm committing a member-signed cancel record would pass `Honest` through `recordedBy`; predates this change, since KERNEL-60); `step_submit` and `step_cancel` are the per-op statements.
+
+## HOST-73 · a header-only plant reaches keptHeaders' indexCorrupt from (2026-10-20, CX-HOST; cv 01a158b0-d455)
+
+**Decision.** Add oldestHeaderIndexPlant to host-file-sim checkpointPlants. It copies the retained
+two-file Store, re-seals only its oldest header with indexCount = indexFrom+1, preserves every
+other header field and the complete file body, and requires the ordinary open to succeed before
+Check.keptClean returns indexCorrupt from. A second copy re-seals the unchanged header and must
+both open and check. This complements HOST-68's index-from-off plant, whose forged base is
+refused earlier by the open.
+
+**Evidence from the real run, before writing the assertion.** logs/CX-HOST-index-probe.log:124
+control count=49 indexFrom=49 oldest=10764 base=12843 open=opened check=checked;
+:126 count=50 indexFrom=49 oldest=10764 base=12843 open=opened check=indexCorrupt from.
+The input is an actual copied Store and Header.bytes under its own key, not a fabricated output.
+With only the keptHeaders index-count guard disabled, logs/CX-HOST-index-red.log prints
+FAIL plant-oldest-header-index-off: open=opened check=checked and ends 1 FAILED / MUTANT-RC 1.
+The control still passes and every other check passes. Whole output read; no error, unbound,
+No such file or Traceback. The helper restores Check.lean in finally, and the restored run passes.
+
+**Premise price and vacuity read.** None: no theorem, trust premise, deployed byte or deployed
+check changes. The new assertion requires both the earlier open and this specific later refusal;
+it cannot be satisfied by the earlier indexCorrupt refusal that motivated the follow-up.
+
+**Critique.** The plant uses the toy World's chain width with the real file Store and KMAC sealers,
+as host-file-sim already does. It establishes this physical branch, not a theorem about all
+retention walks. The existing full-Store and retained-Store checks remain.
+**Meta-critique.** Matching just indexCorrupt would repeat HOST-68's coverage mistake. The probe
+records the whole verdict and asserts the successful open as well as the full refusal name.
