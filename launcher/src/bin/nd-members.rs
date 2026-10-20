@@ -34,7 +34,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -459,9 +459,7 @@ fn socket_dir(d: &Path, mode: u32, group: Option<u32>, sock: &str) -> Result<(),
     let at = |e: &dyn std::fmt::Debug| format!("{} {e:?}", d.display());
     match std::fs::symlink_metadata(d) {
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            std::fs::create_dir(d).map_err(|e| at(&e))?;
-            std::fs::set_permissions(d, std::fs::Permissions::from_mode(mode))
-                .map_err(|e| at(&e))?;
+            nanodregg_launcher::make_dir(d, mode & 0o777).map_err(|e| at(&e))?;
         }
         Err(e) => return Err(at(&e)),
         Ok(_) => {}

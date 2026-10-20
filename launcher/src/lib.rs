@@ -192,3 +192,17 @@ pub fn plan_argv(r: &Roots<'_>, program: &[u8], p: &PlanPaths<'_>) -> Vec<OsStri
     }
     v
 }
+
+/// Make the socket directory `d` with permission bits `perm` from mkdir alone: no chmod follows.
+/// A resident's socket directory is 02710 with its group from a setgid parent (HOSTING-17: SOCKDIR
+/// and MEMBER), and the uid making it (`nd`) is not in that group by design. Linux clears S_ISGID
+/// on a chmod by a caller outside the file's group (no CAP_FSETID), so a mkdir-then-chmod lands at
+/// 0710 and the directory's own check refused it: keybroker ended `sockDir … Mode(456)` on the
+/// first two-uid run (HOSTING-40). mkdir inherits S_ISGID and the group from the parent; its mode is
+/// masked by the process umask, so under a umask that removes a bit of `perm` (a unit's `UMask=0077`
+/// removes group search) the caller's `check_shared_dir` refuses the result by name, and the
+/// unit's UMask line is the fix, never a chmod here.
+pub fn make_dir(d: &std::path::Path, perm: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().mode(perm & 0o777).create(d)
+}

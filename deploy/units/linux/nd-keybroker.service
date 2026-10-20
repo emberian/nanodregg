@@ -17,7 +17,8 @@ ExecStart=/opt/nd/bin/keybroker /etc/nd/keybroker/provider.key /etc/nd/keybroker
 Restart=on-failure
 RestartSec=2
 RestartPreventExitStatus=70 71 72 73 75 76 78 7 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 140 141 142 143 144 145 146 147 148 98 99 100 103 104 105 79
-UMask=0077
+# UMask=0027: the setgid resident socket directory must let the hosted group search it (02710); under 0077 it is created 02700 and keybroker refuses sockDir (R4)
+UMask=0027
 NoNewPrivileges=yes
 # AF_NETLINK: bwrap --unshare-net brings up the decider sandbox loopback over NETLINK_ROUTE; without it
 # the decider dies at every start (measured on burst5, systemd 255, OPS-3 run 1)

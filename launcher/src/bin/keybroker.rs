@@ -491,9 +491,7 @@ fn resident_socket(sockdir: &Path, group: u32, r: &str) -> Result<PathBuf, Strin
     let d = sockdir.join(r);
     match std::fs::symlink_metadata(&d) {
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            std::fs::create_dir(&d).map_err(|e| at(&d, &e))?;
-            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o2710))
-                .map_err(|e| at(&d, &e))?;
+            nanodregg_launcher::make_dir(&d, 0o710).map_err(|e| at(&d, &e))?;
         }
         Err(e) => return Err(at(&d, &e)),
         Ok(_) => {}

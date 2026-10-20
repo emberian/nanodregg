@@ -19,10 +19,10 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Kernel) | 32356 | — |
 | Lean lines (Lang) | 25439 | — |
 | Lean lines (Ledger) | 1862 | — |
-| Lean lines (Ops) | 2408 | — |
+| Lean lines (Ops) | 2410 | — |
 | Lean lines (Protocol) | 10925 | — |
 | Lean lines (deployed) | 23557 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 17660 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 17662 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 282 | — |
 | theorems | 5040 | — |
@@ -30,7 +30,7 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 12 | 12 |
 | C lines | 315 | 315 |
-| Rust lines | 19611 | — |
+| Rust lines | 20569 | — |
 | Rust lines (nd) | 98 | 100 |
 | Rust lines (nd-supervise) | 160 | 160 |
 | Rust lines (client library) | 2528 | 2528 |
@@ -44,4 +44,4 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | protocol status codes | 6 | — |
 | protocol step codes | 7 | — |
 | conformance rows | 42 | — |
-| Rust lines (nd-members) | 639 | 639 |
+| Rust lines (nd-members) | 637 | 639 |

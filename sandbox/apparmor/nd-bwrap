@@ -2,6 +2,11 @@
 # Install as root, once per Linux host whose kernel restricts unprivileged user namespaces
 # (kernel.apparmor_restrict_unprivileged_userns = 1, Ubuntu 24.04+):
 #   install -o root -g <operator-group> -m 0750 /usr/bin/bwrap /usr/local/libexec/nd-bwrap
+#   setfacl -m u:nd:rx,u:nd-hosted:rx /usr/local/libexec/nd-bwrap
+# The ACL is what lets the deployed uids run it: nd and nd-hosted are in no operator group, and
+# nd-hosted holds no supplementary group at all (decisions/hosting.md HOSTING-17 §1), so 0750 alone
+# leaves every confined child of the node unstartable (HOSTING-40 R1). It names exactly those two
+# uids; never 0755, which gives the userns grant to every local uid.
 #   sha256sum /usr/bin/bwrap /usr/local/libexec/nd-bwrap     # must match
 #   install -o root -g root -m 0644 sandbox/apparmor/nd-bwrap /etc/apparmor.d/nd-bwrap
 #   apparmor_parser -r /etc/apparmor.d/nd-bwrap

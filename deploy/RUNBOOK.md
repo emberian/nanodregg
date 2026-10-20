@@ -36,9 +36,12 @@ nd 0700, outside the hosted tree. Two widenings are named and nothing else widen
 while a rotation is armed the precommitted next key may sign READ envelopes, never a call), and the TCB's two
 unverified crates `signal-hook` and `signal-hook-registry` (gates/tcb.tsv, CLIENT-30).
 
-NEVER RUN: hbox has one uid, so the 0660 group peer check (`peerRefused` for another uid) and the grain's `/home` hide
-have not run with a real second uid. Both are proved and planted with a configured other uid only. The first box
-with the real `nd` / `nd-hosted` split is where they run (STAND-INS B1 and B6).
+RUN WITH TWO REAL UIDS (hbox, 2026-10-21, HOSTING-40; the row `cargo-untraced:launcher:fence`): the 0660 group peer
+check refuses `nd`, a third uid holding the group and `nd-hosted` with another gid (`peerRefused`), and decides
+`nd-hosted`; the grant naming `/home` is refused by name for both uids, but by the grant scan (`cannot list grant`)
+before the `/home` hide is reached, because hbox's homes are 0750 (cv 01a155e0-8f91). The run needed three fixes,
+above and in §2a: the nd-bwrap ACL, mkdir at mode, UMask 0027 on keybroker and nd-members. The units themselves
+(sysusers, tmpfiles, `User=`, NoNewPrivileges) are still to run on a box (STAND-INS B1 and B6).
 
 DEPLOYMENT SHAPE (Ember, 2026-10-21): the deployment will be inside its own VMs. That changes STAND-INS B1: the
 "deployment box" is a VM, so B1's system-unit run (sysusers, tmpfiles, `User=`, `RuntimeDirectory=`, NoNewPrivileges,
@@ -181,6 +184,19 @@ The second pair makes the MEMBER root `/run/nd-member` (`d /run/nd-member 2710 n
 shape, HOSTING-20/25): a resident's member socket `/run/nd-member/<dirOf id>/nd.sock` is served as
 nd and reached by the hosted group. It must be disjoint from `/srv/nd-hosted` and `/run/nd-broker`
 (grain-launch refuses nesting: `rootsOverlap`, 117).
+
+The keybroker and nd-members units run with UMask=0027, not 0077 like the other units: the resident
+socket directory is created under the setgid parent and must be 02710 so the hosted group can search
+it. Under 0077 it comes out 02700 and keybroker ends `sockDir` (105), so neither unit can serve a
+resident in a two-uid deployment (HOSTING-40 R4). Other bits stay off; the socket itself is chmodded
+0660/0600 explicitly (by keybroker, and by nd-supervise for nd-members' sockets).
+
+Both users must be able to execute the sandbox mechanism, and neither is in an operator group
+(`nd-hosted` holds no supplementary group at all), so after installing `/usr/local/libexec/nd-bwrap`
+root:`<operator-group>` 0750 as `sandbox/apparmor/nd-bwrap` says, grant exactly those two uids
+(HOSTING-40 R1; never 0755, which gives the userns grant to every local uid):
+
+    sudo setfacl -m u:nd:rx,u:nd-hosted:rx /usr/local/libexec/nd-bwrap
 
 The render refuses a hosted user equal to the key holder (`hostedIsKeyHolder`,
 `Ops.Units.Broker.check_hosted_ne_user`): keybroker cannot tell that misconfiguration from the
