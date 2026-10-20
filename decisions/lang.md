@@ -2844,3 +2844,96 @@ deliverable; an adversarial read found 8 HIGH defects in that mapping and Ember 
 The pull was familiarity: pins and rows were already proved, so I reached for them instead of the theory. The second pull,
 in this landing, is to call the abstractly-instantiated closure "the CMTT closure" — it is not until `cmttCalculus`
 lands, which is why (a) is named above and the commit message says so.
+
+## LANG-67 Open protocols as typed families of continuations: holes with polarity, linear tokens, obligations, the executed prefix, and the two-cell one-use-capability negotiation; nano's `interp_runs` re-derived as an instance (2026-10-22; ACTIVITIES-1; `redregg/work/ACTIVITIES-DESIGN-20261022.md` §9.4)
+**Why.** Ember: "the GPT design discussed repair and open protocols, which seems like a natural way to express the sort of
+smart-contract system this is." The proposal's doc 2: an open protocol as a typed, inspectable family of continuations
+with explicit obligations for making a particular continuation executable; three kinds of openness (an unspecified
+component, an interaction with an environment, an unfinished execution), polarity and causality, shared parameters,
+the executed prefix; doc 3's first integration experiment.
+**Decision.** `Lang/Contextual/Protocol.lean` (757 lines) + `Lang/Contextual/NanoBridge.lean` (66; the resident `Prog` read as a
+protocol) and `Lang/Proofs/Contextual/{ProtocolTyping,Protocol,Negotiation}.lean` (132 + 961 + 474; the judgments
+`HasProt`, `Started`, `Dispatched`, `Open.WF`, `Assigns`… in `ProtocolTyping`, a proof module, per the gate's def/proof split),
+one `lang:`; no wire moves, no package re-ids, no re-genesis.
+1. *The object.* An indexed signature `Sig {Op, Resp, next}` and the free protocol `Prot := ret | call op k | hole h`:
+   a `call` branches over EVERY response (`k : (r : Resp op) → Prot (next op r)`, the interaction with an environment);
+   a `hole` is an unspecified component named in an interface list Ω (polarity `ours | theirs`, acceptor, context, the
+   tokens it needs, its result condition, the obligations it owes, an acceptance contract). A `Spec` says per operation
+   what it consumes (a linear token), requires (reusable facts) and establishes (obligations). The judgment
+   `Ω;Γ;Δ ⊢ P ⊣ Φ` is `HasProt sp Ω Γ Q Φ Δ P`: Δ a BAG of tokens, a `spend` removes one for every continuation; Φ an
+   UPPER BOUND on what any path establishes (a call branches, so Φ cannot be an output). History `Hist` = the answered
+   calls plus at most one call in flight; `Started`, `Dispatched` (the history has ENTERED a hole). The open object
+   `Open` = template, Ω, σ, Γ, Δ, Q, Φ, history; `Open.replan` is a plain setter and `Open.Replan` (a statement) its guard:
+   the theorems that re-plan take the guard as a hypothesis. Admission (`admits`) is SEPARATE from typing: it checks only the next effect against the current world,
+   and a hole admits nothing.
+2. *The four families, proved.* Contextual completion: `fill_preserves_hasProt`, `fill_skips_theirs`,
+   `theirs_hole_untypable`, `HasProt.weaken`, `mem_holes_iff`. Interpretation of substitution: `fold_fusion`,
+   `fold_subst`, `interpret_fill` (running P[σ] = running the template with σ in the environment), `interpret_record`
+   (the recording run appends exactly a complete path, or exactly the prefix to the hole where it stopped). Selective
+   repair: `locality`, `repair_agrees_from_scratch`, `repair_residual` (the leftover obligations named),
+   `repair_reuses` (only the affected fragments are read). Admission and history: `hasProt_reach` (along any prefix,
+   tokens spent stay within Δ, obligations within Φ, the remainder still judged), `at_most_once` (a token held once is
+   spent at most once on every path; the discipline is AFFINE: `ret` accepts any leftover Δ), `resubst_preserves_started`/`Open.resubst_wf` (re-filling holes the history has
+   not entered keeps the history and its obligations), `admits_local`, `commit_once`.
+3. *Polarity and causality, proved.* `no_foresight`: for every peer bit some filling wins, but no single filling chosen
+   before the reveal wins against every bit; `response_dependent_succeeds`: the same game as a `call` continuation wins
+   against every bit; `theirs_never_planned`; `foresight_iff_names_separate` (∃θ∀b wins ↔ the hole's name differs across the response),
+   `response_indexed_names_have_foresight`. So a hole is NOT an interaction when its NAME does not depend on the response: one filling then enters every response
+   branch unchanged. The reader found the general claim FALSE: with response-indexed hole names (`HoleN .revealed := Bool`)
+   θ(b) := ret b wins every bit (`response_indexed_names_have_foresight`), so the separation is a NAMING discipline the
+   template must obey, stated as such, not a fact of the calculus.
+4. *Shared parameters and search.* `separate_witnesses_insufficient` (buyer ≤ 5, seller ≥ 7: each satisfiable, no
+   shared price; `witnesses_do_not_compose` general, `separate_witnesses_bounded` decided), `greedy_vs_logical`
+   (first-fit scores 1 of 2; complete search finds [1,0]; by decide), `search_state_ne_logical_status` (scalar illustrations); and over the template itself
+   `separate_witnesses_over_substitutions` (Θ := Subst over the Negotiation template in the world with p1 revoked: the
+   buyer guard and admission each satisfiable, no completion satisfies all).
+5. *The integration experiment* (`Negotiation.lean`): two parties, a one-use capability, alternative providers, a
+   deadline, a cancellation path. (a) `unrelated_update_keeps_plan` (via `admits_local`), `unrelated_update_repair_reuses`;
+   (b) `provider_revoked_unavailable` (available [1,2,3] → [2,3]; `plan p1` still derivable, not admissible; the template
+   still judged; `revocation_repair` residual [1]); (c) `representation_change_transports` (epoch : Nat, a PARTIAL correspondence `Tok'.current`; `stale_opening_refused`: an
+   opening at another epoch is refused);
+   (d) `competing_commitments`, `replay_refused`, `internal_once_not_external_once` (one spent token is consistent
+   with 0, 1 or 2 external executions), `exactly_once_needs_reply_and_dedupe`; `deadline_expires`,
+   `cancel_path_refunds_obligation` (`commit_path_pays` the contrast); `lost_reply_keeps_obligation`,
+   `lost_reply_blocks_replan` (an unguarded `replan` after dispatch fails `WF` and `Replan` refuses it, to the other provider
+   and to the cancel path), `answered_blocks_replan` (the answered half), `guard_stricter_than_wf` (a filling with the same
+   first call keeps WF but `Replan` refuses it: the guard is sufficient, and stricter than WF needs), `replan_before_dispatch`;
+   `internal_once_not_external_once` and `exactly_once_needs_reply_and_dedupe` over `Internal.ofHist` of `lost p`, `H₀`,
+   `answeredH p b` (the delivery model linked to the history).
+6. *The nano bridge.* `Hosting.Resident.Prog` is the instance with a trivial index and no holes (`Nano.ofProg`, `toEv`):
+   `nano_runs_iff` (nano's `Runs p es a` iff `ofProg p` has a `Runs` path reading as `es`), `nano_interp_agrees`
+   (nano's `Prog.interp (recorder o)` = this `interpret` at the oracle environment), `nano_interp_runs` (HOSTING-37's
+   `interp_runs`, RE-DERIVED from `interpret_record`). So the resident's proved continuation structure IS a protocol,
+   and the protocol theory's statements apply to it.
+**What formalizing corrected in the prose.** (1) Φ "the obligations for a particular completion" is not an output of
+the judgment (a call branches over every response): Φ is an upper bound; and a call's obligation starts at DISPATCH,
+not at the reply (the lost-reply case makes sense only so). (2) Polarity does not capture causality; SCOPE does, and scope is the
+template's hole NAMING (response-independent names), which the theory must state and the reader made it state;
+`theirs_hole_untypable`/`fill_skips_theirs` are this calculus's own rules (a `theirs` hole is a `call`), not findings;
+"who must accept" is a contract predicate on the filling.
+(3) "Replacing an unexecuted component preserves the history" needs ENTERED, not executed: not reached / reached but
+re-plannable (`replan_before_dispatch`) / entered (a call performed or in flight), which cannot be re-planned, not even
+to the cancel path (`lost_reply_blocks_replan`).
+**Price.** No landed theorem gains a premise; no landed statement changes. New modules only. The bridge imports
+`Hosting.Resident.Run` into a Lang def module (a cross-lib import of a deployed module; C9 allows it).
+**Not in this landing, by name.** `fold_rel` (mini's logical-relation fold) not restated; `Consistent`/`External` are this
+module's own delivery and deduplication model (the proposal gives none), so the external-once theorems hold relative to
+it; multi-WRITER agreement over a hole stays out (charter item 3: the two parties are two members of one World).
+**Alternatives.** (i) Holes carrying their interface in the node (refused: substitution would need casts; Ω by name, indexed
+by `Ix`, needs none). (ii) Φ as an output of the judgment (refused: ill-defined under branching). (iii) A `theirs` hole as
+a freely instantiable existential (refused by `no_foresight`: it would give the planner foresight no participant has).
+**Critique.** (0) The gate's split moved "no unguarded re-plan" from the operation's TYPE (`resubst` took its guard as a
+proof argument, which mentions the statement `Dispatched`, so a def module cannot hold it) to the theorems' hypotheses
+(`Open.Replan`); `lost_reply_blocks_replan` is what keeps the guard load-bearing. (1) `Open.resubst_wf`'s history-equality conjunct is true by construction; the substance is the
+well-formedness and the obligation bound. (2) `unrelated_update_keeps_plan`'s unrelated-store part is true by
+construction (the world view never reads it); the revoke-p2 part exercises locality. (3) `holes` needs a finite listing of
+each operation's responses. (4) The Coin and Negotiation instance definitions live in the def module (deployed lines).
+(5) The external-once gap is a theorem of a delivery/deduplication model this module chose; the reader required it to be
+linked to the history (`Internal.ofHist` from `consumed` and the answered entry, stated over `lost p` and `H₀`) or
+labelled as the model's. (6) "Linear" is affine: `ret` accepts any Δ, so unused tokens are dropped; the once theorem is
+at-most-once. (7) Substitution is single-pass: a filling's own holes are not filled by the same σ, so "replace an
+unexecuted sub-component of an entered filling" is not expressible. (8) `Iface.acceptor` was a field nothing read (a
+no-op the reader caught): DELETED; "who must accept" remains the `accepts` contract, exercised by no instance yet (named gap).
+**Meta-critique.** The lane was briefed to re-cut mini's `IndexedProgram` and it did; the risk was a theory that only
+restates mini. The test is the nano bridge: HOSTING-37's `interp_runs` is re-derived as an instance, so the theory says
+something about code the kernel runs, which mini's `fold_fusion` never did.
