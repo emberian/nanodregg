@@ -116,7 +116,7 @@ if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
     M=$common/nanodregg-commit-main/$$
     rm -rf "$M"; materialize refs/heads/main "$M/tree" || exit 2
     if [ -x "$M/tree/scripts/commit" ]; then runner=$M/tree/scripts/commit; else runner=$0; fi
-    before=$(cat "$ND_TICKET" 2>/dev/null || true)
+    before=$(cat "${ND_TICKET:-/dev/null}" 2>/dev/null || true)   # a fast lander holds no ticket (GATES-22 fix)
     out=$(ND_COMMIT_ATTEMPT=$attempt ND_COMMIT_SCRIPTS="$M/tree/scripts" "$runner" "$@" 2>&1 6>&-); rc=$?
     printf '%s\n' "$out"
     if [ $rc -eq 75 ] && [ "$lmode" = fast ]; then
