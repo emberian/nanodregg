@@ -52,7 +52,7 @@ theorem admitted_facts {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
         split at hs
         · cases hs
         · rename_i w'' ha
-          have hv := (receive_ok hr).2.2.2.2.2.2.2
+          have hv := (receive_derived hr).validUntil
           have hw := (admit_window ha).2
           exact ⟨hra, by omega⟩
 
@@ -184,7 +184,7 @@ theorem submit_facts {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     split at hs
     · cases hs
     · assumption
-  obtain ⟨_, _, _, _, _, _, hnb, hvu⟩ := receive_ok hr
+  obtain ⟨_, _, _, _, _, _, hnb, hvu⟩ := receive_derived hr
   have hw := admit_window ha
   have hb := admit_bounded ha
   unfold checkBounds at hb

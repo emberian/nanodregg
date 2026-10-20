@@ -354,7 +354,7 @@ by a turn with the same window: by then its entry is pruned (`admit_spacing`), s
 ended. Every deployed path reaches `World.admit` through `receive`: the writer through
 `Receive.submit` (`submit_ok`), the follower through the audit (`audit_ok`: every logged turn is
 what `receive` derives from its own event). Two turns derived from one call carry its digest and
-its window (`receive_ok`), so on both paths a call is admitted at most once. -/
+its window (`receive_derived`), so on both paths a call is admitted at most once. -/
 theorem admit_twice_window {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon E) (h₁ : World.admit E w₀ t = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
     (h₂ : World.admit E w₂ t' = .ok w₃) (hid : t'.txId = t.txId) (hv : t'.validUntil = t.validUntil) :
@@ -597,8 +597,8 @@ theorem submit_once {X : Ctx D} {w₀ w₁ w₂ : World D} {c : Call D} {t : Tur
   intro ⟨t₂, w₃⟩ h₂
   obtain ⟨_, hr₁, ha₁⟩ := submit_ok h₁
   obtain ⟨_, hr₂, ha₂⟩ := submit_ok h₂
-  obtain ⟨_, _, _, _, _, hid₁, _, hvu₁⟩ := receive_ok hr₁
-  obtain ⟨_, _, _, _, _, hid₂, _, hvu₂⟩ := receive_ok hr₂
+  obtain ⟨_, _, _, _, _, hid₁, _, hvu₁⟩ := receive_derived hr₁
+  obtain ⟨_, _, _, _, _, hid₂, _, hvu₂⟩ := receive_derived hr₂
   exact admit_twice_window hc ha₁ hf ha₂ (by rw [hid₁, hid₂]) (by rw [hvu₁, hvu₂])
 
 /-- **One call, one admission, on any path through `receive`.** If call `c` derived the turn
@@ -610,8 +610,8 @@ theorem derived_once {X : Ctx D} {w₀ w₁ w₂ w₃ : World D} {c : Call D} {t
     (hr₁ : receive X w₀ c = .ok t) (h₁ : World.admit X.env w₀ t = .ok w₁)
     (hf : World.fold X.env w₁ l = .ok w₂)
     (hr₂ : receive X w₂ c = .ok t') (h₂ : World.admit X.env w₂ t' = .ok w₃) : False := by
-  obtain ⟨_, _, _, _, _, hid₁, _, hvu₁⟩ := receive_ok hr₁
-  obtain ⟨_, _, _, _, _, hid₂, _, hvu₂⟩ := receive_ok hr₂
+  obtain ⟨_, _, _, _, _, hid₁, _, hvu₁⟩ := receive_derived hr₁
+  obtain ⟨_, _, _, _, _, hid₂, _, hvu₂⟩ := receive_derived hr₂
   exact admit_twice_window hc h₁ hf h₂ (by rw [hid₁, hid₂]) (by rw [hvu₁, hvu₂])
 
 /-- **Past `journalForgets` the kernel refuses a call by its window**: its turn's window ends by
@@ -622,7 +622,7 @@ theorem submit_forgotten {X : Ctx D} {w : World D} {c : Call D}
     (hfg : journalForgets w.height c.unsigned.notBefore = true) : ∀ r, submit X w c ≠ .ok r := by
   intro ⟨t, w'⟩ h
   obtain ⟨_, hr, ha⟩ := submit_ok h
-  obtain ⟨_, _, _, _, _, _, hnb, hvu⟩ := receive_ok hr
+  obtain ⟨_, _, _, _, _, _, hnb, hvu⟩ := receive_derived hr
   have hw := admit_window ha
   have hb := admit_bounded ha
   unfold checkBounds at hb
@@ -722,7 +722,7 @@ def CallLog (X : Ctx D) (l : List (Step D)) : Prop := ∀ u ∈ Step.turns l, Ca
 /-- A turn `receive` derives from a call its event decodes to is that call's turn. -/
 theorem callTurn_of_receive {X : Ctx D} {v : World D} {c : Call D} {t : Turn D}
     (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t) : CallTurn X t := by
-  obtain ⟨_, _, _, _, he, hid, _, hvu⟩ := receive_ok hr
+  obtain ⟨_, _, _, _, he, hid, _, hvu⟩ := receive_derived hr
   exact ⟨c, hd, he, hid, hvu⟩
 
 /-- **An `Honest` log is a call log**: every turn in it is `receive` of the call its own event

@@ -2881,3 +2881,22 @@ The cap is not reached through `judge`, because C records need over a thousand e
 **cv.** 01a14805-3d5a is closed as describing the pre-KERNEL-27 receiver. Its "cheap fix" (judge `laws'` on `relaw`) is the wording KERNEL-27 refuted: Frozen became uninstallable, and lang-journey L10d went red.
 **Premises.** None on any landed theorem: two new theorems, no changed statement (second-agent read K24-READER-1, LAND-WITH-FIXES, both fixes taken: the `packageOf`/`checkLaws` conjuncts, and a dead sim branch removed). **Re-genesis:** none.
 **Critique.** `law_judged` is a reading of the receiver. Its value is that later theorems, such as an object-history `Chain` of `Admits` (COMPARE §4.4), can start from a kernel fact rather than from `Derive.lean`'s text. **Meta-critique.** I almost shipped `law-self` with a dead `law-relaw` branch "for precision". A branch the generator cannot reach is a label that reads as coverage.
+
+## KERNEL-58 AS BUILT · Q1, the receivers' contract and the call-level frame (KERNEL-27 lane, Ember 10-21 on PROOF-ENGINEERING-20261021 §2.1/§4)
+**Ruling taken.** A receiver's contract is `Derived`, a Prop-structure. Its frame is `submit_frame` over `CallFoot`. There is no assertion language and no `∗`, and `unpinned` stays the receiver's refusal by name.
+**What changed.**
+- `receive_ok` (eight conjuncts) is DELETED. Its re-export is `structure Derived X c t : Prop` in `Kernel/Proofs/Receive.lean`, with fields `signed exact priced pinned event txId notBefore validUntil` (the same eight facts, the window split into two fields), proved by `receive_derived`. The consumers (`Kernel/Proofs/{Journal,Refusals}`, `Host/Proofs/Serve`, `Protocol/Proofs/{Behind,Settle}`) changed proof bodies only. Two `.2.2.2…` projections became `.pinned` and `.validUntil`.
+- `Kernel/Proofs/Logic/Triple.lean` adds the following:
+  - `CallFoot X c w`: a pinned cell, an id `w` has not taken, or a nullifier `w` has not spent. It is the call's footprint at the World it is derived against, read off the call and that World only.
+  - `Triple X P c Q`: a definition over `receive` and `World.admit`.
+  - `Indep X c R`.
+  - `submit_derived`, `callFoot_of_turn` (every `CellFoot t s` of the derived Turn is a `CallFoot`), `call_frame`, `submit_frame`, `not_callFoot_live` (at a live cell the footprint is exactly "pinned"), and `indep_live`.
+- Teeth, on a toy `Ctx` running the deployed receivers, seal and admission:
+  - `callFoot_needs_born`: a `create` writes a cell it never pinned.
+  - `submit_frame_needs_indep`: a `rotate` writes the member it pinned.
+  - `derived_needs_receive`: admission takes a Turn with an empty event, and that Turn is `Derived` of no call.
+**Where the Props live.** Closure C3 puts statements in PROOF modules (a def module exporting a Prop is red). The brief said "a def module", which was a misreading, so no def module was added.
+**Premises.** No landed theorem gained a premise. One statement changed (`receive_ok` → `receive_derived`, equal strength). Every new theorem takes only `receive … = .ok t` and `World.admit … = .ok w'`. Second-agent read (K27-READER-1) found no blocker, and all three of its fixes were taken: the tooth above was strengthened from "not Derived of another call" to "Derived of no call"; the header's `Invokes.other` claim was narrowed to a call-derived Turn at a live object; and the over-approximation is now stated. The older entries' mentions of `receive_ok` are records and stay as written.
+**Re-genesis / re-emit.** None. This is proof-side only.
+**Critique.** `CallFoot` over-approximates births and spends as "anything fresh". It also counts a `keep` pin, which `CellFoot` leaves out. It is exact at what Q3 needs, a live object (`not_callFoot_live`). A footprint that is exact for births would have to read the derivation, which depends on the World through the pins.
+**Meta-critique.** The brief's "zero premises on landed" claim was checked against the diff, not assumed. The brief's `bornIds` helper turned out to be unnecessary, because freshness is the World's own check (`checkCreates`, `checkNullifiers`).

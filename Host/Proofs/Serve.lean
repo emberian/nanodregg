@@ -228,7 +228,7 @@ theorem lookup_expired_never_committed (X : Ctx D)
     (hans : handle X w f = .reply Protocol.Status.refused.code "expired".toUTF8)
     (hr : receive X w₀ c = .ok t) (ha : World.admit X.env w₀ t = .ok w₁)
     (hf : World.fold X.env w₁ l = .ok w) : False := by
-  obtain ⟨_, _, _, _, _, htx, hnb, _⟩ := receive_ok hr
+  obtain ⟨_, _, _, _, _, htx, hnb, _⟩ := receive_derived hr
   simp only [handle, hop, hc] at hans
   cases hj : w.journalAt X.env (txIdOf X c) with
   | some p =>

@@ -113,17 +113,25 @@ theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : C
   unfold checkSignature at hs
   exact ⟨req_ok.mp hs, d, hd, h⟩
 
-/-- **Derive-then-admit, the receive half.** A derived Turn is signed with the key the call
-names, pays exactly its weight within the signed price, and touches exactly the caller's pins,
-in order, with what the signer saw — so `World.admit`'s charge check passes by construction and
-its pin check is the caller's own observation. -/
-theorem receive_ok {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
-    (h : receive X w c = .ok t) :
-    X.verify c.unsigned.key (X.callMessage c.unsigned) c.signature = true ∧
-      t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧
-      t.touches.map (fun x => (x.cell, x.seen)) = c.unsigned.pins ∧
-      t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
-      t.validUntil = c.unsigned.validUntil := by
+/-- **The receivers' contract** (Q1): what every derived Turn is to the call it was derived from,
+named. It is signed with the key the call names, pays exactly its weight within the signed price,
+touches exactly the caller's pins, in order, with what the signer saw, and carries the call as its
+event, the call's id and the call's window. -/
+structure Derived (X : Ctx D) (c : Call D) (t : Turn D) : Prop where
+  signed : X.verify c.unsigned.key (X.callMessage c.unsigned) c.signature = true
+  exact : t.charge = t.weight
+  priced : t.charge ≤ c.unsigned.maxCharge
+  pinned : t.touches.map (fun x => (x.cell, x.seen)) = c.unsigned.pins
+  event : t.event = X.callBytes c
+  txId : t.txId = txIdOf X c
+  notBefore : t.notBefore = c.unsigned.notBefore
+  validUntil : t.validUntil = c.unsigned.validUntil
+
+/-- **Derive-then-admit, the receive half.** A derived Turn is `Derived` of its call — so
+`World.admit`'s charge check passes by construction and its pin check is the caller's own
+observation. -/
+theorem receive_derived {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
+    (h : receive X w c = .ok t) : Derived X c t := by
   obtain ⟨hv, _, _, hs⟩ := receiveWith_sealed (receive_ok_with h).2
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := sealTurn_ok hs
   exact ⟨hv, h1, h2, by rw [h3]; exact touchesOf_pins _ _, h4, h5, h6, h7⟩

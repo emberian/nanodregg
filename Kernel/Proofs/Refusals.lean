@@ -502,7 +502,7 @@ theorem submit_refused_never {X : Ctx D} {w₀ w₁ w₂ : World D} {c : Call D}
   by_cases hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax
   · rw [submit_refused_final hc hjc h₁ hrid.1 hf hlt] at hs; cases hs
   · obtain ⟨-, hr, ha⟩ := submit_ok hs
-    obtain ⟨_, _, _, _, _, _, hnb, hvu⟩ := receive_ok hr
+    obtain ⟨_, _, _, _, _, _, hnb, hvu⟩ := receive_derived hr
     have hw := admit_window ha
     have hb := admit_bounded ha
     unfold checkBounds at hb
