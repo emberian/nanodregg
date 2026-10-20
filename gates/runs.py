@@ -397,8 +397,8 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         v = f"UNREAD(timeout: past {DEADLINE} s of wall clock; last line: {last[:160]})"
     # GATES-22 follow-up (GATES-10 verified at source): the tracer itself can fail mid-run, `strace: ptrace(PTRACE_LISTEN,
     # …): Input/output error`, and the run exits non-zero. That is no verdict about the run: UNREAD(tracer), re-run once
-    # (run_once_more), twice is NOT JUDGED, never RED. Only strace's own lines (`strace: ` at a line start) count, and
-    # only on a run that did not read ok.
+    # (run_once_more), twice is NOT JUDGED, never RED. Only strace's own lines (`strace: ` or `…/strace: `, TRACER)
+    # count, and only on a run that did not read ok.
     if traced and not v.startswith("ok"):
         tl = TRACER.search(out)
         if tl:
@@ -423,7 +423,11 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
 # GATES-20: the strace this judge traces with (None: untraced, every key static). A row's runs' read-sets are
 # the row's own list (Row.sets, one per run, None for a run with no read-set): rows run concurrently (GATES-20g).
 TRACING: dict = {"strace": None}
-TRACER = re.compile(r"(?m)^strace: .*$")
+# strace names itself by its argv[0], the absolute path readset.available() found (`/usr/bin/strace: ptrace(…)`), and
+# its line can follow the tracee's unterminated output (libtest's progress dots: `………/usr/bin/strace: ptrace(…)`, hbox
+# gate-2/4c04f20aa738.log:860, gate-3/2b29a0426731.log:412, gate-3/846590c46570.log:301). The match is `strace: ` at a
+# line start or right after a `/`, to the end of the line.
+TRACER = re.compile(r"(?m)(?:^|/)strace: .*$")
 
 
 def row_line(root: str, table_path: str | None, exe: str) -> str | None:
