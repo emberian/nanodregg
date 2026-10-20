@@ -2937,3 +2937,71 @@ no-op the reader caught): DELETED; "who must accept" remains the `accepts` contr
 **Meta-critique.** The lane was briefed to re-cut mini's `IndexedProgram` and it did; the risk was a theory that only
 restates mini. The test is the nano bridge: HOSTING-37's `interp_runs` is re-derived as an instance, so the theory says
 something about code the kernel runs, which mini's `fold_fusion` never did.
+
+## LANG-68 Lang's deployed term language is a lawful instance of the guarded contextual closure, on its closed-hole fragment (2026-10-20 real; ACTIVITIES-2; ROOT ruled fork (A); cv 01a158c0-ddbf step 3's foundation; the (B) fork is Ember's card, cv 01a158da-0192)
+**Why.** LANG-66's closure theory was instantiated by its toy calculus and by CMTT (`cmttLaws`); the generators that make the
+Bell an instance (LANG-66 (d)) need the closure's carrier to be what a nano package is written in. ACTIVITIES-1's handoff
+asked whether that instance can be HONEST: what are `uses`/`drop`/`strengthen`/`weaken` for a Lang filling such that
+`weaken_avoids` and `uses_var` discharge non-degenerately (READER-CONTEXTUAL's HIGH: `drop := id` or `uses ≡ false`
+satisfy the strengthening laws)? Answered by building it, not by prose.
+**Decision.** `Lang/Contextual/LangCalculus.lean` (def module, 568 lines, no theorem) + `Lang/Proofs/Contextual/LangInstance.lean`
+(proof module, 46 theorems): `langData : CalculusData` with `Tm := Lang.Term` (the DEPLOYED term, `Lang/Term.lean`), not
+`Lang.Data`: a data value has no variables, so `uses_var`/`hasTy_var` could be met only by bolting a variable onto data,
+the lookalike the reader refused. `check Ψ M A := decide (infer [] Ψ M = some A)` (the deployed checker, sound and complete
+by `infer_iff`); `uses`/`weaken`/`strengthen` a binder-aware de Bruijn rename (`Term.renameVar`, `lam` and every `case` arm
+bind one; `liftIdx`/`lowerIdx` from Core); `drop := eraseIdx`; `var := Term.var`; `lookup := Ψ[x]?`; a hole is `ref n`
+(the only hole shape a `Term` has) and `msubst := Term.fillRefs` (closed fillings, no shifting); a structural
+`Term.decEq` by hand (17 constructors, nested rows; `Term` had no decidable equality). `LangHasTy Ω Γ t T :=
+(∀ d ∈ Ω, d.ctx = []) ∧ RefsDeclared Ω t ∧ HasType (ΔOf Ω) Γ t T` with `ΔOf Ω` name-indexed (hole `n` at package position
+`n`, LANG-66's `holeEnv` move) and `RefsDeclared` = every `ref` the template uses is a declared hole (it is what refutes
+`msubst := id` and what makes `ΔOf`'s `.nat` placeholder at an undeclared name make no theorem true: `usesRef_fillRefs`
++ `refsDeclared_nil`). `theorem langLaws : CalculusLaws langData LangHasTy`: msubst_lemma ← `fillRefs_typed`
+(+ `tyOf_filter`, `ΔOf_getElem?`, `hasType_closed_lift`: a closed filling types under every Γ, used exactly at the `lam`/arm
+binders where capture would otherwise occur); check_sound/complete ← `Lang.infer_sound/complete` + `langHasTy_nil_iff`
+(whose right-to-left needs `hasType_usesRef`: a term typed under Δ = [] uses no `ref`); strengthen_lemma ←
+`hasType_unshiftAt`; strengthen_factor ← `Term.shiftAt_unshiftAt`; weaken_avoids ← `usesVar_shiftAt` (unconditional);
+hasTy_var ← `HasType.var`; uses_var by `simp`. Toys: `lang_strengthen_toy` (`strengthen 1 (app (var 0) (var 2)) =
+app (var 0) (var 1)`, weakened back: the strengthening is not the identity); `lang_template_toy` (`app (ref 0) (nat 3)`
+typed WITH the hole `⟨0, [], nat → nat⟩`, NOT without it — refuted by `RefsDeclared`, and by `HasType` too since
+`ΔOf [] = []` — filled with `λx.x` by `rfl`, typed with the hole gone through `langLaws.msubst_lemma`).
+**The boundary, as a theorem.** `langTemplate_no_hyps : Template.Typed tpl LangHasTy → ∀ I ∈ tpl.Ω, I.hyps = []`. A Lang
+`ref` is a closed package reference: it carries no local context and no substitution, so every hole of a typed Lang
+template is CLOSED, and three closure paths are EMPTY ON EVERY LANG TEMPLATE: the `strengthening` outcome
+(`repairSelected`'s `D.uses` branch), the alternative-by-hypothesis outcome, and hypothesis-derived supports
+(`effSupports`' second summand). They are exercised only by the CMTT instance. So the bridge the generators build
+(LANG-66 (d), next) is over the FULL `CalculusLaws` restricted to the closed-hole fragment, not over a sub-structure of
+the laws; the fragment's name is this theorem.
+**Price.** No landed theorem gains a premise; no landed statement changes (READER-CONTEXTUAL: `git diff --stat HEAD`
+empty before the two new files; nothing landed imports them). SIZE: two modules, one proof module, ~1,380 Lang lines (568
+deployed), 46 theorems, max dependents +1 (the instance is OVER the deployed checker: one more dependent of its closure).
+**Vacuity read.** READER-CONTEXTUAL (`a883dc3fb9dca28c8`, resumed), 47 theorems with the disjunct check per theorem,
+each iff's two sides and each ∃ witness named: LAND-WITH-FIXES, nothing vacuous or false; the two LOWs applied
+(`langHasTy_closed_holes` was `h.1`, a projection: DELETED, the conjunct is cited instead; `ΔOf`'s docstring names the
+theorems that make its placeholder harmless); the MEDIUM is a closure-design item made visible by this instance, filed
+cv 01a158da-017c for CLOSURE: no operation requires `Template.Typed` (C3 moved it from the structure to a predicate), so a
+closure over an UNTYPED template with a non-empty hole ctx reports `verified` for an open filling (`check [nat] (var 0)
+nat`) that `fillRefs` would place unshifted — no landed theorem claims that state Derivable (every derivability theorem
+takes `ht`), but the report is the checker's verdict in a context the template never justified; its own `lang:` with its
+own read; the generators state Typed for every generated iface (ctx = [] by construction).
+**Alternatives.** (i) `Tm := Lang.Data` with a variable constructor bolted on: refused, the reader's degenerate class in
+new clothes. (ii) A curried encoding of contextual holes (`ref n : fnOf Ψ A`, occurrences `app (ref n) σ…`): refused
+here because `msubst` must then wrap fillings in `lam`s over Ψ, which needs Ω — a `CalculusData` signature change
+(`msubst` taking Ω) restating `msubst_lemma`/`Derivable` and everything through them; not foreclosed. (iii) (B) CMTT's
+`u[σ]` as an 18th `Term` constructor `hole n σ`: the honest contextual instance in the DEPLOYED language; a `lang!`
+(checker, BigStep, printer/reader, the `lang/package` wire with CODEC review, every Term induction one case each, every
+package re-ids; premises added: none known). ROOT ruled (A) now and sent (B) to Ember as a design fork: under (A) the
+strengthening outcome is a theorem of the MODEL only, reachable by no deployed package — the honestly-labelled-caveat
+class; the question is whether nano's deployed language should carry what its theory proves. (A) does not foreclose (B):
+the generators' statements are over `LangHasTy` and survive it losing the `d.ctx = []` conjunct.
+**Critique.** (1) The instance proves the laws for ALL Lang terms, but every template the laws reach has closed holes;
+the contextual half of "contextual modal types" is, for Lang, a theorem about a fragment nothing deployed inhabits
+(the card above). (2) `fillRefs` does not shift: sound only because fillings are closed, which `LangHasTy []` forces;
+a future (B) must add the shift. (3) `ΔOf` is positional over a name-indexed list with a placeholder; the honest shape
+would index `HasType`'s Δ by name, which is a change to the deployed checker's signature, refused for this landing.
+(4) `Term.decEq` is 272 hand-listed off-diagonal cases (the Ty.lean idiom); `deriving` is refused by Lean v4.30.0 on
+the nested inductive. (5) The reader's MEDIUM is older than this landing (C3's restructure of LANG-66 made `Template.Typed`
+a predicate no operation demands); this instance is the first with a non-trivial ctx to make it bite.
+**Meta-critique.** The handoff's question had a tempting prose answer ("the bridge is over a data-only sub-structure of
+the laws"); it was WRONG in both directions — the laws discharge in full, and the restriction is on the templates, not
+the laws — and only building the instance showed where the restriction actually sits. The pull to resist next is to let
+`langTemplate_no_hyps` read as a limit of Lang rather than as a design choice ROOT made and Ember may reverse.
