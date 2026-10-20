@@ -3283,3 +3283,77 @@ transport tag alone proves nothing: the certificate is tied to a checked two-sid
 destination is rejudged, and the image has a real selection consumer. The remaining temptation
 is to present a tagged-value demonstration as a deployed-language equivalence engine; it is
 explicitly labelled as a checker-only experiment.
+
+## LANG-70 P5 logical statuses and alternating simulation; P1 finite interaction guards (2026-10-20 real; CX-P15)
+**Purpose.** A demonstration Mini can take, implementing contextual-program P5 first and P1 over its
+status type. No wire or Store change. Four new modules; every old declaration remains byte-identical.
+**Decision.** P5.LogicalStatus has witnessed, open(first obligation, rest), refuted(evidence), and
+outsideThisProcedure(reason). Open is nonempty by construction. P5.judge answers a Problem whose finite
+domain is explicit and distinct from its retained search list. A witness is checked for domain membership
+and acceptance. Refutation carries an exclusion enumeration: checkRefutation checks coverage of the
+question's domain AND replays every exclusion. refuted_sound proves every member of that domain fails;
+no_certificate_never_refuted and exhausted_is_open prohibit interpreting search failure as impossibility.
+This is a finite completion procedure, not a solver claiming to decide arbitrary Lean propositions.
+The generic status type can carry other evidence formats; this procedure admits only its replayable format.
+Outside is a distinct constructor, with unsupportedFragment/budgetExhausted explanations.
+**Partial evaluation.** Formula/evaluate leaves unfilled atoms suspended, also under negation.
+Conjunction is strict and combines outstanding atom names. There is no missing-atom-as-false conversion.
+**Polarity.** Machine is an input-deterministic interface automaton with nondeterministic outputs.
+AlternatingSimulation matches specification inputs and implementation outputs with related successor
+states; Refines is pointed existence of that relation. Reflexivity, transitivity, input-session
+preservation and arbitrary finite mixed-session safety are proved. Moves/Action.owner uses LANG-67's
+Polarity directly. price_refines permits more accepted prices and fewer replies. The concrete seven-price
+session breaks after ten becomes five; adding a reply also fails refinement. no_foresight is consumed
+by P1.coin_interaction_obstruction over ALL uniform substitutions; the P5 finite coin question computes
+a refuted status over its two answer candidates.
+**Interactions.** Interaction is a named Boolean counter-test. Design.complete versus Design.gaveUp
+separates completed repair from daimon-like behavior. OrthogonalTo admits gaveUp; inspect always
+reports its named gaveUp obligation, even with zero tests. Eligible is admissibility intersected with
+the orthogonal family. adding_obligation proves exact intersection, not just monotonicity;
+required_implies_tested / eligible_antitone give the tested/required direction. Reports carry the
+exact Interaction objects, not only their potentially colliding display names. inspect_witnessed and
+analyze_witnessed connect returned witnesses to the actual report's scope. analyze uses the P5 judge;
+analyze_refuted quantifies over the declared domain, never over just retained repairs.
+**Existing judge connection.** withInteractions installs a finite conjunction as Iface.guard;
+singleton_judge proves equality of the entire old/new candidate verdict for the original predicate.
+judgeAt consumes Family indexed by hole and world; its verified iff spells out interaction, typing,
+support, blockers and budget. Nullable.required uses an explicit environment precondition, allowing
+the existing Session.run/repair to demonstrate non-null withdrawal as setEnv false, then suspension,
+tolerant replacement, checked replacement, or explicit re-preconditioning as setEnv true.
+Those sessions compute by decide; unchecked crashes on null, tolerate supplies zero, check returns
+rejectedNull. The handler enumeration is a model of null handling, NOT a claimed lawful CMTT calculus
+and NOT execution of a deployed nullable package.
+**Price premises.** None. No LANDED theorem gains a hypothesis; no landed statement is restated or
+edited. All old candidate-judge and repair results stand. Added imports reach only these new leaf
+modules; no existing consumer imports them, and the Host closure is unchanged.
+**Alternatives examined.** Mapping every exhausted retained search to refuted is wrong when an unretained
+witness exists (unretained_repair_exists). Making refuted a reason string loses checked impossibility.
+Identifying daimon orthogonality with successful repair accepts a never-answering object. Covariant
+input narrowing breaks seven; output broadening breaks peers. Label-only refinement without successor
+relations cannot justify mixed-session preservation. The implementations retain the distinctions.
+**Critique.** (1) Refutations are relative to the EXPLICIT finite domain and acceptance function: they
+say nothing about candidates outside it, and the generic data constructor itself is not a proof;
+the authority is judge plus refuted_sound. (2) This is finite interaction orthogonality, not full ludics
+biorthogonal closure. (3) Arbitrary world-dependent Family changes are NOT tracked by the landed
+touches function; judgeAt makes no repair-locality claim. The concrete session uses env changes, which
+already touch every candidate. (4) Re-establishing non-nullness is an explicit caller assumption, not
+evidence conjured by the checker. (5) Alternating simulation here excludes internal actions, fairness,
+and nondeterministic input transitions; SafeFor proves absence of refused interactions, not progress.
+(6) C3 keeps data and laws separate: consumers must use the named checked operations and soundness
+theorems, not treat arbitrary constructed Reports as evidence.
+**Meta-critique.** It would be tempting to rename the old candidate statuses and call P5 complete, or
+to add unused interaction metadata to the old guard. The domain/retained distinction, exact returned
+scope, singleton bridge, concrete withdrawal sessions and mixed-session refinement theorem prevent
+those substitutions. The remaining temptation is to sell bounded model experiments as deployed
+behavior; the nullable model and finite procedure limits are therefore explicit above.
+**Validation.** Scoped build of Lang.Proofs.Contextual.P5 and P1 under 6G/two threads, Lean default 200000
+heartbeat cap (no source override); concrete theorems by decide. Separate mutation scratch modules exercise domain
+membership, certificate coverage/replay, exhaustion status, procedure limits, suspended negation,
+admissibility, tested interactions, daimon status and the nullable guard. Source gates and per-theorem
+self disjunct read are recorded in CX-P15's private lane report.
+**Independent second reader (CX-READER-P15, 2026-10-20 real).** LAND. All 45 theorem statements
+read with the disjunct check; no escape disjunct or changed landed signature. Both new proof modules
+passed an independent scoped build under 6G/two threads and default maxHeartbeats 200000. All twenty
+control/mutant outputs read whole and all ten saved source mutations inspected; the failures are
+semantic Lean failures, with no harness error. No theorem correction required. Finite-domain,
+nullable-model and refusal-safety limits above remain explicit.
