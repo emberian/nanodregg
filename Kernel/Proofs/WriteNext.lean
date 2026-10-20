@@ -51,7 +51,7 @@ theorem ascending_iff : ∀ s : Slots, Slots.ascending s = true ↔ s.Pairwise (
       · intro h
         exact ⟨(List.pairwise_cons.mp h).1 b (List.mem_cons_self ..), (List.pairwise_cons.mp h).2⟩
 
-private theorem mem_set {k : Nat} {v : ByteArray} :
+theorem mem_set {k : Nat} {v : ByteArray} :
     ∀ {s : Slots} {q : Nat × ByteArray}, q ∈ Slots.set k v s → q = (k, v) ∨ q ∈ s
   | [], q, h => by simp [Slots.set] at h; exact .inl h
   | (k', v') :: rest, q, h => by
@@ -78,7 +78,7 @@ private theorem mem_set {k : Nat} {v : ByteArray} :
             · exact .inl h
             · exact .inr (List.mem_cons_of_mem _ h)
 
-private theorem set_pairwise {k : Nat} {v : ByteArray} :
+theorem set_pairwise {k : Nat} {v : ByteArray} :
     ∀ {s : Slots}, s.Pairwise (fun a b => a.1 < b.1) → (Slots.set k v s).Pairwise (fun a b => a.1 < b.1)
   | [], _ => by simp [Slots.set]
   | (k', v') :: rest, h => by
@@ -209,7 +209,7 @@ theorem audit_cellsCanon {X : Ctx D} {w w' : World D} {l : List (Step D)} (hw : 
   fold_cellsCanon hw (audit_ok.mp h).1
 
 omit [Ord D] [DecidableEq D] in
-private theorem slotsOf_ascending (ps : List (Nat × ByteArray)) : Slots.ascending (slotsOf ps) = true := by
+theorem slotsOf_ascending (ps : List (Nat × ByteArray)) : Slots.ascending (slotsOf ps) = true := by
   unfold slotsOf
   refine (ascending_iff _).mpr (foldl_inv (fun s : Slots => s.Pairwise (fun a b => a.1 < b.1)) _
     (fun s p hs => set_pairwise hs) ps [] List.Pairwise.nil)

@@ -3021,3 +3021,25 @@ Teeth (kernel-sim): cancel:recorded, cancel-final:refusedFinal, cancel-other:bad
 **Meta-critique.**
 - My first cancel build had `judge` decline a program-named `cancelled`, so that the code alone would mean "signed". That put a premise on a landed theorem. The field, not the code, was always the right discriminator.
 - I also nearly shipped C1's "no new kernel check" without reading what the chain commits.
+
+## KERNEL-61 AS BUILT · A counted right's cap provably falls: `LedgerContiguous`, the grant totality, and the read-back (KERNEL-30 lane, for LEDGER-7's `grant_moves_le_cap`, 2026-10-22)
+**The finding (LEDGER-7).** Nothing proved a spend is READ BACK. `ledgerLeft base g` reads the LAST entry of the slots `base … base + ledgerSpendsMax` and names the next index as their COUNT, so a spend appends at `base + count`. If a grant's ledger had a gap, that write would land below the last key, `getLast?` would keep reading the old entry, and the cap would never fall. No theorem said a reachable World has no gap.
+**Measured by the proof: the invariant HOLDS for every receiver.** No receiver writes a ledger slot out of order, so there is no kernel defect and no receiver change. Proof-only.
+**What landed** (`Kernel/Proofs/LedgerNext.lean`, new; `Kernel/Proofs/InvokeTree.lean`):
+- `GrantContiguous cell`: at each counted base, the ledger's keys are `List.range' base length`. `LedgerContiguous E w`: every live grant has it. Both are Prop definitions in the proof module.
+- The totality at a grant, `effect_at_grant` (InvokeTree). An effect at a cell the pins read as a grant is either its revocation's retirement or ONE `spendAt` append (`LedgerSpend`: an enrolment, a transfer or credit through it, or a child carved from it). `write`, `law` and an invoke's own write land on cells read as objects. Every other receiver writes cells it read by its own kind. The private totality lemmas were strengthened to carry this (`OtherEffect`; `EffectsAt` now records the invoke's object read). `effect_at_object`'s statement is unchanged.
+- `grant_turn_cell`: a derived, admitted turn keeps a live grant, retires it, or appends ONE entry `left - u` at index `i` of one ledger. The turn's act at a cell is ONE effect's (`actFor` takes the first). That it is the turn's only spend of the grant is `sealTurn`'s `duplicateEffect`, which the read-backs use (`effect_reads_back`): without it a second spend would be silently dropped. `admit_retired` is the retirement's forward lemma.
+- `derive_born_grant`: only `grant` bears a grant, with one entry per counted kind, at its base.
+- The invariant, from genesis, as `CellsCanon` was proved: `genesis_ledgerContiguous`, `step_ledgerContiguous`, `submit_ledgerContiguous`, and `audit_ledgerContiguous`, which carries `CellsCanon` along.
+- The read-back:
+  - `ledgerLeft_append` is the slot half. Over a canonical, contiguous cell, the append reads `(i + 1, left - u)`, the other ledgers are unchanged, and the cell stays canonical and contiguous.
+  - `grant_turn_ledger`: what is left of every ledger of a live grant stays as it was, or ONE ledger falls by exactly the `u` it spent. This is the per-step form for a chain.
+  - `spend_reads_back` (a signed transfer through `g`) and `spend_reads_back_dispatched` (a transfer the walk dispatched at any depth, `u` equal to its amount). Their credit twins are `credit_reads_back` and `credit_reads_back_dispatched`.
+**Teeth.**
+- `gap_never_falls`: a transfer ledger holding `transferBase` and `transferBase + 4` is not contiguous. Two spends of 10 are each within the 10 it reads as left. They write `+2` and `+3`, keys the cell lacks, so `appendOnly` admits both. The ledger still reads 10 left: two spends of 10, each admitted against a cap of 10.
+- `gap_world_not_contiguous`.
+- `two_spends_refused`: `actFor` keeps only the first of two spends, and `effectsPinned` refuses the pair `duplicateEffect`.
+**Premises.** No landed theorem gained a premise. The invariant is a premise only on the new read-back theorems, and it is discharged from genesis. The World-level theorems take `Std.TransOrd`/`Std.LawfulEqOrd` (`admit_written`'s, as `transfer_exact`). Visibility only: `dispatched_ok`, `sealTurn_firstDup`, `actFor_of_nodup` (InvokeTree) and `mem_set`, `set_pairwise`, `slotsOf_ascending` (WriteNext) lost `private`, with statements unchanged.
+**Re-genesis / re-emit.** None.
+**Second-agent read.** K30-READER: LAND. No statement is vacuous. Each disjunct of `effect_at_grant`, `grant_turn_cell` and `grant_turn_ledger` was checked on its own, and none follows from the premises alone. No public statement changed. Its three label fixes were taken.
+**Critique.** `grant_turn_ledger` names the spend's `u` existentially. Only the transfer and credit forms link `u` to the call's amount. An enrolment or a carve is the same append (`LedgerSpend`), but no `*_reads_back` names its count. LEDGER-7's Σ only needs that `u` is what left fell by, which `grant_turn_ledger` gives. A sum over carves would need a `checkParent` read-back.

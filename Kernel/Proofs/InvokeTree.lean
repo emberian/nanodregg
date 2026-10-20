@@ -27,6 +27,10 @@ Proved here, of the same definitions:
   by its own `readKind` (a cell has one kind). `object_turn_cases`: so a derived and admitted turn
   keeps a live object, or is its signed write or law, or dispatched an invoke of it. Tooth
   `effect_at_object_needs_kind`: `revoke` without its kind check retires an object.
+* THE TOTALITY AT A GRANT (KERNEL-30): `effect_at_grant`: an effect at a cell the pins read as a
+  grant is its revocation's retirement or ONE `spendAt` append to one counted ledger
+  (`LedgerSpend`); `Kernel.Proofs.LedgerNext` lifts it to the World (`grant_turn_cell`) and proves
+  every grant's ledgers stay contiguous, so a spend reads back.
 
 Where the top-level proof reads the act at `obj` off the Draft's first effect, a nested run's write
 sits after its caller's. This proof takes the act at `obj` to be this run's through `sealTurn`'s
@@ -141,7 +145,7 @@ private theorem foldCalls_split {sub : Sub D} {obj : D} {calls : List (Body D)} 
 /-! ## A dispatched receiver was derived, inside the signed call's derivation -/
 
 /-- Every receiver the walk dispatched succeeded, and its effects sit inside the signed call's. -/
-private theorem dispatched_ok {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
+theorem dispatched_ok {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
     (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
       ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R)
@@ -285,7 +289,7 @@ theorem dispatched_of_signed {X : Ctx D} {w : World D} {c : Call D} {obj : D} {m
 /-! ## The one effect at a cell -/
 
 /-- A sealed Turn's effects name distinct cells, as `firstDup` saw it (`duplicateEffect`). -/
-private theorem sealTurn_firstDup {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
+theorem sealTurn_firstDup {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
     {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
     firstDup (efs.map Prod.fst) = none := by
   unfold sealTurn at h
@@ -300,7 +304,7 @@ private theorem sealTurn_firstDup {X : Ctx D} {c : Call D} {cr : List (D × Cell
 
 omit [Ord D] in
 /-- Over effects at distinct cells, the act `actFor` finds at a cell is the one effect there. -/
-private theorem actFor_of_nodup {obj : D} {a : Act} :
+theorem actFor_of_nodup {obj : D} {a : Act} :
     ∀ {l : List (D × Act)}, (l.map Prod.fst).Nodup → (obj, a) ∈ l → actFor l obj = a
   | [], _, h => by simp at h
   | q :: rest, hn, h => by
@@ -447,15 +451,66 @@ private theorem readKind_look {look : Pinned D} {g : D} {k : Nat} {cell : Cell}
 private def ReadOther (look : Pinned D) (x : D) : Prop :=
   ∃ k cl, k ≠ kindObject ∧ readKind look x k = .ok cl
 
-omit [Ord D] [DecidableEq D] in
-private theorem spendAt_at {base : Nat} {g : D} {cell : Cell} {units : Nat} {short : Refusal D}
-    {ef : Option (D × Act)} (h : spendAt base g cell units short = .ok ef) : ∀ e ∈ ef.toList, e.1 = g := by
-  obtain ⟨_, _, _, _, hc⟩ := spendAt_ok h
-  rcases hc with ⟨-, rfl⟩ | ⟨-, -, rfl⟩ <;> simp
+/-- The bases of the counted rights' ledgers (KERNEL-60): enrolment, transfer, credit. -/
+def LedgerBase (base : Nat) : Prop := base = enrollBase ∨ base = transferBase ∨ base = creditBase
+
+/-- `a` appends one entry to grant `g`'s ledger at a counted right's base, as read from `cell`:
+`spendAt`'s write of a nonzero spend `u` within what is left, at the ledger's next index. -/
+def LedgerSpend (g : D) (cell : Cell) (a : Act) : Prop :=
+  ∃ base i left u, LedgerBase base ∧ ledgerLeft base g cell = .ok (i, left) ∧ 0 < u ∧ u ≤ left ∧
+    i ≤ ledgerSpendsMax ∧ a = .write [.set (base + i) (countBytes (left - u))]
+
+/-- An effect of a receiver other than `write`, `law` and `invoke`: at a cell read as a kind other
+than an object's, and, at a cell read as a grant, its retirement or one append to one of its
+ledgers. -/
+private def OtherEffect (look : Pinned D) (e : D × Act) : Prop :=
+  ReadOther look e.1 ∧ ∀ cl, readKind look e.1 kindGrant = .ok cl → e.2 = .retire ∨ LedgerSpend e.1 cl e.2
 
 omit [Ord D] [DecidableEq D] in
-private theorem spendEnroll_at {g : D} {cell : Cell} {units : Nat} {short : Refusal D} {ef : Option (D × Act)}
-    (h : spendEnroll g cell units short = .ok ef) : ∀ e ∈ ef.toList, e.1 = g := spendAt_at h
+/-- A pinned id has one cell, of one kind. -/
+private theorem kind_eq {look : Pinned D} {x : D} {k k' : Nat} {a b : Cell}
+    (h : readKind look x k = .ok a) (h' : readKind look x k' = .ok b) : k = k' := by
+  obtain ⟨h1, h1k⟩ := readKind_look h
+  obtain ⟨h2, h2k⟩ := readKind_look h'
+  rw [h1] at h2
+  injection h2 with h2
+  injection h2 with h2
+  subst h2
+  exact h1k.symm.trans h2k
+
+omit [Ord D] [DecidableEq D] in
+private theorem other_of_kind {look : Pinned D} {e : D × Act} {k : Nat} {cl : Cell} (hk : k ≠ kindObject)
+    (hg : k ≠ kindGrant) (h : readKind look e.1 k = .ok cl) : OtherEffect look e :=
+  ⟨⟨k, cl, hk, h⟩, fun _ h' => absurd (kind_eq h h') hg⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- A counted right's spend writes only the grant it read, one entry appended to one ledger. -/
+private theorem spendAt_other {look : Pinned D} {base : Nat} {g : D} {cell : Cell} {units : Nat}
+    {short : Refusal D} {ef : Option (D × Act)} (hb : LedgerBase base)
+    (hg : readKind look g kindGrant = .ok cell) (h : spendAt base g cell units short = .ok ef) :
+    ∀ e ∈ ef.toList, OtherEffect look e := by
+  obtain ⟨i, left, hl, hu, hc⟩ := spendAt_ok h
+  rcases hc with ⟨-, rfl⟩ | ⟨h0, hi, rfl⟩
+  · simp
+  · intro e he
+    simp only [Option.toList_some, List.mem_singleton] at he
+    subst he
+    refine ⟨⟨kindGrant, cell, by decide, hg⟩, fun cl hcl => .inr ?_⟩
+    rw [hg] at hcl
+    cases hcl
+    exact ⟨base, i, left, units, hb, hl, Nat.pos_of_ne_zero h0, hu, hi, rfl⟩
+
+omit [Ord D] in
+/-- An invoke reads its object as an object. -/
+private theorem invokeRun_kind {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
+    {via : Option D} {r : Cell × D × Req D} (h : invokeRun X look c actor obj method via = .ok r) :
+    readKind look obj kindObject = .ok r.1 := by
+  unfold invokeRun at h
+  simp only [except_bind_ok] at h
+  obtain ⟨cell, hk, _, -, _, -, _, -, h⟩ := h
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  subst h
+  exact hk
 
 omit [Ord D] [DecidableEq D] in
 private theorem readAccount_kind {look : Pinned D} {x : D} {cell : Cell} {v : Value}
@@ -491,7 +546,7 @@ private theorem readRef_kind {X : Ctx D} {look : Pinned D} {r : AcctRef D} {x : 
 omit [Ord D] in
 private theorem checkParent_at {X : Ctx D} {look : Pinned D} {actor target : D} {rights : List Right}
     {parent : Option D} {ef : Option (D × Act)} (h : checkParent X look actor target rights parent = .ok ef) :
-    ∀ e ∈ ef.toList, ReadOther look e.1 := by
+    ∀ e ∈ ef.toList, OtherEffect look e := by
   cases parent with
   | none =>
       simp only [checkParent, except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
@@ -502,19 +557,19 @@ private theorem checkParent_at {X : Ctx D} {look : Pinned D} {actor target : D} 
       obtain ⟨pc, hpc, pt, -, ⟨⟩, -, pg, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
       intro e he
       split at h
-      · rw [spendEnroll_at h e he]; exact ⟨kindGrant, pc, by decide, hpc⟩
+      · exact spendAt_other (.inl rfl) hpc h e he
       · split at h
-        · rw [spendAt_at h e he]; exact ⟨kindGrant, pc, by decide, hpc⟩
+        · exact spendAt_other (.inr (.inl rfl)) hpc h e he
         · split at h
-          · rw [spendAt_at h e he]; exact ⟨kindGrant, pc, by decide, hpc⟩
+          · exact spendAt_other (.inr (.inr rfl)) hpc h e he
           · simp only [pure, Except.pure, Except.ok.injEq] at h
             subst h; simp at he
 
 omit [Ord D] [DecidableEq D] in
 /-- A counted right's spend through `via` writes only the grant it read (as a grant). -/
 private theorem spendVia_other {look : Pinned D} {base : Nat} {via : Option D} {units : Nat}
-    {short : D → Refusal D} {ef : Option (D × Act)} (h : spendVia look base via units short = .ok ef) :
-    ∀ e ∈ ef.toList, ReadOther look e.1 := by
+    {short : D → Refusal D} {ef : Option (D × Act)} (hb : LedgerBase base)
+    (h : spendVia look base via units short = .ok ef) : ∀ e ∈ ef.toList, OtherEffect look e := by
   cases via with
   | none =>
       simp only [spendVia, pure, Except.pure, Except.ok.injEq] at h
@@ -522,8 +577,7 @@ private theorem spendVia_other {look : Pinned D} {base : Nat} {via : Option D} {
   | some g =>
       simp only [spendVia, except_bind_ok] at h
       obtain ⟨gc, hgc, h⟩ := h
-      intro e he
-      rw [spendAt_at h e he]; exact ⟨kindGrant, gc, by decide, hgc⟩
+      exact spendAt_other hb hgc h
 
 omit [Ord D] in
 /-- **Every receiver but `write`, `law` and `invoke` writes only cells it read as another kind**: a
@@ -532,7 +586,7 @@ a credit line); births are not effects. -/
 private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
     {wk : Walk D} {actor : D} {b : Body D} {r : Draft D × Walk D}
     (hi : b.isInvoke = false) (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v)
-    (h : dispatch X look rv c sub wk actor b = .ok r) : ∀ e ∈ r.1.effects, ReadOther look e.1 := by
+    (h : dispatch X look rv c sub wk actor b = .ok r) : ∀ e ∈ r.1.effects, OtherEffect look e := by
   cases b with
   | invoke => simp [Body.isInvoke] at hi
   | write o e v => exact absurd rfl (hw o e v)
@@ -545,8 +599,7 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       simp only [pure, Except.pure, Except.ok.injEq] at hd
       intro e he
       rw [← hd] at he
-      rw [spendEnroll_at hs e he]
-      exact ⟨kindGrant, g, by decide, hg⟩
+      exact spendAt_other (.inl rfl) hg hs e he
   | rotate key next =>
       have hd := stepped_draft h
       unfold rotate at hd
@@ -557,7 +610,7 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       rw [← hd] at he
       simp only [List.mem_singleton] at he
       subst he
-      exact ⟨kindMember, m, by decide, hm⟩
+      exact other_of_kind (by decide) (by decide) hm
   | install pkg =>
       have hd := stepped_draft h
       unfold install at hd
@@ -601,7 +654,7 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       rw [← hd] at he
       simp only [List.mem_singleton] at he
       subst he
-      exact ⟨kindGrant, cell, by decide, hc⟩
+      exact ⟨⟨kindGrant, cell, by decide, hc⟩, fun _ _ => .inl rfl⟩
   | issue cap =>
       have hd := stepped_draft h
       unfold issue at hd
@@ -624,9 +677,9 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       rw [← hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact ⟨kindAccount, scell, by decide, readRef_kind hs⟩
-      · exact ⟨kindAccount, dcell, by decide, readRef_kind hdr⟩
-      · exact spendVia_other hsp e he
+      · exact other_of_kind (by decide) (by decide) (readRef_kind hs)
+      · exact other_of_kind (by decide) (by decide) (readRef_kind hdr)
+      · exact spendVia_other (.inr (.inl rfl)) hsp e he
   | credit well acct amount via =>
       have hd := stepped_draft h
       unfold credit at hd
@@ -638,15 +691,16 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       rw [← hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact ⟨kindAccount, wcell, by decide, readAccount_kind hwl⟩
-      · exact ⟨kindAccount, acell, by decide, readRef_kind har⟩
-      · exact spendVia_other hsp e he
+      · exact other_of_kind (by decide) (by decide) (readAccount_kind hwl)
+      · exact other_of_kind (by decide) (by decide) (readRef_kind har)
+      · exact spendVia_other (.inr (.inr rfl)) hsp e he
 
-/-- What a Draft's effects are, for the totality: at a cell read as another kind, or at an object
-an invoke the walk dispatched ran. -/
+/-- What a Draft's effects are, for the totality: another receiver's (`OtherEffect`), or at an
+object (read as one) an invoke the walk dispatched ran. -/
 private def EffectsAt (X : Ctx D) (w : World D) (c : Call D) (efs : List (D × Act)) : Prop :=
-  ∀ e ∈ efs, ReadOther (pinned X.env w c.unsigned.pins) e.1 ∨
-    ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke e.1 method args budget via)
+  ∀ e ∈ efs, OtherEffect (pinned X.env w c.unsigned.pins) e ∨
+    (∃ cl, readKind (pinned X.env w c.unsigned.pins) e.1 kindObject = .ok cl) ∧
+      ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke e.1 method args budget via)
 
 /-- One level of `dispatched_effects`: given it one level down, at this level. -/
 private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (n : Nat)
@@ -714,7 +768,7 @@ private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (
       refine key calls 0 _ r rfl rfl hdc (fun e he => ?_)
       simp only [writeOf, List.mem_singleton] at he
       subst he
-      exact .inr ⟨n, wk, a, method, args, budget, via, hd⟩
+      exact .inr ⟨⟨_, invokeRun_kind hir⟩, n, wk, a, method, args, budget, via, hd⟩
   | _ => simp [Body.isInvoke] at hb
 
 private theorem dispatched_effects {X : Ctx D} {w : World D} {c : Call D} :
@@ -778,8 +832,45 @@ theorem effect_at_object {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × 
       rw [hb] at hroot hR
       rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h) hR e he with
         h | h
-      · exact absurd h hother
-      · exact .inr (.inr h)
+      · exact absurd h.1 hother
+      · exact .inr (.inr h.2)
+
+/-- **The totality at a grant** (KERNEL-30): an effect of a signed call's derivation on `w` at a cell
+`w`'s pinned view reads as a grant is its revocation's retirement, or ONE append to one of its counted
+ledgers (`spendAt`: an enrolment, a transfer or credit line through it, a child carved from it). No
+other receiver, at any depth, writes a grant: `write`, `law` and an invoke's own write are at cells
+they read as objects, and the rest at cells they read by their own kind. -/
+theorem effect_at_grant {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
+    (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+      (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R)
+    {e : D × Act} (he : e ∈ R.1.effects) {cell : Cell}
+    (hk : readKind (pinned X.env w c.unsigned.pins) e.1 kindGrant = .ok cell) :
+    e.2 = .retire ∨ LedgerSpend e.1 cell e.2 := by
+  have notObj : ∀ cl, readKind (pinned X.env w c.unsigned.pins) e.1 kindObject = .ok cl → False :=
+    fun _ h => absurd (kind_eq h hk) (by decide)
+  cases hb : c.unsigned.body with
+  | write o edits via =>
+      rw [hb] at hR
+      obtain ⟨cl, _, _, hko, -, -, -, -, hdeq⟩ := write_judged (stepped_draft hR)
+      rw [hdeq] at he
+      simp only [writeOf, List.mem_singleton] at he
+      subst he
+      exact (notObj cl hko).elim
+  | law o laws via =>
+      rw [hb] at hR
+      obtain ⟨cl, _, _, hko, -, -, -, -, -, -, hef⟩ := law_judged (stepped_draft hR)
+      rw [hef] at he
+      simp only [writeOf, List.mem_singleton] at he
+      subst he
+      exact (notObj cl hko).elim
+  | _ =>
+      have hroot := Dispatched.root (X := X) (w := w) (c := c)
+      rw [hb] at hroot hR
+      rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h) hR e he with
+        h | ⟨⟨cl, hko⟩, -⟩
+      · exact h.2 cell hk
+      · exact (notObj cl hko).elim
 
 omit [Ord D] in
 private theorem actFor_none {obj : D} {l : List (D × Act)} (h : ∀ e ∈ l, e.1 ≠ obj) : actFor l obj = .keep := by
