@@ -103,7 +103,7 @@ second such writer only while neither lists, cleans or reads the other's); wheth
 time this once, since the next schedule may overlap them. A row run now is checked against every row run
 now and every carried row whose record holds what it wrote. A row whose writes cannot be seen never runs beside another: a
 `cargo-untraced:` row, every row of an untraced judge, and a row whose last run entered a mount namespace of its
-own (readset NS: a sandbox names paths in its own view) run alone after the rest; a row that ran beside others
+own (readset NS: its writes still lack a host mapping) run alone after the rest; a row that ran beside others
 and turned out unseen (no read-set, or NS), and every row that ran beside it, are run again alone, and those runs
 are their verdicts (`  alone ROW: …`). A concurrent red is a red like any other.
 THE CARRY (GATES-20l; standing: --reuse the previous standing's record, --record this one's, --daily SECONDS):
@@ -466,10 +466,9 @@ def valid_readset(t: tree.Tree, exe: str, store: str, gitdir: str, base: str, li
     reach_mods = reach_of(t, exe)
     for k, rec in readset.stored(store, exe)[:3]:
         rs, src = rec.get("readset"), rec.get("tree")
-        if not rs or not src or rec.get("line") != line or rs.get("NS") is not False:
-            # GATES-20g: a run inside a mount namespace of its own named what it read in that namespace's view,
-            # so its read-set may miss a box path it read through a mount; a record from before GATES-20g does
-            # not say: neither narrows (the static rules apply)
+        if not rs or not src or rec.get("line") != line or not readset.keyable(rs):
+            # GATES-20m: a namespace read-set narrows only if its bound reads were translated
+            # into host paths; older records or unsupported mounts use the static rules.
             continue
         diff = git_out(gitdir, "diff", "--name-only", src, base)
         if diff is None:
@@ -830,9 +829,9 @@ def main() -> int:
             rs0, line = prev[exe][1].get("readset"), row_line(t.root, a.table, exe)
             k = "t:" + readset.key(rs0, t.root, line) if rs0 and line else None
         at = prev[exe][1].get("at") if exe in prev else None
-        if exe in prev and prev[exe][0].startswith("t:") and (prev[exe][1].get("readset") or {}).get("NS") is not False:
-            head.say(f"  {word} {exe}: re-run (its record was traced inside a mount namespace, or before GATES-20g: "
-                     f"what it read there is not keyed)")
+        if exe in prev and prev[exe][0].startswith("t:") and not readset.keyable(prev[exe][1].get("readset") or {}):
+            head.say(f"  {word} {exe}: re-run (namespace bind sources were not mapped to host paths, "
+                     f"or the record predates GATES-20m)")
             continue
         if exe in prev and k is not None and prev[exe][0] == k and mine(exe) and a.daily is not None and (
                 not isinstance(at, (int, float)) or now - at > a.daily):

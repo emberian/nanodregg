@@ -1,7 +1,7 @@
 """gates/readset.py — traced read-sets (GATES-20; design redregg/work/GATES-20-DESIGN.md, ROOT F1/F2).
 
 Every verdict run executes under
-`strace -f -qq -y --seccomp-bpf -e trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir`
+`strace -f -qq -y --seccomp-bpf --decode-pids=pidns -e trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir,open_tree,move_mount,fsopen,fsconfig,fsmount,mount_setattr,umount2`
 (wrap). Its trace is reduced to a READ-SET over the judged tree (reduce):
   T = every tree path the run touched by name: opened, exec'd, probed and absent (ENOENT is a read of
       absence), and stat'ed, accessed or readlink'd BY CARGO: cargo's fingerprint compares a source's
@@ -26,8 +26,9 @@ Every verdict run executes under
       away (unlink, rmdir, a rename's source), its own directories' contents included (a row that empties a
       directory it made may empty another's inside it); LD every tree directory it LISTED (getdents64; L also
       holds a directory it only opened, and omits its own: L is an input set, LD a collision set). NS: some process of the run entered a mount
-      namespace of its own (clone/unshare CLONE_NEWNS, setns): the paths it names are its namespace's view, not
-      the box's, so its writes are not placed, and runs.py never runs such a row beside another.
+      namespace of its own (clone/unshare CLONE_NEWNS, setns). HOST_VIEW says every successful bind
+      into bwrap's newroot had a traced host source: reads below it are translated through the bind
+      table. NS writes remain unplaced, so runs.py still runs such a row alone.
   W = the waste rows (`op<TAB>metric`) the run MEASURED (its `WASTE` lines; runs.py adds it): no trace
       shows gates/waste.tsv, because the JUDGE reads it, not the run, yet its ceilings decide the row's
       verdict (GATES-20e, PERF-4's finding at 41e041f). The key holds each W row's ceiling and measured.
@@ -53,7 +54,7 @@ import shutil
 import subprocess
 import threading
 
-VERSION = b"GATES-20 traced key v4 (GATES-22: K, the stat-only paths, keyed by kind)"
+VERSION = b"GATES-20 traced key v5 (GATES-20m: namespace reads in host bind-source view)"
 WASTE = "gates/waste.tsv"
 EXCL = (".lake/runs/", ".lake/cargo-target/")
 BIN = ".lake/build/bin/"
@@ -69,15 +70,17 @@ def available() -> str | None:
     if not p:
         return None
     try:
-        r = subprocess.run([p, "-V"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([p, "--decode-pids=pidns", "-V"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
+    # Without host-PID annotations, clone inside CLONE_NEWPID returns a namespace PID
+    # different from the PID that prefixes its child's trace lines.
     return p if r.returncode == 0 else None
 
 
 def wrap(strace: str, argv: list[str], out: str) -> list[str]:
-    return [strace, "-f", "-qq", "-y", "--seccomp-bpf", "-e",
-            "trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir",
+    return [strace, "-f", "-qq", "-y", "--seccomp-bpf", "--decode-pids=pidns", "-e",
+            "trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir,open_tree,move_mount,fsopen,fsconfig,fsmount,mount_setattr,umount2",
             "-e", "signal=none",
             "-s", "4096", "-o", out] + list(argv)
 
@@ -94,7 +97,7 @@ def _class(path: str) -> str:
 DIRFD = re.compile(r'^(?:AT_FDCWD|-?\d+)<((?:[^>\\]|\\.)*)>,\s*')
 FDARG = re.compile(r'^-?\d+<((?:[^>\\]|\\.)*)>')
 CWD = re.compile(r'AT_FDCWD<((?:[^>\\]|\\.)*)>')
-RET = re.compile(r'=\s*(\d+)(?:<[^>]*>)?\s*$')
+RET = re.compile(r"=\s*(\d+)(?:<[^>]*>)?(?:\s+/\*\s*(\d+) in strace's PID NS \*/)?\s*$")
 CLONES = ("clone", "clone3", "fork", "vfork")
 COMPILERS = ("rustc",)
 
@@ -167,17 +170,41 @@ def reduce(trace: str, root: str) -> dict | None:
     ns: set[str] = set()        # GATES-20g: pids in a mount namespace of their own
     removed: set[str] = set()   # GATES-20g: write_key of every path removed or renamed away
     LD: set[str] = set()        # GATES-20g: every tree directory listed by getdents64, its own included
-    nspend: set[str] = set()    # a clone with CLONE_NEWNS whose child pid is still to come (`resumed`)
+    pending: dict[tuple[str, str], str] = {}  # strace interleaves unfinished and resumed mount/clone calls
+    binds: dict[str, dict[str, str]] = {}  # namespace destination -> host bind source, per pid
+    pivots: dict[str, int] = {}  # bwrap first pivots to /tmp, then to /newroot
+    mapped: set[str] = set()  # pids for which a host bind source was observed
+    unknown_mount: set[str] = set()  # a bind into newroot whose source could not be placed
     comp: set[str] = set()   # pids of a compile: exec'd rustc, or cloned from such a pid
     cargo: set[str] = set()  # pids of cargo itself: exec'd cargo, or cloned from such a pid, until another exec
     K: set[str] = set()
     made: set[str] = set()   # directories this run created: what lies under them is its own output
     cwd: dict[str, str] = {}
     parsed = 0
+    seen_pids: set[str] = set()
 
-    def place(s: str) -> None:
-        nonlocal T
-        s = os.path.normpath(s)
+    def host_path(pid: str, path: str) -> str | None:
+        path = os.path.normpath(path)
+        if pid not in ns or pivots.get(pid, 0) == 0:
+            return path
+        if path == "/oldroot" or path.startswith("/oldroot/"):
+            return path[len("/oldroot"):] or "/"
+        phase = pivots.get(pid, 0)
+        if phase == 1:
+            if not (path == "/newroot" or path.startswith("/newroot/")):
+                return None  # bwrap's pivot tmpfs, not a host path
+            path = path[len("/newroot"):] or "/"
+        elif path == "/newroot" or path.startswith("/newroot/"):
+            path = path[len("/newroot"):] or "/"
+        for dest, source in sorted(binds.get(pid, {}).items(), key=lambda item: -len(item[0])):
+            if under(path, dest):
+                return os.path.normpath(source + path[len(dest):])
+        return None  # a namespace scaffold, tmpfs or devpts, not a host input
+
+    def place(s: str, pid: str) -> str | None:
+        s = host_path(pid, s)
+        if s is None:
+            return None
         if s != root and not s.startswith(root + "/"):
             c = _class(s)
             outside[c] = outside.get(c, 0) + 1
@@ -194,32 +221,87 @@ def reduce(trace: str, root: str) -> dict | None:
         if not m:
             continue
         parsed += 1
+        seen_pids.add(m.group(1))
         pid, resumed, call, rest = m.group(1), m.group(2), m.group(3), m.group(4)
         call = call or resumed
+        # strace prints setup calls in two lines on a busy box. Their arguments are on the first
+        # and success/child pid on the resumed line; neither line alone establishes a bind.
+        if call in (*CLONES, "mount", "pivot_root", "unshare", "setns") and not resumed and "<unfinished ...>" in rest:
+            pending[(pid, call)] = rest.split("<unfinished ...>", 1)[0]
+            continue
+        if resumed and call in (*CLONES, "mount", "pivot_root", "unshare", "setns"):
+            first = pending.pop((pid, call), None)
+            if first is None:
+                unknown_mount.add(pid)
+                continue
+            rest = first + rest
         if call in CLONES:
-            # the child's pid is the return value (on the call's line, or on its `resumed` line)
             r = RET.search(rest)
-            if "CLONE_NEWNS" in rest:
-                nspend.add(pid)
-            if r and (pid in ns or pid in nspend):
-                ns.add(r.group(1))
             if r:
-                nspend.discard(pid)
-            if r and pid in comp:
-                comp.add(r.group(1))
-            if r and pid in cargo:
-                cargo.add(r.group(1))
-            if r and r.group(1) not in cwd and pid in cwd:
-                # a child starts in its parent's cwd (coreutils `mkdir -p` chdirs, then writes by a bare name)
-                cwd[r.group(1)] = cwd[pid]
+                child = r.group(2) or r.group(1)
+                if pid in ns or "CLONE_NEWNS" in rest:
+                    ns.add(child)
+                    binds[child] = dict(binds.get(pid, {}))
+                    pivots[child] = pivots.get(pid, 0)
+                    if pid in mapped:
+                        mapped.add(child)
+                    if pid in unknown_mount:
+                        unknown_mount.add(child)
+                if pid in comp:
+                    comp.add(child)
+                if pid in cargo:
+                    cargo.add(child)
+                if child not in cwd and pid in cwd:
+                    cwd[child] = cwd[pid]
             continue
         if call in ("unshare", "setns"):
-            if not resumed and ("CLONE_NEWNS" in rest or "ns/mnt" in rest or call == "setns") \
-                    and rest.rstrip().endswith("= 0"):
+            if rest.rstrip().endswith("= 0") and ("CLONE_NEWNS" in rest or call == "setns"):
                 ns.add(pid)
+                if call == "setns":
+                    unknown_mount.add(pid)  # a foreign namespace has no traced bind table
+            continue
+        if call in ("open_tree", "move_mount", "fsopen", "fsconfig", "fsmount", "mount_setattr"):
+            if pid in ns:
+                unknown_mount.add(pid)  # the new mount API has no bind mapping in this reducer
+            continue
+        if call == "umount2":
+            if pid in ns and not (rest.startswith('"oldroot"') or rest.startswith('"."')):
+                unknown_mount.add(pid)
+            continue
+        if call == "pivot_root":
+            if rest.rstrip().endswith("= 0"):
+                ns.add(pid)
+                pivots[pid] = pivots.get(pid, 0) + 1
+            continue
+        if call == "mount":
+            if rest.rstrip().endswith("= 0") and "MS_BIND" in rest and "MS_REMOUNT" not in rest:
+                names = STR.findall(rest)
+                if len(names) >= 2 and (names[1] == "/newroot" or names[1].startswith("/newroot/")):
+                    src, dest = names[:2]
+                    if "\\" in src or "\\" in dest:
+                        unknown_mount.add(pid)
+                        continue
+                    if src.startswith("/oldroot/"):
+                        source = src[len("/oldroot"):]
+                    elif pivots.get(pid, 0) == 0 and src.startswith("/"):
+                        source = src
+                    else:
+                        unknown_mount.add(pid)
+                        continue
+                    target = dest[len("/newroot"):]
+                    ns.add(pid)
+                    binds.setdefault(pid, {})[os.path.normpath(target)] = os.path.normpath(source)
+                    mapped.add(pid)
+                    # The bind source itself is an input, even when the child reads by the
+                    # destination's name. Child path reads below it are translated by host_path.
+                    r = place(source, "")  # empty pid is the host view
+                    if r is not None:
+                        T.add(r)
+                elif pivots.get(pid, 0) >= 1:
+                    unknown_mount.add(pid)  # a later bind outside newroot is not translated
             continue
         if resumed:
-            continue   # the call's arguments were printed on its `<unfinished ...>` line
+            continue   # ordinary calls' arguments were placed from their unfinished line
         # A name strace had to escape (a backslash: a byte it would not print, a quote) is not a path this
         # reducer can place: strace reads a string argument from the tracee's memory, and a thread that
         # rewrites it meanwhile leaves bytes (145283a's standing: `O\222\17\333\5` in members). The
@@ -240,7 +322,7 @@ def reduce(trace: str, root: str) -> dict | None:
                     if rest.rstrip().endswith("= 0"):
                         cwd[pid] = os.path.normpath(f.group(1))   # GATES-20g: `mkdir -p` walks by fchdir
                     continue
-                r = place(f.group(1))
+                r = place(f.group(1), pid)
                 if r is not None:
                     L.add(r)
                     LD.add(r)
@@ -295,7 +377,7 @@ def reduce(trace: str, root: str) -> dict | None:
         s = os.path.join(base, s) if s else base
         if call == "chdir" and rest.rstrip().endswith("= 0"):
             cwd[pid] = os.path.normpath(s)   # a bare name after it is relative to this
-        r = place(s)
+        r = place(s, pid)
         if r is None:
             continue
         if call in ("mkdir", "mkdirat"):
@@ -313,6 +395,7 @@ def reduce(trace: str, root: str) -> dict | None:
         (C if pid in comp else T).add(r)
     if parsed == 0:
         return _none("no strace line in the trace")
+    host_view = not ns or all(p in seen_pids and p in mapped and p not in unknown_mount for p in ns)
     own = lambda r: any(r == m or r.startswith(m + "/") for m in made)
     T = {r for r in T if not own(r)}
     C = {r for r in C if not own(r)} - T
@@ -322,8 +405,15 @@ def reduce(trace: str, root: str) -> dict | None:
     WR = {w for w in wrote if not any(under(w, m) for m in madew)}
     RM = {x for x in removed if not any(x != y and under(x, y) for y in removed)}
     return {"T": sorted(T), "C": sorted(C), "K": sorted(K), "L": sorted(L), "X": sorted(X),
-            "WR": sorted(WR), "O": sorted(O), "RM": sorted(RM), "LD": sorted(LD), "NS": bool(ns), "outside": outside,
+            "WR": sorted(WR), "O": sorted(O), "RM": sorted(RM), "LD": sorted(LD), "NS": bool(ns), "HOST_VIEW": host_view, "outside": outside,
             "outside_paths": {c: sorted(v)[:50] for c, v in outside_paths.items()}}
+
+
+def keyable(rs: dict) -> bool:
+    """A traced record may narrow/reuse only when its namespace status is explicit and,
+    for a namespace, every bind source was placed in the host view. Missing NS is a record
+    from before GATES-20g; missing HOST_VIEW on NS is a record from before GATES-20m."""
+    return rs.get("NS") is False or (rs.get("NS") is True and rs.get("HOST_VIEW") is True)
 
 
 def union(sets: list[dict | None]) -> dict | None:
@@ -335,6 +425,7 @@ def union(sets: list[dict | None]) -> dict | None:
            "LD": set(), "outside": {},
            "outside_paths": {}}
     ns = any(s.get("NS") for s in sets)
+    host_view = all(s.get("HOST_VIEW") is True for s in sets)
     for s in sets:
         for k in ("T", "C", "K", "L", "X", "WR", "O", "RM", "LD"):
             out[k] |= set(s.get(k, []))
@@ -348,7 +439,7 @@ def union(sets: list[dict | None]) -> dict | None:
             "O": sorted(m for m in out["O"] if not any(m != x and under(m, x) for x in out["O"])),
             "WR": sorted(w for w in out["WR"] if not any(under(w, m) for m in out["O"])),
             "RM": sorted(x for x in out["RM"] if not any(x != y and under(x, y) for y in out["RM"])),
-            "LD": sorted(out["LD"]), "NS": ns,
+            "LD": sorted(out["LD"]), "NS": ns, "HOST_VIEW": host_view,
             "outside": out["outside"],
             "outside_paths": {c: sorted(v)[:50] for c, v in out["outside_paths"].items()}}
 
