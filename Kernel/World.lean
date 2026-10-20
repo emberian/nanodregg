@@ -624,6 +624,25 @@ def under {K V : Type} (S : Trie.Spec K V D) (pre : ByteArray) (n : Nat) : Trie.
         -- prefix: the bits the path skipped are checked here, once, by one key's bytes
         if startsWith pre (S.kbytes rep) then takeList n (.node h b rep l r) else []
 
+/-- Bounded listing on the dirty overlay: no digest is read or computed. -/
+def takeListU {K V : Type} (n : Nat) : Trie.U K V D → List (K × V)
+  | .clean t => takeList n t
+  | .leaf kvs => kvs.take n
+  | .node _ _ l r =>
+      if n = 0 then [] else
+        let a := takeListU n l
+        a ++ takeListU (n - a.length) r
+
+/-- The prefix listing before seal, with exactly the sealed trie's bounded walk. -/
+def underU {K V : Type} (S : Trie.Spec K V D) (pre : ByteArray) (n : Nat) :
+    Trie.U K V D → List (K × V)
+  | .clean t => under S pre n t
+  | .leaf kvs => (kvs.filter fun p => startsWith pre (S.kbytes p.1)).take n
+  | .node b rep l r =>
+      if b < 8 * pre.size then
+        (if byteBit pre b then underU S pre n r else underU S pre n l)
+      else if startsWith pre (S.kbytes rep) then takeListU n (.node b rep l r) else []
+
 /-- A range read's rows (LANG-44 (c)): those of `rel` under `parent` whose key starts with `pre`,
 in key order, given the relation's key `width`; `none` past `most` (`rangeTooLong`: refused, never
 truncated). At most `most + 1` rows are read (KERNEL-48: the WASTE row rows-read-per-range-read). -/
@@ -1309,9 +1328,22 @@ def dropHeads (E : Env D) (t : Turn D) (acc : Rows D × Nat) : Rows D × Nat :=
               acc.2 + rowEntryWeight p)) acc
     | _ => acc) acc
 
+/-- Head removals join the rows batch; on canonical rows, the prefix walk and retains hash nothing.
+Sealing this result is exactly dropHeads of the sealed input, including freed weight. -/
+def dropHeadsU (E : Env D) (t : Turn D) (acc : Trie.U (RowSlot D) RowLeaf D × Nat) :
+    Trie.U (RowSlot D) RowLeaf D × Nat :=
+  t.touches.foldl (fun acc x => match x.act with
+    | .retire =>
+        ((underU (rowSpec E) (E.bytes x.cell) 257 acc.1).filter fun p => match p.1 with
+          | .head q _ => decide (q = x.cell)
+          | .row _ => false).foldl (fun acc p =>
+            (Trie.retainAtU (rowSpec E) (fun k _ => decide (k ≠ p.1)) (rowPath E p.1) acc.1,
+              acc.2 + rowEntryWeight p)) acc
+    | _ => acc) acc
+
 /-- Every row touch, in order, from the World's rows; slots distinct (`duplicateRow`). Returns the
 rows after the turn and the storage its row touches give back (`rowFreed`, summed). The touches run on
-the dirty overlay (`uStore`, cv 01a153a5-0e09), sealed once before the retired parents' heads leave: a
+the dirty overlay (`uStore`, cv 01a153a5-0e09), sealed once after the retired parents' heads leave: a
 node the turn's row and head writes and its retracts' re-joins share is hashed once (a retract joins
 the batch since cv 01a15460-e096). The same rows as each touch on the trie in
 turn (`Kernel.Proofs.Admit.rowsRun_eq`, no premise), which the proofs read. -/
@@ -1328,7 +1360,8 @@ def rowsRun (E : Env D) (w : World D) (t : Turn D) :
       -- passed as a value, `rowStepFreedOn (uStore E) E w t` compiled to the generic body and every
       -- store call to `lean_apply`)
       let acc ← t.rows.foldlM (fun acc x => rowStepFreedOn (uStore E) E w t acc x) (.clean w.rows, 0)
-      pure (dropHeads E t (acc.1.seal (rowSpec E), acc.2))
+      let acc := dropHeadsU E t acc
+      pure (acc.1.seal (rowSpec E), acc.2)
 
 /-- The rows after a checked turn and what its row touches give back. `check` ran `rowsRun` to
 `.ok`, so the fallback is unreachable after it. -/

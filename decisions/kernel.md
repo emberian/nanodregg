@@ -3043,3 +3043,114 @@ Teeth (kernel-sim): cancel:recorded, cancel-final:refusedFinal, cancel-other:bad
 **Re-genesis / re-emit.** None.
 **Second-agent read.** K30-READER: LAND. No statement is vacuous. Each disjunct of `effect_at_grant`, `grant_turn_cell` and `grant_turn_ledger` was checked on its own, and none follows from the premises alone. No public statement changed. Its three label fixes were taken.
 **Critique.** `grant_turn_ledger` names the spend's `u` existentially. Only the transfer and credit forms link `u` to the call's amount. An enrolment or a carve is the same append (`LedgerSpend`), but no `*_reads_back` names its count. LEDGER-7's Σ only needs that `u` is what left fell by, which `grant_turn_ledger` gives. A sum over carves would need a `checkParent` read-back.
+
+## KERNEL-62 · Whole-trie root binding (CX-KERNEL, 2026-10-20; cv 01a15849-3ae0)
+
+**Decision.** Equal roots bind canonical tries, or the hash collides among the explicit
+`bindingPres S vpre t u`: every node input of both tries, and every value input of
+both listings. The value inputs are essential: a leaf node commits value digests,
+so a list of node inputs alone cannot bind the values.
+
+`Trie.digests_eq_of_root` is induction on the actual deployed trie datatype and
+hashing equations, using WF and byte-encoding injectivity. It binds the ordered
+key/value-digest listing. `HeadSound.root_binds` uses the existing HeadSound
+instance to bind values, then Canon to reconstruct exactly the trie, including
+representative and digest caches. `HeadSound.root_binds_sep` gives equality with
+no escape under separation of that same finite list. The deployed instances are
+`Receive.deployed_trie_root_binds` and `Receive.deployed_rows_root_binds`.
+
+**Premises.** LANDED theorems gaining a hypothesis: none. LANDED statements
+restated: none. New statements use the existing Canon and leaf-codec Fits
+invariants, with the latter stated over the two listings. No global hash
+injectivity, unbounded collision existential, axiom, or new deployed check.
+
+**Vacuity read (author).** Neither equality nor a collision among these explicit
+inputs follows from Canon/Fits/HeadSound alone. Canonical tries can hold different
+values; a finite input list can be separated. Root equality does real work in
+the induction. The separation corollary removes the escape. The unconditional
+helpers identify actual hashing/list membership and do not use an empty premise.
+Independent reader CX-READER-KERNEL returned LAND on all 12 new statements,
+with the disjunct check and both real mutation teeth read; required fixes: none.
+
+**Tooth.** The compiled kernel-sim rows probe changes one live leaf to a tomb and
+requires the deployed root to change (`trie-binding:one-leaf`). All 64 seeds
+pass. A separate actual deployed-spec run, logs/cxkernel-binding-tooth.lean,
+passes normally and exits 1 when the value-domain hash ignores its bytes:
+logs/cxkernel-binding-tooth-red.log:1 is
+`FAIL trie-binding:one-leaf: different leaves kept the root`.
+Its entire output was read, not only the expected line.
+
+CROSS-LAYER: HOST: no Host path edited. Host.Proofs.Trusted.start_carry_commits can
+now replace its named-not-proved roots-to-tries line using the deployed cells and
+rows binding theorems, discharging their Canon/Fits from the carried World and
+extending its explicit collision list by the two bindingPres lists. This is the
+KERNEL ingredient; the stronger HOST conclusion is not claimed landed here.
+
+**Critique.** Listing all node/value inputs costs theorem statement and proof
+bookkeeping. It is necessary to cover interior-node and value collisions. Canon
+is necessary because representative keys are caches not committed by the hash;
+the result is not true for arbitrary manually constructed tries.
+
+**Meta-critique.** Reusing inclusion soundness key by key would hide the requested
+hashing induction and make the finite list depend on a queried key. The whole-tree
+induction exposes exactly what the root commits. A node-only input list would
+look smaller while silently losing the value-binding obligation.
+
+## KERNEL-63 · Retired heads join the rows overlay's seal (CX-KERNEL, 2026-10-20; cv 01a1553a-c095)
+
+**Decision.** Add bounded `takeListU` and `underU`, remove retired parents'
+heads with `dropHeadsU`, and seal after that step. The batch now hashes surviving
+written nodes once across row touches and retired-head removals.
+
+**Premise price.** LANDED theorems gaining hypotheses: none. LANDED statements
+restated: none. `rowsRun_eq` is literally unchanged; its proof uses the new
+unconditional `dropHeadsU_seal`, which preserves both the full trie and freed
+weight. `takeListU_seal` and `underU_seal` are unconditional too. No Store byte,
+root, refusal, or wire format moves, so this is kernel:, not kernel!; no re-genesis.
+
+**Requirement and measurements.** Required.rowsReq now marks all row operations
+and all retired-head removals, then counts surviving marked nodes once at the end.
+The old row probe contained no retirement. Add a real admitted turn retiring a
+parent with two relation heads while birthing a parent with eight heads. At seeds
+0–63 the real compiled rows run counts 960 hashes and requires 960; the previous
+seal-before-heads path counts 1088. The new WASTE
+`admit retire-heads-hashes-per-required` is 1.000 versus 1.134 for the old path.
+The two paths reach identical rows roots and freed weight, and the retired
+parent's bounded prefix listing is empty. Existing rows insert/retract/stem counts
+remain 4416/512/24576. All 64 seeds pass; every existing WASTE row is unchanged.
+Measured output: logs/cxkernel-final-sim64.log:76 and :101.
+
+**Real regression plant.** Restore only rowsRun's old
+`dropHeads E t (acc.1.seal ..., acc.2)`, build kernel-sim, run seed 0. Whole
+output read: exit 1, logs/cxkernel-plant-heads-red.log:2:
+`FAIL seed 0: retirement rows counted 17, required 15`.
+That run emits WASTE 1.134. The good source was restored after the plant.
+No check was removed or relaxed.
+
+**Worstcut retires.** The scoped real benchmark passes and measures 1,041,249
+hashes / 32,320 steps = 32.217 for both reopen and audit, exactly the previously
+measured logs/perf6-honest2-retires.out. The workload retires grants with no
+relation heads, so it cannot show a drop from this optimization. No wall-clock
+benchmark is evidence here. New output: logs/cxkernel-worstcut-retires.log.
+
+**Vacuity read (author).** The four new overlay/fold commutation lemmas are
+implementation/specification equalities on arbitrary inputs; no disjunction,
+contradictory instance, or new invariant premise. The unchanged rowsRun_eq ties
+them to deployed admission. CX-READER-KERNEL independently returned LAND,
+with no required fixes.
+
+**Critique.** The measured gain is specifically head-bearing retirement, not
+the old headless-grant benchmark. The fallback retainAtU arm may seal malformed
+out-of-depth shapes; canonical rows use bounded paths and never take it.
+The generic old dropHeads stays as the proof specification and mutation plant.
+
+**Meta-critique.** Expecting the old retire benchmark and retract row to fall was
+an untested workload assumption. Adding the missing admitted shape provides a
+real measurement; relabeling the old constant rows would not.
+
+**Landing authorization (ROOT, real 2026-10-20).** The measured retirement WASTE
+row (1088 to 960 hashes over 64 seeds) is approved as a tightening under GATES
+ownership. Its 1.000 ceiling is added in this commit; no existing ceiling rises.
+The separate emptyHash-cache task is closed as stale by ROOT; no cache edit.
+
+CROSS-LAYER: GATES (ROOT approved the measured row, real 10-20)

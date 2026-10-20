@@ -223,14 +223,15 @@ def T.toList : T K V D → List (K × V)
 /-! ## A batch: the dirty overlay (cv 01a15107-2281)
 
 `U` is a trie a batch is writing. It holds NO digest: a `clean` subtree is a `T` kept whole, with its
-cached digests, and a `leaf` or `node` is one the batch wrote and has not hashed. `U.seal` is its only
+cached digests, and a `leaf` or `node` is one the batch wrote and has not hashed. `U.seal` is its only hashing
 reader: it hashes each written node and leaf once, over its children's digests, and returns the `T`.
 One `clean` subtree is the batch's own: `insLeafU`'s build fallback (a new key that does not leave a
 one-entry leaf below `depth`, or any multi-entry leaf) returns `.clean (build …)`, a `T` the batch wrote
 and hashed AT INSERT TIME, not at seal; a later key of the same batch entering it re-hashes its path.
 Unreachable under injective key bytes (every leaf holds one entry, no two keys share a full bit path),
 which the deployed specs have.
-`T` stays the only authenticated shape: nothing reads, proves, lists or encodes a `U`. The batch IS the
+`T` stays the only authenticated shape. The open batch supports hash-free lookups and prefix
+listings on `U`; proofs and encodings still read `T`. The batch IS the
 sequential inserts (`Kernel.Proofs.Trie.seal_insU`, `insertAll_eq_foldl`: equal as `T` values, cached
 digests included, no premise); what the sequential fold hashed again (the nodes on a key's path an
 earlier insert of the same batch had already rebuilt) is hashed once. -/

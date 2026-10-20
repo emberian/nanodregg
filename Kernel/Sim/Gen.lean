@@ -218,6 +218,8 @@ structure State (D : Type) [Ord D] where
   rowInsReq : Nat := 0
   rowRetReq : Nat := 0
   stemReq : Nat := 0
+  /-- Surviving written nodes of the retirement-and-birth probe. -/
+  retireHeadsReq : Nat := 0
   /-- the wire bytes of the changed cells' inclusion proofs (`Params.proofSize`), and how many -/
   proofBytes : Nat := 0
   proofs : Nat := 0
@@ -364,6 +366,8 @@ structure Marks where
   /-- the retract turns' rows run (`<J`) and the plant `hash-required:rows-retract-seal`'s (`<Z`; cv 01a15460-e096) -/
   rowsRetRun : Nat := 0
   rowsRetSeal : Nat := 0
+  retireHeadsRun : Nat := 0
+  retireHeadsSeal : Nat := 0
   probeInsert : Nat := 0
   prune : Nat := 0
   refuse : Nat := 0
@@ -410,6 +414,8 @@ def countMarks (out : String) : Marks :=
     | some 'M' => { m with rowsRewalk := m.rowsRewalk + n }
     | some 'J' => { m with rowsRetRun := m.rowsRetRun + n }
     | some 'Z' => { m with rowsRetSeal := m.rowsRetSeal + n }
+    | some 'D' => { m with retireHeadsRun := m.retireHeadsRun + n }
+    | some 'I' => { m with retireHeadsSeal := m.retireHeadsSeal + n }
     | some 'K' => { m with probeInsert := m.probeInsert + n }
     | some 'R' => { m with prune := m.prune + n }
     | some 'F' => { m with refuse := m.refuse + n }
@@ -2100,6 +2106,12 @@ def plantRowsRewalk (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (
   let acc ← t.rows.foldlM (rowStepFreed E w t) (w.rows, 0)
   pure (dropHeads E t acc)
 
+/-- The pre-overlay retirement path: seal the rows batch, then remove heads
+one at a time. The retirement probe must measure this above its requirement. -/
+def plantHeadsSeal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (Rows D × Nat) := do
+  let acc ← t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0)
+  pure (dropHeads E t (acc.1.seal (rowSpec E), acc.2))
+
 /-- PLANT `hash-required:rows-retract-seal` (cv 01a15460-e096): the rows overlay whose removal seals
 the batch before it removes (`World.uStore.drop` before this cv: `.clean (retainAt … (u.seal))`), so a
 retract splits the batch, and the nodes its re-join and the head write after it share are hashed again. -/
@@ -2494,6 +2506,29 @@ def probeRows (P : Params D) (seed : Nat) : RowsM D Unit := do
   let w1 ← rowsOk P w0 (rowsTurn P w0 "create" [] [(p, cell)] [decl 0 3 10 2 true, decl 1 8 1000 2 false] [])
     "the parent's birth with its relations"
   rowsAgree E w1 p [] "after the declares"
+  -- A real admitted retirement shares its rows seal with a new parent's heads.
+  let q := cellIdOf E (rowsTx P w1 "retire-and-birth") 0
+  let replacement := rowsTurn P w1 "retire-and-birth"
+    [⟨p, pinOf E (w1.entry E p), .retire⟩] [(q, cell)]
+    ((List.range 8).map fun i => ⟨.head q i, none, .declare 8 1000 2 true⟩) []
+  let wr ← rowsOk P w1 replacement "rows-retire-heads"
+  let cE := countingEnv E
+  let current := dbgTrace "<D" fun _ => rowsRun cE w1 replacement
+  let planted := dbgTrace "<I" fun _ => plantHeadsSeal cE w1 replacement
+  hit "rows-retire-heads:equal"
+    (match current, planted with
+     | .ok a, .ok b => a.1.hashOf (rowSpec E) == wr.rowsRoot E &&
+         b.1.hashOf (rowSpec E) == wr.rowsRoot E && a.2 == b.2 &&
+         (under (rowSpec E) (E.bytes p) 257 wr.rows).isEmpty
+     | _, _ => false) "overlay and seal-before-heads disagree"
+  let needed := Required.rowsReq E w1 replacement
+    (fun k => (wr.rows.get (rowSpec E) k).getD Required.rowDummy)
+  modify fun st => { st with retireHeadsReq := st.retireHeadsReq + needed.2 }
+  -- One changed leaf in the real deployed trie must change its root.
+  let changed := w1.trie.insert (trieSpec E) (.cell p) (.entry .tomb)
+  hit "trie-binding:one-leaf" (changed.hashOf (trieSpec E) != w1.root E)
+    "changing a live leaf to a tomb kept the root"
+
   let keep := fun (w : World D) => (⟨p, pinOf E (w.entry E p), .keep⟩ : Touch D)
   let fl := fun (w : World D) (rel : Nat) => headFloor E w.rows p rel
   let key := fun (rel : Nat) (k : String) => (⟨p, rel, k.toUTF8⟩ : RowKey D)
@@ -2773,6 +2808,7 @@ def plantedArms : List String :=
    "proof-bit:refused", "depth-unhashed-plant:caught", "shape-unary-plant:caught",
    "pin-cell:same", "pin-cell-plant:caught", "pin-row:same", "pin-row-plant:caught",
    "pin-range:same", "pin-range-plant:caught", "rows-stem:ok",
+   "rows-retire-heads:equal", "hash-required:heads-seal", "trie-binding:one-leaf",
    "hash-required:empty-per-insert", "proof-required:extra-sibling", "proof-required:sibling-byte",
    "hash-required:rewalk", "hash-required:rows-rewalk", "hash-required:rows-retract-seal",
    "state-order-create:stateKey", "state-dup-create:stateKey", "state-order-control:ok",
@@ -2820,6 +2856,9 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   let mut rowsInsReqAll := 0
   -- cv 01a15460-e096: the retract turns with the retract-seal plant in place of the run
   let mut retSealCounted := 0
+  let mut headsRun := 0
+  let mut headsSeal := 0
+  let mut headsReq := 0
   -- (journal-probe inserts, prunes, refusals, row inserts, row retracts, stem inserts) required
   let mut reqs : Nat × Nat × Nat × Nat × Nat × Nat := (0, 0, 0, 0, 0, 0)
   let mut weighed := 0
@@ -2901,6 +2940,15 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     let st := if st.rowRetracts > 0 && ratioUp retSealN st.rowRetReq > ratioUp retShare st.rowRetReq then
         { st with seen := "hash-required:rows-retract-seal" :: st.seen } else st
     retSealCounted := retSealCounted + retSealN
+    let st := if m.retireHeadsRun = st.retireHeadsReq then st
+      else failWith st s!"retirement rows counted {m.retireHeadsRun}, required {st.retireHeadsReq}"
+    let st := if st.retireHeadsReq > 0 && m.retireHeadsSeal > m.retireHeadsRun then
+        meet st "hash-required:heads-seal"
+      else failWith st s!"heads-seal plant counted {m.retireHeadsSeal}, run {m.retireHeadsRun}"
+    headsRun := headsRun + m.retireHeadsRun
+    headsSeal := headsSeal + m.retireHeadsSeal
+    headsReq := headsReq + st.retireHeadsReq
+
     req := req.add st.required
     counted := counted + m.admit
     plantCounted := plantCounted + plantN
@@ -2971,6 +3019,8 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
   IO.println s!"kernel-sim: plant hash-required:rows-rewalk (each row touch on the trie in turn, the rows run before cv 01a153a5-0e09) counted={rowsRewalkCounted} over the insert turns' rows requirement {rowsInsReqAll}: hashes-per-required {showRatio (ratioUp rowsRewalkCounted rowsInsReqAll)}"
   IO.println s!"kernel-sim: plant hash-required:rewalk (each key in turn, the fold before cv 01a15107-2281) counted={rewalkCounted}: hashes-per-required {showRatio (ratioUp rewalkCounted req.total)}"
   IO.println s!"kernel-sim: plant hash-required:rows-retract-seal (a retract seals the batch before it removes, uStore.drop before cv 01a15460-e096) counted={retSealCounted} over the retract turns' rows requirement {reqs.2.2.2.2.1}: hashes-per-required {showRatio (ratioUp retSealCounted reqs.2.2.2.2.1)}"
+  IO.println s!"kernel-sim: retire heads counted={headsRun} required={headsReq}; plant seal-before-heads counted={headsSeal}: hashes-per-required {showRatio (ratioUp headsSeal headsReq)}"
+  IO.println s!"WASTE admit retire-heads-hashes-per-required {showRatio (ratioUp headsRun headsReq)}"
   IO.println s!"kernel-sim: required: journal probe inserts {reqs.1} (counted {jhashes.1}), prunes {reqs.2.1} (counted {jhashes.2.2.1}), refusals {reqs.2.2.1} (counted {rf.1}), row inserts {reqs.2.2.2.1} (counted {rw.1}), row retracts {reqs.2.2.2.2.1} (counted {rw.2.2.1}), stem inserts {reqs.2.2.2.2.2} (counted {stem.1})"
   IO.println s!"WASTE admit hashes-per-required {showRatio (ratioUp counted req.total)}"
   IO.println s!"WASTE admit journal-insert-hashes-per-required {showRatio (ratioUp jhashes.1 reqs.1)}"

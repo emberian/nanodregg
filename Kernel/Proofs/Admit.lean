@@ -5,6 +5,7 @@ Every theorem here is about `World.admit` itself (the receive path), not about a
 -/
 import Kernel.World
 import Kernel.Proofs.Check
+import Kernel.Proofs.RowsOverlay
 import Kernel.Proofs.TrieRetain
 
 namespace Nanodregg.Kernel
@@ -416,7 +417,12 @@ theorem rowsRun_eq {E : Env D} {w : World D} {t : Turn D} :
       (fun u k => Trie.seal_retainAtU (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) u) E w t acc x) _ _
   unfold rowsRun
   rw [← hfold]
-  cases t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0) <;> rfl
+  cases t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0) with
+  | error e => rfl
+  | ok acc =>
+      simp only [Functor.map, Except.map, bind, Except.bind, pure, Except.pure]
+      rw [← dropHeadsU_seal]
+      rfl
 
 /-- **The batch is the sequential trie** (cv 01a15107-2281): `commitTrie`'s one pass on the dirty
 overlay is `spendAll` over `insertAll` over `insertAll`, each key in turn, as a `T` value (cached

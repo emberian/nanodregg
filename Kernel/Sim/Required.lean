@@ -267,20 +267,20 @@ def rowOps (E : Env D) (x : RowTouch D) : List (Op (RowSlot D)) :=
   | .row key, .retract => [.del (.row key) (rowPath E (.row key)), .ins (.head key.parent key.rel)]
   | _, _ => []
 
-/-- The rows a turn writes, from `w`'s: each touch's operations in order on the dirty overlay
-(`World.uStore`, cv 01a153a5-0e09; since cv 01a15460-e096 a retract joins the batch, so the turn's row
-touches are ONE batch, `applyAllBatch`), sealed, then each retired parent's heads removed (`dropHeads`,
-listed by the kernel's own `under` on the rows as they then stand). DEFINED as what `rowsRun` hashes. -/
+/-- The rows a turn writes, including retiring parents' head removals, are
+one batch. Mark each operation's path in the sequential specification, then
+count surviving written nodes only once, after all removals. -/
 def rowsReq (E : Env D) (w : World D) (t : Turn D) (val : RowSlot D → RowLeaf) : Rows D × Nat :=
   let S := rowSpec E
-  let (r, n) := applyAllBatch S val w.rows (t.rows.flatMap (rowOps E))
-  t.touches.foldl (fun (acc : Rows D × Nat) x => match x.act with
+  let acc := (t.rows.flatMap (rowOps E)).foldl (applyMark S val) (w.rows, [])
+  let (r, ids) := t.touches.foldl (fun (acc : Rows D × List (Nat × List Bool)) x => match x.act with
     | .retire =>
         let heads := (under S (E.bytes x.cell) 257 acc.1).filterMap fun p => match p.1 with
           | .head q rel => if q = x.cell then some (Op.del (.head q rel) (rowPath E (.head q rel))) else none
           | .row _ => none
-        heads.foldl (apply S val) acc
-    | _ => acc) (r, n)
+        heads.foldl (applyMark S val) acc
+    | _ => acc) acc
+  (r, writtenReq S ids r)
 
 /-- **What an admission `w → w'` of `t` requires** (`E` uncounted). `.error` when `t` does not
 re-check on `w` or a replay does not reach `w'`'s root. -/
