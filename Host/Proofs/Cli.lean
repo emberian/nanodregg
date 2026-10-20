@@ -10,8 +10,9 @@ locks: it writes) throwing `none`: the same function, so the same order of effec
 `k` and `w`:
 
 * `import_genesis_iff` — `genesis` is the first writing effect reached, with key `k` and World `w`,
-  EXACTLY when the digest parsed, the nonce effect answered a nonce, the IN effect answered bytes,
-  `Carry.importWorld` accepted them under the digest (stamp, decode, anchor, KERNEL's carry) making
+  EXACTLY when the pin parsed, the nonce effect answered a nonce, the IN effect answered bytes,
+  `Carry.importWorld` accepted them under the pin (the digest, or the origin of the World made;
+  stamp, decode, anchor, KERNEL's carry) making
   `w`, and the key effect answered `k` (the bound on IN and the 32-byte key are the IO instance's
   `readBounded` and `Digest.ofBytes?`). Its `→` half is refuse-before-write; its `←` half is the tooth:
   a passing import reaches genesis before `reopen`, with the drawn key, so the claim is false of a
@@ -33,19 +34,19 @@ namespace Nanodregg.Host.Cli
 
 open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Host.Deployed
 
-theorem import_genesis_iff (name digestHex : String) (nonceR : Except Status ByteArray)
+theorem import_genesis_iff (name : String) (pinHex : PinArg) (nonceR : Except Status ByteArray)
     (inR : Except (StoreFault (Record.Fault (Reject D))) ByteArray) (keyR : Option Digest)
     (k : Digest) (w : World D) :
     importWith (m := Except (Option (Digest × World D)))
         { nonce := pure nonceR, readIn := pure inR, key := pure keyR,
           genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
           reopen := fun _ => throw none,
-          refuse := fun _ _ => pure 1, report := fun _ => pure () } name digestHex = .error (some (k, w)) ↔
-    ∃ want nonce bytes r, hexDigest digestHex = some want ∧ nonceR = .ok nonce ∧ inR = .ok bytes ∧
-      Carry.importWorld X Codec.Deployed.digestCodec name.toUTF8 nonce want bytes = .ok (w, r) ∧
+          refuse := fun _ _ => pure 1, report := fun _ => pure () } name pinHex = .error (some (k, w)) ↔
+    ∃ pin nonce bytes r, pinHex.parse = some pin ∧ nonceR = .ok nonce ∧ inR = .ok bytes ∧
+      Carry.importWorld X Codec.Deployed.digestCodec name.toUTF8 nonce pin bytes = .ok (w, r) ∧
       budgetFault w = none ∧ keyR = some k := by
   unfold importWith
-  cases hd : hexDigest digestHex <;> cases nonceR <;> cases inR <;>
+  cases hd : pinHex.parse <;> cases nonceR <;> cases inR <;>
     simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
   all_goals (try (intro h₁; subst h₁; simp_all))
@@ -129,38 +130,28 @@ theorem budgetFault_potential {w : World D} (ha : w.allowance ≤ allowanceMax) 
 `Carry.importWorld` makes is KERNEL's carry of a carried state the carried codec decoded
 (`carried_decode_fits`), and the carry keeps that state's cells and rows tries
 (`carryWorld`), so they are canonical and every cell leaf fits its slot. No premise. -/
-theorem importWorld_premises {name nonce : ByteArray} {want : Digest} {f : ByteArray} {w : World D}
-    {r : Carry.Read D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w, r)) :
+theorem importWorld_premises {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {w : World D}
+    {r : Carry.Read D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w, r)) :
     w.Canon X.env ∧ w.Slotted X.env ∧ w.RowsCanon X.env := by
-  unfold Carry.importWorld at h
-  split at h
-  · cases h
-  · cases h
-  · rename_i r₀ hr
-    split at h
-    · rename_i w₀ hw
-      cases h
-      unfold Carry.read at hr
-      split at hr
-      · cases hr
-      split at hr
-      · cases hr
-      split at hr
-      · cases hr
-      rename_i hd j _
-      split at hr
-      · cases hr
-      rename_i c hc
-      split at hr
-      · cases hr
-      cases hr
-      have hf := Codec.Kernel.carried_decode_fits Codec.Deployed.digestCodec_lawful.on hc
-      unfold Carry.world at hw
-      obtain ⟨-, rfl⟩ := Receive.carry_ok.mp hw
-      exact ⟨hf.cells.2,
-        fun s l hg => hf.cells.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 c.trie hf.cells.2.1 s l).mpr hg),
-        hf.rows.listing.2⟩
-    all_goals cases h
+  obtain ⟨hr, hw, -⟩ := Carry.importWorld_ok h
+  unfold Carry.read at hr
+  split at hr
+  · cases hr
+  split at hr
+  · cases hr
+  rename_i hd j _
+  split at hr
+  · cases hr
+  rename_i c hc
+  split at hr
+  · cases hr
+  cases hr
+  have hf := Codec.Kernel.carried_decode_fits Codec.Deployed.digestCodec_lawful.on hc
+  unfold Carry.world at hw
+  obtain ⟨-, rfl⟩ := Receive.carry_ok.mp hw
+  exact ⟨hf.cells.2,
+    fun s l hg => hf.cells.1.2 (s, l) ((Trie.mem_toList (trieSpec X.env) 0 c.trie hf.cells.2.1 s l).mpr hg),
+    hf.rows.listing.2⟩
 
 /-- **A joined World meets `budget_reaches`' premises** (HOST-59): the World an accepted invitation
 makes is KERNEL's genesis World of its signed inputs (PROTOCOL's `accept_ok`, `genesis_ok`). No premise. -/
@@ -173,9 +164,9 @@ theorem accept_premises {trusted inv : ByteArray} {i : Protocol.Invite.Invitatio
 
 /-- **`budget_reaches` at every World `host import` admits** (HOST-59): no premise beyond the import
 and the fold. -/
-theorem import_budget_reaches {name nonce : ByteArray} {want : Digest} {f : ByteArray} {w w' : World D}
+theorem import_budget_reaches {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {w w' : World D}
     {r : Carry.Read D} {l : List (Step D)}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w, r))
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w, r))
     (hb : budgetFault w = none) (hf : World.fold X.env w l = .ok w') :
     potentialRatio.2 * w'.weight ≤ potentialMax :=
   let ⟨hc, hs, hr⟩ := importWorld_premises h
@@ -194,18 +185,11 @@ step count to the height (`carryWorld`), so a Store `import` makes from a World 
 its first record at step N, and a page from before N is refused `beforeLog`
 (`Host.Page.build_beforeLog`). Over any Ctx and digest codec. -/
 theorem importWorld_steps {T : Type} [Ord T] [DecidableEq T] {X : Receive.Ctx T} {dc : Codec.Stream T}
-    {name nonce : ByteArray} {want : Digest} {f : ByteArray} {w : World T} {r : Carry.Read T}
-    (h : Carry.importWorld X dc name nonce want f = .ok (w, r)) : w.steps = w.height := by
-  unfold Carry.importWorld at h
-  split at h
-  · cases h
-  · cases h
-  · split at h
-    · rename_i w₀ hw
-      cases h
-      unfold Carry.world at hw
-      obtain ⟨-, rfl⟩ := Receive.carry_ok.mp hw
-      rfl
-    all_goals cases h
+    {name nonce : ByteArray} {pin : Carry.Pin T} {f : ByteArray} {w : World T} {r : Carry.Read T}
+    (h : Carry.importWorld X dc name nonce pin f = .ok (w, r)) : w.steps = w.height := by
+  obtain ⟨-, hw, -⟩ := Carry.importWorld_ok h
+  unfold Carry.world at hw
+  obtain ⟨-, rfl⟩ := Receive.carry_ok.mp hw
+  rfl
 
 end Nanodregg.Host.Cli

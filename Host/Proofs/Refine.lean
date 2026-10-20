@@ -416,8 +416,8 @@ theorem host_start_kept :
       Receive.genesis X name nonce allowance founders = .ok w → Kept w) ∧
     (∀ {trusted inv : ByteArray} {i : Protocol.Invite.Invitation D} {w : World D},
       Protocol.Invite.accept X trusted inv = .ok (i, w) → Kept w) ∧
-    (∀ {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray} {r : Carry.Read D} {w : World D},
-      Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w, r) → Kept w) := by
+    (∀ {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D} {w : World D},
+      Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w, r) → Kept w) := by
   have hg : ∀ {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {w : World D},
       Receive.genesis X name nonce allowance founders = .ok w → Kept w := by
     intro name nonce allowance founders w h

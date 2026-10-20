@@ -262,7 +262,10 @@ inductive SealFault where
   /-- the segment position the base would name is at or past 2^64: the base layout writes it as a
   u64 its reader (`Base.read`) would refuse, so the writer refuses it first (HOST-41's law: every
   encode on a write path refuses over the bound its decode enforces). Unreachable for a position
-  inside a segment the process could hold; a defect, the same class as `entryUnfit` -/
+  inside a segment the process could hold; a defect, the same class as `entryUnfit`. Also: the
+  newest segment file already starts at that position and its header does not state it (the seal's
+  World's step count and chain, the entries before it, the Store's origin: `headerFault`), so the base
+  could not name that file (`Checkpoint.rotate`'s reuse, HOST-64 F6) -/
   | positionUnfit (offset : Nat)
   /-- the index file is `size` bytes, not `offset`, the end of the entries the newest base counts:
   entries appended now would land elsewhere than the positions their tags name. Another process

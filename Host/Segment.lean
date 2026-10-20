@@ -61,6 +61,49 @@ def Base.peek (file : ByteArray) : Option (Nat × Nat × Nat) :=
   | .ok o, .ok r, .ok k => some (o, r, k)
   | _, _, _ => none
 
+/-! ## The logical segment across files (`Host.Store.Segs.read`'s core, HOST-64's follow-up) -/
+
+/-- The logical bytes `[cur, stop)` from the files starting at `starts` (ascending), where `rd o p n`
+reads `n` body bytes of the file starting at `o` from body offset `p`. It stops at `stop`, at a file
+starting past `cur` (a gap: nothing is read across it), and at a short read (the segment's end).
+`Host.Proofs.Segs.segGather_logical`: over files that are slices of one logical sequence `L`, this is
+`L.extract cur stop`. -/
+def segGather {m : Type → Type} [Monad m] (rd : Nat → Nat → Nat → m ByteArray) :
+    List Nat → Nat → Nat → m ByteArray
+  | [], _, _ => pure .empty
+  | o :: rest, cur, stop =>
+    if stop ≤ cur ∨ cur < o then pure .empty else
+    match rest.head? with
+    | none => rd o (cur - o) (stop - cur)
+    | some n =>
+      if n ≤ cur then segGather rd rest cur stop else do
+        let want := min stop n - cur
+        let got ← rd o (cur - o) want
+        if got.size < want then pure got else
+        return got ++ (← segGather rd rest (cur + got.size) stop)
+
+/-- `len` logical bytes from `off` across the files `starts` (fewer at the segment's end). The
+`Log.tagBytes` bytes before the oldest file (the tag its first frame chains from, HOST-18's preceding
+tag) are served from that file's header (`tagAt first`, which the header's MAC binds); anything
+further before it is not held, and reads as nothing. `Host.Store.Segs.read` is this over the files;
+`Host.Proofs.Segs.segRead_logical` states it returns the logical extract. -/
+def segRead {m : Type → Type} [Monad m] {E : Type} (tagAt : Nat → m (Except E ByteArray))
+    (rd : Nat → Nat → Nat → m ByteArray) (starts : List Nat) (off len : Nat) : m (Except E ByteArray) := do
+  let stop := off + len
+  match starts with
+  | [] => return .ok .empty
+  | first :: _ =>
+    if off < first then
+      if first - off ≤ Log.tagBytes then
+        match ← tagAt first with
+        | .error e => return .error e
+        | .ok tag =>
+          let t := tag.extract (Log.tagBytes - (first - off)) Log.tagBytes
+          let t := t.extract 0 (min t.size (stop - off))
+          return .ok (t ++ (← segGather rd starts (off + t.size) stop))
+      else return .ok .empty
+    else return .ok (← segGather rd starts off stop)
+
 /-- A retention count: `none` keeps every file (the default); `some n` keeps the `n` newest files,
 `n` at least `retainFloor`. -/
 abbrev Retain := Option Nat

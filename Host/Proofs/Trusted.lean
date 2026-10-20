@@ -23,7 +23,11 @@ field; the origin's existing commitment refuted it: two commitments to one start
 It is DISCHARGED
 
 * at the start of a Store: `genesis_trusted` (a genesis that passed the budget check) and
-  `import_trusted` (an import that passed it), with `l = []`;
+  `import_trusted` (an import that passed it), with `l = []`, each at its own origin; and
+  `import_trusted_pinned`: `host import --origin O` (card 7a) is trusted at the `O` passed, because
+  the import refuses any other origin (`carryMismatch wrongWorld`). The premise is named once:
+  `CheckpointTrusted` is over the recorded origin, and the origin pin is the one place a Store's start
+  is checked against an outside record (the invitation PROTOCOL-61 signs; that link is PROTOCOL's);
 * along every admitted fold after (`trusted_fold`), so a reopen from a trusted base opens to a
   trusted World (`openWith_trusted`);
 * for the writer's own base (`sealed_trusted`): a base file `Base.file` writes for a trusted World
@@ -33,7 +37,8 @@ It is DISCHARGED
   `openWith_trusted`, each seal `sealed_trusted`), which this module states link by link.
 
 It is NOT discharged for a RECEIVED base: a thin member's adopt (the pin binds the bytes, not their
-history: `Protocol.Thin`), a hosted follower's join from a served base, or a Store whose older segment
+history: `Protocol.Thin`), a hosted follower's join from a served base (a joiner of a CARRIED World
+instead imports its file under `--origin`, which `import_trusted_pinned` discharges), or a Store whose older segment
 files were dropped (HOST-64), whose history before the oldest kept file nobody here can re-derive. For
 those it is the premise, and the theorems below are what it buys:
 
@@ -68,8 +73,8 @@ structure CheckpointTrusted (o : D) (w : World D) : Prop where
   reached : ∃ (w₀ : World D) (l : List (Step D)), w₀.origin = o ∧
     ((∃ (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)),
         Receive.genesis X name nonce allowance founders = .ok w₀) ∨
-      (∃ (name nonce : ByteArray) (want : Digest) (f : ByteArray) (r : Carry.Read D),
-        Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r))) ∧
+      (∃ (name nonce : ByteArray) (f : ByteArray) (r : Carry.Read D),
+        Carry.read X.env Codec.Deployed.digestCodec f = .ok r ∧ Carry.world X name nonce r = .ok w₀)) ∧
     budgetFault w₀ = none ∧ Kept w₀ ∧ World.fold X.env w₀ l = .ok w
 
 /-- **A genesis that passed the budget check is trusted** (`host genesis`, `host join`: the budget
@@ -82,11 +87,25 @@ theorem genesis_trusted {name nonce : ByteArray} {allowance : Nat} {founders : L
     kept_of_fits (genesisWorld_codecFits hf), by simp [World.fold]⟩⟩
 
 /-- **An import that passed the budget check is trusted** (`host import`, HOST-59). -/
-theorem import_trusted {name nonce : ByteArray} {want : Digest} {f : ByteArray} {r : Carry.Read D}
-    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r))
+theorem import_trusted {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r))
     (hb : budgetFault w₀ = none) : CheckpointTrusted w₀.origin w₀ :=
-  ⟨⟨w₀, [], rfl, Or.inr ⟨name, nonce, want, f, r, h⟩, hb, kept_of_fits (importWorld_codecFits h),
+  ⟨⟨w₀, [], rfl, Or.inr ⟨name, nonce, f, r, (Carry.importWorld_ok h).1, (Carry.importWorld_ok h).2.1⟩, hb,
+    kept_of_fits (importWorld_codecFits h),
     by simp [World.fold]⟩⟩
+
+/-- **An import pinned at `o` is trusted at `o`** (`host import --origin`, card 7a): whatever `o` the
+operator passed, an import that succeeds made a World of that origin (the import refuses any other,
+`carryMismatch wrongWorld`, `Carry.importWorld_wrongWorld`). It is `import_trusted` with the pin's
+`Pin.Holds`; what it adds is the INSTANCE: the Store is trusted at the pinned `o`, which a joiner
+takes from a sponsor-signed invitation (PROTOCOL-61, PROTOCOL's to state: no invitation appears
+here), rather than at the origin its own import computed. Two imports pinned at one `o` carried one
+state up to an explicit collision (`start_carry_commits`). -/
+theorem import_trusted_pinned {name nonce : ByteArray} {o : D} {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce (.origin o) f = .ok (w₀, r))
+    (hb : budgetFault w₀ = none) : CheckpointTrusted o w₀ := by
+  have ho : w₀.origin = o := (Carry.importWorld_ok h).2.2
+  exact ho ▸ import_trusted h hb
 
 /-- An admitted fold from a trusted World reaches a trusted World. -/
 theorem trusted_fold {o : D} {w w' : World D} {l : List (Step D)} (ht : CheckpointTrusted o w)
@@ -216,10 +235,10 @@ same trie and rows ROOTS, allowance and height, and the same journal (canonical,
 is the trie), or their two carry inputs collide (KERNEL's `carry_inj_canon` over the explicit pair).
 What is NOT proved here: that equal roots are equal tries (the trie's own binding, a KERNEL theorem
 over its node preimages); the Worlds agree on everything the origin hashes. -/
-theorem start_carry_commits {name nonce name' nonce' : ByteArray} {want want' : Digest}
+theorem start_carry_commits {name nonce name' nonce' : ByteArray} {pin pin' : Carry.Pin D}
     {f f' : ByteArray} {r r' : Carry.Read D} {w₀ w₀' : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r))
-    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' want' f' = .ok (w₀', r'))
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r))
+    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' pin' f' = .ok (w₀', r'))
     (hj : Trie.Canon (journalSpec X.env) 0 r.carried.journal)
     (hj' : Trie.Canon (journalSpec X.env) 0 r'.carried.journal)
     (ho : w₀.origin = w₀'.origin) :
@@ -230,8 +249,8 @@ theorem start_carry_commits {name nonce name' nonce' : ByteArray} {want want' : 
       CollidesAmong X.env.hash
         [Receive.carryOriginPre X name nonce r.head.fromOrigin r.carried,
          Receive.carryOriginPre X name' nonce' r'.head.fromOrigin r'.carried] := by
-  obtain ⟨-, hw⟩ := Carry.importWorld_ok h
-  obtain ⟨-, hw'⟩ := Carry.importWorld_ok h'
+  obtain ⟨-, hw, -⟩ := Carry.importWorld_ok h
+  obtain ⟨-, hw', -⟩ := Carry.importWorld_ok h'
   obtain ⟨hf, rfl⟩ := Receive.carry_ok.mp hw
   obtain ⟨hf', rfl⟩ := Receive.carry_ok.mp hw'
   rcases Receive.carry_inj_canon Receive.deployed_lawful hj hj' hf hf' ho with
@@ -244,15 +263,15 @@ theorem start_carry_commits {name nonce name' nonce' : ByteArray} {want want' : 
 /-- **A genesis and an import never share an origin**, but by a collision between their two origin
 inputs (KERNEL's `carry_origin_ne_genesis`: the two cases of one tagged codec). -/
 theorem start_kinds_disjoint {name nonce name' nonce' : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {want : Digest} {f : ByteArray} {r : Carry.Read D} {w₀ w₀' : World D}
+    {founders : List (ByteArray × D)} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D} {w₀ w₀' : World D}
     (hg : Receive.genesis X name nonce allowance founders = .ok w₀)
-    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' want f = .ok (w₀', r))
+    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' pin f = .ok (w₀', r))
     (ho : w₀.origin = w₀'.origin) :
     CollidesAmong X.env.hash
       [Receive.carryOriginPre X name' nonce' r.head.fromOrigin r.carried,
        Receive.originPre X name nonce allowance founders] := by
   obtain ⟨_, rfl⟩ := Receive.genesis_ok.mp hg
-  obtain ⟨-, hw'⟩ := Carry.importWorld_ok h'
+  obtain ⟨-, hw', -⟩ := Carry.importWorld_ok h'
   obtain ⟨_, rfl⟩ := Receive.carry_ok.mp hw'
   exact Receive.carry_origin_ne_genesis ho.symm
 

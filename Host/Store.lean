@@ -191,43 +191,20 @@ def Segs.cover (s : Segs) (off : Nat) : IO (Except SegFault Unit) := do
   s.starts.set starts
   return .ok ()
 
-/-- `len` logical bytes from `off` (fewer at the segment's end). The 32 bytes before the oldest
-retained file (the tag its first frame chains from, HOST-18's preceding tag) are served from that
-file's header, which binds them. -/
+/-- `len` logical bytes from `off` (fewer at the segment's end): the files covering `off` learned
+(`cover`, `size`, which check each header and the contiguity), then `segRead` over them, a file's
+body read past its header. The 32 bytes before the oldest retained file are served from that file's
+header tag (`segRead`). `Host.Proofs.Segs.segRead_logical`: over files that are slices of the logical
+segment, this is its extract. -/
 def Segs.read (s : Segs) (off len : Nat) : IO (Except SegFault ByteArray) := do
   if let .error e ← s.cover off then return .error e
   if let .error e ← s.size then return .error e
   let starts ← s.starts.get
-  let stop := off + len
-  let mut out := ByteArray.empty
-  let mut cur := off
-  if let some first := starts[0]? then
-    if cur < first then
-      if first - cur ≤ Log.tagBytes then
-        match ← readHeader s.dir s.keys first with
-        | .error e => return .error e
-        | .ok (h, _, _) =>
-          let t := h.tag.bytes.extract (Log.tagBytes - (first - cur)) Log.tagBytes
-          let t := t.extract 0 (min t.size (stop - cur))
-          out := out ++ t
-          cur := cur + t.size
-      else return .ok out
-  for i in [0:starts.size] do
-    if stop ≤ cur then break
-    let o := starts[i]!
-    let next := starts[i + 1]?
-    if cur < o then break
-    if let some n := next then
-      if n ≤ cur then continue
-    let f ← File.open (segPath s.dir o) .read
-    let want := match next with
-      | some n => min stop n - cur
-      | none => stop - cur
-    let got ← f.readAt (headerBytes s.keys + (cur - o)).toUInt64 want.toUSize
-    out := out ++ got
-    cur := cur + got.size
-    if got.size < want then break
-  return .ok out
+  segRead (fun o => return (← readHeader s.dir s.keys o).map (·.1.tag.bytes))
+    (fun o p n => do
+      let f ← File.open (segPath s.dir o) .read
+      f.readAt (headerBytes s.keys + p).toUInt64 n.toUSize)
+    starts.toList off len
 
 def SegFault.text : SegFault → String
   | .missing o => s!"missing seg.{o}.log"
@@ -429,8 +406,11 @@ def keepFrom (dir : System.FilePath) (keys : Keys) (newest floor n : Nat) :
 
 `rotate` starts the file a seal at `pos` will name (HOST-64): its header (the position, the World's
 step count and chain, the entries before it, the newest file before it) written to `seg.tmp`, synced,
-renamed to `seg.<pos>.log`, the directory synced, and the append handle moved to it. Nothing when the
-newest file already starts at `pos` (a seal at the position of a seal that never installed).
+renamed to `seg.<pos>.log`, the directory synced, and the append handle moved to it. When the
+newest file already starts at `pos` (a seal at the position of a seal that never installed, or of the
+base the writer opened at) nothing is written, and that file is reused only if its header passes
+`headerFault` at the place the base will name: else `positionUnfit` (HOST-64 F6;
+`Host.Proofs.Seal.sealed_opens_reused` states the reused header then opens).
 
 `write` checks `index.<indexFrom>.log` ends exactly where the entries the newest base counts end
 (`indexMoved`), and both encodings, before anything is written. Keeping everything, it appends the
@@ -447,7 +427,21 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
   async
   rotate w pos count := do
     let newest ← wr.newest.get
-    if newest = pos.offset then return .ok ()
+    if newest = pos.offset then
+      -- the newest file already starts here (a seal at the position of one that never installed,
+      -- or of the base the writer opened at): it is the file this seal names only if its header
+      -- passes the open's own check at the place the base will name (`headerFault`, HOST-64 F6);
+      -- otherwise the seal refuses `positionUnfit` before anything is written
+      try
+        let f ← File.open (segPath dir pos.offset) .read
+        let hb ← f.readAt 0 (headerBytes keys).toUSize
+        match headerFault keys hb (origin w) pos.offset pos.tag (mark w) count with
+        | none => return .ok ()
+        | some f =>
+          -- the operator's distinction from a position past 2^64: the header's own fault, by name
+          IO.eprintln s!"STATUS rotate offset={pos.offset} reused=seg.{pos.offset}.log refused=positionUnfit header={f.name}"
+          return .error (.positionUnfit pos.offset)
+      catch e => return .error (.io (toString e))
     let h := Header.at pos (mark w) count newest (origin w)
     unless h.fits keys.chainBytes do return .error (.positionUnfit pos.offset)
     try

@@ -102,22 +102,22 @@ theorem mark_chain_width (key : Codec.Digest) (w : World D) :
     (recorder.mark w).2.size = (Keys.ofKey key shapes).chainBytes := by
   rw [recorder_mark]; simp only [Keys.ofKey, Codec.Digest.size_eq]
 
-/-- `Carry.world_carried` at the deployed codec (HOST-28): a file `host import` accepts hashes to
-the operator's digest, and the World it makes holds exactly the file's carried bytes at its anchor
-height. The codec premise is CODEC's `digestCodec_lawful`. -/
-theorem import_carried {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray} {r : Carry.Read D}
-    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) :
-    Carry.digestOf f = want ∧
+/-- `Carry.world_carried` at the deployed codec (HOST-28): a file `host import` accepts meets its pin
+(hashes to the operator's digest, or makes a World of the pinned origin), and the World it makes holds
+exactly the file's carried bytes at its anchor height. The codec premise is CODEC's `digestCodec_lawful`. -/
+theorem import_carried {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) :
+    pin.Holds f w₀ ∧
       (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes w₀.carried = f.extract r.carriedAt f.size ∧
       w₀.height = r.head.height :=
-  have ⟨hr, hw⟩ := Carry.importWorld_ok h
-  Carry.world_carried Codec.Deployed.digestCodec_lawful.on hr hw
+  have ⟨hr, hw, hp⟩ := Carry.importWorld_ok h
+  ⟨hp, Carry.world_carried Codec.Deployed.digestCodec_lawful.on hr hw⟩
 
 /-- `Carry.exportFile_reads` at the deployed codec: what `host export` writes, `host import`
-reads back under the printed digest, to the exported World's carried bytes and height. -/
+reads back (its digest pin is the printed digest itself), to the exported World's carried bytes and height. -/
 theorem export_reads {w : World D} {f : ByteArray}
     (h : Carry.exportFile X.env Codec.Deployed.digestCodec w = .ok f) :
-    ∃ r, Carry.read X.env Codec.Deployed.digestCodec (Carry.digestOf f) f = .ok r ∧
+    ∃ r, Carry.read X.env Codec.Deployed.digestCodec f = .ok r ∧
       (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes r.carried =
         (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes w.carried ∧
       r.head = ⟨w.origin, w.height, w.chain⟩ :=
@@ -182,11 +182,11 @@ theorem genesis_chain_eq (name nonce : ByteArray) (allowance : Nat) (founders : 
 
 /-- A World `host import` makes starts at the genesis chain of its NEW origin (KERNEL's
 `carryWorld`), not at the exported World's chain. -/
-theorem importWorld_chain_eq {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
+theorem importWorld_chain_eq {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
     {r : Carry.Read D} {w₀ : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) :
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) :
     w₀.chain = World.genesisChain X.env w₀.origin := by
-  obtain ⟨_, hw⟩ := Carry.importWorld_ok h
+  obtain ⟨_, hw, -⟩ := Carry.importWorld_ok h
   obtain ⟨_, rfl⟩ := Receive.carry_ok.mp hw
   rfl
 
@@ -307,12 +307,10 @@ theorem genesis_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {
     (genesis_chain_eq name nonce allowance founders) h
 
 /-- What a carried file reads back to is in the carried codec's domain. -/
-theorem read_carried_fits {want : Codec.Digest} {f : ByteArray} {r : Carry.Read D}
-    (h : Carry.read X.env Codec.Deployed.digestCodec want f = .ok r) :
+theorem read_carried_fits {f : ByteArray} {r : Carry.Read D}
+    (h : Carry.read X.env Codec.Deployed.digestCodec f = .ok r) :
     Codec.Kernel.Carried.CodecFits X.env (fun _ => True) r.carried := by
   unfold Carry.read at h
-  split at h
-  · cases h
   split at h
   · cases h
   split at h
@@ -329,11 +327,11 @@ theorem read_carried_fits {want : Codec.Digest} {f : ByteArray} {r : Carry.Read 
 (canonical, and the window of its carried height: CODEC-31's `kernel/carried-journal`, which
 HOST-39's proof found missing), height and allowance are the carried state's (`read_carried_fits`),
 the chain and origin are digests. -/
-theorem importWorld_codecFits {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
+theorem importWorld_codecFits {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
     {r : Carry.Read D} {w₀ : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) :
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) :
     Codec.Kernel.World.CodecFits X.env (fun _ => True) w₀ := by
-  obtain ⟨hr, hw⟩ := Carry.importWorld_ok h
+  obtain ⟨hr, hw, -⟩ := Carry.importWorld_ok h
   obtain ⟨hcf, rfl⟩ := Receive.carry_ok.mp hw
   have hfit := read_carried_fits hr
   exact { cells := hfit.cells, journal := hfit.journal,
@@ -349,9 +347,9 @@ theorem importWorld_codecFits {name nonce : ByteArray} {want : Codec.Digest} {f 
 /-- **`host import`'s Store reopens to the World the import made, holding exactly the file's
 carried bytes**: so `importWith`'s `carryMismatch reopen` compare passes whenever genesis writes
 the image. No premise beyond the two successes and the deployed chain width (`ofKey_chainBytes`). -/
-theorem import_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
+theorem import_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
     {r : Carry.Read D} {w₀ : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) {img : Image}
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) {img : Image}
     (hg : genesisImage keys c world recorder.mark w₀ = .ok img) :
     ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.header img.segment.size
         img.index.size (segReader img.index) (segReader img.segment)) = .ok o ∧

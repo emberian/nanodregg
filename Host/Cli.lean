@@ -32,9 +32,13 @@
                                                    sealed position it writes nothing. No socket op
                                                    seals: a forced seal writes the whole World
     host import STORE NAME IN --digest HEX [--nonce HEX32]
-                                                   a new Store from a carried file: the digest is
-                                                   REQUIRED and checked, with the stamp and the
-                                                   decode, before any Store file exists; KERNEL's
+    host import STORE NAME IN --origin HEX --nonce HEX32
+                                                   a new Store from a carried file, PINNED: by the
+                                                   file's digest (the operator's own carry), or by
+                                                   the origin of the World it makes (a sponsor's
+                                                   invitation names it with the name and nonce:
+                                                   another is `carryMismatch wrongWorld`); every
+                                                   check runs before any Store file exists; KERNEL's
                                                    one carry, the one genesis, then a reopen whose
                                                    carried bytes must be the file's (HOST-28)
 
@@ -86,7 +90,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] | host seal STORE [--retain N] | host join STORE INVITE_HEX KEY_HEX | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
+  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] | host seal STORE [--retain N] | host join STORE INVITE_HEX KEY_HEX | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -209,6 +213,20 @@ def exportVerb (store out : String) : IO UInt32 := do
 /-- The most bytes a carried file may have: its stamp and head, and a World's worth. -/
 def carriedMax : Nat := Carry.stampBytes + 128 + c.worldBytesMax
 
+/-- `host import`'s pin as given: `--digest HEX` or `--origin HEX`. -/
+inductive PinArg where
+  | digest (hex : String)
+  | origin (hex : String)
+
+/-- The pin's argument name (`usage digest` / `usage origin` when its hex does not parse). -/
+def PinArg.name : PinArg → String
+  | .digest _ => "digest"
+  | .origin _ => "origin"
+
+def PinArg.parse : PinArg → Option (Carry.Pin D)
+  | .digest h => (hexDigest h).map .digest
+  | .origin h => (hexDigest h).map .origin
+
 /-- What `host import` reaches outside itself, in the order it reaches it. Two effects write:
 `genesis` creates the Store's paths, and `reopen` (`openWriter`) locks, truncates and syncs what
 `genesis` wrote; `import_genesis_iff` states `genesis` comes first and only after every check. The
@@ -223,15 +241,17 @@ structure ImportFx (m : Type → Type) where
   refuse : Status → String → m UInt32
   report : List String → m Unit
 
-/-- `host import`'s decision over its effects. The digest parses (`usage digest`), the nonce, IN is
-at most `carriedMax`, and `Carry.importWorld` checks the digest, the stamp (`shapeMismatch`), the
-decode, the anchor and KERNEL's carry (a name or nonce past its bound is `usage`, any other refusal
-`carryMismatch`), and the key is 32 bytes; only then `genesis` writes the World, and the reopen's
+/-- `host import`'s decision over its effects. The pin parses (`usage digest` / `usage origin`), the
+nonce, IN is at most `carriedMax`, and `Carry.importWorld` checks the digest pin, the stamp
+(`shapeMismatch`), the decode, the anchor, KERNEL's carry (a name or nonce past its bound is `usage`,
+any other refusal `carryMismatch`) and the origin pin (`carryMismatch wrongWorld`), and the key is 32
+bytes; only then `genesis` writes the World, and the reopen's
 carried bytes must be the file's (`carryMismatch reopen`). The deployed verb is
 this function at `IO` (`importVerb`); `Host.Proofs.Cli.import_genesis_iff` states, over the same
 function, that `genesis` runs exactly when every check before it passed. -/
-def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name digestHex : String) : m UInt32 := do
-  let some want := hexDigest digestHex | fx.refuse .usage "digest"
+def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name : String) (pinHex : PinArg) :
+    m UInt32 := do
+  let some pin := pinHex.parse | fx.refuse .usage pinHex.name
   let nonce ← match ← fx.nonce with
     | .ok b => pure b
     | .error s => return ← fx.refuse s "nonce"
@@ -240,7 +260,7 @@ def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name digestHex :
     | .error (.base (.baseTooLarge _)) => return ← fx.refuse .carryMismatch "carryMismatch tooLarge"
     | .error f => return ← fx.refuse f.status f.text
   let dc := Codec.Deployed.digestCodec
-  let (w₀, r) ← match Carry.importWorld X dc name.toUTF8 nonce want bytes with
+  let (w₀, r) ← match Carry.importWorld X dc name.toUTF8 nonce pin bytes with
     | .ok p => pure p
     | .error (s, n) => return ← fx.refuse s n
   match budgetFault w₀ with
@@ -260,12 +280,13 @@ def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name digestHex :
         s!"from {r.head.fromOrigin.toHex}", s!"height {back.height}", s!"chain {back.chain.toHex}"]
       return 0
 
-/-- `host import STORE NAME IN --digest HEX [--nonce HEX32]`: `importWith` over the files.
+/-- `host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)`:
+`importWith` over the files.
 `genesis` is `Host.genesis` into STORE (the one writer of a Store path); every refusal before it
 leaves nothing (`import_genesis_iff`); a refusal from it on (genesis itself, `openWriter`, the
 reopen compare, an IO error mid-write) can leave a Store directory behind. -/
-def importVerb (store name inPath digestHex : String) (nonceArg : Option String) : IO UInt32 :=
-  importWith (name := name) (digestHex := digestHex)
+def importVerb (store name inPath : String) (pinHex : PinArg) (nonceArg : Option String) : IO UInt32 :=
+  importWith (name := name) (pinHex := pinHex)
     { nonce := genesisNonce nonceArg
       readIn := readBounded inPath carriedMax (fun n => .base (.baseTooLarge n))
       key := return Digest.ofBytes? (← IO.getRandomBytes 32)
@@ -432,9 +453,13 @@ def verb : List String → IO UInt32
     let some a := Check.Anchor.parse a | refuse .usage "anchor"
     Check.run store (some a)
   | ["export", store, out] => exportVerb store out
-  | ["import", store, name, inp, "--digest", d] => importVerb store name inp d none
-  | ["import", store, name, inp, "--digest", d, "--nonce", n] => importVerb store name inp d (some n)
-  | ["import", store, name, inp, "--nonce", n, "--digest", d] => importVerb store name inp d (some n)
+  | ["import", store, name, inp, "--digest", d] => importVerb store name inp (.digest d) none
+  | ["import", store, name, inp, "--digest", d, "--nonce", n] => importVerb store name inp (.digest d) (some n)
+  | ["import", store, name, inp, "--nonce", n, "--digest", d] => importVerb store name inp (.digest d) (some n)
+  -- an origin pin needs the invitation's nonce: a fresh one can never make the named origin
+  | ["import", store, name, inp, "--origin", o, "--nonce", n] => importVerb store name inp (.origin o) (some n)
+  | ["import", store, name, inp, "--nonce", n, "--origin", o] => importVerb store name inp (.origin o) (some n)
+  | ["import", _, _, _, "--origin", _] => refuse .usage "nonce"
   | "import" :: _ => refuse .usage "digest"
   | _ => do IO.eprintln usage; return Status.usage.code.toUInt32
 

@@ -239,6 +239,19 @@ def check (name : String) (ok : Bool) (failures : IO.Ref Nat) : IO Unit := do
   if ok then IO.println s!"PASS {name}" else
     IO.println s!"FAIL {name}"; failures.modify (· + 1)
 
+/-- plant-rotate-reuse (HOST-64 F6): what the in-memory `rotate` answers for a seal at the newest
+base's own place when the newest file there holds `hdr`: `reused`, or the refusal's name. -/
+def reuseVerdict (bases : Bases) (disk : Disk) (hdr : ByteArray) : IO String := do
+  match Base.read keys cadence world bases.file with
+  | .error _ => pure "unread"
+  | .ok (b, _, _) =>
+    let bref ← IO.mkRef { bases with headers := (bases.headers.filter (·.1 != b.offset)).push (b.offset, hdr) }
+    let dref ← IO.mkRef disk
+    match ← (memCheckpoint dref bref keys cadence world recorder.mark originChain).rotate b.world
+        ⟨b.offset, b.tag⟩ b.indexCount with
+    | .ok () => pure "reused"
+    | .error f => pure f.name
+
 def sameWorld (a b : World Nat) : Bool := a.height == b.height && a.chain == b.chain
 
 /-- HOST-17's count at one Store length: a run of `n` fresh Turns (seeded batch splits), and at
@@ -547,7 +560,7 @@ def sizeRows (seed : Nat) : IO Unit := do
 
 /-- HOST-28's plants, over the toy Ctx (`Kernel.Sim.ctx`, its u64 digest codec): the carried file
 of a World with a journal entry is exported and imported through the deployed pure functions
-(`Carry.exportFile`, `Carry.read`, `Carry.world`); a flipped byte under the original digest is
+(`Carry.exportFile`, `Carry.importWorld`); a flipped byte under the original digest is
 refused `digest`; another stamp (digest recomputed) `shapeMismatch`; a head whose anchor height is
 not the carried height `anchor`; two imports under two nonces are two Worlds. -/
 def carryPlants (failures : IO.Ref Nat) : IO Unit := do
@@ -560,7 +573,7 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
   | .error f => check s!"plant-carry: export of a World with a journal entry ({f.name})" false failures
   | .ok f =>
     let want := Carry.digestOf f
-    let imported (n : UInt8) := match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 n)) want f with
+    let imported (n : UInt8) := match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 n)) (.digest want) f with
       | .ok (w, _) => some w
       | .error _ => none
     match imported 1, imported 2 with
@@ -570,9 +583,9 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
       check "plant-carry: two imports under two nonces are two Worlds" (a.origin != b.origin) failures
     | _, _ => check "plant-carry: the exported file imports" false failures
     let refusedAs (want' : Codec.Digest) (g : ByteArray) : String :=
-      match Carry.read kx.env kdc want' g with
+      match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 1)) (.digest want') g with
       | .ok _ => "read"
-      | .error e => e.name
+      | .error (s, n) => if s == .shapeMismatch then "shapeMismatch" else (n.splitOn " ").getLast!
     let flipped := flipByte f (f.size - 1)
     check "plant-carry-flip: a carried byte flipped in transit, under the original digest, is refused `digest`"
       (flipped != f && refusedAs want flipped == "digest") failures
@@ -584,6 +597,23 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
     check "plant-carry-anchor: a head whose anchor height is not the carried height is refused `anchor`"
       (refusedAs (Carry.digestOf liar) liar == "anchor") failures
     check "plant-carry: the file reads back under its digest (control)" (refusedAs want f == "read") failures
+    -- plant-import-origin (card 7a, `host import --origin`): pinned at the origin the first import
+    -- made, the same file under the same name and nonce imports that World; under another nonce, or the
+    -- head's exported origin flipped (it decodes; no digest is checked under an origin pin, and the new
+    -- origin hashes the exported one), the carry makes another World and
+    -- the import refuses `carryMismatch wrongWorld` before anything is written
+    let nonceOf (n : UInt8) := ByteArray.mk (Array.replicate 32 n)
+    let pinned (n : UInt8) (o : Kernel.Sim.D) (g : ByteArray) : String :=
+      match Carry.importWorld kx kdc "carried".toUTF8 (nonceOf n) (.origin o) g with
+      | .ok (w, _) => if w.origin == o then "imported" else "other"
+      | .error (_, m) => m
+    match imported 1 with
+    | none => check "plant-import-origin: the exported file imports" false failures
+    | some a =>
+      let flippedCarried := flipByte f Carry.stampBytes
+      check s!"plant-import-origin: pinned at the invited origin it imports ({pinned 1 a.origin f}); another nonce ({pinned 2 a.origin f}) or the head's exported origin flipped ({pinned 1 a.origin flippedCarried}) is refused `carryMismatch wrongWorld`"
+        (pinned 1 a.origin f == "imported" && pinned 2 a.origin f == "carryMismatch wrongWorld" &&
+          pinned 1 a.origin flippedCarried == "carryMismatch wrongWorld") failures
 
 /-- HOST-31's plants: a seal refuses an `index.log` that is not the size of the base's prefix
 (`indexMoved`), and a page refuses an entry its codec cannot spell (`entryUnfit`). -/
@@ -792,7 +822,7 @@ def rowsPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
     match Carry.exportFile kx.env kdc kw with
     | .error f => check s!"plant-rows-carry: export of a World with rows ({f.name})" false failures
     | .ok f =>
-      match Carry.importWorld kx kdc "rows".toUTF8 (ByteArray.mk (Array.replicate 32 3)) (Carry.digestOf f) f with
+      match Carry.importWorld kx kdc "rows".toUTF8 (ByteArray.mk (Array.replicate 32 3)) (.digest (Carry.digestOf f)) f with
       | .error _ => check "plant-rows-carry: the exported file imports" false failures
       | .ok (a, _) =>
         check "plant-rows-carry: export then import keeps the rows (listing and root) under a new origin"
@@ -1453,6 +1483,14 @@ def run (args : List String) : IO UInt32 := do
         = "foreignSegment") failures
   check "plant-header-other-file: the genesis base's file header handed to the newest base is refused `foreignSegment`"
     (faultName (reopenH hGen r.bases.file r.disk.synced) = "foreignSegment") failures
+  -- plant-rotate-reuse (HOST-64 F6): when the newest file already starts at the seal's position,
+  -- `rotate` writes nothing and reuses it only if its header passes the open's check at the place the
+  -- base will name; else `positionUnfit` before the seal (before F6 it was reused unchecked and the
+  -- next open refused the installed base).
+  let reuse ← [hNew, restate hNew fun h => { h with indexCount := h.indexCount + 1 }, flipByte hNew 40].mapM
+    (reuseVerdict r.bases r.disk)
+  check s!"plant-rotate-reuse: the newest base's own header is reused; stating one more entry, or a byte flipped, is refused `positionUnfit` before the seal ({reuse})"
+    (reuse = ["reused", "positionUnfit", "positionUnfit"]) failures
   -- plant-old-shape (D2, HOST-20): the newest base re-sealed, byte for byte the same base, by a
   -- binary whose batch record admits one more Turn (another batch shape, so another stamp). The
   -- running binary must refuse it `shapeMismatch` by name; the binary that wrote it opens it.

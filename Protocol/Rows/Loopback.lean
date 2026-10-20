@@ -986,7 +986,7 @@ def runAct (l : Line) : M D (Expect × String) := do
             else match Codec.Digest.ofBytes? (flipLast d.bytes) with
               | some d' => d'
               | none => d
-          match Host.Carry.importWorld X R.dc Rows.Params.worldName (flipLast Rows.Params.nonce) want f with
+          match Host.Carry.importWorld X R.dc Rows.Params.worldName (flipLast Rows.Params.nonce) (.digest want) f with
           | .error (s, _) => do
               -- refused before anything is written: the old writer serves on
               set { st with host := ← Writer.start st.sys.writer st.mem r0 }

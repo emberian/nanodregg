@@ -1,11 +1,13 @@
 /-
 # Host.Proofs.Carry — what `host import` accepts, and that what `host export` writes imports (HOST-28)
 
-* `read_ok` — a file `Carry.read` accepts hashes to the operator's digest, carries this binary's
-  stamp at its head, and its carried bytes are exactly the bytes after its head (CODEC's canonical
-  decode: no other spelling reads back);
-* `read_digest` / `read_stamp` — the teeth: any other digest is refused `digest`, any other stamp
-  `shapeMismatch`, before a byte is decoded;
+* `read_ok` — a file `Carry.read` accepts carries this binary's stamp at its head, and its carried
+  bytes are exactly the bytes after its head (CODEC's canonical decode: no other spelling reads back);
+* `importWorld_ok` — an import accepts exactly what its pin (`Pin.Holds`: the file's digest, or the
+  made World's origin), `read` and `world` accept;
+* `importWorld_digest` / `read_stamp` / `importWorld_wrongWorld` — the teeth: any other digest is
+  refused `digest` before a byte is decoded, any other stamp `shapeMismatch`, and a carry making a
+  World of another origin than the pinned one `carryMismatch wrongWorld`, before anything is written;
 * `world_carried` — the World an import makes holds EXACTLY the file's carried bytes (KERNEL's
   `carry_carried`) at the file's anchor height: the reopen compare (`reopen`) is a pair assertion
   on the base codec, never the first check of the contents;
@@ -32,16 +34,13 @@ theorem head_lawfulOn {D : Type} {PD : D → Prop} {dc : Stream D} (hd : LawfulO
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-theorem read_ok [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) {want : Digest}
-    {f : ByteArray} {r : Read D} (h : read E dc want f = .ok r) :
-    digestOf f = want ∧ f.extract 0 stampBytes = (stamp E dc).bytes ∧
+theorem read_ok [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {f : ByteArray} {r : Read D} (h : read E dc f = .ok r) :
+    f.extract 0 stampBytes = (stamp E dc).bytes ∧
       f.extract stampBytes r.carriedAt = (head dc).bytes r.head ∧
       f.extract r.carriedAt f.size = (carried E dc).bytes r.carried ∧
       r.head.height = r.carried.height := by
   unfold read at h
-  split at h
-  · cases h
-  rename_i hdg
   split at h
   · cases h
   rename_i hst
@@ -56,32 +55,50 @@ theorem read_ok [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {PD : D → Pro
   rename_i hh
   cases h
   obtain ⟨_, hj, ho⟩ := (head_lawfulOn hd).occurs_of_get hget
-  refine ⟨by simpa using hdg, by simpa using hst, ?_, eq_bytes_of_carried_decode hd hc, by simpa using hh⟩
+  refine ⟨by simpa using hst, ?_, eq_bytes_of_carried_decode hd hc, by simpa using hh⟩
   rw [hj]; exact ho.2
 
-theorem read_digest (E : Env D) (dc : Stream D) {want : Digest} {f : ByteArray} (h : digestOf f ≠ want) :
-    read E dc want f = .error .digest := by
+theorem read_stamp (E : Env D) (dc : Stream D) {f : ByteArray} (h : f.extract 0 stampBytes ≠ (stamp E dc).bytes) :
+    read E dc f = .error (.stamp (f.extract 0 stampBytes)) := by
   unfold read; rw [if_pos h]
 
-theorem read_stamp (E : Env D) (dc : Stream D) {f : ByteArray} (h : f.extract 0 stampBytes ≠ (stamp E dc).bytes) :
-    read E dc (digestOf f) f = .error (.stamp (f.extract 0 stampBytes)) := by
-  unfold read; rw [if_neg (by simp), if_pos h]
+/-- What an import's pin demands of its file and the World it makes. -/
+def Pin.Holds : Pin D → ByteArray → World D → Prop
+  | .digest want, f, _ => digestOf f = want
+  | .origin o, _, w => w.origin = o
+
+/-- **Tooth: a digest pin refuses any other file** `carryMismatch digest`, before a byte is read. -/
+theorem importWorld_digest (X : Receive.Ctx D) (dc : Stream D) (name nonce : ByteArray) {want : Digest}
+    {f : ByteArray} (h : digestOf f ≠ want) :
+    importWorld X dc name nonce (.digest want) f = .error (.carryMismatch, "carryMismatch digest") := by
+  unfold importWorld; simp only [if_pos h]; rfl
+
+/-- **Tooth: an origin pin refuses a World of another origin** `carryMismatch wrongWorld`: the file
+reads and KERNEL's carry makes `w`, and still nothing is imported (`import --origin`, card 7a). -/
+theorem importWorld_wrongWorld {X : Receive.Ctx D} {dc : Stream D} {name nonce : ByteArray} {o : D}
+    {f : ByteArray} {r : Read D} {w : World D} (hr : read X.env dc f = .ok r)
+    (hw : world X name nonce r = .ok w) (ho : w.origin ≠ o) :
+    importWorld X dc name nonce (.origin o) f = .error (.carryMismatch, "carryMismatch wrongWorld") := by
+  unfold importWorld carryFile
+  rw [hr]
+  simp only [hw, ho, decide_false, Bool.false_eq_true, if_false]
+  rfl
 
 /-- **An import holds exactly the file's carried bytes**, at the file's anchor height. -/
 theorem world_carried [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
-    {X : Receive.Ctx D} {name nonce : ByteArray} {want : Digest} {f : ByteArray}
+    {X : Receive.Ctx D} {name nonce : ByteArray} {f : ByteArray}
     {r : Read D} {w₀ : World D}
-    (hr : read E dc want f = .ok r) (hw : world X name nonce r = .ok w₀) :
-    digestOf f = want ∧ (carried E dc).bytes w₀.carried = f.extract r.carriedAt f.size ∧
+    (hr : read E dc f = .ok r) (hw : world X name nonce r = .ok w₀) :
+    (carried E dc).bytes w₀.carried = f.extract r.carriedAt f.size ∧
       w₀.height = r.head.height := by
-  obtain ⟨hdg, _, _, hb, hh⟩ := read_ok hd hr
+  obtain ⟨_, _, hb, hh⟩ := read_ok hd hr
   have hc := Receive.carry_carried hw
-  refine ⟨hdg, by rw [hc, hb], ?_⟩
+  refine ⟨by rw [hc, hb], ?_⟩
   rw [hh, ← hc]; rfl
 
 theorem exportCheck_reads [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {dc : Stream D} {w : World D}
     {f f' : ByteArray} (h : exportCheck E dc w f = .ok f') :
-    f' = f ∧ ∃ r, read E dc (digestOf f) f = .ok r ∧
+    f' = f ∧ ∃ r, read E dc f = .ok r ∧
       (carried E dc).bytes r.carried = (carried E dc).bytes w.carried ∧
       r.head = ⟨w.origin, w.height, w.chain⟩ := by
   unfold exportCheck at h
@@ -96,28 +113,48 @@ theorem exportCheck_reads [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {dc :
       rw [← ho, ← hh, ← hc]
     · cases h
 
-/-- `importWorld` accepts exactly what `read` then `world` accept. -/
-theorem importWorld_ok {X : Receive.Ctx D} {dc : Stream D} {name nonce : ByteArray} {want : Digest}
-    {f : ByteArray} {w : World D} {r : Read D}
-    (h : importWorld X dc name nonce want f = .ok (w, r)) :
-    read X.env dc want f = .ok r ∧ world X name nonce r = .ok w := by
-  unfold importWorld at h
+theorem carryFile_ok {X : Receive.Ctx D} {dc : Stream D} {name nonce : ByteArray}
+    {f : ByteArray} {accept : World D → Bool} {w : World D} {r : Read D}
+    (h : carryFile X dc name nonce f accept = .ok (w, r)) :
+    read X.env dc f = .ok r ∧ world X name nonce r = .ok w ∧ accept w = true := by
+  unfold carryFile at h
   split at h
   · cases h
   · cases h
   · rename_i r' hr
     split at h
     · rename_i w' hw
-      cases h
-      exact ⟨hr, hw⟩
+      split at h
+      · rename_i ha
+        cases h
+        exact ⟨hr, hw, ha⟩
+      · cases h
     all_goals cases h
+
+/-- `importWorld` accepts only what its pin, `read` and `world` accept. -/
+theorem importWorld_ok {X : Receive.Ctx D} {dc : Stream D} {name nonce : ByteArray} {pin : Pin D}
+    {f : ByteArray} {w : World D} {r : Read D}
+    (h : importWorld X dc name nonce pin f = .ok (w, r)) :
+    read X.env dc f = .ok r ∧ world X name nonce r = .ok w ∧ pin.Holds f w := by
+  unfold importWorld at h
+  cases pin with
+  | digest want =>
+    simp only at h
+    split at h
+    · cases h
+    · rename_i hd
+      obtain ⟨hr, hw, -⟩ := carryFile_ok h
+      exact ⟨hr, hw, by simpa [Pin.Holds] using hd⟩
+  | origin o =>
+    obtain ⟨hr, hw, ha⟩ := carryFile_ok h
+    exact ⟨hr, hw, by simpa [Pin.Holds] using ha⟩
 
 /-- **What export writes, import reads back**: the exported World's carried bytes and its head
 (origin, the lineage `import` commits in the new origin; height and chain, the anchor), under the
 digest export prints. -/
 theorem exportFile_reads [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {dc : Stream D} {w : World D}
     {f : ByteArray} (h : exportFile E dc w = .ok f) :
-    ∃ r, read E dc (digestOf f) f = .ok r ∧ (carried E dc).bytes r.carried = (carried E dc).bytes w.carried ∧
+    ∃ r, read E dc f = .ok r ∧ (carried E dc).bytes r.carried = (carried E dc).bytes w.carried ∧
       r.head = ⟨w.origin, w.height, w.chain⟩ := by
   obtain ⟨rfl, hr⟩ := exportCheck_reads h
   exact hr
@@ -152,10 +189,10 @@ theorem exportFile_ok [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {PD : D �
   have hdec := (carried_decode_iff hd hfit).mpr hC.symm
   have hst' : (file E dc w).extract 0 stampBytes = (stamp E dc).bytes := by
     rw [hf, hS, ← hst]; exact ByteArray.extract_append_eq_left rfl
-  have hread : read E dc (digestOf (file E dc w)) (file E dc w) =
+  have hread : read E dc (file E dc w) =
       .ok ⟨⟨w.origin, w.height, w.chain⟩, w.carried, stampBytes + H.size⟩ := by
     unfold read
-    rw [if_neg (by simp), if_neg (by simp [hst']), hget]
+    rw [if_neg (by simp [hst']), hget]
     dsimp only
     rw [htail, hdec]
     dsimp only

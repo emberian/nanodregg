@@ -360,6 +360,51 @@ theorem sealed_opens_deployed (keys : Keys) (hkeys : keys.chainBytes = Digest.wi
             trivial, trivial⟩)
       simpa only [Header.at, Prod.eta] using this)
 
+/-- **A reused file opens** (HOST-64 F6): when the newest segment file already starts at the seal's
+position, `Checkpoint.rotate` writes nothing and reuses it only if its header `H'` passes
+`headerFault` at the seal's place with the count `spawnSeal` hands it (`sealed.index.count +
+index.size`): `hreuse` is that IO check, literally. Then the new base opens from it exactly as from
+a fresh header (`sealed_opens_deployed`; the count is the base's `ix'.count` by `seal_facts`). The
+refusal of a header that does not pass is the IO's (`rotate` answers `positionUnfit` before the seal
+Task runs), witnessed by host-sim `plant-rotate-reuse`, not by this theorem. -/
+theorem sealed_opens_reused (keys : Keys) (file₀ H I S : ByteArray) {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file₀ H S.size I.size
+      (segReader I) (segReader S)) = .ok o)
+    {keep : Keep} {page file : ByteArray} {ix' : IndexAt}
+    (hseal : Base.seal (keys.forStore (originChain o.opened.world)) c world o.opened.world o.pos
+      o.sealed.index (sealEntries o.index) I.size keep = .ok (page, ix', file))
+    {H' : ByteArray}
+    (hreuse : headerFault keys H' (originChain o.opened.world) o.pos.offset o.pos.tag
+      (recorder.mark o.opened.world) (o.sealed.index.count + o.index.size) = none) :
+    Id.run (openWith keys c world recorder.mark originChain foldStep file H' (S.extract 0 o.pos.offset).size
+        (I ++ page).size (segReader (I ++ page)) (segReader (S.extract 0 o.pos.offset))) =
+      .ok ⟨⟨o.opened.world, 0, 0, o.pos.tag.bytes, 0⟩,
+        ⟨o.pos.offset, world.size o.opened.world, (recorder.mark o.opened.world).1,
+          (recorder.mark o.opened.world).2,
+          keys.worldDigest (worldBytesOf file (world.size o.opened.world)), ix'⟩, o.pos, #[], 0⟩ :=
+  sealed_opens keys c world recorder.mark originChain foldStep
+    (Codec.Kernel.world_lawfulOn X.env Codec.Deployed.digestCodec_lawful.on)
+    (fun _ _ _ hs => foldStep_originChain hs) (fun _ _ _ hs => foldStep_steps hs) (by decide) file₀ H I S h
+    (openWith_codecFits h) hseal (by
+      obtain ⟨-, -, -, -, -, -, -, -, -, hcnt, -⟩ :=
+        seal_facts keys c world recorder.mark originChain foldStep
+          (Codec.Kernel.world_lawfulOn X.env Codec.Deployed.digestCodec_lawful.on)
+          (fun _ _ _ hs => foldStep_originChain hs) (fun _ _ _ hs => foldStep_steps hs) (by decide) file₀ H I S h
+          (openWith_codecFits h) hseal
+      rw [hcnt]; exact hreuse)
+
+/-- The tooth of the reuse check: a header that verifies but states another entry count than the
+seal's is refused (`foreignSegment` from `headerFault`, which `rotate` answers `positionUnfit`), so the
+reused-header branch is not a pass-through. -/
+theorem reuse_refuses_count (keys : Keys) {H' : ByteArray} {h : Header} (hr : Header.read keys H' = some h)
+    {origin : ByteArray} {offset count : Nat} {tag : Digest} {mark : Nat × ByteArray}
+    (ho : h.origin = origin) (hc : h.indexCount ≠ count) :
+    headerFault keys H' origin offset tag mark count = some .foreignSegment := by
+  unfold headerFault
+  rw [hr]
+  simp only [ho, ne_eq, not_true_eq_false, if_false]
+  rw [if_neg (fun hp => hc hp.2.2.2.2)]
+
 /-- The tooth of `Base.file_offset_lt`: a base whose World fits but whose position is at or past
 2^64 is refused `positionUnfit` by name, before anything is encoded. -/
 theorem file_positionUnfit (keys : Keys) {w : World D} {seg : Position} (ix : IndexAt) (keep : Keep)

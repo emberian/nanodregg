@@ -3020,3 +3020,53 @@ NOT PROVED:
 **Flag day.** None for an honest Store: every count-0 base this Host writes sits at the origin end (genesis, import, join, adopt at genesis; HOST-20: past genesis every base counts ≥ 1 and a drop never empties the count). A base counting none anywhere else, which no honest writer produces, now refuses to open `indexCorrupt`.
 
 **Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.** No vacuity: `RunFrom` constrains in both arms (the `[]` arm forces the base to the origin end; the cons arm pins entry 0's offset, which `Indexes` ties to a verifying frame); `Coherent` is satisfiable (genesis and import, through `of_open_empty` and `genesisImage_opens`' then-branch); `page_beforeLog_origin` has no disjunct or existential in its conclusion. No honest Store refused (seal with an empty tail keeps offset and count; `append` pushes one entry per record; retention never makes a count-0 base; adopt only at step 0, where `openWith_steps_zero` gives count 0 and the origin end; genesis/import proved). No check weakened. The plant reaches the new arm (header forged at count 0 passes `headerFault`; `indexNamed` passes at count 0 with `Digest.zero`). Taken: the step-count half restored as an explicit Not-proved bullet (Coherence header) and in `page_beforeLog_first`'s and `page_beforeLog_origin`'s docs; "no record before it" points at the open's origin check (HOST-25, HOST-64's header); the plant reads the forged base's own offset.
+
+## HOST-67 · three of HOST-64's follow-ups: `host import --origin` (the pin CheckpointTrusted is stated over), `Segs.read` is the logical extract, and rotate's reuse checks the header (2026-10-20, HOST-19; cv 01a1583d-864c items 1, 2, 4)
+
+**(1) `host import STORE NAME IN --origin HEX --nonce HEX32`** (card 7a, ROOT's (B′), PROTOCOL-61's Host half; PROTOCOL-23 agreed the name).
+- `Carry.importWorld` takes a `Pin`: `.digest d` (the operator's own carry, unchanged) or `.origin o` (a sponsor's invitation).
+- The digest check moved out of `Carry.read` into `importWorld`. It still runs first, before the stamp and before any decode.
+- An origin pin checks no digest. After KERNEL's carry, a World whose origin is not `o` is refused `carryMismatch wrongWorld` (exit 49, the same reason word as PROTOCOL's `adoptWrongWorld` row), before anything is written.
+- `--origin` without `--nonce` is `usage nonce`: `carryOriginOf` hashes the name and nonce, so a fresh nonce can never make the named origin. PROTOCOL-61's carried invitation therefore signs (origin, name, nonce, from, anchor), and the joiner takes its name and nonce from it.
+- **One premise, named once.** `import_trusted_pinned`: an import pinned at `o` that passes the budget check is `CheckpointTrusted o w₀` at the `o` passed. It is `import_trusted` plus `Pin.Holds`; what it adds is the instance. `import_trusted` alone trusts the origin the import computed, which (HOST-64's third read) certifies any World some start admits. The pin is the one place a Store's start is checked against an outside record, and a joiner takes it from the sponsor-signed invitation: PROTOCOL-61's Start, PROTOCOL's to state; no invitation appears in this theorem. So `CheckpointTrusted` over the recorded origin and `import --origin` are one premise: checked once at the start, then carried by `trusted_fold` / `openWith_trusted` through every open.
+- `CheckpointTrusted`'s import disjunct is restated as `∃ name nonce f r, Carry.read f = .ok r ∧ Carry.world name nonce r = .ok w₀`. Main's `∃ want` (and a draft's `∃ pin`) was a no-op quantifier: `digestOf f` always passes. Equivalent, not weaker. The origin carries the information (`w₀.origin = o`), as before.
+- Teeth:
+  - `importWorld_wrongWorld` (the file reads, the carry makes `w`, `w.origin ≠ o` ⇒ refused);
+  - `importWorld_digest`;
+  - host-sim `plant-import-origin`: pinned at the origin the first import made, the same file, name and nonce import; another nonce, or the head's exported origin flipped (decodes; no digest is checked), refused `carryMismatch wrongWorld`. With the pin accepting every World it reads `FAIL … (other) (other)`.
+
+**(2) `Segs.read` is the logical extract** (HOST-64's meta-critique: "the file reader is code with plants, not a theorem").
+- `Store.Segs.read` now learns the files (`cover`, `size`, unchanged), then runs `segRead`. `segRead` / `segGather` are a pure core over a body reader, in `Host.Segment`, generic in the monad, at `IO` over the files.
+- Behaviour unchanged: the tag served from the oldest file's header for the 32 bytes before it; a stop at a gap, at a short read, at `stop`.
+- `Host.Proofs.Segs`:
+  - `SlicesOf L body starts`: ascending files, each body `L`'s slice to the next start, the newest to `L`'s end.
+  - `segGather_logical` (from any `cur` at or past the oldest start: `L.extract cur stop`).
+  - `segRead_logical` (from `first - 32` on, when the oldest header's tag is those bytes of `L`).
+  - `segRead_whole`: the retain=∞ identity HOST-64 asserted. A Store keeping every file reads at every offset exactly what `segReader L` reads, which is what the single `seg.log` held; no tag is read.
+- Satisfiable: `slicesOf_two` (a real boundary), `slicesOf_whole`.
+- Teeth: `segGather_gap` (a read before the oldest known file gathers nothing) and `segGather_short` (a body shorter than its slice: the read is `1`, not `1 2 3 4`).
+- host-file-sim and store-plants exercise the IO side unchanged.
+
+**(3) rotate's early return** (HOST-64 F6, "fails closed: the next open refuses `foreignSegment`").
+- When the newest file already starts at the seal's position, `rotate` writes nothing. That happens for a seal at the position of one that never installed, or of the base the writer opened at.
+- It now reuses the file only if its header passes the open's own `headerFault` at the place the base will name: offset, tag, the World's step count and chain, the entries counted (`spawnSeal`'s count = `ix'.count`) and the origin. Otherwise the seal refuses `positionUnfit` before anything is written. The deployed `fileCheckpoint` and the memory `memCheckpoint` make the same check.
+- Before, such a header was reused unchecked. The base was installed, and the Store then refused its next open: a Store that served and could not reopen.
+- `sealed_opens_reused` (Deployed): its premise is literally the IO's check, at `spawnSeal`'s count `sealed.index.count + index.size` (`seal_facts` equates it with the base's `ix'.count`). Under it, a reused header opens the new base exactly as a fresh one. `reuse_refuses_count` is its tooth. The refusal itself is IO, witnessed by the plant, not by the theorem.
+- host-sim `plant-rotate-reuse`: the newest base's own header is reused; the same header re-sealed under the key stating one more entry, or a byte flipped, is refused `positionUnfit`. With the check disabled it reads `FAIL … [reused, reused, reused]`.
+- `positionUnfit` was chosen over a new status because one status is one name (`StoreFault.status_iff_name`), and the class fits: the base cannot name that position's file. No exit, unit or generated-file change. The operator's distinction from a position past 2^64 is a stderr line before it: `STATUS rotate offset=O reused=seg.O.log refused=positionUnfit header=NAME` (the header's own `headerFault` name).
+
+**Law-6 read (second agent, read-only, WITH the disjunct check): LAND-WITH-FIXES, all taken.** No vacuous statement, no landed theorem gained a premise or lost strength, no check removed; the --digest path keeps digest → stamp → decode. Taken: (1) `import_trusted_pinned`'s doc claimed the invitation link the statement does not have (reworded; the link is PROTOCOL-61's); (2) the no-op `∃ pin` in `CheckpointTrusted` dropped (above); (3) `sealed_opens_reused`'s premise restated at spawnSeal's count, discharged through `seal_facts`; (4) `positionUnfit` overloaded: kept, with the named stderr line; (5) `importWorld_ok`'s doc "exactly" → "only" (one direction, as on main); (6) `segRead_logical`'s `32 ≤ first` premise named in the doc (every file but `seg.0.log` follows the longer origin frame).
+
+**Premise spread.**
+- No landed theorem gains a premise. `read_ok`, `world_carried` and `read_carried_fits` lose the digest conjunct: the digest is no longer `read`'s.
+- `import_carried`'s first conjunct is now `pin.Holds f w₀` (the digest when digest-pinned, the origin when origin-pinned).
+- Every theorem over `importWorld` is generalized from `want` to `pin`: `import_genesis_iff`, `importWorld_premises`, `importWorld_steps`, `import_reopens`, `import_indexes`, `start_carry_commits`, `start_kinds_disjoint`, `host_start_kept`. Each conclusion is unchanged, over every pin.
+
+**Critique.**
+- The origin pin is only as strong as `carryOriginOf`'s binding. It commits the carried roots, and equal roots ⇒ equal tries is KERNEL's open trie-binding theorem (cv 01a15849-3ae0), so `start_carry_commits` still stops at roots.
+- `SlicesOf` for the files on disk is the files' own property. The headers check starts and contiguity; that each body's bytes are the logical bytes the writer appended is the File layer and the MAC chain the open verifies.
+- The CLI argument match (`--origin` with `--nonce`) has no plant against the real binary. store-plants (OPS's) is where it belongs.
+
+**Meta-critique.** F6 was named "fails closed" at HOST-64 and left. It failed closed only after a base had been installed over the bad header: the Store served, then could not reopen. "Fails closed" at the wrong step is a refusal in the wrong place, and it took one `headerFault` call to move it.
+
+**Flag day.** None. The --digest import, the files, the base and the exits are unchanged. `host import … --origin H --nonce N` is new, and `--origin` without `--nonce` refuses `usage nonce`.

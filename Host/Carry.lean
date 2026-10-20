@@ -13,13 +13,22 @@ by name, before a byte of it is decoded, never reinterpreted. Nobody promises th
 stable (HOST-28): a flag day that changes it cannot carry.
 
 The file is not MAC'd (no Store key crosses a flag day, HOST-16). `export` prints the file's
-digest (`Carry.digestOf`, its own domain) and `import --digest` is REQUIRED: the operator's
-out-of-band link from the old Store to the bytes imported. `Carry.read` checks, in order and
-before anything is written: the digest (`digest`), the stamp (`shapeMismatch`), the head and the
-carried bytes decode (`decode`), and the head's height is the carried height (`anchor`). Import
-then builds the World by KERNEL's ONE carry (`Receive.carry`) and writes it with the one genesis
-(`Host.genesis`); the reopen's carried bytes must be the file's (`reopen`). Every refusal but
-`shapeMismatch` and the kernel's own is `carryMismatch` with its reason on stderr.
+digest (`Carry.digestOf`, its own domain). An import is PINNED, one of two ways (`Pin`):
+
+* `--digest HEX`: the operator's out-of-band link from the old Store to the bytes imported (its own
+  carry, RUNBOOK §5), checked first, before a byte is decoded (`digest`);
+* `--origin HEX --nonce HEX32`: the World a sponsor's invitation names (card 7a, ROOT's (B′)): the
+  carried World's origin (`carryOriginOf`, which hashes the carried roots, allowance, height, journal,
+  the exported origin, the name and the nonce) must be the named one, checked after KERNEL's carry
+  and before anything is written (`wrongWorld`, PROTOCOL-61's word). This is the pin
+  `Host.Proofs.Trusted.CheckpointTrusted` is stated over: `import_trusted_pinned` discharges it at the
+  INVITATION's origin, one premise named once.
+
+`Carry.read` then checks, in order: the stamp (`shapeMismatch`), the head and the carried bytes decode
+(`decode`), and the head's height is the carried height (`anchor`). Import builds the World by
+KERNEL's ONE carry (`Receive.carry`) and writes it with the one genesis (`Host.genesis`); the reopen's
+carried bytes must be the file's (`reopen`). Every refusal but `shapeMismatch` and the kernel's own
+is `carryMismatch` with its reason on stderr.
 
 Export checks its own file reads back (`Carry.exportFile`) before it writes OUT.
 Theorems: `Host.Proofs.Carry`.
@@ -49,7 +58,7 @@ def head (dc : Stream D) : Stream (Head D) :=
 
 def domStamp : String := "nanodregg/host/carried/v1"
 
-/-- The file's digest domain: the digest `export` prints and `import --digest` requires. -/
+/-- The file's digest domain: the digest `export` prints and `import --digest` pins. -/
 def domFile : String := "nanodregg/host/carried-file/v1"
 
 /-- The stamp of a carried file: the digest of the head's and the carried codec's tags. Computed
@@ -67,10 +76,18 @@ def file (E : Env D) (dc : Stream D) (w : World D) : ByteArray :=
   (stamp E dc).bytes ++ (head dc).bytes ⟨w.origin, w.height, w.chain⟩ ++
     (Codec.Kernel.carried E dc).bytes w.carried
 
+/-- What an import is pinned to: the file's digest (the operator's own carry), or the origin of the
+World it makes (a sponsor's invitation, card 7a). -/
+inductive Pin (D : Type) where
+  | digest (want : Digest)
+  | origin (o : D)
+
 /-- Why a carried file is not imported (or exported). -/
 inductive Fault where
   /-- the file does not hash to the digest the operator gave -/
   | digest
+  /-- the World the carry makes has another origin than the one the import is pinned to -/
+  | wrongWorld
   /-- the file was written under other shapes (`stored`) than this binary's -/
   | stamp (stored : ByteArray)
   /-- the head or the carried bytes do not decode -/
@@ -85,6 +102,7 @@ inductive Fault where
 
 def Fault.name : Fault → String
   | .digest => "digest"
+  | .wrongWorld => "wrongWorld"
   | .stamp _ => "shapeMismatch"
   | .decode _ => "decode"
   | .anchor => "anchor"
@@ -97,10 +115,9 @@ structure Read (D : Type) [Ord D] where
   carried : Carried D
   carriedAt : Nat
 
-/-- Read a carried file, checking (in this order, before anything is written) its digest, its
-stamp, that its head and carried bytes decode, and that the anchor height is the carried one. -/
-def read (E : Env D) (dc : Stream D) (want : Digest) (f : ByteArray) : Except Fault (Read D) :=
-  if digestOf f ≠ want then .error .digest else
+/-- Read a carried file, checking (in this order, before anything is written) its stamp, that its
+head and carried bytes decode, and that the anchor height is the carried one. -/
+def read (E : Env D) (dc : Stream D) (f : ByteArray) : Except Fault (Read D) :=
   if f.extract 0 stampBytes ≠ (stamp E dc).bytes then .error (.stamp (f.extract 0 stampBytes)) else
   match (head dc).get f stampBytes with
   | .error r => .error (.decode r)
@@ -114,26 +131,37 @@ nonce, from the exported origin. -/
 def world (X : Receive.Ctx D) (name nonce : ByteArray) (r : Read D) : Except Receive.CarryRefusal (World D) :=
   Receive.carry X name nonce r.head.fromOrigin r.carried
 
-/-- THE import decision, pure (`host import` and PROTOCOL's carry row both call it): read the file
-under the operator's digest, then KERNEL's one carry. A refusal is its exit Status and its stderr
-name: another stamp is `shapeMismatch`; a name or nonce past its bound `usage`; anything else
-`carryMismatch` with its reason. -/
-def importWorld (X : Receive.Ctx D) (dc : Stream D) (name nonce : ByteArray) (want : Digest)
-    (f : ByteArray) : Except (Status × String) (World D × Read D) :=
-  match read X.env dc want f with
+/-- Read the file, then KERNEL's one carry, then `accept` the World it makes (an origin pin;
+`carryMismatch wrongWorld` otherwise). -/
+def carryFile (X : Receive.Ctx D) (dc : Stream D) (name nonce : ByteArray) (f : ByteArray)
+    (accept : World D → Bool) : Except (Status × String) (World D × Read D) :=
+  match read X.env dc f with
   | .error (.stamp _) => .error (.shapeMismatch, "carried")
   | .error e => .error (.carryMismatch, s!"carryMismatch {e.name}")
   | .ok r =>
     match world X name nonce r with
-    | .ok w => .ok (w, r)
+    | .ok w => if accept w then .ok (w, r) else .error (.carryMismatch, s!"carryMismatch {Fault.wrongWorld.name}")
     | .error .nameTooLong => .error (.usage, "nameTooLong")
     | .error .nonceTooLong => .error (.usage, "nonceTooLong")
     | .error e => .error (.carryMismatch, s!"carryMismatch carry {e.name}")
 
-/-- Export's own check of a file `f` for `w`: it reads back, under its own digest, to `w`'s carried
+/-- THE import decision, pure (`host import` and PROTOCOL's carry row both call it): a digest pin is
+checked first, then the file read, then KERNEL's one carry, then an origin pin. A refusal is its exit
+Status and its stderr name: another stamp is `shapeMismatch`; a name or nonce past its bound
+`usage`; anything else `carryMismatch` with its reason (`carryMismatch wrongWorld` for a World of
+another origin than the pinned one). -/
+def importWorld (X : Receive.Ctx D) (dc : Stream D) (name nonce : ByteArray) (pin : Pin D)
+    (f : ByteArray) : Except (Status × String) (World D × Read D) :=
+  match pin with
+  | .digest want =>
+    if digestOf f ≠ want then .error (.carryMismatch, s!"carryMismatch {Fault.digest.name}") else
+    carryFile X dc name nonce f (fun _ => true)
+  | .origin o => carryFile X dc name nonce f (fun w => decide (w.origin = o))
+
+/-- Export's own check of a file `f` for `w`: it reads back to `w`'s carried
 bytes and to `w`'s head (origin, height, chain); otherwise `exportCheck`, and nothing is written. -/
 def exportCheck (E : Env D) (dc : Stream D) (w : World D) (f : ByteArray) : Except Fault ByteArray :=
-  match read E dc (digestOf f) f with
+  match read E dc f with
   | .error _ => .error .exportCheck
   | .ok r =>
     if (Codec.Kernel.carried E dc).bytes r.carried = (Codec.Kernel.carried E dc).bytes w.carried ∧

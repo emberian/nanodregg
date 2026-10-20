@@ -67,7 +67,12 @@ def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys :
   rotate w pos count := do
     let b ← bases.get
     let newest := (b.headers.back?.map (·.1)).getD 0
-    if newest = pos.offset then return .ok ()
+    -- the deployed rotate's reuse check (HOST-64 F6): the newest file's header must pass the open's
+    -- check at the place the base will name
+    if newest = pos.offset then
+      return match headerFault keys (headerAt b.headers pos.offset) (origin w) pos.offset pos.tag (mark w) count with
+        | none => .ok ()
+        | some _ => .error (.positionUnfit pos.offset)
     let h := Header.at pos (mark w) count newest (origin w)
     unless h.fits keys.chainBytes do return .error (.positionUnfit pos.offset)
     bases.set { b with headers := b.headers.push (pos.offset, Header.bytes keys h) }

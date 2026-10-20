@@ -107,8 +107,8 @@ structure Checkpoint (W : Type) where
   entry count and last tag the new base names -/
   write : W → Position → Array Entry → IndexAt → IO (Except SealFault (Nat × ByteArray × IndexAt))
   /-- start the segment file the seal of `w` at `pos` will name, after `count` index entries
-  (HOST-64: every base sits at the start of its own file); nothing when the newest file starts
-  there already -/
+  (HOST-64: every base sits at the start of its own file); when the newest file starts there
+  already, it is reused only if its header passes `headerFault` at that place, else `positionUnfit` -/
   rotate : W → Position → Nat → IO (Except SealFault Unit)
   async : Bool
 

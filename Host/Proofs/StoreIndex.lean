@@ -386,9 +386,9 @@ theorem genesis_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {
 
 /-- **`host import`'s Store has a coherent index**: it holds none (a page before its World's step
 is refused `beforeLog`, `Page.build_beforeLog_none`). -/
-theorem import_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
+theorem import_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
     {r : Carry.Read D} {w₀ : World D}
-    (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) {img : Image}
+    (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
     Coherent keys img.base img.index img.segment := by
   obtain ⟨o, ho, -⟩ := import_reopens keys hkeys hi h
