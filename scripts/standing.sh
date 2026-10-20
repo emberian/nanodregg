@@ -82,7 +82,7 @@ if [ "$build" = ok ]; then
   case $rc in
     0) runs=ok ;;
     3) runs="INCOMPLETE($(first INCOMPLETE))" ;;
-    76) runs="UNJUDGED($(first '(KILLED|UNREAD\(timeout)'))" ;;   # killed or timed out twice (GATES-16)
+    76) runs="UNJUDGED($(first '(KILLED|UNREAD\((timeout|tracer))'))" ;;   # killed, timed out or tracer failed twice
     *) runs="RED($(first 'RED' || echo "runs.py exit $rc"))" ;;
   esac
 fi
@@ -95,6 +95,7 @@ unpinned=$(grep -c '^unpinned' "$log" || true)
 outside=$(grep -c '^  outside ' "$G/runs.out" 2>/dev/null || true)
 traced=$(grep -q '^  trace: strace unavailable' "$G/runs.out" 2>/dev/null && echo untraced || echo traced)
 untraced=$(grep -c '^  untraced ' "$G/runs.out" 2>/dev/null || true)
+flakes=$(grep -c '^  flake ' "$G/runs.out" 2>/dev/null || true)
 # GREEN only when every stage is the verdict `ok` and no ceiling is unmeasured; any stage that is
 # RED makes the line RED; anything else (ABSENT, INCOMPLETE, or a value that is not a verdict) is
 # INCOMPLETE.
@@ -108,7 +109,7 @@ for v in "$gates" "$build" "$census" "$generated" "$cargo" "$runs" "$wastev"; do
 done
 [ $verdict = GREEN ] && [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE
 [ $verdict = GREEN ] && [ "${untraced:-0}" -gt 0 ] && verdict=INCOMPLETE
-line="STANDING ${sha:0:12} gates=$gates build=$build census=$census generated=$generated cargo=$cargo runs=$runs waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured outside=${outside:-0}($traced) untraced=${untraced:-0} => $verdict"
+line="STANDING ${sha:0:12} gates=$gates build=$build census=$census generated=$generated cargo=$cargo runs=$runs waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured outside=${outside:-0}($traced) untraced=${untraced:-0} flakes=${flakes:-0} => $verdict"
 echo "$line" | tee -a "$G/verdicts.log"
 echo "log: $log"
 [ "$verdict" = RED ] && exit 1

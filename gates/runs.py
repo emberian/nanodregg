@@ -349,6 +349,14 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         out = "".join(x.decode(errors="replace") if isinstance(x, bytes) else (x or "") for x in (e.stdout, e.stderr))
         last = next((l.strip() for l in reversed(out.splitlines()) if l.strip()), "no output")
         v = f"UNREAD(timeout: past {DEADLINE} s of wall clock; last line: {last[:160]})"
+    # GATES-22 follow-up (GATES-10 verified at source): the tracer itself can fail mid-run, `strace: ptrace(PTRACE_LISTEN,
+    # …): Input/output error`, and the run exits non-zero. That is no verdict about the run: UNREAD(tracer), re-run once
+    # (run_once_more), twice is NOT JUDGED, never RED. Only strace's own lines (`strace: ` at a line start) count, and
+    # only on a run that did not read ok.
+    if TRACING["strace"] and not v.startswith("ok"):
+        tl = TRACER.search(out)
+        if tl:
+            v = f"UNREAD(tracer: {tl.group(0)[:200]})"
     shutil.rmtree(fresh, ignore_errors=True)
     if TRACING["strace"]:
         TRACING["sets"].append(readset.reduce(tr, t.root))
@@ -364,6 +372,7 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
 # GATES-20: the strace this judge traces with (None: untraced, every key static), and the read-sets of
 # the runs of the row being judged, one per run (None for a run with no read-set).
 TRACING: dict = {"strace": None, "sets": []}
+TRACER = re.compile(r"(?m)^strace: .*$")
 
 
 def row_line(root: str, table_path: str | None, exe: str) -> str | None:
@@ -497,13 +506,18 @@ def traced_selected(t: tree.Tree, changed: list[str], rows: dict, store: str, gi
 
 def run_once_more(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bindir: str,
                   drives: list[str] = ()) -> tuple[str, str]:
-    """`run`, and once more when it timed out: a second timeout stays UNREAD (GATES-16)."""
+    """`run`, and once more when it timed out or its tracer failed: a second one stays UNREAD (GATES-16)."""
     out, v = run(t, exe, args, passline, fresh, bindir, drives)
-    if v.startswith("UNREAD(timeout"):
-        sys.stderr.write(out + f"\n[runs.py] {exe} {' '.join(args)}: {v}; re-running once\n")
-        out, v = run(t, exe, args, passline, fresh, bindir, drives)
-        if v.startswith("UNREAD(timeout"):
-            v = "UNREAD(timeout twice" + v[len("UNREAD(timeout"):]
+    for kind in ("UNREAD(timeout", "UNREAD(tracer"):
+        if v.startswith(kind):
+            sys.stderr.write(out + f"\n[runs.py] {exe} {' '.join(args)}: {v}; re-running once\n")
+            out, v = run(t, exe, args, passline, fresh, bindir, drives)
+            if v.startswith(kind):
+                v = kind + " twice" + v[len(kind):]
+            elif kind == "UNREAD(tracer":
+                # standing counts these (`flakes=N`): a tracer that keeps failing is the box's to fix
+                print(f"  flake {exe} {' '.join(args)}: the tracer failed once; the re-run read {v[:80]}", flush=True)
+            break
     return out, v
 
 
@@ -731,7 +745,7 @@ def main() -> int:
             f.write("".join(l + "\n" for l in waste))
     red = any(not v.startswith(("ok", "INCOMPLETE", "KILLED", "UNREAD", "ABSENT")) for v in results)
     killed = any(v.startswith("KILLED") for v in results)
-    timed = any(v.startswith("UNREAD(timeout") for v in results)
+    timed = any(v.startswith(("UNREAD(timeout", "UNREAD(tracer")) for v in results)
     inc = any(v.startswith(("INCOMPLETE", "ABSENT")) for v in results)
     word = ("RED" if red else "KILLED(load)" if killed else "UNREAD(timeout)" if timed
             else "INCOMPLETE" if inc else "ok")
