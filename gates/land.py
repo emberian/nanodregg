@@ -28,6 +28,12 @@ lander displaced AGE_BOUND times is head regardless, and a head displaced again 
 older head (blockers() lets nothing else land), so it waits for the tie winners and never fails for
 them. LANG-21's c1166ce gave up after five displacements, three of them as head. A deadline wait
 (the count unchanged) is not charged either. Exit 0 = charged, 1 = not charged.
+
+--fast (GATES-22): a FAST lander (scripts/commit's default: judged in minutes) holds no ticket and is never
+counted: it lands by the compare-and-swap, or exits 75 (main moved) and re-bases. It lets a FULL lander displaced
+AGE_BOUND times land first (that one's judge is ~40 min and would otherwise never win a race against landings
+every ~25 min), for at most --deadline (default 3600 s), then lands anyway and says whom it passed: a stalled head
+must not stop every landing.
 """
 import argparse
 import fcntl
@@ -98,7 +104,50 @@ def charge(ticket: str, before: int) -> int:
     return 0
 
 
+def fast(q: str, repo: str, ref: str, new: str, base: str, deadline: int) -> int:
+    end = time.monotonic() + deadline
+    said = None
+    while True:
+        lk = os.open(os.path.join(q, "land.flock"), os.O_RDWR | os.O_CREAT, 0o664)
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            cur = subprocess.run(["git", "-C", repo, "rev-parse", ref], capture_output=True, text=True)
+            if cur.returncode != 0:
+                print(f"queue: cannot read {ref}: {cur.stderr.strip()}")
+                return 2
+            if cur.stdout.strip() != base:
+                print(f"queue: main moved from {base[:12]} to {cur.stdout.strip()[:12]} under this fast verdict; re-basing")
+                return 75
+            heads = [os.path.join(q, n) for n in sorted(os.listdir(q))
+                     if n[:1].isdigit() and "." in n and count(os.path.join(q, n)) >= AGE_BOUND and alive(os.path.join(q, n))]
+            late = time.monotonic() > end
+            if not heads or late:
+                if heads:
+                    print(f"queue: waited {deadline} s for {' '.join(os.path.basename(h) for h in heads)}; landing past it")
+                r = subprocess.run(["git", "-C", repo, "update-ref", ref, new, base], capture_output=True, text=True)
+                if r.returncode != 0:
+                    print(f"queue: the compare-and-swap refused: {r.stderr.strip()}")
+                    return 75
+                print("queue: fast; landed by compare-and-swap")
+                return 0
+        finally:
+            os.close(lk)
+        names = " ".join(os.path.basename(h) for h in heads)
+        if names != said:
+            print(f"queue: a full lander displaced {AGE_BOUND} times lands first: waiting for {names}", flush=True)
+            said = names
+        time.sleep(5)
+
+
 def main() -> int:
+    if "--fast" in sys.argv[1:]:
+        fp = argparse.ArgumentParser()
+        fp.add_argument("--fast", action="store_true")
+        for f in ("--queue", "--repo", "--ref", "--new", "--base"):
+            fp.add_argument(f, required=True)
+        fp.add_argument("--deadline", type=int, default=3600)
+        f = fp.parse_args()
+        return fast(f.queue, f.repo, f.ref, f.new, f.base, f.deadline)
     if "--charge" in sys.argv[1:]:
         cp = argparse.ArgumentParser()
         cp.add_argument("--charge", action="store_true")

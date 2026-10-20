@@ -14,14 +14,24 @@
 #  3. writes SIZE.md, a purely generated view, for that candidate (gates/size.py --write). SIZE.md
 #     is refused as a PATH: ceilings are edited in gates/ceilings.tsv;
 #  4. refuses if the candidate differs from main anywhere outside PATH... and SIZE.md;
-#  5. runs scripts/pre-push on the candidate: ownership (the subject prefix `kernel:` … names the
-#     layer, gates/OWNERS; --cross-layer records `CROSS-LAYER: REASON`), the source gates, the
-#     build of the changed modules + every importer, the axiom census, cargo for changed crates
-#     (--no-build records `NO-BUILD: REASON` and skips build + census);
+#  5. judges the candidate (GATES-22, Ember 10-21: converge periodically, do not judge every landing).
+#     FAST, the default (gates/fast.py mode): scripts/pre-push --fast — ownership (the subject prefix
+#     `kernel:` … names the layer, gates/OWNERS; --cross-layer records `CROSS-LAYER: REASON`), every
+#     source gate (the parent's too), `lake build` of only the targets the change reaches, `cargo check`
+#     + `cargo fmt --check` of only the packages it reaches; minutes. The census, the rows, the benches,
+#     the waste measurements, the generated files and clippy judge it at the next CONVERGENCE
+#     (scripts/converge, every 3 h while landings happen), which names the commits a red row read.
+#     FULL, for a flag day (`kernel!:`) or a change of the judge's code (gates/*.py, scripts/): the
+#     whole scripts/pre-push (every target, the census, the selected rows, waste, generated files, the
+#     Rust workspace with clippy), judged by main's code (--no-build records `NO-BUILD: REASON` and
+#     skips build + census);
 #  6. commit-tree on main + compare-and-swap `update-ref refs/heads/main NEW BASE`: if main moved
-#     while you were being judged, nothing is written and steps 1-6 re-run; COMMIT_RETRIES (5)
-#     counts only displacements while this lander was not head (gates/land.py --charge): a head
-#     lander waits for the tie winners, it never fails for them (LANG-21's c1166ce);
+#     while you were being judged, nothing is written and steps 1-6 re-run. FAST: a plain re-base and
+#     retry (FAST_RETRIES, 12 attempts), no queue ticket; it lets a FULL lander displaced twice land
+#     first (gates/land.py --fast; a full judge is ~40 min and would otherwise never win the race).
+#     FULL: the landing queue: COMMIT_RETRIES (5) counts only displacements while this lander was not
+#     head (gates/land.py --charge): a head lander waits for the tie winners, it never fails for them
+#     (LANG-21's c1166ce);
 #  7. leaves this worktree on the new main (`checkout --detach NEW`), moves the primary checkout
 #     (the read-only reference) to it when that is clean, and pushes main to origin.
 # Works from any worktree of the repo (scripts/worktree LAYER makes one).
@@ -49,25 +59,55 @@ set -uo pipefail
 # dir whose queue ticket nobody holds flock'd (the ticket itself is land.py's to remove).
 reap_dead() {
   local d p t
-  for d in "$common"/nanodregg-commit-main/*; do
+  for d in "$common"/nanodregg-commit-main/* "$common"/nanodregg-landers/p*; do
     [ -d "$d" ] || continue
-    p=${d##*/}
+    p=${d##*/}; p=${p#p}
     case $p in ''|*[!0-9]*) continue ;; esac
     { [ "$p" = $$ ] || kill -0 "$p" 2>/dev/null || [ -e "/proc/$p" ]; } && continue
     rm -rf "$d" && echo "scripts/commit: reaped a dead lander's scratch $d (pid $p is gone)"
   done
   for d in "$common"/nanodregg-landers/*; do
     [ -d "$d" ] || continue
+    case ${d##*/} in p*) continue ;; esac   # a fast lander's directory: by its pid, above
     t=$common/nanodregg-queue/${d##*/}
     [ -e "$t" ] && ! flock -n "$t" true 2>/dev/null && continue
     rm -rf "$d" && echo "scripts/commit: reaped a dead lander's directory $d (its ticket is not held)"
   done
 }
+# lander_mode ARGS...: `full` when the subject is a flag day or a named path is the judge's code
+# (gates/*.py, scripts/), else `fast` (GATES-22). The attempt (main's own copy, gates/fast.py mode on the
+# real candidate) decides what judges it; this only decides whether the lander holds a queue ticket.
+lander_mode() {
+  local subj="" r
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -m) subj=${2%%$'\n'*}; shift ;;
+      -F) subj=$(head -1 "$2" 2>/dev/null); shift ;;
+      --cross-layer|--no-build|--reverts) shift ;;
+      --) shift; for r in "$@"; do lander_path "$r" && { echo full; return; }; done; break ;;
+      -*) ;;
+      *) lander_path "$1" && { echo full; return; } ;;
+    esac
+    shift
+  done
+  [[ $subj =~ ^[a-z]+(\([^\)]*\))?!: ]] && { echo full; return; }
+  echo fast
+}
+lander_path() {
+  local r; r=$(git rev-parse --show-prefix)${1#./}; r=${r%/}
+  case $r in scripts|scripts/*|gates|gates/*.py) return 0 ;; esac
+  return 1
+}
 if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
-  new_ticket || exit 2
-  export ND_TICKET=$ticket ND_LANDER_DIR=$common/nanodregg-landers/${ticket##*/}
+  lmode=$(lander_mode "$@")
+  if [ "$lmode" = full ]; then
+    new_ticket || exit 2
+    export ND_TICKET=$ticket ND_LANDER_DIR=$common/nanodregg-landers/${ticket##*/}
+  else
+    export ND_LANDER_DIR=$common/nanodregg-landers/p$$
+  fi
   mkdir -p "$ND_LANDER_DIR" || exit 2
-  trap 'rm -rf "$ND_LANDER_DIR" "$ND_TICKET"' EXIT
+  trap 'rm -rf "$ND_LANDER_DIR" ${ND_TICKET:+"$ND_TICKET"}' EXIT
   reap_dead
   attempt=0 charged=0
   while :; do
@@ -79,7 +119,9 @@ if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
     before=$(cat "$ND_TICKET" 2>/dev/null || true)
     out=$(ND_COMMIT_ATTEMPT=$attempt ND_COMMIT_SCRIPTS="$M/tree/scripts" "$runner" "$@" 2>&1 6>&-); rc=$?
     printf '%s\n' "$out"
-    if [ $rc -eq 75 ]; then
+    if [ $rc -eq 75 ] && [ "$lmode" = fast ]; then
+      charged=$((charged + 1))   # a fast lander re-judges in minutes: every displacement counts, of FAST_RETRIES
+    elif [ $rc -eq 75 ]; then
       # A displacement is charged only when this lander was not head (land.py decides; an old
       # land.py without --charge charges every one, as before).
       python3 "$M/tree/gates/land.py" --charge --ticket "$ND_TICKET" --before "${before:-0}"; c=$?
@@ -87,10 +129,11 @@ if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
     fi
     rm -rf "$M" "$M/tree.index"
     [ $rc -eq 75 ] || exit $rc
-    if [ $charged -ge "${COMMIT_RETRIES:-5}" ]; then
-      echo "scripts/commit: main kept moving; gave up after $charged displacements while not head ($attempt attempts)"; exit 1
+    if [ "$lmode" = fast ]; then budget=${FAST_RETRIES:-12}; else budget=${COMMIT_RETRIES:-5}; fi
+    if [ $charged -ge "$budget" ]; then
+      echo "scripts/commit: main kept moving; gave up after $charged displacements ($lmode lander, $attempt attempts)"; exit 1
     fi
-    echo "scripts/commit: main moved (attempt $attempt, $charged of ${COMMIT_RETRIES:-5} charged); re-reading main and re-basing onto it"
+    echo "scripts/commit: main moved (attempt $attempt, $charged of $budget charged); re-reading main and re-basing onto it"
   done
 fi
 scripts=${ND_COMMIT_SCRIPTS:-$(dirname "$0")}
@@ -185,25 +228,46 @@ git -C "$repo" diff --stat "$base" "$cand"
 python3 "$scripts/../gates/rebase.py" stale --repo "$repo" --snapshot "$snap" --main "$base" --message "$msg" \
   "${reverts[@]}" || { echo "scripts/commit: REFUSED — nothing was written"; exit 1; }
 
+# GATES-22: FAST unless a flag day or a change of the judge's code (main's gates/fast.py decides, on the
+# real candidate).
+git -C "$repo" diff --name-only "$base" "$cand" > "$tmp/changed"
+mode=$(python3 "$scripts/../gates/fast.py" mode --message "$msg" --changed "$tmp/changed") ||
+  { echo "scripts/commit: gates/fast.py mode failed; nothing written"; exit 2; }
+echo "scripts/commit: judge: ${mode}"
 pp=(--index --base "$base" --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
-# GATES-19: the judge records each ok unit under its input key; a re-based attempt carries a unit of
-# the previous attempt's record only when its key is byte-identical (pre-push re-checks every key).
-[ -n "${ND_LANDER_DIR:-}" ] && pp+=(--record "$ND_LANDER_DIR/record.new" --reuse "$ND_LANDER_DIR/record.prev")
-"$scripts/pre-push" "${pp[@]}"; rc=$?
-if [ $rc -eq 76 ]; then echo "scripts/commit: NOT JUDGED — the judge was killed under load (KILLED(load)) or a run timed out twice (UNREAD(timeout), GATES-16); nothing written: re-run scripts/commit"; exit 76; fi
+if [ "$mode" = fast ]; then
+  pp+=(--fast)
+else
+  # GATES-19: the judge records each ok unit under its input key; a re-based attempt carries a unit of
+  # the previous attempt's record only when its key is byte-identical (pre-push re-checks every key).
+  [ -n "${ND_LANDER_DIR:-}" ] && pp+=(--record "$ND_LANDER_DIR/record.new" --reuse "$ND_LANDER_DIR/record.prev")
+fi
+"$scripts/pre-push" "${pp[@]}" | tee "$tmp/verdict"; rc=${PIPESTATUS[0]}
+if [ $rc -eq 76 ]; then echo "scripts/commit: NOT JUDGED — the judge was killed under load (KILLED(load)), a run timed out twice (UNREAD(timeout), GATES-16) or no judge slot freed in 30 min; nothing written: re-run scripts/commit"; exit 76; fi
 [ $rc -eq 0 ] || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
+# A fast landing says so in its message: the next convergence reads which commits it has not yet judged.
+if [ "$mode" = fast ]; then
+  printf 'JUDGED: fast (GATES-22) — %s\n' "$(sed -n 's/^PRE-PUSH FAST GREEN tree [0-9a-f]* *\(.*\)$/\1/p' "$tmp/verdict" | tail -1)" >> "$msg"
+fi
 
 new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
 # The landing queue (gates/land.py, GATES-19): a green lander whose base is still main lands by
 # compare-and-swap unless a lander displaced twice is alive (that one is head regardless; this one
 # waits). Main moved: displaced, exit 75, and the outer loop re-bases. An outer loop older than
 # GATES-19 holds no ticket; then this attempt takes one of its own, which starts at zero.
-if [ -z "${ND_TICKET:-}" ]; then new_ticket || exit 2; ND_TICKET=$ticket; trap 'rm -rf "$tmp" "$ND_TICKET"' EXIT; fi
-python3 "$scripts/../gates/land.py" --queue "$common/nanodregg-queue" --ticket "$ND_TICKET" --repo "$repo" \
-  --ref refs/heads/main --new "$new" --base "$base"; rc=$?
+if [ "$mode" = fast ]; then
+  # GATES-22: a plain compare-and-swap, no ticket; a full lander displaced twice lands first (land.py --fast)
+  mkdir -p "$common/nanodregg-queue"
+  python3 "$scripts/../gates/land.py" --fast --queue "$common/nanodregg-queue" --repo "$repo" \
+    --ref refs/heads/main --new "$new" --base "$base"; rc=$?
+else
+  if [ -z "${ND_TICKET:-}" ]; then new_ticket || exit 2; ND_TICKET=$ticket; trap 'rm -rf "$tmp" "$ND_TICKET"' EXIT; fi
+  python3 "$scripts/../gates/land.py" --queue "$common/nanodregg-queue" --ticket "$ND_TICKET" --repo "$repo" \
+    --ref refs/heads/main --new "$new" --base "$base"; rc=$?
+fi
 case $rc in
   0) ;;
-  75) [ -n "${ND_LANDER_DIR:-}" ] && mv -f "$ND_LANDER_DIR/record.new" "$ND_LANDER_DIR/record.prev"
+  75) [ -n "${ND_LANDER_DIR:-}" ] && [ -f "$ND_LANDER_DIR/record.new" ] && mv -f "$ND_LANDER_DIR/record.new" "$ND_LANDER_DIR/record.prev"
       echo "scripts/commit: main moved while this commit was judged; nothing written."; exit 75 ;;
   *) echo "scripts/commit: the landing queue failed (exit $rc); nothing written."; exit 1 ;;
 esac

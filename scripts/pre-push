@@ -16,6 +16,13 @@
 #                                               candidate before the verdict (`stale verdict: U`)
 #   --verify FILE [--reuse PREV]                only re-compute the keys of record FILE on the
 #                                               candidate (materialized and built in a slot)
+#   --fast                                      (scripts/commit, GATES-22) the per-landing judge of a change that
+#                                               is not a flag day and leaves the judge's code alone (gates/fast.py
+#                                               mode): steps 0-1, then `lake build` of only the targets the change
+#                                               reaches and `cargo check` + `cargo fmt --check` of only the packages
+#                                               it reaches (gates/fast.py targets/crates). The census, the rows, the
+#                                               benches, the waste measurements, the generated files and clippy run
+#                                               at the next CONVERGENCE (scripts/converge), not here
 #
 # Steps, all against a private copy of exactly that tree (never the shared working tree):
 #   0. ownership: every changed path belongs to the layer named by the subject prefix, per the
@@ -34,12 +41,13 @@
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
 #   4. the Rust workspace whole (root Cargo.toml) when a member or the root manifest/lock changed:
 #      `cargo check --locked --workspace --all-targets`, clippy -D warnings, `cargo fmt --all --check`.
-# Prints one verdict line. Exit 0 = may land; 1 = RED; 76 = not judged (KILLED(load), or a run
-# past its wall-clock deadline twice: UNREAD(timeout), GATES-16).
+# Prints one verdict line. Exit 0 = may land; 1 = RED; 76 = not judged (KILLED(load), a run past its
+# wall-clock deadline twice: UNREAD(timeout), GATES-16; or every judge slot busy for 30 min: a wait is
+# not a verdict, GATES-22).
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
 
-mode=index rev="" msg="" build=1 basec=refs/heads/main record="" reuse="" verify=""
+mode=index rev="" msg="" build=1 basec=refs/heads/main record="" reuse="" verify="" fast=0
 while [ $# -gt 0 ]; do
   case $1 in
     --index) mode=index ;;
@@ -50,6 +58,7 @@ while [ $# -gt 0 ]; do
     --record) record=$2; shift ;;
     --reuse) reuse=$2; shift ;;
     --verify) verify=$2; shift ;;
+    --fast) fast=1 ;;
     *) echo "usage: scripts/pre-push [--index [--base COMMIT] | --rev REV] [--message FILE] [--no-build]" >&2; exit 2 ;;
   esac
   shift
@@ -66,7 +75,47 @@ else
 fi
 [ -n "$msg" ] || { msg=$(mktemp); : > "$msg"; }
 
-gate_slot || exit 2
+# GATES-22 (ROOT, from the lanes: a lane waited 30 min for a slot to learn it indented a CROSS-LAYER line): THE SOURCE
+# GATES RUN FIRST, before any slot is asked for, on a private copy of the candidate and its parent: ownership,
+# SIZE lines, CROSS-LAYER, the waste and ceiling ratchets, closure, … (gates/check.py, the candidate's and the
+# parent's). A red there is refused in seconds, naming the lines to add; the slot judge does not run them again.
+prelint="" G=""
+if [ -z "$verify" ]; then
+  F=$(mktemp -d); trap 'rm -rf "$F"' EXIT
+  materialize "$cand" "$F/tree" && materialize "$base" "$F/base" || exit 2
+  git -C "$repo" diff --name-only "$base" "$cand" > "$F/changed"
+  pl=(--owners-from "$F/base" --base-tree "$F/base" --base-waste "$F/base/gates/waste.tsv" --message "$msg" --changed "$F/changed")
+  pf="" prenote=""
+  python3 "$F/tree/gates/check.py" "$F/tree" "${pl[@]}" > "$F/gates.out" 2>&1 && echo "  gates: ok" || { echo "  gates: RED"; pf="$pf gates"; }
+  if [ -f "$F/base/gates/check.py" ]; then
+    if python3 "$F/base/gates/check.py" "$F/tree" "${pl[@]}" > "$F/parent-gates.out" 2>&1; then echo "  parent-gates: ok"
+    elif grep -qE '^GATE-CHANGE:[[:space:]]*[^[:space:]]' "$msg"; then
+      prenote=" (parent's gates RED; passed on GATE-CHANGE)"; echo "  parent-gates: RED, accepted by GATE-CHANGE"
+    else echo "  parent-gates: RED"; pf="$pf parent-gates"; fi
+  fi
+  if [ -n "$pf" ]; then
+    echo "PRE-PUSH RED tree ${cand:0:12}:$pf — the source gates, before any slot (nothing was built)"
+    cat "$F/gates.out" "$F/parent-gates.out" 2>/dev/null | grep -E '^  [a-z-]+: ' | grep -v ': PRE-EXISTING ' | awk '!seen[$0]++' | head -40
+    exit 1
+  fi
+  prelint=1
+fi
+# GATES-22: a fast judge decides what it builds BEFORE it asks for a slot (a slot is a warm .lake and cargo target;
+# the source gates need none). Nothing to build and no package to check: judged in a private directory, no slot.
+if [ $fast = 1 ]; then
+  JF=$(cd "$(dirname "$0")/.." && pwd)/gates/fast.py
+  targets=$(python3 "$JF" targets "$F/tree" --changed "$F/changed") || { echo "PRE-PUSH FAST RED: gates/fast.py targets failed"; exit 1; }
+  crates=$(python3 "$JF" crates "$F/tree" --changed "$F/changed") || { echo "PRE-PUSH FAST RED: gates/fast.py crates failed"; exit 1; }
+  [ "$build" = 0 ] && targets=""
+  if [ -z "$targets" ] && [ -z "$crates" ]; then G=$F; echo "  slot: none (nothing to build, no package to check)"; fi
+fi
+if [ -z "$G" ]; then
+  gate_slot; rc=$?
+  # a slot that never freed is not a verdict about the commit (GATES-22; it read REFUSED until then); gate_slot
+  # has named the holders
+  [ $rc -eq 3 ] && { echo "PRE-PUSH NOT JUDGED: no judge slot freed (holders above); re-run"; exit 76; }
+  [ $rc -eq 0 ] || exit 2
+fi
 export CARGO_TARGET_DIR=$G/cargo-target   # one Rust target per slot: workspace, cargo runs rows, cargo generators
 materialize "$cand" "$G/tree" || exit 2
 materialize "$base" "$G/base" || exit 2
@@ -76,7 +125,7 @@ log=$G/${cand:0:12}.log
 : > "$log"
 ls -t "$G"/*.log 2>/dev/null | tail -n +21 | while read -r old; do rm -f "$old"; done
 fail=""
-note=""
+note=${prenote:-}
 killed=""
 # GATES-19: input keys, computed and re-checked by the JUDGE's gates/rebase.py (this script's tree:
 # main's copy under scripts/commit), never the candidate's, so a candidate cannot widen its own reuse.
@@ -224,8 +273,12 @@ judge_runs() {
   else echo "  runs: ok (every red is PRE-EXISTING)"; fi
 }
 args=(--owners-from "$G/base" --base-tree "$G/base" --base-waste "$G/base/gates/waste.tsv" --message "$msg" --changed "$G/changed")
+if [ -n "$prelint" ]; then
+  cat "$F/gates.out" "$F/parent-gates.out" >> "$log" 2>/dev/null   # judged above, before the slot, on the same trees
+else
 step gates python3 "$G/tree/gates/check.py" "$G/tree" "${args[@]}"
-if [ -f "$G/base/gates/check.py" ]; then
+fi
+if [ -z "$prelint" ] && [ -f "$G/base/gates/check.py" ]; then
   if ! python3 "$G/base/gates/check.py" "$G/tree" "${args[@]}" >> "$log" 2>&1; then
     if grep -qE '^GATE-CHANGE:[[:space:]]*[^[:space:]]' "$msg"; then
       note=" (parent's gates RED; passed on GATE-CHANGE)"; echo "  parent-gates: RED, accepted by GATE-CHANGE"
@@ -235,6 +288,44 @@ if [ -f "$G/base/gates/check.py" ]; then
   else
     echo "  parent-gates: ok"
   fi
+fi
+
+# GATES-22, THE FAST LANDING: only the targets and packages the change reaches, by the JUDGE's gates/fast.py.
+if [ $fast = 1 ]; then
+  # targets and crates were decided above, before the slot, on this same candidate
+  if [ "$build" = 0 ]; then
+    if grep -qE '^NO-BUILD:[[:space:]]*[^[:space:]]' "$msg"; then echo "  build: SKIPPED (NO-BUILD in message)"; note="$note (build skipped)"
+    else echo "  build: --no-build needs a 'NO-BUILD: <reason>' message line"; fail="$fail no-build"; fi
+  elif [ -n "$targets" ]; then
+    echo "  build targets (reached): $targets"
+    # shellcheck disable=SC2086
+    step build wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $targets
+  else
+    echo "  build: none (no module, and no build input, changed)"
+  fi
+  case $crates in
+    "") echo "  cargo: none (no workspace member changed)" ;;
+    workspace)
+      step cargo-check wrapped cargo check --quiet --locked --workspace --all-targets --manifest-path "$G/tree/Cargo.toml"
+      step fmt wrapped cargo fmt --all --check --manifest-path "$G/tree/Cargo.toml" ;;
+    *)
+      pk=(); for c in $crates; do pk+=(-p "$c"); done
+      echo "  cargo packages (reached): $crates"
+      step cargo-check wrapped cargo check --quiet --locked "${pk[@]}" --all-targets --manifest-path "$G/tree/Cargo.toml"
+      step fmt wrapped cargo fmt --check "${pk[@]}" --manifest-path "$G/tree/Cargo.toml" ;;
+  esac
+  short=${cand:0:12}
+  if [ -n "$fail" ]; then
+    echo "PRE-PUSH FAST RED tree $short:$fail — log: $log"
+    grep -E '^  [a-z-]+: |error(\[E[0-9]+\])?:|^Diff in' "$log" | grep -v ': PRE-EXISTING ' | awk '!seen[$0]++' | head -40
+    exit 1
+  fi
+  if [ -n "$killed" ]; then
+    echo "PRE-PUSH NOT JUDGED tree $short:$killed — killed by a signal under memory pressure: not a verdict about this commit; re-run — log: $log"
+    exit 76
+  fi
+  echo "PRE-PUSH FAST GREEN tree $short$note (built: ${targets:-none}; cargo: ${crates:-none}; the census, rows, benches, waste, generated files and clippy judge it at the next convergence)"
+  exit 0
 fi
 
 # Every target, every time: lake's traces rebuild exactly what this tree changed (and anything a

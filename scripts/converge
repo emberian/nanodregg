@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# scripts/converge [--scheduled] | --revert C [--why TEXT] | --install — THE CONVERGENCE (GATES-22).
+#
+# Ember, 10-21: "we don't need to focus on landings as much, as long as every now and then we make sure the whole
+# system still builds and passes its tests, and do convergences at those points instead of EVERY LANDING."
+# A landing is judged FAST (scripts/commit, gates/fast.py); this is where everything else is judged:
+#   1. scripts/standing.sh on main (the full build, the census, the generated files, the Rust workspace whole,
+#      every row and bench traced, the waste ceilings), in the converge worktree (wt/converge, reset to main
+#      on every run: nothing else edits it), one convergence at a time box-wide (nanodregg-converge.flock);
+#   2. gates/converge.py record: the CONVERGENCE line labelled with the range since the last GREEN standing,
+#      each RED unit with the commits of that range it READ, by owner, each FIXED unit with its time-to-fix;
+#      appended to <common>/nanodregg-standing/convergence.log. ROOT routes each red to its owner;
+#   3. a unit still red at the next convergence whose commit is attributed at both sightings is REVERTED
+#      by name: a `gates:` landing through scripts/commit with --reverts C and C's owners in CROSS-LAYER.
+#      Several commits attributed: REVERT-PENDING, and ROOT runs `scripts/converge --revert C`.
+# --scheduled (the timer, every 3 h): skipped when main has not moved since the last convergence, or when one
+#   is running. On demand (ROOT, Ember): waits up to 2 h for a running one.
+# --install: the systemd user timer nanodregg-converge.timer on this box (every 3 h).
+# Run detached: nohup bash -c 'exec scripts/converge' > LOG 2>&1 & echo $! > job.pid
+set -uo pipefail
+. "$(dirname "$0")/gate-lib.sh"
+W=$(git -C "$repo" config nanodregg.convergewt || echo "$(cd "$common/../.." && pwd)/wt/converge")
+mode=now revert="" why="" args=("$@")
+while [ $# -gt 0 ]; do
+  case $1 in
+    --scheduled) mode=scheduled ;;
+    --revert) mode=revert; revert=$2; shift ;;
+    --why) why=$2; shift ;;
+    --install) mode=install ;;
+    *) echo "usage: scripts/converge [--scheduled] | --revert C [--why TEXT] | --install" >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" != true ]; then
+  echo "converge: REFUSED — this clone is a reader; main lives on hbox"; exit 1
+fi
+
+if [ $mode = install ]; then
+  d=$HOME/.config/systemd/user; mkdir -p "$d"
+  cat > "$d/nanodregg-converge.service" <<EOF
+[Unit]
+Description=nanodregg convergence (GATES-22): standing on main, attributed, every 3 h while landings happen
+[Service]
+Type=oneshot
+WorkingDirectory=$W
+ExecStart=/bin/bash -c 'exec $W/scripts/converge --scheduled >> $common/nanodregg-standing/converge-timer.log 2>&1'
+EOF
+  cat > "$d/nanodregg-converge.timer" <<EOF
+[Unit]
+Description=nanodregg convergence every 3 h (GATES-22)
+[Timer]
+OnCalendar=*-*-* 00/3:17:00
+Persistent=false
+[Install]
+WantedBy=timers.target
+EOF
+  [ -d "$W" ] || git -C "$repo" worktree add -q --detach "$W" refs/heads/main || exit 2
+  systemctl --user daemon-reload && systemctl --user enable --now nanodregg-converge.timer &&
+    systemctl --user list-timers nanodregg-converge.timer --no-pager
+  exit $?
+fi
+
+# One convergence at a time, box-wide. fd 5 is inherited by the re-exec below and by nothing it backgrounds.
+if [ -z "${ND_CONVERGE_INNER:-}" ]; then
+  flock_or_refuse || exit 2
+  exec 5> "$common/nanodregg-converge.flock"
+  if [ $mode = scheduled ]; then
+    flock -n 5 || { echo "converge: a convergence is running; this scheduled one is skipped"; exit 0; }
+  else
+    flock -w 7200 5 || { echo "converge: a convergence held the lock for 2 h; not run"; exit 76; }
+  fi
+  # The converge worktree is this script's own: reset to main, then run main's copy of this script.
+  [ -d "$W" ] || git -C "$repo" worktree add -q --detach "$W" refs/heads/main || exit 2
+  git -C "$W" reset -q --hard refs/heads/main || exit 2
+  cd "$W" || exit 2
+  ND_CONVERGE_INNER=1 exec bash "$W/scripts/converge" "${args[@]}"
+fi
+[ "$repo" = "$(cd "$W" && pwd)" ] || { echo "converge: the inner run must be the converge worktree's copy ($W)"; exit 2; }
+SD=$common/nanodregg-standing
+mkdir -p "$SD"
+
+# revert_landing C UNIT: the revert of C as a landing (GATES-20b's --reverts, C's owners named), made in a worktree
+# of its own (RW): this run executes from W's scripts, which nothing may rewrite under it.
+RW=$W-revert
+revert_landing() {
+  local c=$1 unit=$2 own paths m
+  [ -d "$RW" ] || git -C "$repo" worktree add -q --detach "$RW" refs/heads/main || return 1
+  git -C "$RW" reset -q --hard refs/heads/main || return 1
+  if ! git -C "$RW" revert --no-commit "$c" > "$SD/revert.out" 2>&1; then
+    git -C "$RW" revert --abort > /dev/null 2>&1; git -C "$RW" reset -q --hard refs/heads/main
+    echo "REVERT-FAILED $c $unit: it does not revert cleanly on main ($(tail -1 "$SD/revert.out")); ROOT routes" | tee -a "$SD/convergence.log"
+    return 1
+  fi
+  paths=$(git -C "$RW" diff --name-only HEAD)
+  git -C "$RW" reset -q   # the index back to HEAD: scripts/commit records the working copies
+  own=$(python3 "$W/gates/converge.py" owners --repo "$RW" --commit "$c")
+  m=$(mktemp)
+  {
+    echo "gates: revert $(git -C "$W" log -1 --format='%h' "$c") — $unit still red at a second convergence and attributed to it at both (GATES-22)"
+    echo
+    echo "Reverted: $(git -C "$W" log -1 --format='%h %s' "$c" | cut -c1-200)"
+    echo "Unit: $unit. ${why:+Why: $why. }The owner fixes it forward and lands it again; convergence.log holds the attribution."
+  } > "$m"
+  # shellcheck disable=SC2086
+  (cd "$RW" && scripts/commit -F "$m" --reverts "$c" \
+     --cross-layer "$own: GATES-22's convergence revert of $(git -C "$W" log -1 --format=%h "$c") (Ember 10-21 via ROOT: a red still red at the next convergence is reverted by name)" \
+     $paths)
+  local rc=$?
+  rm -f "$m"
+  if [ $rc -eq 0 ]; then echo "REVERTED $c $unit: $(git -C "$repo" log -1 --format='%h' refs/heads/main)" | tee -a "$SD/convergence.log"
+  else echo "REVERT-REFUSED $c $unit: scripts/commit exit $rc; ROOT routes" | tee -a "$SD/convergence.log"; fi
+  git -C "$RW" reset -q --hard refs/heads/main
+  return $rc
+}
+
+if [ $mode = revert ]; then
+  c=$(git -C "$repo" rev-parse --verify "$revert^{commit}") || exit 2
+  revert_landing "$c" "${why:-ROOT: --revert}"; exit $?
+fi
+
+sha=$(git -C "$repo" rev-parse refs/heads/main)
+if [ $mode = scheduled ] && grep -qE "^CONVERGENCE ${sha:0:12} .* => (GREEN|RED) " "$SD/convergence.log" 2>/dev/null; then
+  echo "converge: main ${sha:0:12} has not moved since the last convergence; skipped"; exit 0
+fi
+start=$(date +%s)
+echo "converge: main ${sha:0:12}, started $(date -u +%FT%TZ)"
+bash "$W/scripts/standing.sh" "$sha" | tee "$SD/converge.standing"
+line=$(grep -m1 '^STANDING ' "$SD/converge.standing")
+[ -n "$line" ] || line="STANDING ${sha:0:12} (no verdict line: standing.sh exited before its verdict) => INCOMPLETE"
+printf '%s\n' "$line" > "$SD/converge.line"
+python3 "$W/gates/converge.py" record --repo "$repo" --sha "$sha" --line "$SD/converge.line" --dir "$SD" \
+  --tree "$SD/tree" --traces "$common/nanodregg-traces" | tee "$SD/converge.out"
+echo "converge: wall $(( ($(date +%s) - start) / 60 )) min"
+grep '^REVERT ' "$SD/converge.out" | while read -r _ c unit; do revert_landing "$c" "$unit"; done
+exit 0

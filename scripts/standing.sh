@@ -2,8 +2,12 @@
 # scripts/standing.sh [--here] [REV] — the standing verdict of one commit (default HEAD), on a
 # laptop. Refused unless this checkout is at main (--here: judge with this checkout's scripts).
 #
-#   tip -> gates -> full build -> census + generated files -> runs -> waste -> one line:
-#   STANDING <sha> gates=… build=… census=… runs=… waste=… unmeasured=N => GREEN|RED|INCOMPLETE
+#   tip -> gates -> full build -> census -> generated files -> the Rust workspace -> runs -> waste -> one line:
+#   STANDING <sha> gates=… build=… census=… generated=… cargo=… runs=… waste=… unmeasured=N => GREEN|RED|INCOMPLETE
+# It is THE CONVERGENCE (GATES-22): scripts/converge runs it on main every 3 h while landings happen, and every
+# check a FAST landing does not run is here: the census, the generated files, the whole Rust workspace (cargo
+# check, clippy -D warnings, rustfmt; per landing since GATES-22 only check + fmt of the reached packages), every
+# row (the benches included) and the waste ceilings.
 #
 # GREEN only when every stage's value is exactly `ok` and no ceiling is unmeasured; any RED stage
 # makes the line RED; anything else (ABSENT, INCOMPLETE, KILLED(load)) is INCOMPLETE: a gate that
@@ -47,12 +51,24 @@ gates=$(run python3 "$T/gates/check.py" "$T" --changed "$G/changed" --base-tree 
 unmeasured=$(grep -c '^WARN ' "$log" || true)
 # shellcheck disable=SC2046
 build=$(run wrapped env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$T"))
-census=ABSENT; runs=ABSENT; : > "$G/waste.measured"
+census=ABSENT; generated=ABSENT; runs=ABSENT; : > "$G/waste.measured"
+# The Rust workspace whole (it needs no Lean build): what pre-push judged on every Rust landing until GATES-22.
+cargo=ok
+if [ -f "$T/Cargo.toml" ]; then
+  for c in "check --quiet --locked --workspace --all-targets" "clippy --quiet --locked --workspace --all-targets" "fmt --all --check"; do
+    # shellcheck disable=SC2086
+    if [ "${c%% *}" = clippy ]; then r=$(run wrapped cargo $c --manifest-path "$T/Cargo.toml" -- -D warnings)
+    else r=$(run wrapped cargo $c --manifest-path "$T/Cargo.toml"); fi
+    [ "$r" = ok ] || { cargo="RED(cargo ${c%% *})"; break; }
+  done
+fi
 if [ "$build" = ok ]; then
   census=$(run wrapped python3 "$T/gates/census.py" "$T")
+  generated=ok gred=""
   while read -r exe out; do
-    [ -n "$exe" ] && [ "$(run generated_check "$T" "$exe" "$out")" = RED ] && census=RED
+    [ -n "$exe" ] && [ "$(run generated_check "$T" "$exe" "$out")" = RED ] && gred="$gred${gred:+,}$out"
   done < <(generated_checks "$T")
+  [ -n "$gred" ] && generated="RED($gred)"
   # runs: every verdict exe as gates/runs.tsv says (sims, journeys, rows, plants), gates/runs.py.
   # --standing: the `standing:` rows (minutes-long benches) run here and nowhere else (GATES-17)
   # GATES-20: every run traced; the re-trace check reds a fresh read-set the stored one (same key) omits;
@@ -61,6 +77,7 @@ if [ "$build" = ok ]; then
   wrapped python3 "$T/gates/runs.py" "$T" --standing --waste-out "$G/waste.measured" \
     --traces "$common/nanodregg-traces" --tree-oid "$(git -C "$repo" rev-parse "$sha^{tree}")" > "$G/runs.out" 2>> "$log"; rc=$?
   cat "$G/runs.out" >> "$log"
+  cp "$G/runs.out" "$G/${sha:0:12}.runs.out"   # scripts/converge attributes its red rows from it
   first() { grep -m1 -E "^  run .*: $1" "$G/runs.out" | sed 's/^  run //'; }
   case $rc in
     0) runs=ok ;;
@@ -82,7 +99,7 @@ untraced=$(grep -c '^  untraced ' "$G/runs.out" 2>/dev/null || true)
 # RED makes the line RED; anything else (ABSENT, INCOMPLETE, or a value that is not a verdict) is
 # INCOMPLETE.
 verdict=GREEN
-for v in "$gates" "$build" "$census" "$runs" "$wastev"; do
+for v in "$gates" "$build" "$census" "$generated" "$cargo" "$runs" "$wastev"; do
   case $v in
     ok) ;;
     RED*) verdict=RED; break ;;
@@ -91,7 +108,7 @@ for v in "$gates" "$build" "$census" "$runs" "$wastev"; do
 done
 [ $verdict = GREEN ] && [ "$unmeasured" -gt 0 ] && verdict=INCOMPLETE
 [ $verdict = GREEN ] && [ "${untraced:-0}" -gt 0 ] && verdict=INCOMPLETE
-line="STANDING ${sha:0:12} gates=$gates build=$build census=$census runs=$runs waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured outside=${outside:-0}($traced) untraced=${untraced:-0} => $verdict"
+line="STANDING ${sha:0:12} gates=$gates build=$build census=$census generated=$generated cargo=$cargo runs=$runs waste=$wastev(pinned $waste, unpinned $unpinned) unmeasured=$unmeasured outside=${outside:-0}($traced) untraced=${untraced:-0} => $verdict"
 echo "$line" | tee -a "$G/verdicts.log"
 echo "log: $log"
 [ "$verdict" = RED ] && exit 1

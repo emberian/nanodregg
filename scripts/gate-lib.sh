@@ -41,7 +41,9 @@ lock() {
 # itself, never in `$(…)`: a subshell's lock dies with the subshell). The first free slot is taken
 # at once; when all are busy, this process tries every slot again each 5 s, for at most 30 min, and
 # takes whichever frees first. (It waited on one fixed slot, pid mod N, until GATES-8: a judge sat
-# ~10 min behind a busy slot while two others stood free, 10-18.)
+# ~10 min behind a busy slot while two others stood free, 10-18.) Returns 3 when no slot freed in 30
+# min: the caller says NOT JUDGED (exit 76), never RED (GATES-22; the landing of GATES-20b-prime read
+# "REFUSED by scripts/pre-push" on a slot wait).
 gate_slot() {
   flock_or_refuse || return 1
   local n k
@@ -49,7 +51,10 @@ gate_slot() {
   if [ -z "$n" ]; then
     if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" = true ]; then n=4; else n=1; fi
   fi
-  local end=$(( $(date +%s) + 1800 )) said=
+  # GATES-22 (ROOT, lanes' measurements): a waiting judge KEEPS its place: every 30 min it names the holders and
+  # waits on; only after ND_SLOT_WAIT seconds (default 4 h) is it NOT JUDGED (return 3), never refused.
+  local start; start=$(date +%s)
+  local end=$(( start + ${ND_SLOT_WAIT:-14400} )) next=$(( start + 1800 )) said=
   while :; do
     for k in $(seq 1 "$n"); do
       exec 9> "$common/nanodregg-gate-$k.flock"
@@ -60,8 +65,16 @@ gate_slot() {
       fi
     done
     exec 9>&-
-    [ "$(date +%s)" -lt "$end" ] || { echo "gate: every judge slot busy for 30 min; refusing" >&2; return 1; }
-    [ -n "$said" ] || { echo "gate: all $n judge slots busy; waiting for the first to free (30 min)" >&2; said=1; }
+    if [ "$(date +%s)" -ge "$next" ] || [ "$(date +%s)" -ge "$end" ]; then
+      echo "gate: every judge slot busy for $(( ($(date +%s) - start) / 60 )) min; holders:" >&2
+      for k in $(seq 1 "$n"); do
+        local h; h=$(fuser "$common/nanodregg-gate-$k.flock" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' | head -1)
+        echo "  slot $k: ${h:-?} $( [ -n "$h" ] && tr '\0' ' ' < /proc/$h/cmdline 2>/dev/null | cut -c1-200) ($(ls -t "$common/nanodregg-gate-$k"/*.log 2>/dev/null | head -1 | xargs -r basename))" >&2
+      done
+      [ "$(date +%s)" -ge "$end" ] && { echo "gate: no slot in $(( ${ND_SLOT_WAIT:-14400} / 60 )) min; not judged" >&2; return 3; }
+      next=$(( next + 1800 ))
+    fi
+    [ -n "$said" ] || { echo "gate: all $n judge slots busy; waiting, in place, for the first to free" >&2; said=1; }
     sleep 5
   done
 }

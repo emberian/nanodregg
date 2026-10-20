@@ -2,9 +2,15 @@
 
 Every verdict run executes under `strace -f -qq -y --seccomp-bpf -e trace=%file,execve,getdents64,clone,clone3,fork,vfork`
 (wrap). Its trace is reduced to a READ-SET over the judged tree (reduce):
-  T = every tree path the run touched by name: opened, exec'd, stat'ed, accessed, readlink'd, probed
-      and absent (ENOENT is a read of absence). A stat is keyed by CONTENT, like an open: cargo's
-      fingerprint compares a source's mtime and size, so a stat is a proxy for the bytes.
+  T = every tree path the run touched by name: opened, exec'd, probed and absent (ENOENT is a read of
+      absence), and stat'ed, accessed or readlink'd BY CARGO: cargo's fingerprint compares a source's
+      mtime and size, so cargo's stat is a proxy for the bytes, keyed by CONTENT like an open.
+  K = every tree path some OTHER process only stat'ed, accessed or readlink'd (GATES-22, 20h (a)): a tree
+      walk (devtools' workspace scan, a test's `exists`) reads what KIND of thing is there, not its bytes,
+      so K is keyed by kind (DIR / FILE / ABSENT / LINK target / OTHER) and only an add, a delete or a
+      kind change of the path reaches it. A K path also opened is in T (K -= T). A CARGO process is one
+      that exec'd `cargo`, and its clones, until one exec's something else (the test binary cargo
+      spawns is not cargo); a compile (C) stays C.
   C = the same, touched by a COMPILE: a process that exec'd rustc, and every process or thread it
       cloned (GATES-20d). A cargo row compiles only when its cache is cold, so C is present in one
       trace of a row and empty in the next; T is what the run reads whatever the cache holds (cargo's
@@ -35,7 +41,7 @@ import re
 import shutil
 import subprocess
 
-VERSION = b"GATES-20 traced key v3 (GATES-20e: the judge's waste rows W)"
+VERSION = b"GATES-20 traced key v4 (GATES-22: K, the stat-only paths, keyed by kind)"
 WASTE = "gates/waste.tsv"
 EXCL = (".lake/runs/", ".lake/cargo-target/")
 BIN = ".lake/build/bin/"
@@ -84,6 +90,11 @@ def _compiler(path: str) -> bool:
     return os.path.basename(path).startswith(COMPILERS)
 
 
+# A call that reads what a path IS (its kind, its metadata, a link's target), never its bytes.
+STATLIKE = ("stat", "lstat", "newfstatat", "fstatat64", "statx", "access", "faccessat", "faccessat2",
+            "readlink", "readlinkat", "stat64", "lstat64")
+
+
 # Why the last reduce held no read-set (runs.py prints it: a trace it cannot read is never silent).
 WHY: list[str] = []
 
@@ -108,6 +119,8 @@ def reduce(trace: str, root: str) -> dict | None:
         return _none("no trace file")
     T, C, L, X, outside, outside_paths = set(), set(), set(), set(), {}, {}
     comp: set[str] = set()   # pids of a compile: exec'd rustc, or cloned from such a pid
+    cargo: set[str] = set()  # pids of cargo itself: exec'd cargo, or cloned from such a pid, until another exec
+    K: set[str] = set()
     made: set[str] = set()   # directories this run created: what lies under them is its own output
     cwd: dict[str, str] = {}
     parsed = 0
@@ -138,6 +151,8 @@ def reduce(trace: str, root: str) -> dict | None:
             r = RET.search(rest)
             if r and pid in comp:
                 comp.add(r.group(1))
+            if r and pid in cargo:
+                cargo.add(r.group(1))
             continue
         if resumed:
             continue   # the call's arguments were printed on its `<unfinished ...>` line
@@ -174,6 +189,11 @@ def reduce(trace: str, root: str) -> dict | None:
             return _none(f"an escaped name: {(s if chr(92) in s else base)[:60]}")
         if call in ("execve", "execveat") and _compiler(s):
             comp.add(pid)
+        if call in ("execve", "execveat") and rest.rstrip().endswith("= 0"):
+            if os.path.basename(s) == "cargo":
+                cargo.add(pid)
+            else:
+                cargo.discard(pid)
         s = os.path.join(base, s) if s else base
         r = place(s)
         if r is None:
@@ -187,6 +207,9 @@ def reduce(trace: str, root: str) -> dict | None:
             continue
         if call in ("execve", "execveat") and r.startswith(BIN):
             X.add(r[len(BIN):])
+        if call in STATLIKE and pid not in comp and pid not in cargo:
+            K.add(r)
+            continue
         (C if pid in comp else T).add(r)
     if parsed == 0:
         return _none("no strace line in the trace")
@@ -194,7 +217,8 @@ def reduce(trace: str, root: str) -> dict | None:
     T = {r for r in T if not own(r)}
     C = {r for r in C if not own(r)} - T
     L = {r for r in L if not own(r)}
-    return {"T": sorted(T), "C": sorted(C), "L": sorted(L), "X": sorted(X), "outside": outside,
+    K = {r for r in K if not own(r)} - T - C
+    return {"T": sorted(T), "C": sorted(C), "K": sorted(K), "L": sorted(L), "X": sorted(X), "outside": outside,
             "outside_paths": {c: sorted(v)[:50] for c, v in outside_paths.items()}}
 
 
@@ -203,17 +227,37 @@ def union(sets: list[dict | None]) -> dict | None:
     the row has none."""
     if not sets or any(s is None for s in sets):
         return None
-    out = {"T": set(), "C": set(), "L": set(), "X": set(), "outside": {}, "outside_paths": {}}
+    out = {"T": set(), "C": set(), "K": set(), "L": set(), "X": set(), "outside": {}, "outside_paths": {}}
     for s in sets:
-        for k in ("T", "C", "L", "X"):
+        for k in ("T", "C", "K", "L", "X"):
             out[k] |= set(s.get(k, []))
         for c, n in s["outside"].items():
             out["outside"][c] = out["outside"].get(c, 0) + n
         for c, ps in s.get("outside_paths", {}).items():
             out["outside_paths"].setdefault(c, set()).update(ps)
-    return {"T": sorted(out["T"]), "C": sorted(out["C"] - out["T"]), "L": sorted(out["L"]), "X": sorted(out["X"]),
+    return {"T": sorted(out["T"]), "C": sorted(out["C"] - out["T"]), "K": sorted(out["K"] - out["T"] - out["C"]),
+            "L": sorted(out["L"]), "X": sorted(out["X"]),
             "outside": out["outside"],
             "outside_paths": {c: sorted(v)[:50] for c, v in out["outside_paths"].items()}}
+
+
+def kind(root: str, r: str) -> str:
+    """What a stat sees of a path, never its bytes: DIR, FILE, ABSENT, LINK <target>, OTHER."""
+    p = os.path.join(root, r)
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        return "ABSENT"
+    except OSError as e:
+        return f"UNREADABLE {e.errno}"
+    import stat as st_
+    if st_.S_ISLNK(st.st_mode):
+        return "LINK " + os.readlink(p)
+    if st_.S_ISDIR(st.st_mode):
+        return "DIR"
+    if st_.S_ISREG(st.st_mode):
+        return "FILE"
+    return "OTHER"
 
 
 def _file(root: str, r: str) -> str:
@@ -265,6 +309,8 @@ def key(rs: dict, root: str, row_line: str) -> str:
         put("T " + r + " " + _file(root, r))
     for r in rs.get("C", []):
         put("C " + r + " " + _file(root, r))
+    for r in rs.get("K", []):
+        put("K " + r + " " + kind(root, r))
     for d in rs["L"]:
         p = os.path.join(root, d)
         put("L " + d + " " + ("\0".join(sorted(os.listdir(p))) if os.path.isdir(p) else "ABSENT"))
@@ -303,12 +349,16 @@ def waste_changed(old: str, new: str) -> set[str]:
 
 
 def touched_by(rs: dict, changed: list[str], added_or_deleted: set[str]) -> str | None:
-    """Why a change reaches a read-set (a path it touched, or an add/delete in a directory it
-    listed), or None."""
+    """Why a change reaches a read-set (a path it touched, a path it stat'ed only (K) added, deleted
+    or changed in kind, or an add/delete in a directory it listed), or None."""
     t = set(rs["T"]) | set(rs.get("C", []))
     for p in changed:
         if p in t:
             return f"changed path {p} (traced)"
+    k = set(rs.get("K", []))
+    for p in sorted(added_or_deleted):
+        if p in k:
+            return f"added/removed/re-kinded {p}, which it stat'ed (traced)"
     ls = set(rs["L"])
     for p in sorted(added_or_deleted):
         if os.path.dirname(p) in ls or (os.path.dirname(p) == "" and "." in ls):
@@ -328,16 +378,19 @@ def subset_violation(fresh: dict, recorded: dict, root: str | None = None) -> st
     D that is a file on this tree (ROOT the tree the key was re-computed on). That file's key pins its
     bytes, so it exists, so D is a directory; a stat or readlink of D reads nothing more (cargo resolves
     each dep-info path's ancestors after a compile: `readlink launcher/tests` = EINVAL)."""
-    pairs = [("T", "touched"), ("L", "listed"), ("X", "exec'd")]
+    pairs = [("T", "touched"), ("L", "listed"), ("X", "exec'd"), ("K", "stat'ed")]
     if recorded.get("C"):
         pairs.append(("C", "compiled from"))
     have = set(recorded.get("T", [])) | set(recorded.get("C", []))
+    # a fresh stat-only path is inside the record when the record read it at all (K, T or C); a fresh T path
+    # the record only stat'ed IS an extra (its bytes were never keyed)
     def implied(d: str) -> bool:
         return root is not None and os.path.isdir(os.path.join(root, d)) and any(
             p.startswith(d + "/") and os.path.isfile(os.path.join(root, p)) for p in have)
     for k, what in pairs:
         extra = sorted(p for p in set(fresh.get(k, [])) - set(recorded.get(k, []))
-                       - (set(recorded.get("T", [])) if k == "C" else set()) if k not in ("T", "C") or not implied(p))
+                       - (set(recorded.get("T", [])) if k == "C" else set()) - (have if k == "K" else set())
+                       if k not in ("T", "C", "K") or not implied(p))
         if extra:
             return f"{what} {extra[0]}{f' (+{len(extra) - 1} more)' if len(extra) > 1 else ''}"
     return None

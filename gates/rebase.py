@@ -13,7 +13,9 @@ object store), `path<TAB>base<TAB>ours<TAB>mode` with `-` for absent. Every atte
 built from that record by `candidate`, into the attempt's private index, file by file against
 main's blob M: OURS = M, or OURS = BASE (the lander did not edit it: main's copy wins), or BASE = M
 (main did not change it: OURS), else the 3-way merge `git merge-file OURS BASE M`. A conflict, or
-a side absent or unmergeable, is refused by name with its hunks, never resolved. The working tree is
+a side absent or unmergeable, is refused by name with its hunks, never resolved. One exception (GATES-22 (b)): an
+append-only file (gates/append-only.tsv: the decision records) that both sides only APPENDED to since the base lands as main's copy with the
+lander's addition after it; an edit above the end on either side is merged as any file. The working tree is
 not read again: an edit made while the lander runs is not in what it lands, and is named at the end.
 
 Before GATES-20b the merge ran only for a path whose HEAD copy differed from main's, with HEAD's copy
@@ -178,6 +180,24 @@ def read_snapshot(path: str) -> list[tuple[str, str, str, str]]:
     return out
 
 
+# The append-only files (GATES-22 (b), KERNEL-26's conflict on an append-only decision record): two appends never
+# conflict. gates/append-only.tsv names the directories whose *.md files are append-only (a table, read from the
+# judge's own gates/: this module names no path of the doc allow-list itself, GATES-19's rule).
+def _append_only() -> tuple[str, ...]:
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "append-only.tsv")
+    try:
+        return tuple(l.strip() for l in open(p, encoding="utf-8") if l.strip() and not l.startswith("#"))
+    except OSError:
+        return ()
+
+
+APPEND_ONLY = _append_only()
+
+
+def append_only(p: str) -> bool:
+    return p.endswith(".md") and any(p.startswith(d) and "/" not in p[len(d):] for d in APPEND_ONLY)
+
+
 def merge3(ours: bytes, base: bytes, theirs: bytes) -> tuple[int, bytes, str]:
     """`git merge-file -p OURS BASE THEIRS`: (exit, merged bytes, stderr). 0 clean, 1..127 conflicts."""
     with tempfile.TemporaryDirectory() as d:
@@ -211,6 +231,17 @@ def candidate(repo: str, snap: str, main: str) -> int:
             refused.append(f"scripts/commit: REFUSED — cannot merge {p}: {side}, and the other side holds different "
                            f"bytes; re-apply your edit on main's copy (git show main:{p})")
             continue
+        if append_only(p):
+            bb, ob, mb = show(repo, base), show(repo, ours), show(repo, moid)
+            if ob.startswith(bb) and mb.startswith(bb):
+                # GATES-22 (b): an append-only file both sides only appended to: main's copy, then
+                # yours appended. Anything else (an edit above the end on either side) is merged and refused as below.
+                tail = ob[len(bb):]
+                data = mb + (b"" if not mb or mb.endswith(b"\n") else b"\n") + tail
+                updates.append((p, mode, hash_bytes(repo, data, write=True)))
+                said.append(f"scripts/commit: {p}: both sides appended since your base: your addition follows main's "
+                            f"(append-only, GATES-22)")
+                continue
         rc, data, err = merge3(show(repo, ours), show(repo, base), show(repo, moid))
         if rc == 0:
             updates.append((p, mode, hash_bytes(repo, data, write=True)))
