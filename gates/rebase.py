@@ -14,8 +14,9 @@ built from that record by `candidate`, into the attempt's private index, file by
 main's blob M: OURS = M, or OURS = BASE (the lander did not edit it: main's copy wins), or BASE = M
 (main did not change it: OURS), else the 3-way merge `git merge-file OURS BASE M`. A conflict, or
 a side absent or unmergeable, is refused by name with its hunks, never resolved. One exception (GATES-22 (b)): an
-append-only file (gates/append-only.tsv: the decision records) that both sides only APPENDED to since the base lands as main's copy with the
-lander's addition after it; an edit above the end on either side is merged as any file. The working tree is
+append-only file (gates/append-only.tsv: the decision records) that the lander only APPENDED to since its base lands as
+main's copy, whatever main changed in it, with the lander's addition after it; a lander's edit above the end is merged as
+any file. The working tree is
 not read again: an edit made while the lander runs is not in what it lands, and is named at the end.
 
 Before GATES-20b the merge ran only for a path whose HEAD copy differed from main's, with HEAD's copy
@@ -233,14 +234,15 @@ def candidate(repo: str, snap: str, main: str) -> int:
             continue
         if append_only(p):
             bb, ob, mb = show(repo, base), show(repo, ours), show(repo, moid)
-            if ob.startswith(bb) and mb.startswith(bb):
-                # GATES-22 (b): an append-only file both sides only appended to: main's copy, then
-                # yours appended. Anything else (an edit above the end on either side) is merged and refused as below.
+            if ob.startswith(bb):
+                # GATES-22 (b): the lander only APPENDED to an append-only file: main's copy as it is now (whatever
+                # main changed, above the end or at it), then the lander's addition. A lander that edited above the
+                # end is merged and refused as below.
                 tail = ob[len(bb):]
                 data = mb + (b"" if not mb or mb.endswith(b"\n") else b"\n") + tail
                 updates.append((p, mode, hash_bytes(repo, data, write=True)))
-                said.append(f"scripts/commit: {p}: both sides appended since your base: your addition follows main's "
-                            f"(append-only, GATES-22)")
+                said.append(f"scripts/commit: {p}: you only appended since your base: your addition follows main's "
+                            f"copy (append-only, GATES-22)")
                 continue
         rc, data, err = merge3(show(repo, ours), show(repo, base), show(repo, moid))
         if rc == 0:
