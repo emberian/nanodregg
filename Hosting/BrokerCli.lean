@@ -38,7 +38,7 @@ import Lang.Read
 namespace Nanodregg.Hosting.BrokerCli
 
 open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Hosting.Broker
-open Nanodregg.Host (Tail File readKey Keys StoreFault)
+open Nanodregg.Host (Tail Segs readKey Keys StoreFault)
 
 /-- Asks one process answers at most. -/
 def lifetime : Nat := 1 <<< 48
@@ -97,7 +97,7 @@ abbrev D := Host.Deployed.D
 resident grains it holds by World id (`lifeId`: the lifecycle package's id). -/
 structure Follow where
   keys : Keys
-  seg : File
+  seg : Segs
   pkgId : ByteArray
   operator : ByteArray
   lifeId : ByteArray
@@ -110,7 +110,7 @@ def Follow.residents (f : Follow) : List ByteArray := f.grains.map fun p => Cont
 
 /-- Read what was appended until nothing is new, at most `n` reads; the Turns absorbed (a recorded
 refusal moves no cell, `Kernel.refuse_frame`, so only the log's Turns are read). -/
-def catchUp (keys : Keys) (seg : File) : Nat → Tail (World D) → List (Turn D) →
+def catchUp (keys : Keys) (seg : Segs) : Nat → Tail (World D) → List (Turn D) →
     IO (Except Exit (Tail (World D) × List (Turn D)))
   | 0, _, _ => pure (.error .behind)
   | n + 1, t, acc => do

@@ -1,7 +1,7 @@
 /-
 # Host.Proofs.Index — the fixed-entry index (HOST-33)
 
-`index.log` is fixed-width entries, entry k at byte k · entryBytes, each tagged over its position.
+the index file is fixed-width entries, entry k at byte k · entryBytes, each tagged over its position.
 
 * `Entry.read_bytes` / `Entry.read_sound` — an entry in the layout reads back at its position as
   itself, and a read that returns an entry was handed exactly that entry's bytes at that position
@@ -13,13 +13,13 @@
   returns, and its two refusals;
 * `seal_at_end` / `seal_indexMoved` — a seal appends exactly at the end of the entries the newest
   base counts, or refuses `indexMoved`;
-* `entriesSeq_read` — the `index.log` successive seals write from genesis reads back, every entry
+* `entriesSeq_read` — the index file successive seals write from genesis reads back, every entry
   at its position, and the one check open makes passes on it for a base whose step count is past
   every entry's (no Store this Host writes is refused: the tie to the sealed World is
   `Host.sealed_opens`);
 * `indexNamed_none` / `indexNamed_unread` / `indexNamed_notBefore` — what the one open check means, and its
   teeth (HOST-53: the last entry's record began before the base's World);
-* (`Host.Proofs.Base.openWith_verifies_named`) — an open that succeeds found `index.log` holding every entry the base
+* (`Host.Proofs.Base.openWith_verifies_named`) — an open that succeeds found the index file holding every entry the base
   counts, and its last entry reading back at its position with the tag the base names, its record
   begun before the base's World (HOST-53);
 * `indexClean_none` / `indexClean_unread` — `host check` reads EVERY entry: when it passes, each
@@ -202,16 +202,16 @@ theorem entries_indexTooLarge (keys : Keys) (ix : IndexAt) (es : Array Entry)
   simp only [hb, if_true]
 
 /-- **A seal appends at the end of the entries the newest base counts** (HOST-31, HOST-33). A seal
-that succeeds was handed an `index.log` of exactly `ix.count · entryBytes` bytes, its bytes are
+that succeeds was handed an index file of exactly `ix.count · entryBytes` bytes, its bytes are
 `Base.entries`' after `ix`, and the base it writes counts what `Base.entries` returns. So the
 entries a checkpoint appends land at the positions their tags name. What is not stated: that
 `File.writeAll` appends exactly its bytes at the end (the FFI's contract, `Host/c/file.c`). -/
 theorem seal_at_end {W : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W) (w : W)
-    (seg : Position) (ix : IndexAt) (entries : Array Entry) (indexSize : Nat)
+    (seg : Position) (ix : IndexAt) (entries : Array Entry) (indexSize : Nat) (keep : Keep)
     {page file : ByteArray} {ix' : IndexAt}
-    (h : Base.seal keys c world w seg ix entries indexSize = .ok (page, ix', file)) :
+    (h : Base.seal keys c world w seg ix entries indexSize keep = .ok (page, ix', file)) :
     indexSize = ix.count * entryBytes keys ∧ Base.entries keys ix entries = .ok (page, ix') ∧
-      Base.file keys c world w seg ix' = .ok file := by
+      Base.file keys c world w seg ix' keep = .ok file := by
   unfold Base.seal at h
   split at h
   · cases h
@@ -227,12 +227,12 @@ theorem seal_at_end {W : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream
           cases h
           exact ⟨by simpa using hsz, hp, hf⟩
 
-/-- **The tooth of `seal_at_end`**: an `index.log` of any other size than the end of the entries
+/-- **The tooth of `seal_at_end`**: an index file of any other size than the end of the entries
 the newest base counts is refused `indexMoved`, before anything is encoded or written. -/
 theorem seal_indexMoved {W : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W) (w : W)
-    (seg : Position) (ix : IndexAt) (entries : Array Entry) (indexSize : Nat)
+    (seg : Position) (ix : IndexAt) (entries : Array Entry) (indexSize : Nat) (keep : Keep)
     (hne : indexSize ≠ ix.count * entryBytes keys) :
-    Base.seal keys c world w seg ix entries indexSize =
+    Base.seal keys c world w seg ix entries indexSize keep =
       .error (.indexMoved indexSize (ix.count * entryBytes keys)) := by
   unfold Base.seal
   rw [if_pos hne]
@@ -306,16 +306,16 @@ theorem indexNamed_unread (keys : Keys) {n : Nat} (last : Codec.Digest) {before 
   unfold indexNamed
   rw [if_neg (by omega), h]
 
-theorem indexClean_go_none (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
-    ∀ (k h : Nat), indexClean.go keys bytes k h offs = none → ∀ (i : Nat) (hi : i < offs.length),
-      ∃ e, Entry.read keys (k + i) (bytes.extract ((k + i) * entryBytes keys)
-        ((k + i) * entryBytes keys + entryBytes keys)) = some e ∧ e.offset = offs[i] := by
+theorem indexClean_go_none (keys : Keys) (bytes : ByteArray) (k0 : Nat) (offs : List Nat) :
+    ∀ (k h : Nat), indexClean.go keys bytes k0 k h offs = none → ∀ (i : Nat) (hi : i < offs.length),
+      ∃ e, Entry.read keys (k + i) (bytes.extract ((k + i - k0) * entryBytes keys)
+        ((k + i - k0) * entryBytes keys + entryBytes keys)) = some e ∧ e.offset = offs[i] := by
   induction offs with
   | nil => intro _ _ _ i hi; exact absurd hi (by simp)
   | cons off rest ih =>
     intro k h hgo i hi
     rw [indexClean.go] at hgo
-    cases hr : Entry.read keys k (bytes.extract (k * entryBytes keys) (k * entryBytes keys + entryBytes keys)) with
+    cases hr : Entry.read keys k (bytes.extract ((k - k0) * entryBytes keys) ((k - k0) * entryBytes keys + entryBytes keys)) with
     | none => rw [hr] at hgo; cases hgo
     | some e =>
       rw [hr] at hgo
@@ -329,18 +329,18 @@ theorem indexClean_go_none (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
           exact ⟨e', by rw [show k + (i + 1) = k + 1 + i by omega]; exact he', by simpa using ho'⟩
       · rw [if_neg hc] at hgo; cases hgo
 
-theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
-    ∀ (k h : Nat), indexClean.go keys bytes k h offs = none → ∀ (i : Nat) (_ : i + 1 < offs.length) (e e' : Entry),
-      Entry.read keys (k + i) (bytes.extract ((k + i) * entryBytes keys)
-        ((k + i) * entryBytes keys + entryBytes keys)) = some e →
-      Entry.read keys (k + i + 1) (bytes.extract ((k + i + 1) * entryBytes keys)
-        ((k + i + 1) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps := by
+theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (k0 : Nat) (offs : List Nat) :
+    ∀ (k h : Nat), indexClean.go keys bytes k0 k h offs = none → ∀ (i : Nat) (_ : i + 1 < offs.length) (e e' : Entry),
+      Entry.read keys (k + i) (bytes.extract ((k + i - k0) * entryBytes keys)
+        ((k + i - k0) * entryBytes keys + entryBytes keys)) = some e →
+      Entry.read keys (k + i + 1) (bytes.extract ((k + i + 1 - k0) * entryBytes keys)
+        ((k + i + 1 - k0) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps := by
   induction offs with
   | nil => intro _ _ _ i hi; exact absurd hi (by simp)
   | cons off rest ih =>
     intro k h hgo i hi e e' he he'
     rw [indexClean.go] at hgo
-    cases hr : Entry.read keys k (bytes.extract (k * entryBytes keys) (k * entryBytes keys + entryBytes keys)) with
+    cases hr : Entry.read keys k (bytes.extract ((k - k0) * entryBytes keys) ((k - k0) * entryBytes keys + entryBytes keys)) with
     | none => rw [hr] at hgo; cases hgo
     | some e₀ =>
       rw [hr] at hgo
@@ -366,41 +366,51 @@ theorem indexClean_go_rise (keys : Keys) (bytes : ByteArray) (offs : List Nat) :
             (by rw [show k + 1 + i + 1 = k + (i + 1) + 1 by omega]; exact he')
       · rw [if_neg hc] at hgo; cases hgo
 
-/-- **`host check` reads every entry** (HOST-33 condition 1): when `indexClean` passes, the index
-holds exactly the `count` entries the base counts, one per record frame before the base, EVERY one
-reads back at its position under the Store's keys (its tag verified there) and names that record
-frame's offset, and step counts never fall from one entry to the next. -/
-theorem indexClean_none {keys : Keys} {bytes : ByteArray} {count : Nat} {offsets : List Nat}
-    (h : indexClean keys bytes count offsets = none) :
-    offsets.length = count ∧ bytes.size = count * entryBytes keys ∧
-    (∀ (k : Nat) (hk : k < offsets.length), ∃ e,
-      Entry.read keys k (bytes.extract (k * entryBytes keys) (k * entryBytes keys + entryBytes keys)) = some e ∧
-        e.offset = offsets[k]) ∧
-    (∀ (k : Nat) (_ : k + 1 < offsets.length) (e e' : Entry),
-      Entry.read keys k (bytes.extract (k * entryBytes keys) (k * entryBytes keys + entryBytes keys)) = some e →
-      Entry.read keys (k + 1) (bytes.extract ((k + 1) * entryBytes keys)
-        ((k + 1) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps) := by
+/-- **`host check` reads every entry it keeps** (HOST-33 condition 1, HOST-64): when `indexClean`
+passes, the index file holds exactly the entries `k0 … count - 1` the base keeps, one per offset of
+`offsets`, EVERY one reads back at its absolute position `k0 + i` under the Store's keys (its tag
+verified there) and names the `i`-th offset, and step counts never fall from one entry to the next.
+At `k0 = 0` it is the whole index. That `offsets` are the record frames between the oldest kept file
+and the base is the caller's (`Check.keptClean` hands `recordOffsetsFrom` of the recovered kept
+history), not this theorem's. -/
+theorem indexClean_none {keys : Keys} {bytes : ByteArray} {k0 count : Nat} {offsets : List Nat}
+    (h : indexClean keys bytes k0 count offsets = none) :
+    k0 + offsets.length = count ∧ bytes.size = (count - k0) * entryBytes keys ∧
+    (∀ (i : Nat) (hi : i < offsets.length), ∃ e,
+      Entry.read keys (k0 + i) (bytes.extract (i * entryBytes keys) (i * entryBytes keys + entryBytes keys)) = some e ∧
+        e.offset = offsets[i]) ∧
+    (∀ (i : Nat) (_ : i + 1 < offsets.length) (e e' : Entry),
+      Entry.read keys (k0 + i) (bytes.extract (i * entryBytes keys) (i * entryBytes keys + entryBytes keys)) = some e →
+      Entry.read keys (k0 + i + 1) (bytes.extract ((i + 1) * entryBytes keys)
+        ((i + 1) * entryBytes keys + entryBytes keys)) = some e' → e.steps ≤ e'.steps) := by
   unfold indexClean at h
-  by_cases hc : offsets.length ≠ count ∨ bytes.size ≠ count * entryBytes keys
+  by_cases hc : k0 + offsets.length ≠ count ∨ bytes.size ≠ (count - k0) * entryBytes keys
   · rw [if_pos hc] at h; cases h
   · rw [if_neg hc] at h
-    refine ⟨by omega, by omega, fun k hk => by simpa using indexClean_go_none keys bytes offsets 0 0 h k hk,
-      fun k hk e e' he he' => indexClean_go_rise keys bytes offsets 0 0 h k hk e e' (by simpa using he)
-        (by simpa using he')⟩
+    obtain ⟨h1, h2⟩ := not_or.mp hc
+    refine ⟨Classical.not_not.mp h1, Classical.not_not.mp h2, fun i hi => ?_, fun i hi e e' he he' => ?_⟩
+    · have := indexClean_go_none keys bytes k0 offsets k0 0 h i hi
+      rw [Nat.add_sub_cancel_left] at this
+      exact this
+    · have e1 : k0 + i + 1 - k0 = i + 1 := by rw [Nat.add_assoc, Nat.add_sub_cancel_left]
+      refine indexClean_go_rise keys bytes k0 offsets k0 0 h i hi e e' ?_ ?_
+      · rw [Nat.add_sub_cancel_left]; exact he
+      · rw [e1]; exact he'
 
 /-- **The tooth of `indexClean_none`**: when the sizes agree, a first entry that does not read back
 is refused at 0. -/
-theorem indexClean_unread (keys : Keys) (bytes : ByteArray) (off : Nat) (rest : List Nat)
+theorem indexClean_unread (keys : Keys) (bytes : ByteArray) (k0 off : Nat) (rest : List Nat)
     (hs : bytes.size = (rest.length + 1) * entryBytes keys)
-    (h : Entry.read keys 0 (bytes.extract 0 (entryBytes keys)) = none) :
-    indexClean keys bytes (rest.length + 1) (off :: rest) = some 0 := by
+    (h : Entry.read keys k0 (bytes.extract 0 (entryBytes keys)) = none) :
+    indexClean keys bytes k0 (k0 + (rest.length + 1)) (off :: rest) = some k0 := by
   unfold indexClean
   rw [if_neg (by simp [hs])]
-  simp only [indexClean.go, Nat.zero_mul, Nat.zero_add, h]
+  simp only [indexClean.go, Nat.sub_self, Nat.zero_mul, Nat.zero_add, h]
 
 /-- **The count tooth**: an index of another length than the base's count is refused. -/
-theorem indexClean_count (keys : Keys) (bytes : ByteArray) (count : Nat) (offsets : List Nat)
-    (h : offsets.length ≠ count) : indexClean keys bytes count offsets = some (min count offsets.length) := by
+theorem indexClean_count (keys : Keys) (bytes : ByteArray) (k0 count : Nat) (offsets : List Nat)
+    (h : k0 + offsets.length ≠ count) :
+    indexClean keys bytes k0 count offsets = some (k0 + min (count - k0) offsets.length) := by
   unfold indexClean
   rw [if_pos (Or.inl h)]
 
@@ -522,7 +532,7 @@ theorem entriesSeq_run (keys : Keys) : ∀ (ess : List (Array Entry)) (ix : Inde
           · exact hf e he
 
 /-- **No entry the seals wrote is lost, and no Store this Host writes is refused by the one open
-check** (HOST-33; replaces HOST-31's `indexEntries_pages`). The `index.log` successive seals write
+check** (HOST-33; replaces HOST-31's `indexEntries_pages`). The index file successive seals write
 from genesis (`Base.entriesSeq` from `indexStart`, one `Base.entries` per seal) is exactly
 `entryBytes` per entry; EVERY entry handed to every seal reads back at its own position, in
 order (`run_read`); and the check open makes over the last one passes (`indexNamed`) for a base whose

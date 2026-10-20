@@ -2845,3 +2845,155 @@ The fault takes `Status.beforeLog`, exit 60, fatal. A writer answers the page `r
 - Not taken, but named: `openWith_reads` could state the extra read exactly (`count = 0 ↔ none`). It states "at most one".
 
 **Flag day.** None on disk. Every Store this Host writes passes (completeness above). A Store whose last entry does not name the frame ending at its base, which no honest writer produces, now refuses to open `indexCorrupt` instead of failing its first page `corrupt`.
+
+## HOST-64 · the checkpoint mechanism: the segment as files, each opened by a MAC'd header; retention operator-set, default keep-everything; `CheckpointTrusted` named (2026-10-21, KERNEL-44 Part 2, shape D; DECISIONS-20261021 CARD 1; HOST-19 wrote it, HOST-20 compiled and landed it)
+
+**The question.** Ember: "we need to eventually support compacting and dropping old history." A Store kept its segment from genesis for ever (`seg.log`, `index.log`), so disk, `host check` and a backup were O(history). The open was already bounded (one base, `tailMax` of tail).
+
+**Decision (ROOT's R1–R3 and CARD 1's D).**
+- **The segment is one LOGICAL byte sequence**, byte for byte what `seg.log` held: same frames, same MAC chain, absolute offsets. Files hold slices of it. `seg.<o>.log` = checkpoint header ‖ the logical bytes from `o`.
+  - The loop starts a new file exactly where it starts a seal (`Loop.spawnSeal` → `Checkpoint.rotate`), so every base sits at the start of its own file.
+  - Genesis writes `seg.0.log` (the origin frame) and its base's empty `seg.<o0>.log`.
+- **The header** (`Host.Base.Header`, layout `headerLayout` in the shape stamp) is u64 start, steps, indexCount, prev ‖ tag32 ‖ origin ‖ chain ‖ mac32, under a fourth sealer, `Keys.checkpoint`. Its domain is `nanodregg/host/checkpoint/v1`. It is 160 B deployed.
+  - It binds the position as (steps, chain), not the base digest (R1: the digest does not exist when the file starts; base.world's MAC binds it). R2: steps, not height.
+- **The open checks the header of the base's own file** (`headerFault`). It refuses:
+  - `checkpointCorrupt` when the header does not verify;
+  - `foreignOrigin` when it states another Store's origin (HOST-25's identity, which the origin frame at 0 carried before a Store could drop it);
+  - `foreignSegment` when it states another position, step count, chain or entry count.
+  The open no longer reads the origin frame at 0. `originMax`, `originLen` and `originFault` are DELETED. `host check` verifies the origin frame whenever it is kept: `foreignOrigin` first, then `corrupt history`.
+- **How it composes with HOST-63 at open.** `openWith`'s order:
+  1. the base (`Base.read`, the stamp);
+  2. the tail bound;
+  3. ONE read of the 32 bytes before the base's offset plus the tail, and the anchor (`foreignSegment`);
+  4. the header of the base's own file (`headerFault`: `checkpointCorrupt` / `foreignOrigin` / `foreignSegment`), which replaced the origin read at 0 beside it;
+  5. `indexShort`;
+  6. the one entry (`indexNamed`);
+  7. HOST-63's last-frame read `[e.offset - 32, base)` (`lastFrameFault`, `indexCorrupt`);
+  8. the fold.
+  The header pins the file the base sits in; the last-frame check pins the record before it, in the PREVIOUS file. That is why a finite retention keeps at least two files (`retainFloor` = 2): the last-frame read must always find its bytes, and when the entry's frame is a file's first, its 32-byte prefix is served from that file's header tag (`Segs.read`). Both checks read logical offsets only, so neither depends on which files a drop removed.
+- **The base** gains `retainedFrom` (the oldest kept file) and `indexFrom` (the first kept entry: the index file is `index.<k0>.log`, R3). The base codec (site `host/base/retained`) refuses, by its label, a base keeping a file past its own offset or an entry past its count. `Base.file` refuses the same `positionUnfit` before writing.
+- **Retention.** `host serve|seal STORE --retain N` keeps the N newest files (N ≥ `retainFloor` = 2, else `usage retainBelowFloor`). The base's own file and the one before it are needed because the open's last-frame check (HOST-63) reads the record before the base. The default keeps everything (`retainedFrom` = 0 for ever).
+  - A finite-retention seal writes the kept entries plus the new ones to `index.<k0'>.log` through `index.tmp` BEFORE the base naming `k0'` is installed, then unlinks what it dropped.
+  - A crash leaves surplus files, never a missing one. A finite-retention writer removes the surplus at open.
+- **Pages.** `Page.kept` (the deployed pager's and host-file-sim's one function) builds over the index from `k0`. A page from before the oldest kept record is `checkpointed START FIRST` (exit 61, fatal from `host check --anchor`). The writer answers that page refused and keeps serving.
+- **Check.** `Check.keptClean` is the one verification, run by `host check` and by host-file-sim:
+  - walks the kept files from the base's back to `retainedFrom` (each header, origin and contiguity; a file ending short of its successor is `segmentShort`, a mismatch `foreignSegment`);
+  - checks the kept history from the oldest header's tag;
+  - runs `indexClean` from `k0`.
+  `STATUS` gains `retained_from=H` (the oldest kept header's step count).
+- **Names.** A missing kept file is HOST-35's `missing seg.<o>.log` with its start, one name per fault class (ROOT ruled). KERNEL-44's `storeMissing` is that name's description, not a new name.
+  - Exits: `checkpointed` = 61, `checkpointCorrupt` = 62, both fatal.
+  - `SegFault` gains `foreignOrigin` (a kept file states another origin than its neighbour) and `short` → `segmentShort`.
+
+**`CheckpointTrusted o w` (Host/Proofs/Trusted.lean)** is the premise every open from a base rests on, stated over the Store's RECORDED ORIGIN `o`. `w` is reached by an admitted fold from a `w₀` such that:
+- `w₀.origin = o`;
+- a start of this binary admits `w₀` (`Receive.genesis` or `Carry.importWorld`);
+- `w₀` passes the budget check and is `Kept`.
+
+The origin is the start's commitment (ROOT's (B′)):
+- `originOf` hashes the genesis inputs.
+- `carryOriginOf` hashes the carried roots, allowance, height and journal, the exported origin, the name and the nonce.
+- Every segment file's header states it under the Store key, and `trusted_origin` gives `w.origin = o`.
+- It is what an outside party checks: the founder compares it out of band, and a sponsor's invitation pins it (card 7a: `import --origin`, not `--digest`).
+- It names ONE start up to an explicit collision:
+  - `start_genesis_unique` (`genesis_inj`);
+  - `start_carry_commits` (`carry_inj_canon`: the same roots, allowance, height, steps, journal, refusals and chain, or the two carry inputs collide);
+  - `start_kinds_disjoint` (`carry_origin_ne_genesis`).
+- ROOT first ruled a separate start-digest field in the header and the base. The origin's existing commitment refuted that: two commitments to one start are two shapes.
+
+Discharged:
+- at genesis and join (`genesis_trusted`) and import (`import_trusted`), each at its own origin;
+- along every admitted fold (`trusted_fold`), and through a reopen (`openWith_trusted`);
+- for the writer's own base (`sealed_trusted`).
+
+What it buys: `trusted_kept`, `trusted_size_le`, `trusted_potential_le`, and the consumer `opened_size_le` (the TAIL's growth after a trusted base stays within `worldBytesMax`; the base itself is bounded by its frame). In each it is the hypothesis that yields the conclusion. It is refutable: `not_trusted_of_potential`.
+
+NOT discharged for a received base: a thin adopt, a hosted follower's join, or a dropped prefix. There, the base's origin must be the one the invitation pins, and the premise is what admits it.
+- The planting row: a thin adopt whose pinned World's origin is not the one the invitation names is refused by name. It is PROTOCOL-22's next commit (cv-less, agreed): row `adoptWrongWorld`, refused `wrongWorld` by Command.step's origin check, plus `untrustedAdopt`, an adopt past potentialMax refused `potentialPastBound`, which tests `not_trusted_of_potential`'s premise.
+
+The third read's point, named: `CheckpointTrusted o w` is `w.origin = o` plus "some admitted start". So `o` carries information only when a consumer PINS it from an independent record: the founder's out-of-band origin, or a sponsor's invitation (PROTOCOL-22's row). Instantiated at the base's own origin, it certifies any World a start admits, a forged import included. `openWith_trusted` and `opened_size_le` take the pin as a free parameter, and the caller names where it comes from:
+- the writer gets it from its own genesis or import output (`genesis_trusted` / `import_trusted`), then by induction;
+- a follower gets it from its invitation.
+The header states the genesis CHAIN of the origin, which `genesis_chain_inj` links to the origin up to a collision.
+
+NOT PROVED:
+- equal trie/rows roots ⇒ equal tries (the trie's own binding over node preimages, KERNEL's);
+- the writer-life induction as one theorem (it is stated link by link).
+
+**Theorems (restated and new).**
+- Header:
+  - `Header.read_bytes` and `headerFault_bytes`: every header the layout holds reads back and passes at its own place (completeness).
+  - `headerFault_none_iff`, `Header.read_sound`.
+  - Teeth: `headerFault_corrupt`, `headerFault_foreignOrigin`, `headerFault_foreignSegment`.
+  - `openWith_header`: an open that succeeds read a header naming the base's origin, position, step count, chain and count; its base keeps only what precedes it.
+  - `openWith_headerFault`: the tooth over the real open.
+  - `genesisImage_header`, `genesis_header_passes`.
+- Base codec:
+  - `Base.codec_lawfulOn`, over `refine_lawfulOn_where`;
+  - `Base.codec_decode_keep` and `Base.read_keep`;
+  - `Base.file_keep_le`; `Base.read_file` (keep fields).
+- Index (k0): `indexClean_none` (every kept entry reads back at its absolute position k0+i), `indexClean_unread`, `indexClean_count`.
+- Seal: `seal_at_end` and `seal_indexMoved` gain the keep.
+- Open: `openWith_reads` names two ranges and at most one more; the header is handed in.
+- The open family over the logical segment (`openWith_*`, the backup and cut theorems, `sealed_opens*`, `StoreIndexes`, `page_nonempty`) keeps its conclusions, with the header as one more input.
+- Names: `StorePart.name_injective` (a part's name determines it, the start by `Nat.repr_injective`) and `StoreFault.text_missing_injective` for parameterized parts. `StorePart.pattern` and `families` name the layout's rows.
+
+**The premise spread (priced, per the 10-17 lesson).**
+- ~40 `openWith` hypothesis sites gain the header input. Their conclusions are unchanged.
+- The origin family is DELETED and restated over the header.
+- `sealed_opens`, `sealed_opens_clean` and `sealed_unindexed_refused` gain `hH`: the header handed to the open passes at the new base's place. `sealed_opens_deployed` discharges it for the header `Checkpoint.rotate` writes (`Header.at o.pos (mark w) ix'.count prev (originChain w)`, with `prev ≤ o.pos.offset`) through `headerFault_bytes`. The count is the same `sealed.index.count + index.size` `spawnSeal` hands `rotate`.
+- `genesis_reopens`, `import_reopens`, `genesis_indexes` and `import_indexes` (landed) gain the premise `keys.chainBytes = Digest.width`: the header's chain field is the Store's chain width. `Keys.ofKey` discharges it by rfl (`ofKey_chainBytes`). It is satisfiable, and its failure (a Keys of another width) is a different deployment, not a Store this Host writes.
+- HOST-57/62 and every Kernel `deployed_*` theorem are unchanged.
+
+**Teeth (host-sim and host-file-sim seeds 1–3 ALL PASS; store-plants ALL PASS against the real host).**
+- host-sim:
+  - `plant-header-flip`: newest and genesis → `checkpointCorrupt`;
+  - `plant-foreign-origin`: the header re-sealed under this key stating another origin → `foreignOrigin`;
+  - `plant-header-position`: steps+1 or count+1 → `foreignSegment`;
+  - `plant-header-other-file`: genesis's header under the newest base → `foreignSegment`.
+- host-file-sim, retention:
+  - `plant-retain-all`: every file from `seg.0.log`; the logical segment a clean seg.log from `segmentInitial`, origin first; `index.0.log`; checked from 0.
+  - `plant-retain-two`: exactly the 2 newest files, `retainedFrom` > 0, `indexFrom` > 0, `keptClean` passing from the oldest header at retained_from = 120.
+  - `plant-retain-bytes`: the kept Store's logical segment and index are the full Store's suffixes, byte for byte, so dropping changes no logical byte.
+  - `plant-checkpointed`: a page from 0 → `checkpointed`. Controls: the full Store serves it, and the kept Store serves from its oldest step.
+- host-file-sim, headers and files:
+  - `plant-header-{control,flip,origin,position}`;
+  - `plant-origin-frame`: an origin flip opens, and the check refuses `corrupt history`;
+  - `plant-missing-kept`: the base's file → `missing seg.<o>.log` from the open; the older kept file → `missing seg.<older>.log`.
+- The codec vectors carry the keep boundary pairs: offset and count read back, one past refused by name.
+
+**Law-6 read (second agent, read-only, WITH the disjunct check).** No theorem is vacuous, and no disjunct follows from its premises alone.
+- The disjunctions:
+  - `openWith_verifies_named`'s two cases are exclusive on the count.
+  - `openWith_backup`'s four outcomes each pin `R` to one shape.
+- `CheckpointTrusted` is used in every theorem that takes it: `trusted_fold`, `trusted_kept`, `trusted_size_le`, `trusted_potential_le` (false without it, at allowance 2^40), `openWith_trusted`, `sealed_trusted` (twice).
+- `hH` is discharged for the header rotate writes: `fileCheckpoint.rotate` and `memCheckpoint` both write `Header.at pos (mark w) count newest (origin w)`, with `spawnSeal`'s `count = sealed.index.count + index.size` = `ix'.count`.
+- `hkeys` is discharged by rfl for `Keys.ofKey`.
+- TAKEN:
+  - (F1) HOST-19's definition started the fold from ANY `Kept`, within-budget World. That made it a budget fact a received base could discharge locally (`l = []`), not the history fact the docs claimed. It now starts from a genesis or an import, with `genesis_trusted` and `import_trusted` as the named discharges. The re-read found that the import disjunct was still an existential over a carried preimage: any import-shaped World within budget was trusted. ROOT ruled (B′): the premise is stated over the Store's recorded origin, which names one start up to an explicit collision.
+  - (F2) It had no consumer. `opened_size_le` is one.
+  - (F3, F4) `sealed_trusted`'s and `indexClean_none`'s docs said more than their statements, and are restated.
+  - (F5) `StoreIndexes` (HOST-62) covers a Store keeping its whole index, and its doc now says so. A Store with `indexFrom` > 0 pages through `Page.kept`, which no theorem states: NOT PROVED, a trigger for HOST-21.
+- NOT TAKEN, named: (F6) `rotate` returns early when the newest file already starts at the seal's position, reusing that header without re-checking its count or mark. It fails closed: the next open refuses `foreignSegment`.
+
+**Critique.**
+- The open's origin check MOVED to `host check`. A Store keeping fewer files has no origin frame, and the header now carries the origin under the Store key. A damaged origin frame of a full Store now opens and is `check`'s `corrupt history`. store-plants' `origin-record-flip-serve-*` and `foreign-origin-serve-L` now assert the open does not read it, and `origin-record-flip-check-*` is new. That is a relocation of the tooth, not its removal: `foreign-origin-check-L` still answers `foreignOrigin`.
+- Another key's segment files copied over a Store now refuse `checkpointCorrupt` (their headers do not verify), where `foreignSegment` answered before.
+- The drop costs the writer's own Store its audit-from-genesis property, and the hosted follower is the archive. That is why the default keeps everything and `CheckpointTrusted` names what a dropped Store rests on. The drop runs only on a finite `--retain`.
+- `Segs` walks headers by name (`seg.<end>.log`) and by `prev`. A rotation whose seal never installed leaves a file the next base's file follows. The open reads O(1) files.
+- The hdr-less memory Store (host-sim, rows) keeps every file and records headers in `Bases.headers`. It does not exercise a drop; host-file-sim does.
+- Not built: the Units `retain` Node value (OPS-6's, after this hash) and the RUNBOOK §3/4/5 text (OPS-6's).
+
+**Meta-critique.**
+- HOST-19 wrote the 2187 lines without compiling them whole. The compile found a real bug the design text did not show: `memCheckpoint.write` rebuilt `Bases` without its new field, so every header vanished at the first seal.
+- The sims found three more:
+  - an empty newest file read as its own successor;
+  - `host check`'s anchor chain was read from a full page instead of a zero-budget one, a chainMismatch on every past anchor;
+  - a successor's origin mismatch named `foreignSegment`.
+- None of these were proof bugs, all of them were IO. "Proved over the logical bytes" covers `openWith`, not `Segs`. The file reader is code with plants, not a theorem, and that is the gap to name: a future lane can state `Segs.read` = the logical extract under the contiguity the headers check.
+
+**Flag day.** Every Store re-geneses.
+- What changes shape: the base record (two u64 fields; site `host/base/index-count` → `host/base/retained`), the shape stamp (`headerLayout` enters it), the files (`seg.log` and `index.log` → `seg.<o>.log` and `index.<k0>.log`), and `Cadence.baseRecordMax` (+16: 91,914,458 → 91,914,474).
+- What refuses: an old Store refuses `shapeMismatch` (the stamp moved), or `missing seg.<o>.log` / `missing index.0.log` before any decode.
+- New refusals: `checkpointed` (61), `checkpointCorrupt` (62), `foreignOrigin` and `foreignSegment` from the header, `usage retainBelowFloor`.
+- What re-emits: gates/codec-vectors.tsv (regenerated from empty: only the moved site's rows differ), deploy/units (EXITS.md rows 61/62, STORE.md, three RestartPreventExitStatus lists). No Rust frame changes (generated.rs unchanged: no Host exit enters the launcher's tables).

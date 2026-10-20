@@ -34,6 +34,29 @@ use nanodregg_devtools::lean_bin;
 
 const LABEL: &str = "w";
 
+/// A deployed segment file's checkpoint header (HOST-64: four u64, a tag, the origin and the chain
+/// at 32 bytes, the MAC), in bytes.
+const SEG_HEADER: u64 = 4 * 8 + 32 + 2 * 32 + 32;
+
+/// The logical end of a Store's segment (HOST-64): the newest `seg.<o>.log`'s start plus its bytes
+/// after the header. Two Stores holding the same log end at the same offset.
+fn seg_end(store: &Path) -> u64 {
+    fs::read_dir(store)
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.unwrap();
+            let name = e.file_name().into_string().ok()?;
+            let start: u64 = name
+                .strip_prefix("seg.")?
+                .strip_suffix(".log")?
+                .parse()
+                .ok()?;
+            Some(start + e.metadata().unwrap().len() - SEG_HEADER)
+        })
+        .max()
+        .expect("a Store holds a segment file")
+}
+
 #[test]
 fn the_owner_stops_a_grain_and_a_start_only_grantee_cannot() {
     let hosting = Gone(nanodregg_devtools::scratch(&format!(
@@ -175,8 +198,8 @@ fn the_owner_stops_a_grain_and_a_start_only_grantee_cannot() {
     );
     w.run(&["sync"]);
     assert_eq!(
-        fs::metadata(w.store.join("seg.log")).unwrap().len(),
-        fs::metadata(store.join("seg.log")).unwrap().len(),
+        seg_end(&w.store),
+        seg_end(&store),
         "the follower Store did not reach the writer's"
     );
     assert!(

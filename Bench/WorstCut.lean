@@ -97,11 +97,11 @@ def admit (w : World D) (c : Call D) : Except String ((Step D × D) × World D) 
 
 /-- Commit `staged` as one batch record at `pos`, if its frame stays within `tailMax`; `none` when
 `withinTail` refuses it (the cut is reached). -/
-def commit (sealed : Sealed) (seg : File) (keys : Keys) (pos : Position) (staged : Array (Step D × D)) :
+def commit (sealed : Sealed) (wr : Writer (World D)) (keys : Keys) (pos : Position) (staged : Array (Step D × D)) :
     IO (Except String (Option Position)) := do
   let some rec_ := Record.encode Codec.Deployed.digestCodec staged | return .error "a record past its bounds"
   if h : withinTail c sealed pos.offset (frameSize rec_) = true then
-    match ← commitBatch c sealed (fileStore seg) keys.segment pos rec_ h with
+    match ← commitBatch c sealed (fileStore wr) keys.segment pos rec_ h with
     | .ok p => return .ok (some p)
     | .error e => return .error e
   else return .ok none
@@ -127,9 +127,9 @@ def sealBase (dir : System.FilePath) (keys : Keys) : IO (Except String Sealed) :
   let wr ← match ← openWriter dir keys c world recorder.mark originChain foldStep with
     | .ok wr => pure wr
     | .error f => return .error s!"reopen for the seal {f.text}"
-  let ck := fileCheckpoint dir keys c world recorder.mark originChain wr.index (async := false)
+  let ck := fileCheckpoint dir keys c world recorder.mark originChain wr (async := false)
   if let .error f ← sealNow ck recorder.mark wr.opening.resident then return .error s!"seal {f.name}"
-  wr.segment.sync
+  (← wr.segment.get).sync
   match ← openFollower dir keys c world recorder.mark originChain foldStep with
   | .ok o =>
     unless o.sealed.offset = o.pos.offset do return .error "the new base is not at the Store's tail"
@@ -197,11 +197,11 @@ def build {σ : Type} (dir : System.FilePath) (s : Shape σ) : IO (Except String
   let (more, w1, st0) ← match ← s.first g m w1 obj with
     | .ok x => pure x
     | .error e => return .error s!"the first record: {e}"
-  match ← commit wr0.opening.sealed wr0.segment keys wr0.opening.pos (#[s0] ++ more) with
+  match ← commit wr0.opening.sealed wr0 keys wr0.opening.pos (#[s0] ++ more) with
   | .ok (some _) => pure ()
   | .ok none => return .error "the first record left tailMax"
   | .error e => return .error s!"commit {e}"
-  wr0.segment.sync
+  (← wr0.segment.get).sync
   -- the base: sealed over the object (and over whatever the shape's `beforeTail` adds)
   if let .error e ← sealBase dir keys then return .error e
   let (w, st1) ← match ← s.beforeTail dir keys m obj w1 st0 with
@@ -231,12 +231,12 @@ def build {σ : Type} (dir : System.FilePath) (s : Shape σ) : IO (Except String
       match (s.step st' m obj w' j).bind fun (cl, st'') => (admit w' cl).map (·, st'') with
       | .ok ((stp, w''), st'') => staged := staged.push stp; w' := w''; st' := st''; j := j + 1
       | .error e => return .error s!"{name} step {j}: {e}"
-    match ← commit sealed wr.segment keys pos staged with
+    match ← commit sealed wr keys pos staged with
     | .ok (some p) => pos := p; w := w'; records := records + 1; i := j; st := st'
     | .ok none => full := true
     | .error e => return .error s!"commit {e}"
   unless full do return .error "the tail never reached tailMax within the loop's bound"
-  wr.segment.sync
+  (← wr.segment.get).sync
   return .ok ⟨name, dir, keys, sealed, pos.offset - sealed.offset, records, i, allowance0, w.allowance, s.note st⟩
 
 /-- A built Store's counts: the host's reopen, then the counted reopen and re-derivation. -/

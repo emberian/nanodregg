@@ -1,7 +1,8 @@
 /-
 # Ops.Plants — backup and restore, planted against the real `host` (ASSEMBLY-ops D6/D7)
 
-A backup is the Store's three files copied in the order `key`, `base.world`, `seg.log`; a restore
+A backup is the Store's files copied in `Host.Store.backupOrder`: `key`, `base.world`, the index
+file `index.<k0>.log`, then the segment files `seg.<o>.log` oldest first (HOST-64); a restore
 is the copy put back and judged by `host check STORE --anchor STEPS:CHAIN`. Each plant below
 builds a Store through the real `host genesis`/`host serve` (one record per serve run), copies or
 damages it, and asserts the exit code `host check` gives against `Host.Status.code` — the table,
@@ -17,11 +18,17 @@ WITHOUT an anchor, and are refused by name WITH one.
 The live plants (`live`) run ONE long `host serve` fed calls whose state fills one slot, so the
 Store seals real bases (`sealMinBytes` = 1 MiB) while it runs, and interleave the backup with it
 deterministically: `key` and `base.world` are copied, the writer is fed until it seals a NEWER
-base (polled through `host check`, read-only, with a deadline), and only then is `seg.log` copied.
+base (polled through `host check`, read-only, with a deadline), and only then are the index file and
+the segment files copied.
 That is the D7 race at its worst point: the copied base is no longer the Store's base, and the
 copy must still open to the height the writer had reached. The finished Store is then the sealed
 Store the first plants never had: a history flip before a real base, a segment cut below the base
-offset (`segmentShort`), and the WRONG copy order (`seg.log` before a seal, `base.world` after).
+offset (`segmentShort`), and the WRONG copy order (the segment before a seal, `base.world` after).
+
+The plants cut, splice and flip the LOGICAL segment (`Host.Sim.Files`: the bytes `seg.log` held
+before HOST-64, each `seg.<o>.log` keeping its checkpoint header and holding its slice), so every
+row's mutation is the one it was; only where the open no longer reads a byte (the origin frame,
+which a Store keeping fewer files no longer holds) does the refusal move from the open to the check.
 Each live plant first asserts that its precondition happened (a seal during the copy, a base past
 the origin), or it FAILS instead of passing on a Store that never sealed.
 
@@ -31,10 +38,16 @@ import Ops.Founder
 import Host.Exit
 import Host.Carry
 import Host.Check
+import Host.Sim.Files
 
 namespace Nanodregg.Ops.Plants
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Host Nanodregg.Host.Deployed
+open Nanodregg.Host.Sim (segFiles indexFile logical logicalSize writeLogical copySegs copyStore snapshot)
+
+/-- A deployed segment file's checkpoint header, in bytes (`Host.headerBytes` at the deployed chain
+width, `Keys.ofKey`'s). -/
+def hdr : Nat := headerBytes (Keys.ofKey Codec.Digest.zero shapes)
 
 def name : String := "plants"
 
@@ -68,12 +81,8 @@ def hostRaw (exe : String) (args : List String) (stdin : ByteArray) : IO (UInt32
   let code ← child.wait
   return (code, ← IO.ofExcept out.get, err)
 
-def files : List String := Host.Store.backupOrder
-
-/-- The backup: the Store's files, in `Host.Store.backupOrder`. -/
-def backup (src dst : System.FilePath) : IO Unit := do
-  IO.FS.createDirAll dst
-  for f in files do IO.FS.writeBinFile (dst / f) (← IO.FS.readBinFile (src / f))
+/-- The backup: the Store's files, in `Host.Store.backupOrder` (`Host.Sim.copyStore`). -/
+def backup (src dst : System.FilePath) : IO Unit := copyStore src dst
 
 /-- The World the Store should open to, and the calls that make it; every call must admit in
 process, or the plants refuse to run. -/
@@ -99,11 +108,12 @@ def judge (p : Plant) : IO Bool := do
   IO.println s!"PLANT {p.label} {if ok then "PASS" else "FAIL"} exit={r.code} want={p.want.name}({p.want.code}) :: {r.out.replace "\n" " "}"
   return ok
 
-/-- Write `bytes` over `dir/seg.log`, refusing a mutation that changed nothing. -/
+/-- Write `bytes` as the logical segment of `dir` (`Host.Sim.writeLogical`), refusing a mutation
+that changed nothing. -/
 def damage (dir : System.FilePath) (bytes : ByteArray) : IO Unit := do
-  let old ← IO.FS.readBinFile (dir / "seg.log")
+  let old ← logical dir hdr
   if old == bytes then throw (IO.userError s!"mutation of {dir} is a no-op")
-  IO.FS.writeBinFile (dir / "seg.log") bytes
+  writeLogical dir hdr bytes
 
 /-- The `i`-th sealed-plant call's one slot (the first state key, `Receive.stateBase`): `slotBytes` deterministic bytes. -/
 def slotBytes : Nat := 49152
@@ -141,7 +151,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let l := dir / "L"
   let g ← host exe (["genesis", l.toString, name] ++ Founder.genesisArgs)
   unless g.code = 0 do IO.eprintln s!"genesis L: {g.out}"; return 1
-  let originSeg ← IO.FS.readBinFile (l / "seg.log")
+  let originSeg ← logical l hdr
   -- the calls and their folds, in process; enough bytes for two seals
   let n := 48
   -- anchors[h] is the kernel's own `STEPS:CHAIN` after the first h calls (each admitted: one step)
@@ -177,9 +187,9 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   IO.FS.writeBinFile (copy / "key") (← IO.FS.readBinFile (l / "key"))
   let baseCopied ← IO.FS.readBinFile (l / "base.world")
   IO.FS.writeBinFile (copy / "base.world") baseCopied
-  let wrongOrderSeg ← IO.FS.readBinFile (l / "seg.log")
+  let wrongOrderSeg ← logical l hdr
   -- read after the base copy: the copied base names an index prefix no longer than this
-  let indexAtBase ← IO.FS.readBinFile (l / "index.log")
+  let indexAtBase ← IO.FS.readBinFile (← indexFile l)
   -- 2. feed until the writer seals a newer base, then copy the segment
   let mut sealed := none
   let mut fed := 4
@@ -189,11 +199,10 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
     sealed ← awaitStatus exe l fun st => field st "height" ≥ fed
     if let some st := sealed then
       if field st "base_steps" ≤ field st0 "base_steps" then sealed := none
-  -- the append-only files after the base, in `Host.Store.backupOrder` (HOST-30: index.log first)
-  let indexCopied ← IO.FS.readBinFile (l / "index.log")
-  IO.FS.writeBinFile (copy / "index.log") indexCopied
-  let segCopied ← IO.FS.readBinFile (l / "seg.log")
-  IO.FS.writeBinFile (copy / "seg.log") segCopied
+  -- the append-only files after the base, in `Host.Store.backupOrder` (HOST-30: the index file first)
+  let indexCopied ← IO.FS.readBinFile (← indexFile l)
+  IO.FS.writeBinFile (copy / ((← indexFile l).fileName.getD "")) indexCopied
+  copySegs l copy
   let raced := sealed.isSome && (← IO.FS.readBinFile (l / "base.world")) != baseCopied
   say "live-copy-raced-a-seal" raced
     s!"base_steps {field st0 "base_steps"} at the base copy, {(sealed.map (field · "base_steps")).getD 0} at the segment copy; the copied base is {if raced then "no longer" else "STILL"} the Store's"
@@ -230,7 +239,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let ow := dir / "orphan-writer"
   backup copy ow
   let r ← host exe ["serve", ow.toString]
-  let after := (← IO.FS.readBinFile (ow / "index.log")).size
+  let after := (← IO.FS.readBinFile (← indexFile ow)).size
   let truncated := r.code = 0 && after ≤ indexAtBase.size
   say "orphan-index-entries-writer-truncates" truncated
     s!"serve exit={r.code}; index.log {indexCopied.size} -> {after} bytes (the base names at most {indexAtBase.size})"
@@ -243,7 +252,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   say "sealed-store-has-a-real-base" hasBase s!"base_steps={field stS "base_steps"} base_offset={off} origin={originSeg.size} seg_bytes={field stS "seg_bytes"}"
   unless hasBase do return failed + 1
   failed := failed + (← plain "sealed-intact-anchor" .eof (check l (anchorAt n)))
-  let seg ← IO.FS.readBinFile (l / "seg.log")
+  let seg ← logical l hdr
   let sealedCopy (label : String) (f : System.FilePath → IO Unit) : IO System.FilePath := do
     let d := dir / label
     backup l d
@@ -257,7 +266,7 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
   let some key := Codec.Digest.ofBytes? (← IO.FS.readBinFile (l / "key"))
     | IO.eprintln "L: key file is not a digest"; return failed + 1
   let keys := Keys.ofKey key shapes
-  let idx ← IO.FS.readBinFile (l / "index.log")
+  let idx ← IO.FS.readBinFile (← indexFile l)
   let eb := entryBytes keys
   -- each entry's offset field (bytes 8..16), read as a locator only, with no MAC: the verdicts
   -- below are the real exe's refusals of the flipped copies, never this parse
@@ -277,12 +286,12 @@ def live (exe : String) (dir : System.FilePath) : IO Nat := do
       damage d (seg.set! atLast (seg.get! atLast ^^^ 1))
     failed := failed + (← plain "sealed-flip-base-last-frame" .indexCorrupt (check flippedLast))
   else failed := failed + 1
-  -- the wrong order: seg.log copied before a seal, base.world after it
+  -- the wrong order: the segment copied before a seal, base.world after it
   let wrong ← sealedCopy "wrong-order" fun d => damage d wrongOrderSeg
   -- (b) index.log copied BEFORE base.world, across seals: the newer base counts entries the copy lacks.
   -- It must refuse `indexShort` by name or open to the writer's height; never open short.
-  let finalIndex ← IO.FS.readBinFile (l / "index.log")
-  let wrongIdx ← sealedCopy "wrong-order-index" fun d => IO.FS.writeBinFile (d / "index.log") indexAtBase
+  let finalIndex ← IO.FS.readBinFile (← indexFile l)
+  let wrongIdx ← sealedCopy "wrong-order-index" fun d => do IO.FS.writeBinFile (← indexFile d) indexAtBase
   let older := indexAtBase.size < finalIndex.size
   let ri ← check wrongIdx (anchorAt n)
   let okIdx := older && (ri.code = Status.indexShort.code.toUInt32 || ri.code = 0)
@@ -318,14 +327,17 @@ def replay (exe : String) (dir : System.FilePath) : IO Nat := do
     unless ok do failed := failed + 1
   return failed
 
-/-- HOST-25's origin check through the real exe's own open (`serve`, not only `check`), on the
-genesis-base Store `A` and the sealed Store `L`. A flip inside the origin RECORD (offset 4..35,
-not its tag: under a genesis-only base the origin's tag is HOST-18's anchor) is `corrupt`. A
-foreign origin is an origin frame that verifies under THIS Store's key but states another World's
-genesis chain (the same founders and label, another nonce): it is built here with HOST's own
-`Log.frame`, `Keys.ofKey` and `Deployed.originChain` from the copy's key file, as a Store whose
-key file was shared would hold it. Over a sealed base it is `foreignOrigin`; over the genesis base
-the anchor refuses first, `foreignSegment`. -/
+/-- HOST-25's origin check through the real exe, on the genesis-base Store `A` and the sealed Store
+`L`. Since HOST-64 the open checks the base's own file's checkpoint header (which states the
+origin) and never reads the origin frame at 0, which a Store keeping fewer files does not hold;
+`host check` reads it whenever it is kept. So a flip inside the origin RECORD (offset 4..35, not its
+tag: under a genesis-only base the origin's tag is HOST-18's anchor) OPENS under `serve` (the row
+asserts the open does not read it) and is refused `corrupt` by `check`. A foreign origin is an
+origin frame that verifies under THIS Store's key but states another World's genesis chain (the
+same founders and label, another nonce): it is built here with HOST's own `Log.frame`,
+`Keys.ofKey` and `Deployed.originChain` from the copy's key file, as a Store whose key file was
+shared would hold it. Over a sealed base `serve` opens and `check` refuses `foreignOrigin`; over the
+genesis base the anchor refuses both first, `foreignSegment`. -/
 def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   let other := Founder.nonce.set! 0 (Founder.nonce.get! 0 ^^^ 1)
   let wOther ← match Receive.genesis X name.toUTF8 other allowanceMax [(Founder.key, nextKeyDigest X Founder.next)] with
@@ -334,14 +346,16 @@ def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   let mut failed := 0
   for (store, sealed) in [("A", false), ("L", true)] do
     let src := dir / store
-    let seg ← IO.FS.readBinFile (src / "seg.log")
+    let seg ← logical src hdr
     let some key := Codec.Digest.ofBytes? (← IO.FS.readBinFile (src / "key"))
       | IO.eprintln s!"{store}: key file is not a digest"; return failed + 1
     let flipD := dir / s!"origin-flip-{store}"
     backup src flipD
     damage flipD (seg.set! 5 (seg.get! 5 ^^^ 1))
     let r ← host exe ["serve", flipD.toString]
-    unless ← judge ⟨s!"origin-record-flip-serve-{store}", .corrupt, pure r⟩ do failed := failed + 1
+    unless ← judge ⟨s!"origin-record-flip-serve-{store}", .eof, pure r⟩ do failed := failed + 1
+    unless ← judge ⟨s!"origin-record-flip-check-{store}", .corrupt, host exe ["check", flipD.toString]⟩ do
+      failed := failed + 1
     let frame := Log.frame (Keys.ofKey key shapes).segment segmentInitial (originChain wOther)
     let fD := dir / s!"foreign-origin-{store}"
     backup src fD
@@ -349,7 +363,7 @@ def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
     damage fD (frame ++ seg.extract frame.size seg.size)
     let want : Status := if sealed then .foreignOrigin else .foreignSegment
     let r ← host exe ["serve", fD.toString]
-    unless ← judge ⟨s!"foreign-origin-serve-{store}", want, pure r⟩ do failed := failed + 1
+    unless ← judge ⟨s!"foreign-origin-serve-{store}", if sealed then .eof else want, pure r⟩ do failed := failed + 1
     unless ← judge ⟨s!"foreign-origin-check-{store}", want, host exe ["check", fD.toString]⟩ do
       failed := failed + 1
   return failed
@@ -381,12 +395,12 @@ def indexMovedPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   for i in [0:2] do input.write frames[i]!
   input.flush
   let some st ← awaitStatus exe m (field · "height" ≥ 2) | IO.eprintln "indexMoved writer never reached height 2"; return 1
-  let idx0 := (← IO.FS.readBinFile (m / "index.log")).size
+  let idx0 := (← IO.FS.readBinFile (← indexFile m)).size
   if field st "base_steps" ≠ 0 then IO.eprintln "indexMoved: the writer sealed before the byte"; return 1
-  let h ← IO.FS.Handle.mk (m / "index.log") .append
+  let h ← IO.FS.Handle.mk (← indexFile m) .append
   h.write (ByteArray.mk #[0x5a])
   h.flush
-  let idx1 := (← IO.FS.readBinFile (m / "index.log")).size
+  let idx1 := (← IO.FS.readBinFile (← indexFile m)).size
   -- feed until the seal is due; the writer may stop reading once it refuses
   try
     for i in [2:n] do input.write frames[i]!
@@ -409,7 +423,7 @@ def indexMovedPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   unless moved do failed := failed + 1
   let durable := field ((← status exe m).getD []) "height"
   let r ← host exe ["serve", m.toString]
-  let idx2 := (← IO.FS.readBinFile (m / "index.log")).size
+  let idx2 := (← IO.FS.readBinFile (← indexFile m)).size
   let some st2 ← status exe m | do IO.println "PLANT index-moved-restart-truncates FAIL :: check refuses after the restart"; return failed + 1
   let ok := r.code = 0 && idx2 = idx0 && field st2 "height" = durable && durable ≥ 2
   IO.println s!"PLANT index-moved-restart-truncates {if ok then "PASS" else "FAIL"} :: restart exit={r.code}; index.log {idx1} -> {idx2} bytes (want {idx0}); height {field st2 "height"} (durable {durable})"
@@ -432,7 +446,7 @@ def middleEntryPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   let some key := Codec.Digest.ofBytes? (← IO.FS.readBinFile (l / "key"))
     | IO.eprintln "L: key file is not a digest"; return 1
   let eb := entryBytes (Keys.ofKey key shapes)
-  let idx ← IO.FS.readBinFile (l / "index.log")
+  let idx ← IO.FS.readBinFile (← indexFile l)
   let some st ← status exe l | IO.eprintln "the sealed Store L does not check"; return 1
   let count := idx.size / eb
   let total := count + field st "records"
@@ -462,7 +476,7 @@ def middleEntryPlant (exe : String) (dir : System.FilePath) : IO Nat := do
   let at_ := k * eb + eb / 2
   let flipped := idx.set! at_ (idx.get! at_ ^^^ 1)
   if flipped == idx then IO.eprintln "the index flip is a no-op"; return failed + 1
-  IO.FS.writeBinFile (d / "index.log") flipped
+  IO.FS.writeBinFile (← indexFile d) flipped
   let (c1, s1, p1) ← reply d
   unless ← say "index-middle-flip-opens-page-badIndex"
       (c1 = 0 && s1 = Protocol.Status.refused.code && p1 = Page.Fault.name (.badIndex k))
@@ -486,13 +500,19 @@ def mentions (text part : String) : Bool := (text.splitOn part).length > 1
 
 /-- HOST-35, through the real exe: one Store file removed from a copy of the intact Store (the
 removal asserted first) is refused `missing` by code AND names the file on stderr, from `host
-check`; and `host serve` over a copy without index.log, or without seg.log (the file the writer
-used to re-create through O_CREAT), refuses the same and leaves it absent. -/
+check`; and `host serve` over a copy without the index file, or without the base's own segment
+file (the file the writer appends to, which it used to re-create through O_CREAT), refuses the same
+and leaves it absent. The files are named as the Store names them (`index.<k0>.log`,
+`seg.<o>.log` at the base's offset, HOST-64), and the refusal must name that file. -/
 def missingPlants (exe : String) (intact dir : System.FilePath) : IO Nat := do
   let mut failed := 0
   let want := Status.missing.code.toUInt32
+  let indexName := ((← indexFile intact).fileName).getD ""
+  let some (o, _, _) := Base.peek (← IO.FS.readBinFile (basePath intact))
+    | IO.eprintln "intact: base.world names no offset"; return 1
+  let segName := (StorePart.segment o).name
   for (label, f) in [("missing-key", "key"), ("missing-base", "base.world"),
-      ("missing-index", "index.log"), ("missing-segment", "seg.log")] do
+      ("missing-index", indexName), ("missing-segment", segName)] do
     let d := dir / label
     backup intact d
     IO.FS.removeFile (d / f)
@@ -501,7 +521,7 @@ def missingPlants (exe : String) (intact dir : System.FilePath) : IO Nat := do
     let ok := gone && r.code = want && mentions r.out s!"refused missing {f}"
     IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} removed={gone} exit={r.code} want=missing({want}) :: {r.out.replace "\n" " "}"
     unless ok do failed := failed + 1
-  for (label, f) in [("missing-index-serve", "index.log"), ("missing-segment-serve", "seg.log")] do
+  for (label, f) in [("missing-index-serve", indexName), ("missing-segment-serve", segName)] do
     let d := dir / label
     backup intact d
     IO.FS.removeFile (d / f)
@@ -535,7 +555,7 @@ def carryPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   let say (label : String) (ok : Bool) (detail : String) : IO Bool := do
     IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
     return ok
-  let snap (d : System.FilePath) : IO (List ByteArray) := Host.Store.backupOrder.mapM fun (f : String) => IO.FS.readBinFile (d / System.FilePath.mk f)
+  let snap (d : System.FilePath) : IO (List (String × ByteArray)) := snapshot d
   let before ← snap l
   let out := dir / "L.carried"
   let e ← host exe ["export", l.toString, out.toString]
@@ -701,7 +721,7 @@ process:
   WRITES an object it made reads 0 through `host check`; a count that forgot "a member other than
   the maker" reads 1 here (measured by mutating `Protocol.Use.sharedBy`). A positive count needs a
   second member (an invitation and a grant), which row `use` holds;
-* `use-reads-every-call` (fidelity, IN PROCESS through `Host.Check.callsAt`, not the exe): the
+* `use-reads-every-call` (fidelity, IN PROCESS through `Host.Check.openClean`'s `Kept.calls`, not the exe): the
   calls read back from `intact`'s records are exactly the 4 served calls' bytes, in order.
 The number that failed. -/
 def usePlants (exe : String) (dir intact : System.FilePath) (calls : List (Call D)) (w4 : World D) :
@@ -728,7 +748,7 @@ def usePlants (exe : String) (dir intact : System.FilePath) (calls : List (Call 
   let opened ← Host.Check.openClean intact.toString
   let readBack ← match opened with
     | .error (s, n) => pure (Except.error s!"{s.name} {n}")
-    | .ok (keys, o) => Host.Check.callsAt intact.toString keys o
+    | .ok k => pure k.calls
   let served := calls.map X.callBytes
   let same := match readBack with
     | .ok cs => cs.map X.callBytes == served
@@ -756,7 +776,7 @@ def sealPlants (exe : String) (intact dir : System.FilePath) (w4 : World D) : IO
   let w5 ← match submit X w4 c with
     | .ok (_, w) => pure w
     | .error _ => do IO.eprintln "the seal fixture call does not admit in process"; return 1
-  let snap : IO (List ByteArray) := Host.Store.backupOrder.mapM fun (f : String) => IO.FS.readBinFile (s / System.FilePath.mk f)
+  let snap : IO (List (String × ByteArray)) := snapshot s
   let say (label : String) (ok : Bool) (detail : String) : IO Bool := do
     IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
     return ok
@@ -822,7 +842,7 @@ def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UI
   let a := dir / "A"
   let g ← host exe (["genesis", a.toString, name] ++ Founder.genesisArgs)
   unless g.code = 0 do IO.eprintln s!"genesis: {g.out}"; return 1
-  let origin := (← IO.FS.readBinFile (a / "seg.log")).size
+  let origin := (← logicalSize a hdr)
   if origin = 0 then IO.eprintln "genesis wrote an empty segment (no origin frame)"; return 1
   let .ok (calls, w4) := expected 4 | IO.eprintln "a fixture call does not admit in process"; return 1
   let .ok (_, w2) := expected 2 | return 1
@@ -831,9 +851,9 @@ def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UI
   for c in calls do
     let r ← host exe ["serve", a.toString] (Founder.submitFrame c)
     unless r.code = 0 do IO.eprintln s!"serve: {r.out}"; return 1
-    sizes := sizes.push (← IO.FS.readBinFile (a / "seg.log")).size
+    sizes := sizes.push (← logicalSize a hdr)
     if sizes.size = 2 then backup a (dir / "old2")
-  let seg ← IO.FS.readBinFile (a / "seg.log")
+  let seg ← logical a hdr
   let at_ (i : Nat) : Nat := sizes[i]!
   -- another history under the same key: a copy at height 2 that admits two other calls
   let b := dir / "B"
@@ -862,7 +882,7 @@ def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UI
   let torn ← copy "torn" fun d => damage d (seg.extract 0 ((at_ 2 + at_ 3) / 2))
   let drop ← copy "drop" fun d => damage d (seg.extract 0 (at_ 0) ++ seg.extract (at_ 1) seg.size)
   let foreign ← copy "foreign" fun d => do
-    let bseg ← IO.FS.readBinFile (b / "seg.log")
+    let bseg ← logical b hdr
     damage d (seg.extract 0 (at_ 2) ++ bseg.extract (at_ 2) bseg.size)
   -- the origin frame is genesis's whole segment and sits before the base (HOST-18)
   let o := origin / 2
@@ -897,9 +917,9 @@ def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UI
     unless ← judge p do failed := failed + 1
   failed := failed + (← usePlants exe dir intact calls w4)
   -- `check` writes nothing: the torn copy still holds its torn bytes
-  let tornNow := (← IO.FS.readBinFile (torn / "seg.log")).size
+  let tornNow := (← logicalSize torn hdr)
   let ro := tornNow = (at_ 2 + at_ 3) / 2
-  IO.println s!"PLANT check-writes-nothing {if ro then "PASS" else "FAIL"} torn seg.log {tornNow} bytes"
+  IO.println s!"PLANT check-writes-nothing {if ro then "PASS" else "FAIL"} torn segment {tornNow} bytes"
   unless ro do failed := failed + 1
   failed := failed + (← live exe dir)
   failed := failed + (← replay exe dir)

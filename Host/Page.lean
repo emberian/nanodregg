@@ -10,7 +10,7 @@ recorded refusal, is one event of a page, `0 ‖ the call` for a Turn (its `even
 for a recorded refusal (its `event`), PROTOCOL-8's tagged event. The follower re-judges each one and
 takes the same step (`Kernel.Receive.audit`).
 
-The index (`Host.Base.Entry`, one per record: the newest base's on disk in `index.log`, the tail's
+The index (`Host.Base.Entry`, one per record: the newest base's on disk in the index file, the tail's
 in the loop's memory) locates the record holding step `start + 1` by binary search (`locate`),
 reading each probed entry through `entryAt`, which checks a disk entry by its tag AT ITS POSITION
 (`Entry.read`) on that read: an entry that does not read back is refused `badIndex` by name, and
@@ -59,6 +59,10 @@ inductive Fault where
   Host/Follow.lean): the steps through `first` are in no record here, so no page from `start` can be
   served (HOST-61) -/
   | beforeLog (start first : Nat)
+  /-- a `log` page from `start` before `first`, the step count at the oldest segment file this Store
+  keeps: the records before it were dropped by a retention count (HOST-64). The remedy is a served
+  base (a thin join) or the archive's copy, never this Store -/
+  | checkpointed (start first : Nat)
   deriving Repr
 
 def Fault.name : Fault → String
@@ -68,6 +72,7 @@ def Fault.name : Fault → String
   | .pastEnd _ _ => "pastEnd"
   | .shortBase => "shortBase"
   | .beforeLog _ _ => "beforeLog"
+  | .checkpointed _ _ => "checkpointed"
 
 /-- The deployed page budget: a reply frame, less room for the counts, the positions and the chain. -/
 def budget : Nat := Protocol.Bounds.frameBytesMax - 1024
@@ -121,7 +126,7 @@ def walkTurnsAt (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts
 def walkTurns (E : Env D) (budget start : Nat) (chain₀ : D) (h₀ : Nat) (ts : List (Step D × D)) (acc : Acc) : Acc :=
   (walkTurnsAt E budget start chain₀ h₀ ts acc).1
 
-/-- Index entry `k`: the first `disk` from `index.log` (`readIndex off len`), each read back AT ITS
+/-- Index entry `k`: the first `disk` from the index file (`readIndex off len`), each read back AT ITS
 POSITION (`Entry.read`: its tag over `k` and its fields, under the Store's key), else `badIndex k`;
 past them, the loop's own entries since the base (`mem`). The only way a page meets an entry. -/
 def entryAt (keys : Keys) (readIndex : Nat → Nat → m ByteArray) (disk : Nat) (mem : Array Entry) (k : Nat) :
@@ -187,7 +192,7 @@ def walk (E : Env D) (dc : Stream D) (s : Log.Sealer) (recordMax budget : Nat) (
         let (a, c', _) := walkTurnsAt E budget start c acc.steps ts acc
         walk E dc s recordMax budget read endOff start fuel (off + frameSize r) c' a
 
-/-- A page from `start`. `get`/`count` are the index (`entryAt` over `index.log` and the loop's
+/-- A page from `start`. `get`/`count` are the index (`entryAt` over the index file and the loop's
 entries), `endOff` the durable end of the segment, `now` the World's step count and chain (an
 empty page states them). The page is built from ONE entry, the one `locate` returns, and the segment
 bytes after it. A page from before the log is refused `beforeLog` by name (HOST-61): no index
@@ -209,6 +214,18 @@ def build (E : Env D) (dc : Stream D) (digestOf : ByteArray → Option D) (s : L
     | some c =>
       let a : Acc := { steps := e.steps, chain := e.chain }
       walk E dc s recordMax budget read endOff start (count - k) e.offset c a
+
+/-- A `log` page over the files a base KEEPS (HOST-64): `build` over the index from the first kept
+entry `k0` (entry `k0 + k` as the page's `k`, `count` the absolute entry count), so no page reads an
+entry or a frame the Store dropped. A page from before the first kept record is `checkpointed` when
+the Store dropped history (`k0 > 0`), `beforeLog` otherwise (HOST-61: the log itself begins later).
+The deployed pager (`Host.Deployed.pageKept`) and host-file-sim run this one function. -/
+def kept (E : Env D) (dc : Stream D) (digestOf : ByteArray → Option D) (s : Log.Sealer)
+    (recordMax budget k0 : Nat) (read : Nat → Nat → m ByteArray) (get : Nat → m (Except Fault Entry))
+    (count endOff : Nat) (now : Nat × ByteArray) (start : Nat) : m (Except Fault Acc) := do
+  match ← build E dc digestOf s recordMax budget read (fun k => get (k0 + k)) (count - k0) endOff now start with
+  | .error (.beforeLog st f) => return .error (if 0 < k0 then .checkpointed st f else .beforeLog st f)
+  | x => return x
 
 /-- The page on the wire: `logReplyLayout` (events, steps u64, chain, tipSteps u64, tipHeight u64,
 baseSteps u64, baseDigest): `tipSteps` and `tipHeight` the World's step count and height the page

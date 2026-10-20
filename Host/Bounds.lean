@@ -111,10 +111,10 @@ def tailMax (c : Cadence) (baseBytes : Nat) : Nat :=
   2 * c.cadence baseBytes + Log.frameMax c.recordBytesMax
 
 /-- A base record: the shape stamp (`stampBytes`), the World's bytes (bounded by `worldBytesMax`,
-`Base.file`), the segment offset (u64) and tag (32) it starts from, and the `index.log` count (u64)
-and tag (32) it names. So every base `Base.file` writes is within one base frame
-(`Host.Proofs.Genesis.Base.read_file`). -/
-def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + stampBytes + 2 * (8 + Log.tagBytes)
+`Base.file`), the segment offset (u64) and tag (32) it starts from, and the index file count (u64)
+and tag (32) it names, and what it keeps (two u64, HOST-64). So every base `Base.file` writes is
+within one base frame (`Host.Proofs.Genesis.Base.read_file`). -/
+def baseRecordMax (c : Cadence) : Nat := c.worldBytesMax + stampBytes + 2 * (8 + Log.tagBytes) + 2 * 8
 
 /-- `host serve`'s numbers. The base: `worldBytesMax` is the reader's bound on a base World (open
 refuses a larger base file `baseTooLarge` before decoding it) and the seal's encode twin

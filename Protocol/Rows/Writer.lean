@@ -132,7 +132,7 @@ structure Mem where
 
 /-- HOST's in-memory checkpoint (its entries tagged for the Store of the World it seals, HOST-33). -/
 def checkpoint (P : Params D) (m : Mem) : Checkpoint (World D) :=
-  Host.Sim.memCheckpoint m.disk m.bases P.R.keys (cadence P) P.R.world
+  Host.Sim.memCheckpoint m.disk m.bases P.R.keys (cadence P) P.R.world (mark P)
     (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
 
 /-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes
@@ -174,18 +174,21 @@ def genesisStore (P : Params D) (g : World D) : IO (Except String (Mem × Reside
   | .ok (d, b, r) => return .ok (⟨← IO.mkRef d, ← IO.mkRef b⟩, r)
 
 /-- What one open read of the Store besides the base file it is handed: `index.log` bytes and
-segment bytes (THE BAR's `rowbar reopen-…` numerators, PROTOCOL-53). -/
+segment-file bytes, the base's own file's checkpoint header counted among them (HOST-64; THE BAR's
+`rowbar reopen-…` numerators, PROTOCOL-53). -/
 structure Reads where
   index : Nat := 0
   tail : Nat := 0
 
 /-- The one open over the in-memory Store, HOST's `openWith` with the writer's fold, its reads
 counted: the same generic open run in a reader monad that adds each read's bytes. -/
-def reopenCounted (P : Params D) (index base seg : ByteArray) : Except String (Resident (World D)) × Reads :=
+def reopenCounted (P : Params D) (headers : Array (Nat × ByteArray)) (index base seg : ByteArray) :
+    Except String (Resident (World D)) × Reads :=
+  let hdr := Host.Sim.headerOf headers base
   let (o, n) := (openWith (m := StateM Reads) P.R.keys (cadence P) P.R.world (mark P)
       (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
       (Record.step P.R.dc (World.step P.X.env) (World.roots P.X.env))
-      base seg.size index.size
+      base hdr seg.size index.size
       (fun off len => do
         let b := index.extract off (off + len)
         modify fun r => { r with index := r.index + b.size }
@@ -193,7 +196,7 @@ def reopenCounted (P : Params D) (index base seg : ByteArray) : Except String (R
       fun off len => do
         let b := seg.extract off (off + len)
         modify fun r => { r with tail := r.tail + b.size }
-        pure (.ok b)).run {}
+        pure (.ok b)).run { tail := hdr.size }
   match o with
   | .error f => (.error f.name, n)
   | .ok o =>
@@ -201,8 +204,9 @@ def reopenCounted (P : Params D) (index base seg : ByteArray) : Except String (R
       (.ok { world := w, pos := o.pos, sealed := o.sealed, index := o.index }, n)
 
 /-- The one open over the in-memory Store (`reopenCounted`, its counts dropped). -/
-def reopen (P : Params D) (index base seg : ByteArray) : Except String (Resident (World D)) :=
-  (reopenCounted P index base seg).1
+def reopen (P : Params D) (headers : Array (Nat × ByteArray)) (index base seg : ByteArray) :
+    Except String (Resident (World D)) :=
+  (reopenCounted P headers index base seg).1
 
 /-- A loop running on its own thread. -/
 structure Running (D : Type) [Ord D] where

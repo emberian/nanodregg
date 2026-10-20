@@ -5,7 +5,7 @@ The segment is the origin frame, then one frame per record (`size_encodeAll_sum`
 frames' sizes). A frame is its record plus 36 bytes (`frameSize`: a u32 length and a 32-byte tag).
 A record is a u32 count, then each step with the 32-byte roots digest beside it: 33 bytes of framing
 per step (its tag and that digest), and the step's own bytes (`record_size_eq`). A Turn's own bytes
-are exactly its `logWeight` (CODEC's `turn_size_logWeight`). `index.log` is `entryBytes` per record
+are exactly its `logWeight` (CODEC's `turn_size_logWeight`). the index file is `entryBytes` per record
 before the newest base (`entriesSeq_read`), and every record holds at least one step (HOST-49).
 
 What bounds them:

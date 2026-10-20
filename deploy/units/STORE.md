@@ -3,11 +3,13 @@
 
 | file | kind | holds |
 |---|---|---|
-| `key` | written once (genesis) | 32 bytes, mode 0600: the integrity-at-rest key (HOST-16) |
-| `seg.log` | append-only | the frames (Host.Log) from genesis's origin frame: one batch record per frame; its append handle is flock'd, the writer lock |
-| `index.log` | append-only | fixed-width keyed entries, one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33) |
-| `base.world` | replaced whole, atomically | the newest sealed base: the World, the seg.log position after it, and how many index.log entries it counts with the last one's tag |
+| `key` | written once (genesis) | 32 bytes, mode 0600: the integrity-at-rest key (HOST-16); its read handle is flock'd, the writer lock |
+| `seg.<o>.log` | append-only | a checkpoint header (Host.Segment), then the frames (Host.Log) from logical offset o: one batch record per frame; one file per seal start, from genesis's seg.0.log (the origin frame); only the newest is appended to; the files before the base's retainedFrom are dropped (--retain) |
+| `index.<k0>.log` | append-only | fixed-width keyed entries k0, k0+1, ..., one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33); k0 is the base's indexFrom, 0 unless a drop moved it |
+| `base.world` | replaced whole, atomically | the newest sealed base: the World, the segment position after it (its own file's start), how many index entries it counts with the last one's tag, and what it keeps (retainedFrom, indexFrom) |
 | `base.tmp` | transient: never read by an open, never backed up | a base being installed; a crash may leave one, which no open reads |
+| `seg.tmp` | transient: never read by an open, never backed up | a segment file being started; a crash may leave one, which no open reads |
+| `index.tmp` | transient: never read by an open, never backed up | a kept index being written by a drop; a crash may leave one, which no open reads |
 
 ## Backup order (a live Store may be copied while its writer runs)
 
@@ -18,5 +20,5 @@ an open handles. Restore with `host check STORE --anchor HEIGHT:CHAIN` (RUNBOOK 
 
 1. `key`
 2. `base.world`
-3. `index.log`
-4. `seg.log`
+3. `index.<k0>.log`
+4. `seg.<o>.log`

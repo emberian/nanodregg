@@ -5,7 +5,11 @@
                                                    precommitted NEXT public key; the Store
                                                    holds its digest, `Receive.nextKeyDigest`, which
                                                    only Lean computes: law 2)
-    host serve STORE                               the writer loop on stdin/stdout
+    host serve STORE [--retain N]                  the writer loop on stdin/stdout; with --retain
+                                                   (N ≥ 2, `retainBelowFloor` below) each base
+                                                   install keeps the N newest segment files and
+                                                   drops the rest (HOST-64); without it nothing
+                                                   is ever dropped
     host follow STORE MEMBER_HEX GRANT_HEX         the follower loop on stdin/stdout (Host.Follow)
     host check STORE [--anchor STEPS:CHAIN_HEX]   open read-only, print one STATUS line, refuse a
                                                    Store behind or off the anchor (Host.Check)
@@ -19,7 +23,7 @@
                                                    trust root: never take it from the Host), then the
                                                    one genesis of the signed inputs; nothing is
                                                    written unless both passed (`join_genesis_iff`)
-    host seal STORE                                the OPERATOR's seal of a STOPPED writer's Store
+    host seal STORE [--retain N]                   the OPERATOR's seal of a STOPPED writer's Store
                                                    (HOST-43): the Store's lock (a live writer holds
                                                    it: `locked`), one seal of the World at its
                                                    position through the writer's own checkpoint
@@ -82,7 +86,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE | host seal STORE | host join STORE INVITE_HEX KEY_HEX | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
+  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] | host seal STORE [--retain N] | host join STORE INVITE_HEX KEY_HEX | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN --digest HEX [--nonce HEX32]"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -190,8 +194,8 @@ reads a consistent base and the tail that verifies, as `check` does. -/
 def exportVerb (store out : String) : IO UInt32 := do
   match ← Check.openClean store with
   | .error (s, n) => refuse s n
-  | .ok (_, o) =>
-    let w := o.opened.world
+  | .ok k =>
+    let w := k.opening.opened.world
     match Carry.exportFile X.env Codec.Deployed.digestCodec w with
     | .error f => refuse .carryMismatch s!"carryMismatch {f.name}"
     | .ok bytes =>
@@ -269,7 +273,7 @@ def importVerb (store name inPath digestHex : String) (nonceArg : Option String)
       reopen := fun key => do
         match ← openWriter store (Keys.ofKey key shapes) c world recorder.mark originChain foldStep with
         | .error f => return .error f
-        | .ok wr => return .ok (wr.opening.opened.world, wr.segment.sync)
+        | .ok wr => return .ok (wr.opening.opened.world, wr.hold)
       refuse := fun s n => refuse s n
       report := fun ls => ls.forM IO.println }
 
@@ -323,21 +327,21 @@ def runResident (verb : String) (r₀ : Resident (World D))
   status verb (("exit", exit.status.name) :: ("refused_queued", toString refused) :: residentFields r)
   return exitCode exit
 
-def serveVerb (store : String) : IO UInt32 := do
+def serveVerb (store : String) (retain : Retain) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
   | .error f => refuseStore f
   | .ok key =>
     let keys := Keys.ofKey key shapes
-    match ← openWriter store keys c world recorder.mark originChain foldStep with
+    match ← openWriter store keys c world recorder.mark originChain foldStep retain with
     | .error f => refuseStore f
     | .ok wr => serving do
-      let pagerSeg ← File.open (segmentPath store) .read
-      let pagerIdx ← File.open (indexPath store) .read
+      let files : PageFiles := ⟨store, keys, originChain wr.opening.opened.world, wr.kept,
+        ← IO.mkRef #[wr.opening.sealed.offset]⟩
       let code ← runResident "serve" wr.opening.resident fun port =>
-        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark originChain wr.index) c
-            (fileStore wr.segment) (pager keys store pagerSeg pagerIdx) port limits fuelBatches)
+        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark originChain wr) c
+            (fileStore wr) (pager keys files) port limits fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
-      wr.segment.sync  -- the writer's handle, and so its lock, lives to here
+      wr.hold  -- the writer's lock lives to here
       return code
 
 def followVerb (store memberHex grantHex : String) : IO UInt32 := do
@@ -355,10 +359,10 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
       let download ← IO.mkRef ({} : Protocol.Command.Memory)
       let code ← runResident "follow" wr.opening.resident fun port =>
         -- the World this member was invited to: its own Store's genesis origin, never the writer's word
-        restarts (Follow.loop keys ⟨wr.opening.opened.world.origin, member, grant, Follow.window⟩ (fileStore wr.segment)
-            (fileCheckpoint store keys c world recorder.mark originChain wr.index) port download fuelBatches)
+        restarts (Follow.loop keys ⟨wr.opening.opened.world.origin, member, grant, Follow.window⟩ (fileStore wr)
+            (fileCheckpoint store keys c world recorder.mark originChain wr) port download fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
-      wr.segment.sync  -- the follower's handle, and so its lock, lives to here
+      wr.hold  -- the follower's lock lives to here
       return code
 
 /-- What `host seal` reaches outside itself: the key, the writer's open (the Store's lock), the
@@ -389,29 +393,38 @@ def sealWith {m : Type → Type} [Monad m] {R : Type} (fx : SealFx m R) : m UInt
 (`openWriter`: the Store's lock, so a running writer refuses it `locked`); the seal is `sealNow`
 with the writer's own file checkpoint, inline (the process waits for its one base); the report is
 the base an invitation pins: `sealed steps=S chain=C digest=D`. -/
-def sealVerb (store : String) : IO UInt32 := do
+def sealVerb (store : String) (retain : Retain) : IO UInt32 := do
   let held ← IO.mkRef (none : Option (Writer (World D)))
   let code ← sealWith (R := Keys × Writer (World D))
     { key := readKey store
       open_ := fun key => do
         let keys := Keys.ofKey key shapes
-        match ← openWriter store keys c world recorder.mark originChain foldStep with
+        match ← openWriter store keys c world recorder.mark originChain foldStep retain with
         | .error f => return .error f
         | .ok wr => held.set (some wr); return .ok (keys, wr)
       write := fun (keys, wr) => do
-        let ck := fileCheckpoint store keys c world recorder.mark originChain wr.index (async := false)
+        let ck := fileCheckpoint store keys c world recorder.mark originChain wr (async := false)
         return (← sealNow ck recorder.mark wr.opening.resident).map (·.sealed)
       refuse := fun s n => refuse s n
       report := fun s => IO.println s!"sealed steps={s.steps} chain={Protocol.Text.toHex s.chain} digest={Protocol.Text.toHex s.digest}" }
-  -- the writer's handle, and so its lock, lives to here
-  if let some wr := ← held.get then wr.segment.sync
+  -- the writer's lock lives to here
+  if let some wr := ← held.get then wr.hold
   return code
+
+/-- `--retain N`: refused `usage` by the name `retainBelowFloor` under the floor of two files
+(`Host.retainFloor`), `usage retain` when N is not a number; nothing is opened before it parses. -/
+def withRetain (n : String) (k : Retain → IO UInt32) : IO UInt32 :=
+  match Retain.parse n with
+  | .ok r => k r
+  | .error name => refuse .usage name
 
 def verb : List String → IO UInt32
   | "genesis" :: store :: name :: "--nonce" :: n :: fs => genesisVerb store name (some n) fs
   | "genesis" :: store :: name :: fs => genesisVerb store name none fs
-  | ["serve", store] => serveVerb store
-  | ["seal", store] => sealVerb store
+  | ["serve", store] => serveVerb store none
+  | ["serve", store, "--retain", n] => withRetain n (serveVerb store)
+  | ["seal", store] => sealVerb store none
+  | ["seal", store, "--retain", n] => withRetain n (sealVerb store)
   | ["follow", store, member, grant] => followVerb store member grant
   | ["join", store, inv, key] => joinVerb store inv key
   | ["check", store] => Check.run store none

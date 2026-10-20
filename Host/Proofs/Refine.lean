@@ -452,8 +452,8 @@ reads, the World it returns is the fold, from the `Kept` World of the base it re
 steps its segment's records decode to, those records being exactly the segment's bytes from the
 base's offset to the open's position; and that World is `Kept`. With `host_run_kept`, every World
 the writer holds, across any number of crashes, is a fold from a base. -/
-theorem host_reopen_folds {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem host_reopen_folds {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     ∃ (b : Base (World D)) (n : Nat) (d : ByteArray) (rs : List ByteArray) (pss : List (List (Step D × D))),
       Base.read keys c world file = .ok (b, n, d) ∧ Kept b.world ∧
@@ -461,7 +461,7 @@ theorem host_reopen_folds {keys : Keys} {file I S : ByteArray} {o : Opening (Wor
       rs.mapM (Record.codec Codec.Deployed.digestCodec).decode = .ok pss ∧
       World.fold X.env b.world (pss.flatMap (·.map Prod.fst)) = .ok o.opened.world ∧ Kept o.opened.world := by
   obtain ⟨b, n, d, rs, hb, hf, -, -, -, he⟩ :=
-    openWith_world keys c world recorder.mark originChain foldStep file I S h
+    openWith_world keys c world recorder.mark originChain foldStep file H I S h
   obtain ⟨b', n', d', rs', hb', hk, -, hk'⟩ := openWith_kept h
   rw [hb] at hb'
   cases hb'

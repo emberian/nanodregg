@@ -7,35 +7,35 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 
 | metric | now | ceiling |
 |---|---|---|
-| Lean modules in the Host closure | 80 | 150 |
-| Lean modules | 399 | — |
-| Lean proof-modules | 214 | — |
+| Lean modules in the Host closure | 81 | 150 |
+| Lean modules | 402 | — |
+| Lean proof-modules | 215 | — |
 | Lean lines (Bench) | 961 | — |
 | Lean lines (Census) | 244 | — |
 | Lean lines (Codec) | 13750 | — |
-| Lean lines (Emit) | 1736 | — |
-| Lean lines (Host) | 14076 | — |
-| Lean lines (Hosting) | 9759 | — |
+| Lean lines (Emit) | 1747 | — |
+| Lean lines (Host) | 15501 | — |
+| Lean lines (Hosting) | 9761 | — |
 | Lean lines (Kernel) | 35831 | — |
 | Lean lines (Lang) | 25451 | — |
 | Lean lines (Ledger) | 2416 | — |
-| Lean lines (Ops) | 2410 | — |
-| Lean lines (Protocol) | 11195 | — |
-| Lean lines (deployed) | 23824 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 17981 | — |
+| Lean lines (Ops) | 2432 | — |
+| Lean lines (Protocol) | 11199 | — |
+| Lean lines (deployed) | 24454 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 18298 | — |
 | foundation modules | 7 | 8 |
-| max dependents of a non-foundation module | 296 | — |
-| theorems | 5219 | — |
+| max dependents of a non-foundation module | 299 | — |
+| theorems | 5245 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 12 | 12 |
 | C lines | 315 | 315 |
-| Rust lines | 20569 | — |
+| Rust lines | 20594 | — |
 | Rust lines (nd) | 98 | 100 |
 | Rust lines (nd-supervise) | 160 | 160 |
 | Rust lines (client library) | 2528 | 2528 |
 | Rust lines (attach/src) | 148 | 300 |
-| Rust lines (generated) | 2223 | — |
+| Rust lines (generated) | 2225 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | protocol operations | 6 | 6 |
 | call kinds (Receive.Body constructors) | 13 | 13 |

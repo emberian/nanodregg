@@ -41,11 +41,11 @@ def bearGrants (dir : System.FilePath) (keys : Keys) (m : Who) (obj : D) (goal :
       | .ok (s, w'', some g) => staged := staged.push s; w' := w''; born := born.push g
       | .ok (_, _, none) => return .error "a grant bore no cell"
       | .error e => return .error s!"grant {grants.size + born.size}: {e}"
-    match ← commit wr.opening.sealed wr.segment keys pos staged with
+    match ← commit wr.opening.sealed wr keys pos staged with
     | .ok (some p) => pos := p; w := w'; grants := grants ++ born
     | .ok none => break
     | .error e => return .error s!"commit {e}"
-  wr.segment.sync
+  (← wr.segment.get).sync
   return .ok (w, grants)
 
 /-- The frame of one record of `recordTurnsMax` revokes staged on `w` (never committed): what the

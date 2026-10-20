@@ -51,23 +51,28 @@ def tailStep : World D → ByteArray → Except (Record.Fault (Reject D)) (World
 /-- The loop's batch bounds: a record's Turns, and a megabyte of request payload. -/
 def limits : Limits := ⟨recordTurnsMax, 1 <<< 20⟩
 
-/-- A deferred reply from the Store's files: a `log` page from the segment, located through
-`index.log` (`idx`: every entry it reads is checked at its position, `Page.entryAt`) and the
-loop's entries since the base, and a `read` page from the newest base (opened per page: the base
+/-- A `log` page from `start` over the files a base keeps (HOST-64): `Page.kept` at the deployed
+instance, the index read through `Page.entryAt` (the base's entries on disk, the loop's since). -/
+def pageKept {m : Type → Type} [Monad m] (keys : Keys) (k0 : Nat) (read readIndex : Nat → Nat → m ByteArray)
+    (r : Resident (World D)) (start : Nat) : m (Except Page.Fault Page.Acc) :=
+  Page.kept X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax Page.budget k0 read
+    (Page.entryAt (keys.forStore (originChain r.world)) readIndex r.sealed.index.count r.index)
+    (r.sealed.index.count + r.index.size) r.pos.offset (recorder.mark r.world) start
+
+/-- A deferred reply from the Store's files: a `log` page from the segment files, located through
+the kept index file (every entry it reads is checked at its position, `Page.entryAt`) and the
+loop's entries since the base (`pageKept`), and a `read` page from the newest base (opened per page: the base
 is replaced, never written in place). -/
-def pager (keys : Keys) (dir : System.FilePath) (seg idx : File) (r : Resident (World D)) :
+def pager (keys : Keys) (files : PageFiles) (r : Resident (World D)) :
     Deferred → IO (UInt8 × ByteArray)
   | .read start => do
-    let base ← File.open (basePath dir) .read
+    let base ← File.open (basePath files.dir) .read
     match ← Page.basePage Page.budget (fun off len => base.readAt off.toUInt64 len.toUSize) r.sealed start with
     | .error f => return named f.name
     | .ok b => return (Protocol.Status.ok.code, b)
   | .log start => do
-  match ← Page.build X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax
-      Page.budget (fun off len => seg.readAt off.toUInt64 len.toUSize)
-      (Page.entryAt (keys.forStore (originChain r.world)) (fun off len => idx.readAt off.toUInt64 len.toUSize)
-        r.sealed.index.count r.index)
-      (r.sealed.index.count + r.index.size) r.pos.offset (recorder.mark r.world) start with
+  let (k0, read, readIndex) ← files.readers
+  match ← pageKept keys k0 read readIndex r start with
   | .error f => return named f.name
   | .ok a => match Page.bytes a r.world.steps r.world.height r.sealed.steps r.sealed.digest with
     | .ok b => return (Protocol.Status.ok.code, b)

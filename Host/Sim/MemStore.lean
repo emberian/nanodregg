@@ -45,19 +45,40 @@ structure Bases where
   written : Nat := 0
   /-- index entries handed to seals (law 5: each entry is handed once, HOST-30) -/
   handed : Nat := 0
+  /-- each segment file's start and checkpoint header (HOST-64): the in-memory Store keeps every
+  file, so its segment is the logical bytes and these are the headers the files would open with -/
+  headers : Array (Nat × ByteArray) := #[]
+
+/-- The header of the file starting at `o` (empty when there is none: the open refuses it
+`checkpointCorrupt`). -/
+def headerAt (headers : Array (Nat × ByteArray)) (o : Nat) : ByteArray :=
+  ((headers.find? (·.1 == o)).map (·.2)).getD ByteArray.empty
+
+/-- The header of the file the base `file` sits at the start of (`Base.peek`'s offset). -/
+def headerOf (headers : Array (Nat × ByteArray)) (file : ByteArray) : ByteArray :=
+  headerAt headers ((Base.peek file).map (·.1) |>.getD 0)
 
 /-- A checkpoint over memory: the deployed `Base.file`, then an atomic replace. Inline, so a seeded
-run seals at the same points every time. -/
+run seals at the same points every time. It keeps every file (`Keep.all`); `rotate` records the
+header the file a seal starts would open with (HOST-64), after the bytes synced so far. -/
 def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys : Keys) (c : Cadence)
-    (world : Codec.Stream W) (origin : W → ByteArray) : Checkpoint W where
+    (world : Codec.Stream W) (mark : W → Nat × ByteArray) (origin : W → ByteArray) : Checkpoint W where
   async := false
+  rotate w pos count := do
+    let b ← bases.get
+    let newest := (b.headers.back?.map (·.1)).getD 0
+    if newest = pos.offset then return .ok ()
+    let h := Header.at pos (mark w) count newest (origin w)
+    unless h.fits keys.chainBytes do return .error (.positionUnfit pos.offset)
+    bases.set { b with headers := b.headers.push (pos.offset, Header.bytes keys h) }
+    return .ok ()
   write w seg entries ipos := do
-    match Base.seal (keys.forStore (origin w)) c world w seg ipos entries (← bases.get).index.size with
+    match Base.seal (keys.forStore (origin w)) c world w seg ipos entries (← bases.get).index.size Keep.all with
     | .error f => return .error f
     | .ok (page, ipos', file) =>
       let synced := (← disk.get).synced.size
       bases.modify fun b =>
-        { file, history := b.history.push (file, synced), index := b.index ++ page,
+        { file, history := b.history.push (file, synced), index := b.index ++ page, headers := b.headers,
           indexAt := b.indexAt.push (b.index.size + page.size), written := b.written + page.size + file.size,
           handed := b.handed + entries.size }
       return .ok (world.size w, keys.worldDigest (worldBytesOf file (world.size w)), ipos')
@@ -71,12 +92,13 @@ def memGenesis {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   match genesisImage keys c world mark w₀ with
   | .error f => .error (.seal f)
   | .ok img =>
-    match Id.run (openWith keys c world mark origin step img.base img.segment.size img.index.size
+    match Id.run (openWith keys c world mark origin step img.base img.header img.segment.size img.index.size
         (fun off len => pure (.ok (img.index.extract off (off + len))))
         fun off len => pure (.ok (img.segment.extract off (off + len)))) with
     | .error f => .error f
     | .ok o =>
-      let b : Bases := { file := img.base, history := #[(img.base, img.segment.size)], index := img.index, indexAt := #[img.index.size] }
+      let hs : Array (Nat × ByteArray) := #[(0, img.header0), (img.segment.size, img.header)]
+      let b : Bases := { file := img.base, history := #[(img.base, img.segment.size)], index := img.index, indexAt := #[img.index.size], headers := hs }
       .ok ({ synced := img.segment }, b,
         { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index })
 

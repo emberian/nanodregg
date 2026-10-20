@@ -786,7 +786,7 @@ def restart (sealFirst : Bool) : M D Expect := do
       -- the plant: the open handed the genesis base, the newest one ignored
       let base := if st.sys.staleBase then (bs.history[0]?.map (·.1)).getD bs.file else bs.file
       let t0 ← nowNs
-      match Writer.reopenCounted st.sys.writer bs.index base d.synced with
+      match Writer.reopenCounted st.sys.writer bs.headers bs.index base d.synced with
       | (.error f, _) => pure (.refused f)
       | (.ok r, n) =>
           let t1 ← nowNs
@@ -804,7 +804,7 @@ def reopenFlipped (off : Nat) : M D Expect := do
   let st ← get
   let d ← st.mem.disk.get
   let bs ← st.mem.bases.get
-  match Writer.reopen st.sys.writer bs.index (Host.Sim.flipByte bs.file off) d.synced with
+  match Writer.reopen st.sys.writer bs.headers bs.index (Host.Sim.flipByte bs.file off) d.synced with
   | .error f => pure (.refused f)
   | .ok _ => pure .ok
 

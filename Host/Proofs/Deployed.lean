@@ -71,14 +71,23 @@ theorem originChain_genesis (name nonce : ByteArray) (allowance : Nat) (founders
       (recorder.mark (Receive.genesisWorld X name nonce allowance founders)).2 := by
   rw [recorder_mark]; simp only [originChain, Receive.genesis_chain]
 
-theorem genesis_origin_passes {F : Type} (keys : Keys) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) {img : Image}
+/-- The deployed keys' chain width is the deployed digest's (an index entry's and a checkpoint
+header's chain field, HOST-33, HOST-64). -/
+theorem ofKey_chainBytes (k shapes : Digest) : (Keys.ofKey k shapes).chainBytes = Digest.width := rfl
+
+/-- **HOST-64 at deployed genesis**: the checkpoint header genesis writes for its base's own file
+passes the deployed open's check (`genesisImage_header`). -/
+theorem genesis_header_passes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) (name nonce : ByteArray)
+    (allowance : Nat) (founders : List (ByteArray × D)) {img : Image}
+    (hst : (Receive.genesisWorld X name nonce allowance founders).steps < 2 ^ 64)
     (h : genesisImage keys c world recorder.mark (Receive.genesisWorld X name nonce allowance founders) = .ok img) :
-    originFault (F := F) keys.segment (img.segment.extract 0 (originLen img.segment.size))
-      (originChain (Receive.genesisWorld X name nonce allowance founders)) = none :=
-  genesisImage_origin keys c world recorder.mark originChain _ h
-    (by show (Receive.genesisWorld X name nonce allowance founders).chain.bytes.size ≤ chainBytesMax
-        rw [Digest.size_eq]; decide)
+    headerFault keys img.header (originChain (Receive.genesisWorld X name nonce allowance founders))
+      img.segment.size (tagDigest keys.segment (segmentInitial ++
+        (recorder.mark (Receive.genesisWorld X name nonce allowance founders)).2))
+      (recorder.mark (Receive.genesisWorld X name nonce allowance founders)) 0 = none :=
+  genesisImage_header keys c world recorder.mark originChain _ h
+    (by rw [recorder_mark, hkeys]; exact Digest.size_eq _)
+    (by rw [hkeys]; decide) hst
     (originChain_genesis name nonce allowance founders)
 
 theorem foldStep_originChain {w w' : World D} {r : ByteArray} (h : foldStep w r = .ok w') :
@@ -117,11 +126,11 @@ theorem export_reads {w : World D} {f : ByteArray}
 
 /-- **The World the deployed writer opens to is `JournalOk`** (KERNEL-41), whatever base file and
 segment bytes the open reads. -/
-theorem openWith_journalOk {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_journalOk {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     o.opened.world.JournalOk X.env := by
-  obtain ⟨b, _n, _d, rs, hb, hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file I S h
+  obtain ⟨b, _n, _d, rs, hb, hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file H I S h
   obtain ⟨r, _, _, hd, _⟩ := Base.read_decode keys c world file hb
   simp only [Codec.Stream.decode] at hd
   split at hd
@@ -130,10 +139,12 @@ theorem openWith_journalOk {keys : Keys} {file I S : ByteArray} {o : Opening (Wo
     · cases hd
       obtain ⟨x, hx, hacc⟩ := Codec.Stream.refine_get_inner hget
       obtain ⟨_j, hw⟩ := Codec.Stream.product_get_fst hx
-      obtain ⟨xw, xo, xt, xio, xit⟩ := x
-      simp only [Option.some.injEq] at hacc
-      subst hacc
-      exact Record.foldlM_journalOk (Codec.Deployed.world_get_journalOk hw) hf
+      obtain ⟨xw, xo, xt, xio, xit, xrf, xk0⟩ := x
+      simp only at hacc
+      split at hacc
+      · cases hacc
+        exact Record.foldlM_journalOk (Codec.Deployed.world_get_journalOk hw) hf
+      · cases hacc
     · cases hd
   · cases hd
 
@@ -141,11 +152,11 @@ theorem openWith_journalOk {keys : Keys} {file I S : ByteArray} {o : Opening (Wo
 its base's World because the deployed World codec read it (`Codec.Deployed.world_get_refusalsOk`),
 every record after it by `Record.foldlM_refusalsOk`. With `Host.admitBatch_refusalsOk`, every World
 the loop holds is, which discharges the `RefusalsCanon` premise of `Host.lookup_recorded_answers`. -/
-theorem openWith_refusalsOk {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_refusalsOk {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     o.opened.world.RefusalsOk X.env := by
-  obtain ⟨b, _n, _d, rs, hb, hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file I S h
+  obtain ⟨b, _n, _d, rs, hb, hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file H I S h
   obtain ⟨r, _, _, hd, _⟩ := Base.read_decode keys c world file hb
   simp only [Codec.Stream.decode] at hd
   split at hd
@@ -154,10 +165,12 @@ theorem openWith_refusalsOk {keys : Keys} {file I S : ByteArray} {o : Opening (W
     · cases hd
       obtain ⟨x, hx, hacc⟩ := Codec.Stream.refine_get_inner hget
       obtain ⟨_j, hw⟩ := Codec.Stream.product_get_fst hx
-      obtain ⟨xw, xo, xt, xio, xit⟩ := x
-      simp only [Option.some.injEq] at hacc
-      subst hacc
-      exact Record.foldlM_refusalsOk (Codec.Deployed.world_get_refusalsOk hw) hf
+      obtain ⟨xw, xo, xt, xio, xit, xrf, xk0⟩ := x
+      simp only at hacc
+      split at hacc
+      · cases hacc
+        exact Record.foldlM_refusalsOk (Codec.Deployed.world_get_refusalsOk hw) hf
+      · cases hacc
     · cases hd
   · cases hd
 
@@ -187,19 +200,19 @@ theorem originChain_mark {w : World D} (hc : w.chain = World.genesisChain X.env 
 start path, `genesisImage_opens` at the deployed instance). Premises: `hfit`, the deployed World
 codec reads `w₀` back (`Codec.Kernel.world_lawfulOn` over `digestCodec_lawful.on`, whose digest
 predicate is `fun _ => True`); `hc`, `w₀`'s chain is the genesis chain of its origin
-(`genesis_chain_eq`, `importWorld_chain_eq`). -/
-theorem genesisImage_opens_deployed (keys : Keys) {w₀ : World D}
+(`genesis_chain_eq`, `importWorld_chain_eq`); `hkeys`, the Store's chain width is the deployed
+digest's (`ofKey_chainBytes`: `Keys.ofKey`'s, by rfl). -/
+theorem genesisImage_opens_deployed (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {w₀ : World D}
     (hfit : Codec.Kernel.World.CodecFits X.env (fun _ => True) w₀)
     (hc : w₀.chain = World.genesisChain X.env w₀.origin) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
-    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.segment.size
+    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.header img.segment.size
         img.index.size (segReader img.index) (segReader img.segment)) = .ok o ∧
       o.opened.world = w₀ ∧ o.opened.records = 0 ∧ o.opened.torn = 0 ∧
         o.pos.offset = img.segment.size :=
   genesisImage_opens keys c world recorder.mark originChain foldStep
     (Codec.Kernel.world_lawfulOn X.env Codec.Deployed.digestCodec_lawful.on) hfit h
-    (by show w₀.chain.bytes.size ≤ chainBytesMax
-        rw [Digest.size_eq]; decide)
+    (by rw [recorder_mark, hkeys]; exact Digest.size_eq _) (by rw [hkeys]; decide) hfit.stepsLt
     (originChain_mark hc)
     (by decide)
 
@@ -279,18 +292,18 @@ theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
     | spent => trivial
 
 /-- **`host genesis`'s Store reopens to the World genesis made** (one start path), with no premise
-beyond the two successes: KERNEL's genesis, and the genesis image (which refuses only
-`worldTooLarge`). -/
-theorem genesis_reopens (keys : Keys) {name nonce : ByteArray} {allowance : Nat}
+beyond the two successes (KERNEL's genesis, and the genesis image, which refuses only
+`worldTooLarge`) and the Store's chain width, the deployed digest's (`ofKey_chainBytes`). -/
+theorem genesis_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {w₀ : World D}
     (hg : Receive.genesis X name nonce allowance founders = .ok w₀) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
-    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.segment.size
+    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.header img.segment.size
         img.index.size (segReader img.index) (segReader img.segment)) = .ok o ∧
       o.opened.world = w₀ ∧ o.opened.records = 0 ∧ o.opened.torn = 0 ∧
         o.pos.offset = img.segment.size := by
   obtain ⟨hf, rfl⟩ := Receive.genesis_ok.mp hg
-  exact genesisImage_opens_deployed keys (genesisWorld_codecFits hf)
+  exact genesisImage_opens_deployed keys hkeys (genesisWorld_codecFits hf)
     (genesis_chain_eq name nonce allowance founders) h
 
 /-- What a carried file reads back to is in the carried codec's domain. -/
@@ -335,19 +348,19 @@ theorem importWorld_codecFits {name nonce : ByteArray} {want : Codec.Digest} {f 
 
 /-- **`host import`'s Store reopens to the World the import made, holding exactly the file's
 carried bytes**: so `importWith`'s `carryMismatch reopen` compare passes whenever genesis writes
-the image. No premise beyond the two successes. -/
-theorem import_reopens (keys : Keys) {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
+the image. No premise beyond the two successes and the deployed chain width (`ofKey_chainBytes`). -/
+theorem import_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
     {r : Carry.Read D} {w₀ : World D}
     (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) {img : Image}
     (hg : genesisImage keys c world recorder.mark w₀ = .ok img) :
-    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.segment.size
+    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.header img.segment.size
         img.index.size (segReader img.index) (segReader img.segment)) = .ok o ∧
       o.opened.world = w₀ ∧ o.opened.records = 0 ∧ o.opened.torn = 0 ∧
         o.pos.offset = img.segment.size ∧
       (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes o.opened.world.carried =
         f.extract r.carriedAt f.size := by
   obtain ⟨o, ho, hw, hn, ht, hp⟩ :=
-    genesisImage_opens_deployed keys (importWorld_codecFits h) (importWorld_chain_eq h) hg
+    genesisImage_opens_deployed keys hkeys (importWorld_codecFits h) (importWorld_chain_eq h) hg
   refine ⟨o, ho, hw, hn, ht, hp, ?_⟩
   rw [hw]
   exact (import_carried h).2.1
@@ -479,13 +492,13 @@ theorem codecFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.le
     cases k <;> trivial
 
 /-- The base World of a deployed open is `Kept`, and so is the World it opens to. -/
-theorem openWith_kept {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_kept {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     ∃ (b : Base (World D)) (n : Nat) (d : ByteArray) (rs : List ByteArray),
       Base.read keys c world file = .ok (b, n, d) ∧ Kept b.world ∧
         rs.foldlM foldStep b.world = .ok o.opened.world ∧ Kept o.opened.world := by
-  obtain ⟨b, n, d, rs, hb, hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file I S h
+  obtain ⟨b, n, d, rs, hb, hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file H I S h
   obtain ⟨r, _, _, hd, _⟩ := Base.read_decode keys c world file hb
   simp only [Codec.Stream.decode] at hd
   split at hd
@@ -494,15 +507,17 @@ theorem openWith_kept {keys : Keys} {file I S : ByteArray} {o : Opening (World D
     · cases hd
       obtain ⟨x, hx, hacc⟩ := Codec.Stream.refine_get_inner hget
       obtain ⟨_j, hw⟩ := Codec.Stream.product_get_fst hx
-      obtain ⟨xw, xo, xt, xio, xit⟩ := x
-      simp only [Option.some.injEq] at hacc
-      subst hacc
-      have hw2 : (Codec.Kernel.world Codec.Deployed.env Codec.Deployed.digestCodec).get _ _ = .ok (xw, _j) := hw
-      have hfits : Codec.Kernel.World.CodecFits Codec.Deployed.env (fun _ => True) xw :=
-        Codec.Kernel.world_get_fits (E := Codec.Deployed.env) (dc := Codec.Deployed.digestCodec)
-          Codec.Deployed.digestCodec_lawful.on hw2
-      have hk := kept_of_fits hfits
-      exact ⟨_, n, d, rs, hb, hk, hf, Record.foldlM_kept hk hf⟩
+      obtain ⟨xw, xo, xt, xio, xit, xrf, xk0⟩ := x
+      simp only at hacc
+      split at hacc
+      · cases hacc
+        have hw2 : (Codec.Kernel.world Codec.Deployed.env Codec.Deployed.digestCodec).get _ _ = .ok (xw, _j) := hw
+        have hfits : Codec.Kernel.World.CodecFits Codec.Deployed.env (fun _ => True) xw :=
+          Codec.Kernel.world_get_fits (E := Codec.Deployed.env) (dc := Codec.Deployed.digestCodec)
+            Codec.Deployed.digestCodec_lawful.on hw2
+        have hk := kept_of_fits hfits
+        exact ⟨_, n, d, rs, hb, hk, hf, Record.foldlM_kept hk hf⟩
+      · cases hacc
     · cases hd
   · cases hd
 
@@ -786,15 +801,15 @@ refusals entries together.** The base World is at most `c.baseRecordMax` bytes, 
 (`world_size_listing`); the tail `tailRead` admits is at most `c.tailMax` of it, and every leaf or
 entry a record's steps add costs 32 of its bytes (`admit_listing`, `refuse_refusals_listing`,
 `record_steps_le`); an admission only prunes the refusals (`admit_refusals_listing`). -/
-theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_listing_lt {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     o.opened.world.trie.toList.length + o.opened.world.rows.toList.length +
       o.opened.world.refusals.toList.length < 2 ^ 24 := by
   obtain ⟨b, n, d, rs, hb, hf, _, _, _, he⟩ :=
-    openWith_world keys c world recorder.mark originChain foldStep file I S h
+    openWith_world keys c world recorder.mark originChain foldStep file H I S h
   obtain ⟨b', n', d', len, _, _, hb', hlen, -⟩ :=
-    openWith_seg_ok keys c world recorder.mark originChain foldStep file I S h
+    openWith_seg_ok keys c world recorder.mark originChain foldStep file H I S h
   rw [hb] at hb'
   cases hb'
   obtain ⟨hs, hle⟩ := tailRead_ok hlen
@@ -808,7 +823,7 @@ theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (W
   have hbs : (r.record.extract stampBytes r.record.size).size = (Base.codec world).size b := by
     rw [hbase]; exact (hbl.size_eq b).symm
   rw [ByteArray.size_extract, Nat.min_self] at hbs
-  have hcs : (Base.codec world).size b = world.size b.world + (8 + (32 + (8 + 32))) := rfl
+  have hcs : (Base.codec world).size b = world.size b.world + (8 + (32 + (8 + (32 + (8 + 8))))) := rfl
   have htail : (rs.map frameSize).sum ≤ len := by
     rw [← hsz, Nat.min_self]; omega
   obtain ⟨b₂, n₂, d₂, rs₂, hb₂, hk, hf₂, -⟩ := openWith_kept h
@@ -816,7 +831,7 @@ theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (W
   cases hb₂
   have hl := Record.foldlM_listing hk hf
   have hw := world_size_listing b.world
-  have e1 : c.baseRecordMax = 91914458 := by decide
+  have e1 : c.baseRecordMax = 91914474 := by decide
   have e2 : c.tailMax n = 2 * max 1048576 (n / 4) + (4 + 16779332 + 32) := rfl
   have hm : max 1048576 (n / 4) ≤ 1048576 + n / 4 :=
     Nat.max_le.mpr ⟨Nat.le_add_right _ _, Nat.le_add_left _ _⟩
@@ -827,8 +842,8 @@ theorem openWith_listing_lt {keys : Keys} {file I S : ByteArray} {o : Opening (W
 premise: the base World is because the World codec read it (`kept_of_fits`), every step keeps the
 rest (`Kept`, `Record.foldlM_kept`), and the three listings are below 2^24 entries together
 (`openWith_listing_lt`). So the next seal's base reads back (`sealed_opens_deployed`). -/
-theorem openWith_codecFits {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_codecFits {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     Codec.Kernel.World.CodecFits X.env (fun _ => True) o.opened.world := by
   obtain ⟨_, _, _, _, _, _, _, hk⟩ := openWith_kept h
@@ -839,8 +854,8 @@ theorem openWith_codecFits {keys : Keys} {file I S : ByteArray} {o : Opening (Wo
 /-- **`host export` refuses no World the deployed open returns** (HOST-28's completeness), no
 premise: the opened World is in the World codec's domain (`openWith_codecFits`), so in the carried
 codec's (`Codec.Kernel.carried_fits`). -/
-theorem openWith_exportFile_ok {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_exportFile_ok {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     Carry.exportFile X.env Codec.Deployed.digestCodec o.opened.world =
       .ok (Carry.file X.env Codec.Deployed.digestCodec o.opened.world) := by
@@ -996,31 +1011,31 @@ theorem foldlM_steps : ∀ {w w' : World D} {rs : List ByteArray},
       omega
 
 /-- **An open's step count is at least its base's plus its records** (HOST-49). -/
-theorem openWith_steps_records {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_steps_records {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     ∃ (b : Base (World D)) (n : Nat) (d : ByteArray), Base.read keys c world file = .ok (b, n, d) ∧
       b.world.steps + o.opened.records ≤ o.opened.world.steps := by
-  obtain ⟨b, n, d, rs, hb, hf, hn, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file I S h
+  obtain ⟨b, n, d, rs, hb, hf, hn, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file H I S h
   exact ⟨b, n, d, hb, by rw [hn]; exact foldlM_steps hf⟩
 
 /-- **HOST-21's adopt argument, proved**: a Store the deployed open opens at step 0 holds no record
 past its base, the loop holds no index entry after it, the base itself is at step 0, and the base
-counts no entry of `index.log` (HOST-53: open refuses a base whose last entry does not begin before
+counts no entry of the index file (HOST-53: open refuses a base whose last entry does not begin before
 its World, and nothing begins before step 0). So the measure PROTOCOL's adopt checks (`w.steps ≠ 0`
 refuses `notAtGenesis`) is "nothing past the image", and the adopted base's empty index
 (`indexStart`) drops nothing, neither the loop's entries nor the old base's. -/
-theorem openWith_steps_zero {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+theorem openWith_steps_zero {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) (h0 : o.opened.world.steps = 0) :
     o.opened.records = 0 ∧ o.index.size = 0 ∧ o.sealed.index.count = 0 ∧
       ∃ (b : Base (World D)) (n : Nat) (d : ByteArray), Base.read keys c world file = .ok (b, n, d) ∧
         b.world.steps = 0 := by
   obtain ⟨b, n, d, hb, hle⟩ := openWith_steps_records h
-  have hi := openWith_tail_entries keys c world recorder.mark originChain foldStep file I S h
+  have hi := openWith_tail_entries keys c world recorder.mark originChain foldStep file H I S h
   have hc : o.sealed.index.count = 0 := by
-    obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, hix, _, _, _, ho⟩ :=
-      openWith_seg_ok keys c world recorder.mark originChain foldStep file I S h
+    obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, _, hix, _, _, _, ho⟩ :=
+      openWith_seg_ok keys c world recorder.mark originChain foldStep file H I S h
     have hbb : b = b' := by rw [hb] at hb'; cases hb'; rfl
     subst hbb
     rw [ho]

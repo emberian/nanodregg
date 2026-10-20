@@ -125,7 +125,7 @@ def rowbarCounts (r : Row) (res : Loopback.Result) : Except String (List (String
 this much, above the honest ratio. -/
 def rowbarStated : List (Mutation × String × String) :=
   [(.twiceEach, "frames-per-write", "21.871"), (.twiceEach, "steps-per-write", "1.977"),
-   (.staleBase, "reopen-bytes-per-byte-past-base", "5.251")]
+   (.staleBase, "reopen-bytes-per-byte-past-base", "5.259")]
 
 /-- THE BAR under each rowbar plant: its counts must move to their stated values, above the honest
 ones, and the mutation must have happened (`staleBase`: a measured reopen was handed an older base). -/

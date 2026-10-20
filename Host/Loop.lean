@@ -95,7 +95,7 @@ def Exit.name : Exit → String
   | .stream _ => "stream"
 
 /-- How the loop seals a base: `write w seg entries index` appends `entries` (the index entries
-since the last base, never the whole index: HOST-30) to `index.log` after the `index.count`
+since the last base, never the whole index: HOST-30) to the index file after the `index.count`
 entries there, syncs them, then writes the base of `w`, which is the segment prefix
 `[0, seg.offset)` chained to `seg.tag`, counting the entries up to the last appended, durably; it
 returns the World's encoded size, the digest of its bytes and what the new base names of the
@@ -106,6 +106,10 @@ structure Checkpoint (W : Type) where
   /-- returns the World's encoded size, the digest of its bytes (`Keys.worldDigest`) and the
   entry count and last tag the new base names -/
   write : W → Position → Array Entry → IndexAt → IO (Except SealFault (Nat × ByteArray × IndexAt))
+  /-- start the segment file the seal of `w` at `pos` will name, after `count` index entries
+  (HOST-64: every base sits at the start of its own file); nothing when the newest file starts
+  there already -/
+  rotate : W → Position → Nat → IO (Except SealFault Unit)
   async : Bool
 
 /-- How the loop writes a batch record and indexes it: the record of the staged entries (each step
@@ -133,7 +137,7 @@ structure Resident (W : Type) where
   sealed : Sealed
   /-- one entry per record AFTER the newest durable base, in order: entries
   `sealed.index.count, sealed.index.count + 1, …` of the index. The base's own are on disk in
-  `index.log`; the loop never holds them (HOST-33: RAM O(tail), not O(records)) -/
+  the index file; the loop never holds them (HOST-33: RAM O(tail), not O(records)) -/
   index : Array Entry
   pending : Option Pending := none
 
@@ -188,12 +192,17 @@ HOST-30). -/
 def sealEntries (index : Array Entry) : Array Entry :=
   index.extract 0 index.size
 
-/-- Start sealing `w` at `pos` in a dedicated Task, after the newest base `sealed`. -/
+/-- Start sealing `w` at `pos` in a dedicated Task, after the newest base `sealed`, in a segment file
+started at `pos` (`Checkpoint.rotate`). -/
 def spawnSeal (ck : Checkpoint W) (mark : W → Nat × ByteArray) (w : W) (pos : Position)
     (sealed : Sealed) (index : Array Entry) : IO Pending := do
   let (h, chain) := mark w
   let fresh := sealEntries index
   let count := sealed.index.count + index.size
+  -- the file the base will name starts here, before the seal runs: a refused rotation is the
+  -- seal's refusal, by name (`settle`), and nothing was appended to a file that does not exist
+  if let .error f ← ck.rotate w pos count then
+    return ⟨pos.offset, h, chain, count, .pure (.ok (.error f))⟩
   if ck.async then
     return ⟨pos.offset, h, chain, count, ← IO.asTask (ck.write w pos fresh sealed.index) .dedicated⟩
   else
@@ -284,7 +293,7 @@ def pageIoReply : UInt8 × ByteArray := (Protocol.Status.refused.code, Protocol.
 
 /-- Build one deferred page; an IO error while building it refuses THAT page `pageIo` (one
 `STATUS page refused=pageIo` line on stderr, the error last), and the loop serves on (HOST-48). A page
-only reads (the newest base, the segment, index.log): nothing the loop holds or the disk has depends
+only reads (the newest base, the segment, the index file): nothing the loop holds or the disk has depends
 on it, so a failed read is that request's failure, not the writer's. Before HOST-48 the error escaped
 the loop and `serving` restarted the whole writer (`ioServing`). -/
 def pageOrRefuse (pager : Resident W → Deferred → IO (UInt8 × ByteArray)) (r : Resident W) (d : Deferred) :

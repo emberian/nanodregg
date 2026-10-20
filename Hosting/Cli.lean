@@ -24,7 +24,7 @@ import Hosting.LaunchExit
 namespace Nanodregg.Hosting.Cli
 
 open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Hosting.Controller
-open Nanodregg.Host (Tail File tailPollMs readKey Keys StoreFault)
+open Nanodregg.Host (Tail Segs tailPollMs readKey Keys StoreFault)
 
 /-- Rounds, and report frames, in one process: centuries at any rate. -/
 def lifetime : Nat := 1 <<< 48
@@ -118,7 +118,7 @@ def send (out : IO.FS.Stream) (acts : List Action) : IO (Option Exit) := do
 abbrev D := Host.Deployed.D
 
 /-- The rounds after the first, at most `fuel`. -/
-def rounds (keys : Keys) (seg : File) (label pkgId : ByteArray) (out : IO.FS.Stream)
+def rounds (keys : Keys) (seg : Segs) (label pkgId : ByteArray) (out : IO.FS.Stream)
     (ch : Std.CloseableChannel.Sync Report) (reader : Task (Except IO.Error Exit)) :
     Nat → Tail (World D) → Loop.State D → IO Exit
   | 0, _, _ => pure .lifetime

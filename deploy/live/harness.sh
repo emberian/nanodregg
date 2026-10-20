@@ -50,7 +50,8 @@ m=$(awk '/^founder 0 /{print $4}' "$ROOT/report/genesis-store.txt")
 gr=$(awk '/^founder 0 /{print $6}' "$ROOT/report/genesis-store.txt")
 printf 'ND_MEMBER=%s\nND_GRANT=%s\n' "$m" "$gr" > "$ROOT/env/nd-ops-live-follow.env"
 "$B/emit-units" --live "$ROOT" "$U" || exit 2
-seg=$(stat -c %s "$ROOT/fsize-store/seg.log")
+# the largest segment file of the fresh Store (HOST-64: one file per seal start, header first)
+seg=$(stat -c %s "$ROOT"/fsize-store/seg.*.log | sort -n | tail -1)
 # fault injection, by hand and named: a file-size limit just above the fresh segment
 sed -i "s/^\[Service\]$/[Service]\nLimitFSIZE=$((seg + 4096))/" "$U/nd-ops-live-fsize.service"
 for u in $UNITS; do

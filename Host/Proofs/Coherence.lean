@@ -1,7 +1,7 @@
 /-
 # Host.Proofs.Coherence — every index entry points at its own record (cv 01a15180-9499)
 
-`index.log` and the loop's entries since the base hold one entry per record: the step count and
+the index file and the loop's entries since the base hold one entry per record: the step count and
 chain BEFORE the record and the offset of its frame (`Host.indexed` at open, the same push in
 `Host.append`). A page locates ONE entry and walks the segment from it (`Page.build`), so what a
 page serves rests on every entry pointing at its own record. HOST-60 read that off the code; here
@@ -46,7 +46,7 @@ Every Store written at an open is coherent (the completeness side, in `Host.Proo
 * `openWith_indexes` — the open's entries since the base continue the base's run to the open's
   position and World (`indexed_indexes`: each entry `Host.indexed` makes is the frame the open
   verified);
-* `StoreIndexes.of_open_empty` — a Store with an empty `index.log` (genesis, import, a follower's
+* `StoreIndexes.of_open_empty` — a Store with an empty the index file (genesis, import, a follower's
   adopted base): `Deployed.genesis_indexes`, `Deployed.import_indexes`;
 * `StoreIndexes.append` — records and entries (or orphans) appended;
 * `StoreIndexes.cut_open` — the writer's truncation at open;
@@ -755,8 +755,8 @@ base's offset. That this is the segment's own last record, not another frame tha
 rests on the sealer's tags; it is not proved from `Log.recover`. -/
 theorem openWith_lastFrame {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
-    (file I S : ByteArray) {o : Opening W}
-    (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o)
+    (file H I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file H S.size I.size (segReader I) (segReader S)) = .ok o)
     (hpos : 0 < o.sealed.index.count) :
     ∃ (b : Base W) (n : Nat) (d : ByteArray) (e : Entry) (r : ByteArray),
       Base.read keys c world file = .ok (b, n, d) ∧ b.indexCount = o.sealed.index.count ∧
@@ -766,8 +766,8 @@ theorem openWith_lastFrame {W F : Type} (keys : Keys) (c : Cadence) (world : Cod
       tagBytes ≤ e.offset ∧
       frameOf keys.segment c.recordBytesMax (fun x y => (pure (S.extract x (x + y)) : Id ByteArray)) e.offset = some r ∧
       e.offset + frameSize r = b.offset := by
-  obtain ⟨b, n, d, _, _, _, hb, _, _, _, _, _, _, hix, hlf, _, _, ho⟩ :=
-    openWith_seg_ok keys c world mark origin step file I S h
+  obtain ⟨b, n, d, _, _, _, hb, _, _, _, _, _, _, _, hix, hlf, _, _, ho⟩ :=
+    openWith_seg_ok keys c world mark origin step file H I S h
   have hc : b.indexCount = o.sealed.index.count := by rw [ho]
   have hoff : b.offset = o.sealed.offset := by rw [ho]
   have hp : 0 < b.indexCount := by omega

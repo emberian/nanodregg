@@ -113,12 +113,14 @@ def splits (seed n : Nat) : List Bool :=
 abbrev Fault := StoreFault (Record.Fault (Reject Nat))
 
 /-- The one open over an in-memory image: `openWith` reading bytes. -/
-def reopenWith (c : Cadence) (index base seg : ByteArray) : Except Fault (Opening (World Nat)) :=
-  Id.run (openWith keys c world recorder.mark originChain foldStep base seg.size index.size (segReader index)
+def reopenWith (c : Cadence) (headers : Array (Nat × ByteArray)) (index base seg : ByteArray) :
+    Except Fault (Opening (World Nat)) :=
+  Id.run (openWith keys c world recorder.mark originChain foldStep base (headerOf headers base) seg.size index.size (segReader index)
     (segReader seg))
 
 /-- The open of a base and segment under the `index.log` bytes `index`. -/
-def reopenIn (index base seg : ByteArray) : Except Fault (Opening (World Nat)) := reopenWith cadence index base seg
+def reopenIn (headers : Array (Nat × ByteArray)) (index base seg : ByteArray) : Except Fault (Opening (World Nat)) :=
+  reopenWith cadence headers index base seg
 
 def faultName (r : Except Fault (Opening (World Nat))) : String :=
   match r with
@@ -174,7 +176,7 @@ def memReopen (c : Cadence) (disk : IO.Ref Disk) (bases : IO.Ref Bases) (reopens
   let d ← disk.get
   if 0 < d.pending.size then return .error .reopenDiverged
   let b ← bases.get
-  match reopenWith c b.index b.file d.synced with
+  match reopenWith c b.headers b.index b.file d.synced with
   | .error f => return .error (.reopenFailed f.name)
   | .ok o => return if o.opened.torn = 0 then .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index } else .error .reopenDiverged
 
@@ -198,7 +200,7 @@ def serveFrom (c : Cadence) (seed : Nat) (frames : List Frame) (failSyncAt : Opt
       unless dropUnread do  -- the plant run expects it; its check reads the count
           IO.println s!"FAIL requests = replies at fuel return {← reopens.get}: {taken} taken, {(← sent.get).size} answered"
     memReopen c disk bases reopens
-  let (exit, r) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys c world originChain) c
+  let (exit, r) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys c world recorder.mark originChain) c
       (memStore disk failSyncAt) (fun _ _ => pure (0, ByteArray.empty))
       (if dropUnread then { scriptPort fr sp sent with unread := fun _ => pure () } else scriptPort fr sp sent)
       limits roundFuel)
@@ -290,7 +292,7 @@ def entryRows (seed n : Nat) (failures : IO.Ref Nat) : IO Unit := do
 move (condition 5): a corrupt MIDDLE entry was refused at open; it is now refused at first read
 (`badIndex`, never served) or by `host check` (`indexClean`). -/
 def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
-  let reopen := reopenIn r.bases.index
+  let reopen := reopenIn r.bases.headers r.bases.index
   let opened := reopen r.bases.file r.disk.synced
   let count := match opened with | .ok o => o.sealed.index.count | .error _ => 0
   let eb := entryBytes keys
@@ -301,16 +303,16 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   let offsets := recordOffsets (records.take (count + 1))
   check s!"index control: the newest base counts {count} entries, index.log holds exactly them, every one reads back and names its record's offset (`indexClean` none)"
     (1 < count && r.bases.index.size = named && honest.length = count &&
-      indexClean sk r.bases.index count offsets == none) failures
+      indexClean sk r.bases.index 0 count offsets == none) failures
   check "plant-index-short: index.log one byte short of the entries the base counts is refused `indexShort`"
-    (faultName (reopenIn (r.bases.index.extract 0 (named - 1)) r.bases.file r.disk.synced) = "indexShort") failures
+    (faultName (reopenIn r.bases.headers (r.bases.index.extract 0 (named - 1)) r.bases.file r.disk.synced) = "indexShort") failures
   check "plant-index-last-flip: a flipped byte in the last entry (the one open reads) is refused `indexCorrupt`"
-    (faultName (reopenIn (flipByte r.bases.index (named - eb / 2)) r.bases.file r.disk.synced) = "indexCorrupt") failures
+    (faultName (reopenIn r.bases.headers (flipByte r.bases.index (named - eb / 2)) r.bases.file r.disk.synced) = "indexCorrupt") failures
   let otherKeys : Keys := { keys with index := fnvSealer 9 }
   let retagged := Entry.run (otherKeys.forStore (originChain genesis)) 0 honest
   check "plant-index-other-key: the same entries tagged under another key are refused `indexCorrupt`"
     (retagged.size = named && retagged != r.bases.index &&
-      faultName (reopenIn retagged r.bases.file r.disk.synced) = "indexCorrupt") failures
+      faultName (reopenIn r.bases.headers retagged r.bases.file r.disk.synced) = "indexCorrupt") failures
   -- plant-index-other-store (HOST-33's law-6 read): the same entries tagged for ANOTHER Store under
   -- the SAME key file (HOST-25's shared-key case). Spliced whole, open refuses the last; spliced
   -- into the middle, `host check` refuses it and no page is built from it
@@ -322,9 +324,9 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     r.bases.index.extract (midK * eb + eb) named
   check "plant-index-other-store: entries tagged for another Store under the same key: whole, open refuses `indexCorrupt`; one in the middle, open opens and `host check` refuses it at its position"
     (originChain otherWorld != originChain genesis && foreign.size = named && spliced != r.bases.index &&
-      faultName (reopenIn foreign r.bases.file r.disk.synced) = "indexCorrupt" &&
-      faultName (reopenIn spliced r.bases.file r.disk.synced) = "opened" &&
-      indexClean sk spliced count offsets == some midK) failures
+      faultName (reopenIn r.bases.headers foreign r.bases.file r.disk.synced) = "indexCorrupt" &&
+      faultName (reopenIn r.bases.headers spliced r.bases.file r.disk.synced) = "opened" &&
+      indexClean sk spliced 0 count offsets == some midK) failures
   -- plant-index-ahead (HOST-53): the newest base re-sealed naming a last entry re-tagged with a step
   -- count AT the base's own (the record it indexes would begin at or after the base's World). Every
   -- tag verifies; open refuses `indexCorrupt`. CONTROLS through the same forging path: the honest
@@ -333,14 +335,14 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     match Base.read keys cadence world r.bases.file, honest.getLast? with
     | .ok (b, _, _), some last =>
       let e : Entry := { last with steps := s }
-      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨count, e.tag sk (count - 1)⟩ with
+      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨count, e.tag sk (count - 1)⟩ ⟨b.retainedFrom, b.indexFrom⟩ with
       | .ok f => some (Entry.run sk 0 (honest.dropLast ++ [e]), f)
       | .error _ => none
     | _, _ => none
   let baseSteps := match opened with | .ok o => o.sealed.steps | .error _ => 0
   let lastSteps := match honest.getLast? with | some e => e.steps | none => 0
   let verdict (s : Nat) : String := match ahead s with
-    | some (i, f) => faultName (reopenIn i f r.disk.synced)
+    | some (i, f) => faultName (reopenIn r.bases.headers i f r.disk.synced)
     | none => "unforged"
   check s!"plant-index-ahead: a last entry at the base's own step count {baseSteps} (every tag verifying) is refused `indexCorrupt`; controls: its honest {lastSteps} and {baseSteps - 1} open"
     (0 < baseSteps && lastSteps < baseSteps && verdict baseSteps = "indexCorrupt" &&
@@ -354,13 +356,13 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     match Base.read keys cadence world r.bases.file, honest.getLast? with
     | .ok (b, _, _), some last =>
       let e : Entry := { last with offset := off }
-      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨count, e.tag sk (count - 1)⟩ with
+      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨count, e.tag sk (count - 1)⟩ ⟨b.retainedFrom, b.indexFrom⟩ with
       | .ok f => some (Entry.run sk 0 (honest.dropLast ++ [e]), f)
       | .error _ => none
     | _, _ => none
   let lastOff := match honest.getLast? with | some e => e.offset | none => 0
   let offVerdict (off : Nat) : String := match shifted off with
-    | some (i, f) => faultName (reopenIn i f r.disk.synced)
+    | some (i, f) => faultName (reopenIn r.bases.headers i f r.disk.synced)
     | none => "unforged"
   check s!"plant-index-offset: a last entry one byte off its record ({lastOff + 1}, {lastOff - 1}; every tag verifying) is refused `indexCorrupt`; control: its honest {lastOff} opens"
     (36 < lastOff && offVerdict (lastOff + 1) = "indexCorrupt" && offVerdict (lastOff - 1) = "indexCorrupt" &&
@@ -370,7 +372,7 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     | a :: b :: rest => Entry.run sk 0 (b :: a :: rest) | _ => r.bases.index
   check "plant-index-swap: entries 0 and 1 swapped are refused by `host check` at entry 0: as bytes (each tag names its own position), and re-tagged at the new positions (each names another record's offset)"
     (raw != r.bases.index && retagSwap != r.bases.index &&
-      indexClean sk raw count offsets == some 0 && indexClean sk retagSwap count offsets == some 0) failures
+      indexClean sk raw 0 count offsets == some 0 && indexClean sk retagSwap 0 count offsets == some 0) failures
   -- the ruled move: every entry the base counts flipped in turn (one at a time). Open still opens;
   -- `host check` refuses that entry; and EVERY page from every height is either refused
   -- `badIndex k` (it read the entry) or is byte for byte the honest page (it did not): no page is
@@ -383,8 +385,8 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   for k in List.range count do
     let bad := flipByte r.bases.index (k * eb + 9)
     unless k + 1 = count do
-      opens := opens && faultName (reopenIn bad r.bases.file r.disk.synced) == "opened"
-    checked := checked && indexClean sk bad count offsets == some k
+      opens := opens && faultName (reopenIn r.bases.headers bad r.bases.file r.disk.synced) == "opened"
+    checked := checked && indexClean sk bad 0 count offsets == some k
     for s in (List.range r.resident.world.height).filter (· % 5 = k % 5) do
       match (memPage bad r.disk.synced r.resident 40 s).1, honestPage s with
       | .error (.badIndex j), _ => neverServed := neverServed && j == k; refusedSome := refusedSome + 1
@@ -437,12 +439,12 @@ def sizeTerm (seed n : Nat) (mk : Nat → Turn Nat) : IO SizeCount := do
     (r.bases.history.toList.drop 1).foldl (fun a (f, _) => a + (f.size - 4)) 0
   let c : SizeCount := ⟨n, r.bases.history.size - 1, r.bases.written - genesisBase, r.bases.index.size,
     genesisBase, r.bases.file.size, r.disk.synced.size, 0, 1, 0, hashed⟩
-  match reopenWith sizeCadence r.bases.index r.bases.file r.disk.synced with
+  match reopenWith sizeCadence r.bases.headers r.bases.index r.bases.file r.disk.synced with
   | .error _ => return c
   | .ok o =>
-    -- the one entry open reads (HOST-33)
+    -- the one entry open reads (HOST-33), and the base file's checkpoint header (HOST-64)
     let named := (lastAt keys o.sealed.index.count).2
-    let head := r.bases.file.size + named + originLen o.sealed.offset
+    let head := r.bases.file.size + named + headerBytes keys
     let read := head + (o.pos.offset - o.sealed.offset)
     let bound := head + sizeCadence.tailMax o.sealed.bytes
     return ⟨c.turns, c.seals, c.sealed, c.pages, c.genesisBase, c.finalBase, c.appended, read, bound, named, c.hashed⟩
@@ -471,8 +473,8 @@ def backupPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   for k in [0:h.size - 1] do
     let (file, segAt) := h[k]!
     let liveSeg := r.disk.synced.extract 0 h[k + 1]!.2
-    let live := reopenIn (r.bases.index.extract 0 r.bases.indexAt[k + 1]!) file liveSeg
-    match live, reopenIn r.bases.index file r.disk.synced with
+    let live := reopenIn r.bases.headers (r.bases.index.extract 0 r.bases.indexAt[k + 1]!) file liveSeg
+    match live, reopenIn r.bases.headers r.bases.index file r.disk.synced with
     | .ok lo, .ok bo =>
       let tagK := match Base.read keys cadence world file with
         | .ok (b, _, _) => b.tag.bytes
@@ -486,7 +488,7 @@ def backupPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
     | .error _, _ => held := false
     if 0 < k then
       wrongOrder := wrongOrder &&
-        faultName (reopenIn r.bases.index file (r.disk.synced.extract 0 h[k - 1]!.2)) == "segmentShort"
+        faultName (reopenIn r.bases.headers r.bases.index file (r.disk.synced.extract 0 h[k - 1]!.2)) == "segmentShort"
     let _ := segAt
   check "plant-backup fires: at least two live Stores with a non-empty tail have a backup that opens" (2 ≤ opened) failures
   check "plant-backup: every backup in backupOrder opens to its base with at least the live records and exactly the frames past it, or refuses `tailTooLong`"
@@ -576,7 +578,7 @@ def indexPlants (seed : Nat) (frames : List Frame) (r : RunResult) (failures : I
     check "plant-index-moved: an index.log a byte past the base's prefix stops the first seal `sealFailed indexMoved`, and no base is installed"
       (stopped && mv.bases.history.size = 1) failures
     check "plant-index-moved: the restart's open of that Store opens to genesis with the stray byte as a 1-byte orphan (the writer truncates it)"
-      (match reopenIn mv.bases.index mv.bases.file mv.disk.synced with
+      (match reopenIn mv.bases.headers mv.bases.index mv.bases.file mv.disk.synced with
         | .ok o => o.orphan = 1 && o.opened.torn = 0 | .error _ => false) failures
   -- plant-entry-unfit (HOST-31, HOST-33): an entry whose chain is not the Store's width
   let fitE : Entry := ⟨0, 0, ByteArray.mk (Array.replicate keys.chainBytes 0)⟩
@@ -638,7 +640,7 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
     (0 < r.reopens && (r.replies.toList.filter (·.status == Protocol.Status.refused.code)).length = 3 &&
       (r.replies.toList.filter (·.payload == le64 3)).length = 3 &&
       (match r.exit with | .eof => true | _ => false)) failures
-  let opened := reopenIn r.bases.index r.bases.file r.disk.synced
+  let opened := reopenIn r.bases.headers r.bases.index r.bases.file r.disk.synced
   check "plant-refusal-survives-reopen: the one open reaches the loop's World, every recorded refusal at its txId, steps counted"
     (match opened with
      | .ok o => sameWorld o.opened.world w && o.opened.world.steps = 33 &&
@@ -656,13 +658,13 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
       | .error f => throw (IO.userError s!"genesis: {f.name}")
     let disk ← IO.mkRef gd
     let bases ← IO.mkRef gb
-    let (e, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world originChain)
+    let (e, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world recorder.mark originChain)
         cadence (memStore disk none) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent)
         ⟨16, 1 <<< 20⟩ 3)
       (do
         let d ← disk.get
         let b ← bases.get
-        match reopenWith cadence b.index b.file d.synced with
+        match reopenWith cadence b.headers b.index b.file d.synced with
         | .error f => return .error (.reopenFailed f.name)
         | .ok o => return .ok { world := { o.opened.world with steps := o.opened.world.steps + 1 }, pos := o.pos,
                                 sealed := o.sealed, index := o.index }) mark 20 gr
@@ -747,7 +749,7 @@ def rowsPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
     check s!"plant-rows-survive-reopen fires: the loop holds {w.rows.toList.length} rows entries (a head and a row)"
       (w.rows.toList.length = 2 && w.rows.toList == wk.rows.toList) failures
     let p := cellIdOf env (rowsMk env genesis "create" [] [] []).txId 0
-    match reopenWith eager r.bases.index r.bases.file r.disk.synced with
+    match reopenWith eager r.bases.headers r.bases.index r.bases.file r.disk.synced with
     | .error f => check s!"plant-rows-survive-reopen: the Store opens ({f.name})" false failures
     | .ok o =>
       check "plant-rows-survive-reopen: the one open (from the base, no record replayed) reaches the same rows listing and root, the head counting its row"
@@ -786,7 +788,7 @@ def sealPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO U
     (r.resident.sealed.offset < r.resident.pos.offset) failures
   let disk ← IO.mkRef r.disk
   let bases ← IO.mkRef r.bases
-  let ck := memCheckpoint disk bases keys cadence world originChain
+  let ck := memCheckpoint disk bases keys cadence world recorder.mark originChain
   match ← sealNow ck recorder.mark r.resident with
   | .error f => check s!"plant-seal-verb: the seal ({f.name})" false failures
   | .ok r₁ =>
@@ -794,7 +796,7 @@ def sealPlants (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : IO U
     check "plant-seal-verb: the newest base is at the tip"
       (r₁.sealed.offset = r.resident.pos.offset && r₁.sealed.steps = r.resident.world.steps) failures
     check "plant-seal-verb: the one open replays no record and reaches the same World and position"
-      (match reopenIn b₁.index b₁.file (← disk.get).synced with
+      (match reopenIn b₁.headers b₁.index b₁.file (← disk.get).synced with
        | .ok o => o.opened.records = 0 && sameWorld o.opened.world r.resident.world &&
            o.opened.world.steps = r.resident.world.steps && o.pos.offset = r.resident.pos.offset
        | .error _ => false) failures
@@ -848,12 +850,12 @@ def pageIoPlant (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
       if throwFirst && n == 0 then throw (IO.userError "plant: base.world unreadable")
       return (Protocol.Status.ok.code, "page".toUTF8)
     try
-      let (e, r) ← restarts (serve pm recorder keys.segment (memCheckpoint disk bases keys cadence world originChain)
+      let (e, r) ← restarts (serve pm recorder keys.segment (memCheckpoint disk bases keys cadence world recorder.mark originChain)
           cadence (memStore disk none) pager (scriptPort fr sp sent) ⟨16, 1 <<< 20⟩ 5)
         (do
           let d ← disk.get
           let b ← bases.get
-          match reopenWith cadence b.index b.file d.synced with
+          match reopenWith cadence b.headers b.index b.file d.synced with
           | .error f => return .error (.reopenFailed f.name)
           | .ok o => return .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index })
         recorder.mark (frames.length + 1) gr
@@ -889,7 +891,7 @@ def sealCountPlant (seed : Nat) (frames : List Frame) (failures : IO.Ref Nat) : 
     let disk ← IO.mkRef gd
     let bases ← IO.mkRef gb
     let seals ← IO.mkRef 0
-    let ck := memCheckpoint disk bases keys cadence world originChain
+    let ck := memCheckpoint disk bases keys cadence world recorder.mark originChain
     let ck' : Checkpoint (World Nat) := { ck with write := fun w seg es ip => do
       seals.modify (· + 1)
       match ← ck.write w seg es ip with
@@ -1089,7 +1091,7 @@ def run (args : List String) : IO UInt32 := do
   let r ← runOnce seed frames none
   let w := r.resident.world
   -- every open of this run's bases reads its `index.log` (HOST-30)
-  let reopen := reopenIn r.bases.index
+  let reopen := reopenIn r.bases.headers r.bases.index
   let statusOf (k : Kind) := sc.zip r.replies.toList |>.filter (·.1.2 = k) |>.map (·.2.status)
   check "one reply per request" (r.replies.size = 200) failures
   check "loop ended at eof" (match r.exit with | .eof => true | _ => false) failures
@@ -1122,7 +1124,7 @@ def run (args : List String) : IO UInt32 := do
       -- newer seal's entries are ORPHANS to it (HOST-30), which the open leaves out and reports
       let olderNamed := r.bases.indexAt[k]!
       let newerPage := r.bases.indexAt[k + 1]! - olderNamed
-      let a := match reopenIn (r.bases.index.extract 0 r.bases.indexAt[k + 1]!) older seg with
+      let a := match reopenIn r.bases.headers (r.bases.index.extract 0 r.bases.indexAt[k + 1]!) older seg with
         | .ok o => some o | .error _ => none
       unless (a.map fun o => sameWorld o.opened.world b.opened.world && o.pos.offset = b.pos.offset &&
           o.orphan = newerPage && o.sealed.index.count * entryBytes keys = olderNamed &&
@@ -1283,13 +1285,13 @@ def run (args : List String) : IO UInt32 := do
     | .error f => throw (IO.userError s!"genesis: {f.name}")
   let disk ← IO.mkRef gd
   let bases ← IO.mkRef gb
-  let (dexit, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world originChain)
+  let (dexit, _) ← restarts (serve machine recorder keys.segment (memCheckpoint disk bases keys cadence world recorder.mark originChain)
       cadence (memStore disk none) (fun _ _ => pure (0, ByteArray.empty)) (scriptPort fr sp sent)
       ⟨16, 1 <<< 20⟩ 3)
     (do
       let d ← disk.get
       let b ← bases.get
-      match reopenWith cadence b.index b.file (d.synced.extract 0 (d.synced.size - 1)) with
+      match reopenWith cadence b.headers b.index b.file (d.synced.extract 0 (d.synced.size - 1)) with
       | .error f => return .error (.reopenFailed f.name)
       | .ok o => return .ok { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }) recorder.mark 10 gr
   check "plant-reopen-diverged: a reopen missing the last synced byte stops the resident `reopenDiverged`"
@@ -1303,7 +1305,7 @@ def run (args : List String) : IO UInt32 := do
   -- genesis writes it and the one open reads it back (`Cadence.baseRecordMax` counts the stamp)
   let atCap := { cadence with worldBytesMax := world.size genesis }
   let capOpen : Except Fault (Opening (World Nat)) := match genesisStore atCap with
-    | .ok (d, b, _) => reopenWith atCap b.index b.file d.synced
+    | .ok (d, b, _) => reopenWith atCap b.headers b.index b.file d.synced
     | .error f => .error f
   check s!"plant-world-at-cap: a World of exactly worldBytesMax = {atCap.worldBytesMax} bytes is written by genesis and opens to itself ({faultName capOpen})"
     ((world.bytes genesis).size == atCap.worldBytesMax && match capOpen with
@@ -1319,7 +1321,7 @@ def run (args : List String) : IO UInt32 := do
   let lastBatch := p.replies.toList.drop (p.replies.size - uncertainN)
   check "plant-fsync-fail: the batch's replies are uncertain"
     (0 < uncertainN ∧ lastBatch.all (·.status = Protocol.Status.uncertain.code) ∧ pendingSize > 0) failures
-  let baseOpen := reopenIn p.bases.index p.bases.file p.disk.synced
+  let baseOpen := reopenIn p.bases.headers p.bases.index p.bases.file p.disk.synced
   let baseRecords := match baseOpen with | .ok o => o.opened.records | .error _ => 0
   check "plant-fsync-fail: synced prefix opens" (match baseOpen with | .ok o => o.pos.offset = p.disk.synced.size | .error _ => false) failures
   -- every crash cut of the unsynced frame: open (truncating the torn tail, as the writer does),
@@ -1327,7 +1329,7 @@ def run (args : List String) : IO UInt32 := do
   let resend := frames.drop (p.replies.size - uncertainN)
   let mut cutsOk := true
   for cut in List.range (pendingSize + 1) do
-    match reopenIn p.bases.index p.bases.file (crashImage p.disk cut) with
+    match reopenIn p.bases.headers p.bases.index p.bases.file (crashImage p.disk cut) with
     | .error e =>
       cutsOk := false; IO.println s!"  cut {cut}: open refused {e.name}"
     | .ok o =>
@@ -1336,7 +1338,7 @@ def run (args : List String) : IO UInt32 := do
       let img := (crashImage p.disk cut).extract 0 o.pos.offset
       let q ← serveFrom cadence seed resend none { synced := img } p.bases
         { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index }
-      let finalOk : Bool := match reopenIn q.bases.index q.bases.file q.disk.synced with
+      let finalOk : Bool := match reopenIn q.bases.headers q.bases.index q.bases.file q.disk.synced with
         | .ok o' => o'.opened.torn = 0 && sameWorld o'.opened.world w && sameWorld q.resident.world w
         | .error _ => false
       unless decide (o.opened.torn = expectTorn ∧ o.opened.records = expectRecords) && finalOk do
@@ -1394,27 +1396,39 @@ def run (args : List String) : IO UInt32 := do
   check "plant-foreign-segment: under the newest base (offset > 0), refused `foreignSegment`"
     (0 < (match reopen r.bases.file r.disk.synced with | .ok o => o.sealed.offset | .error _ => 0) &&
       faultName (reopen r.bases.file foreignAll) = "foreignSegment") failures
-  -- plant-origin-flip (HOST-25, OPS's `corrupt history`): a byte flipped inside the origin frame's
-  -- RECORD (offset 5: past the length field, before the tag, so the anchor HOST-18 compares is
-  -- untouched). Before HOST-25 no open read [0, origin.offset) and both opened clean.
+  -- the header plants (HOST-64, carrying HOST-25): the open checks the checkpoint header of the
+  -- base's own segment file, not the origin frame at 0 (which a Store keeping fewer files no longer
+  -- holds; `host check` verifies it when kept, host-file-sim's plant-origin-frame). A byte flipped in
+  -- the header is `checkpointCorrupt`; the header re-sealed under the SAME key stating another
+  -- World's origin is `foreignOrigin`; stating another step count, `foreignSegment`.
+  let reopenH (hdr file seg : ByteArray) : Except Fault (Opening (World Nat)) :=
+    Id.run (openWith keys cadence world recorder.mark originChain foldStep file hdr seg.size r.bases.index.size
+      (segReader r.bases.index) (segReader seg))
   let newestOffset := match reopen r.bases.file r.disk.synced with | .ok o => o.sealed.offset | .error _ => 0
-  check "plant-origin-flip: under the newest base (past the first record), refused `corrupt` at 0"
-    (origin.offset < newestOffset && isCorrupt (reopen r.bases.file (flipByte r.disk.synced 5)) 0) failures
-  check "plant-origin-flip: under the genesis base, refused `corrupt` at 0"
-    (isCorrupt (reopen g (flipByte firstSeg 5)) 0) failures
-  -- plant-foreign-origin (HOST-25): another World's origin frame (another origin, the SAME key)
-  -- spliced over this Store's. Under the newest base it verifies and states another genesis chain:
-  -- `foreignOrigin`. Under the genesis base its tag is the anchor, so HOST-18 names it first.
+  let hNew := headerOf r.bases.headers r.bases.file
+  let hGen := headerOf r.bases.headers g
   let otherWorld : World Nat := World.genesis env (env.hash "nanodregg/host-sim/origin/v1" "other".toUTF8) (2 ^ 40)
-  let otherFrame := Log.frame keys.segment segmentInitial (recorder.mark otherWorld).2
-  let splice (seg : ByteArray) : ByteArray := otherFrame ++ seg.extract origin.offset seg.size
-  check "plant-foreign-origin fires: another origin, a frame of the same size, other bytes"
-    (otherWorld.origin != genesis.origin && otherFrame.size = origin.offset &&
-      otherFrame != r.disk.synced.extract 0 origin.offset) failures
-  check "plant-foreign-origin: under the newest base, refused `foreignOrigin`"
-    (faultName (reopen r.bases.file (splice r.disk.synced)) = "foreignOrigin") failures
-  check "plant-foreign-origin: under the genesis base, refused `foreignSegment` (the anchor first)"
-    (faultName (reopen g (splice firstSeg)) = "foreignSegment") failures
+  let restate (hdr : ByteArray) (f : Header → Header) : ByteArray :=
+    match Header.read keys hdr with
+    | some h => Header.bytes keys (f h)
+    | none => ByteArray.empty
+  check "plant-header-flip fires: the newest base sits past genesis's file, both headers read"
+    (origin.offset < newestOffset && (Header.read keys hNew).isSome && (Header.read keys hGen).isSome &&
+      faultName (reopenH hNew r.bases.file r.disk.synced) = "opened") failures
+  check "plant-header-flip: a byte flipped in the newest base's file header is refused `checkpointCorrupt`, and in the genesis base's"
+    (faultName (reopenH (flipByte hNew 40) r.bases.file r.disk.synced) = "checkpointCorrupt" &&
+      faultName (reopenH (flipByte hGen 40) g firstSeg) = "checkpointCorrupt") failures
+  check "plant-foreign-origin: the header re-sealed under this key stating another World's origin is refused `foreignOrigin`"
+    (otherWorld.origin != genesis.origin &&
+      faultName (reopenH (restate hNew fun h => { h with origin := originChain otherWorld }) r.bases.file r.disk.synced)
+        = "foreignOrigin") failures
+  check "plant-header-position: the header stating another step count, or another entry count, is refused `foreignSegment`"
+    (faultName (reopenH (restate hNew fun h => { h with steps := h.steps + 1 }) r.bases.file r.disk.synced)
+        = "foreignSegment" &&
+      faultName (reopenH (restate hNew fun h => { h with indexCount := h.indexCount + 1 }) r.bases.file r.disk.synced)
+        = "foreignSegment") failures
+  check "plant-header-other-file: the genesis base's file header handed to the newest base is refused `foreignSegment`"
+    (faultName (reopenH hGen r.bases.file r.disk.synced) = "foreignSegment") failures
   -- plant-old-shape (D2, HOST-20): the newest base re-sealed, byte for byte the same base, by a
   -- binary whose batch record admits one more Turn (another batch shape, so another stamp). The
   -- running binary must refuse it `shapeMismatch` by name; the binary that wrote it opens it.
@@ -1422,7 +1436,7 @@ def run (args : List String) : IO UInt32 := do
   let oldBase : Option ByteArray :=
     match Base.read keys cadence world r.bases.file with
     | .ok (b, _, _) =>
-      match Base.file oldKeys cadence world b.world ⟨b.offset, b.tag⟩ ⟨b.indexCount, b.indexLast⟩ with
+      match Base.file oldKeys cadence world b.world ⟨b.offset, b.tag⟩ ⟨b.indexCount, b.indexLast⟩ ⟨b.retainedFrom, b.indexFrom⟩ with
       | .ok f => some f
       | .error _ => none
     | .error _ => none
@@ -1431,8 +1445,8 @@ def run (args : List String) : IO UInt32 := do
   | some ob =>
     check "plant-old-shape fires: another stamp, and the writing binary opens it"
       (oldKeys.shapes.bytes != keys.shapes.bytes &&
-        faultName (Id.run (openWith oldKeys cadence world recorder.mark originChain foldStep ob r.disk.synced.size
-          r.bases.index.size (segReader r.bases.index)
+        faultName (Id.run (openWith oldKeys cadence world recorder.mark originChain foldStep ob (headerOf r.bases.headers ob)
+          r.disk.synced.size r.bases.index.size (segReader r.bases.index)
           (segReader r.disk.synced))) = "opened") failures
     check "plant-old-shape: the running binary refuses the old shape `shapeMismatch` (never decoded)"
       (faultName (reopen ob r.disk.synced) = "shapeMismatch") failures

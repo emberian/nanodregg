@@ -48,11 +48,11 @@ reads, a World it returns is `World.Canon` under the deployed environment: the b
 canonical because the deployed World codec read it (`world_get_canon`), and every record after it
 is admitted Turns (`fold_canon`). -/
 theorem open_world_canon {keys : Keys} {mark : World Codec.Digest → Nat × ByteArray}
-    {origin : World Codec.Digest → ByteArray} {file I S : ByteArray} {o : Opening (World Codec.Digest)}
-    (h : Id.run (openWith keys Host.Deployed.c Host.Deployed.world mark origin (fun w r => (Host.Deployed.tailStep w r).map Prod.fst) file S.size I.size
+    {origin : World Codec.Digest → ByteArray} {file H I S : ByteArray} {o : Opening (World Codec.Digest)}
+    (h : Id.run (openWith keys Host.Deployed.c Host.Deployed.world mark origin (fun w r => (Host.Deployed.tailStep w r).map Prod.fst) file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     o.opened.world.Canon Host.Deployed.X.env := by
-  obtain ⟨b, _n, _d, rs, hb, hf, -⟩ := openWith_world keys Host.Deployed.c Host.Deployed.world mark origin (fun w r => (Host.Deployed.tailStep w r).map Prod.fst) file I S h
+  obtain ⟨b, _n, _d, rs, hb, hf, -⟩ := openWith_world keys Host.Deployed.c Host.Deployed.world mark origin (fun w r => (Host.Deployed.tailStep w r).map Prod.fst) file H I S h
   obtain ⟨r, _, _, hd, _⟩ := Base.read_decode keys Host.Deployed.c Host.Deployed.world file hb
   simp only [Codec.Stream.decode] at hd
   split at hd
@@ -61,10 +61,12 @@ theorem open_world_canon {keys : Keys} {mark : World Codec.Digest → Nat × Byt
     · cases hd
       obtain ⟨x, hx, hacc⟩ := Codec.Stream.refine_get_inner hget
       obtain ⟨_j, hw⟩ := Codec.Stream.product_get_fst hx
-      obtain ⟨xw, xo, xt, xio, xit⟩ := x
-      simp only [Option.some.injEq] at hacc
-      subst hacc
-      exact tail_foldlM_canon (Codec.Deployed.world_get_canon hw).1 hf
+      obtain ⟨xw, xo, xt, xio, xit, xrf, xk0⟩ := x
+      simp only at hacc
+      split at hacc
+      · cases hacc
+        exact tail_foldlM_canon (Codec.Deployed.world_get_canon hw).1 hf
+      · cases hacc
     · cases hd
   · cases hd
 

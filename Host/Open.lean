@@ -18,9 +18,10 @@ advances a World on open (HOST-14: there are no deltas).
 
 The follower and the reopening writer run this same function: one open, one fold.
 
-Before the tail is folded, the one open (`openWith`) reads the origin frame at offset 0 (at most
-`originMax` bytes) and requires it to verify and to state the genesis chain of the base World's
-origin (`originFault`, HOST-25): `corrupt 0` or `foreignOrigin` otherwise. Its theorems are in
+Before the tail is folded, the one open (`openWith`) checks the checkpoint header of the base's own
+segment file (`headerFault`, HOST-64): it must verify (`checkpointCorrupt`), state the genesis chain
+of the base World's origin (`foreignOrigin`, HOST-25, which the origin frame at offset 0 carried
+before a Store could drop the files holding it) and the base's own position (`foreignSegment`). Its theorems are in
 `Host.Proofs.Base`. Every `corrupt` offset the open reports is absolute in the segment.
 
 Theorems (`Host.Proofs.Open`): `open_encodeAll` (a clean segment opens to the fold of exactly the
@@ -28,7 +29,7 @@ records written), `open_torn` (a segment whose last frame was cut opens to the f
 before it, `torn` = the cut), and `open_sound` (for ANY bytes, the World opened is the fold of
 records that are literally the bytes before `validLen`).
 -/
-import Host.Base
+import Host.Segment
 
 namespace Nanodregg.Host
 
@@ -121,7 +122,7 @@ structure Opening (W : Type) where
   /-- one entry per record of the tail: the entries since the base (the base's own are on disk,
   `sealed.index.count` of them; HOST-33) -/
   index : Array Entry
-  /-- `index.log` bytes past the entries the base counts: orphan entries of a seal whose base
+  /-- the index file bytes past the entries the base counts: orphan entries of a seal whose base
   never landed. The writer truncates them; a follower ignores them (HOST-30) -/
   orphan : Nat
 
@@ -132,22 +133,6 @@ def indexed (mark : W → Nat × ByteArray) (step : W → ByteArray → Except F
     let w' ← step w r
     let (h, chain) := mark w
     pure (w', idx.push ⟨h, off, chain⟩, off + frameSize r)
-
-/-- The most bytes of the origin frame open reads: one frame of a chain (`chainBytesMax`). -/
-def originMax : Nat := Log.frameMax chainBytesMax
-
-/-- The origin range open reads for a base at `offset`: `[0, min originMax offset)` (the origin
-frame ends at or before the first base's offset, HOST-18). -/
-def originLen (offset : Nat) : Nat := min originMax offset
-
-/-- The origin check (HOST-25), over the bytes `head` read at offset 0 of the segment: the frame
-there must verify from `segmentInitial` under the segment sealer (else bad bytes at 0 with the
-base's frames after them, `corrupt 0`, HOST-12's own fact), and its record must be `expected`,
-the genesis chain of the base World's origin (else `foreignOrigin`). -/
-def originFault (s : Log.Sealer) (head expected : ByteArray) : Option (StoreFault F) :=
-  match Log.frameAt s chainBytesMax head 0 segmentInitial with
-  | none => some (.log (.corrupt 0))
-  | some r => if r.record = expected then none else some (.base .foreignOrigin)
 
 /-- A log fault with its offset made absolute: `openLog` reads the tail from `base`. -/
 def OpenFault.shift (base : Nat) : OpenFault F → OpenFault F
@@ -175,9 +160,11 @@ def lastFrameFault {m : Type → Type} [Monad m] (s : Log.Sealer) (recordMax off
 (`IO` over the file for `host`, `Id` over bytes in the simulation): verify and decode the base,
 bound the tail (`tailRead`), read exactly that tail AND the 32 bytes before it in one read,
 refuse `foreignSegment` unless those 32 bytes are the base's tag (every base sits after a frame
-of its own segment: `genesisImage`, HOST-18), read the origin frame at 0 (at most `originMax`
-bytes) and refuse unless it verifies and states `origin b.world`, the genesis chain of the base
-World's own origin (`originFault`, HOST-25), refuse `indexShort` unless `index.log` (`indexSize`
+of its own segment: `genesisImage`, HOST-18), check `header`, the checkpoint header of the base's own
+segment file, and refuse unless it verifies (`checkpointCorrupt`), states `origin b.world`, the
+genesis chain of the base World's own origin (`foreignOrigin`, HOST-25: the origin frame at offset 0
+said this before a Store could drop it), and states the base's own position (`foreignSegment`,
+`headerFault`, HOST-64), refuse `indexShort` unless the index file (`indexSize`
 bytes, `readIndex` its reader) holds every entry the base counts and `indexCorrupt` past
 `indexMax`, read the ONE entry the base names last (`lastAt`) and refuse `indexCorrupt` unless it
 reads back at its position with the base's `indexLast` and begins before the base's World
@@ -188,7 +175,7 @@ reads no other entry: a page checks the ones it reads, `host check` all of them.
 offset is absolute in the segment. -/
 def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
-    (file : ByteArray) (size : Nat) (indexSize : Nat)
+    (file header : ByteArray) (size : Nat) (indexSize : Nat)
     (readIndex : Nat → Nat → m (Except (StoreFault F) ByteArray))
     (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Except (StoreFault F) (Opening W)) := do
   if Log.frameMax c.baseRecordMax < file.size then return .error (.base (.baseTooLarge file.size)) else
@@ -204,12 +191,8 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   | .ok read =>
   if read.size ≠ Log.tagBytes + len then return .error (.shortRead read.size (Log.tagBytes + len)) else
   if read.extract 0 Log.tagBytes ≠ b.tag.bytes then return .error (.base .foreignSegment) else
-  match ← readTail 0 (originLen b.offset) with
-  | .error e => return .error e
-  | .ok head =>
-  if head.size ≠ originLen b.offset then return .error (.shortRead head.size (originLen b.offset)) else
-  match originFault keys.segment head (origin b.world) with
-  | some f => return .error f
+  match headerFault keys header (origin b.world) b.offset b.tag (mark b.world) b.indexCount with
+  | some f => return .error (.base f)
   | none =>
   if indexMax < b.indexCount then return .error (.base .indexCorrupt) else
   if indexSize < b.indexCount * entryBytes keys then

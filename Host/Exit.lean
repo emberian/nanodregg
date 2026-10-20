@@ -104,9 +104,9 @@ inductive Status where
   shape refuses to load; re-genesis from a checked export carries the state (law 1) -/
   | shapeMismatch
   /-- the segment's origin frame verifies but states another World's genesis chain than the base
-  World's origin (HOST-25): another Store's seg.log under a shared key file -/
+  World's origin (HOST-25): another Store's segment files under a shared key file -/
   | foreignOrigin
-  /-- `index.log` is shorter than the entries the base counts (HOST-30, HOST-33) -/
+  /-- the index file is shorter than the entries the base counts (HOST-30, HOST-33) -/
   | indexShort
   /-- the last entry the base counts does not read back at its position or is not the one the base
   names (open, HOST-33); from `host check`, any entry the base counts does not read back, name its
@@ -115,7 +115,7 @@ inductive Status where
   /-- a seal was handed an index entry outside the entry layout (a chain not the Store's width, a
   height or offset past u64): a value the layout cannot spell, a defect (HOST-31, HOST-33) -/
   | entryUnfit
-  /-- a seal found `index.log` at another size than the end of the entries the newest base counts:
+  /-- a seal found the index file at another size than the end of the entries the newest base counts:
   another process wrote or truncated it; the restart's open truncates orphans or refuses
   `indexShort` (HOST-31) -/
   | indexMoved
@@ -139,6 +139,13 @@ inductive Status where
   `potentialMax / 145`, the weight bound this budget admits (`Host.Cli.budget_reaches`, HOST-56).
   Nothing was written -/
   | potentialPastBound
+  /-- a `log` page or an anchor from before the oldest segment file this Store keeps: its history
+  there was dropped by a retention count (`host serve --retain N`, HOST-64). Join from a served base,
+  or read the archive (the hosted follower keeps everything) -/
+  | checkpointed
+  /-- a segment file's checkpoint header does not verify under the Store's key, or the file is
+  shorter than a header (HOST-64) -/
+  | checkpointCorrupt
   deriving DecidableEq, Repr
 
 namespace Status
@@ -149,7 +156,8 @@ def all : List Status :=
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
    shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch,
-   inviteRefused, positionUnfit, allowancePastBound, potentialPastBound, beforeLog]
+   inviteRefused, positionUnfit, allowancePastBound, potentialPastBound, beforeLog, checkpointed,
+   checkpointCorrupt]
 
 def code : Status → Nat
   | eof => 0
@@ -200,6 +208,8 @@ def code : Status → Nat
   | allowancePastBound => 58
   | potentialPastBound => 59
   | beforeLog => 60
+  | checkpointed => 61
+  | checkpointCorrupt => 62
 
 def cls : Status → ExitClass
   | eof => .done
@@ -209,7 +219,7 @@ def cls : Status → ExitClass
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
   | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused | positionUnfit
-  | allowancePastBound | potentialPastBound | beforeLog => .fatal
+  | allowancePastBound | potentialPastBound | beforeLog | checkpointed | checkpointCorrupt => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
 def name (s : Status) : String := ((toString (repr s)).splitOn ".").getLast!
@@ -238,6 +248,7 @@ def BaseFault.status : BaseFault → Status
   | .foreignOrigin => .foreignOrigin
   | .indexShort _ _ => .indexShort
   | .indexCorrupt => .indexCorrupt
+  | .checkpointCorrupt => .checkpointCorrupt
 
 def StoreFault.status {F : Type} : StoreFault F → Status
   | .locked => .locked
@@ -258,6 +269,7 @@ def Page.Fault.status : Page.Fault → Status
   | .pastEnd _ _ => .pastEnd
   | .shortBase => .shortBase
   | .beforeLog _ _ => .beforeLog
+  | .checkpointed _ _ => .checkpointed
 
 def Exit.status : Exit → Status
   | .eof => .eof

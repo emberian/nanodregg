@@ -60,7 +60,7 @@ def world : Codec.Stream (World Nat) := Codec.Kernel.world env dc
 /-- The toy Store's shape stamp: the deployed `Base.shapeStamp` over the toy codecs. -/
 def shapes : Codec.Digest := Base.shapeStamp world (Record.codec dc)
 
-def keys : Keys := ⟨fnvSealer 0, fnvSealer 1, fnvSealer 2, fun b => le64 (fnv b), shapes, 8⟩
+def keys : Keys := ⟨fnvSealer 0, fnvSealer 1, fnvSealer 2, fnvSealer 3, fun b => le64 (fnv b), shapes, 8⟩
 
 /-- The toy digest's inverse of `env.bytes`. -/
 def digestOf (b : ByteArray) : Option Nat :=

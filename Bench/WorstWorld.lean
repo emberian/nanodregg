@@ -92,11 +92,11 @@ def honest (scratch : System.FilePath) (stateBytes : Nat) (control : Bool) : IO 
         | .ok (s, w'') => staged := staged.push s; w' := w''; n := n + 1
         | .error e => bound := some e
       if staged.isEmpty then break
-      match ← commit wr.opening.sealed wr.segment keys pos staged with
+      match ← commit wr.opening.sealed wr keys pos staged with
       | .ok (some p) => pos := p; w := w'; births := births + n
       | .ok none => full := true; bound := none
       | .error e => return ← fail s!"commit {e}"
-    wr.segment.sync
+    (← wr.segment.get).sync
     match ← sealBase dir keys with
     | .ok _ => seals := seals + 1
     | .error e => bound := some s!"seal: {e}"

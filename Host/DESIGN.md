@@ -71,7 +71,7 @@ at low load and buys nothing at high load (HP-DESIGN §0.2 proposed one; HOST-3 
 
 ```
 STORE/key          32 random bytes, 0600: the integrity-at-rest key (HOST-16)
-STORE/seg.log      every batch frame since genesis, append-only, flock'd on its append handle
+STORE/seg.<o>.log  every batch frame from logical offset o, after a MAC'd checkpoint header (HOST-64); one file per seal start; the key file's read handle is flock'd
 STORE/base.world   the newest base: one frame of `world ‖ u64 offset ‖ tag32` (Host.Base)
 STORE/base.tmp     a seal in progress; never read
 ```

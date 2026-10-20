@@ -48,9 +48,4 @@ def OpenMode.code : OpenMode → UInt8
 def File.open (path : System.FilePath) (mode : OpenMode) : IO File :=
   File.openRaw path.toString mode.code
 
-/-- The loop's store over an open segment. -/
-def fileStore (f : File) : Store where
-  append := f.writeAll
-  sync := f.sync
-
 end Nanodregg.Host

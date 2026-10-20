@@ -13,7 +13,7 @@ HOST-33 (condition 2, never-served): a page meets index entries only through `en
 built from ONE of them, the one `locate` returns.
 
 * `locate_got` — the entry `locate` returns is what its reader returned at that position;
-* `entryAt_ok` — what `entryAt` returns from `index.log` read back at its position (its tag
+* `entryAt_ok` — what `entryAt` returns from the index file read back at its position (its tag
   verified there: `Entry.read_sound`), and past the disk entries is the loop's own;
 * `build_located` / `build_never_served` — a page that is served is the walk of the segment from
   that one entry, so no page is built from an entry whose tag failed;
@@ -80,7 +80,7 @@ theorem locate_got {get : Nat → Id (Except Fault Entry)} {count start k : Nat}
   · rename_i e₀ he₀
     exact locate_go_got get start count 0 count e₀ he₀ h
 
-/-- What `entryAt` returns: from `index.log`, an entry that read back at its own position under
+/-- What `entryAt` returns: from the index file, an entry that read back at its own position under
 the Store's key; past the `disk` entries, the loop's own entry. -/
 theorem entryAt_ok {keys : Keys} {rd : Nat → Nat → ByteArray} {disk : Nat} {mem : Array Entry} {k : Nat}
     {e : Entry} (h : entryAt (m := Id) keys (fun o l => pure (rd o l)) disk mem k = .ok e) :
@@ -134,7 +134,7 @@ theorem build_located {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc 
 
 /-- **No page is built from an entry whose tag failed** (HOST-33, condition 2). A page `build`
 serves over `entryAt` (the deployed pager's getter) after `start` is the walk of the segment from
-ONE entry `e` at position `k`: from `index.log`, the bytes at `k` are EXACTLY `Entry.bytes keys k e`
+ONE entry `e` at position `k`: from the index file, the bytes at `k` are EXACTLY `Entry.bytes keys k e`
 (the entry with its tag over `k`, `Entry.read_sound`); past the disk entries, it is the loop's own.
 An entry whose tag failed is never returned by `entryAt`, so it never reaches a page. -/
 theorem build_never_served {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}

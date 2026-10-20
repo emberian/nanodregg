@@ -16,13 +16,15 @@ open Nanodregg.Host.Page (Indexes frameOf)
 /-! ## The Store: every entry the base counts, and every entry since -/
 
 /-- **The Store's index points at its records** (cv 01a15180-9499): the base file decodes to a
-base `b`; the first `b.indexCount` entries of `index.log` (all inside it) read back at their
+base `b`; the first `b.indexCount` entries of the index file (all inside it) read back at their
 positions under the Store's index key as `L`; and `L` is a coherent run over the segment to the
 base (its offset and its World's step count), the segment reaching the base. What the deployed
-open adds to it is the tail's entries (`openWith_indexes`). Every Store this Host writes has it:
+open adds to it is the tail's entries (`openWith_indexes`). Every Store this Host writes keeping its whole index has it:
 `StoreIndexes.of_open_empty` (genesis, import, adopt: no entry), `StoreIndexes.append` (records
 and orphans appended), `StoreIndexes.cut_open` (the writer's truncation at open), `sealed_indexes`
-(a seal). -/
+(a seal). It is stated over the LOGICAL index from entry 0, so it covers a Store that keeps its
+whole index (the default); a Store that dropped entries (`indexFrom` > 0, HOST-64) is outside it: its
+pages read the kept entries through `Page.kept`, which no theorem here states. -/
 def StoreIndexes {W D : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (dc : Codec.Stream D) (file I S : ByteArray) :
     Prop :=
@@ -43,15 +45,15 @@ theorem openWith_indexes (keys : Keys) (c : Cadence) (world : Codec.Stream W) (m
     (origin : W → ByteArray) (step : W → ByteArray → Except F W) {dc : Codec.Stream D}
     (hstep : ∀ w r w', step w r = .ok w' → ∃ ts : List (Kernel.Step D × D),
       (Record.codec dc).decode r = .ok ts ∧ (mark w').1 = (mark w).1 + ts.length)
-    (file I S : ByteArray) {o : Opening W}
-    (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o)
+    (file H I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file H S.size I.size (segReader I) (segReader S)) = .ok o)
     {b : Base W} {n : Nat} {d : ByteArray} (hb : Base.read keys c world file = .ok (b, n, d)) {L : List Entry}
     (hL : Indexes dc keys.segment c.recordBytesMax (fun o l => (pure (S.extract o (o + l)) : Id ByteArray)) L
       (b.offset, (mark b.world).1)) :
     Indexes dc keys.segment c.recordBytesMax (fun o l => (pure (S.extract o (o + l)) : Id ByteArray))
       (L ++ o.index.toList) (o.pos.offset, (mark o.opened.world).1) := by
-  obtain ⟨b', _, _, _, op, _, hb', hlen, hoff, htag, _, _, _, _, _, hop, _, rfl⟩ :=
-    openWith_seg_ok keys c world mark origin step file I S h
+  obtain ⟨b', _, _, _, op, _, hb', hlen, hoff, htag, _, _, _, _, _, _, hop, _, rfl⟩ :=
+    openWith_seg_ok keys c world mark origin step file H I S h
   rw [hb] at hb'; cases hb'
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   have hvl := openLog_validLen_le hop
@@ -80,16 +82,16 @@ theorem StoreIndexes.of_count_zero (keys : Keys) (c : Cadence) (world : Codec.St
     StoreIndexes keys c world mark origin dc file I S :=
   ⟨b, n, d, [], hb, h0.symm, by simp, hS, fun _ hi => absurd hi (by simp), trivial⟩
 
-/-- **A Store whose `index.log` is empty has a coherent index** (genesis, import and a follower's
+/-- **A Store whose the index file is empty has a coherent index** (genesis, import and a follower's
 adopted base all write an empty one): whenever the one open succeeds over it. -/
 theorem StoreIndexes.of_open_empty (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
-    (dc : Codec.Stream D) (file S : ByteArray) {o : Opening W}
-    (h : Id.run (openWith keys c world mark origin step file S.size ByteArray.empty.size
+    (dc : Codec.Stream D) (file H S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file H S.size ByteArray.empty.size
       (segReader ByteArray.empty) (segReader S)) = .ok o) :
     StoreIndexes keys c world mark origin dc file ByteArray.empty S := by
-  obtain ⟨b, _, _, _, _, _, hb, hlen, _, _, _, _, hi, _, _, _, _, _⟩ :=
-    openWith_seg_ok keys c world mark origin step file ByteArray.empty S h
+  obtain ⟨b, _, _, _, _, _, hb, hlen, _, _, _, _, _, hi, _, _, _, _, _⟩ :=
+    openWith_seg_ok keys c world mark origin step file H ByteArray.empty S h
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   have heb : 0 < entryBytes keys := by unfold entryBytes; omega
   simp only [ByteArray.size_empty, Nat.le_zero, Nat.mul_eq_zero] at hi
@@ -104,7 +106,7 @@ theorem Entry.read_extract_append {keys : Keys} {I x : ByteArray} {L : List Entr
   exact extract_append_le (by omega)
 
 /-- **Appending keeps the index coherent**: records appended to the segment and entries (or
-orphans) appended to `index.log` leave every entry the base counts, and the run to the base, as
+orphans) appended to the index file leave every entry the base counts, and the run to the base, as
 they were. -/
 theorem StoreIndexes.append {keys : Keys} {c : Cadence} {world : Codec.Stream W}
     {mark : W → Nat × ByteArray} {origin : W → ByteArray} {dc : Codec.Stream D} {file I S : ByteArray}
@@ -116,18 +118,18 @@ theorem StoreIndexes.append {keys : Keys} {c : Cadence} {world : Codec.Stream W}
   exact Indexes.congr (fun i j hj => (extract_append_le (by simp only at hj; omega)).symm) L hL
 
 /-- **The writer's cut keeps the index coherent**: `openWriter` truncates the segment to the open's
-valid end and `index.log` to the entries the base counts (`Host.openWriter`); the cut Store has
+valid end and the index file to the entries the base counts (`Host.openWriter`); the cut Store has
 the same coherent index. -/
 theorem StoreIndexes.cut_open (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
-    {dc : Codec.Stream D} (file I S : ByteArray) {o : Opening W}
-    (h : Id.run (openWith keys c world mark origin step file S.size I.size (segReader I) (segReader S)) = .ok o)
+    {dc : Codec.Stream D} (file H I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file H S.size I.size (segReader I) (segReader S)) = .ok o)
     (hS : StoreIndexes keys c world mark origin dc file I S) :
     StoreIndexes keys c world mark origin dc file (I.extract 0 (o.sealed.index.count * entryBytes keys))
       (S.extract 0 o.pos.offset) := by
   obtain ⟨b, n, d, L, hb, hc, hI, hSz, hr, hL⟩ := hS
-  obtain ⟨b', _, _, _, op, _, hb', hlen, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
-    openWith_seg_ok keys c world mark origin step file I S h
+  obtain ⟨b', _, _, _, op, _, hb', hlen, _, _, _, _, _, _, _, _, hop, _, rfl⟩ :=
+    openWith_seg_ok keys c world mark origin step file H I S h
   rw [hb] at hb'; cases hb'
   obtain ⟨hs, _⟩ := tailRead_ok hlen
   have hvl := openLog_validLen_le hop
@@ -146,7 +148,7 @@ theorem entryBytes_forStore (keys : Keys) (sid : ByteArray) :
 
 /-- **A seal keeps the index coherent** (the completeness side, discharged at seal): the seal of
 an opened World at the open's position, with the entries since the base (what both checkpoints
-write, `Base.seal`), over a Store whose index is coherent, leaves a Store (the new base, `index.log`
+write, `Base.seal`), over a Store whose index is coherent, leaves a Store (the new base, the index file
 with the seal's entries appended, the segment cut at the open's position) whose index is coherent:
 the old base's entries, then the open's (`openWith_indexes`), each read back at its position
 (`run_read`). Premises are `sealed_opens`' and `hstep`. -/
@@ -158,25 +160,25 @@ theorem sealed_indexes (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (hcap : c.baseRecordMax < 2 ^ 32) {dc : Codec.Stream D}
     (hstep : ∀ w r w', step w r = .ok w' → ∃ ts : List (Kernel.Step D × D),
       (Record.codec dc).decode r = .ok ts ∧ (mark w').1 = (mark w).1 + ts.length)
-    (file₀ I S : ByteArray) {o : Opening W}
-    (h : Id.run (openWith keys c world mark origin step file₀ S.size I.size (segReader I) (segReader S)) = .ok o)
-    (hP : P o.opened.world) {page file : ByteArray} {ix' : IndexAt}
+    (file₀ H I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file₀ H S.size I.size (segReader I) (segReader S)) = .ok o)
+    (hP : P o.opened.world) {keep : Keep} {page file : ByteArray} {ix' : IndexAt}
     (hseal : Base.seal (keys.forStore (origin o.opened.world)) c world o.opened.world o.pos o.sealed.index
-      (sealEntries o.index) I.size = .ok (page, ix', file))
+      (sealEntries o.index) I.size keep = .ok (page, ix', file))
     (hS : StoreIndexes keys c world mark origin dc file₀ I S) :
     StoreIndexes keys c world mark origin dc file (I ++ page) (S.extract 0 o.pos.offset) := by
-  obtain ⟨-, hrd, -, hle, -, -, hI, hcnt, -, hsz, -, -⟩ :=
-    seal_facts keys c world mark origin step hw horigin hmono hcap file₀ I S h hP hseal
+  obtain ⟨-, hrd, -, hle, -, -, -, -, hI, hcnt, -, hsz, -, -⟩ :=
+    seal_facts keys c world mark origin step hw horigin hmono hcap file₀ H I S h hP hseal
   obtain ⟨b, n, d, L, hb, hc, hIL, -, hr, hL⟩ := hS
-  have hL' := openWith_indexes keys c world mark origin step hstep file₀ I S h hb hL
-  obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, _, _, _, _, ho⟩ :=
-    openWith_seg_ok keys c world mark origin step file₀ I S h
+  have hL' := openWith_indexes keys c world mark origin step hstep file₀ H I S h hb hL
+  obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, _, _, _, _, _, ho⟩ :=
+    openWith_seg_ok keys c world mark origin step file₀ H I S h
   rw [hb] at hb'; cases hb'
   have hcount : o.sealed.index.count = L.length := by rw [ho]; exact hc.symm
-  obtain ⟨b'', _, _, rs, hb'', hf, -⟩ := openWith_world keys c world mark origin step file₀ I S h
+  obtain ⟨b'', _, _, rs, hb'', hf, -⟩ := openWith_world keys c world mark origin step file₀ H I S h
   rw [hb] at hb''; cases hb''
   have hor : origin o.opened.world = origin b.world := foldlM_origin horigin rs _ _ hf
-  obtain ⟨-, hent, -⟩ := seal_at_end _ _ _ _ _ _ _ _ hseal
+  obtain ⟨-, hent, -⟩ := seal_at_end _ _ _ _ _ _ _ _ _ hseal
   obtain ⟨hfit, -, -, hp, -, -⟩ := entries_ok hent
   have hes : (sealEntries o.index).toList = o.index.toList := by simp [sealEntries]
   rw [hes] at hp hfit
@@ -225,9 +227,9 @@ write keeps (`genesis_indexes`, `import_indexes`, `StoreIndexes.append`, `StoreI
 abbrev Coherent (keys : Keys) (file I S : ByteArray) : Prop :=
   StoreIndexes keys c world recorder.mark originChain Codec.Deployed.digestCodec file I S
 
-theorem coherent_reader {keys : Keys} {file I S : ByteArray} {o : Opening (World D)}
+theorem coherent_reader {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
     (hS : Coherent keys file I S)
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o) :
     ∃ L : List Entry, L.length = o.sealed.index.count + o.index.size ∧
       Page.Indexes Codec.Deployed.digestCodec keys.segment c.recordBytesMax
@@ -236,12 +238,12 @@ theorem coherent_reader {keys : Keys} {file I S : ByteArray} {o : Opening (World
         (fun x y => pure (I.extract x (x + y))) o.sealed.index.count o.index k = .ok e → L[k]? = some e := by
   obtain ⟨b, n, d, L, hb, hc, -, -, hr, hL⟩ := hS
   have hL' := openWith_indexes keys c world recorder.mark originChain foldStep
-    (fun _ _ _ hs => foldStep_decode hs) file I S h hb hL
-  obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, _, _, _, _, ho⟩ :=
-    openWith_seg_ok keys c world recorder.mark originChain foldStep file I S h
+    (fun _ _ _ hs => foldStep_decode hs) file H I S h hb hL
+  obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, _, _, _, _, _, ho⟩ :=
+    openWith_seg_ok keys c world recorder.mark originChain foldStep file H I S h
   rw [hb] at hb'; cases hb'
   have hcount : o.sealed.index.count = L.length := by rw [ho]; exact hc.symm
-  obtain ⟨b'', _, _, rs, hb'', hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file I S h
+  obtain ⟨b'', _, _, rs, hb'', hf, -⟩ := openWith_world keys c world recorder.mark originChain foldStep file H I S h
   rw [hb] at hb''; cases hb''
   have hor : originChain o.opened.world = originChain b.world :=
     foldlM_origin (fun _ _ _ hs => foldStep_originChain hs) rs _ _ hf
@@ -261,9 +263,9 @@ the deployed open's state (the resident a writer or a follower starts from), and
 pager (`Host.Deployed.pager`'s `log` arm over bytes: `Page.build` with `Page.entryAt` over the
 base's entries on disk and the open's since, the durable end, the World's mark), every page served
 from a `start` below the World's step count holds at least one event. -/
-theorem page_nonempty (keys : Keys) (file I S : ByteArray) {o : Opening (World D)}
+theorem page_nonempty (keys : Keys) (file H I S : ByteArray) {o : Opening (World D)}
     (hS : Coherent keys file I S)
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file S.size I.size
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
       (segReader I) (segReader S)) = .ok o)
     {start : Nat} (hs : start < o.opened.world.steps) {a : Page.Acc}
     (ha : Id.run (Page.build X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax
@@ -277,7 +279,7 @@ theorem page_nonempty (keys : Keys) (file I S : ByteArray) {o : Opening (World D
   exact Page.build_nonempty Codec.Deployed.digestCodec_lawful.on Page.budget_fits_event hget hL hs ha
 
 /-- **A deployed page is refused `beforeLog` only from below the entry its search reads first**
-(HOST-61's entry-0 case): the deployed pager over any `index.log` and any loop entries, when it
+(HOST-61's entry-0 case): the deployed pager over any the index file and any loop entries, when it
 holds an entry and reads entry 0 as `e₀`, refuses `beforeLog` only from a `start` below `e₀`'s step
 count. Not proved: that entry 0 is the Store's first record, at step 0 for a Store genesis made and
 at the import's step for an imported one (`StoreIndexes` ties each entry to a record, not entry 0
@@ -299,38 +301,38 @@ theorem page_beforeLog_first (keys : Keys) (I S : ByteArray) (r : Resident (Worl
 
 /-- `sealed_indexes` at the deployed instance: every premise discharged as in
 `sealed_opens_deployed`. -/
-theorem sealed_indexes_deployed (keys : Keys) (file₀ I S : ByteArray) {o : Opening (World D)}
-    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file₀ S.size I.size
+theorem sealed_indexes_deployed (keys : Keys) (file₀ H I S : ByteArray) {o : Opening (World D)}
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file₀ H S.size I.size
       (segReader I) (segReader S)) = .ok o)
-    {page file : ByteArray} {ix' : IndexAt}
+    {keep : Keep} {page file : ByteArray} {ix' : IndexAt}
     (hseal : Base.seal (keys.forStore (originChain o.opened.world)) c world o.opened.world o.pos
-      o.sealed.index (sealEntries o.index) I.size = .ok (page, ix', file))
+      o.sealed.index (sealEntries o.index) I.size keep = .ok (page, ix', file))
     (hS : Coherent keys file₀ I S) :
     Coherent keys file (I ++ page) (S.extract 0 o.pos.offset) :=
   sealed_indexes keys c world recorder.mark originChain foldStep
     (Codec.Kernel.world_lawfulOn X.env Codec.Deployed.digestCodec_lawful.on)
     (fun _ _ _ hs => foldStep_originChain hs) (fun _ _ _ hs => foldStep_steps hs) (by decide)
-    (fun _ _ _ hs => foldStep_decode hs) file₀ I S h (openWith_codecFits h) hseal hS
+    (fun _ _ _ hs => foldStep_decode hs) file₀ H I S h (openWith_codecFits h) hseal hS
 
 /-- **`host genesis`'s Store has a coherent index**: it holds none. -/
-theorem genesis_indexes (keys : Keys) {name nonce : ByteArray} {allowance : Nat}
+theorem genesis_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {w₀ : World D}
     (hg : Receive.genesis X name nonce allowance founders = .ok w₀) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
     Coherent keys img.base img.index img.segment := by
-  obtain ⟨o, ho, -⟩ := genesis_reopens keys hg h
+  obtain ⟨o, ho, -⟩ := genesis_reopens keys hkeys hg h
   obtain ⟨_, -, rfl⟩ := genesisImage_ok h
-  exact StoreIndexes.of_open_empty keys c world recorder.mark originChain foldStep _ _ _ ho
+  exact StoreIndexes.of_open_empty keys c world recorder.mark originChain foldStep _ _ _ _ ho
 
 /-- **`host import`'s Store has a coherent index**: it holds none (a page before its World's step
 is refused `beforeLog`, `Page.build_beforeLog_none`). -/
-theorem import_indexes (keys : Keys) {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
+theorem import_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {want : Codec.Digest} {f : ByteArray}
     {r : Carry.Read D} {w₀ : World D}
     (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce want f = .ok (w₀, r)) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
     Coherent keys img.base img.index img.segment := by
-  obtain ⟨o, ho, -⟩ := import_reopens keys hi h
+  obtain ⟨o, ho, -⟩ := import_reopens keys hkeys hi h
   obtain ⟨_, -, rfl⟩ := genesisImage_ok h
-  exact StoreIndexes.of_open_empty keys c world recorder.mark originChain foldStep _ _ _ ho
+  exact StoreIndexes.of_open_empty keys c world recorder.mark originChain foldStep _ _ _ _ ho
 
 end Nanodregg.Host.Deployed

@@ -58,32 +58,37 @@ def Tail.absorb (s : Log.Sealer) (recordMax : Nat) (step : W → ByteArray → E
       | none => .error .tagWidth
       | some tag => .ok (⟨w, ⟨t.pos.offset + rv.validLen, tag⟩⟩, os)
 
-/-- Open `dir` to follow it: the one open over a fresh read handle (no lock, no truncation), with
-the tail step's World. Returns the tail and the handle its `next` reads through. -/
+/-- Open `dir` to follow it: the one open over fresh read handles (no lock, no truncation), with
+the tail step's World. Returns the tail and the logical segment reader its `next` reads through
+(`Segs`: a new segment file the writer starts is found by name when the tail passes its end, HOST-64). -/
 def Tail.open (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F (W × O)) :
-    IO (Except (StoreFault F) (Tail W × File)) := do
+    IO (Except (StoreFault F) (Tail W × Segs)) := do
   match ← openAt dir keys c world mark origin (fun w r => (step w r).map Prod.fst) with
   | .error e => return .error e
-  | .ok (o, seg) => return .ok (⟨o.opened.world, o.pos⟩, seg)
+  | .ok (o, fs) => return .ok (⟨o.opened.world, o.pos⟩, fs.segs)
 
 /-- What was appended since `t`, absorbed: one read of at most `Log.frameMax c.recordBytesMax`
 bytes at the tail's position (so a call costs O(appended bytes), bounded), every whole frame
 folded. Nothing new: the tail unchanged and no outputs. -/
-def Tail.next (keys : Keys) (c : Cadence) (step : W → ByteArray → Except F (W × O)) (seg : File)
+def Tail.next (keys : Keys) (c : Cadence) (step : W → ByteArray → Except F (W × O)) (seg : Segs)
     (t : Tail W) : IO (Except (StoreFault F) (Tail W × Array O)) := do
-  let size := (← seg.size).toNat
+  let size ← match ← seg.size with
+    | .ok n => pure n
+    | .error e => return .error e.store
   if size ≤ t.pos.offset then return .ok (t, #[])
   let bound := Log.frameMax c.recordBytesMax
   let len := min (size - t.pos.offset) bound
-  let bytes ← seg.readAt t.pos.offset.toUInt64 len.toUSize
+  let bytes ← match ← seg.read t.pos.offset len with
+    | .ok b => pure b
+    | .error e => return .error e.store
   if bytes.size ≠ len then return .error (.shortRead bytes.size len)
   return Tail.absorb keys.segment c.recordBytesMax step t bytes (decide (bound < size - t.pos.offset))
 
 /-- `next` until it absorbs something, sleeping `tailPollMs` between empty reads, at most `rounds`
 reads (a deadline of `rounds · tailPollMs`); spent, the tail is returned unchanged with no
 outputs. There is no change notification: polling with a stated bound is the mechanism. -/
-def Tail.await (keys : Keys) (c : Cadence) (step : W → ByteArray → Except F (W × O)) (seg : File)
+def Tail.await (keys : Keys) (c : Cadence) (step : W → ByteArray → Except F (W × O)) (seg : Segs)
     (t : Tail W) : Nat → IO (Except (StoreFault F) (Tail W × Array O))
   | 0 => return .ok (t, #[])
   | rounds + 1 => do

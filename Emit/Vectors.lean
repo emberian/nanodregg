@@ -311,7 +311,8 @@ def printCarriedWire (x : CarriedWire Sim.D) : String := printCarried (carriedOf
 
 def printBase (b : Host.Base (World Sim.D)) : String :=
   s!"\{world := {printWorld b.world}, offset := {b.offset}, tag := {text b.tag}, " ++
-    s!"indexCount := {b.indexCount}, indexLast := {text b.indexLast}}"
+    s!"indexCount := {b.indexCount}, indexLast := {text b.indexLast}, retainedFrom := {b.retainedFrom}, " ++
+    s!"indexFrom := {b.indexFrom}}"
 
 /-- One line: tabs and newlines would break the table. -/
 def oneLine (s : String) : String := (s.replace "\n" " ").replace "\t" " "
@@ -358,6 +359,17 @@ def digest : G Digest := do
   let mut b := ByteArray.empty
   for _ in [0:32] do b := b.push (← below 256).toUInt8
   return (Digest.ofBytes? b).getD Digest.zero
+
+/-- `host/base/retained`'s vectors (HOST-64): two drawn bases keeping from the start of the log, then
+the keep's boundary pairs: a base keeping the segment file at its own offset (read back) and one
+past it (refused `host/base/retained` by name), and a base keeping from its own entry count (read
+back) and one past it (refused by name). -/
+def baseVecs : G (List (Host.Base (World Sim.D))) := do
+  let drawn ← each 2 fun _ => do
+    return (⟨← Vectors.world, (← nat64) % 2 ^ 63, ← digest, (← nat64) % 2 ^ 63, ← digest, 0, 0⟩ : Host.Base (World Sim.D))
+  let b : Host.Base (World Sim.D) := ⟨← Vectors.world, (← nat64) % 2 ^ 63, ← digest, (← nat64) % 2 ^ 63, ← digest, 0, 0⟩
+  return drawn ++ [{ b with retainedFrom := b.offset }, { b with retainedFrom := b.offset + 1 },
+    { b with indexFrom := b.indexCount }, { b with indexFrom := b.indexCount + 1 }]
 
 /-- `kernel/world-budget`'s vectors: two drawn Worlds, then a third at the budget's boundary (storage plus
 allowance exactly 2^64 − 1, read back) and the same World one past it (refused `kernel/world-budget` by name,
@@ -778,8 +790,7 @@ def sites : List Site :=
     site "kernel/carried-rows-parented" (carriedParentedWire Sim.env Sim.dc) carriedParentedVecs printCarriedWire,
     site "kernel/carried" (Codec.Kernel.carried Sim.env Sim.dc) (each 2 fun _ => Vectors.carried) printCarried,
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
-    site "host/base/index-count" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc))
-      (each 2 fun _ => do return ⟨← Vectors.world, ← nat64, ← digest, ← nat64, ← digest⟩) printBase,
+    site "host/base/retained" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc)) baseVecs printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
     ⟨"lang/package/3", Tag.of "lang/package/3" Lang.Wire.packageCodec, pure packageVecs,
       print Lang.Wire.packageCodec text⟩,
