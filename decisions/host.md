@@ -2997,3 +2997,26 @@ NOT PROVED:
 - What refuses: an old Store refuses `shapeMismatch` (the stamp moved), or `missing seg.<o>.log` / `missing index.0.log` before any decode.
 - New refusals: `checkpointed` (61), `checkpointCorrupt` (62), `foreignOrigin` and `foreignSegment` from the header, `usage retainBelowFloor`.
 - What re-emits: gates/codec-vectors.tsv (regenerated from empty: only the moved site's rows differ), deploy/units (EXITS.md rows 61/62, STORE.md, three RestartPreventExitStatus lists). No Rust frame changes (generated.rs unchanged: no Host exit enters the launcher's tables).
+
+## HOST-65 · entry 0 is the Store's first record: the run begins at the origin frame's end, and the open refuses a base counting none anywhere else (2026-10-20, HOST-18; HOST-62's named-not-proved item, HOST-61's entry-0 case)
+
+**Decision.** `StoreIndexes` gains one conjunct, `RunFrom L b.offset (frameSize (origin b.world))`: the base's entries begin at the LOGICAL end of the origin frame, or, when the base counts none, the base sits there. The open checks the count-0 half: `lastFrameFault`'s `none` arm (HOST-63 passed it unconditionally) refuses `indexCorrupt` unless the base's offset is `frameSize (origin b.world)`, a function of the World read from nothing (HOST-64 dropped the origin frame's bytes from a retained Store, so the anchor is arithmetic, never a read at 0).
+
+- `openWith_originEnd`: an open that succeeds over a base counting none read a base at the origin frame's end. With it `StoreIndexes.of_open_empty` needs no new premise: genesis, import, join and a follower's adopt (at genesis only, PROTOCOL's `notAtGenesis`) are covered by the open, not read off.
+- `RunFrom.append`; `openWith_indexes` also returns that the open's entries begin at the base's offset (from `indexed_indexes`' head fact), so `sealed_indexes` carries the run start; `append` and `cut_open` keep it unchanged; `coherent_reader` returns it.
+- `Deployed.page_beforeLog_origin`: over a coherent Store at the deployed open, a page refused `beforeLog` read as entry 0 an entry whose offset is the origin frame's end, and `start` is below its step count. With `Indexes` (that offset holds a frame a page reads) the entry is the segment's first record: no record lies below the step count a `beforeLog` refuses from.
+
+**Teeth.**
+- `lastFrameFault_none_off`: a count-0 base off the origin end is refused before anything is read.
+- host-sim `plant-base-past-origin`: the newest base re-sealed counting none (its checkpoint header re-forged at count 0, so HOST-64's header check passes and this arm is what refuses), every tag verifying, at 12843 past the origin end 44: refused `indexCorrupt`. Control: genesis's base and header over the segment cut at 44 opens. With the arm passing (`if originEnd = originEnd`) it reads `FAIL plant-base-past-origin` (logs/host18-red65 run, seed 1).
+
+**Critique.**
+- The step count of entry 0 is not pinned to the first World's (step 0 at genesis, the import's step): a count-0 base names no step count but its own World's, and `Indexes` ties entry 0's steps to the tip only through the records after it. What is proved is the offset: nothing precedes entry 0 but the origin frame.
+- Scope: `StoreIndexes` is over the logical index from entry 0, so it covers Stores keeping their whole index (HOST-64's default). A Store that dropped entries (`indexFrom` > 0) starts its run at the oldest kept file's header (HOST-20's measurement); no theorem here states that run.
+- The loop's push between opens stays read off (HOST-62's first item): `seal_facts` covers a seal straight after an open.
+
+**Meta-critique.** HOST-61/62 named "entry 0 is the first record" as not proved and left it; the open-time half was one arithmetic comparison on a value the open already holds. A named gap with a cheap check is a check not yet written.
+
+**Flag day.** None for an honest Store: every count-0 base this Host writes sits at the origin end (genesis, import, join, adopt at genesis; HOST-20: past genesis every base counts ≥ 1 and a drop never empties the count). A base counting none anywhere else, which no honest writer produces, now refuses to open `indexCorrupt`.
+
+**Law-6 read (second agent, read-only, with the DISJUNCT check): LAND-WITH-FIXES.** No vacuity: `RunFrom` constrains in both arms (the `[]` arm forces the base to the origin end; the cons arm pins entry 0's offset, which `Indexes` ties to a verifying frame); `Coherent` is satisfiable (genesis and import, through `of_open_empty` and `genesisImage_opens`' then-branch); `page_beforeLog_origin` has no disjunct or existential in its conclusion. No honest Store refused (seal with an empty tail keeps offset and count; `append` pushes one entry per record; retention never makes a count-0 base; adopt only at step 0, where `openWith_steps_zero` gives count 0 and the origin end; genesis/import proved). No check weakened. The plant reaches the new arm (header forged at count 0 passes `headerFault`; `indexNamed` passes at count 0 with `Digest.zero`). Taken: the step-count half restored as an explicit Not-proved bullet (Coherence header) and in `page_beforeLog_first`'s and `page_beforeLog_origin`'s docs; "no record before it" points at the open's origin check (HOST-25, HOST-64's header); the plant reads the forged base's own offset.

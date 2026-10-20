@@ -39,7 +39,8 @@ it is refused `baseCorrupt` by name, and open does not fall back to folding the 
 Open reads the base (at most `Log.frameMax c.baseRecordMax` bytes), the origin frame at 0 (at most
 `originMax` bytes, checked against the base World's origin, HOST-25), the base's last index entry
 (`entryBytes`), the record that entry names (at most a frame and a tag, checked to be the frame
-ending at `offset`, `lastFrame`, HOST-63), and the segment from `offset`, and `tailRead` refuses a tail longer than
+ending at `offset`, `lastFrame`, HOST-63; a base counting none must sit at the origin frame's end,
+HOST-65), and the segment from `offset`, and `tailRead` refuses a tail longer than
 `c.tailMax` by name (`tailTooLong`), so open reads one base, one entry, its record, and at most two cadences and
 a frame of log (`Host.Proofs.Base.tailRead_le`). The loop never writes a longer tail
 (`Host.Loop.Tail`).
@@ -479,7 +480,8 @@ inductive BaseFault where
   Store's key (`Entry.read`), or its tag is not the `indexLast` the base names (HOST-33: the one
   entry open reads; `host check` reads them all), or its record does not begin before the base's
   World (its step count is not below the base's, HOST-53), or the record it names is not the frame
-  that ends at the base's offset (`lastFrame`, HOST-63) -/
+  that ends at the base's offset (`lastFrame`, HOST-63), or the base counts none and does not sit at
+  the origin frame's end (HOST-65) -/
   | indexCorrupt
   /-- the base's own segment file is shorter than a checkpoint header, or its header does not verify
   under the Store's key (HOST-64) -/

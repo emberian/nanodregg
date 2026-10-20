@@ -98,7 +98,7 @@ theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
     indexNamed (keys.forStore (origin o.opened.world)) ix'.count ix'.last (mark o.opened.world).1
       ((I ++ page).extract (lastAt keys ix'.count).1
         ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)) = none ∧
-    Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax o.pos.offset
+    Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax (frameSize (origin o.opened.world)) o.pos.offset
       (lastEntry (keys.forStore (origin o.opened.world)) ix'.count ((I ++ page).extract (lastAt keys ix'.count).1
         ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)))
       (segReader (S.extract 0 o.pos.offset))) = none := by
@@ -142,7 +142,7 @@ theorem seal_facts (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   have hpos := Base.file_offset_lt hfile
   have hes : (sealEntries op.world.2.1).size = op.world.2.1.size := by simp [sealEntries]
   -- HOST-63: the new base's last entry is the frame that ends at the open's position
-  have hlast : Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax (b.offset + op.validLen)
+  have hlast : Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax (frameSize (origin b.world)) (b.offset + op.validLen)
       (lastEntry (keys.forStore (origin b.world)) ix'.count ((I ++ page).extract (lastAt keys ix'.count).1
         ((lastAt keys ix'.count).1 + (lastAt keys ix'.count).2)))
       (segReader (S.extract 0 (b.offset + op.validLen)))) = none := by

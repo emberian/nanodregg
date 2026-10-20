@@ -367,6 +367,30 @@ def entryPlants (r : RunResult) (failures : IO.Ref Nat) : IO Unit := do
   check s!"plant-index-offset: a last entry one byte off its record ({lastOff + 1}, {lastOff - 1}; every tag verifying) is refused `indexCorrupt`; control: its honest {lastOff} opens"
     (36 < lastOff && offVerdict (lastOff + 1) = "indexCorrupt" && offVerdict (lastOff - 1) = "indexCorrupt" &&
       offVerdict lastOff = "opened") failures
+  -- plant-base-past-origin (HOST-65): the newest base re-sealed counting NO entry, index.log empty.
+  -- Every tag verifies, but records lie between the origin frame and the base that no entry
+  -- indexes, so entry 0 would not be the Store's first record. Open refuses `indexCorrupt`
+  -- (`lastFrameFault`'s count-0 arm). The base file's checkpoint header is forged to count 0 too
+  -- (HOST-64's header binds the count), so the header check passes and the count-0 arm is what
+  -- refuses. CONTROL: genesis's own base and header (count 0, at the origin frame's end) over the
+  -- segment cut there opens.
+  let originEnd := frameSize (originChain genesis)
+  let (baseOff, pastOrigin) : Nat × String :=
+    match Base.read keys cadence world r.bases.file with
+    | .ok (b, _, _) => (b.offset,
+      match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ indexStart ⟨b.retainedFrom, 0⟩ with
+      | .ok f =>
+        let hdr := Header.bytes keys (Header.at ⟨b.offset, b.tag⟩ (recorder.mark b.world) 0 0 (originChain b.world))
+        faultName (reopenIn #[(b.offset, hdr)] ByteArray.empty f r.disk.synced)
+      | .error _ => "unforged")
+    | .error _ => (0, "unread")
+  let atOrigin : String :=
+    match genesisImage keys cadence world recorder.mark genesis with
+    | .ok img => faultName (reopenIn #[(originEnd, img.header)] ByteArray.empty img.base
+        (r.disk.synced.extract 0 originEnd))
+    | .error _ => "unforged"
+  check s!"plant-base-past-origin: a base counting no entry at {baseOff}, past the origin frame's end {originEnd} (every tag verifying), is refused `indexCorrupt`; control: genesis's base at {originEnd} opens"
+    (originEnd < baseOff && pastOrigin = "indexCorrupt" && atOrigin = "opened") failures
   let raw := r.bases.index.extract eb (2 * eb) ++ r.bases.index.extract 0 eb ++ r.bases.index.extract (2 * eb) named
   let retagSwap := match honest with
     | a :: b :: rest => Entry.run sk 0 (b :: a :: rest) | _ => r.bases.index

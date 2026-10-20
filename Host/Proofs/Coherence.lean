@@ -38,6 +38,12 @@ What a page gets from it:
   refused by another name.
 * `Deployed.page_nonempty` (at the deployed open and the deployed pager, over a coherent Store)
   and `Deployed.page_beforeLog_first` (the deployed pager over any Store).
+* `Deployed.page_beforeLog_origin` — **entry 0 is the Store's first record** (HOST-65): over a
+  coherent Store the run begins at the origin frame's end (`StoreIndexes`' `RunFrom`), so the entry
+  a `beforeLog` refusal reads first sits right after the origin frame (that [0, its end) IS the
+  origin frame is the open's origin check, HOST-25/HOST-64's header). The open checks the run start
+  of a base counting none (`openWith_originEnd`; tooth `lastFrameFault_none_off`; host-sim
+  `plant-base-past-origin`). The OFFSET is proved; the step count is not (below).
 
 Both page theorems are about a page `build` returns: neither says a page over a coherent Store is
 served rather than refused (`badIndex`, `corrupt`).
@@ -65,7 +71,9 @@ Not proved:
 * that an entry's chain is the chain before its record: `Indexes` pins the offset and the step
   count, not `e.chain` (from which a page states its chain). A wrong chain field is caught by the
   follower's chain check, not here;
-* that entry 0 is the Store's first record (see `Deployed.page_beforeLog_first`).
+* that entry 0's step count is the first World's (0 at genesis, the import's step): `Indexes` pins
+  it only backward from the base's step count through the records after it, and a count-0 base
+  names no step count but its own World's.
 -/
 import Host.Proofs.Page
 import Host.Proofs.Backup
@@ -664,11 +672,11 @@ theorem frameAt_bounds {s : Sealer} {rm : Nat} {log prev : ByteArray} {off : Nat
 /-- **The open's last-entry check passes on the frame that ends at the base**: an entry past the
 segment's first 32 bytes whose offset holds a frame, chained from the 32 bytes before it and within the
 record bound, that ends at `B` (inside the segment). -/
-theorem lastFrameFault_frame {F : Type} {s : Sealer} {rm B : Nat} {S r : ByteArray} {e : Entry}
+theorem lastFrameFault_frame {F : Type} {s : Sealer} {rm O B : Nat} {S r : ByteArray} {e : Entry}
     (h32 : tagBytes ≤ e.offset) (hB : e.offset + frameSize r = B) (hBS : B ≤ S.size)
     (hf : S.extract e.offset (e.offset + frameSize r) = frame s (S.extract (e.offset - tagBytes) e.offset) r)
     (hr : r.size ≤ rm) (hr32 : r.size < 2 ^ 32) :
-    Id.run (lastFrameFault (F := F) s rm B (some e) (segReader S)) = none := by
+    Id.run (lastFrameFault (F := F) s rm O B (some e) (segReader S)) = none := by
   have hfs := frameSize_ge r
   have hlr : lastRange rm B e = some (e.offset - tagBytes, B - e.offset + tagBytes) := by
     unfold lastRange
@@ -691,8 +699,8 @@ theorem lastFrameFault_frame {F : Type} {s : Sealer} {rm B : Nat} {S r : ByteArr
 /-- **What the open's last-entry check found** (the converse): when it passes for entry `e` over a
 segment, `e`'s offset is at least 32 bytes into the segment and holds a frame a page reads (`frameOf`)
 that ends exactly at `B`. -/
-theorem lastFrameFault_sound {F : Type} {s : Sealer} {rm B : Nat} {S : ByteArray} {e : Entry}
-    (h : Id.run (lastFrameFault (F := F) s rm B (some e) (segReader S)) = none) :
+theorem lastFrameFault_sound {F : Type} {s : Sealer} {rm O B : Nat} {S : ByteArray} {e : Entry}
+    (h : Id.run (lastFrameFault (F := F) s rm O B (some e) (segReader S)) = none) :
     tagBytes ≤ e.offset ∧ ∃ r, frameOf s rm (fun o l => (pure (S.extract o (o + l)) : Id ByteArray)) e.offset = some r ∧
       e.offset + frameSize r = B := by
   simp only [lastFrameFault] at h
@@ -733,9 +741,9 @@ theorem lastFrameFault_sound {F : Type} {s : Sealer} {rm B : Nat} {S : ByteArray
 /-- **The tooth of the last-entry check**: an entry at or past its base's offset (it names no
 record before the base, HOST-53's alternative (d)) is refused `indexCorrupt`, before anything is
 read. -/
-theorem lastFrameFault_past {F : Type} {m : Type → Type} [Monad m] (s : Sealer) (rm B : Nat) (e : Entry)
+theorem lastFrameFault_past {F : Type} {m : Type → Type} [Monad m] (s : Sealer) (rm O B : Nat) (e : Entry)
     (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) (h : B ≤ e.offset) :
-    lastFrameFault s rm B (some e) readTail = pure (some (.base .indexCorrupt)) := by
+    lastFrameFault s rm O B (some e) readTail = pure (some (.base .indexCorrupt)) := by
   simp only [lastFrameFault, lastRange]
   rw [if_neg (by omega)]
 
@@ -781,5 +789,38 @@ theorem openWith_lastFrame {W F : Type} (keys : Keys) (c : Cadence) (world : Cod
     obtain ⟨h32, r, hr, hend⟩ := lastFrameFault_sound hlf
     rw [lastAt_read keys _ hp] at he
     exact ⟨b, n, d, e, r, hb, hc, hoff, he, h32, hr, hend⟩
+
+/-- **The tooth of the count-0 check** (HOST-65): a base that counts no entry and does not sit at
+the origin frame's end (a record before it that no entry indexes) is refused `indexCorrupt`,
+before anything is read. -/
+theorem lastFrameFault_none_off {F : Type} {m : Type → Type} [Monad m] (s : Sealer) (rm O B : Nat)
+    (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) (h : B ≠ O) :
+    lastFrameFault s rm O B none readTail = pure (some (.base .indexCorrupt)) := by
+  simp only [lastFrameFault, if_neg h]
+
+/-- **A base that counts no entry sits at the origin frame's end** (HOST-65): an open that succeeds
+over a base counting none read a base whose offset is the end of the origin frame, so no record
+lies before it (`StoreIndexes`' run start). -/
+theorem openWith_originEnd {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W)
+    (file H I S : ByteArray) {o : Opening W}
+    (h : Id.run (openWith keys c world mark origin step file H S.size I.size (segReader I) (segReader S)) = .ok o)
+    {b : Base W} {n : Nat} {d : ByteArray} (hb : Base.read keys c world file = .ok (b, n, d))
+    (h0 : b.indexCount = 0) :
+    b.offset = frameSize (origin b.world) := by
+  obtain ⟨b', _, _, _, _, _, hb', _, _, _, _, _, _, _, _, hlf, _, _, _⟩ :=
+    openWith_seg_ok keys c world mark origin step file H I S h
+  rw [hb] at hb'; cases hb'
+  have hle : lastEntry (keys.forStore (origin b.world)) b.indexCount
+      (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)) =
+        none := by
+    unfold lastEntry; rw [if_pos h0]
+  rw [hle] at hlf
+  have hif : (if b.offset = frameSize (origin b.world) then (none : Option (StoreFault F))
+      else some (.base .indexCorrupt)) = none := hlf
+  by_cases hne : b.offset = frameSize (origin b.world)
+  · exact hne
+  · rw [if_neg hne] at hif
+    cases hif
 
 end Nanodregg.Host

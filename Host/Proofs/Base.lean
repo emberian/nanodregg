@@ -94,10 +94,10 @@ theorem lastRange_some {rm B a len : Nat} {e : Entry} (h : lastRange rm B e = so
   · cases h
 
 /-- The last-entry check (HOST-63) reads only bytes before the base's offset. -/
-theorem lastFrameFault_congr {F : Type} {s : Log.Sealer} {rm B : Nat} {S S' : ByteArray} (e? : Option Entry)
+theorem lastFrameFault_congr {F : Type} {s : Log.Sealer} {rm O B : Nat} {S S' : ByteArray} (e? : Option Entry)
     (hS : ∀ i j, j ≤ B → S.extract i j = S'.extract i j) :
-    Id.run (lastFrameFault (F := F) s rm B e? (segReader S)) =
-      Id.run (lastFrameFault (F := F) s rm B e? (segReader S')) := by
+    Id.run (lastFrameFault (F := F) s rm O B e? (segReader S)) =
+      Id.run (lastFrameFault (F := F) s rm O B e? (segReader S')) := by
   cases e? with
   | none => rfl
   | some e =>
@@ -110,14 +110,15 @@ theorem lastFrameFault_congr {F : Type} {s : Log.Sealer} {rm B : Nat} {S S' : By
 
 /-- The last-entry check (HOST-63) asks for at most ONE range, ending at the base's offset and at
 most a frame and a tag long, over a reader that records its calls. -/
-theorem lastFrameFault_reads {F : Type} (s : Log.Sealer) (rm B : Nat) (e? : Option Entry)
+theorem lastFrameFault_reads {F : Type} (s : Log.Sealer) (rm O B : Nat) (e? : Option Entry)
     (answer : Nat → Nat → ByteArray) (st : List (Nat × Nat)) :
-    ∃ v extra, (lastFrameFault (F := F) (m := StateM (List (Nat × Nat))) s rm B e?
+    ∃ v extra, (lastFrameFault (F := F) (m := StateM (List (Nat × Nat))) s rm O B e?
         (fun off len => StateT.modifyGet fun l => (Except.ok (answer off len), l ++ [(off, len)]))) st =
         (v, st ++ extra) ∧ extra.length ≤ 1 ∧
       ∀ p ∈ extra, p.1 + p.2 = B ∧ p.2 ≤ Log.frameMax rm + Log.tagBytes := by
   cases e? with
-  | none => exact ⟨none, [], by simp [lastFrameFault, pure, StateT.pure], by simp, by simp⟩
+  | none => exact ⟨if B = O then none else some (.base .indexCorrupt), [], by simp [lastFrameFault, pure, StateT.pure],
+      by simp, by simp⟩
   | some e =>
     cases hlr : lastRange rm B e with
     | none => exact ⟨some (.base .indexCorrupt), [], by simp [lastFrameFault, hlr, pure, StateT.pure], by simp, by simp⟩
@@ -207,7 +208,7 @@ theorem openWith_reads {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.S
               rw [hix] at h
               simp only at h
               obtain ⟨v, extra, hrun, hx1, hx2⟩ := lastFrameFault_reads (F := F) keys.segment c.recordBytesMax
-                b.offset (lastEntry (keys.forStore (origin b.world)) b.indexCount
+                (frameSize (origin b.world)) b.offset (lastEntry (keys.forStore (origin b.world)) b.indexCount
                   (answerI (lastAt keys b.indexCount).1 (lastAt keys b.indexCount).2)) answer
                 ([(b.offset - Log.tagBytes, Log.tagBytes + len)] ++
                   [((lastAt keys b.indexCount).1, (lastAt keys b.indexCount).2)])
@@ -711,7 +712,7 @@ theorem openWith_verifies_named {W F : Type} (keys : Keys) (c : Cadence) (world 
                     · split at h
                       · cases h
                       · rename_i hnamed
-                        cases hlf : lastFrameFault keys.segment c.recordBytesMax b.offset
+                        cases hlf : lastFrameFault keys.segment c.recordBytesMax (frameSize (origin b.world)) b.offset
                             (lastEntry (keys.forStore (origin b.world)) b.indexCount
                               (idx.extract (lastAt keys b.indexCount).1
                                 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))

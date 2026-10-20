@@ -377,7 +377,7 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
       b.indexCount ≤ indexMax ∧ b.indexCount * entryBytes keys ≤ I.size ∧
       indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast (mark b.world).1
         (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)) = none ∧
-      Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax b.offset
+      Id.run (lastFrameFault (F := F) keys.segment c.recordBytesMax (frameSize (origin b.world)) b.offset
         (lastEntry (keys.forStore (origin b.world)) b.indexCount
           (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
         (segReader S)) = none ∧
@@ -421,7 +421,7 @@ theorem openWith_seg_ok (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
   split at h
   · exact absurd h (by simp [Id.run, pure])
   rename_i hix
-  cases hlf : lastFrameFault (F := F) keys.segment c.recordBytesMax b.offset
+  cases hlf : lastFrameFault (F := F) keys.segment c.recordBytesMax (frameSize (origin b.world)) b.offset
       (lastEntry (keys.forStore (origin b.world)) b.indexCount
         (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
       (segReader S) with
@@ -564,7 +564,7 @@ theorem openWith_backup (keys : Keys) (c : Cadence) (world : Codec.Stream W) (ma
     rw [if_neg (by omega), if_neg (by rw [size_append]; omega), if_neg (by simp [size_append]; omega),
       extract_append_le (by omega), hix]
     dsimp only
-    have hlf' := (lastFrameFault_congr (F := F) (s := keys.segment) (rm := c.recordBytesMax) (B := b.offset)
+    have hlf' := (lastFrameFault_congr (F := F) (s := keys.segment) (rm := c.recordBytesMax) (O := frameSize (origin b.world)) (B := b.offset)
       (S := S ++ y) (S' := S) (lastEntry (keys.forStore (origin b.world)) b.indexCount
         (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
       (fun i j hj => extract_append_le (by omega))).trans hlf
@@ -728,7 +728,7 @@ theorem openWith_cut (keys : Keys) (c : Cadence) (world : Codec.Stream W) (mark 
   rw [if_neg (by omega), if_neg (by rw [hI']; omega), if_neg (by simp [hI']; omega),
     extract_prefix I (by omega), hix]
   dsimp only
-  have hlf' := (lastFrameFault_congr (F := F) (s := keys.segment) (rm := c.recordBytesMax) (B := b.offset)
+  have hlf' := (lastFrameFault_congr (F := F) (s := keys.segment) (rm := c.recordBytesMax) (O := frameSize (origin b.world)) (B := b.offset)
     (S := S.extract 0 (b.offset + op.validLen)) (S' := S) (lastEntry (keys.forStore (origin b.world)) b.indexCount
       (I.extract (lastAt keys b.indexCount).1 ((lastAt keys b.indexCount).1 + (lastAt keys b.indexCount).2)))
     (fun i j hj => extract_prefix S (by omega))).trans hlf

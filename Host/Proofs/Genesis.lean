@@ -191,6 +191,7 @@ theorem genesisImage_opens (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   have hext : (tagDigest keys.segment (segmentInitial ++ ch)).bytes.extract 0 tagBytes =
       (tagDigest keys.segment (segmentInitial ++ ch)).bytes := by
     rw [← htsz, extract_zero_size]
+  have hoe : seg.size = frameSize (origin w₀) := by rw [ho, hch, hss]; rfl
   unfold openWith
   simp only [show ¬ frameMax c.baseRecordMax < (file).size by omega, if_false, hb, tailRead_self,
     show ¬ seg.size < tagBytes by omega, segReader, pure_bind, htag]
@@ -198,8 +199,9 @@ theorem genesisImage_opens (keys : Keys) (c : Cadence) (world : Codec.Stream W)
   rw [hor]
   simp only [lastAt, if_true, ByteArray.size_empty, Nat.zero_mul,
     Nat.lt_irrefl, if_false, indexNamed_zero]
-  simp only [hext, hol, hofs, not_true_eq_false, if_false, ByteArray.size_extract,
-    ByteArray.size_empty, Nat.zero_add, Nat.min_self, Nat.sub_self]
+  simp only [hext, hol, hofs, not_true_eq_false, ByteArray.size_extract,
+    ByteArray.size_empty, Nat.zero_add, Nat.min_self, Nat.sub_self, lastEntry, lastFrameFault, eq_true hoe,
+    ↓reduceIte]
   exact ⟨_, rfl, rfl, rfl, rfl, Nat.add_zero _⟩
 
 end Nanodregg.Host

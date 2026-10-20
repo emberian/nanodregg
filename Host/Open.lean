@@ -139,13 +139,15 @@ def OpenFault.shift (base : Nat) : OpenFault F → OpenFault F
   | .corrupt off => .corrupt (base + off)
   | .record i f => .record i f
 
-/-- The record check of the base's last entry (HOST-63): at count 0 nothing; otherwise the entry's
-range (`lastRange`, `indexCorrupt` when it names no place one frame before the base) read in one
-read, `shortRead` when it comes back short, and `lastFrame` over it. -/
-def lastFrameFault {m : Type → Type} [Monad m] (s : Log.Sealer) (recordMax offset : Nat) (e? : Option Entry)
-    (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Option (StoreFault F)) :=
+/-- The record check of the base's last entry (HOST-63): at count 0 the frame before the base is
+the origin frame, so the base must sit at its end, `originEnd` (`indexCorrupt` otherwise, HOST-65:
+entry 0 is then the Store's first record, `Host.Proofs.StoreIndex`); otherwise the entry's range
+(`lastRange`, `indexCorrupt` when it names no place one frame before the base) read in one read,
+`shortRead` when it comes back short, and `lastFrame` over it. -/
+def lastFrameFault {m : Type → Type} [Monad m] (s : Log.Sealer) (recordMax originEnd offset : Nat)
+    (e? : Option Entry) (readTail : Nat → Nat → m (Except (StoreFault F) ByteArray)) : m (Option (StoreFault F)) :=
   match e? with
-  | none => pure none
+  | none => pure (if offset = originEnd then none else some (.base .indexCorrupt))
   | some e =>
     match lastRange recordMax offset e with
     | none => pure (some (.base .indexCorrupt))
@@ -169,7 +171,8 @@ bytes, `readIndex` its reader) holds every entry the base counts and `indexCorru
 `indexMax`, read the ONE entry the base names last (`lastAt`) and refuse `indexCorrupt` unless it
 reads back at its position with the base's `indexLast` and begins before the base's World
 (`indexNamed`, HOST-33, HOST-53), read the record that entry names and refuse `indexCorrupt`
-unless it is the frame ending at the base's offset (`lastFrameFault`, HOST-63), and `openLog` the
+unless it is the frame ending at the base's offset, or, when the base counts none, unless the base
+sits at the origin frame's end (`lastFrameFault`, HOST-63, HOST-65), and `openLog` the
 tail from the base's World, indexing it from an empty Array (the entries since the base). Open
 reads no other entry: a page checks the ones it reads, `host check` all of them. A `corrupt`
 offset is absolute in the segment. -/
@@ -204,7 +207,7 @@ def openWith {m : Type → Type} [Monad m] (keys : Keys) (c : Cadence) (world : 
   match indexNamed (keys.forStore (origin b.world)) b.indexCount b.indexLast (mark b.world).1 ib with
   | some e => return .error (.base e)
   | none =>
-  match ← lastFrameFault keys.segment c.recordBytesMax b.offset
+  match ← lastFrameFault keys.segment c.recordBytesMax (frameSize (origin b.world)) b.offset
       (lastEntry (keys.forStore (origin b.world)) b.indexCount ib) readTail with
   | some f => return .error f
   | none =>
