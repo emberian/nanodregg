@@ -1145,21 +1145,23 @@ structure RowStore (D C : Type) where
   /-- remove a key (`Trie.retainAt` along its `rowPath`) -/
   drop : C → RowSlot D → C
 
-/-- `headOf` on a store. -/
-def headOfOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel : Nat) :
+/-- `headOf` on a store. `@[inline]` (cv 01a1545b-1daf): a store is a record of closures over the
+runtime `E`, so its uses at `trieStore` and `uStore` compile to direct calls only where the body is
+inlined at the instance; a class would not close over `E`. -/
+@[inline] def headOfOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel : Nat) :
     Option (Nat × Nat × Nat × Nat × Nat × Bool) :=
   match st.get r (.head parent rel) with
   | some (.head count sum limit cap width retract _) => some (count, sum, limit, cap, width, retract)
   | _ => none
 
-/-- `headFloor` on a store. -/
-def headFloorOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel : Nat) : Nat :=
+/-- `headFloor` on a store (`@[inline]`, as `headOfOn`). -/
+@[inline] def headFloorOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel : Nat) : Nat :=
   match st.get r (.head parent rel) with
   | some (.head _ _ _ _ _ _ floor) => floor
   | _ => 0
 
-/-- `setHead` on a store. -/
-def setHeadOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel count sum limit cap width : Nat)
+/-- `setHead` on a store (`@[inline]`, as `headOfOn`). -/
+@[inline] def setHeadOn {C : Type} (st : RowStore D C) (r : C) (parent : D) (rel count sum limit cap width : Nat)
     (retract : Bool) (floor : Nat) : C :=
   st.ins r (.head parent rel) (.head count sum limit cap width retract floor)
 
@@ -1169,13 +1171,28 @@ abbrev trieStore (E : Env D) : RowStore D (Rows D) where
   ins r k v := r.insert (rowSpec E) k v
   drop r k := Trie.retainAt (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) r
 
-/-- The rows as the dirty overlay: a read walks it (no hash), a write is unhashed (`Trie.insU`), a
+/-- `uStore`'s read, write and removal as named functions (cv 01a1545b-1daf): the record's fields are
+these, partly applied to `E`, so a touch inlined at `uStore` calls them directly. A lambda in the record
+compiled to a closure the compiler floated out of `rowsRun`'s loop and applied (`lean_apply`), never
+called. -/
+def uGet (E : Env D) (u : Trie.U (RowSlot D) RowLeaf D) (s : RowSlot D) : Option RowLeaf :=
+  Trie.U.getAt (rowSpec E) s 0 u
+
+def uIns (E : Env D) (u : Trie.U (RowSlot D) RowLeaf D) (k : RowSlot D) (v : RowLeaf) :
+    Trie.U (RowSlot D) RowLeaf D :=
+  Trie.insU (rowSpec E) k v 0 u
+
+def uDrop (E : Env D) (u : Trie.U (RowSlot D) RowLeaf D) (k : RowSlot D) : Trie.U (RowSlot D) RowLeaf D :=
+  Trie.retainAtU (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) u
+
+/-- The rows as the dirty overlay (`@[inline]`, as `headOfOn`: `rowsRun`'s calls through it are
+direct, `uGet`/`uIns`/`uDrop`): a read walks it (no hash), a write is unhashed (`Trie.insU`), a
 removal re-joins the row's path unhashed (`Trie.retainAtU`, cv 01a15460-e096: a retract joins the
 batch; before it, the removal sealed what was written and the batch split at every retract). -/
-def uStore (E : Env D) : RowStore D (Trie.U (RowSlot D) RowLeaf D) where
-  get u s := Trie.U.getAt (rowSpec E) s 0 u
-  ins u k v := Trie.insU (rowSpec E) k v 0 u
-  drop u k := Trie.retainAtU (rowSpec E) (fun k' _ => decide (k' ≠ k)) (rowPath E k) u
+@[inline] def uStore (E : Env D) : RowStore D (Trie.U (RowSlot D) RowLeaf D) where
+  get := uGet E
+  ins := uIns E
+  drop := uDrop E
 
 /-- One row touch, judged on the rows written so far this turn, on any store (`RowStore`) (slots are distinct, so a row's pin
 is judged against the pre-state; a head's count and sum accumulate: the head update is additive,
@@ -1186,7 +1203,7 @@ Versions (KERNEL-54): an absent row's pin names its relation's floor IN THE WORL
 pin of the same turn); an insert takes the floor as its version (inserts leave the floor alone, so two
 turns' inserts commute); an upsert bumps the row's version; a retract raises the floor past the
 version of the row it removes. Each refused by name past `Bounds.counterLimit` (`overBound .version`). -/
-def rowStepOn {C : Type} (st : RowStore D C) (E : Env D) (w : World D) (t : Turn D) (r : C)
+@[inline] def rowStepOn {C : Type} (st : RowStore D C) (E : Env D) (w : World D) (t : Turn D) (r : C)
     (x : RowTouch D) : Except (Reject D) C := do
   match x.slot, x.act with
   | .head p rel, .declare limit cap width retract => do
@@ -1262,7 +1279,7 @@ def rowFreedOn {C : Type} (st : RowStore D C) (r : C) (x : RowTouch D) : Nat :=
 def rowFreed (E : Env D) (r : Rows D) (x : RowTouch D) : Nat := rowFreedOn (trieStore E) r x
 
 /-- One row touch with what it gives back, accumulated, on any store. -/
-def rowStepFreedOn {C : Type} (st : RowStore D C) (E : Env D) (w : World D) (t : Turn D) (acc : C × Nat)
+@[inline] def rowStepFreedOn {C : Type} (st : RowStore D C) (E : Env D) (w : World D) (t : Turn D) (acc : C × Nat)
     (x : RowTouch D) : Except (Reject D) (C × Nat) := do
   let r ← rowStepOn st E w t acc.1 x
   pure (r, acc.2 + rowFreedOn st acc.1 x)
@@ -1301,7 +1318,10 @@ def rowsRun (E : Env D) (w : World D) (t : Turn D) :
   match t.rows.find? (fun x => decide (1 < (t.rows.filter fun y => decide (y.slot = x.slot)).length)) with
   | some x => .error (.duplicateRow (match x.slot with | .head p _ => p | .row k => k.parent))
   | none => do
-      let acc ← t.rows.foldlM (rowStepFreedOn (uStore E) E w t) (.clean w.rows, 0)
+      -- a saturated call, so the `@[inline]` touch body is inlined here at `uStore` (cv 01a1545b-1daf:
+      -- passed as a value, `rowStepFreedOn (uStore E) E w t` compiled to the generic body and every
+      -- store call to `lean_apply`)
+      let acc ← t.rows.foldlM (fun acc x => rowStepFreedOn (uStore E) E w t acc x) (.clean w.rows, 0)
       pure (dropHeads E t (acc.1.seal (rowSpec E), acc.2))
 
 /-- The rows after a checked turn and what its row touches give back. `check` ran `rowsRun` to
