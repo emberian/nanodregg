@@ -34,7 +34,11 @@ It is DISCHARGED
   reads back as that World. That the bytes on disk ARE that file is the Store key's MAC: an
   integrity-at-rest key (HOST-16), not a proof; that the writer's World is trusted is the chain
   genesis/import → `trusted_fold` → seal, by induction over the writer's life (each open
-  `openWith_trusted`, each seal `sealed_trusted`), which this module states link by link.
+  `openWith_trusted`, each round's last seal `sealed_trusted`, every other seal the end of a prefix
+  life): `writer_life_trusted` over `WriterLife`, the abstract events (open, admitted fold, seal;
+  HOST-69), from `genesis_life_trusted` / `import_life_trusted`. The fold of each batch is
+  `host_run_kept`; that the loop holds nothing but those Worlds between the open and the seal is
+  the fold premise of each link, read off (HOST-62's item), not re-derived.
 
 It is NOT discharged for a RECEIVED base: a thin member's adopt (the pin binds the bytes, not their
 history: `Protocol.Thin`), a hosted follower's join from a served base (a joiner of a CARRIED World
@@ -212,6 +216,117 @@ theorem sealed_trusted {o : D} {keys : Keys} {w : World D} {seg : Position} {ix 
   injection he with he
   rw [he]
   exact ht
+
+/-! ## The writer's life as ONE theorem (HOST-69; HOST-64's "NOT PROVED: the writer-life induction") -/
+
+/-- **The writer's life, as the abstract events this module states link by link**: from a base
+file, each link is one open of it (`openWith` to `o`), the loop's admitted steps after it (an
+admitted fold `World.fold X.env o.opened.world l = .ok w'`), and the seal of the World it reached
+(`Base.file`, the base file the next link opens). `refl` ends it. Stated over opens and seals only:
+no append is an event.
+
+The fold premise `hf`: the fold of ONE batch is `host_run_kept` (`Host.Proofs.Refine`, at
+`(machine X)`, from `trusted_kept`'s `Kept`); the batches of a round concatenate by `fold_append`.
+What stays READ OFF (HOST-62's item; host.md's "the resident World is only ever the open's World or
+`admitBatch`'s") is that `Loop.serve` holds nothing but those Worlds between the open and the seal.
+Nobody discharges `hf` over the IO loop; it enters as this premise.
+
+A link's seal is the LAST seal of its round: the base the next open reads. A seal made mid-round
+(`append`'s cadence, `makeRoom`'s `sealNow`) is not a link of the life that continues; it is the
+END of a shorter life over the same open, since folds concatenate (`fold_append`). So every base
+this writer writes ends some `WriterLife` from its start file, and `writer_life_trusted` covers
+each; no single life lists every seal. -/
+inductive WriterLife (keys : Keys) : ByteArray → ByteArray → Prop
+  | refl (file : ByteArray) : WriterLife keys file file
+  | link {file file' rest H I S : ByteArray} {o : Opening (World D)} {l : List (Step D)} {w' : World D}
+      {seg : Position} {ix : IndexAt} {keep : Keep}
+      (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
+        (segReader I) (segReader S)) = .ok o)
+      (hf : World.fold X.env o.opened.world l = .ok w')
+      (hs : Base.file keys c world w' seg ix keep = .ok file')
+      (hcount : ix.count < 2 ^ 64)
+      (next : WriterLife keys file' rest) : WriterLife keys file rest
+
+/-- **One link keeps the base trusted**: a base file whose World is trusted at `r`, opened, folded
+by admitted steps and sealed, leaves a base file whose World is trusted at `r`
+(`openWith_trusted`, `trusted_fold`, `sealed_trusted`). -/
+theorem link_trusted {r : D} {keys : Keys} {file file' H I S : ByteArray} {o : Opening (World D)}
+    {l : List (Step D)} {w' : World D} {seg : Position} {ix : IndexAt} {keep : Keep}
+    (hbase : ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world file = .ok (b, n, d) → CheckpointTrusted r b.world)
+    (h : Id.run (openWith keys c world recorder.mark originChain foldStep file H S.size I.size
+      (segReader I) (segReader S)) = .ok o)
+    (hf : World.fold X.env o.opened.world l = .ok w')
+    (hs : Base.file keys c world w' seg ix keep = .ok file') (hcount : ix.count < 2 ^ 64) :
+    ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world file' = .ok (b, n, d) → CheckpointTrusted r b.world :=
+  fun _ _ _ hr => sealed_trusted (trusted_fold (openWith_trusted h hbase) hf) hs hcount hr
+
+/-- **The writer-life induction, as one theorem** (HOST-64's named gap): over a writer's life from a
+base file whose World is trusted at `r`, the base file it ends at holds a World trusted at `r`
+(every base file a writer reaches ends some life, so each is covered). The induction over
+`WriterLife` composes `link_trusted`; the start is `genesis_life_trusted` / `import_life_trusted`. -/
+theorem writer_life_trusted {r : D} {keys : Keys} {file₀ fileN : ByteArray}
+    (life : WriterLife keys file₀ fileN)
+    (hbase : ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world file₀ = .ok (b, n, d) → CheckpointTrusted r b.world) :
+    ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world fileN = .ok (b, n, d) → CheckpointTrusted r b.world := by
+  induction life with
+  | refl _ => exact hbase
+  | link h hf hs hcount _ ih => exact ih (link_trusted hbase h hf hs hcount)
+
+/-- The base `genesisImage` writes for a trusted World holds a trusted World: `Base.file` through
+`sealed_trusted` at count 0. -/
+theorem genesisImage_trusted {r : D} {keys : Keys} {w₀ : World D} (ht : CheckpointTrusted r w₀) {img : Image}
+    (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
+    ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world img.base = .ok (b, n, d) → CheckpointTrusted r b.world := by
+  obtain ⟨file, hf, rfl⟩ := genesisImage_ok h
+  exact fun _ _ _ hr => sealed_trusted ht hf (by decide) hr
+
+/-- **A writer's life from `host genesis` holds trusted bases throughout** (at the genesis World's
+origin): the genesis that passed the budget check (`genesis_trusted`), its image, then any life. -/
+theorem genesis_life_trusted {keys : Keys} {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)} {w₀ : World D}
+    (hg : Receive.genesis X name nonce allowance founders = .ok w₀) (hb : budgetFault w₀ = none)
+    {img : Image} (h : genesisImage keys c world recorder.mark w₀ = .ok img) {fileN : ByteArray}
+    (life : WriterLife keys img.base fileN) :
+    ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world fileN = .ok (b, n, d) → CheckpointTrusted w₀.origin b.world :=
+  writer_life_trusted life (genesisImage_trusted (genesis_trusted hg hb) h)
+
+/-- **A writer's life from `host import --origin O` holds bases trusted at `O` throughout**
+(`import_trusted_pinned`: the pinned origin, the one an invitation names). -/
+theorem import_life_trusted {keys : Keys} {name nonce : ByteArray} {o : D} {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce (.origin o) f = .ok (w₀, r))
+    (hb : budgetFault w₀ = none) {img : Image} (h : genesisImage keys c world recorder.mark w₀ = .ok img)
+    {fileN : ByteArray} (life : WriterLife keys img.base fileN) :
+    ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world fileN = .ok (b, n, d) → CheckpointTrusted o b.world :=
+  writer_life_trusted life (genesisImage_trusted (import_trusted_pinned hi hb) h)
+
+/-- **The consumer, over a life**: every World a reopen of any base of the life returns encodes
+within `worldBytesMax` (`opened_size_le`), so no seal of the life refuses `worldTooLarge` by the
+tail's growth. -/
+theorem life_opened_size_le {keys : Keys} {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)} {w₀ : World D}
+    (hg : Receive.genesis X name nonce allowance founders = .ok w₀) (hb : budgetFault w₀ = none)
+    {img : Image} (h : genesisImage keys c world recorder.mark w₀ = .ok img) {fileN H I S : ByteArray}
+    (life : WriterLife keys img.base fileN) {o : Opening (World D)}
+    (ho : Id.run (openWith keys c world recorder.mark originChain foldStep fileN H S.size I.size
+      (segReader I) (segReader S)) = .ok o) :
+    world.size o.opened.world ≤ c.worldBytesMax :=
+  opened_size_le ho (genesis_life_trusted hg hb h life)
+
+/-- **The tooth**: a life is refuted by any base it reaches holding more potential than
+`potentialMax`: no `WriterLife` from a trusted start reaches it (`not_trusted_of_potential`). -/
+theorem life_refutes_potential {r : D} {keys : Keys} {file₀ fileN : ByteArray}
+    (hbase : ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
+      Base.read keys c world file₀ = .ok (b, n, d) → CheckpointTrusted r b.world)
+    {b : Base (World D)} {n : Nat} {d : ByteArray} (hr : Base.read keys c world fileN = .ok (b, n, d))
+    (hp : potentialMax < potential b.world) : ¬ WriterLife keys file₀ fileN :=
+  fun life => not_trusted_of_potential hp (writer_life_trusted life hbase b n d hr)
 
 /-! ## The recorded origin names ONE start (ROOT's (B′)) -/
 
