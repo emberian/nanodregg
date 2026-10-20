@@ -200,65 +200,120 @@ def headKnown : Tm → Bool
   | .mvar _ _ => false
   | _ => true
 
-/-! ## Decidable equality, by hand (no `deriving` for nested inductives in v4.30.0) -/
+/-! ## Decidable equality, by hand (no `deriving` for nested inductives in v4.30.0)
+
+Structural recursion over the nested inductives, every verdict carrying its proof term; there is
+no separate Boolean equality to relate. -/
 
 mutual
-def Ty.beq : Ty → Ty → Bool
-  | .base, .base => true
-  | .arr a b, .arr c d => Ty.beq a c && Ty.beq b d
-  | .box Ψ a, .box Φ b => Ty.beqL Ψ Φ && Ty.beq a b
-  | _, _ => false
-def Ty.beqL : List Ty → List Ty → Bool
-  | [], [] => true
-  | a :: as, b :: bs => Ty.beq a b && Ty.beqL as bs
-  | _, _ => false
+/-- Decide equality of types. -/
+def Ty.decEq : (a b : Ty) → Decidable (a = b)
+  | .base, .base => isTrue rfl
+  | .arr a₁ a₂, .arr b₁ b₂ =>
+    match Ty.decEq a₁ b₁, Ty.decEq a₂ b₂ with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | .box Ψ a, .box Φ b =>
+    match Ty.decEqL Ψ Φ, Ty.decEq a b with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | .base, .arr _ _ => isFalse (by intro e; cases e)
+  | .base, .box _ _ => isFalse (by intro e; cases e)
+  | .arr _ _, .base => isFalse (by intro e; cases e)
+  | .arr _ _, .box _ _ => isFalse (by intro e; cases e)
+  | .box _ _, .base => isFalse (by intro e; cases e)
+  | .box _ _, .arr _ _ => isFalse (by intro e; cases e)
+/-- Decide equality of type lists. -/
+def Ty.decEqL : (as bs : List Ty) → Decidable (as = bs)
+  | [], [] => isTrue rfl
+  | a :: as, b :: bs =>
+    match Ty.decEq a b, Ty.decEqL as bs with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | [], _ :: _ => isFalse (by intro e; cases e)
+  | _ :: _, [] => isFalse (by intro e; cases e)
 end
+
+instance Ty.instDecEq : DecidableEq Ty := Ty.decEq
 
 mutual
-def Tm.beq : Tm → Tm → Bool
-  | .var i, .var j => i == j
-  | .lam A t, .lam B s => Ty.beq A B && Tm.beq t s
-  | .app t₁ t₂, .app s₁ s₂ => Tm.beq t₁ s₁ && Tm.beq t₂ s₂
-  | .box Ψ t, .box Φ s => Ty.beqL Ψ Φ && Tm.beq t s
-  | .letbox t₁ t₂, .letbox s₁ s₂ => Tm.beq t₁ s₁ && Tm.beq t₂ s₂
-  | .mvar u σ, .mvar v τ => u == v && Tm.beqL σ τ
-  | _, _ => false
-def Tm.beqL : List Tm → List Tm → Bool
-  | [], [] => true
-  | a :: as, b :: bs => Tm.beq a b && Tm.beqL as bs
-  | _, _ => false
+/-- Decide equality of terms. -/
+def Tm.decEq : (a b : Tm) → Decidable (a = b)
+  | .var i, .var j =>
+    if h : i = j then isTrue (by subst h; rfl)
+    else isFalse (by intro e; injection e with e₁; exact h e₁)
+  | .lam A t, .lam B s =>
+    match Ty.decEq A B, Tm.decEq t s with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | .app t₁ t₂, .app s₁ s₂ =>
+    match Tm.decEq t₁ s₁, Tm.decEq t₂ s₂ with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | .box Ψ t, .box Φ s =>
+    match Ty.decEqL Ψ Φ, Tm.decEq t s with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | .letbox t₁ t₂, .letbox s₁ s₂ =>
+    match Tm.decEq t₁ s₁, Tm.decEq t₂ s₂ with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | .mvar u σ, .mvar v τ =>
+    if h : u = v then
+      match Tm.decEqL σ τ with
+      | isTrue h₂ => isTrue (by subst h; subst h₂; rfl)
+      | isFalse h₂ => isFalse (by intro e; injection e with e₁ e₂; exact h₂ e₂)
+    else isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+  | .var _, .lam _ _ => isFalse (by intro e; cases e)
+  | .var _, .app _ _ => isFalse (by intro e; cases e)
+  | .var _, .box _ _ => isFalse (by intro e; cases e)
+  | .var _, .letbox _ _ => isFalse (by intro e; cases e)
+  | .var _, .mvar _ _ => isFalse (by intro e; cases e)
+  | .lam _ _, .var _ => isFalse (by intro e; cases e)
+  | .lam _ _, .app _ _ => isFalse (by intro e; cases e)
+  | .lam _ _, .box _ _ => isFalse (by intro e; cases e)
+  | .lam _ _, .letbox _ _ => isFalse (by intro e; cases e)
+  | .lam _ _, .mvar _ _ => isFalse (by intro e; cases e)
+  | .app _ _, .var _ => isFalse (by intro e; cases e)
+  | .app _ _, .lam _ _ => isFalse (by intro e; cases e)
+  | .app _ _, .box _ _ => isFalse (by intro e; cases e)
+  | .app _ _, .letbox _ _ => isFalse (by intro e; cases e)
+  | .app _ _, .mvar _ _ => isFalse (by intro e; cases e)
+  | .box _ _, .var _ => isFalse (by intro e; cases e)
+  | .box _ _, .lam _ _ => isFalse (by intro e; cases e)
+  | .box _ _, .app _ _ => isFalse (by intro e; cases e)
+  | .box _ _, .letbox _ _ => isFalse (by intro e; cases e)
+  | .box _ _, .mvar _ _ => isFalse (by intro e; cases e)
+  | .letbox _ _, .var _ => isFalse (by intro e; cases e)
+  | .letbox _ _, .lam _ _ => isFalse (by intro e; cases e)
+  | .letbox _ _, .app _ _ => isFalse (by intro e; cases e)
+  | .letbox _ _, .box _ _ => isFalse (by intro e; cases e)
+  | .letbox _ _, .mvar _ _ => isFalse (by intro e; cases e)
+  | .mvar _ _, .var _ => isFalse (by intro e; cases e)
+  | .mvar _ _, .lam _ _ => isFalse (by intro e; cases e)
+  | .mvar _ _, .app _ _ => isFalse (by intro e; cases e)
+  | .mvar _ _, .box _ _ => isFalse (by intro e; cases e)
+  | .mvar _ _, .letbox _ _ => isFalse (by intro e; cases e)
+/-- Decide equality of term lists. -/
+def Tm.decEqL : (as bs : List Tm) → Decidable (as = bs)
+  | [], [] => isTrue rfl
+  | a :: as, b :: bs =>
+    match Tm.decEq a b, Tm.decEqL as bs with
+    | isTrue h₁, isTrue h₂ => isTrue (by subst h₁; subst h₂; rfl)
+    | isFalse h, _ => isFalse (by intro e; injection e with e₁ e₂; exact h e₁)
+    | _, isFalse h => isFalse (by intro e; injection e with e₁ e₂; exact h e₂)
+  | [], _ :: _ => isFalse (by intro e; cases e)
+  | _ :: _, [] => isFalse (by intro e; cases e)
 end
 
-mutual
-private theorem Ty.beq_iff' : ∀ a b : Ty, Ty.beq a b = true ↔ a = b
-  | .base, b => by cases b <;> simp [Ty.beq]
-  | .arr a₁ a₂, b => by cases b <;> simp [Ty.beq, Ty.beq_iff' a₁, Ty.beq_iff' a₂]
-  | .box Ψ a, b => by cases b <;> simp [Ty.beq, Ty.beqL_iff' Ψ, Ty.beq_iff' a]
-private theorem Ty.beqL_iff' : ∀ as bs : List Ty, Ty.beqL as bs = true ↔ as = bs
-  | [], bs => by cases bs <;> simp [Ty.beqL]
-  | a :: as, bs => by cases bs <;> simp [Ty.beqL, Ty.beq_iff' a, Ty.beqL_iff' as]
-end
-
-
-/-- Decidable equality of types (data; its correctness is private here and public as
-`Ty.beq_iff` in the proof module). -/
-instance Ty.decEq : DecidableEq Ty := fun a b => decidable_of_iff _ (Ty.beq_iff' a b)
-
-mutual
-private theorem Tm.beq_iff' : ∀ a b : Tm, Tm.beq a b = true ↔ a = b
-  | .var i, b => by cases b <;> simp [Tm.beq]
-  | .lam A t, b => by cases b <;> simp [Tm.beq, Ty.beq_iff' A, Tm.beq_iff' t]
-  | .app t₁ t₂, b => by cases b <;> simp [Tm.beq, Tm.beq_iff' t₁, Tm.beq_iff' t₂]
-  | .box Ψ t, b => by cases b <;> simp [Tm.beq, Ty.beqL_iff' Ψ, Tm.beq_iff' t]
-  | .letbox t₁ t₂, b => by cases b <;> simp [Tm.beq, Tm.beq_iff' t₁, Tm.beq_iff' t₂]
-  | .mvar u σ, b => by cases b <;> simp [Tm.beq, Tm.beqL_iff' σ]
-private theorem Tm.beqL_iff' : ∀ as bs : List Tm, Tm.beqL as bs = true ↔ as = bs
-  | [], bs => by cases bs <;> simp [Tm.beqL]
-  | a :: as, bs => by cases bs <;> simp [Tm.beqL, Tm.beq_iff' a, Tm.beqL_iff' as]
-end
-
-/-- Decidable equality of terms. -/
-instance Tm.decEq : DecidableEq Tm := fun a b => decidable_of_iff _ (Tm.beq_iff' a b)
+instance Tm.instDecEq : DecidableEq Tm := Tm.decEq
 
 /-! ## The type checker -/
 

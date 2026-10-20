@@ -6,7 +6,8 @@ lists of variable names, one type, typing = scoping), so every closure computes 
 experiment is a named theorem over a concrete session, next to the general theorem it instances.
 
 1. `withdraw_one_of_two_supports` (provenance `ab + c`; `alternative_sound`), `rejudged_only_touched`
-   (`repair_rejudged_eq_touched`), `s1_coherent` (`session_preserves_coherent`)
+   (`repair_rejudged_eq_touched`), `s1_coherent` (`session_preserves_coherent`), `s1_derivable`
+   (`derivable_of_wellFilled` applied: `tpl0_typed`, `toyLaws`); `tplH_typed`
 2. `withdraw_last_support` (`withdraw_never_refutes`, `suspended_sound`)
 3. `withdraw_pruning_reason` (`judge_pruned`, `withdraw_never_prunes`)
 4. `cycle_loses_grounding` + `counting_keeps_cycle` (`unfounded_not_derivable`, `lfpIter_sound`):
@@ -651,6 +652,22 @@ theorem s1_coherent : ∃ st, s1 = .ok st ∧ Coherent st.1 st.2 ∧ WellFilled 
     refine ⟨st, rfl, ?_, ?_⟩
     · exact session_preserves_coherent _ (start_coherent tpl0 w0) h
     · exact session_preserves_wellFilled _ (fromScratch_wellFilled w0 tpl0 _) h
+
+/-- The fixture templates type under their open interfaces. -/
+theorem tpl0_typed : tpl0.Typed toyHasTy := by
+  unfold Template.Typed toyHasTy; decide
+
+theorem tplH_typed : tplH.Typed toyHasTy := by
+  unfold Template.Typed toyHasTy; decide
+
+/-- **Experiment 1's state is DERIVABLE**: the template with its selected filling types, by
+`derivable_of_wellFilled` over the toy's laws, the template's typing and the session's
+well-filledness (not by evaluating the typing). -/
+theorem s1_derivable : ∃ st, s1 = .ok st ∧ Derivable toyHasTy st.2 := by
+  obtain ⟨st, hs, -, hwf⟩ := s1_coherent
+  refine ⟨st, hs, derivable_of_wellFilled toyLaws ?_ hwf⟩
+  have := session_preserves_tpl _ hs
+  rw [this]; exact tpl0_typed
 
 /-- Withdrawing `A` in experiment 1 re-judges candidate 0 (it cites `A`) and NOT candidate 1. -/
 theorem rejudged_only_touched : (repair w0 (.withdraw tA) (clOf s1)).2.2 = [(0, 0)] := by

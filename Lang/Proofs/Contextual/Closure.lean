@@ -8,7 +8,7 @@ Over every calculus: its data `CalculusData` (`Lang.Contextual.Closure`) and its
 * the judgment: `judge_congr` (a status reads only the environment and its dependencies),
   `judge_frame`, `judge_verified_iff`, `judge_conflict_iff`, `provenance_iff` (the bridge from the
   world-free token polynomial to `judge_verified_iff`); the obstruction: `hyp_var_cites`,
-  `drop_removes`;
+  `weaken_never_var`, `drop_removes`;
 * CONDITIONAL SOUNDNESS: `conditional_soundness`, `derivable_of_wellFilled`,
   `fill_preserves_derivable`, `op_preserves_wellFilled`, `select_requires_available`;
 * withdrawal: `withdraw_never_refutes`, `withdraw_never_prunes`, `withdraw_never_refutes_closure`;
@@ -237,14 +237,23 @@ theorem hyp_var_cites (L : CalculusLaws D HasTy) {I : Iface D E} {x : Nat} {t : 
   · simp only [effSupports, List.mem_append, List.mem_map, List.mem_filter]
     exact Or.inr ⟨(x, t), ⟨h, by rw [hc]; exact L.uses_var⟩, rfl⟩
 
-/-- **`drop` removes the hypothesis.** If `x` is a hypothesis of `Ψ` and weakening fixes the
-variable `x`, then `x` does not type in `drop Ψ x` (so `drop = id` with `weaken = id` is refuted). -/
-theorem drop_removes (L : CalculusLaws D HasTy) {Ψ : D.Ctx} {x : Nat} {A : D.Ty} (hw : D.weaken x (D.var x) = D.var x) :
-    ¬ HasTy [] (D.drop Ψ x) (D.var x) A := by
-  intro h
+/-- **Weakening never produces the dropped variable.** No term typed in `drop Ψ x`, weakened back,
+is the variable `x`: the general form, which bites for every calculus (de Bruijn included). -/
+theorem weaken_never_var (L : CalculusLaws D HasTy) {Ψ : D.Ctx} {M : D.Tm} {A : D.Ty} {x : Nat}
+    (h : HasTy [] (D.drop Ψ x) M A) : D.weaken x M ≠ D.var x := by
+  intro he
   have := L.weaken_avoids h
-  rw [hw, L.uses_var] at this
+  rw [he, L.uses_var] at this
   cases this
+
+/-- **`drop` removes the hypothesis, for weakenings that fix the variable.** If weakening fixes
+`var x` (named-variable calculi such as the toy, or the degenerate `weaken = id`), then `var x` does
+not type in `drop Ψ x`, so `drop = id` with `weaken = id` is refuted. It does NOT cover a de Bruijn
+weakening (CMTT's `shiftAt` sends `var x` to `var (x+1)`, so the premise is false there); the
+general statement is `weaken_never_var`. -/
+theorem drop_removes (L : CalculusLaws D HasTy) {Ψ : D.Ctx} {x : Nat} {A : D.Ty}
+    (hw : D.weaken x (D.var x) = D.var x) : ¬ HasTy [] (D.drop Ψ x) (D.var x) A :=
+  fun h => weaken_never_var L h hw
 
 /-! ## Withdrawal never refutes -/
 
@@ -1471,6 +1480,20 @@ theorem session_preserves_coherent :
     · cases h
     · rename_i cl₁ h₁
       exact session_preserves_coherent ops (op_preserves_coherent hc h₁) h
+
+/-- A session never rewrites the template. -/
+theorem session_preserves_tpl :
+    ∀ (ops : List (Op D E)) {w w' : World E} {cl cl' : Closure D E},
+      Session.run ops (w, cl) = .ok (w', cl') → cl'.tpl = cl.tpl
+  | [], _, _, _, _, h => by
+    simp only [Session.run, Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h; rfl
+  | op :: ops, w, w', cl, cl', h => by
+    simp only [Session.run] at h
+    split at h
+    · cases h
+    · rename_i cl₁ h₁
+      rw [session_preserves_tpl ops h, (history_is_prefix h₁).tpl]
 
 /-- Well-filledness (hence derivability) holds along a session. -/
 theorem session_preserves_wellFilled :

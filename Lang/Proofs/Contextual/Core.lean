@@ -11,7 +11,7 @@
 * teeth: `box_cannot_capture` (+ `_toy`), `box_ambient_free`, `mvar_blocked` and
   `subst_keeps_blocked` (definitional), `msubst_mvar_self`, `msubst_unblocks`,
   `msubst_other_blocked` (+ `mvar_blocked_toy`), `strengthen_needs_unused`;
-* the checker: `Ty.beq_iff`, `Tm.beq_iff` (the instances are Core's), `infer_sound`,
+* the checker (equality is Core's `Ty.decEq`/`Tm.decEq`): `infer_sound`,
   `infer_complete`, `check_sound`, `check_complete`;
 * strengthening at any position: `rename_congr`, `shiftAt_unshiftAt`, `hasTy_unshiftAt`,
   `uses_rename`, `uses_shiftAt`;
@@ -886,22 +886,6 @@ theorem bell_resume_toy :
   exact ⟨hk, hr, s1, s2, subject_reduction hr s1, subject_reduction (subject_reduction hr s1) s2⟩
 
 /-! ## Decidable equality -/
-
-theorem Ty.decide_eq (a b : Ty) : decide (a = b) = Ty.beq a b := by
-  simp only [decide, Ty.decEq, decidable_of_iff, decidable_of_decidable_of_iff]
-  split <;> simp_all
-
-/-- `Ty.beq` decides equality (the public face of `Ty.decEq`'s private correctness). -/
-theorem Ty.beq_iff (a b : Ty) : Ty.beq a b = true ↔ a = b := by
-  rw [← Ty.decide_eq]; exact decide_eq_true_iff
-
-theorem Tm.decide_eq (a b : Tm) : decide (a = b) = Tm.beq a b := by
-  simp only [decide, Tm.decEq, decidable_of_iff, decidable_of_decidable_of_iff]
-  split <;> simp_all
-
-/-- `Tm.beq` decides equality. -/
-theorem Tm.beq_iff (a b : Tm) : Tm.beq a b = true ↔ a = b := by
-  rw [← Tm.decide_eq]; exact decide_eq_true_iff
 
 /-- The instance decides: two different terms, one `decide`. -/
 theorem tm_decEq_toy :
