@@ -26,8 +26,9 @@ for every relation.
 The polarity (PROOF-ENGINEERING Q3): wp over the fold, sp over the law. `Admits` stays existential;
 `Lang.Proofs.Receiver.fault_never_admits` is the tooth on the judge's side. The kernel's half (a
 World's audited history around one object projects to a `Chain` for every law in force) is
-KERNEL's `object_history_chain` (KERNEL-27, not landed with this module: until it
-lands nothing ties a World's history to a `Step` chain). The per-law instances are `Lang.Proofs.StdChain`.
+KERNEL's `Kernel.Proofs.Logic.History.object_history_chain` (KERNEL-28): an `ObjectHistory` (every
+step of the World around one object; an audited log is one, `object_history_of_audit`) is a
+`Chain (Step [] t)` for every `NoRef` law `t` in force. The per-law instances are `Lang.Proofs.StdChain`.
 -/
 import Lang.Proofs.Std
 

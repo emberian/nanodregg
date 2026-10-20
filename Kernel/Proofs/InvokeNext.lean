@@ -406,7 +406,9 @@ private theorem invokeRun_cell {X : Ctx D} {look : Pinned D} {c : Call D} {actor
   simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
   rw [← h.1]; exact hc
 
-private theorem readKind_pinned {E : Env D} {w : World D} {pins : List (D × D)} {c : D} {kind : Nat}
+/-- **A pinned read is a live cell a pin names**: `pinned` answers only for a pinned id, with
+`w.live` itself. -/
+theorem readKind_pinned {E : Env D} {w : World D} {pins : List (D × D)} {c : D} {kind : Nat}
     {cell : Cell} (h : readKind (pinned E w pins) c kind = .ok cell) :
     w.live E c = some cell ∧ ∃ q ∈ pins, q.1 = c := by
   unfold readKind pinned at h
@@ -522,8 +524,8 @@ theorem invoke_next_run {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
   exact hk
 
 /-- **The run the next state comes from was judged** (LEDGER-14 `Runs`' judge premise): under
-`invoke_next_slots`' premises, the laws in force admitted the run's slots `s` over the cell's state,
-under the request the invoke ran with. -/
+`invoke_next_slots`' premises, the laws in force (the cell's, by `lawsOf`) admitted the run's slots
+`s` over the cell's state, under the request the invoke ran with. -/
 theorem invoke_next_judged {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
     {cell : Cell} {p : D} {r : Req D} {s : Slots} {calls : List (Body D)}
@@ -533,7 +535,8 @@ theorem invoke_next_judged {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D
     (hr : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r))
     (hp : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
       method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used)) :
-    ∃ laws, X.program.judge (pinned X.env w c.unsigned.pins) (some p) laws (stateOf cell) s r = .ok () := by
+    ∃ laws, lawsOf X obj cell = .ok laws ∧
+      X.program.judge (pinned X.env w c.unsigned.pins) (some p) laws (stateOf cell) s r = .ok () := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
   obtain ⟨-, d, hd, -⟩ := receiveWith_sealed hw
   rw [derive_eq, hb] at hd
@@ -542,7 +545,7 @@ theorem invoke_next_judged {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D
       ⟨[], poolOf (Body.invoke obj method args budget via), 0⟩ c.unsigned.member obj method args budget via with
   | error e => simp only [dispatch, hdisp] at hd; cases hd
   | ok q =>
-    obtain ⟨-, cell₀, p₀, r₀, new, calls₀, rows₀, used₀, hr₀, hp₀, -, -, -, -, ⟨laws, -, hj⟩, -⟩ := invoke_ok hdisp
+    obtain ⟨-, cell₀, p₀, r₀, new, calls₀, rows₀, used₀, hr₀, hp₀, -, -, -, -, ⟨laws, hlw, hj⟩, -⟩ := invoke_ok hdisp
     rw [hr] at hr₀
     simp only [Except.ok.injEq, Prod.mk.injEq] at hr₀
     obtain ⟨rfl, rfl, rfl⟩ := hr₀
@@ -552,7 +555,7 @@ theorem invoke_next_judged {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D
       simp only [Except.ok.injEq, Prod.mk.injEq] at this
       exact this.1
     subst hnew
-    exact ⟨laws, hj⟩
+    exact ⟨laws, hlw, hj⟩
 
 /-! ## Teeth -/
 

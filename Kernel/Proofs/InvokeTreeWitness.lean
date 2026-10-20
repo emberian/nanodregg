@@ -2,9 +2,11 @@
 # Kernel.Proofs.InvokeTreeWitness — an object invoked by another object's run, derived, admitted, run again
 
 `invoke_tree_slots` and `invoke_tree_run` (`Kernel.Proofs.InvokeTree`) take a `receive`, a
-`World.admit` and `Invoked`: the object was invoked somewhere in the call's tree. This module shows
+`World.admit` and `Dispatched`: the call's walk dispatched an invoke of the object. This module shows
 those premises hold together on an instance where the object is NOT the signed call's: it is invoked
-by another object's run, through `tree`, with the real language (`Lang.program`) running both.
+by another object's run, through `tree`, with the real language (`Lang.program`) running both. Tooth
+`dispatched_pins_args`: the walk's record names the arguments it ran with; the same invoke with
+other arguments is not dispatched (its run returns a state the World does not hold).
 
 The instance. The toy `Env` and `Ctx` of `Kernel.Proofs.InvokeWitness` (one-byte digests, the hash an
 input's first byte, every signature accepted, `program := Lang.program`). The World holds member 7
@@ -323,8 +325,38 @@ private theorem c1_admit : World.admit wCtx.env w0 t1 = .ok w1 := by
   | error e => rw [hf] at h; cases h
   | ok w' => rfl
 
-private theorem c1_invoked : Invoked wCtx w0 c1 5 :=
-  ⟨(ownA.append ownB, wkB), c1_invokeA, by decide⟩
+/-- B's invoke is dispatched: the one call A's run returned, the first, at the walk past A, as A. -/
+private theorem c1_dispatchedB : Dispatched wCtx w0 c1 3 wkA 6 bodyB :=
+  Dispatched.call (m := 3) (acc := (ownA, wkA)) (calls := [bodyB]) 0 (by decide)
+    (Dispatched.root (X := wCtx) (w := w0) (c := c1)) c1_invokeA c1_invokeRunA c1_runA rfl
+
+/-- A run's resulting state is `s`, as a Boolean the kernel evaluates. -/
+private def runStateIs {ε D : Type} (x : Except ε (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat))
+    (s : Slots) : Bool :=
+  match x with
+  | .ok (s', _, _, _) => decide (s' = s)
+  | .error _ => false
+
+private theorem of_runStateIs {ε D : Type}
+    {x : Except ε (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat)} {s : Slots}
+    (h : runStateIs x s = true) : ∃ cs rs u, x = .ok (s, cs, rs, u) := by
+  unfold runStateIs at h
+  split at h
+  · simp only [decide_eq_true_eq] at h
+    subst h
+    exact ⟨_, _, _, rfl⟩
+  · cases h
+
+/-- What `bump 5` returns on `n = 3`. -/
+private def sB5 : Slots := [(stateBase, natBytes 8)]
+
+private theorem c1_runB5 : ∃ cs rs u,
+    wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 9 (stateOf bCell)
+      0 (natBytes 5) reqB (min 1000 wkA.pool) = .ok (sB5, cs, rs, u) := by
+  show ∃ cs rs u, (runMeasured wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  unfold runMeasured runSetup
+  rw [load_one c1_pkgC counter_decodes rfl]
+  exact of_runStateIs (by decide +kernel)
 
 /-- B as `w1` holds it. -/
 private def cellB1 : Cell := (w1.live wEnv 5).getD bCell
@@ -348,47 +380,76 @@ private theorem c2_invokeRunB :
 /-! ## The premises, witnessed -/
 
 /-- **The premises of `invoke_tree_slots` hold together on a NESTED invoke**, through
-`Lang.program`: a signed call whose body invokes A, derived and admitted, in whose tree B, not the
-signed body's object, is invoked (as A, by A's run); the run the tree made of B (its `invokeRun` as
-A, its `X.program.run` at the pool A left) returned a state other than the one it ran on, and B is
-live in the admitted World with exactly that state. -/
+`Lang.program`: a signed call whose body invokes A, derived and admitted, whose walk dispatched an
+invoke of B, not the signed body's object, as A (A's run returned it); that invoke's run (its
+`invokeRun` as A, its `X.program.run` with its arguments at the fuel the walk left it) returned a
+state other than the one it ran on, and B is live in the admitted World with exactly that state. -/
 theorem invoke_tree_slots_witnessed :
-    ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (obj : UInt8),
+    ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (n : Nat) (wk : Walk UInt8)
+      (actor obj : UInt8) (budget : Nat),
       X.program = Lang.program X.env.bytes X.digestOf ∧
-      receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧ Invoked X w c obj ∧
+      receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
+      Dispatched X w c n wk actor (.invoke obj 0 (natBytes 4) budget none) ∧
       (∀ o method args budget via, c.unsigned.body = .invoke o method args budget via → o ≠ obj) ∧
-      ∃ (actor : UInt8) (fuel : Nat) (cell : Cell) (p : UInt8) (r : Req UInt8) (s : Slots) (used : Nat),
+      actor ≠ c.unsigned.member ∧
+      ∃ (cell : Cell) (p : UInt8) (r : Req UInt8) (s : Slots) (used : Nat),
         invokeRun X (pinned X.env w c.unsigned.pins) c actor obj 0 none = .ok (cell, p, r) ∧
         X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
-          0 (natBytes 4) r fuel = .ok (s, [], [], used) ∧
-        s ≠ stateOf cell ∧ actor ≠ c.unsigned.member ∧
+          0 (natBytes 4) r (min budget wk.pool) = .ok (s, [], [], used) ∧
+        s ≠ stateOf cell ∧
         ∃ cell', w'.live X.env obj = some cell' ∧ stateOf cell' = s :=
-  ⟨wCtx, w0, w1, c1, t1, 5, rfl, c1_receive, c1_admit, c1_invoked,
+  ⟨wCtx, w0, w1, c1, t1, 3, wkA, 6, 5, 1000, rfl, c1_receive, c1_admit, c1_dispatchedB,
     fun o _ _ _ _ h => by
       rw [show c1.unsigned.body = Body.invoke 6 0 (natBytes 0) 1000 none from rfl] at h
       cases h
       decide,
-    6, min 1000 wkA.pool, bCell, 9, reqB, sB, 41, c1_invokeRunB, c1_runB, by decide +kernel, by decide,
-    cellB1, w1_liveB, by decide +kernel⟩
+    by decide, bCell, 9, reqB, sB, 41, c1_invokeRunB, c1_runB, by decide +kernel, cellB1, w1_liveB,
+    by decide +kernel⟩
 
 /-- **The premises of `invoke_tree_run` hold together**: on the instance above, an `invokeRun` of B
-on the admitted World (as A, through fresh pins) reads the cell whose state is what the tree's run
-of B returned. -/
+on the admitted World (as A, through fresh pins) reads the cell whose state is what the dispatched
+invoke's run of B returned. -/
 theorem invoke_tree_run_witnessed :
-    ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (obj : UInt8)
+    ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (n : Nat) (wk : Walk UInt8)
+      (actor obj : UInt8) (budget : Nat)
       (pins' : List (UInt8 × UInt8)) (c' : Call UInt8) (actor' : UInt8) (method' : Nat) (via' : Option UInt8)
       (cell' : Cell) (p' : UInt8) (r' : Req UInt8),
       X.program = Lang.program X.env.bytes X.digestOf ∧
-      receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧ Invoked X w c obj ∧
+      receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
+      Dispatched X w c n wk actor (.invoke obj 0 (natBytes 4) budget none) ∧
       (∀ o method args budget via, c.unsigned.body = .invoke o method args budget via → o ≠ obj) ∧
       invokeRun X (pinned X.env w' pins') c' actor' obj method' via' = .ok (cell', p', r') ∧
       stateOf cell' = [(stateBase, natBytes 7)] :=
-  ⟨wCtx, w0, w1, c1, t1, 5, c2.unsigned.pins, c2, 6, 0, none, cellB1, 9, req2, rfl, c1_receive, c1_admit,
-    c1_invoked,
+  ⟨wCtx, w0, w1, c1, t1, 3, wkA, 6, 5, 1000, c2.unsigned.pins, c2, 6, 0, none, cellB1, 9, req2, rfl,
+    c1_receive, c1_admit, c1_dispatchedB,
     fun o _ _ _ _ h => by
       rw [show c1.unsigned.body = Body.invoke 6 0 (natBytes 0) 1000 none from rfl] at h
       cases h
       decide,
     c2_invokeRunB, by decide +kernel⟩
+
+/-- **Tooth: the walk's record pins the arguments.** On the instance above, the invoke of B with
+`bump 5` in place of the `bump 4` A's run returned, at the same walk, actor, method and budget, is
+NOT dispatched: through `invoke_tree_slots` its run (which returns `n = 8`) would be what B holds in
+`w1`, and B holds `n = 7`. The existential form `invoke_tree_slots` had before cv 01a15554-cffd named
+no arguments and could not refuse it. -/
+theorem dispatched_pins_args :
+    ¬ Dispatched wCtx w0 c1 3 wkA 6 (.invoke 5 0 (natBytes 5) 1000 none) := by
+  intro hd
+  obtain ⟨cell, p, r, s, calls, rows, used, laws, hir, hrun, -, -, cell', hl, hk⟩ :=
+    invoke_tree_slots c1_receive c1_admit hd
+  rw [c1_invokeRunB] at hir
+  simp only [Except.ok.injEq, Prod.mk.injEq] at hir
+  obtain ⟨rfl, rfl, rfl⟩ := hir
+  obtain ⟨cs, rs, u, h5⟩ := c1_runB5
+  rw [h5] at hrun
+  simp only [Except.ok.injEq, Prod.mk.injEq] at hrun
+  obtain ⟨rfl, -, -, -⟩ := hrun
+  have hl' : w1.live wEnv 5 = some cell' := hl
+  rw [w1_liveB] at hl'
+  cases hl'
+  have h7 := hk stateBase
+  revert h7
+  decide +kernel
 
 end Nanodregg.Kernel.Receive

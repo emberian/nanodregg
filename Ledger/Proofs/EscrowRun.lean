@@ -35,8 +35,14 @@ two meet, through LANG-61 (`Lang.Proofs.Extract`):
   before and after, the next run reading slots that hold, key by key, what this one wrote (read by
   `readState` through Lang's `readState_get`), read back by LANG-63's
   `runMeasured_means`), at most one returned call is a payout (`payoutCalls`: a transfer through
-  no grant). `escrow_runs_after_payout`: a run that pays out is the last the receiver commits
-  (`escrow_judge_settled`: the judge refuses everything out of `released` and `refunded`).
+  no grant), by `Std.chain_count`: `runs_chain` reads the runs as a `Std.Chain` of the escrow law's
+  admitted steps under every lib (`escrow_step_admits`, through LANG's `judgeOne_admits_relib`;
+  `escrow_law_noRef`, `escrow_law_isLaw`), each paired with its run's calls, of which at most one
+  is a payout and a payout only into a settled state (`runCalls_payout`); `payoutCalls_le_one`
+  marks the settled steps and `escrow_absorbing` stops the chain at one. The same count serves the
+  World's history (`Ledger.Proofs.EscrowInvokes`). `escrow_runs_after_payout`: a run that pays out
+  is the last the receiver commits (`chain_stops` on the same chain; `escrow_judge_settled`: the
+  judge refuses everything out of `released` and `refunded`).
   `escrow_program_one_payout` and `escrow_runs_deployed`: at a lawful `Ctx` over its own codec
   and at the node's, premise only the runs (`Ledger.Proofs.EscrowWitness.escrow_runs_witness`: a
   deposit then a release there, evaluated by the kernel, is a `Runs` with exactly one payout).
@@ -90,6 +96,15 @@ theorem escrow_noRef : NoRef escrow.body := by
       noneD, someB, keep, phaseT, slotLabels]
   · simp [mth, methods, NoRef, NoRefRow, resultT, callsT, someCallT, payoutCall, transferT, ofT, st, rq,
       noneD, someB, keep, phaseT, slotLabels]
+
+/-- The escrow's law mentions no closure package. -/
+theorem escrow_law_noRef : NoRef law := by
+  have h := escrow_noRef
+  rw [escrow_body, fields_eq] at h
+  exact h.2.1
+
+/-- The escrow's law has a law's shape (`λ old new req. body`). -/
+theorem escrow_law_isLaw : IsLaw law := ⟨_, _, _, _, rfl⟩
 
 /-! ## The method the receiver resolves, the state it reads -/
 
@@ -357,44 +372,160 @@ theorem escrow_judge_settled (hdig : ∀ x, digestOf (bytesOf x) = some x)
   cases ho'
   exact escrow_absorbing hs (escrow_judge_admits hlib (hall "escrow" (by rw [escrow_laws]; simp)))
 
+/-- The escrow's judge passed its own law: the package's verdict is the first of `judge`'s. -/
+theorem escrow_judgeOne {look : Pinned D} {pkg : D} {laws : List D} {old new : Slots} {r : Req D}
+    (h : Lang.judge bytesOf digestOf look (some pkg) laws old new r = .ok ()) :
+    judgeOne bytesOf digestOf look pkg old new r = .ok () := by
+  unfold Lang.judge at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  · rename_i u hj
+    cases u
+    exact hj
+
+/-- **One judged step of the escrow is one admitted step of its law**, under every lib: the judge's
+verdict on the escrow package (`judgeOne_admits_relib`, the law mentions no closure package). -/
+theorem escrow_step_admits (hdig : ∀ x, digestOf (bytesOf x) = some x)
+    {look : Pinned D} {pkg : D} {laws : List D} {old new : Slots} {r : Req D}
+    (hpkg : readPackage look pkg = .ok escrow)
+    (h : Lang.judge bytesOf digestOf look (some pkg) laws old new r = .ok ()) :
+    ∃ o n, readState digestOf (recordRow escrow.state) old = .ok o ∧
+      readState digestOf (recordRow escrow.state) new = .ok n ∧ Std.Admits [] law (reqData bytesOf r) n o := by
+  obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_admits_relib bytesOf digestOf (hdig pkg) hpkg escrow_body (escrow_judgeOne h)
+  exact ⟨o, n, ho, hn, hall "escrow" (by rw [escrow_laws]; simp) law escrow_field escrow_law_isLaw escrow_law_noRef []⟩
+
+/-- **What a run's calls say of the state it leaves**: at most one payout, and a payout only from
+`refund` or `release`, whose state is settled. -/
+theorem runCalls_payout {state : Slots} {method : Nat} {args : ByteArray} {self : D} {calls : List (Body D)}
+    {s : Slots} (h : RunCalls digestOf state method args self calls s) {n : Data}
+    (hn : readState digestOf (recordRow escrow.state) s = .ok n) :
+    (calls.filter isPayoutCall).length ≤ 1 ∧ (0 < (calls.filter isPayoutCall).length → Settled n) := by
+  obtain ⟨amount, arb, asset, ben, dep, nk, ph, a, -, -, hx⟩ := h
+  rcases hx with ⟨-, -, gb, gd, d, -, -, -, rfl⟩ | ⟨-, hs, d, -, rfl⟩ | ⟨-, hs, b, -, rfl⟩
+  · exact ⟨by simp [isPayoutCall], fun h => by simp [isPayoutCall] at h⟩
+  · rw [hs] at hn; cases hn
+    exact ⟨by simp [isPayoutCall], fun _ => .inr ⟨_, rfl⟩⟩
+  · rw [hs] at hn; cases hn
+    exact ⟨by simp [isPayoutCall], fun _ => .inl ⟨_, rfl⟩⟩
+
+end
+
+section
+variable {D : Type}
+
+open Classical in
+/-- **The count, by `chain_count`.** Along a chain of the escrow law's admitted steps, each paired
+with the calls of the run it came from, where a run returns at most one payout and a payout only
+into a settled state, at most one call is a payout: `chain_count` marks the steps into a settled
+state, and the law admits nothing out of one (`escrow_absorbing`). -/
+theorem payoutCalls_le_one {o : Data} :
+    ∀ (ps : List (List (Body D) × (Data × Data))), Std.Chain (Std.Admits [] law) o (ps.map Prod.snd) →
+      (∀ x ∈ ps, (x.1.filter isPayoutCall).length ≤ 1 ∧ (0 < (x.1.filter isPayoutCall).length → Settled x.2.2)) →
+      payoutCalls (ps.map Prod.fst) ≤ 1 := by
+  intro ps hc hp
+  have hcount := Std.chain_count (fun s => decide (Settled s.2)) Settled
+    (fun _ _ _ _ hm => of_decide_eq_true hm) (fun _ _ _ hs ha => escrow_absorbing hs ha) hc
+  have key : ∀ (qs : List (List (Body D) × (Data × Data))),
+      (∀ x ∈ qs, (x.1.filter isPayoutCall).length ≤ 1 ∧ (0 < (x.1.filter isPayoutCall).length → Settled x.2.2)) →
+      payoutCalls (qs.map Prod.fst) ≤ ((qs.map Prod.snd).filter fun s => decide (Settled s.2)).length := by
+    intro qs
+    induction qs with
+    | nil => intro _; simp [payoutCalls]
+    | cons x rest ih =>
+        intro hq
+        have hr := ih (fun y hy => hq y (List.mem_cons_of_mem _ hy))
+        obtain ⟨h1, h2⟩ := hq x (List.mem_cons_self ..)
+        simp only [payoutCalls, List.map_cons, List.sum_cons, List.filter_cons] at hr ⊢
+        by_cases hs : Settled x.2.2
+        · simp only [hs, decide_true, if_true, List.length_cons]
+          omega
+        · have h0 : (x.1.filter isPayoutCall).length = 0 := by
+            rcases Nat.eq_zero_or_pos (x.1.filter isPayoutCall).length with h | h
+            · exact h
+            · exact absurd (h2 h) hs
+          simp only [hs, decide_false, Bool.false_eq_true, if_false]
+          omega
+  exact Nat.le_trans (key ps hp) hcount
+
+end
+
+section
+variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+
+/-- **The receiver's runs on an escrow are a chain of its law**, step for step, each paired with the
+calls its run returned (`escrow_step_admits`; the next run reads what this one wrote, `readState_get`). -/
+theorem runs_chain (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} :
+    ∀ {state : Slots} {runs : List (List (Body D))},
+      Runs (Lang.program bytesOf digestOf) pkg escrow state runs →
+      ∀ {o : Data}, readState digestOf (recordRow escrow.state) state = .ok o →
+        ∃ ps : List (List (Body D) × (Data × Data)), ps.map Prod.fst = runs ∧
+          Std.Chain (Std.Admits [] law) o (ps.map Prod.snd) ∧
+          ∀ x ∈ ps, (x.1.filter isPayoutCall).length ≤ 1 ∧ (0 < (x.1.filter isPayoutCall).length → Settled x.2.2) := by
+  intro state runs h
+  induction h with
+  | nil => exact fun _ => ⟨[], rfl, .nil _, by simp⟩
+  | @cons look rv state method args r budget s calls rows used laws next rest hpkg hrun hj hnext hr ih =>
+      intro o ho
+      obtain ⟨o', n, ho', hn, hadm⟩ := escrow_step_admits hdig hpkg hj
+      rw [ho] at ho'
+      cases ho'
+      have hn' : readState digestOf (recordRow escrow.state) next = .ok n := (readState_get hnext).trans hn
+      obtain ⟨ps, hps, hc, hp⟩ := ih hn'
+      obtain ⟨t, k, hm⟩ := run_of_program hrun
+      have hpay := runCalls_payout (escrow_run_calls hdig hpkg hm) hn
+      refine ⟨(calls, (reqData bytesOf r, n)) :: ps, by simp [hps], .cons hadm hc, fun x hx => ?_⟩
+      rcases List.mem_cons.mp hx with rfl | hx
+      · exact hpay
+      · exact hp x hx
+
+/-- A sequence of runs with a first run starts from a state the escrow reads. -/
+theorem runs_start (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
+    {calls : List (Body D)} {rest : List (List (Body D))}
+    (h : Runs (Lang.program bytesOf digestOf) pkg escrow state (calls :: rest)) :
+    ∃ o, readState digestOf (recordRow escrow.state) state = .ok o := by
+  cases h with
+  | cons hpkg _ hj _ _ =>
+      obtain ⟨o, -, ho, -⟩ := escrow_step_admits hdig hpkg hj
+      exact ⟨o, ho⟩
+
 /-- **After a payout, the receiver commits nothing more** on the escrow: a run that returned a
-payout (`isPayoutCall`) is the last step of every sequence of committed runs it starts. -/
+payout (`isPayoutCall`) is the last step of every sequence of committed runs it starts. A
+corollary of the chain: the payout's step leaves a settled state, and `chain_stops`. -/
 theorem escrow_runs_after_payout (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
     {calls : List (Body D)} {rest : List (List (Body D))}
     (h : Runs (Lang.program bytesOf digestOf) pkg escrow state (calls :: rest))
     (hp : 0 < payoutCalls [calls]) : rest = [] := by
-  cases h with
-  | cons hpkg hrun _ hnext hr =>
-    obtain ⟨t, n, hm⟩ := run_of_program hrun
-    obtain ⟨amount, arb, asset, ben, dep, nk, ph, a, -, -, hx⟩ := escrow_run_calls hdig hpkg hm
-    rcases hx with ⟨-, -, gb, gd, d, -, -, -, rfl⟩ | ⟨-, hs, -⟩ | ⟨-, hs, -⟩
-    · simp [payoutCalls, isPayoutCall] at hp
-    all_goals
-      cases hr with
-      | nil => rfl
-      | cons hpkg' _ hj _ _ =>
-        exact (escrow_judge_settled hdig hpkg' ((readState_get hnext).trans hs)
-          (by first | exact .inr ⟨_, rfl⟩ | exact .inl ⟨_, rfl⟩) hj).elim
+  obtain ⟨o, ho⟩ := runs_start hdig h
+  obtain ⟨ps, hps, hc, hpay⟩ := runs_chain hdig h ho
+  cases ps with
+  | nil => cases hps
+  | cons x ps' =>
+      obtain ⟨xc, rq, n⟩ := x
+      simp only [List.map_cons, List.cons.injEq] at hps
+      obtain ⟨rfl, rfl⟩ := hps
+      have hs : Settled n := (hpay _ (List.mem_cons_self ..)).2 (by simpa [payoutCalls] using hp)
+      cases hc with
+      | cons _ hrest =>
+          have := Std.chain_stops Settled (fun _ _ _ hs' ha => escrow_absorbing hs' ha) hs hrest
+          simpa using congrArg List.length this
 
 /-- **The escrow pays out at most once, over the receiver's own runs.** Along any sequence of runs
 the receiver commits on an object whose package cell reads as `escrow` (each a successful
 `runMeasured`, the next one reading slots that hold what it wrote, each admitted by the judge),
 from any state, of any methods on any arguments, requests and budgets, at most one call the runs
 return is a payout (a transfer through no grant), under a decoder that reads every id's bytes
-back. -/
+back. `chain_count` over `runs_chain` (`payoutCalls_le_one`). -/
 theorem escrow_runs_one_payout (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
     {runs : List (List (Body D))} (h : Runs (Lang.program bytesOf digestOf) pkg escrow state runs) :
     payoutCalls runs ≤ 1 := by
-  induction h with
+  cases runs with
   | nil => simp [payoutCalls]
-  | @cons look rv state method args r budget s calls rows used laws next rest hpkg hrun hj hnext hr ih =>
-    obtain ⟨t, n, hm⟩ := run_of_program hrun
-    obtain ⟨amount, arb, asset, ben, dep, nk, ph, a, -, -, hx⟩ := escrow_run_calls hdig hpkg hm
-    have hrest := escrow_runs_after_payout hdig (.cons hpkg hrun hj hnext hr)
-    rcases hx with ⟨-, -, gb, gd, d, -, -, -, rfl⟩ | ⟨-, -, d, -, rfl⟩ | ⟨-, -, b, -, rfl⟩
-    · simpa [payoutCalls, isPayoutCall] using ih
-    · rw [hrest (by simp [payoutCalls, isPayoutCall])]; simp [payoutCalls, isPayoutCall]
-    · rw [hrest (by simp [payoutCalls, isPayoutCall])]; simp [payoutCalls, isPayoutCall]
+  | cons calls rest =>
+      obtain ⟨o, ho⟩ := runs_start hdig h
+      obtain ⟨ps, hps, hc, hp⟩ := runs_chain hdig h ho
+      rw [← hps]
+      exact payoutCalls_le_one ps hc hp
 
 /-- **At the kernel's program**: the same for the runs and judges of a lawful `Ctx` whose program
 is the language over the World's own codec. -/

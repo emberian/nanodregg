@@ -3,28 +3,30 @@
 
 `escrow_runs_one_payout` (Ledger.Proofs.EscrowRun) bounds the payouts of a `Runs` chain: runs the
 receiver commits, each next run reading slots that hold, key by key, what the run before it wrote.
-Here the chain is the World's: `Invokes X obj pkg p w invs` is a history of admitted turns around
-one object `obj`, each either a signed top-level invoke of `obj` (received on the World the last turn
-was admitted to, and admitted) or a turn that neither touches nor creates `obj`. KERNEL proves the
-links (`Kernel.Proofs.InvokeNext`, `Kernel.Proofs.Frame`): the judge admitted each invoke's run
-(`invoke_next_judged`), the object's live state after it holds what the run returned
-(`invoke_next_slots`), another turn leaves the object's entry (`admit_frame`), and the next invoke
-runs on the live cell (`invokeRun_live`). So:
+Here the chain is the World's: an `ObjectHistory` around one escrow object (KERNEL's
+`Kernel.Proofs.Logic.History`: every step of the World, as the object sees it; a step that leaves
+it alone records nothing, a step that judges it records what the judge saw). KERNEL lifts it once
+(`object_history_chain`): the judged steps are a `Std.Chain` of the escrow law's admitted steps from
+the object's state, and each invoke's calls are its run's (`object_history_runs`). So:
 
-* `invokes_runs`: such a history is a `Runs` from the state the object holds;
-* `escrow_invokes_one_payout`: along any such history on an object whose package reads as `escrow` in
-  each invoke's view, at most one call the invokes return is a payout, at a lawful `Ctx` whose
-  program is the language over its own codec; `escrow_invokes_deployed` at the node's
-  (`Host.Deployed.X`), premise only the history.
+* `escrow_invokes_one_payout`: along any `ObjectHistory` of an object whose every judged step was
+  judged by the escrow package (read as `escrow` in the step's view), at most one call the invokes
+  return is a payout, at a lawful `Ctx` whose program is the language over its own codec:
+  `payoutCalls_le_one`, `chain_count` of the steps into a settled state. `escrow_invokes_deployed`
+  at the node's (`Host.Deployed.X`), premises only the history and its package reading.
+* Completeness: an audited log is such a history (`object_history_of_audit`), and a history files no
+  invoke of the object as a step that left it alone (`ObjectStep.keep` says "no invoke"; `other`
+  and `frame` exclude a touch of it), so the count is of every invoke the log holds.
 
-Not covered: a turn that touches `obj` other than as its top-level invoke (an invoke of `obj` nested
-in another object's call tree, KERNEL's cv 01a15430-0f62, or any other touch) is not a step of
-`Invokes`; a history with one is not an instance. The teeth are `Ledger.Proofs.EscrowWitness`'s:
-`escrow_link_bites` (without the next-state link an admitted payout repeats) and
-`escrow_second_release_refused` (without the judge a release from `released` pays again).
+The history covers every invoke of the object, signed or NESTED in another object's call tree
+(`ObjectStep.nested`), and every other turn and recorded refusal (the hand-rolled `Invokes`, which
+covered only signed top-level invokes, is deleted: it was this instance). The teeth are
+`Ledger.Proofs.EscrowWitness`'s: `escrow_link_bites` (without the next-state link an admitted
+payout repeats) and `escrow_second_release_refused` (without the judge a release from `released`
+pays again).
 -/
 import Ledger.Proofs.EscrowWitness
-import Kernel.Proofs.InvokeNext
+import Kernel.Proofs.Logic.History
 
 namespace Nanodregg.Ledger.Proofs
 
@@ -35,74 +37,71 @@ open Nanodregg.Ledger.Escrow
 section
 variable {D : Type} [Ord D] [DecidableEq D]
 
-/-- **A history the World admits around one object.** Each step is one admitted turn: either a
-signed top-level invoke of `obj` (a call `c` received on `w`, `receive X w c = .ok t`, admitted to
-`w'`, whose body invokes `obj`, whose `invokeRun` reads the object's cell naming package `pkg`, read as
-`p` in the call's view, and whose run on the cell's state at the call's budget returned `calls`), or
-any other admitted turn that neither touches nor creates `obj` (its calls are not counted: it runs
-no method of `obj`). The list holds the invokes' calls, in order. -/
-inductive Invokes (X : Ctx D) (obj pkg : D) (p : Package) : World D → List (List (Body D)) → Prop
-  | nil (w : World D) : Invokes X obj pkg p w []
-  | invoke {w w' : World D} {c : Call D} {t : Turn D} {method : Nat} {args : ByteArray} {budget : Nat}
-      {via : Option D} {cell : Cell} {r : Req D} {s : Slots} {calls : List (Body D)}
-      {rows : List (RowSlot D × RowAct)} {used : Nat} {rest : List (List (Body D))} :
-      receive X w c = .ok t → World.admit X.env w t = .ok w' →
-      c.unsigned.body = .invoke obj method args budget via →
-      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, pkg, r) →
-      readPackage (pinned X.env w c.unsigned.pins) pkg = .ok p →
-      X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) pkg (stateOf cell)
-        method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used) →
-      Invokes X obj pkg p w' rest → Invokes X obj pkg p w (calls :: rest)
-  | other {w w' : World D} {t : Turn D} {rest : List (List (Body D))} :
-      World.admit X.env w t = .ok w' → (∀ x ∈ t.touches, x.cell ≠ obj) → obj ∉ createdIds t →
-      Invokes X obj pkg p w' rest → Invokes X obj pkg p w rest
+omit [Ord D] [DecidableEq D] in
+/-- The judged steps of a history, paired with the chain's steps the lift reads them as. -/
+private theorem pair_steps {digestOf : ByteArray → Option D} {bytesOf : D → ByteArray} {row : List (Label × Ty)} :
+    ∀ (tr : List (Pinned D × Option D × List D × Req D × Slots × Slots × List (Body D)))
+      (steps : List (Data × Data)),
+      tr.map (fun e => (reqData bytesOf e.2.2.2.1, readState digestOf row e.2.2.2.2.2.1)) =
+        steps.map (fun s => (s.1, .ok s.2)) →
+      ∃ ps : List (List (Body D) × (Data × Data)), ps.map Prod.fst = tr.map (fun e => e.2.2.2.2.2.2) ∧
+        ps.map Prod.snd = steps ∧
+        ∀ x ∈ ps, ∃ e ∈ tr, x.1 = e.2.2.2.2.2.2 ∧ readState digestOf row e.2.2.2.2.2.1 = .ok x.2.2
+  | [], [], _ => ⟨[], rfl, rfl, by simp⟩
+  | [], _ :: _, h => by simp at h
+  | _ :: _, [], h => by simp at h
+  | e :: tr, s :: steps, h => by
+      simp only [List.map_cons, List.cons.injEq, Prod.mk.injEq] at h
+      obtain ⟨⟨-, hn⟩, h⟩ := h
+      obtain ⟨ps, h1, h2, h3⟩ := pair_steps tr steps h
+      refine ⟨(e.2.2.2.2.2.2, s) :: ps, by simp [h1], by simp [h2], fun x hx => ?_⟩
+      rcases List.mem_cons.mp hx with rfl | hx
+      · exact ⟨e, List.mem_cons_self .., rfl, hn⟩
+      · obtain ⟨e', he', h4, h5⟩ := h3 x hx
+        exact ⟨e', List.mem_cons_of_mem _ he', h4, h5⟩
 
-/-- **An admitted history around one object is a chain of committed runs**, from the state the
-object holds: a turn that neither touches nor creates it leaves its entry (`admit_frame`); an
-invoke runs on the live cell (`invokeRun_live`), the judge admitted it (`invoke_next_judged`), and
-the object's next live state holds, key by key, what the run returned (`invoke_next_slots`). -/
-theorem invokes_runs {X : Ctx D} {obj pkg : D} {p : Package} :
-    ∀ {w : World D} {invs : List (List (Body D))}, Invokes X obj pkg p w invs →
-      invs = [] ∨ ∃ cell, w.live X.env obj = some cell ∧ Runs X.program pkg p (stateOf cell) invs
-  | _, _, .nil _ => .inl rfl
-  | _, _, .other ha hl hc h => by
-    have he : _ = _ := admit_frame (c := obj) ha (fun x hx hxc => absurd hxc (hl x hx)) hc
-    rcases invokes_runs h with h | ⟨cell, hlive, hr⟩
-    · exact .inl h
-    · refine .inr ⟨cell, ?_, hr⟩
-      unfold World.live at hlive ⊢
-      rw [← he]
-      exact hlive
-  | _, _, .invoke hc ha hb hr hrd hp htail => by
-    obtain ⟨laws, hj⟩ := invoke_next_judged hc ha hb hr hp
-    obtain ⟨cell', hlive', hk⟩ := invoke_next_slots hc ha hb hr hp
-    refine .inr ⟨_, invokeRun_live hr, ?_⟩
-    rcases invokes_runs htail with rfl | ⟨cell'', hlive'', hruns⟩
-    · exact .cons hrd hp hj (fun _ => rfl) (.nil _)
-    · rw [hlive'] at hlive''
-      cases hlive''
-      exact .cons hrd hp hj hk hruns
-
-/-- **The escrow pays out at most once over the invokes the World admits.** Along any sequence of
-signed invokes of one object, each received on the World the last was admitted to and admitted,
-whose package reads as `escrow` in each invoke's view, at most one call the runs return is a
-payout, at a lawful `Ctx` whose program is the language over its own codec. -/
+/-- **The escrow pays out at most once over the history the World admits.** Along any
+`ObjectHistory` of one object (its signed and nested invokes, writes, law changes, every other turn
+and recorded refusal) whose every judged step was judged by the package `pkg`, read as `escrow` in
+that step's view, at most one call the invokes return is a payout, at a lawful `Ctx` whose program
+is the language over its own codec. -/
 theorem escrow_invokes_one_payout {X : Ctx D} (hX : X.Lawful)
-    (hprog : X.program = Lang.program X.env.bytes X.digestOf) {obj pkg : D} {w : World D}
-    {invs : List (List (Body D))} (h : Invokes X obj pkg escrow w invs) : payoutCalls invs ≤ 1 := by
-  rcases invokes_runs h with rfl | ⟨_, _, hruns⟩
-  · simp [payoutCalls]
-  · exact escrow_program_one_payout hX hprog hruns
+    (hprog : X.program = Lang.program X.env.bytes X.digestOf) {obj pkg : D} {w w' : World D}
+    {tr : List (Pinned D × Option D × List D × Req D × Slots × Slots × List (Body D))}
+    (h : ObjectHistory X obj w w' tr)
+    (hpkg : ∀ e ∈ tr, e.2.1 = some pkg ∧ readPackage e.1 pkg = .ok escrow) :
+    payoutCalls (tr.map fun e => e.2.2.2.2.2.2) ≤ 1 := by
+  by_cases hne : tr = []
+  · subst hne; simp [payoutCalls]
+  have hin : ∀ e ∈ tr, pkg ∈ e.2.1.toList ++ e.2.2.1 ∧ readPackage e.1 pkg = .ok escrow := fun e he => by
+    obtain ⟨h1, h2⟩ := hpkg e he
+    exact ⟨by rw [h1]; simp, h2⟩
+  obtain ⟨cell, o, hl, ho⟩ := object_history_start hX hprog h hin hne
+  obtain ⟨steps, hc, hmap⟩ := object_history_chain hX hprog escrow_body (by rw [escrow_laws]; simp)
+    escrow_field escrow_law_isLaw escrow_law_noRef h hin hl ho
+  obtain ⟨ps, hfst, hsnd, hpair⟩ := pair_steps tr steps hmap
+  have hruns := object_history_runs h
+  rw [← hfst]
+  have hca : Std.Chain (Std.Admits [] law) o (ps.map Prod.snd) := by
+    rw [hsnd]
+    exact Std.chain_mono (R := Std.Step [] law) (fun _ _ _ hs => hs.1) hc
+  refine payoutCalls_le_one ps hca (fun x hx => ?_)
+  obtain ⟨e, he, hcalls, hn⟩ := hpair x hx
+  obtain ⟨rv, method, args, fuel, rows, used, -, hrun⟩ := (hruns e he).2 pkg (hpkg e he).1
+  rw [hcalls]
+  exact runCalls_payout (escrow_program_calls hX hprog (hpkg e he).2 hrun) hn
 
 end
 
-/-- **Deployed**: along any sequence of invokes the node (`Host.Deployed.X`) admits on one object
-whose package reads as `escrow` in each invoke's view, at most one returned call is a payout; no
-premise but the invokes. -/
-theorem escrow_invokes_deployed {obj pkg : Codec.Digest} {w : World Codec.Digest}
-    {invs : List (List (Body Codec.Digest))}
-    (h : Invokes (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)) obj pkg escrow w invs) :
-    payoutCalls invs ≤ 1 :=
-  escrow_invokes_one_payout (deployed_ctx_lawful _) rfl h
+/-- **Deployed**: along any history the node (`Host.Deployed.X`) admits around one object whose
+every judged step was judged by a package read as `escrow`, at most one returned call is a payout;
+premises: the history and that package reading, the `Ctx` discharged (`deployed_ctx_lawful`, `rfl`). -/
+theorem escrow_invokes_deployed {obj pkg : Codec.Digest} {w w' : World Codec.Digest}
+    {tr : List (Pinned Codec.Digest × Option Codec.Digest × List Codec.Digest × Req Codec.Digest × Slots × Slots ×
+      List (Body Codec.Digest))}
+    (h : ObjectHistory (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)) obj w w' tr)
+    (hpkg : ∀ e ∈ tr, e.2.1 = some pkg ∧ readPackage e.1 pkg = .ok escrow) :
+    payoutCalls (tr.map fun e => e.2.2.2.2.2.2) ≤ 1 :=
+  escrow_invokes_one_payout (deployed_ctx_lawful _) rfl h hpkg
 
 end Nanodregg.Ledger.Proofs

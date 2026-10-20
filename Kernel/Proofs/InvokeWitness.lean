@@ -34,6 +34,7 @@ import Kernel.Proofs.InvokeNext
 import Lang.Program
 import Lang.Std
 import Lang.Proofs.Wire
+import Lang.Proofs.Receiver
 
 namespace Nanodregg.Kernel.Receive
 
@@ -373,5 +374,29 @@ theorem invoke_next_run_witnessed :
     c2.unsigned.pins, c2, 7, 0, none, cell2, 9, req2, natBytes 2, 1000, t2, w2, s2, [], [], 41,
     rfl, c1_receive, c1_admit, rfl, c1_invokeRun, c1_run, c2_invokeRun, rfl, rfl, rfl, c2_receive, c2_admit,
     c2_run, by decide +kernel, by decide +kernel⟩
+
+/-- **The run-level lift's premises, on this instance** (KERNEL-28, for
+`Kernel.Proofs.Logic.HistoryWitness`): the `Ctx` is lawful (its decoder reads every id's bytes back)
+and runs the language; the signed invoke of `invoke_next_slots_witnessed`, whose run moves the
+state; and the package the object names reads, in the call's view, as `counter`, whose law `cap` is a
+`NoRef` law of a law's shape. -/
+theorem invoke_lift_witnessed :
+    ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (obj : UInt8) (method : Nat)
+      (args : ByteArray) (budget : Nat) (via : Option UInt8) (cell : Cell) (p : UInt8) (r : Req UInt8)
+      (s : Slots) (calls : List (Body UInt8)) (rows : List (RowSlot UInt8 × RowAct)) (used : Nat)
+      (pk : Package) (fs : List (Label × Term)) (ℓ : Label) (tl : Term),
+      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf ∧
+      receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
+      c.unsigned.body = .invoke obj method args budget via ∧
+      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) ∧
+      X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
+        method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used) ∧
+      s ≠ stateOf cell ∧
+      Lang.readPackage (pinned X.env w c.unsigned.pins) p = .ok pk ∧ pk.body = .record fs ∧ ℓ ∈ pk.laws ∧
+      Row.find? ℓ fs = some tl ∧ IsLaw tl ∧ NoRef tl :=
+  ⟨wCtx, w0, w1, c1, t1, 5, 0, natBytes 4, 1000, none, objCell, 9, req1, s1, [], [], 41, counter, _, "cap", _,
+    ⟨fun _ => rfl⟩, rfl, c1_receive, c1_admit, rfl, c1_invokeRun, c1_run, by decide +kernel,
+    readPackage_counter c1_pkg, rfl, by decide, rfl, ⟨_, _, _, _, rfl⟩,
+    by simp [NoRef, NoRefRow, Std.okT, Std.refusedT]⟩
 
 end Nanodregg.Kernel.Receive

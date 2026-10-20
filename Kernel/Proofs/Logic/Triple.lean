@@ -18,8 +18,9 @@ rule a CALL lacked.
   frame rule: `{P} c {Q}` and `Indep X c R` give `{P ∧ R} c {Q ∧ R}`. Cells only; a rows or journal
   frame takes its trie's canonicity inside the field, as `Frame` does.
 - `not_callFoot_live`: at a live cell the footprint is exactly "pinned", so `indep_live` (an
-  unpinned live cell is kept) is, for a call-derived Turn at a LIVE object, what `Invokes.other`'s
-  two inline turn-level hypotheses (no touch, not born) were: liveness stands in for "not born".
+  unpinned live cell is kept) is, for a call-derived Turn at a LIVE object, what `ObjectStep.other`'s
+  two turn-level hypotheses (no touch, not born) say (`Kernel.Proofs.Logic.History`; its `frame`
+  step is this footprint form): liveness stands in for "not born".
 - What it does not frame: a `keep` pin is inside (`CellFoot` leaves it out), and every untaken id
   and unspent nullifier is inside, so an assertion about an absent id or an unspent nullifier is
   never `Indep` of any call. Sound, and exact where it is used: a live object no pin names.

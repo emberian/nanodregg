@@ -230,6 +230,50 @@ theorem law_adopt_refused {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} 
     law X look c a obj laws' via = .error e := by
   simp only [law, hc, hp, ha, hcl, hl, hrel, had, req, bind, Except.bind, Option.isNone_none, if_true]
 
+omit [Ord D] in
+/-- **A write is judged on the state it leaves** (KERNEL-28, the twin of `law_judged`). A derived
+`write` read the object's cell (a data object: no package), passed the owner authority, and the laws
+in force (`lawsOf`) admitted, on `write`, the move from the cell's state to exactly the state the
+edits make of it (`applyEdits`); its one effect is the write `diffOps` derives between the two. The
+authority half is `write_authorized`; the refusal half is `write_law_refused`; what the World holds
+after it is `Kernel.Proofs.WriteNext.write_next_slots`. -/
+theorem write_judged {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {obj : D}
+    {edits : List (Nat × Option ByteArray)} {via : Option D} {d : Draft D}
+    (h : write X look c a obj edits via = .ok d) :
+    ∃ cell principal laws, readKind look obj kindObject = .ok cell ∧
+      packageOf X obj cell = .ok none ∧
+      ownerAuthority X look a.actor obj cell .mutate via = .ok principal ∧
+      lawsOf X obj cell = .ok laws ∧
+      X.program.judge look none laws (stateOf cell) (applyEdits (stateOf cell) edits)
+        (reqOf c.unsigned obj principal .write) = .ok () ∧
+      d = ⟨[], writeOf obj (diffOps (stateOf cell) (applyEdits (stateOf cell) edits)), [], []⟩ := by
+  unfold write at h
+  simp only [except_bind_ok] at h
+  obtain ⟨cell, hc, pkg, hp, ⟨⟩, hn, principal, ha, ⟨⟩, -, laws, hl, ⟨⟩, hj, h⟩ := h
+  rw [req_ok] at hn
+  cases pkg with
+  | some _ => simp at hn
+  | none =>
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    exact ⟨cell, principal, laws, hc, hp, ha, hl, hj, h.symm⟩
+
+omit [Ord D] in
+/-- **A write the laws refuse is refused by their refusal** (the tooth of `write_judged`). Past the
+authority and the key bounds, a `write` whose laws in force refuse the move to the edited state is
+refused with exactly that refusal (for LANG's program, `lawDenied <law> <its reason>`), so no write
+turn is derived that the laws did not judge. -/
+theorem write_law_refused {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {obj principal : D}
+    {edits : List (Nat × Option ByteArray)} {via : Option D} {cell : Cell} {laws : List D} {e : Refusal D}
+    (hc : readKind look obj kindObject = .ok cell) (hp : packageOf X obj cell = .ok none)
+    (ha : ownerAuthority X look a.actor obj cell .mutate via = .ok principal)
+    (hk : ∀ e ∈ edits, stateBase + e.1 < Bounds.slotKeyLimit) (hl : lawsOf X obj cell = .ok laws)
+    (hj : X.program.judge look none laws (stateOf cell) (applyEdits (stateOf cell) edits)
+      (reqOf c.unsigned obj principal .write) = .error e) :
+    write X look c a obj edits via = .error e := by
+  unfold write
+  rw [forEx_ok.mpr (fun x hx => req_ok.mpr (decide_eq_true (hk x hx)))]
+  simp only [hc, hp, ha, hl, hj, req, bind, Except.bind, Option.isNone_none, if_true]
+
 /-- **Current key.** Every derived call that is not a rotation is signed by a key its member cell
 holds as current. -/
 theorem key_current {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
