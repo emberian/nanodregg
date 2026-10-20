@@ -46,25 +46,27 @@ def Step (lib : List Term) (law : Term) (rq n o : Data) : Prop :=
   Admits lib law rq n o ∧ LawKeeps rq n o
 
 /-- A chain of `R`-steps (`R rq n o`: request `rq` takes `o` to `n`): `(request, new state)` pairs
-from `o`, each over the state the previous one left. -/
-inductive Chain (R : Data → Data → Data → Prop) : Data → List (Data × Data) → Prop
-  | nil (o : Data) : Chain R o []
-  | cons {o rq n : Data} {rest : List (Data × Data)} :
+from `o`, each over the state the previous one left. The request and state types are parameters
+(a law's history has `Data` for both; a World's audited log has a `Step` and a `World`, LEDGER-19):
+ONE chain scheme for every history. -/
+inductive Chain {Q St : Type} (R : Q → St → St → Prop) : St → List (Q × St) → Prop
+  | nil (o : St) : Chain R o []
+  | cons {o : St} {rq : Q} {n : St} {rest : List (Q × St)} :
       R rq n o → Chain R n rest → Chain R o ((rq, n) :: rest)
 
-variable {R : Data → Data → Data → Prop}
+variable {Q St : Type} {R : Q → St → St → Prop}
 
 /-- A chain of stronger steps is a chain of weaker ones (a `Step` chain is an `Admits` chain). -/
-theorem chain_mono {R' : Data → Data → Data → Prop} (hR : ∀ rq n o, R rq n o → R' rq n o)
-    {o : Data} {steps : List (Data × Data)} (h : Chain R o steps) : Chain R' o steps := by
+theorem chain_mono {R' : Q → St → St → Prop} (hR : ∀ rq n o, R rq n o → R' rq n o)
+    {o : St} {steps : List (Q × St)} (h : Chain R o steps) : Chain R' o steps := by
   induction h with
   | nil o => exact .nil o
   | cons hs _ ih => exact .cons (hR _ _ _ hs) ih
 
 /-- **The invariant scheme.** A state predicate every step preserves, true at the start, holds at
 every state the chain reaches. -/
-theorem chain_invariant (inv : Data → Prop) (hpres : ∀ rq n o, R rq n o → inv o → inv n)
-    {o : Data} {steps : List (Data × Data)} (h : Chain R o steps) (h0 : inv o) :
+theorem chain_invariant (inv : St → Prop) (hpres : ∀ rq n o, R rq n o → inv o → inv n)
+    {o : St} {steps : List (Q × St)} (h : Chain R o steps) (h0 : inv o) :
     ∀ s ∈ steps, inv s.2 := by
   induction h with
   | nil => simp
@@ -77,8 +79,8 @@ theorem chain_invariant (inv : Data → Prop) (hpres : ∀ rq n o, R rq n o → 
 
 /-- **The step scheme.** What every step satisfies, about its request `rq`, its new state `n` and
 the state `o'` before it, holds of every step of the chain (paired with the state before it). -/
-theorem chain_always (P : Data → Data → Data → Prop) (hstep : ∀ rq n o, R rq n o → P rq n o)
-    {o : Data} {steps : List (Data × Data)} (h : Chain R o steps) :
+theorem chain_always (P : Q → St → St → Prop) (hstep : ∀ rq n o, R rq n o → P rq n o)
+    {o : St} {steps : List (Q × St)} (h : Chain R o steps) :
     ∀ o' rq n, (o', (rq, n)) ∈ (o :: steps.map Prod.snd).zip steps → P rq n o' := by
   induction h with
   | nil => simp
@@ -89,8 +91,8 @@ theorem chain_always (P : Data → Data → Data → Prop) (hstep : ∀ rq n o, 
     · exact hstep _ _ _ hs
     · exact ih o' rq' n' hm
 
-private theorem mem_zip_prev {s : Data × Data} :
-    ∀ {o : Data} {steps : List (Data × Data)}, s ∈ steps → ∃ o', (o', s) ∈ (o :: steps.map Prod.snd).zip steps
+private theorem mem_zip_prev {s : Q × St} :
+    ∀ {o : St} {steps : List (Q × St)}, s ∈ steps → ∃ o', (o', s) ∈ (o :: steps.map Prod.snd).zip steps
   | _, [], h => by simp at h
   | o, a :: rest, h => by
     simp only [List.map_cons, List.zip_cons_cons, List.mem_cons] at h ⊢
@@ -100,8 +102,8 @@ private theorem mem_zip_prev {s : Data × Data} :
       exact ⟨o', .inr ho'⟩
 
 /-- The step scheme for a fact about a step's request and new state alone: it holds of every step. -/
-theorem chain_each (P : Data → Data → Prop) (hstep : ∀ rq n o, R rq n o → P rq n)
-    {o : Data} {steps : List (Data × Data)} (h : Chain R o steps) : ∀ s ∈ steps, P s.1 s.2 := by
+theorem chain_each (P : Q → St → Prop) (hstep : ∀ rq n o, R rq n o → P rq n)
+    {o : St} {steps : List (Q × St)} (h : Chain R o steps) : ∀ s ∈ steps, P s.1 s.2 := by
   intro s hs
   obtain ⟨o', ho'⟩ := mem_zip_prev (o := o) hs
   exact chain_always (fun rq n _ => P rq n) (fun rq n o hs => hstep rq n o hs) h o' s.1 s.2 ho'
@@ -109,8 +111,8 @@ theorem chain_each (P : Data → Data → Prop) (hstep : ∀ rq n o, R rq n o �
 /-- **The potential scheme.** If each step of the chain has its weight `f rq n o` paid by the rise
 of `φ` from `o` to `n`, and `φ` is at most `B` at every state the chain holds, the weights of all
 the steps plus `φ` at the start are at most `B`. -/
-theorem chain_sum (φ : Data → Nat) (f : Data → Data → Data → Nat) (B : Nat)
-    {o : Data} {steps : List (Data × Data)} (h : Chain R o steps)
+theorem chain_sum (φ : St → Nat) (f : Q → St → St → Nat) (B : Nat)
+    {o : St} {steps : List (Q × St)} (h : Chain R o steps)
     (hstep : ∀ rq n o, R rq n o → (rq, n) ∈ steps → f rq n o + φ o ≤ φ n)
     (hB : ∀ s ∈ steps, φ s.2 ≤ B) (h0 : φ o ≤ B) :
     (((o :: steps.map Prod.snd).zip steps).map fun x => f x.2.1 x.2.2 x.1).sum + φ o ≤ B := by
@@ -125,18 +127,18 @@ theorem chain_sum (φ : Data → Nat) (f : Data → Data → Data → Nat) (B : 
     omega
 
 /-- Nothing follows a stopping state: a state the law admits no step from ends every chain. -/
-theorem chain_stops (Stop : Data → Prop) (hstop : ∀ rq n o, Stop o → ¬ R rq n o)
-    {o : Data} {steps : List (Data × Data)} (hs : Stop o) (h : Chain R o steps) : steps = [] := by
+theorem chain_stops (Stop : St → Prop) (hstop : ∀ rq n o, Stop o → ¬ R rq n o)
+    {o : St} {steps : List (Q × St)} (hs : Stop o) (h : Chain R o steps) : steps = [] := by
   cases h with
   | nil => rfl
   | cons ha _ => exact (hstop _ _ _ hs ha).elim
 
 /-- **The once scheme.** If a marked step leads to a state the law admits no step from, at most
 one step of any chain is marked. -/
-theorem chain_count (mark : Data × Data → Bool) (Stop : Data → Prop)
+theorem chain_count (mark : Q × St → Bool) (Stop : St → Prop)
     (hmark : ∀ rq n o, R rq n o → mark (rq, n) = true → Stop n)
     (hstop : ∀ rq n o, Stop o → ¬ R rq n o)
-    {o : Data} {steps : List (Data × Data)} (h : Chain R o steps) : (steps.filter mark).length ≤ 1 := by
+    {o : St} {steps : List (Q × St)} (h : Chain R o steps) : (steps.filter mark).length ≤ 1 := by
   induction h with
   | nil => simp
   | @cons o rq n rest hs hr ih =>

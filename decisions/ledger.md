@@ -908,3 +908,96 @@ kernel's cap. So the package bytes stand and the derivation lives with the depos
 grant is made.
 **Nothing moves.** No wire, vector, shipped text or package byte. `escrow` is the same value, and E0
 and E0s pass byte for byte. ledger-sim 1 ALL PASS; --harness-control RED (1).
+
+## LEDGER-19 · A grant moves at most what it had left, over every audited history: `grant_moves_le_cap`, a `Std.chain_sum` instance over Worlds (LEDGER-7, 2026-10-22; on KERNEL-30's 1fe9f93; ROOT's ruling on LEDGER-18's finding)
+**Decision.** `Ledger.Proofs.GrantCap.grant_moves_le_cap` takes a World `w` and a grant `g` such that:
+- the cells are canonical and the grants' ledgers are contiguous (as at every World a follower
+  reaches from genesis: `genesis_cellsCanon`, `genesis_ledgerContiguous`,
+  `audit_ledgerContiguous`);
+- `g` is a live grant whose transfer ledger has `left` left.
+
+Then every audited log `audit X w l = .ok w'` is a `Std.Chain (GrantStep X g) w steps` (with
+`steps.map Prod.fst = l`). Pick any amount per step that is either 0 or the amount of a transfer the
+step dispatched through `g` (`MovesThrough`: the turn's own call, the one its event decodes to and
+the audit re-derived, has `transfer src dst a (some g) once` anywhere in its tree, signed or called
+by an object's run). Those amounts sum to at most `left`. So the cap binds over the history, not
+only at one turn. `grant_credits_le_cap` is its credit twin, on the credit ledger, counting credit
+lines (`CreditsThrough`, from `credit_reads_back_dispatched`). Both are instances of one private
+scheme (`spends_le_left`) over the ledger base.
+
+**Proof.** The chain is `audit_grant_chain`, the audit's own steps:
+- `GrantStep` is `auditStep` from a World where `CellsCanon`, `LedgerContiguous` and `GrantOrTomb`
+  hold;
+- each step carries those three (`grant_step_keeps`: KERNEL-30's `step_ledgerContiguous`, KERNEL's
+  `admit_cellsCanon`, `refuse_live`).
+
+`Std.chain_sum` is applied with potential `2^64 - leftAt` and weight `leftAt o - leftAt n`:
+- `left_falls`: what is left never rises. A turn keeps the grant, retires it, or appends one entry
+  (`grant_turn_ledger`). A retired grant is a tombstone for ever (`fold_entryStep`: an entry never
+  moves back, so no birth reuses the id).
+- `move_weight`: a transfer through `g` weighs exactly its amount (`spend_reads_back_dispatched`,
+  the call identified through `auditTurn_ok`'s `decodeCall`).
+
+**Tooth.** `Ledger.Proofs.GrantCapTooth.grant_cap_needs_contiguous` (`decide +kernel`, through the
+real `receive` and `World.admit`). Every premise of `grant_moves_le_cap` holds except
+`LedgerContiguous`:
+- `CellsCanon` (all 256 ids enumerated);
+- a live grant with 10 left;
+- `audit X w [t1, t2] = .ok w'`, its turns re-derived from their decoded calls;
+- steps that are the audit's own, each `MovesThrough` 10.
+
+Its grant is gapped (entries at `transferBase` and `+4`), and the amounts sum to 20 > 10, with the
+balances going 100 → 80 / 20. So the bound fails exactly where that premise does. This is KERNEL-30's
+`gap_never_falls`, lifted from one cell to an audited history.
+
+**LANG, by ROOT for LANG** (no LANG lane live; a type parameter with the old default):
+- `Lang/Proofs/Chain.lean`'s `Chain` is generalised over its request and state types,
+  `Chain {Q St} (R : Q → St → St → Prop) : St → List (Q × St) → Prop`, and every scheme is made
+  parametric.
+- At `Q = St = Data` every statement is the old one: StdChain, History, HistoryWitness and the
+  Escrow modules build with no text change.
+- ROOT ruled against a hand induction over `audit` beside it, because two chain schemes drift.
+
+**Not via ObjectHistory.** ROOT named `ObjectHistory`, but its steps are an object's. A turn that
+writes a grant is not an `ObjectStep` of it: `other`/`keep`/`frame` exclude a touch, and
+`write`/`law`/`invoke` read an object. So a grant's history is the audit's own chain instead.
+
+**Read.** Second-agent vacuity read with the disjunct check (LEDGER-7-READER, probes
+logs/ledger7r-grantcap.lean): the theorem is sound and not vacuous.
+- `steps` is pinned by the log and the deterministic `auditStep`.
+- The `amt x = 0` disjunct only skips a step.
+- `MovesThrough` is tied to the audited call (`auditTurn_ok`'s `decodeCall`).
+- The bound rests on `left_falls`: without it a 10→0→10→0 ledger would sum to 20.
+- The tomb case is sound.
+- The Chain generalisation moves no other file's text.
+- Axioms: propext, Classical.choice, Quot.sound.
+
+Fixed from the read:
+- The first tooth's `Ctx` decoded nothing, so no audit hypothesis could hold and it refuted only the
+  receive/admit fact. It now audits, proves `CellsCanon`, and refutes the sum itself, with the
+  balances shown.
+- A docstring's "so at most its cap" overclaimed. It now reads: what was left, which is the cap for
+  an untouched grant.
+
+The third read: LAND. Its optional fix was taken: the tooth states that its steps are a chain of the
+audit's own `auditStep`s.
+
+**Critique.**
+(1) The bound is over transfers. A grant's transfer ledger also falls by carves (`checkParent`'s
+`spendAt` when a child is granted from it). Those weigh their `u` in the sum but are not
+`MovesThrough`, so they only tighten the bound. Including carves would need a `checkParent`
+read-back (KERNEL-30 offered one).
+(2) No CONTIGUOUS non-empty audited log is witnessed reaching the bound. The tooth's audited log is
+gapped, and the bound is attained at one admitted step by LEDGER-18's `escrow_deposit_spends_cap`.
+(4) The credit bound has no tooth of its own. Its mechanism is the transfer bound's parametric
+`left_falls`, and a gapped credit ledger would mirror the transfer tooth.
+(3) `left` is what was left at the start. That `left` is the grant's cap for a grant no spend has
+touched is `grant`'s birth (`rightSlots`), and it is not restated here.
+
+**Meta-critique.** The first shape counted a telescoping sum of what `leftAt` lost, which alone is
+arithmetic (the sum of drops is the total drop). The content is in two step lemmas the chain
+scheme takes as `hstep`: the drop is never negative (a gapped ledger or a reborn id would break
+that), and a transfer's amount IS its step's drop. The tooth breaks the first of these.
+
+**Nothing moves.** This is proof-side only: no wire, vector, package byte or kernel definition
+changes.
