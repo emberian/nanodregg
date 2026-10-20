@@ -2773,3 +2773,74 @@ empty because the Sim workload has no long bytes. The plant, not the table, is t
 **Also (cv 01a15456-b411).** `readState_get` (readState reads slots only by key) moves from
 Ledger/Proofs/EscrowRun.lean to Lang/Proofs/Invoke.lean, beside `readState_conforms`. The Ledger copy
 is deleted (ROOT for LEDGER, cross-layer).
+
+## LANG-66 Contextual modal types, the guarded contextual closure and the hole rows: activities and continuations get their theory at the Lean level, and their first demonstration through the receivers (2026-10-22; ACTIVITIES-1, deputized by Ember; ROOT GO with three conditions; design `redregg/work/ACTIVITIES-DESIGN-20261022.md` §9–9.1)
+**Ember's ruling.** "I want activities and continuations … promote those things into nano, because we would finally have
+a firm theoretical, metaprogrammatic and proof-engineering basis to rest them upon"; then, on the first design and its
+obend prototype: "I don't see the actual explicit things GPT wrote about, contextual modal type theory etc. … implement
+this properly and thoroughly at the Lean level."
+**Decision.** Three things land as one `lang:`; nothing on the wire moves, no package re-ids, no Store re-geneses.
+1. `Lang/Contextual/Core.lean` + `Lang/Proofs/Contextual/Core.lean` (113 theorems): a well-scoped, simply typed Contextual
+   Modal Type Theory (Nanevski–Pfenning–Pientka): types `base | arr | box Ψ A` (the contextual type `[Ψ ⊢ A]`), terms with
+   de Bruijn variables, `box Ψ t` CLOSED to its ambient context, `letbox`, and metavariable occurrences `mvar u σ` carrying
+   an explicit simultaneous substitution; one `HasTy Δ Γ t A` (with `HasSubst` and `Step`, the judgments, in the proof module `Lang/Proofs/Contextual/Typing.lean`) over a meta-context that is a FUNCTION from names to declarations (`MEnv`, so a partial fill leaves unfilled holes at their names); a total type checker `infer`/`check` proved SOUND AND COMPLETE; decidable term equality by hand; `msubstP` (named, simultaneous, partial filling) with `hasTy_msubstP`; the strengthening FUNCTION `unshiftAt` with `shiftAt_unshiftAt`, `hasTy_unshiftAt`, `uses_shiftAt`; ordinary and metavariable substitution with their lemmas
+   (`subst_lemma`, `msubst_lemma`, `subst_comp`, weakening both ways); the proposal's factorization `strengthen` (a term
+   not using a hypothesis is a smaller-context term under the projection); weak-head reduction with `subject_reduction`
+   (its two redex cases ARE the two substitution lemmas) and `step_deterministic`. Teeth: `box_cannot_capture`,
+   `mvar_blocked`/`msubst_unblocks` (an unresolved metavariable blocks inspection until a METAvariable substitution
+   arrives, never an ordinary one: Hu–Pientka's layered discipline, operational in `letbox_needs_box`),
+   `strengthen_needs_unused`, `no_step_under_box`, `box_ambient_free` (a box typed under one ambient context is typed under any other). The Bell's resumption is a toy: a continuation `box [base] …` typed under
+   ANY ambient context, resumed by `letbox`, computed by `rfl`.
+2. `Lang/Contextual/Closure.lean` + `Lang/Proofs/Contextual/{Closure,Experiments}.lean` (86 + 36 theorems): the GUARDED
+   CONTEXTUAL CLOSURE — the proposal's `(P, Ω, σ, D, support, Φ, t)` — over an abstract calculus split as nano splits everything: `CalculusData` (a def module: Ty, Ctx, Tm, decidable term equality, msubst, check, uses, drop, strengthen, weaken, var, lookup) and `CalculusLaws D HasTy : Prop` (a proof module: msubst_lemma, check_sound, check_complete, strengthen_lemma, strengthen_factor, weaken_avoids, hasTy_var, uses_var; the last three anchor `uses` and `drop` so no degenerate instance satisfies them), `HasTy` a parameter, a template's typing the predicate `Template.Typed` (so the theory is calculus-independent, as Mini's `GuardedAdvice` was candidate-independent, and the gate's def/proof split holds: C3): immutable versioned assumption tokens, a
+   hole's interface with its guard, chooser and acceptor (POLARITY), retained candidates with the reason each was set
+   aside (`Status := verified | suspended | pruned | conflict | uncovered`), five repair outcomes, `judge` the one status
+   function, `Derivable` SEPARATE from `Available`, `repair` and `fromScratch`. Theorems: conditional soundness
+   (`conditional_soundness(_closure)`), repair correctness (`repair_agrees_from_scratch` under `Coherent`, kept reachable
+   by `repair_coherent`/`fromScratch_coherent`), locality (`repair` RETURNS the candidates it re-judged; `repair_rejudged_eq_touched`: exactly the touched ones, a statement recompute-all FAILS; `locality`, `repair_carries_untouched`, `judge_frame`; `rejudged_only_touched` computed on experiment 1),
+   `withdraw_never_refutes` (a withdrawal never acquires a negation), `select_requires_available`,
+   `executed_prefix_blocks_replan` (no select, deselect OR prune of an accepted selection), `history_is_prefix`, `conflict_illTyped_refutes` (with `check_complete` an ill-typed verdict is a true refutation), `session_preserves_coherent`/`s1_coherent` (Coherent shown on an experiment state, from the session theorems), `provenance_iff` (the ATMS/semiring reading, THE BRIDGE between two independent definitions: `provenance` is a WORLD-FREE polynomial over tokens, supports positive literals and blockers negative, and a hole has a verified candidate iff some monomial holds at the world; `provenance_world_free`), `stability_class`/`valueGuard_iff` (which substitutions a guard's
+   verdict survives), and the EIGHT EXPERIMENTS as named theorems over a concrete session: withdraw one of two supports,
+   withdraw the last, withdraw a pruning reason, a cycle losing its grounding (NOT expressible in the one-level closure: a separate rule model, `unfounded_not_derivable`, over a world where an unrelated fact stays live; least fixpoint loses it, naive counting keeps it: both proved), a dependent-context change, replace a filling preserving its contract, correctness kept but a
+   cost bound lost, re-apply an earlier filling.
+3. `Lang/Journey.lean`: rows LH0–LH11, the hole as a surface package (`holeText`, the text a resident writes) through the
+   real receivers: a candidate's supports are assumption-token ROWS on the hole object; a support re-pinned or withdrawn
+   by its poster refuses a `select` BY NAME (`select: refused support0 moved` / `support0 withdrawn`), also over the view
+   before the withdrawal; the candidate with the surviving support is selected (139 required steps / 179 ticks); a select
+   after `accept` is refused `accepted`; a post-acceptance withdrawal leaves the selection; the over-cap candidate is
+   retained `suspended "cap"`; the chooser prunes naming why. Plant (by hand, logged): the pin equality removed from
+   `select` turns LH7 admitted and LH7b `rejected stale` — the kernel's row pin is reached exactly when the method's check
+   is absent: derivability and admission are two judges, measured.
+**What the Lean theory corrected in the design that was proposed** (and in `ACTIVITIES-DESIGN` §3–4, which §9 supersedes):
+a method never sees its call's cell pins and reads rows under `self` only, so a support is a row under the hole object,
+never a pin on another cell; `relaw` is refused `hasMethods` on a programmed object, so a pruning reason or guard
+parameter is STATE changed by a method, not a law; `admit_comm` is insert-only, so selects do not commute by it; an
+identical row upsert bumps the version (measured), so an exported `value` row must skip unchanged upserts; the guard
+belongs to the hole, not the candidate; the outcomes need `kept` and differ in who may apply each (`replacement` is
+OFFERED to the chooser, never applied by repair; after `accept` only `suspended (reconcile)`); repair-equals-from-scratch
+needs `Coherent` and an explicit observable (the selection is history), and locality is a separate theorem.
+**Price.** No landed theorem gains a premise, no landed statement changes: three new def modules, four new proof modules,
+rows appended to one journey. `Lang/Proofs/Contextual/Closure.lean` is 1,236 lines in one proof module (law 8 asks for a
+split; a follow-up `lang:`). SIZE: modules, lines and theorems rise, stated in the commit.
+**Not in this landing, by name.** (a) The REAL-CMTT instance (`Lang/Contextual/CoreCalculus.lean`: `cmttData : CalculusData`, `holeEnv`; `Lang/Proofs/Contextual/CoreInstance.lean`: `theorem cmttLaws : CalculusLaws cmttData (HasTy ∘ holeEnv)`, every law discharged, `weaken_avoids` by `uses_shiftAt`, `check_complete` by the checker's completeness; `bell_template_toy`: the template `λx.u₀[x]` typed WITH the hole and not without, filled by `rfl`, typed with no holes left through the instance's `msubst_lemma`; `cmtt_strengthen_toy`: the real strengthening is not the identity) is BUILT and lands as the SECOND `lang:` right after this one (ROOT's condition 2); until it lands the closure theory is instantiated only abstractly and by its toy calculus. (b) First-class substitutions
+(Cave–Pientka): cv task 01a1587d-9a98, with the two syntax options. (c) Open protocols with polarized holes and linear
+resources (`Lang/Contextual/Protocol.lean`, the two-cell one-use-capability negotiation): a lane in flight, its own
+`lang:`. (d) The `Std.activity`/`Std.hole` generators that make the Bell an instance: after (a)–(c).
+**Alternatives.** (i) Build only the obend package and rows (the first design): refused by Ember as "half-assed"; the
+theorems were the point. (ii) A kernel continuation cell kind: refused on price (the three totalities, every `readKind`
+site, a `kernel!`) and on law 1 (rows are "keyed bounded things under an object"). (iii) Depend on Mathlib for the
+category-theoretic reading (presheaves over contexts): refused by LANG-15/GATES-1; the stability class is stated directly
+(`StableUnder`, `valueGuard_iff`). (iv) Import Mini's `IndexedProgram`/`GuardedAdvice`: law 11 (no twins); restated
+smaller and, for the closure, over an abstract calculus rather than Mini's `Vocabulary`.
+**Critique.** (1) The closure's supports are one level deep: a hole cannot support a hole; the cycle experiment is
+therefore a separate rule-system model (`Rule`/`Derives`/`lfpIter`), not a closure over closures. (2) An `env` edit marks
+every candidate touched (locality bites on token edits only). (3) The toy calculus's hole occurrences carry no explicit
+`u[θ]`; the real instance is where the CMTT and the closure meet, and it is not landed here. (4) The theory is simply
+typed; the proposal's dependent-context experiment is modelled by a guard parametrized by `n`, not by `Vec n`. (5) The
+rows demonstrate one hole per object; many holes per object (the `waits` row design) and the `Std` generators are not
+built. (6) 1,407 lines in one proof module (`Lang/Proofs/Contextual/Closure.lean`), a law-8 split owed as a follow-up `lang:`. (7) Named limits from the instance lane: fillings are typed in the empty meta-context (no hole inside a filling, so hierarchical refinement is not expressible); hole-name uniqueness lives in `Template`, not in `HasTy` (the instance takes the first declaration of a name); fillings compare syntactically, so β-equal fillings are different candidates.
+**Meta-critique.** The first design mapped the proposal onto nano's existing vocabulary and called the obend package the
+deliverable; an adversarial read found 8 HIGH defects in that mapping and Ember named the substitution for what it was.
+The pull was familiarity: pins and rows were already proved, so I reached for them instead of the theory. The second pull,
+in this landing, is to call the abstractly-instantiated closure "the CMTT closure" — it is not until `cmttCalculus`
+lands, which is why (a) is named above and the commit message says so.

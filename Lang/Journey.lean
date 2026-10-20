@@ -1849,6 +1849,269 @@ def gateRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
     (v5 == "admitted" && slotOf Sim.env r5.st.host obj 0 == nat64 7)
   return r
 
+
+/-! ### LH: a hole with retained candidates and withdrawable facts (ACTIVITIES-DESIGN-20261022 section 9)
+
+A hole whose SHAPE is fixed now (chooser, acceptor, cap, closes) and whose FILLING arrives later as a candidate,
+retained with the reason it was set aside. A candidate records the FACTS it was verified under: rows other members
+post on this object (assumption tokens, `(cell, pin)` as the poster saw it). A `select` point-reads the candidate
+and its facts: a fact re-pinned or withdrawn by its poster refuses the select BY NAME (`support0 moved` /
+`support0 withdrawn`), and the kernel's `stale` stands behind it for a view that no longer holds (the plant that
+removes the method's pin check turns LH7 admitted and LH7b `rejected stale`). The demonstration of the
+`Lang/Contextual` closure theory; the text is the `.ob` a resident would write. -/
+def holeText : String := "
+(package
+  (doc \"A hole fixed now and filled later by a chosen candidate whose recorded facts must still stand; a set-aside candidate keeps its reason.\")
+  (type Status (sum (pruned bytes) (suspended bytes) (verified (rec))))
+  (type Support (rec (cell digest) (pin digest)))
+  (state (rec (accepted bool) (acceptor digest) (cap nat) (chooser digest) (closes nat) (selected (option digest))))
+  (rel candidates (key (cand digest))
+    (val (rec (by digest) (s0 (option Support)) (s1 (option Support)) (status Status) (value nat)))
+    (limit 64) (guard proposed))
+  (rel facts (key (cell digest)) (val (rec (by digest) (pin digest))) (limit 64) (retract) (guard posted))
+  ; a fact is a token its poster owns: posted, re-pinned and withdrawn only by its poster
+  (method post (arg (rec (cell digest) (pin digest))) (edits 1)
+    (done state (insert facts (record (cell arg.cell)) (record (by req.agent) (pin arg.pin)))))
+  (method repin (arg (rec (cell digest) (pin digest))) (edits 1)
+    (done state (upsert facts (record (cell arg.cell)) (record (by req.agent) (pin arg.pin)))))
+  (method unpost (arg (rec (cell digest))) (edits 1)
+    (done state (retract facts (record (cell arg.cell)))))
+  ; a candidate is inserted with the status the guard clause gives it; it is never silently dropped
+  (method propose (arg (rec (cand digest) (s0 (option Support)) (s1 (option Support)) (value nat))) (edits 1)
+    (check ((<= req.validUntil state.closes) \"closed\")
+      (done state (insert candidates (record (cand arg.cand))
+        (record (by req.agent) (s0 arg.s0) (s1 arg.s1)
+          (status (if (<= arg.value state.cap) (Status verified) (Status suspended \"cap\")))
+          (value arg.value))))))
+  ; the chooser sets a candidate aside, naming why; the row stays
+  (method prune (reads (candidates (points 1))) (arg (rec (cand digest) (why (bytes 1 64)))) (edits 1)
+    (check ((deq req.agent state.chooser) \"notChooser\")
+      (case rows.candidates.p0 (none _ (refuse \"unknown\"))
+        (some p (case p.val (none _ (refuse \"unknown\"))
+          (some c (check ((deq p.key.cand arg.cand) \"unknown\")
+            (done state (upsert candidates p.key (extend c (status (Status pruned arg.why))))))))))))
+  ; the chooser selects a verified candidate whose recorded facts are, now, what it was verified under
+  (method select (reads (candidates (points 1)) (facts (points 2))) (arg (rec (cand digest)))
+    (check ((deq req.agent state.chooser) \"notChooser\") ((not state.accepted) \"accepted\")
+      (case rows.candidates.p0 (none _ (refuse \"unknown\"))
+        (some p (case p.val (none _ (refuse \"unknown\"))
+          (some c (check ((deq p.key.cand arg.cand) \"unknown\")
+            (case c.status (pruned _ (refuse \"pruned\")) (suspended _ (refuse \"suspended\"))
+              (verified _
+                (case c.s0
+                  (none _
+                    (case c.s1
+                      (none _ (done (with state (selected (some digest arg.cand)))))
+                      (some t (case rows.facts.p0 (none _ (refuse \"support1 withdrawn\"))
+                        (some f (case f.val (none _ (refuse \"support1 withdrawn\"))
+                          (some v (check ((deq f.key.cell t.cell) \"support1\") ((deq v.pin t.pin) \"support1 moved\")
+                            (done (with state (selected (some digest arg.cand))))))))))))
+                  (some s
+                    (case rows.facts.p0 (none _ (refuse \"support0 withdrawn\"))
+                      (some f (case f.val (none _ (refuse \"support0 withdrawn\"))
+                        (some v (check ((deq f.key.cell s.cell) \"support0\") ((deq v.pin s.pin) \"support0 moved\")
+                          (case c.s1
+                            (none _ (done (with state (selected (some digest arg.cand)))))
+                            (some t (case rows.facts.p1 (none _ (refuse \"support1 withdrawn\"))
+                              (some g (case g.val (none _ (refuse \"support1 withdrawn\"))
+                                (some u (check ((deq g.key.cell t.cell) \"support1\") ((deq u.pin t.pin) \"support1 moved\")
+                                  (done (with state (selected (some digest arg.cand)))))))))))))))))))))))))))
+  ; the acceptor takes the selected candidate; after that the choice is an executed prefix
+  (method accept
+    (check ((deq req.agent state.acceptor) \"notAcceptor\") ((not state.accepted) \"accepted\")
+      (case state.selected (none _ (refuse \"unselected\"))
+        (some _ (done (with state (accepted true)))))))
+  ; a candidate's status agrees with the clause; only the chooser prunes; a candidate's value and author never change
+  (guard proposed (case edit
+    (insert x (check ((deq x.val.by req.agent) \"notYours\")
+      (case x.val.status
+        (pruned _ (refuse \"prunedAtBirth\"))
+        (suspended _ (if (<= x.val.value state.cap) (refuse \"status\") ok))
+        (verified _ (if (<= x.val.value state.cap) ok (refuse \"status\"))))))
+    (upsert x (case old (none _ (refuse \"unknown\"))
+      (some o (check ((== x.val.value o.value) \"value\") ((deq x.val.by o.by) \"by\")
+        (case x.val.status
+          (pruned _ (if (deq req.agent state.chooser) ok (refuse \"notChooser\")))
+          (suspended _ (if (<= x.val.value state.cap) (refuse \"status\") ok))
+          (verified _ (if (<= x.val.value state.cap) ok (refuse \"status\"))))))))))
+  ; a fact is its poster's
+  (guard posted (case edit
+    (insert x (if (deq x.val.by req.agent) ok (refuse \"notYours\")))
+    (upsert x (case old (none _ (refuse \"unknown\"))
+      (some o (check ((deq o.by req.agent) \"notYours\") ((deq x.val.by req.agent) \"notYours\") ok))))
+    (retract x (case old (none _ (refuse \"unknown\"))
+      (some o (if (deq o.by req.agent) ok (refuse \"notYours\")))))))
+  ; the shape never moves on an invoke
+  (law shape (on invoke m (all ((== new.cap old.cap) \"cap\") ((deq new.chooser old.chooser) \"chooser\")
+    ((deq new.acceptor old.acceptor) \"acceptor\") ((== new.closes old.closes) \"closes\"))) (else ok)))
+"
+
+def hole_supportTy : Ty := .record [("cell", .digest), ("pin", .digest)]
+def hole_optSupport : Ty := optTy hole_supportTy
+
+def hole_supportData (cell pin : ByteArray) : Data :=
+  .inj "some" (.record [("cell", .digest cell), ("pin", .digest pin)])
+def hole_noSupport : Data := .inj "none" (.record [])
+
+def hole_postArgTy : Ty := .record [("cell", .digest), ("pin", .digest)]
+def hole_postArg (cell pin : ByteArray) : ByteArray :=
+  argBytes hole_postArgTy (.record [("cell", .digest cell), ("pin", .digest pin)])
+def hole_unpostArg (cell : ByteArray) : ByteArray := argBytes (.record [("cell", .digest)]) (.record [("cell", .digest cell)])
+
+def hole_proposeArgTy : Ty := .record [("cand", .digest), ("s0", hole_optSupport), ("s1", hole_optSupport), ("value", .nat)]
+def hole_proposeArg (cand : ByteArray) (s0 s1 : Data) (value : Nat) : ByteArray :=
+  argBytes hole_proposeArgTy (.record [("cand", .digest cand), ("s0", s0), ("s1", s1), ("value", .nat value)])
+
+def hole_selectArg (cand : ByteArray) : ByteArray := argBytes (.record [("cand", .digest)]) (.record [("cand", .digest cand)])
+def hole_pruneArg (cand : ByteArray) (why : String) : ByteArray :=
+  argBytes (.record [("cand", .digest), ("why", .bytes)]) (.record [("cand", .digest cand), ("why", .bytes why.toUTF8)])
+
+/-- A row of relation `rel` of `obj` at `key`, pinned at what the signer sees on `w` (the LB rows' `pinAtObj`). -/
+def hole_pinAt (obj : D) (w : World D) (rel : Nat) (d : RelDecl) (key : Data) : List (RowSlot D × D) :=
+  match keyBytes d key with
+  | some k => let s : RowSlot D := .row ⟨obj, rel, k⟩; [(s, rowPin Sim.env (headFloor Sim.env w.rows obj rel) (rowAt Sim.env w.rows s))]
+  | none => []
+
+/-- The status label of a candidate's row, read back. -/
+def hole_statusOf (w : World D) (obj : D) (dC : RelDecl) (cand : ByteArray) : Option String :=
+  match (storyRow w obj 0 dC (.record [("cand", .digest cand)])).bind (·.field "status") with
+  | some (.inj l (.bytes b)) => some s!"{l} \"{String.fromUTF8! b}\""
+  | some (.inj l _) => some l
+  | _ => none
+
+def hole_selectedOf (E : Kernel.Env D) (w : World D) (obj : D) : Option (Option ByteArray) :=
+  match slotOf E w obj 5 |>.map (Wire.decodeData (optTy .digest)) with
+  | some (.ok (.inj "some" (.digest b))) => some (some b)
+  | some (.ok (.inj "none" _)) => some none
+  | _ => none
+
+def hole_acceptedOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Bool :=
+  match slotOf E w obj 0 |>.map (Wire.decodeData .bool) with
+  | some (.ok (.bool b)) => some b
+  | _ => none
+
+def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run := Id.run do
+  let prog := mode.program
+  let mut r := r0
+  -- LH0 the surface reads
+  let p ← match Surface.readPackage src with
+    | .ok p => pure p
+    | .error e => return note r s!"LH0 read the hole: {e.text src}" false
+  r := note r s!"LH0 Hole.ob reads ({src.length} chars): methods {p.methods}, laws {p.laws}, relations {p.rels.map (·.1)}"
+    (p.methods == ["accept", "post", "propose", "prune", "repin", "select", "unpost"] && p.laws == ["shape"] &&
+      p.rels.map (·.1) == ["candidates", "facts"])
+  let some pb := Wire.encodePackage p | return note r "LH0 no bytes" false
+  let some dC := p.rels.lookup "candidates" | return note r "LH0 no candidates" false
+  let some dF := p.rels.lookup "facts" | return note r "LH0 no facts" false
+  -- LH1 install
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
+  r := note r1 s!"LH1 A installs the hole ({pb.size} package bytes): {v1}" (v1 == "admitted")
+  let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LH1 no package id" false
+  -- LH2 create: cap 10, chooser A, acceptor B, closes far off, nothing selected
+  let seedData : List (Label × Data) :=
+    [("accepted", .bool false), ("acceptor", .digest (Sim.dc.bytes b.id)), ("cap", .nat 10),
+     ("chooser", .digest (Sim.dc.bytes a.id)), ("closes", .nat 100000), ("selected", .inj "none" (.record []))]
+  let some seed := stateSlots (recordRow p.state) seedData 0 | return note r "LH2 seed has no bytes" false
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed))
+  let some obj := t2.bind fun t => (createdIds t).head? | return note r2 s!"LH2 no hole: {v2}" false
+  r := note r2 s!"LH2 A creates the hole (cap 10, chooser A, acceptor B): {v2}; both relations born empty"
+    (v2 == "admitted" && [0, 1].all fun i => headCount r2.st.host obj i == some 0)
+  -- LH3 A grants B accept (0), post (1), repin (4), unpost (6)
+  let (r3, v3, t3) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj])
+    (.grant obj b.id [.invoke 0, .invoke 1, .invoke 4, .invoke 6] none))
+  r := note r3 s!"LH3 A grants B accept, post, repin, unpost: {v3}" (v3 == "admitted")
+  let some gr := t3.bind fun t => (createdIds t).head? | return note r "LH3 no grant id" false
+  let pinsOf (r : Run) (m : Sim.Member) := Sim.S.pinsFor r.st.host ([m.id, obj, pkg] ++ if m.id == b.id then [gr] else [])
+  let viaOf (m : Sim.Member) : Option D := if m.id == b.id then some gr else none
+  let call (r : Run) (m : Sim.Member) (method : Nat) (x : ByteArray) (rowPins : List (RowSlot D × D) := []) : Call D :=
+    signedAt r.st m (pinsOf r m) (.invoke obj method x 100000 (viaOf m)) r.st.host.height (r.st.host.height + 1024) rowPins
+  let cost (c : Call D) (w : World D) : String :=
+    s!"required steps / ticks {match measure w c with | .ok (q, k) => s!"{q} / {k}" | .error e => e}"
+  -- the two facts: cells f1, f2 (any Sim digests), pins p1, p2
+  let f1 := Sim.dc.bytes a.id
+  let f2 := Sim.dc.bytes b.id
+  let p1 := Sim.dc.bytes pkg
+  let p2 := Sim.dc.bytes obj
+  let p1' := Sim.dc.bytes gr
+  let factKey (cell : ByteArray) : Data := .record [("cell", .digest cell)]
+  let candKey (cand : ByteArray) : Data := .record [("cand", .digest cand)]
+  let pinFact (w : World D) (cell : ByteArray) := hole_pinAt obj w 1 dF (factKey cell)
+  let pinCand (w : World D) (cand : ByteArray) := hole_pinAt obj w 0 dC (candKey cand)
+  let factPin (w : World D) (cell : ByteArray) : Option ByteArray :=
+    match (storyRow w obj 1 dF (factKey cell)).bind (·.field "pin") with
+    | some (.digest d) => some d
+    | _ => none
+  -- LH4 B posts f1@p1 and f2@p2
+  let (r4a, v4a, _) := go prog r (call r b 1 (hole_postArg f1 p1))
+  r := note r4a s!"LH4a B posts fact f1 at pin p1: {v4a}" (v4a == "admitted" && factPin r4a.st.host f1 == some p1)
+  let (r4b, v4b, _) := go prog r (call r b 1 (hole_postArg f2 p2))
+  r := note r4b s!"LH4b B posts fact f2 at pin p2: {v4b}" (v4b == "admitted" && headCount r4b.st.host obj 1 == some 2)
+  let (_, v4c, _) := go prog r (call r a 1 (hole_postArg f1 p1))
+  r := note r s!"LH4c A posts f1 again (B's token): {v4c}" (v4c.startsWith "rejected keyTaken")
+  -- LH5 candidates: c1 over f1@p1, f2@p2; c2 over f2@p2; c3 past the cap
+  let c1 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 7)
+  let c2 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 8)
+  let c3 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 9)
+  let (r5a, v5a, _) := go prog r (call r a 2 (hole_proposeArg c1 (hole_supportData f1 p1) (hole_supportData f2 p2) 5))
+  r := note r5a s!"LH5a A proposes c1 (value 5, facts f1@p1 f2@p2): {v5a}; status {hole_statusOf r5a.st.host obj dC c1}"
+    (v5a == "admitted" && hole_statusOf r5a.st.host obj dC c1 == some "verified")
+  let (r5b, v5b, _) := go prog r (call r a 2 (hole_proposeArg c2 (hole_supportData f2 p2) hole_noSupport 7))
+  r := note r5b s!"LH5b A proposes c2 (value 7, fact f2@p2): {v5b}; status {hole_statusOf r5b.st.host obj dC c2}"
+    (v5b == "admitted" && hole_statusOf r5b.st.host obj dC c2 == some "verified")
+  let (r5c, v5c, _) := go prog r (call r a 2 (hole_proposeArg c3 hole_noSupport hole_noSupport 50))
+  r := note r5c s!"LH5c A proposes c3 (value 50, past the cap): {v5c}; retained with its reason: {hole_statusOf r5c.st.host obj dC c3}"
+    (v5c == "admitted" && hole_statusOf r5c.st.host obj dC c3 == some "suspended \"cap\"")
+  -- LH5d a candidate filed verified past the cap: the guard refuses it (the status is the clause's, not the author's)
+  let (_, v5d, _) := go prog r (call r a 2 (hole_proposeArg c3 hole_noSupport hole_noSupport 50))
+  r := note r s!"LH5d A proposes c3 again (its key is taken): {v5d}" (v5d.startsWith "rejected keyTaken")
+  -- LH6 the view before the withdrawal, kept for LH7b; then B re-pins f1
+  let viewBefore := r
+  let (r6, v6, _) := go prog r (call r b 4 (hole_postArg f1 p1') (pinFact r.st.host f1))
+  r := note r6 s!"LH6 B re-pins fact f1 (p1 -> p1'): {v6}; the support c1 recorded has MOVED"
+    (v6 == "admitted" && factPin r6.st.host f1 == some p1')
+  -- LH7 A selects c1: its support f1 is not what it was verified under
+  let c7 := call r a 5 (hole_selectArg c1) (pinCand r.st.host c1 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2)
+  let (_, v7, _) := go prog r c7
+  r := note r s!"LH7 A selects c1: {v7}; {cost c7 r.st.host}" (refusedBy v7 "select" "support0 moved")
+  -- LH7b the same select signed over the view before LH6 (the row pins of that view)
+  let c7b := call viewBefore a 5 (hole_selectArg c1)
+    (pinCand viewBefore.st.host c1 ++ pinFact viewBefore.st.host f1 ++ pinFact viewBefore.st.host f2)
+  let (_, v7b, _) := go prog r c7b
+  r := note r s!"LH7b the same select signed over the view before the re-pin: {v7b} (the method reads the row as it is; the kernel's stale stands behind it)"
+    (refusedBy v7b "select" "support0 moved")
+  -- LH7c a select citing a candidate whose fact row is pinned absent (f1 unposted on a scratch World)
+  let (rX, vX, _) := go prog r (call r b 6 (hole_unpostArg f1) (pinFact r.st.host f1))
+  let cX := call rX a 5 (hole_selectArg c1) (pinCand rX.st.host c1 ++ pinFact rX.st.host f1 ++ pinFact rX.st.host f2)
+  let (_, vX2, _) := go prog rX cX
+  r := note r s!"LH7c (scratch) B withdraws f1 ({vX}); A selects c1: {vX2}" (vX == "admitted" && refusedBy vX2 "select" "support0 withdrawn")
+  -- LH8 A selects c2: its one support f2@p2 still stands
+  let c8 := call r a 5 (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2)
+  let (r8, v8, _) := go prog r c8
+  r := note r8 s!"LH8 A selects c2 (fact f2@p2 unchanged): {v8}; selected {hole_selectedOf Sim.env r8.st.host obj |>.map (·.map Print.hex)}; {cost c8 r.st.host}"
+    (v8 == "admitted" && hole_selectedOf Sim.env r8.st.host obj == some (some c2))
+  -- LH8b B (not the chooser) selects
+  let (_, v8b, _) := go prog r (call r b 5 (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2))
+  r := note r s!"LH8b B selects c2: {v8b}" (v8b.startsWith "refused grantRight" || refusedBy v8b "select" "notChooser")
+  -- LH9 B accepts; LH9b a select after acceptance
+  let (r9, v9, _) := go prog r (call r b 0 (argBytes (.record []) (.record [])))
+  r := note r9 s!"LH9 B accepts the selected c2: {v9}; accepted {hole_acceptedOf Sim.env r9.st.host obj}"
+    (v9 == "admitted" && hole_acceptedOf Sim.env r9.st.host obj == some true)
+  let (_, v9b, _) := go prog r (call r a 5 (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2))
+  r := note r s!"LH9b A selects again after acceptance: {v9b}" (refusedBy v9b "select" "accepted")
+  -- LH10 B withdraws f2 after acceptance: the executed prefix does not move
+  let (r10, v10, _) := go prog r (call r b 6 (hole_unpostArg f2) (pinFact r.st.host f2))
+  r := note r10 s!"LH10 B withdraws f2 after acceptance: {v10}; selected stays c2: {hole_selectedOf Sim.env r10.st.host obj == some (some c2)}; accepted: {hole_acceptedOf Sim.env r10.st.host obj}"
+    (v10 == "admitted" && hole_selectedOf Sim.env r10.st.host obj == some (some c2) && hole_acceptedOf Sim.env r10.st.host obj == some true)
+  -- LH11 A prunes c1 naming why; the three candidates and their reasons read back
+  let (r11, v11, _) := go prog r (call r a 3 (hole_pruneArg c1 "support moved") (pinCand r.st.host c1))
+  r := note r11 s!"LH11 A prunes c1: {v11}; candidates: c1 {hole_statusOf r11.st.host obj dC c1}, c2 {hole_statusOf r11.st.host obj dC c2}, c3 {hole_statusOf r11.st.host obj dC c3}"
+    (v11 == "admitted" && hole_statusOf r11.st.host obj dC c1 == some "pruned \"support moved\"" &&
+      hole_statusOf r11.st.host obj dC c2 == some "verified" && headCount r11.st.host obj 0 == some 3)
+  -- LH11b B prunes (not the chooser): the guard refuses it
+  let (_, v11b, _) := go prog r (call r b 3 (hole_pruneArg c2 "mine") (pinCand r.st.host c2))
+  r := note r s!"LH11b B prunes c2: {v11b}" (v11b.startsWith "refused grantRight" || refusedBy v11b "prune" "notChooser")
+  return r
+
 def journey (bell : String) (mode : Mode) : Run := Id.run do
   let prog := mode.program
   let fk : List (ByteArray × ByteArray) :=
@@ -2122,6 +2385,8 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
     r := tallyRows mode r a b
     r := storyRows mode r a b
     r := bellRows mode r a b bell
+  if mode = .honest then
+    r := holeRows mode r a b holeText
     r := quorumRows mode r a b
     r := windowedRows mode r a
   if mode = .honest then
