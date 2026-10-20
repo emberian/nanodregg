@@ -57,6 +57,15 @@ refuses a unit file that differs from the tables):
 
     nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
 
+RETENTION (HOST-64, KERNEL-44 Part 2). The unit above keeps every file, the default: no `--retain` is rendered. To
+keep only the newest N segment files, set the node's `retain` in Ops/Units.lean (`Node.retain := some N`) and
+re-render: `host serve /srv/nd/store --retain N`. N below 2 is refused twice by one name: at render
+(`retainBelowFloor`, nothing is written) and by `host` itself (`refused retainBelowFloor`, exit 8 `usage`, nothing
+opened); a non-number is `usage retain`. A follower node takes none (`retainOnFollower` at render): the hosted
+follower is the ARCHIVE and keeps everything by default, so retention on the writer never loses history for
+members who follow. What retention drops is read back as `checkpointed` (61) on a `log` page below `retained_from`
+(§3). `host seal STORE --retain N` takes the same flag, for the operator's seal of a stopped writer.
+
 Member machine (user unit `nd-host-follow.service`; `%h/.nd/nd-host-follow.env` holds
 `ND_MEMBER=<hex>` and `ND_GRANT=<hex>`: a founder's from genesis, a joiner's from its enrolment below):
 
@@ -440,16 +449,22 @@ grain-launch and the controller together: a controller without `tick` refuses it
 ## 3. Status — RAN
 
     host check STORE
-    STATUS height=H steps=N chain=C base_offset=O base_steps=B seg_bytes=S records=R torn=T use=U anchor=none
+    STATUS height=H steps=N chain=C base_offset=O base_steps=B seg_bytes=S records=R torn=T use=U retained_from=F anchor=none
 
 (the line `Host.Check` prints, field by field; parse it by field name, never by position.)
+`retained_from=F` is the step count at the oldest segment file the Store keeps (HOST-64): 0 while the Store
+keeps its whole history, past 0 once `host serve --retain N` has dropped files. `check` verifies from there,
+and `use=U` counts only the records kept. A `log` page below F is refused `checkpointed` (61): nothing is wrong
+with the Store, the history was dropped by retention; the member joins from a served base (`nd adopt`, §2) or
+reads the archive. The archive is the hosted follower: its unit takes no `--retain` (the render refuses one,
+`retainOnFollower`), so it keeps every file; keep at least one follower alive if you set `--retain` on the writer.
 Read-only (no lock, writes nothing; works while the writer runs or is down). `torn>0` is the
 writer's unsynced last frame. `anchor=none` means: integrity and height only, NOT completeness.
 `use=U`: the number of distinct objects one member made that another member invoked or wrote, over
 every call committed in the Store's segment (history and tail). A Store used by one resident reads 0
 (PROTOCOL-43, db0b43c; planted: `use-zero-on-creates-only`, `use-self-use-zero`, `use-reads-every-call`).
 
-`check` reads EVERY `index.log` entry the base counts; an open reads only the last one (HOST-33).
+`check` reads EVERY index entry (`index.<k0>.log`) the base counts; an open reads only the last one (HOST-33).
 So a corrupt middle entry is refused at first read or by check, not at open: the writer opens and
 serves, the first `log` page whose search reads that entry is answered `refused badIndex` (the
 writer keeps serving), and `host check` refuses `indexCorrupt` (46)
@@ -463,21 +478,24 @@ A failed READ of the Store's files for one page (an IO error in `log` or `read`,
 refused that page, `refused pageIo`, and the writer keeps serving: it does not exit `ioServing` (6).
 The writer's stderr carries one line per failed page, `STATUS page refused=pageIo error="<the IO
 error>"`. The member sees `refused host pageIo` and runs its command again. One line means a
-transient read failure; if it repeats, check the disk (`base.world`, `seg.log` and `index.log` are
+transient read failure; if it repeats, check the disk (`base.world`, every `seg.<o>.log` and `index.<k0>.log` are
 readable by the writer's user) and run `host check STORE`. Planted in the Host's simulation
 (`pageIoPlant`: the first page is refused, the second is served). The exit table is unchanged.
 
 ## 4. Backup — RAN (stopped and LIVE: store-plants)
 
 Copy the files in the order `deploy/units/STORE.md` lists (generated from
-`Host.Store.backupOrder`; the base before every append-only file), each whole. It is safe while
+`Host.Store.backupOrder`: `key`, `base.world`, `index.<k0>.log`, then every `seg.<o>.log` oldest first; the
+base before every append-only file), each whole. The segment files are a family, one per seal start that the
+Store still keeps (`--retain N` drops the oldest), so list the directory and copy them all: a copy missing one
+is refused `missing seg.<o>.log` (20) at the restore. It is safe while
 the writer runs, across a seal: a seal installs a new `base.world` atomically and the append-only
 files only grow, so each one copied after `base.world` holds the prefix the copied base names.
 Planted in store-plants: `live-copy-raced-a-seal` / `live-copy-anchor-at-segment-copy` (the right
 order across a seal opens at the writer's height); `orphan-index-entries-*` (index entries past
 the ones the stale base counts: a reader ignores them, the writer's open truncates them and
-reopens at the same height). The OTHER orders are refused by name: `seg.log` copied before a seal is `segmentShort`
-(`copy-segment-before-base-wrong-order`), `index.log` copied before a seal is `indexShort`
+reopens at the same height). The OTHER orders are refused by name: a segment file copied before a seal is `segmentShort`
+(`copy-segment-before-base-wrong-order`), the index file copied before a seal is `indexShort`
 (`copy-index-before-base-wrong-order`); neither opens short. Record an anchor at the
 same time: `HEIGHT:CHAIN` from a member follower's head (an operator's `host seal`, §2, is a seal like the
 cadence's: the same order covers a backup taken across it) (its own `host check` on its follow
@@ -492,8 +510,12 @@ Copy the files (`deploy/units/STORE.md`) into an empty STORE, then:
 
 A Store file reported `missing` (20, `refused missing FILE`, HOST-35) is never re-created by hand
 and never genesis'd over: restore ALL of the Store's files from one backup (§4 order) into an empty
-STORE. No open creates a Store file (only genesis does), so a missing `seg.log` or `index.log`
-cannot silently come back empty. Deleted while the writer runs: the next batch's sync fails, that
+STORE. No open creates a Store file (only genesis does), so a missing `seg.<o>.log` or `index.<k0>.log`
+cannot silently come back empty (`refused missing seg.<o>.log`, naming the file's real start).
+A segment file whose header fails its MAC under the Store key, or that is shorter than a header, is
+`checkpointCorrupt` (62, fatal): keep the Store untouched and restore from a backup. A Store of the layout
+before HOST-64 (`seg.log`, `index.log`) refuses `shapeMismatch` or `missing`: it is never read as the new
+layout; re-genesis it (§1) or carry its state (§6). Deleted while the writer runs: the next batch's sync fails, that
 batch ends `uncertain` (3, restarted; nothing is acknowledged) and the restart refuses `missing`
 (fatal, the unit stops). Planted by HOST in store-plants: `missing-key`, `-base`, `-index`,
 `-segment`, `missing-index-serve`, `missing-segment-serve`. An absent STORE directory is `io` (13).

@@ -30,6 +30,7 @@ nothing (accepted in ASSEMBLY §1 O1: the Mac is a member machine, never the wri
 import Host.Exit
 import Protocol.Exit
 import Host.Base
+import Host.Segment
 import Hosting.BrokerExit
 import Hosting.Plan
 import Hosting.LaunchExit
@@ -82,6 +83,10 @@ structure Node where
   HOSTING-17 §7): bound 0660 in a setgid 02710 directory of that group, the numeric gid from the
   unit's environment file (`ND_GID`) -/
   group : Bool := false
+  /-- `host serve STORE --retain N` (HOST-64): keep the `N` newest segment files; `none` keeps every
+  file and renders no flag. A follower is the archive and never takes it: the default is `none`, and a
+  follow node that sets it is refused -/
+  retain : Option Nat := none
   deriving Repr
 
 inductive Refusal where
@@ -95,6 +100,11 @@ inductive Refusal where
   uid that reads the provider keys and writes the Store; keybroker cannot tell it from the
   one-uid test, so the render refuses it) -/
   | hostedIsKeyHolder
+  /-- a retention count under `Host.retainFloor` (`host serve` would refuse it `retainBelowFloor`) -/
+  | retainBelowFloor
+  /-- a retention count on a follower: `host follow` takes no `--retain`, and the follower keeps
+  everything (the archive) -/
+  | retainOnFollower
   deriving DecidableEq, Repr
 
 def Refusal.name : Refusal → String
@@ -103,6 +113,8 @@ def Refusal.name : Refusal → String
   | .relative _ => "relative"
   | .runtimeOnUserUnit => "runtimeOnUserUnit"
   | .hostedIsKeyHolder => "hostedIsKeyHolder"
+  | .retainBelowFloor => "retainBelowFloor"
+  | .retainOnFollower => "retainOnFollower"
 
 def plainChar (c : Char) : Bool := c.isAlphanum || c == '/' || c == '.' || c == '_' || c == '-'
 
@@ -129,7 +141,8 @@ def envGid : String := "ND_GID"
 /-- The supervised program's arguments. -/
 def Node.args (n : Node) : List Arg :=
   match n.role with
-  | .serve => [.lit "serve", .lit n.store]
+  | .serve => [.lit "serve", .lit n.store] ++
+      (match n.retain with | some k => [.lit "--retain", .lit (toString k)] | none => [])
   | .follow => [.lit "follow", .lit n.store, .var envMember, .var envGrant]
 
 /-- A unit, before it is text: the command line and the restart policy. -/
@@ -165,6 +178,13 @@ def checkAll (ps : List String) (inst : Bool := false) : Except Refusal _root_.U
 `SupervisorExit.code_disjoint_host` keeps them apart). -/
 def preventCodes : List Nat := Status.codesOf .fatal ++ SupervisorExit.codesOf .fatal
 
+/-- A retention count is for a writer and at least `retainFloor` (HOST-64). -/
+def Node.checkRetain (n : Node) : Except Refusal _root_.Unit :=
+  match n.retain with
+  | none => .ok ()
+  | some k => if n.role == .follow then .error .retainOnFollower
+      else if k < retainFloor then .error .retainBelowFloor else .ok ()
+
 /-- Every path of the node, its socket as rendered; under a runtime directory, the directory and
 the socket's name are single components (the socket sits directly in `/run/NAME`). -/
 def Node.check (n : Node) : Except Refusal _root_.Unit := do
@@ -172,6 +192,7 @@ def Node.check (n : Node) : Except Refusal _root_.Unit := do
   if let some r := n.runtime then
     if r.isEmpty || r.contains '/' then throw (.badPath r)
     if n.socket.isEmpty || n.socket.contains '/' then throw (.badPath n.socket)
+  n.checkRetain
 
 def Service.ofNode (n : Node) : Except Refusal Service :=
   if n.hide.isEmpty then .error .nothingHidden else

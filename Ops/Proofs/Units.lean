@@ -232,4 +232,23 @@ stands in for a clock or a key-slot list it never reads (HOSTING-33; `hosting-br
 gone), and no operator id reaches it. -/
 theorem membersUnit_decider_store : membersUnit.deciderArgs = [.lit membersUnit.store] := rfl
 
+/-- The deployed writer keeps every file: no `--retain` is rendered (HOST-64's default). -/
+theorem writer_keeps_all : writer.retain = none := rfl
+
+/-- A node whose retention checks keeps one only on a writer and at least `retainFloor` files, so no
+unit passes `--retain` a value `host serve` would refuse, and no follower is given one (HOST-64). -/
+theorem checkRetain_sound (n : Node) (h : n.checkRetain = .ok ()) (k : Nat) (hk : n.retain = some k) :
+    Host.retainFloor ≤ k ∧ n.role ≠ .follow := by
+  unfold Node.checkRetain at h
+  rw [hk] at h
+  by_cases hf : (n.role == .follow) = true
+  · simp [hf] at h
+  · by_cases hl : k < Host.retainFloor
+    · simp [hf, hl] at h
+    · exact ⟨Nat.le_of_not_lt hl, fun e => hf (by simp [e])⟩
+
+/-- A finite retention renders the flag `host serve` reads. -/
+theorem writer_retain_two_args :
+    ({ writer with retain := some 2 } : Node).args = [.lit "serve", .lit writer.store, .lit "--retain", .lit "2"] := rfl
+
 end Nanodregg.Ops.Units
