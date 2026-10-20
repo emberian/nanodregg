@@ -524,6 +524,26 @@ batch ends `uncertain` (3, restarted; nothing is acknowledged) and the restart r
 cut at a frame boundary, a single foreign last frame and a rollback to an older complete copy ALL
 open cleanly at a lower height; that is why the anchor is not optional.
 
+### 5a. A joiner of a CARRIED World pins its origin (HOST-67 832a815)
+
+A member who re-creates its follow Store from a carried World (§6 step 7) has no invitation to join from, so
+without a pin it trusts the carried file's digest and the operator's word. `host import` can pin the World's
+ORIGIN instead:
+
+    host import STORE NAME IN --origin ORIGIN_HEX --nonce NONCE_HEX32
+
+ORIGIN_HEX is the origin the operator's own import printed (`origin HEX`, out of band), and NAME and NONCE_HEX32
+the same import's name and `nonce HEX`: the origin is a hash of the label, the nonce and the carried roots, so a
+fresh nonce could never make a named origin. A carried World whose origin is not ORIGIN_HEX is refused
+`refused carryMismatch wrongWorld` (49), before anything is written: the file is not the World you were told
+of (another export, another nonce, or a doctored copy). `--origin` without `--nonce` is `refused nonce`
+(8, usage) and a malformed ORIGIN_HEX is `refused origin` (8, usage); neither writes a Store file. An origin pin
+checks no digest (`--digest` is the other pin; give one, not both), so it is as strong as the origin you obtained.
+This flag is the INTERIM way to pin: when PROTOCOL-61 lands, `host join STORE INVITE KEY` takes the pin from the
+sponsor's signed invitation and the manual flag is for the operator's own checks. Planted through the real binary
+(store-plants `carry-import-origin-without-nonce`, `-malformed`, `-other-world-refused`, with
+`-pinned-accepted-control`; a binary that sent `--origin` to the digest check turns three of them red).
+
 ## 6. Re-genesis with state carried (flag day) — RAN (store-plants `carry-*`, HOST-28 6b89d6f, KERNEL-29)
 
 State crosses a flag day only by re-genesis from a checked export (law 1, OPS-1). History never

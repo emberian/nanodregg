@@ -609,6 +609,35 @@ def carryPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   unless ← say "carry-import-keeps-height-new-origin" ok2
       s!"exit={i.code} height={h} (want {n}) chain=KERNEL's carry {decide (chainC = wC.chain.toHex)} new {decide (chainC ≠ wL.chain.toHex)} :: {i.out.replace "\n" " "}" do
     failed := failed + 1
+  -- HOST-67: `--origin HEX --nonce HEX32` pins the carried World's origin instead of a digest. The
+  -- verdict is the whole output: the exit code AND the refusal line the real binary prints, and no
+  -- Store file after a refusal (the lines below are read from a run of the binary, not written from a model).
+  let zeros := String.ofList (List.replicate 64 '0')
+  let nonceHex := Protocol.Text.toHex nonce2
+  let o0 := dir / "carry-origin-refused"
+  let outHas (r : Run) (needle : String) : Bool := (r.out.splitOn needle).length > 1
+  let r1 ← host exe ["import", o0.toString, "plants-carry", out.toString, "--origin", zeros]
+  unless ← say "carry-import-origin-without-nonce"
+      (r1.code = Status.usage.code.toUInt32 && outHas r1 "refused nonce" && (← empty o0))
+      s!"exit={r1.code} want=usage({Status.usage.code}) no Store file={← empty o0} :: {r1.out.replace "\n" " "}" do
+    failed := failed + 1
+  let r2 ← host exe ["import", o0.toString, "plants-carry", out.toString, "--origin", "zz", "--nonce", nonceHex]
+  unless ← say "carry-import-origin-malformed"
+      (r2.code = Status.usage.code.toUInt32 && outHas r2 "refused origin" && (← empty o0))
+      s!"exit={r2.code} want=usage({Status.usage.code}) no Store file={← empty o0} :: {r2.out.replace "\n" " "}" do
+    failed := failed + 1
+  let r3 ← host exe ["import", o0.toString, "plants-carry", out.toString, "--origin", zeros, "--nonce", nonceHex]
+  unless ← say "carry-import-origin-other-world-refused"
+      (r3.code = Status.carryMismatch.code.toUInt32 && outHas r3 "wrongWorld" && (← empty o0))
+      s!"exit={r3.code} want=carryMismatch({Status.carryMismatch.code}) no Store file={← empty o0} :: {r3.out.replace "\n" " "}" do
+    failed := failed + 1
+  -- the control: the same file, name and nonce, pinned at the origin the digest import made, is accepted
+  let oc := dir / "C-origin"
+  let r4 ← host exe ["import", oc.toString, "plants-carry", out.toString, "--origin", wC.origin.toHex, "--nonce", nonceHex]
+  unless ← say "carry-import-origin-pinned-accepted-control"
+      (r4.code = 0 && lineField r4.out "origin" = some wC.origin.toHex)
+      s!"exit={r4.code} :: {r4.out.replace "\n" " "}" do
+    failed := failed + 1
   -- PROTOCOL-29: the last call before the export answers `lookup` committed in the new World
   let some last := calls.head? | IO.eprintln "no fixture calls"; return failed + 1
   let (lc, lout, _) ← hostRaw exe ["serve", c.toString] (Founder.lookupFrame last)
