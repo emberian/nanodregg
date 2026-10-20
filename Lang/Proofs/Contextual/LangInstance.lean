@@ -24,7 +24,7 @@ import Lang.Contextual.LangCalculus
 import Lang.Proofs.Check
 import Lang.Proofs.Load
 import Lang.Proofs.Contextual.Core
-import Lang.Proofs.Contextual.Closure
+import Lang.Proofs.Contextual.ClosureStatements
 
 namespace Nanodregg.Lang.Contextual
 

@@ -3005,3 +3005,29 @@ a predicate no operation demands); this instance is the first with a non-trivial
 the laws"); it was WRONG in both directions — the laws discharge in full, and the restriction is on the templates, not
 the laws — and only building the instance showed where the restriction actually sits. The pull to resist next is to let
 `langTemplate_no_hyps` read as a limit of Lang rather than as a design choice ROOT made and Ember may reverse.
+
+## LANG-69 Split the contextual closure proof module by responsibility (2026-10-20 real; CX-ACT; cv 01a158c0-ddae)
+**Decision.** Replace the 1,533-line Lang/Proofs/Contextual/Closure.lean with eight proof modules:
+ClosureStatements (calculus laws and judgments), Judge (tokens, judgment, provenance, withdrawal, lookup),
+Repair (candidate pass, coherence, locality and the exact work log), Outcomes (soundness of repair outcomes),
+Operations (operation frames and history prefix), Soundness (conditional soundness and preserved invariants),
+History (selection, acceptance, consumer boundary and sessions), Stability (value guards and grounding).
+CoreInstance and LangInstance import ClosureStatements only; Experiments imports History and Stability.
+There is no compatibility import hub. This is moves plus imports and module wrappers, with NO statement changes.
+**Price premises.** None. No landed theorem gains a hypothesis; none is restated. No definition in the deployed
+language changes, no package re-ids, no wire moves. LANG-68's LangCalculus line count was 567, not its recorded 568.
+**Verification.** A source partition audit accounts for every original line 32..1532 exactly once, preserving
+all 102 declaration names (89 theorems) and every statement/proof body byte-for-byte. The scoped build of
+Experiments, CoreInstance and LangInstance is GREEN (59 jobs), under 6G/two threads and Lean's finite default
+heartbeat cap. The original statements and their disjunct readings are the LANG-66 reader's unchanged statements;
+this change adds no assertion, disjunct or premise. No new semantic check is added, so no new mutation plant
+is applicable to these moves. The consumer build checks resolution and composition after changing imports.
+**Alternatives.** Keep an import-only Closure compatibility module: rejected because it preserves a broad
+dependency entry point rather than teaching each consumer which family it needs. Split by line count: rejected
+because it makes the module boundaries arbitrary and leaves unrelated dependencies together.
+**Critique.** Soundness still joins operation frames with repair outcome lemmas, and History consequently imports
+both; this follows the current proof dependencies, not an ideal independent theory. A further split should be
+driven by an actual consumer or rebuild bottleneck, not a target module count.
+**Meta-critique.** Moving code can masquerade as simplification. Here the measurable benefit is that the two
+calculus instances no longer depend on the 89 closure theorems; only their laws/judgments are imported. The
+statement/body equality audit prevents a proof cleanup from slipping into this structural change.

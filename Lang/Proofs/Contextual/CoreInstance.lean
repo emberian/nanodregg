@@ -17,7 +17,7 @@
 import Lang.Contextual.CoreCalculus
 import Lang.Proofs.Contextual.Typing
 import Lang.Proofs.Contextual.Core
-import Lang.Proofs.Contextual.Closure
+import Lang.Proofs.Contextual.ClosureStatements
 
 namespace Nanodregg.Lang.Contextual
 

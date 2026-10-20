@@ -22,7 +22,8 @@ and beside them: `withdraw_hypothesis_strengthens` / `withdraw_used_hypothesis_o
 `unchecked_select_underivable` (the tooth of `fill_preserves_derivable`), and
 `value_guard_stable` / `syntactic_guard_not_stable` (`stability_class`).
 -/
-import Lang.Proofs.Contextual.Closure
+import Lang.Proofs.Contextual.History
+import Lang.Proofs.Contextual.Stability
 
 namespace Nanodregg.Lang.Contextual.Toy
 
