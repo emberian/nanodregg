@@ -3,7 +3,8 @@
 Writes .lake/gates/CensusRun.lean importing every module outside Census except the lean_exe roots (they hold only `main`,
 closure C7, and two `main`s cannot share one environment), then runs
 `#axiom_census "gates/axioms-allow.tsv" <every lib but Census>` and `#refine_census "gates/refines-allow.tsv" "gates/codec-vectors.tsv" …`
-(CODEC-28: every refinement carries its lawfulness theorem) under `lake env lean`.
+(CODEC-28: every refinement carries its lawfulness theorem) and
+`#statement_census ".lake/gates/statements.tsv" …` over elaborated theorem conclusions under `lake env lean`.
 Every module must already be built (scripts/pre-push builds first).
 """
 import os
@@ -24,13 +25,14 @@ def main(root: str) -> int:
     os.makedirs(os.path.join(t.root, ".lake", "gates"), exist_ok=True)
     run = os.path.join(t.root, ".lake", "gates", "CensusRun.lean")
     with open(run, "w", encoding="utf-8") as f:
-        f.write("import Census.Axioms\nimport Census.Refines\n" + "".join(f"import {m}\n" for m in mods))
+        f.write("import Census.Axioms\nimport Census.Refines\nimport Census.Statements\n" + "".join(f"import {m}\n" for m in mods))
         f.write(f'#axiom_census "gates/axioms-allow.tsv" {" ".join(libs)}\n')
         f.write(f'#refine_census "gates/refines-allow.tsv" "gates/codec-vectors.tsv" {" ".join(libs)}\n')
+        f.write(f'#statement_census ".lake/gates/statements.tsv" {" ".join(libs)}\n')
     r = subprocess.run(["lake", "env", "lean", run], cwd=t.root, capture_output=True, text=True)
     out = (r.stdout + r.stderr).strip()
     print(out)
-    ok = r.returncode == 0 and "AXIOM-CENSUS ok" in out and "REFINE-CENSUS ok" in out
+    ok = r.returncode == 0 and "AXIOM-CENSUS ok" in out and "REFINE-CENSUS ok" in out and "STATEMENT-CENSUS ok" in out
     print(f"census: {'ok' if ok else 'RED'}")
     return 0 if ok else 1
 
