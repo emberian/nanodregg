@@ -2,7 +2,7 @@
 
 OPS is the operator's path: genesis, units, backup/restore, status. It renders and drives; it
 decides nothing that HOST, KERNEL or CLIENT decides. Source of the row: ASSEMBLY-ops.md (the Opus
-evaluation of scouts O1–O5, `~/dev/redregg/work/nanodregg-scout/`).
+evaluation of scouts O1–O5, `docs/record/ASSEMBLY-ops.md`).
 
 ## OPS-0 · the row: a renderer and a driver, and nothing imports it (2026-10-16)
 

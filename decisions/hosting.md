@@ -1,6 +1,6 @@
 # decisions/hosting.md — HOSTING (owner: BUILD-HOSTING)
 
-The layer and its first design are argued in `~/dev/redregg/work/nanodregg-scout/ASSEMBLY-hosting.md`
+The layer and its first design are argued in `docs/record/ASSEMBLY-hosting.md`
 (§3, HOSTING-1 … HOSTING-11, each with both critiques). Entries here are what the builder decided
 against main, with what changed from the assembly. Format: `decisions/README.md`.
 

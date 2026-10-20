@@ -8,8 +8,36 @@ not ported from its code. The spec is: the journey ROWS, the deterministic SIMUL
 (two friends + hosted Hermes over ssh; 1000 records, write ≤ 5 s, cold reopen ≤ 60 s), and the
 THEOREM STATEMENTS that mean something (not the vacuous ones; see the discovery dossiers). The
 target shape is minidregg's `docs/HP-DESIGN.md` taken literally, and the reorientation documents
-in `~/dev/redregg/work/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
-`RECOVERY-20261016.md`, and each `DELETE-<layer>-20261016.md` as it lands.
+in `docs/record/`: `ARCHITECTURE-20261016.md`, `CYCLE-TIME-20261016.md`,
+`RECOVERY-20261016.md`, and each `DELETE-<layer>-20261016.md`.
+
+## Scope (Ember, 2026-10-21)
+
+Ember: "we agree that nano has nothing to do with proof systems, host-hiding, or multi-node
+agreement." nanodregg is an object of study more than the seed of a prototype: a side exploration,
+for diversity and focus, while breadstuffs (the whole system built before it) waits to be resumed
+or composted into the next robigalia. It is a single-node vat with one writer per Store, members
+who consent by re-execution, and an operator who sees every byte. It demonstrates where minidregg
+could be better where that is cheap. Two demonstrations are approved: documents and escrow. No
+other minidregg aspect is pulled in to demonstrate.
+
+Three things are outside nanodregg by ruling, not by omission:
+
+1. **Proof systems.** Nothing. Admission is re-execution; the proof slot stays empty; no circuit,
+   STARK, folding scheme or accumulator is built here or enters the TCB. breadstuffs holds that
+   lineage.
+2. **Hiding from the Host.** Nothing. The operator is a trusted vat: the Host and every key holding
+   a follow grant see every byte; membership is the confidentiality boundary; a member is kept out
+   of a World by holding no follow grant (decisions/protocol.md PROTOCOL-3, ruling (a)).
+3. **Multi-node agreement.** Nothing. One writer per Store; followers re-derive every Turn (law 1,
+   PROTOCOL-4). There is no agreement mesh, no second writer, no replication of the writer.
+
+A lane briefed to "add a proof", "hide it from the Host", "replicate the writer" or "bring in
+another minidregg feature as a demo" is briefed against this section: the brief is wrong, not the
+charter. The meta-critique below applies here too: a scope chosen to avoid a hard part is the
+smell. This one is chosen because each excluded part is a measured failure of the trees before
+it: breadstuffs' soundness apex vacuous at BabyBear, minidregg's empty proof slot, an agreement
+mesh with one host.
 
 ## Laws (every commit obeys; a reviewer may revert on sight)
 
@@ -98,13 +126,13 @@ above has committed, never against prose.
 | PROTOCOL | DISCOVER-PROTOCOL → BUILD-PROTOCOL | `protocol/`: the operation table (target ≤ 40 ops), consent frames (merged), client commands, the SPK broker verbs; every op's receiver named; the conformance rows (the journeys rewritten as executable rows against nanodregg) | `protocol/operations.lean` (the table as data with a theorem that every op has exactly one receiver) + `rows/` (journey J0–J8, JPAY, jwell, m6grain, hermes as nanodregg rows) |
 | CLIENT | DISCOVER-RUST → BUILD-CLIENT | `client/` (Rust, one crate, one process over two sockets: custody + transport + workspace; decides nothing) and `sandbox/` (bwrap launcher, SPK broker, grain runtime as thin plumbing over Lean-decided policy) | `client/` that performs challenge → prepare → assemble → submit → lookup against BUILD-HOST's loop, with the generated op table as its only protocol knowledge |
 | CLOSURE | DISCOVER-CLOSURE → BUILD-GATES | `gates/` + the build: lakefile with small modules and the def/proof split enforced, the size ratchet, the waste ratchet, the import-closure gate, `#assert_axioms` census, the standing service script (tip → build → sim → rows), the CI that runs on a laptop | `lakefile`, `gates/size`, `gates/closure` (refuses a def-module importing a proof-module), `SIZE.md` seeded, `scripts/standing.sh` |
-| HOSTING | BUILD-HOSTING | `Hosting/` (lifecycle generator + theorems, Plan, controller + broker decisions with the lease, resident profile), the `launcher/` Rust crate, `world/grain/` + `world/hosting/` package texts, `decisions/hosting.md`; must never hold a member seed in a process that parses model/provider bytes, keep grain phase/pid/volumes as truth outside the World, or add a Body constructor/receiver without KERNEL (full row: `redregg/work/nanodregg-scout/ASSEMBLY-hosting.md` §4) | the grain lifecycle green through `Receive.submit`; the broker's first refusal by name with no key reaching the resident |
+| HOSTING | BUILD-HOSTING | `Hosting/` (lifecycle generator + theorems, Plan, controller + broker decisions with the lease, resident profile), the `launcher/` Rust crate, `world/grain/` + `world/hosting/` package texts, `decisions/hosting.md`; must never hold a member seed in a process that parses model/provider bytes, keep grain phase/pid/volumes as truth outside the World, or add a Body constructor/receiver without KERNEL (full row: `docs/record/ASSEMBLY-hosting.md` §4) | the grain lifecycle green through `Receive.submit`; the broker's first refusal by name with no key reaching the resident |
 | LEDGER | BUILD-LEDGER (a KERNEL deliverable, prefix `kernel:`) | `Kernel/Value.lean`, `Kernel/Proofs/Value.lean`, `Kernel/Receive/Ledger.lean`, `Kernel/Proofs/Ledger.lean`, the ledger arms of `Kernel/Sim/Gen.lean`; edits Cell/World/Call/Derive only by agreement with KERNEL (full row: `ASSEMBLY-ledger.md`) | value conservation as an equality with its plant; floors + wells (pug's rule); escrow never both released and refunded |
 | OPS | BUILD-OPS | `Ops/` (unit renderer emitted with `--check`, Node values, the BAR driver), `ops/` (units, RUNBOOK, live/), `decisions/ops.md`; must never decide what HOST/KERNEL/CLIENT decide, touch a service manager outside its scratch, hold key material, or delete a Store (full row: `ASSEMBLY-ops.md`) | units emitted + live harness green against the real `host`; world-carry round trip with its check |
 | PERF | BUILD-PERF (a lane, not a decision layer) | `Bench/` (C9 tooling), `scripts/bar.sh`, `gates/bar.tsv`, `decisions/perf.md`; must never decide anything, copy a deployed definition, quote a toy/warm/extrapolated number as THE BAR, or add a wall-clock row to waste.tsv (full row: `ASSEMBLY-perf.md`) | THE BAR over sockets on a quiet machine, with load recorded |
 | TRANSPORT | BUILD-TRANSPORT (temporary; dissolves when D1–D7 land) | nothing permanently: drives store identity, the mux close, thin-consent plumbing into the owners' paths under their prefixes (full row: `ASSEMBLY-transport-consent.md`) | D1+D2: a request and an envelope bound to their Store (flag day), with the foreign-segment plant |
 
-The 10-17 rows (HOSTING, LEDGER, OPS, PERF, TRANSPORT) came from the scoutotype swarm (27 Sonnet scouts → 6 Opus assemblies in `redregg/work/nanodregg-scout/`); the primary checkout `~/dev/nanodregg` is the READ-ONLY reference at main, moved by `scripts/commit` after each landing.
+The 10-17 rows (HOSTING, LEDGER, OPS, PERF, TRANSPORT) came from the scoutotype swarm (27 Sonnet scouts → 6 Opus assemblies, recorded as `docs/record/ASSEMBLY-*.md`); the primary checkout `~/dev/nanodregg` is the READ-ONLY reference at main, moved by `scripts/commit` after each landing.
 
 Until KERNEL commits its first signatures, the other five write their layer's `DESIGN.md`
 (decisions with critiques) and their interface PROPOSAL as Lean/Rust signatures in a

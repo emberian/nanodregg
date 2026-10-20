@@ -1,6 +1,6 @@
 # decisions/protocol.md — BUILD-PROTOCOL
 
-Reach table this layer is built from: `~/dev/redregg/work/DELETE-PROTOCOL-20261016.md` (minidregg main
+Reach table this layer is built from: `docs/record/DELETE-PROTOCOL-20261016.md` (minidregg main
 2c27b08b: 186 opcodes, 86 reached by a landing row, 43 by nothing; 116 Host CLI verbs, 30 by nothing;
 127 `mini` verbs, 56 by nothing; 12 consent frames, 3 a thin twin).
 
@@ -87,6 +87,8 @@ the pinned cells only (consent needs only the pinned cells + a proof they are cu
 - *Threat model, v1.* The operator's Host is a trusted vat: it sees every byte of every cell, and so does every key holding a follow grant (it folds the whole log). Membership is the confidentiality boundary. Nothing is hidden from the operator or from a follower. J5/K10/KH hold as refusals at `log`/`read`, never as hiding.
 - *Why.* Nano is the semi-trusted single-node vat prototype. Hiding arrives only as a restated spec behind a named trigger. Every option that hides from the operator costs new premises (a blinded-slot-invariant judge, a `blindedState` refusal, value cells without blinded slots, a KEM wrap in Lean, key custody apart from the seed: PRIVACY-DESIGN-BRIEF §4(b)), and buys nothing for a hosted resident, whose key is on the operator's box.
 - *Trigger.* The first World in which a member who is not the operator writes, from a device that member controls, content they would not show the operator. The design held for it is (b2), per-object epoch keys wrapped to members. Ember's questions Q2/Q3 are filed with it in cv 01a154f6-9cc7.
+
+**Status (2026-10-21, ROOT for Ember).** RULED and in the charter: `CHARTER.md` §Scope item 2 states this ruling as nanodregg's scope (Ember 10-21: "nano has nothing to do with proof systems, host-hiding, or multi-node agreement"); the charter and this entry say one thing, and a change to either changes both.
 
 ## PROTOCOL-4 · follow must re-run the receiver on every logged event (2026-10-16)
 **Finding.** `World.fold` admits Turns; `World.admit` decides no authority ("`admit` decides none of

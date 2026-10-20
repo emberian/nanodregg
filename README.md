@@ -13,6 +13,21 @@ simulations, one workload called THE BAR, and the theorem statements that surviv
 here has users yet; every incompatible change is a re-genesis, and the repository says so in each
 such commit.
 
+## Where this sits
+
+Three trees, one lineage (Ember, 2026-10-21):
+
+- **breadstuffs** is where the whole system we built lives: the kernel, the proof stack, the
+  carriers, the products. It is not running and has no users. It waits there, to be either resumed
+  or composted into the next version of robigalia.
+- **minidregg** is the previous side exploration: finish-only. It is the specification for the
+  rows nanodregg `replaces`.
+- **nanodregg** (this repository) is an object of study more than the seed of a prototype: a side
+  exploration, for diversity and focused exploration, while breadstuffs waits. It has nothing to do
+  with proof systems, with hiding from the Host, or with multi-node agreement (`CHARTER.md`, Scope).
+  It demonstrates where minidregg could be better where that is cheap; the two approved
+  demonstrations are documents and escrow.
+
 ## What is true today
 
 Measured on 2026-10-18, from the standing verdict and the row runner on the build host:
@@ -111,6 +126,7 @@ fall unless a commit says why.
 The charter was written on 2026-10-16. The layers were built by parallel agents, each attacking
 its own row of the charter before building it; twenty-seven short prototypes were made across the
 missing surfaces and six assemblies chose what to keep. The day's record, including every ruling
-and every mistake, is in the project log outside this repository.
+and every mistake, is in the project log outside this repository; the briefs that carried a
+decision are copied, dated and unedited, into `docs/record/`.
 
 License: AGPL-3.0 (see LICENSE).

@@ -816,3 +816,20 @@ subject; that the package cell never changes is KERNEL's (ROM), not composed.
 (4) The self-deposit remark of LEDGER-14 (3) stands.
 **Nothing moves.** No wire, vector, shipped text or package byte. ledger-sim 1 ALL PASS; --harness-control
 RED (1).
+
+## LEDGER-17 · Unspent credit sits: no sweep, no decay, no reclaim to a commons (ROOT for LEDGER, Ember's ruling 2026-10-21; closes LEDGER-4's taste fork)
+**Decision.** A credit line, once extended (LEDGER-4), sits until the holder uses or repays it. No
+receiver sweeps unused credit, none decays it over heights, none reclaims it to a commons or to the
+issuer. Ember, 2026-10-21: "FINAL. Just let it sit there. It isn't a strong opinion, it's just for
+simplicity's sake." Final for v1.
+**Alternatives.** (a) Issuer reclaim of unused headroom (a power over a holder's account). (b) Decay
+by height. (c) A sweep of idle credit to a commons. Each adds a receiver, a call kind and an
+authority rule, and each was a taste fork with no row asking for it.
+**Why.** Simplicity: the ledger keeps three authority rules and one direction for credit; LEDGER-4's
+`credit_exact` stays the whole story of a floor moving.
+**Critique.** An issuer who over-extends still can only wait for holders to repay; that is now the
+design, not a gap. **Meta-critique.** Ember called it weak-opinion and final at once: the finality is
+for v1's simplicity, so a reclaim arrives only as a new entry with a row that needs it, never as a
+reinterpretation of this one.
+**Status.** ruled by Ember 2026-10-21 (recorded by ROOT for LEDGER; no LEDGER lane live). Nothing moves:
+no code, wire or package byte changes.
