@@ -3909,3 +3909,112 @@ theorem. The canonical-world restriction and finite sufficient draw certificate 
 **Integration receipt (CX-READER-P11a).** P9 landed as c58757f6ad04c5cef4877350962cb6a748d4fdc4;
 its six dependency modules are consumed from main and excluded from P11a landing paths.
 The earlier worker-snapshot integration blocker is resolved.
+
+## LANG-P6 · Certificates retain their logic and checked Environment context (2026-10-20 real; CX-P6)
+
+**Decision.** This is development tooling, a demonstration Mini can take, not nano admission.
+A certificate retains target, statement, declaration context, admitted assumptions and checker
+identity. The generic reader compares every payload with the destination lookup and closes the
+context under statement/type/value/shape dependencies. Extraction is bounded and runs the
+same acceptance check before returning. Same-statement certificates with different contexts
+remain different objects; checker identity is intrinsic as well.
+
+The concrete adapter lives beside the existing census tooling: Census/CertificateData.lean
+projects Lean's checked kernel Environment; Census/Certificate.lean provides the command;
+Census/Proofs/Certificate.lean contains its two proof statements. ROOT authorized these GATES
+paths on real 10-20. C2/C5 and every existing gate remain unchanged. Full expression DAGs retain
+universes, binder annotations, metadata and projection names; declaration payloads retain each
+ConstantInfo variant's fields, including recursor rules and inductive shapes. Structural cache
+equality, not a digest comparison, identifies shared expression nodes. The context includes
+opaque proof values as well as definitions: it is a conservative read closure, not a trace of
+which reductions the kernel happened to perform.
+
+**Proved contract and exact trust boundary.** The generic eight theorem declarations establish
+acceptance/factory fidelity, finite transitive reachability coverage (cycles allowed), missing
+dependency and changed projected-body refusal, and context/checker identity distinctions.
+Census.Certificate.read_environment proves that every returned entry comes from an actual
+env.checked.get.find? result, with exactly the declaration projection stored in that entry.
+Census.Certificate.accepted_environment_reachable gives the same result along every finite
+reader dependency path. These are environment-relative extraction theorems, not proofs of the
+target theorem, foreign-logic interpretation, or a verified Lean kernel.
+
+The named trusted read-offs are Lean.Environment.checked/get/find? and imported oleans;
+Census.Certificate.encodeExpr/expression/declaration (field coverage, reference extraction
+and encoding injectivity are not proved); Lean.Expr.equal/ExprStructEq and core Repr/JSON;
+Lean.collectAxioms including its imported-module cache; compiler/command execution; and file IO,
+Python JSON and lossless gzip. No theorem identifies raw ConstantInfo values from equal encodings.
+The successful factory/acceptance claims quantify over the concrete projection above; they
+must not be promoted to completeness of this trusted extraction or proof authentication.
+
+**Real vector and verdict.** gates/certificate.py imports Ledger.Proofs.GrantCap and emits
+Nanodregg.Ledger.Proofs.grant_moves_le_cap, including its full telescope. The checker name,
+Lean version/compiler githash and actual direct imports are retained. The exact target
+collectAxioms inventory is distinct from the possibly larger conservative context inventory;
+every reported target axiom must occur in the accepted context. gates/certificate-grant.json.gz
+is the complete emitted JSON object compressed losslessly, not a list of hashes or a synthetic
+sample. The script row in gates/runs.tsv regenerates the object and compares all fields and
+all declaration payloads. It refuses changed axioms, constants, definitions, statement or
+checker; normal checking never refreshes the vector. --emit-vector is explicit authoring.
+
+**Price premises.** Landed theorems gaining hypotheses: none. Landed theorem statements
+restated: none. The new certificate component has no deployed caller. The size classifier
+still counts its 119 Lang definition lines as deployed; this is reported, not hidden.
+The Host import closure and maximum dependents are unchanged. Exact final counts and source
+gate results accompany the message and lane report.
+
+**Teeth.** The generic 15-case executable covers cycles, equal statements with distinct
+accepted contexts, each acceptance refusal, non-theorem/missing-dependency reads and fuel.
+Eight run-1 disabled-check plants returned actual Except.ok () for invalid objects, producing
+real FAIL lines; run 2 read all eight complete outputs. The Environment plant helper creates
+a twin of the actual GrantCap telescope, once using the landed proof and once using a new
+scratch axiom; collectAxioms must observe the extra axiom and the real vector comparator must
+refuse. A second scratch theorem keeps its statement/axioms but changes the definition it
+unfolds. Disabling the comparator in lane scratch exposes false acceptance of the actual
+extra-axiom output. Whole output and exact log locators are recorded in the lane report.
+The normal vector and harness-control are exercised separately.
+The separate collectAxioms coverage guard also has a tooth: an actual scratch compilation of
+the adapter with poisoned axiom classification is refused by that guard; a scratch copy with
+the guard disabled emits the inconsistent inventory and a separate executable assertion fails.
+No production source is mutated by these Environment plants.
+
+**Final validation.** Scoped builds GREEN; scoped axiom census over both proof modules GREEN
+(40 declarations, zero allowance rows); all 15 generic cases GREEN; fresh full-vector
+regeneration GREEN; known-red controls and all three Environment mutation families behaved
+as required. Source gates, including ownership and C2/C3/C5, GREEN. The full vector contains
+6857 declarations and the target's three axioms (propext, Classical.choice, Quot.sound);
+101964263 JSON bytes compress to 11961094 bytes. The exact whole-output logs and per-theorem
+disjunct readings are in the private lane report; ROOT's independent reader owns landing.
+
+**Critique.** This is an auditable extraction boundary, not a proof of serialization or a new
+checker. Source/encoding changes may conservatively invalidate the vector even when logical
+meaning is unchanged; they require review. Huge proof terms must retain sharing: the tree-shaped Repr attempts first hit the work
+bound, then exited 143 without a result (the cause of that signal was not established). The
+DAG representation completes under the same 6G cap without discarding proof declarations or
+weakening the closure check. The reader's
+finite fuel can still refuse very large theories by name; there is no claim of total extraction
+for every Environment. Toolchain identity does not authenticate producer-supplied strings.
+
+**Meta-critique.** Generic laws alone could have looked like a completed bridge. This change
+connects them to an executing Environment adapter, a real landed theorem and a pinned full
+object, while naming exactly which projection facts remain trusted. A serialization theorem
+would strengthen this boundary; its absence is a limit, not an unstated axiom of these proofs.
+
+**Independent second reader (CX-READER-P6, real 2026-10-20): LAND.** Read all ten
+theorem statements and proof bodies with the disjunct check; none has an escape disjunct.
+No landed signature changes. Projection fidelity and the named trusted read-offs above
+match the actual proofs. Scoped build and source gates passed; one fresh extraction
+reproduced all 11961094 gzip bytes exactly. Read every generic and Environment plant
+output, including the coverage-guard refusal and the disabled-guard assertion failure.
+
+**Authorized landing repair (CX-READER-P6, real 2026-10-20).** ROOT for CLIENT
+authorized four expect-to-unwrap substitutions in devtools/tests/workspace.rs,
+pre-existing since bb77db4. The file already allows unwrap for test setup.
+Every absent value, failed IO and failed thread still panics; no test changed its
+assertion. No lint allowance, gate or refusal changes. Landed theorem hypotheses:
+none; restated statements: none.
+**Critique.** Panic diagnostics lose the four custom labels; the same failing
+operations and assertions remain. Scoped clippy and the affected scratch test
+validate the repair; the full judge still decides this landing.
+**Meta-critique.** A pre-existing clippy failure is not evidence against P6, but
+also not a reason to bypass the judge. ROOT's explicit ownership grant permits
+this behavior-preserving repair in the same landing.
