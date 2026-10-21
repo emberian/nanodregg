@@ -122,7 +122,7 @@ fn between<'a>(l: &'a str, pre: &str, end: char) -> &'a str {
 }
 
 /// A row of one of the Bell's relations, as `read OBJ REL K` prints it:
-/// `(record (key (record (notBefore N) (ringer #H))) (val (record (text "T"))))`.
+/// Key agent/notBefore and captured ask/text; ordering remains notBefore then signer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Row {
     not_before: u64,
@@ -135,19 +135,19 @@ fn rows(out: &str) -> Vec<Row> {
         .filter(|l| !l.is_empty())
         .map(|l| Row {
             not_before: between(l, "(notBefore ", ')').parse().unwrap(),
-            ringer: between(l, "(ringer #", ')').to_owned(),
+            ringer: between(l, "(agent #", ')').to_owned(),
             text: between(l, "(text \"", '"').to_owned(),
         })
         .collect()
 }
 
-/// The answered rings of `rings` lines (LANG-59: `(val (record (answer (some "A")) (text "T")))`),
-/// each as its key and its ANSWER text; an unanswered ring (`(answer (none (record)))`) is left out.
+/// The answered rings of the activity log, each as its key and answer text.
+/// An unanswered continuation is left out.
 fn answered(out: &str) -> Vec<Row> {
     out.lines()
-        .filter(|l| l.contains("(answer (some \""))
+        .filter(|l| l.contains("(answered (some (ask \""))
         .map(|l| Row {
-            text: between(l, "(answer (some \"", '"').to_owned(),
+            text: between(l, "(answered (some (ask \"", '"').to_owned(),
             ..rows(l).remove(0)
         })
         .collect()

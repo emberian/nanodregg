@@ -101,6 +101,8 @@ import Lang.Program
 import Lang.Print
 import Lang.Resident
 import Lang.Std
+import Lang.Journey.Activity
+import Lang.Journey.HoleChecks
 import Lang.Sim.Need
 import Lang.Contextual.Trace
 import Lang.Contextual.Provenance
@@ -1213,7 +1215,7 @@ def bellArg (s : String) : ByteArray := argBytes (.record [("text", .bytes)]) (.
 
 /-- A ring's key: its signed `notBefore` and its ringer. -/
 def ringKey (nb : Nat) (ringer : Sim.Member) : Data :=
-  .record [("notBefore", .nat nb), ("ringer", .digest (Sim.dc.bytes ringer.id))]
+  .record [("agent", .digest (Sim.dc.bytes ringer.id)), ("notBefore", .nat nb)]
 
 /-- `answer`'s argument: the ring's key, the ring's text sent back, and the answer's text. -/
 def answerArg (nb : Nat) (ringer : Sim.Member) (ringText s : String) : ByteArray :=
@@ -1223,7 +1225,8 @@ def answerArg (nb : Nat) (ringer : Sim.Member) (ringText s : String) : ByteArray
 
 /-- `retire`'s argument: the ring's key. -/
 def retireArg (nb : Nat) (ringer : Sim.Member) : ByteArray :=
-  argBytes (.record [("notBefore", .nat), ("ringer", .digest)]) (ringKey nb ringer)
+  argBytes (.record [("notBefore", .nat), ("ringer", .digest)])
+    (.record [("notBefore", .nat nb), ("ringer", .digest (Sim.dc.bytes ringer.id))])
 
 /-- A layer over the Bell: `answer` without the resident check, `drop` (a ring retracted unanswered),
 `rewrite` (an answered ring answered again, no `pending` edit), `say` (a ring inserted already
@@ -1236,30 +1239,36 @@ def bellTakeover (superHex : String) : String := s!"
   (layer bell)
   (method answer (arg (rec (notBefore nat) (ringText bytes) (ringer digest) (text bytes))) (edits 2)
     (done state
-      (upsert rings (record (notBefore arg.notBefore) (ringer arg.ringer))
-        (record (answer (some bytes arg.text)) (text arg.ringText)))
-      (retract pending (record (notBefore arg.notBefore) (ringer arg.ringer)))))
+      (upsert rings (record (agent arg.ringer) (notBefore arg.notBefore))
+        (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
+          (captured (inj (sum (ask (rec (text bytes)))) ask (record (text arg.ringText))))))
+      (retract pending (record (agent arg.ringer) (notBefore arg.notBefore)))))
   (method drop (arg (rec (notBefore nat) (ringer digest))) (edits 2)
-    (done state (retract rings (record (notBefore arg.notBefore) (ringer arg.ringer)))
-      (retract pending (record (notBefore arg.notBefore) (ringer arg.ringer)))))
+    (done state (retract rings (record (agent arg.ringer) (notBefore arg.notBefore)))
+      (retract pending (record (agent arg.ringer) (notBefore arg.notBefore)))))
   (method rewrite (arg (rec (notBefore nat) (ringText bytes) (ringer digest) (text bytes))) (edits 1)
-    (done state (upsert rings (record (notBefore arg.notBefore) (ringer arg.ringer))
-      (record (answer (some bytes arg.text)) (text arg.ringText)))))
+    (done state (upsert rings (record (agent arg.ringer) (notBefore arg.notBefore))
+      (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
+          (captured (inj (sum (ask (rec (text bytes)))) ask (record (text arg.ringText))))))))
   (method say (arg (rec (text bytes))) (edits 1)
-    (done state (insert rings (record (notBefore req.notBefore) (ringer req.agent))
-      (record (answer (some bytes arg.text)) (text arg.text)))))
+    (done state (insert rings (record (agent req.agent) (notBefore req.notBefore))
+      (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
+          (captured (inj (sum (ask (rec (text bytes)))) ask (record (text arg.text))))))))
   (method seize (done (with state (resident req.agent)))))
 "
 
-/-- The Bell's guard `rung` as `world/resident/Bell.ob` writes it (`bellPlant` replaces exactly this
-text; were the file to drift, the plant would equal the source and LB13' would say so). -/
-def bellRungText : String := "(guard rung (case edit\n    (insert x (check ((deq x.key.ringer req.agent) \"notYours\")\n      (case x.val.answer (none _ ok) (some _ (refuse \"answered\")))))\n    (upsert x (check ((deq req.agent state.resident) \"notResident\")\n      (case old (none _ (refuse \"unrung\"))\n        (some o (case o.answer (some _ (refuse \"answered\"))\n          (none _ (check ((beq x.val.text o.text) \"text\")\n            (case x.val.answer (none _ (refuse \"unanswered\")) (some _ ok)))))))))\n    (retract x (case old (none _ (refuse \"unrung\"))\n      (some o (case o.answer (none _ (refuse \"unanswered\")) (some _ ok)))))))"
-
-/-- The Bell with its guard `rung` admitting every edit and `queued` every retracter: what LB13's
-plant rows run, so each refusal there is shown to be the guard's. -/
-def bellPlant (src : String) : String :=
-  (src.replace bellRungText "(guard rung (case edit (insert x ok) (upsert x ok) (retract x ok)))").replace
-    "(retract x (if (deq req.agent state.resident) ok (refuse \"notResident\")))" "(retract x ok)"
+/-- Disable the actual generated guard fields in the checked Bell. The inherited
+LB13 plant rows must then admit all four forbidden edits. -/
+def bellPlant (src : String) : String := Id.run do
+  let .ok p := Surface.readPackage src | return src
+  let .record fs := p.body | return src
+  let some queued := p.rels.lookup "pending" | return src
+  let some rung := p.rels.lookup "rings" | return src
+  unless (fs.lookup "queued").isSome && (fs.lookup "rung").isSome do return src
+  let allow (d : RelDecl) := Term.lam p.state (.lam reqTy (.lam (guardInTy d) Std.okT))
+  let fs := fs.map fun (n, t) => (n,
+    if n == "queued" then allow queued else if n == "rung" then allow rung else t)
+  return (Print.package { p with body := .record fs }).getD src
 
 /-- The LB rows: the Bell through the real receivers. `a` is the operator (owner, and a ringer);
 `b` is the resident (and a ringer). Under `skipJudge` the law row is the plant. -/
@@ -1303,10 +1312,16 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
       (rowPins : List (RowSlot D × D) := []) : Call D :=
     signedAt r.st m (pinsOf r m) (.invoke obj method x 100000 (viaOf m)) nb (nb + 1024) rowPins
   let rowOf (o : D) (w : World D) (rel : Nat) (d : RelDecl) (key : Data) : Option Data := storyRow w o rel d key
-  let pendingText (w : World D) (key : Data) : Option ByteArray := asBytes ((rowOf obj w 0 dP key).bind (·.field "text"))
-  let ringText (w : World D) (key : Data) : Option ByteArray := asBytes ((rowOf obj w 1 dR key).bind (·.field "text"))
+  let capturedText (row : Option Data) : Option ByteArray := match row.bind (·.field "captured") with
+    | some (.inj "ask" value) => asBytes (value.field "text")
+    | _ => none
+  let pendingText (w : World D) (key : Data) := capturedText (rowOf obj w 0 dP key)
+  let ringText (w : World D) (key : Data) := capturedText (rowOf obj w 1 dR key)
   let ringAnswer (o : D) (w : World D) (key : Data) : Option (Option ByteArray) :=
-    asOptBytes ((rowOf o w 1 dR key).bind (·.field "answer"))
+    match (rowOf o w 1 dR key).bind (·.field "answered") with
+    | some (.inj "none" (.record [])) => some none
+    | some (.inj "some" (.inj "ask" (.bytes b))) => some (some b)
+    | _ => none
   let present (w : World D) (rel : Nat) (d : RelDecl) (key : Data) : Bool :=
     match keyBytes d key with
     | some k => (rowAt Sim.env w.rows (.row ⟨obj, rel, k⟩)).isSome
@@ -1317,7 +1332,7 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
     | some (_, _, _, _, width, _) =>
       match rangeRows Sim.env w.rows obj 0 width .empty 64 with
       | some l => match rangeRowData Sim.digestOf "pending" dP l with
-        | .ok ds => ds.filterMap fun d => match d.field "key" |>.bind (·.field "notBefore"), d.field "key" |>.bind (·.field "ringer") with
+        | .ok ds => ds.filterMap fun d => match d.field "key" |>.bind (·.field "notBefore"), d.field "key" |>.bind (·.field "agent") with
           | some (.nat n), some (.digest g) => some (n, g)
           | _, _ => none
         | .error _ => []
@@ -1862,92 +1877,6 @@ and its facts: a fact re-pinned or withdrawn by its poster refuses the select BY
 `support0 withdrawn`), and the kernel's `stale` stands behind it for a view that no longer holds (the plant that
 removes the method's pin check turns LH7 admitted and LH7b `rejected stale`). The demonstration of the
 `Lang/Contextual` closure theory; the text is the `.ob` a resident would write. -/
-def holeText : String := "
-(package
-  (doc \"A hole fixed now and filled later by a chosen candidate whose recorded facts must still stand; a set-aside candidate keeps its reason.\")
-  (type Status (sum (pruned bytes) (suspended bytes) (verified (rec))))
-  (type Support (rec (cell digest) (pin digest)))
-  (state (rec (accepted bool) (acceptor digest) (cap nat) (chooser digest) (closes nat) (selected (option digest))))
-  (rel candidates (key (cand digest))
-    (val (rec (by digest) (s0 (option Support)) (s1 (option Support)) (status Status) (value nat)))
-    (limit 64) (guard proposed))
-  (rel facts (key (cell digest)) (val (rec (by digest) (pin digest))) (limit 64) (retract) (guard posted))
-  ; a fact is a token its poster owns: posted, re-pinned and withdrawn only by its poster
-  (method post (arg (rec (cell digest) (pin digest))) (edits 1)
-    (done state (insert facts (record (cell arg.cell)) (record (by req.agent) (pin arg.pin)))))
-  (method repin (arg (rec (cell digest) (pin digest))) (edits 1)
-    (done state (upsert facts (record (cell arg.cell)) (record (by req.agent) (pin arg.pin)))))
-  (method unpost (arg (rec (cell digest))) (edits 1)
-    (done state (retract facts (record (cell arg.cell)))))
-  ; a candidate is inserted with the status the guard clause gives it; it is never silently dropped
-  (method propose (arg (rec (cand digest) (s0 (option Support)) (s1 (option Support)) (value nat))) (edits 1)
-    (check ((<= req.validUntil state.closes) \"closed\")
-      (done state (insert candidates (record (cand arg.cand))
-        (record (by req.agent) (s0 arg.s0) (s1 arg.s1)
-          (status (if (<= arg.value state.cap) (Status verified) (Status suspended \"cap\")))
-          (value arg.value))))))
-  ; the chooser sets a candidate aside, naming why; the row stays
-  (method prune (reads (candidates (points 1))) (arg (rec (cand digest) (why (bytes 1 64)))) (edits 1)
-    (check ((deq req.agent state.chooser) \"notChooser\")
-      (case rows.candidates.p0 (none _ (refuse \"unknown\"))
-        (some p (case p.val (none _ (refuse \"unknown\"))
-          (some c (check ((deq p.key.cand arg.cand) \"unknown\")
-            (done state (upsert candidates p.key (extend c (status (Status pruned arg.why))))))))))))
-  ; the chooser selects a verified candidate whose recorded facts are, now, what it was verified under
-  (method select (reads (candidates (points 1)) (facts (points 2))) (arg (rec (cand digest)))
-    (check ((deq req.agent state.chooser) \"notChooser\") ((not state.accepted) \"accepted\")
-      (case rows.candidates.p0 (none _ (refuse \"unknown\"))
-        (some p (case p.val (none _ (refuse \"unknown\"))
-          (some c (check ((deq p.key.cand arg.cand) \"unknown\")
-            (case c.status (pruned _ (refuse \"pruned\")) (suspended _ (refuse \"suspended\"))
-              (verified _
-                (case c.s0
-                  (none _
-                    (case c.s1
-                      (none _ (done (with state (selected (some digest arg.cand)))))
-                      (some t (case rows.facts.p0 (none _ (refuse \"support1 withdrawn\"))
-                        (some f (case f.val (none _ (refuse \"support1 withdrawn\"))
-                          (some v (check ((deq f.key.cell t.cell) \"support1\") ((deq v.pin t.pin) \"support1 moved\")
-                            (done (with state (selected (some digest arg.cand))))))))))))
-                  (some s
-                    (case rows.facts.p0 (none _ (refuse \"support0 withdrawn\"))
-                      (some f (case f.val (none _ (refuse \"support0 withdrawn\"))
-                        (some v (check ((deq f.key.cell s.cell) \"support0\") ((deq v.pin s.pin) \"support0 moved\")
-                          (case c.s1
-                            (none _ (done (with state (selected (some digest arg.cand)))))
-                            (some t (case rows.facts.p1 (none _ (refuse \"support1 withdrawn\"))
-                              (some g (case g.val (none _ (refuse \"support1 withdrawn\"))
-                                (some u (check ((deq g.key.cell t.cell) \"support1\") ((deq u.pin t.pin) \"support1 moved\")
-                                  (done (with state (selected (some digest arg.cand)))))))))))))))))))))))))))
-  ; the acceptor takes the selected candidate; after that the choice is an executed prefix
-  (method accept
-    (check ((deq req.agent state.acceptor) \"notAcceptor\") ((not state.accepted) \"accepted\")
-      (case state.selected (none _ (refuse \"unselected\"))
-        (some _ (done (with state (accepted true)))))))
-  ; a candidate's status agrees with the clause; only the chooser prunes; a candidate's value and author never change
-  (guard proposed (case edit
-    (insert x (check ((deq x.val.by req.agent) \"notYours\")
-      (case x.val.status
-        (pruned _ (refuse \"prunedAtBirth\"))
-        (suspended _ (if (<= x.val.value state.cap) (refuse \"status\") ok))
-        (verified _ (if (<= x.val.value state.cap) ok (refuse \"status\"))))))
-    (upsert x (case old (none _ (refuse \"unknown\"))
-      (some o (check ((== x.val.value o.value) \"value\") ((deq x.val.by o.by) \"by\")
-        (case x.val.status
-          (pruned _ (if (deq req.agent state.chooser) ok (refuse \"notChooser\")))
-          (suspended _ (if (<= x.val.value state.cap) (refuse \"status\") ok))
-          (verified _ (if (<= x.val.value state.cap) ok (refuse \"status\"))))))))))
-  ; a fact is its poster's
-  (guard posted (case edit
-    (insert x (if (deq x.val.by req.agent) ok (refuse \"notYours\")))
-    (upsert x (case old (none _ (refuse \"unknown\"))
-      (some o (check ((deq o.by req.agent) \"notYours\") ((deq x.val.by req.agent) \"notYours\") ok))))
-    (retract x (case old (none _ (refuse \"unknown\"))
-      (some o (if (deq o.by req.agent) ok (refuse \"notYours\")))))))
-  ; the shape never moves on an invoke
-  (law shape (on invoke m (all ((== new.cap old.cap) \"cap\") ((deq new.chooser old.chooser) \"chooser\")
-    ((deq new.acceptor old.acceptor) \"acceptor\") ((== new.closes old.closes) \"closes\"))) (else ok)))
-"
 
 def hole_supportTy : Ty := .record [("cell", .digest), ("pin", .digest)]
 def hole_optSupport : Ty := optTy hole_supportTy
@@ -1966,8 +1895,10 @@ def hole_proposeArg (cand : ByteArray) (s0 s1 : Data) (value : Nat) : ByteArray 
   argBytes hole_proposeArgTy (.record [("cand", .digest cand), ("s0", s0), ("s1", s1), ("value", .nat value)])
 
 def hole_selectArg (cand : ByteArray) : ByteArray := argBytes (.record [("cand", .digest)]) (.record [("cand", .digest cand)])
-def hole_pruneArg (cand : ByteArray) (why : String) : ByteArray :=
-  argBytes (.record [("cand", .digest), ("why", .bytes)]) (.record [("cand", .digest cand), ("why", .bytes why.toUTF8)])
+def hole_pruneArg (cand cell pin : ByteArray) (why : String) : ByteArray :=
+  argBytes (.record [("blocker", Std.holeSupport), ("cand", .digest), ("why", .bytes)])
+    (.record [("blocker", .record [("cell", .digest cell), ("pin", .digest pin)]),
+      ("cand", .digest cand), ("why", .bytes why.toUTF8)])
 
 /-- A row of relation `rel` of `obj` at `key`, pinned at what the signer sees on `w` (the LB rows' `pinAtObj`). -/
 def hole_pinAt (obj : D) (w : World D) (rel : Nat) (d : RelDecl) (key : Data) : List (RowSlot D × D) :=
@@ -1993,21 +1924,38 @@ def hole_acceptedOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Bool :=
   | some (.ok (.bool b)) => some b
   | _ => none
 
-def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run := Id.run do
+def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let prog := mode.program
   let mut r := r0
-  -- LH0 the surface reads
+  for (name, want, got) in Std.holeCheckRows do
+    r := note r s!"LH-prefix {name}: {got}" (got == want)
+  let bundle ← match Std.generatedHoleBundle with
+    | .ok b => pure b
+    | .error e => return note r s!"LH0 generating the hole: {e.name}" false
+  let mut libraryIds : List D := []
+  for lib in bundle.libraries do
+    let some bytes := Wire.encodePackage lib | return note r "LH0 library has no bytes" false
+    let (rL, vL, tL) := go prog r (Sim.signed r.st a a.key
+      (Sim.S.pinsFor r.st.host [a.id]) (.install bytes))
+    r := note rL s!"LH0 installing helper ROM ({bytes.size} bytes): {vL}"
+      (vL == "admitted" && bytes.size ≤ Lang.Bounds.bytesMax)
+    let some id := tL.bind fun t => (createdIds t).head? | return note r "LH0 no helper ROM id" false
+    libraryIds := libraryIds ++ [id]
+  let generated ← match bundle.link (libraryIds.map Sim.dc.bytes) with
+    | .ok p => pure p
+    | .error e => return note r s!"LH0 linking the hole: {e.name}" false
+  let some src := Print.package generated | return note r "LH0 hole is not printable" false
   let p ← match Surface.readPackage src with
     | .ok p => pure p
-    | .error e => return note r s!"LH0 read the hole: {e.text src}" false
-  r := note r s!"LH0 Hole.ob reads ({src.length} chars): methods {p.methods}, laws {p.laws}, relations {p.rels.map (·.1)}"
-    (p.methods == ["accept", "post", "propose", "prune", "repin", "select", "unpost"] && p.laws == ["shape"] &&
-      p.rels.map (·.1) == ["candidates", "facts"])
+    | .error e => return note r s!"LH0 read the generated hole: {e.text src}" false
+  r := note r s!"LH0 generated hole reads ({src.length} chars): methods {p.methods}, laws {p.laws}, relations {p.rels.map (·.1)}"
+    (p.methods == ["accept", "fill", "post", "propose", "prune", "rejudge", "repin", "resume_fill", "retire", "select", "unpost"] &&
+      p.laws == ["shape"] && p.rels.map (·.1) == ["candidates", "facts", "fills", "pending"])
   let some pb := Wire.encodePackage p | return note r "LH0 no bytes" false
   let some dC := p.rels.lookup "candidates" | return note r "LH0 no candidates" false
   let some dF := p.rels.lookup "facts" | return note r "LH0 no facts" false
   -- LH1 install
-  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host (a.id :: libraryIds)) (.install pb))
   r := note r1 s!"LH1 A installs the hole ({pb.size} package bytes): {v1}" (v1 == "admitted")
   let some pkg := t1.bind fun t => (createdIds t).head? | return note r "LH1 no package id" false
   -- LH2 create: cap 10, chooser A, acceptor B, closes far off, nothing selected
@@ -2015,19 +1963,19 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
     [("accepted", .bool false), ("acceptor", .digest (Sim.dc.bytes b.id)), ("cap", .nat 10),
      ("chooser", .digest (Sim.dc.bytes a.id)), ("closes", .nat 100000), ("selected", .inj "none" (.record []))]
   let some seed := stateSlots (recordRow p.state) seedData 0 | return note r "LH2 seed has no bytes" false
-  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg]) (.create (some pkg) [] seed))
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ libraryIds)) (.create (some pkg) [] seed))
   let some obj := t2.bind fun t => (createdIds t).head? | return note r2 s!"LH2 no hole: {v2}" false
-  r := note r2 s!"LH2 A creates the hole (cap 10, chooser A, acceptor B): {v2}; both relations born empty"
-    (v2 == "admitted" && [0, 1].all fun i => headCount r2.st.host obj i == some 0)
+  r := note r2 s!"LH2 A creates the hole (cap 10, chooser A, acceptor B): {v2}; all four relations born empty"
+    (v2 == "admitted" && [0, 1, 2, 3].all fun i => headCount r2.st.host obj i == some 0)
   -- LH3 A grants B accept (0), post (1), repin (4), unpost (6)
   let (r3, v3, t3) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj])
-    (.grant obj b.id [.invoke 0, .invoke 1, .invoke 4, .invoke 6] none))
+    (.grant obj b.id [.invoke (p.methods.idxOf "accept"), .invoke (p.methods.idxOf "post"), .invoke (p.methods.idxOf "repin"), .invoke (p.methods.idxOf "unpost"), .invoke (p.methods.idxOf "resume_fill")] none))
   r := note r3 s!"LH3 A grants B accept, post, repin, unpost: {v3}" (v3 == "admitted")
   let some gr := t3.bind fun t => (createdIds t).head? | return note r "LH3 no grant id" false
-  let pinsOf (r : Run) (m : Sim.Member) := Sim.S.pinsFor r.st.host ([m.id, obj, pkg] ++ if m.id == b.id then [gr] else [])
+  let pinsOf (r : Run) (m : Sim.Member) := Sim.S.pinsFor r.st.host ([m.id, obj, pkg] ++ libraryIds ++ if m.id == b.id then [gr] else [])
   let viaOf (m : Sim.Member) : Option D := if m.id == b.id then some gr else none
-  let call (r : Run) (m : Sim.Member) (method : Nat) (x : ByteArray) (rowPins : List (RowSlot D × D) := []) : Call D :=
-    signedAt r.st m (pinsOf r m) (.invoke obj method x 100000 (viaOf m)) r.st.host.height (r.st.host.height + 1024) rowPins
+  let call (r : Run) (m : Sim.Member) (method : Label) (x : ByteArray) (rowPins : List (RowSlot D × D) := []) : Call D :=
+    signedAt r.st m (pinsOf r m) (.invoke obj (p.methods.idxOf method) x 100000 (viaOf m)) r.st.host.height (r.st.host.height + 1024) rowPins
   let cost (c : Call D) (w : World D) : String :=
     s!"required steps / ticks {match measure w c with | .ok (q, k) => s!"{q} / {k}" | .error e => e}"
   -- the two facts: cells f1, f2 (any Sim digests), pins p1, p2
@@ -2045,74 +1993,148 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
     | some (.digest d) => some d
     | _ => none
   -- LH4 B posts f1@p1 and f2@p2
-  let (r4a, v4a, _) := go prog r (call r b 1 (hole_postArg f1 p1))
+  let (r4a, v4a, _) := go prog r (call r b "post" (hole_postArg f1 p1))
   r := note r4a s!"LH4a B posts fact f1 at pin p1: {v4a}" (v4a == "admitted" && factPin r4a.st.host f1 == some p1)
-  let (r4b, v4b, _) := go prog r (call r b 1 (hole_postArg f2 p2))
+  let (r4b, v4b, _) := go prog r (call r b "post" (hole_postArg f2 p2))
   r := note r4b s!"LH4b B posts fact f2 at pin p2: {v4b}" (v4b == "admitted" && headCount r4b.st.host obj 1 == some 2)
-  let (_, v4c, _) := go prog r (call r a 1 (hole_postArg f1 p1))
+  let (_, v4c, _) := go prog r (call r a "post" (hole_postArg f1 p1))
   r := note r s!"LH4c A posts f1 again (B's token): {v4c}" (v4c.startsWith "rejected keyTaken")
   -- LH5 candidates: c1 over f1@p1, f2@p2; c2 over f2@p2; c3 past the cap
   let c1 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 7)
   let c2 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 8)
   let c3 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 9)
-  let (r5a, v5a, _) := go prog r (call r a 2 (hole_proposeArg c1 (hole_supportData f1 p1) (hole_supportData f2 p2) 5))
+  let (r5a, v5a, _) := go prog r (call r a "propose" (hole_proposeArg c1 (hole_supportData f1 p1) (hole_supportData f2 p2) 5) (pinFact r.st.host f1 ++ pinFact r.st.host f2))
   r := note r5a s!"LH5a A proposes c1 (value 5, facts f1@p1 f2@p2): {v5a}; status {hole_statusOf r5a.st.host obj dC c1}"
     (v5a == "admitted" && hole_statusOf r5a.st.host obj dC c1 == some "verified")
-  let (r5b, v5b, _) := go prog r (call r a 2 (hole_proposeArg c2 (hole_supportData f2 p2) hole_noSupport 7))
+  let (r5b, v5b, _) := go prog r (call r a "propose" (hole_proposeArg c2 (hole_supportData f2 p2) hole_noSupport 7) (pinFact r.st.host f2))
   r := note r5b s!"LH5b A proposes c2 (value 7, fact f2@p2): {v5b}; status {hole_statusOf r5b.st.host obj dC c2}"
     (v5b == "admitted" && hole_statusOf r5b.st.host obj dC c2 == some "verified")
-  let (r5c, v5c, _) := go prog r (call r a 2 (hole_proposeArg c3 hole_noSupport hole_noSupport 50))
+  let (r5c, v5c, _) := go prog r (call r a "propose" (hole_proposeArg c3 hole_noSupport hole_noSupport 50))
   r := note r5c s!"LH5c A proposes c3 (value 50, past the cap): {v5c}; retained with its reason: {hole_statusOf r5c.st.host obj dC c3}"
-    (v5c == "admitted" && hole_statusOf r5c.st.host obj dC c3 == some "suspended \"cap\"")
+    (v5c == "admitted" && hole_statusOf r5c.st.host obj dC c3 == some "conflict \"clause\"")
   -- LH5d a candidate filed verified past the cap: the guard refuses it (the status is the clause's, not the author's)
-  let (_, v5d, _) := go prog r (call r a 2 (hole_proposeArg c3 hole_noSupport hole_noSupport 50))
+  let (_, v5d, _) := go prog r (call r a "propose" (hole_proposeArg c3 hole_noSupport hole_noSupport 50))
   r := note r s!"LH5d A proposes c3 again (its key is taken): {v5d}" (v5d.startsWith "rejected keyTaken")
+  let c4 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 10)
+  let (rf, vf, _) := go prog r (call r a "fill"
+    (hole_proposeArg c4 (hole_supportData f1 p1) hole_noSupport 4) (pinFact r.st.host f1))
+  r := note r s!"LH5f (scratch) fill a supported candidate atomically: {vf}"
+    (vf == "admitted" && hole_selectedOf Sim.env rf.st.host obj == some (some c4) &&
+      hole_statusOf rf.st.host obj dC c4 == some "verified")
+  let (rx, vx, _) := go prog r (call r a "fill" (hole_proposeArg c4 hole_noSupport hole_noSupport 50))
+  r := note r s!"LH5g fill a clause-conflicting candidate: {vx}"
+    (refusedBy vx "fill" "conflict" && hole_statusOf rx.st.host obj dC c4 == none)
+  let (_, vs, _) := go prog r (call r a "select" (hole_selectArg c3) (pinCand r.st.host c3))
+  r := note r s!"LH5h select a clause-conflicting candidate: {vs}" (refusedBy vs "select" "conflict")
+  let (rj, vj, _) := go prog r (call r a "rejudge" (hole_selectArg c3) (pinCand r.st.host c3))
+  r := note r s!"LH5j rejudge records conflict: {vj}"
+    (vj == "admitted" && hole_statusOf rj.st.host obj dC c3 == some "conflict \"clause\"")
   -- LH6 the view before the withdrawal, kept for LH7b; then B re-pins f1
   let viewBefore := r
-  let (r6, v6, _) := go prog r (call r b 4 (hole_postArg f1 p1') (pinFact r.st.host f1))
+  let (r6, v6, _) := go prog r (call r b "repin" (hole_postArg f1 p1') (pinFact r.st.host f1))
   r := note r6 s!"LH6 B re-pins fact f1 (p1 -> p1'): {v6}; the support c1 recorded has MOVED"
     (v6 == "admitted" && factPin r6.st.host f1 == some p1')
   -- LH7 A selects c1: its support f1 is not what it was verified under
-  let c7 := call r a 5 (hole_selectArg c1) (pinCand r.st.host c1 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2)
+  let c7 := call r a "select" (hole_selectArg c1) (pinCand r.st.host c1 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2)
   let (_, v7, _) := go prog r c7
   r := note r s!"LH7 A selects c1: {v7}; {cost c7 r.st.host}" (refusedBy v7 "select" "support0 moved")
+  let (rf, vf, _) := go prog r (call r a "fill"
+    (hole_proposeArg c4 (hole_supportData f1 p1) hole_noSupport 4) (pinFact r.st.host f1))
+  r := note r s!"LH7f fill over a moved support: {vf}"
+    (refusedBy vf "fill" "support0 moved" && hole_statusOf rf.st.host obj dC c4 == none)
+  let (rj, vj, _) := go prog r (call r a "rejudge" (hole_selectArg c1)
+    (pinCand r.st.host c1 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2))
+  r := note r s!"LH7j rejudge records suspension: {vj}"
+    (vj == "admitted" && hole_statusOf rj.st.host obj dC c1 == some "suspended \"support0 moved\"")
   -- LH7b the same select signed over the view before LH6 (the row pins of that view)
-  let c7b := call viewBefore a 5 (hole_selectArg c1)
+  let c7b := call viewBefore a "select" (hole_selectArg c1)
     (pinCand viewBefore.st.host c1 ++ pinFact viewBefore.st.host f1 ++ pinFact viewBefore.st.host f2)
   let (_, v7b, _) := go prog r c7b
   r := note r s!"LH7b the same select signed over the view before the re-pin: {v7b} (the method reads the row as it is; the kernel's stale stands behind it)"
     (refusedBy v7b "select" "support0 moved")
   -- LH7c a select citing a candidate whose fact row is pinned absent (f1 unposted on a scratch World)
-  let (rX, vX, _) := go prog r (call r b 6 (hole_unpostArg f1) (pinFact r.st.host f1))
-  let cX := call rX a 5 (hole_selectArg c1) (pinCand rX.st.host c1 ++ pinFact rX.st.host f1 ++ pinFact rX.st.host f2)
+  let (rX, vX, _) := go prog r (call r b "unpost" (hole_unpostArg f1) (pinFact r.st.host f1))
+  let cX := call rX a "select" (hole_selectArg c1) (pinCand rX.st.host c1 ++ pinFact rX.st.host f1 ++ pinFact rX.st.host f2)
   let (_, vX2, _) := go prog rX cX
   r := note r s!"LH7c (scratch) B withdraws f1 ({vX}); A selects c1: {vX2}" (vX == "admitted" && refusedBy vX2 "select" "support0 withdrawn")
   -- LH8 A selects c2: its one support f2@p2 still stands
-  let c8 := call r a 5 (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2)
+  let c8 := call r a "select" (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2)
   let (r8, v8, _) := go prog r c8
   r := note r8 s!"LH8 A selects c2 (fact f2@p2 unchanged): {v8}; selected {hole_selectedOf Sim.env r8.st.host obj |>.map (·.map Print.hex)}; {cost c8 r.st.host}"
     (v8 == "admitted" && hole_selectedOf Sim.env r8.st.host obj == some (some c2))
   -- LH8b B (not the chooser) selects
-  let (_, v8b, _) := go prog r (call r b 5 (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2))
+  let (_, v8b, _) := go prog r (call r b "select" (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2))
   r := note r s!"LH8b B selects c2: {v8b}" (v8b.startsWith "refused grantRight" || refusedBy v8b "select" "notChooser")
+  -- LH8p: a pruning reason is a live posted token; withdrawing it releases the branch.
+  let (rP, vP, _) := go prog r (call r a "prune" (hole_pruneArg c2 f1 p1' "policy")
+    (pinCand r.st.host c2 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2))
+  r := note rP s!"LH8p A prunes c2 by posted f1: {vP}"
+    (vP == "admitted" && hole_statusOf rP.st.host obj dC c2 == some "pruned \"policy\"")
+  let (_, vPS, _) := go prog r (call r a "select" (hole_selectArg c2)
+    (pinCand r.st.host c2 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2))
+  r := note r s!"LH8q selecting the live-blocked candidate: {vPS}" (refusedBy vPS "select" "pruned")
+  let (_, omittedBlocker, _) := go prog r (call r a "select" (hole_selectArg c2)
+    (pinCand r.st.host c2 ++ pinFact r.st.host f2))
+  r := note r s!"hole:omitted-blocker-pin-admits live blocker fact omitted from select pins: {omittedBlocker}"
+    (refusedBy omittedBlocker "select" "pruned")
+  let (_, omittedAccept, _) := go prog r (call r b "accept" (argBytes (.record []) (.record []))
+    (pinCand r.st.host c2 ++ pinFact r.st.host f2))
+  r := note r s!"hole:omitted-blocker-pin-admits live blocker fact omitted from accept pins: {omittedAccept}"
+    (refusedBy omittedAccept "accept" "pruned")
+  let (omittedRJ, omittedRejudge, _) := go prog r (call r a "rejudge" (hole_selectArg c2)
+    (pinCand r.st.host c2 ++ pinFact r.st.host f2))
+  r := note r s!"hole:omitted-blocker-pin-admits live blocker fact omitted from rejudge pins: {omittedRejudge}; status {hole_statusOf omittedRJ.st.host obj dC c2}"
+    (refusedBy omittedRejudge "rejudge" "pruned")
+  let (rW, vW, _) := go prog r (call r b "unpost" (hole_unpostArg f1) (pinFact r.st.host f1))
+  r := note rW s!"LH8r B withdraws the pruning token: {vW}" (vW == "admitted")
+  let (rJ, vJ, _) := go prog r (call r a "rejudge" (hole_selectArg c2)
+    (pinCand r.st.host c2 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2))
+  let reason := (storyRow rJ.st.host obj 0 dC (candKey c2)).bind (·.field "reason")
+  r := note rJ s!"LH8s rejudge releases c2 and retains its reason: {vJ}; {hole_statusOf rJ.st.host obj dC c2}"
+    (vJ == "admitted" && hole_statusOf rJ.st.host obj dC c2 == some "verified" &&
+      asBytes reason == some "policy".toUTF8)
   -- LH9 B accepts; LH9b a select after acceptance
-  let (r9, v9, _) := go prog r (call r b 0 (argBytes (.record []) (.record [])))
+  let dispatchAt := r.st.host.height
+  let (r9, v9, _) := go prog r (call r b "accept" (argBytes (.record []) (.record [])) (pinCand r.st.host c2 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2))
   r := note r9 s!"LH9 B accepts the selected c2: {v9}; accepted {hole_acceptedOf Sim.env r9.st.host obj}"
     (v9 == "admitted" && hole_acceptedOf Sim.env r9.st.host obj == some true)
-  let (_, v9b, _) := go prog r (call r a 5 (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2))
+  let (_, v9b, _) := go prog r (call r a "select" (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2))
   r := note r s!"LH9b A selects again after acceptance: {v9b}" (refusedBy v9b "select" "accepted")
   -- LH10 B withdraws f2 after acceptance: the executed prefix does not move
-  let (r10, v10, _) := go prog r (call r b 6 (hole_unpostArg f2) (pinFact r.st.host f2))
+  let (r10, v10, _) := go prog r (call r b "unpost" (hole_unpostArg f2) (pinFact r.st.host f2))
   r := note r10 s!"LH10 B withdraws f2 after acceptance: {v10}; selected stays c2: {hole_selectedOf Sim.env r10.st.host obj == some (some c2)}; accepted: {hole_acceptedOf Sim.env r10.st.host obj}"
     (v10 == "admitted" && hole_selectedOf Sim.env r10.st.host obj == some (some c2) && hole_acceptedOf Sim.env r10.st.host obj == some true)
-  -- LH11 A prunes c1 naming why; the three candidates and their reasons read back
-  let (r11, v11, _) := go prog r (call r a 3 (hole_pruneArg c1 "support moved") (pinCand r.st.host c1))
+  -- LH11 accepted history also prevents pruning; the retained rows are unchanged
+  let (r11, v11, _) := go prog r (call r a "prune" (hole_pruneArg c1 f1 p1' "support moved") (pinCand r.st.host c1))
   r := note r11 s!"LH11 A prunes c1: {v11}; candidates: c1 {hole_statusOf r11.st.host obj dC c1}, c2 {hole_statusOf r11.st.host obj dC c2}, c3 {hole_statusOf r11.st.host obj dC c3}"
-    (v11 == "admitted" && hole_statusOf r11.st.host obj dC c1 == some "pruned \"support moved\"" &&
+    (refusedBy v11 "prune" "accepted" && hole_statusOf r11.st.host obj dC c1 == some "verified" &&
       hole_statusOf r11.st.host obj dC c2 == some "verified" && headCount r11.st.host obj 0 == some 3)
   -- LH11b B prunes (not the chooser): the guard refuses it
-  let (_, v11b, _) := go prog r (call r b 3 (hole_pruneArg c2 "mine") (pinCand r.st.host c2))
+  let (_, v11b, _) := go prog r (call r b "prune" (hole_pruneArg c2 f1 p1' "mine") (pinCand r.st.host c2))
   r := note r s!"LH11b B prunes c2: {v11b}" (v11b.startsWith "refused grantRight" || refusedBy v11b "prune" "notChooser")
+  let some dLog := p.rels.lookup "fills" | return note r "LH12 no activity log" false
+  let some dPending := p.rels.lookup "pending" | return note r "LH12 no activity cursor" false
+  let dispatchKey := Data.record [("agent", .digest (Sim.dc.bytes b.id)), ("notBefore", .nat dispatchAt)]
+  let captured := match (storyRow r.st.host obj 2 dLog dispatchKey).bind (·.field "captured") with
+    | some (.inj "fill" (.nat 7)) => true | _ => false
+  r := note r "LH12 acceptance dispatched captured value 7; withdrawal did not rewrite it"
+    (captured && headCount r.st.host obj 2 == some 1 && headCount r.st.host obj 3 == some 1)
+  let dispatchPins (w : World D) := hole_pinAt obj w 2 dLog dispatchKey ++ hole_pinAt obj w 3 dPending dispatchKey
+  let resumeArg := argBytes (.record [("agent", .digest), ("notBefore", .nat), ("response", .record [])])
+    (.record [("agent", .digest (Sim.dc.bytes b.id)), ("notBefore", .nat dispatchAt), ("response", .record [])])
+  let (r12, v12, _) := go prog r (call r b "resume_fill" resumeArg (dispatchPins r.st.host))
+  let answered := match (storyRow r12.st.host obj 2 dLog dispatchKey).bind (·.field "answered") with
+    | some (.inj "some" (.inj "fill" (.record []))) => true | _ => false
+  r := note r12 s!"LH12b acceptor acknowledges the dispatched filling: {v12}"
+    (v12 == "admitted" && answered && headCount r12.st.host obj 3 == some 0)
+  let (_, v12r, _) := go prog r (call r b "resume_fill" resumeArg (dispatchPins r.st.host))
+  r := note r s!"LH12c the dispatch cannot be acknowledged twice: {v12r}"
+    (deniedWith v12r "fills_waiting: answered")
+  let retireArg := argBytes (keyTy dLog) dispatchKey
+  let (r13, v13, _) := go prog r (call r a "retire" retireArg (hole_pinAt obj r.st.host 2 dLog dispatchKey))
+  r := note r13 s!"LH13 retire the answered dispatch: {v13}"
+    (v13 == "admitted" && headCount r13.st.host obj 2 == some 0 &&
+      hole_acceptedOf Sim.env r13.st.host obj == some true)
   return r
 
 
@@ -2121,18 +2143,45 @@ The checked commitment re-executes the selected method; it never resumes a saved
 effectful continuation. The grant is the kernel's counted Right.transfer 1.
 Toy cryptographic parameters are those of the rest of this journey. -/
 
-/-- Add an atomic commitment to the existing open artifact. Its support checks are
-the select method's checks, and the transfer is part of the SAME kernel turn. -/
+/-- Compose the generated checked select with one atomic transfer. The selected
+row edit and accepted state remain in the same ordinary method result. -/
+def p8CommitPackage (p : Package) : Except String Package := do
+  let .record ts := p.iface | throw "P8 interface"
+  let .record fs := p.body | throw "P8 root"
+  let some select := Row.find? "select" fs | throw "P8 select"
+  let some (.fn R (.fn _ (.fn _ (.fn _ SR)))) := Row.find? "select" ts | throw "P8 select type"
+  let A := Ty.record [("asset", .digest), ("cand", .digest), ("grant", .digest)]
+  let C := callOf ["transfer"]
+  let RT := resultTy p.state [C] (editTy p.rels) 1
+  let arg (l : Label) := Term.get (.var 2) l
+  let transfer := Term.inj C "transfer" (.record [
+    ("amount", .nat 1),
+    ("dst", .inj acctRefTy "of" (.record [("asset", arg "asset"), ("owner", arg "cand")])),
+    ("once", .inj (optTy .bytes) "none" (.record [])),
+    ("src", .inj acctRefTy "well" (arg "asset")),
+    ("via", .inj (optTy .digest) "some" (arg "grant"))])
+  let finish := resultT (callsT [someCallT C transfer])
+    (.extend (.get (.var 0) "state") [("accepted", .bool true)])
+    (.get (.var 0) "edits")
+  let selected := Std.activityApply select [.var 3, .var 2,
+    .record [("cand", .get (.var 1) "cand")], .var 0]
+  let body := Term.lam R (.lam p.state (.lam A (.lam reqTy
+    (.ite (.prim .le (.get (.var 0) "validUntil") (.get (.var 2) "closes"))
+      (.app (.lam SR finish) selected) (.refuse RT "closed".toUTF8)))))
+  return { p with
+    iface := .record (Row.sort (ts ++ [("commit", methodTy p.state A [C] R (editTy p.rels) 1)])),
+    body := .record (Row.sort (fs ++ [("commit", body)])),
+    methods := (Row.sort ((p.methods ++ ["commit"]).map (·, ()))).map (·.1) }
+
+/-- Core source for the generated root plus atomic commitment. Placeholder
+library identities are linked to actual installed helpers by p8Rows. -/
 def p8Text : String :=
-  let select := (((holeText.splitOn "  (method select").getD 1 "").splitOn
-    "  ; the acceptor takes").headD ""
-  let body := ("  (method commit" ++ select)
-    |>.replace "(arg (rec (cand digest)))" "(arg (rec (asset digest) (cand digest) (grant digest))) (calls (transfer))"
-    |>.replace "((not state.accepted) \"accepted\")"
-      "((not state.accepted) \"accepted\") ((<= req.validUntil state.closes) \"closed\")"
-    |>.replace "(done (with state (selected (some digest arg.cand))))"
-      "(done (with state (selected (some digest arg.cand)) (accepted true)) (transfer (amount 1) (dst (AcctRef of (record (asset arg.asset) (owner arg.cand)))) (once (none bytes)) (src (AcctRef well arg.asset)) (via (some digest arg.grant))))"
-  holeText.replace "  ; the acceptor takes" (body ++ "  ; the acceptor takes")
+  match Std.generatedHoleBundle with
+  | .error _ => ""
+  | .ok b => match p8CommitPackage { b.layout with
+        imports := b.libraries.map fun _ => ByteArray.mk (Array.replicate 32 (0 : UInt8)) } with
+    | .error _ => ""
+    | .ok p => (Print.package p).getD ""
 
 /-- The provider index's old/new wire representation. This is a finite data schema,
 not a substitute typechecker for Lang packages; the package is installed normally. -/
@@ -2194,17 +2243,30 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   let p ← match Surface.readPackage src with
     | .ok p => pure p
     | .error e => return note r s!"P8 read: {e.text src}" false
+  let bundle ← match Std.generatedHoleBundle with
+    | .error e => return note r s!"P8 generate helpers: {e.name}" false
+    | .ok b => pure b
+  let mut libraryIds : List D := []
+  for lib in bundle.libraries do
+    let some bytes := Wire.encodePackage lib | return note r "P8 helper bytes" false
+    let (rL, vL, tL) := go prog r (Sim.signed r.st a a.key
+      (Sim.S.pinsFor r.st.host [a.id]) (.install bytes))
+    r := note rL s!"P8 install checked helper ({bytes.size} bytes): {vL}"
+      (vL == "admitted" && bytes.size ≤ Lang.Bounds.bytesMax)
+    let some id := tL.bind fun t => (createdIds t).head? | return note r "P8 helper id" false
+    libraryIds := libraryIds ++ [id]
+  let p := { p with imports := libraryIds.map Sim.dc.bytes }
   let some pb := Wire.encodePackage p | return note r "P8 no package bytes" false
   let some dc := p.rels.lookup "candidates" | return note r "P8 no candidates" false
   let some df := p.rels.lookup "facts" | return note r "P8 no facts" false
-  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
-  r := note r1 s!"P8 install checked open artifact: {v1}" (v1 == "admitted")
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host (a.id :: libraryIds)) (.install pb))
+  r := note r1 s!"P8 install checked open artifact ({pb.size} bytes): {v1}" (v1 == "admitted")
   let some pkg := t1.bind fun t => (createdIds t).head? | return r
   let some seed := stateSlots (recordRow p.state)
     [("accepted", .bool false), ("acceptor", .digest (Sim.dc.bytes b.id)), ("cap", .nat 1),
      ("chooser", .digest (Sim.dc.bytes a.id)), ("closes", .nat 100000),
      ("selected", .inj "none" (.record []))] 0 | return note r "P8 seed" false
-  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg])
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ libraryIds))
     (.create (some pkg) [] seed))
   r := note r2 s!"P8 requester cell: {v2}" (v2 == "admitted")
   let some obj := t2.bind fun t => (createdIds t).head? | return r
@@ -2229,7 +2291,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   let supports := providers.map fun g => (g, pinOf Sim.env (r.st.host.entry Sim.env g))
   let invoke (r : Run) (m : String) (arg : ByteArray) (rp : List (RowSlot D × D) := [])
       (extra : List (D × D) := []) : Call D :=
-    signedAt r.st a (Sim.S.pinsFor r.st.host [a.id, obj, pkg] ++ extra)
+    signedAt r.st a (Sim.S.pinsFor r.st.host ([a.id, obj, pkg] ++ libraryIds) ++ extra)
       (.invoke obj (p.methods.idxOf m) arg 100000 none)
       r.st.host.height (r.st.host.height + 1024) rp
   let pinF (w : World D) (g : D) := hole_pinAt obj w 1 df (.record [("cell", .digest (Sim.dc.bytes g))])
@@ -2238,7 +2300,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
     let (r', v, _) := go prog r (invoke r "post" (hole_postArg (Sim.dc.bytes g) (Sim.dc.bytes pin)))
     r := note r' s!"P8 post versioned provider support: {v}" (v == "admitted")
     let (r', v, _) := go prog r (invoke r "propose"
-      (hole_proposeArg (Sim.dc.bytes owner) (hole_supportData (Sim.dc.bytes g) (Sim.dc.bytes pin)) hole_noSupport 1))
+      (hole_proposeArg (Sim.dc.bytes owner) (hole_supportData (Sim.dc.bytes g) (Sim.dc.bytes pin)) hole_noSupport 1) (pinF r.st.host g))
     r := note r' s!"P8 retain candidate {owner}: {v}" (v == "admitted")
   let commit (r : Run) (i : Nat) (owner : D) : Call D :=
     invoke r "commit" (p8Arg asset owner cap)
@@ -2620,7 +2682,7 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
     r := storyRows mode r a b
     r := bellRows mode r a b bell
   if mode = .honest then
-    r := holeRows mode r a b holeText
+    r := holeRows mode r a b
     r := quorumRows mode r a b
     r := windowedRows mode r a
   if mode = .honest then
@@ -2636,17 +2698,41 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   | .error (i, e) => r := note r s!"L7 auditor refused at {i}: {reprStr e}" false
   return r
 
+/-- Permanent real-Receive regression: declared support and blocker observations
+must be complete. The same rows are also part of the ordinary journey. -/
+def holeObservationJourney : Run := Id.run do
+  let mode : Mode := .honest
+  let prog := mode.program
+  let fk : List (ByteArray × ByteArray) :=
+    [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
+  let X := ctxWith prog
+  let g ← match genesis X Sim.worldName (Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+    | .ok g => pure g
+    | .error e =>
+        return note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } } s!"genesis refused {e.name}" false
+  let members := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Sim.Member)
+  let r : Run := { st := { rng := ⟨1⟩, host := g, members } }
+  let a := members.headD ⟨0, .empty, .empty⟩
+  let b := members.getD 1 ⟨0, .empty, .empty⟩
+  return holeRows mode r a b
+
 def runAll (args : List String) : IO UInt32 := do
+  if args == ["--hole-omitted-blocker-pin-admits"] then
+    let r := holeObservationJourney
+    for l in r.log do IO.println l
+    IO.println s!"hole:omitted-blocker-pin-admits {if r.bad = 0 then "GREEN" else s!"RED ({r.bad})"}"
+    IO.println s!"lang-journey: {if r.bad = 0 then "GREEN" else s!"RED ({r.bad})"}"
+    return if r.bad = 0 then 0 else 1
   let some control := (match args with
       | [] => some false
       | ["--harness-control"] => some true
       | _ => none)
-    | IO.eprintln s!"usage: lang-journey [--harness-control] (got {args})"; return 2
+    | IO.eprintln s!"usage: lang-journey [--harness-control | --hole-omitted-blocker-pin-admits] (got {args})"; return 2
   let bell ← try IO.FS.readFile bellSourcePath catch _ => pure ""
   let bellCore ← try IO.FS.readFile bellCorePath catch _ => pure ""
   -- LB0 the Bell's surface source lowers to exactly the core shipped beside it; one flipped edit is caught
   let (l0, ok0) := match Surface.readPackage bell with
-    | .ok want => Surface.shippedRow "LB0" bell bellCore want ("(limit 64)", "(limit 65)")
+    | .ok want => Surface.shippedRow "LB0" bell bellCore want ("(limits 64 1024)", "(limits 65 1024)")
     | .error e => (s!"LB0 read {bellSourcePath}: {e.text bell}", false)
   IO.println s!"{if ok0 then "ok  " else "FAIL"} {l0}"
   -- LB0d (LANG-60) the Bell states its clock and tie rule in its own doc: one line, printed by the one
@@ -2667,6 +2753,9 @@ def runAll (args : List String) : IO UInt32 := do
         !p.doc.isEmpty && back && oneLine && says && refused && long != bell)
     | .error e => (s!"LB0d read {bellSourcePath}: {e.text bell}", false)
   IO.println s!"{if okd then "ok  " else "FAIL"} {ld}"
+  let activityVerdict := Std.activitySurfaceVerdict
+  let activityOk := activityVerdict == "ok"
+  IO.println s!"{if activityOk then "ok  " else "FAIL"} LA0 activity with its own facts relation reads and checks: {activityVerdict}"
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
     .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow, .foreignRow].map (journey bell)
   let runs := runs ++ [p8Session]
@@ -2674,7 +2763,7 @@ def runAll (args : List String) : IO UInt32 := do
     | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
     | _, rs => rs
   for r in runs do for l in r.log do IO.println l
-  let bad := (runs.map (·.bad)).foldl (· + ·) ((if ok0 then 0 else 1) + (if okd then 0 else 1))
+  let bad := (runs.map (·.bad)).foldl (· + ·) ((if ok0 then 0 else 1) + (if okd then 0 else 1) + (if activityOk then 0 else 1))
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
   return if bad = 0 then 0 else 1
 

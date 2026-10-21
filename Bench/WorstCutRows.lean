@@ -48,6 +48,10 @@ def argOf (T : Lang.Ty) (d : Lang.Data) : ByteArray := (Lang.Wire.encodeData T d
 def ringKey (nb : Nat) (ringer : D) : Lang.Data :=
   .record [("notBefore", .nat nb), ("ringer", .digest (X.env.bytes ringer))]
 
+/-- The activity's row key; the public retire argument above keeps ringer. -/
+def activityRowKey (nb : Nat) (ringer : D) : Lang.Data :=
+  .record [("agent", .digest (X.env.bytes ringer)), ("notBefore", .nat nb)]
+
 /-- Relation `rel`'s row at `key` on `w`, pinned at what the signer sees (Lang.Journey's `pinRow`). -/
 def pinRow (rc : RowsCtx) (w : World D) (rel : Nat) (d : Lang.RelDecl) (key : Lang.Data) : List (RowSlot D × D) :=
   match Lang.keyBytes d key with
@@ -68,11 +72,11 @@ def rowsCall (rc : RowsCtx) (a : Who) (w : World D) (j ring : Nat) : Call D × N
       (.invoke rc.obj 0 (argOf (.record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)])
         (.record [("notBefore", .nat ring), ("ringText", .bytes "r".toUTF8), ("ringer", .digest (X.env.bytes a.id)),
           ("text", .bytes "a".toUTF8)])) 100000 (some rc.gr))
-      (pinRow rc w 0 rc.dP (ringKey ring a.id) ++ pinRow rc w 1 rc.dR (ringKey ring a.id)), ring)
+      (pinRow rc w 0 rc.dP (activityRowKey ring a.id) ++ pinRow rc w 1 rc.dR (activityRowKey ring a.id)), ring)
   | _ =>
     (call w a [a.id, rc.obj, rc.pkg]
       (.invoke rc.obj 3 (argOf (.record [("notBefore", .nat), ("ringer", .digest)]) (ringKey ring a.id)) 100000 none)
-      (pinRow rc w 1 rc.dR (ringKey ring a.id)), ring)
+      (pinRow rc w 1 rc.dR (activityRowKey ring a.id)), ring)
 
 /-- Install the Bell, create a bell whose resident is `b`, grant `b` answer and ring: three admitted
 calls on `w`, staged; the context, the steps and the World after. -/

@@ -18,7 +18,7 @@ arguments and the clause, so a clause may open a `case` of its own (`At.under`) 
 a law over a field its state type lacks fails the install check (`illTyped`), never at run time.
 -/
 import Lang.Package
-import Lang.Data
+import Lang.StdData
 
 namespace Nanodregg.Lang.Std
 
@@ -410,5 +410,6 @@ def lawBody : Term → Term
 
 /-- What every law's statement below assumes of its environment: request, new, old as data. -/
 abbrev LawEnv (rq n o : Data) (E : Env) : Env := rq.toVal :: n.toVal :: o.toVal :: E
+
 
 end Nanodregg.Lang.Std

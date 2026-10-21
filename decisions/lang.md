@@ -4112,3 +4112,336 @@ variable environment mutation failed compilation and remains excluded. The three
 package-string mutants installed actual checked packages before their rows failed.
 A scoped build and fresh elaboration of both changed Lean modules passed at
 6G/two threads with maxHeartbeats 200000. No source correction was required.
+
+
+## LANG-ACT Generated activities and guarded holes; Bell as an activity (2026-10-20 real; CX-ACT; cv 01a158c0-ddbf)
+**Decision.** Std.eqData generates structural equality for data types, with actual BigStep meaning and
+an equality iff under canonical, conforming data. Std.activity generates ordinary continuation rows:
+a time/signer cursor and a retained captured-plan log. Insert is signer-owned and unanswered; upsert
+requires the resumer, the same capture and plan, and the first answer; retirement requires an answer.
+The author's resume function receives both the retained capture and the explicit response.
+Surface activity declarations compose their edit types with application relations. Applications can
+choose exposed generated methods, call generated closed code from bounded public wrappers, and retain
+their diagnostic vocabulary without replacing predicates.
+
+**Hole.** Std.hole generates candidates, posted facts, selection, acceptance and the activity used to
+dispatch an accepted filling. Candidates retain two optional versioned supports, one optional blocker
+support, their status and pruning-reason text. A probe matches cell identity and then version; it searches
+all three pinned fact points, not their arrival order. Select/fill/accept recompute clause, blocker and
+support observations. Rejudge RECORDS the resulting status, including negative statuses. This is ROOT's
+rejudge ruling (A): the reason an alternative was set aside remains available. A pruning reason is a
+posted fact token plus text; withdrawing the token releases pruning, while the text stays. Selection is
+revisable; acceptance dispatches the immutable captured value. Generic start_fill is not exposed.
+
+**Bound and bundle.** The first in-package construction measured 392,235 bytes and refused overPrice.
+Sharing and small-result refusal sequencing reduced it to 120,523, still refused overBound. The measured
+breakdown was 29,062 bytes of interface/relations, 18,407 for resume_fill and 12,266 for accept.
+ROOT chose ordinary imports (A). The generator partitions pure fields into independently checked ROMs
+and returns a root layout whose link operation checks the supplied imports and slot bound. The measured
+journey bundle has helper ROMs of 57,662 / 64,276 / 9,218 bytes and a 29,521-byte root. All pass the existing
+install path, each below the unchanged 65,536-byte bound. No pin, gate, wire constructor or bound moves.
+
+**Bridge and scope.** HoleModel uses the existing langData, not a new Data-only calculus. Its ref-0 template
+is proved Typed by LangHasTy. Operational proofs cover actual clause/probe composition through holeJudge,
+the shared admission gate and the negative-status renderer. Under fixed observations matching the
+world, the judgment segment used by select/fill admits iff the existing Closure.judge verifies;
+separate lemmas establish Closure select/fill equivalence
+and exact rejudge status for a present candidate. The proof states its representation boundary: observed
+clause evaluation and complete pinned support observations must represent the model's environment and
+token liveness. Independent chooser, existence, accepted and window checks precede candidate judgment.
+The arbitrary-point lookup theorem proves actual identity/version/absence behavior; executable teeth
+also exercise the three-point search and row-order independence. This is not a whole-Kernel.Receive
+simulation theorem or a claim that missing pins describe a complete world.
+LANG-68's langTemplate_no_hyps remains the boundary: strengthening, alternative-by-hypothesis and
+hypothesis-derived supports are EMPTY ON EVERY LANG TEMPLATE. No work on fork (B) is included.
+
+**Bell flag day.** Bell is an activity instance. Its bounded answer/close/open/retire/ring wrappers and
+method indices remain; ring invokes generated start_ask. Generated queued/rung guards preserve the
+established notResident/unrung/text/answered/unanswered/final/notYours refusals, including through layers.
+Rows now hold captured ask values and tagged answered responses; the resident decoder follows them.
+The declared key remains time first, then signer (the field is agent); tied rings keep digest order.
+Bell, layers built over it, hole ROMs/root and hole candidate/argument types re-id. Install new packages
+and create new objects, or re-genesis, while cutting the resident over with Bell. No existing Store bytes
+are migrated, and no Store representation changes.
+
+**Price premises.** NONE. No LANDED theorem gains a hypothesis; none is restated. All new typing,
+canonicality and observation premises belong to new statements. Existing resident proof statements are
+unchanged. The extra cost is generated code/ROMs and focused meaning/model/proof modules, measured in SIZE.
+
+**Evidence.** Scoped proofs and lang-journey are green on main 06da84f. The real generated hole is installed
+with its helper closure and exercises fill success/conflict/suspension, moved and withdrawn supports,
+live-blocker refusal, withdrawal of that blocker with its reason retained, acceptance and negative rejudge.
+All Bell LB rows, their takeover plants and the shipped-core equality row pass. Filtered resident_bell is
+green (1/1): queue ordering, exactly-once, restart intent, refusal and crash-loop recovery.
+Plants independently bypass each activity method check (five native verdicts change to ok); bypassing the
+hole conflict gate admits LH5g/LH5h, pruning admits LH8q, and moved-support admission admits LH7/LH7f while
+LH7b reaches kernel stale. Six lookup/birth mutations make the expected kernel-decided statement FALSE.
+Twenty-eight additional emitted-code rows cover authority, window, existence, candidate immutability
+and fixed shape. Sixteen independently disabled refusal names make their exact rows RED; every
+mutated package still passes the checker. The accepted hole also completes its activity path:
+captured value survives withdrawal, acknowledgment succeeds, replay refuses, and retirement succeeds.
+EqData's 16 statements have CX-READER-ACT's LAND. Every later statement still requires ROOT's second reader;
+this source is prepared for that read, not a claim of independent approval.
+
+**Critique.** The hole currently represents two positive supports and one blocker, not an unbounded
+provenance polynomial. Its methods implement the declared operations; this is not a claim that arbitrary
+layer overrides preserve hole selection semantics. Fact completeness is an explicit interpretation
+condition, not derivable from a missing read. Import bundling repeats some type/closure syntax between
+ROMs; a later measured sharing pass can improve it without changing the bound. Bell's answer wrapper
+supplies the expected capture so the existing rung:text refusal stays a guard property, while the generic
+resume method normally reads its capture itself. Both paths share the continuation guard.
+
+**Meta-critique.** Counting a typechecked generator or a fixture as the closure bridge would hide the
+important join. Here the calculus is the landed Lang instance, the judgment segment is actual emitted
+code, and the observation assumptions are stated rather than erased. Conversely, pretending that
+rejudge refuses would destroy the very retained negative reasons the design needs. The slot-bound
+refusal exposed representation pressure; ordinary checked imports address it without turning the bound
+into a moving target. Independent review must assess the operational boundary as well as the iff syntax.
+
+**Pre-repair review (CX-READER-ACT2, 2026-10-20 real; superseded by LANG-P13 below).** LAND-WITH-FIXES under ROOT's
+explicit disposition. Read all 71 new non-eqData statements with the disjunct check; eqData's 16
+retain CX-READER-ACT's approval. Existing landed statements gain no hypotheses and are not restated.
+All 24 changed/reached modules re-elaborated at 6G/two threads; all 11 source gates pass.
+The original bridge's deployed correspondence claim is refused: a real journey retaining every
+control but omitting the live blocker fact pin ADMITS select and accept and records verified on
+rejudge, where the complete-pin control refuses pruned. No production check was disabled.
+The theorem is renamed hole_judgment_admission_fixed_observations with an explicit omitted live
+blocker pin docstring; its already-conditional mathematical statement and proof are unchanged.
+This bundle does NOT repair complete observation coverage. ROOT directed landing this scoped
+result and tracking integration of CX-P10's proved declared-read-set adapter into the emitted
+receive path: cv 01a15b7a-6dd9-7510-b0b4-45089e4ca484.
+
+**Review critique.** The negative dependency requires coverage: an unobserved blocker is not an
+observed-absent blocker. Existing positive-support and pruning bypass plants supplied all pins,
+so they did not exercise this gap. Selection, acceptance and rejudge remain affected until the
+tracked receive-path integration; no arbitrary-request soundness is claimed here.
+
+**Review meta-critique.** A conditional semantic equivalence cannot certify that real requests
+satisfy its observation premises. Naming that boundary is an honest restatement, not the repair.
+The follow-up must establish coverage by construction and connect authenticated observations to
+the actual world, with missing-blocker mutation teeth on the emitted path.
+
+**Flag-day benchmark consumer (CX-READER-ACT2, ROOT granted PERF, 2026-10-20 real).**
+The first full judge exposed Bench/WorstCutRows using ringer for the activity's row
+pins, refusing rowUnpinned before its known-red control. Its public retire argument
+still uses ringer; only its three pin sites now use agent/notBefore through a separate
+activityRowKey constructor. Measurements, check predicates and harness-control are
+unchanged. The real control reaches its intended harness-control refusal; the normal
+bench passes. At 16448 steps, reopen/audit hashes are 331897 rather than 331960
+(63 fewer), ratios 20.179 rather than 20.182; verification ratios remain 0.000/1.000.
+The recut Bell's base world is 29253 bytes; the tail fills 18837876 of 18876520 bytes
+(0.998). ROOT authorized the downward measured-value re-pin in gates/waste.tsv;
+every ceiling stays unchanged. No theorem gains a hypothesis or is restated.
+
+**Benchmark critique.** The Bell re-id changes the workload and its key distribution,
+so an unchanged counting method need not produce an identical ratio. This measures
+the actual recut workload; it does not attribute the small hash decrease to a new
+algorithm. Preserving the old ringer public method argument separately from the new
+row key prevents a pin adaptation from silently changing invocation bytes.
+
+
+## LANG-P13 Complete observations in the generated hole (2026-10-20 real; Codex CX-P13)
+
+**Decision.** Land the ACTIVITIES bundle and its observation repair together as
+one lang! flag day. ROOT withdrew the earlier scoped-bridge / dated-RED split:
+a newly red verdict never receives an exemption. P10 landed 0a8c780 first.
+
+The candidate declares its read set through s0, s1 and blocker. The emitted
+holePointCovered checks the key of an actual point under self; a point whose
+value is none is an observed absence, whereas a missing point is unobserved.
+holeSupportCovered searches all three bounded points by identity. Optional
+dependencies that are none impose no read. The source receive path remains
+readsData/relReads on RowView under self only; no cell pins or foreign rows
+are exposed, and no kernel or generic row-view API changes.
+
+holeCheckedJudge collects coverage before the raw judgment. Its coverage
+check is the finite three-role lowering of P10 Trace.collect, established by
+holeCoverageCheck_application against holeCoverageOutcome, which calls that
+LANDED collector. This is generated core code with a refinement proof, not
+a direct native checkedJudge call hidden in the interpreter. The package
+binds this wrapper as its shared holeJudge value, so propose, fill, select,
+accept, prune and rejudge all cross it. An omitted support refuses by its
+role (support0 withdrawn/support1 withdrawn); an omitted blocker refuses
+pruned. Missing observation cannot become a negative liveness observation.
+Complete negative observations still reach rejudge's status renderer.
+
+**Bridge.** hole_judgment_admission_bridge is about the actual emitted checked
+judgment and admission gate: successful execution iff P10's finite collector
+succeeds AND the existing closed-Lang world judgment verifies. No complete
+caller read set is assumed. Only PROVIDED observations must be authentic;
+the resulting coverage is enforced by the generated expressions. The fixed
+complete-observation form is a corollary. The old raw calculation is retained
+as holeJudge_fixed_observations. Clause/probe BigStep premises remain the
+representation boundary; the bridge does not claim a whole-Kernel.Receive
+simulation or erase independent chooser, existence, window, stale, budget
+or law checks. holePointCovered_meaning proves the actual key comparison
+for arbitrary optional row points, separately from liveness.
+
+**Price premises.** LANDED theorems gaining hypotheses: none. LANDED theorems
+restated: none. These changes affect the UNLANDED hole/bridge and add new
+coverage statements. Existing activity and equality statements retain their
+reviewed bytes; the unlanded bridge's scope/names and proof are revised.
+The contextual calculus, its judge and P10 proofs retain their landed bytes.
+No gate, waste ceiling, slot bound or pin changes. The inherited benchmark
+measured-value downward re-pin and granted HOSTING cutover remain in this
+same bundle.
+
+**Real evidence.** The predecessor's complete 71-line Receive probe admitted
+all three requests after removing only the live blocker fact pin. With the
+wrapper, select, accept AND rejudge refuse pruned by name; pinned absence
+after withdrawal still permits rejudge to record verified and retain the
+reason. The permanent named hole:omitted-blocker-pin-admits tooth runs both
+inside the default journey and as a registered dedicated argument run.
+No dated RED or known-red exemption lands. The exact generator bypass
+reproduces RED (3); restoring the wrapper restores GREEN.
+
+The checked bundle measures helper ROMs 59747 / 65139 / 12525 bytes, root
+29521; every installed package is below the unchanged 65536-byte slot bound.
+The largest has 397 bytes of headroom. Nine kernel-executed coverage teeth
+distinguish all roles, observed absence, unrelated rows, order, and a false
+clause with missing coverage. Disabling each of the three coverage checks
+must refute its actual tooth; the integration bypass drives real Receive.
+
+**Alternatives.** Treating omitted blocker observations as false is the
+confirmed fail-open. Making every negative judgment refuse would destroy
+rejudge's retained statuses and is not this repair. Enumerating the entire
+facts relation would change the bounded read discipline and is unnecessary:
+the candidate itself names the finite dependencies. Changing the kernel to
+supply an ambient lookup oracle would widen this task into a different
+language/receive design. The chosen collector implements P10's already
+reviewed missing-versus-absent boundary within the existing method interface.
+
+**Critique.** The generated hole is still limited to two supports and one
+blocker. Authentication of supplied decoded row values and the clause-to-
+model relation remain explicit semantic obligations, as in P10; completeness
+is no longer one. Missing and semantically negative observations deliberately
+share existing method refusal names, while rejudge distinguishes them by
+refusing only missing observations and recording observed negative results.
+The wrapper increases select from 476/688 to 644/928 required steps/ticks in
+this fixture. A second key scan is bounded by three points, but it is real
+work and not claimed to be a minimum semantic read set.
+
+**Meta-critique.** A collector proved in isolation would leave the same wound.
+The production binding, actual Receive omission requests, and a mutation
+that removes that binding test the integration. Conversely, calling this a
+whole-receiver theorem would overstate its BigStep representation boundary;
+the correspondence is the checked judgment segment, with collection on its
+success side and independent receiver checks still in force.
+
+**P13 validation receipt.** Scoped build of the changed proof modules plus
+Surface/Resident consumers and deployed host/resident tools GREEN (276 jobs,
+6G/two threads, Lean's finite default heartbeat cap). Whole 754-line default
+lang-journey output read, GREEN. Dedicated omission journey GREEN. Filtered
+cargo test --locked -p nanodregg-launcher --test resident_bell -- --nocapture
+passes 1/1 in 72.07s with this worktree's own cargo target; expected pathMissing,
+crashLoop and refusal/restart controls precede its success.
+
+Four source mutants individually bypass support0, support1, blocker coverage
+or point-key equality. Each altered definition builds, then the actual Lean
+kernel reports that the relevant named coverage tooth is false. Real semantic
+diagnostics: CX-P13-plant3-s0-tooth.log:2 (theorem line 28),
+-s1-tooth.log:2 (32), -blocker-tooth.log:2/5/8 (36/40/61);
+CX-P13-plant4-key-tooth.log:2 (61). The fifth mutant bypasses the package's
+checked-judge binding: CX-P13-plant-bypass-receive.log:58/59/60 admits the
+three omitted-pin requests and ends RED (3). Restored real Receive is GREEN.
+All cited outputs and successful mutant-build outputs were read whole.
+The first diagnostic attempt hit pretty-printer recursion; the second used
+an unsupported pretty-printer option and is INVALID evidence. The final
+three-role runs use maxRecDepth 10000 to expose the genuine semantic failure,
+with explicit maxHeartbeats 800000; no production resource bound changes.
+Point-key mutation is a separate real run, not a synthesized diagnostic.
+
+Builder's own disjunct/premise read covers every added/revised statement.
+ROOT's independent second reader must review the new coverage statements and
+revised bridge before landing; this receipt does not claim that approval.
+
+
+**Independent second reader (CX-READER-ACT3, 2026-10-20 real).** LAND.
+Read all 17 added/renamed/revised coverage and bridge statements in full with
+the disjunct check; no vacuous alternative, free witness or assumed admission.
+The bridge certifies the emitted checked judgment segment, with supplied-row
+authenticity explicit and collection success on the conclusion side. Existing
+Std statements and resident proof bytes are unchanged; no landed premise cost.
+ACT2's other 70 statements and ACT's 16 equality statements retain reviewed bytes.
+
+Independent real-Receive omission probe refuses select/accept/rejudge as pruned.
+Removing only the production holeCheckedJudge binding reproduces three admissions
+and RED (3); restoration returns GREEN, including pinned-absence withdrawal.
+Whole logs read: CX-READER-ACT3-probe-{green,red,restored}.log; actual failure
+lines 58-60 of probe-red, no harness errors. Helper ROMs 59747/65139/12525 B and
+root 29521 B install through the existing path, all below unchanged 65536 B.
+The 27 changed/reached modules re-elaborate at 6G/two threads with explicit
+maxHeartbeats 800000. P13's whole resident_bell output and all four final
+individual coverage mutation logs independently read. Bell, bench and equality
+source bytes are unchanged; the actual ACT2 benchmark/control outputs confirm
+20.179 with unchanged method and ceilings. Main's 998f75a decision prefix is
+preserved in the rebase onto 710dd08.
+
+**Review critique.** The bridge still exposes its clause/observation representation
+boundary; it does not quantify arbitrary authenticated Kernel.Receive requests.
+Operational omission tests supply that separate integration evidence. The
+largest fixture ROM has only 397 B headroom; generic construction refuses any
+oversize field/root through the existing bound rather than widening it.
+
+**Review meta-critique.** A renamed conditional equivalence would not close ACT2's
+wound. The independent binding mutation makes that distinction observable:
+the same real requests change from three named refusals to three admissions.
+
+
+**Concurrent P8 integration (CX-READER-ACT3, 2026-10-20 real).**
+The first landing passed two full judges, but both lost to newer main tips.
+P8/ad96bab added a commitment fixture by splicing the old holeText while this
+bundle replaced that fixture with the generated hole. The third merge was
+textually clean and correctly failed compilation on the removed identifier.
+
+**Decision.** Keep P8's full client and compose its atomic commitment with the
+actual generated select method. The root adds a commit field that checks the
+contract deadline, calls the imported checked select, and returns its candidate
+edit plus accepted=true and the ordinary one-unit transfer in the SAME method
+result. The kernel still admits that result atomically. No legacy hole clone,
+new production API, method-check bypass, or saved effectful continuation.
+P8 installs the existing helper bundle, links actual helper identities, pins
+its import closure on create/invoke and supplies the proposal's support row.
+Its root is 36998 B; all helper/root packages use the unchanged install bound.
+The printed source remains available to package-mutation probes; its unlinked
+library identities are replaced by the actual installed identities before
+installation, as with HoleBundle.link.
+
+All P8 row predicates are retained, including named deadline, moved-support,
+accepted, stale, replayed, transferSpent and recovery checks. Its 15 landed
+theorems and the Std/resident statements are byte-identical to main.
+PRICE PREMISES: no landed theorem gains a hypothesis; none is restated.
+
+**Evidence.** Independent standalone actual-Receive P8 control GREEN.
+Bypassing the deadline yields actual admitted at the contract-deadline row,
+RED (1); bypassing the generated select yields admitted at moved-support and
+transferSpent instead of accepted at repeated commitment, RED (2). Whole logs
+CX-READER-ACT3-p8-plant-deadline.log and -p8-plant-select.log read; no synthetic
+expected failure output or harness error. The latter has an unused binding
+warning caused by bypassing select; it still installs and executes its mutant.
+
+**Critique.** P8's external transfer commitment does not dispatch the separate
+hole-filling activity: it retains its landed atomic-value-transfer experiment.
+The compose step trusts only a checked method result and carries its edits,
+so dropping those edits or bypassing selection would be a different program.
+The P8 model-to-package correspondence retains its earlier stated scope;
+no new end-to-end compiler theorem is asserted.
+
+**Meta-critique.** Preserving the old text beside the new generator would have
+made compilation green while leaving a second hole implementation. Composing
+the existing checked selection makes the new consumer share the repaired
+boundary, and the two real bypass plants keep that connection refutable.
+
+**Post-port validation.** The combined lang-journey is GREEN (787 output lines),
+its dedicated omission tooth GREEN, and harness-control RED (1); the scoped
+Journey/Integration build passes and Integration's statements and proofs are
+byte-identical to ad96bab. All nine P8 mutation categories were independently
+rerun against this port and are semantic RED: deadline (1), support (1),
+accepted (1), cap (4), pin (1), environment (3), certificate (1), live (1),
+version (1). Every whole output was read. Support and accepted mutations alter
+the installed generated helper bodies; the accepted mutation makes fresh
+reexecution reach transferSpent, and the support mutation admits moved support.
+An initial root-only accepted mutation changed no actual check and stayed
+GREEN; it was rejected as a no-op and replaced by the helper mutation. No
+production check was removed, no row expectation changed, no theorem weakened.
+The final source rebase also preserves HOSTING/0cd046c's unrelated startup fix.

@@ -5,7 +5,7 @@ The resident serves ONE bell (`world/resident/Bell.ob`, LANG-58: a queue of ring
 member socket:
 - It reads the bell's description once (`read OBJ ?`, PROTOCOL-44). From it come the index of the
   method labelled `answer`, whose argument must be `answerArgTy`, and the relation `pending`, whose
-  key must be `(notBefore nat) (ringer digest)` and whose value `(rec (text bytes))`. No index,
+  key must be `(notBefore nat) (agent digest)` and whose value holds the captured `ask` plan. No index,
   bound or relation layout is written into the program; the read's K is `pending`'s declared limit.
 - Each tick it makes ONE read, `read OBJ pending K` (PROTOCOL-51's range read): every unanswered
   ring, one `Lang.Print.data` line per row, read with `Lang.Read.readData` at the relation's row
@@ -14,7 +14,7 @@ member socket:
   ascending key order, which is ring order (`Lang.Proofs.KeyOrder.range_keys_ascend_read`).
 - It answers the lowest pending ring: `invoke OBJ <answer> ARG`, ARG `Lang.Print.data` of
   `(record (notBefore N) (ringText X) (ringer #H) (text T))`, X the ring's text as the pending row
-  holds it. The bell (LANG-59) upserts `rings[k]` to `(answer (some T)) (text X)` and retracts
+  holds it. The bell (LANG-59) upserts `rings[k]` to an `answered (some (ask T))` with immutable `captured (ask (text X))` and retracts
   `pending[k]`; its `rings` guard refuses the upsert unless the ring is unanswered and X is the
   ring's own text (`rung: answered`, `rung: text`), so exactly-once is a check on the row as it is.
 
@@ -74,10 +74,10 @@ def answerArgTy : Ty :=
   .record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)]
 
 /-- The key of the bell's `pending`, in declared order (key bytes follow it, LANG-49/57). -/
-def pendingKey : List (Label × Ty) := [("notBefore", .nat), ("ringer", .digest)]
+def pendingKey : List (Label × Ty) := [("notBefore", .nat), ("agent", .digest)]
 
 /-- The value of the bell's `pending`: the ring's text, held beside the key so a tick is one read. -/
-def pendingVal : Ty := .record [("text", .bytes)]
+def pendingVal : Ty := .record [("captured", .sum [("ask", .record [("text", .bytes)])])]
 
 /-- What the resident needs from the description: `answer`'s index and `pending` as declared,
 with the key and value it reads at (so every theorem over a shape has them without a premise). -/
@@ -119,16 +119,16 @@ structure Ring where
   text : ByteArray
   deriving DecidableEq
 
-/-- A ring as the range read's row datum: `(record (key (record (notBefore N) (ringer #H))) (val
-(record (text T))))`, `Lang.rowTy` of `pending` (`keyTy`'s labels ascending). -/
+/-- A ring as the activity cursor row: key agent/notBefore, captured ask/text.
+The declared key order remains notBefore then agent; the record labels are canonical. -/
 def Ring.row (r : Ring) : Data :=
-  .record [("key", .record [("notBefore", .nat r.notBefore), ("ringer", .digest r.ringer)]),
-    ("val", .record [("text", .bytes r.text)])]
+  .record [("key", .record [("agent", .digest r.ringer), ("notBefore", .nat r.notBefore)]),
+    ("val", .record [("captured", .inj "ask" (.record [("text", .bytes r.text)]))])]
 
 /-- The ring in a row datum, or why the datum is not a pending row. -/
 def Ring.ofRow : Data → Except String Ring
-  | .record [("key", .record [("notBefore", .nat n), ("ringer", .digest g)]),
-      ("val", .record [("text", .bytes t)])] => .ok ⟨n, g, t⟩
+  | .record [("key", .record [("agent", .digest g), ("notBefore", .nat n)]),
+      ("val", .record [("captured", .inj "ask" (.record [("text", .bytes t)]))])] => .ok ⟨n, g, t⟩
   | _ => .error "rowFields"
 
 /-- One line of `read OBJ pending K`, read at `pending`'s row type. -/

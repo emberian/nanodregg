@@ -19,7 +19,7 @@ hosting-broker	-	keybroker decider (follows a Store); the launcher broker test r
 hosting-residents	-	nd-members' decider (answers residents frames only, follows a Store); launcher/tests/members.rs runs it under nd-members over a real Store	-
 resident	-	THE BAR's hosted Hermes, a resident grain's program; launcher/tests/resident_bell.rs runs it confined under grain-launch over a real World	-
 host-sock-probe	-	a test driver: launcher/tests/sock.rs runs it against the peer it holds (Host.Sock's contracts)	-
-lang-journey	(none)	lang-journey: GREEN	--harness-control
+lang-journey	(none) ; --hole-omitted-blocker-pin-admits	lang-journey: GREEN	--harness-control
 rows	(none) ; --deployed	ALL PASS	--harness-control
 store-plants	{host} {fresh}	ALL PASS	{host} {fresh} --harness-control
 host	-	the deployed binary; the sims, rows and plants drive it	-

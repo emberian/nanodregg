@@ -8,6 +8,7 @@ evaluating a generated term. The environment is `req :: new :: old :: E` for an 
 statement covers both the closed term a test runs and the package field the receiver selects.
 -/
 import Lang.Std
+import Lang.Proofs.StdData
 import Lang.Law
 import Lang.Proofs.Meaning
 import Lang.Proofs.Agree

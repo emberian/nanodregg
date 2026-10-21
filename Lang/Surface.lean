@@ -15,7 +15,9 @@ text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_
               | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] body)
               | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))
               | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))
+              | (activity cursor log [(limits cursorLimit logLimit)] (resumer e) plan…)
               | (machine f initial (methods m…) (from m to)…) | (guard g body)
+    plan    ::= (plan name (arg T) (resp U) [(pre e)] (start e) (resume e))
     type    ::= the core's types | N | Req | Verdict | Occasion | AcctRef | Right
               | (enum ℓ…) | (option T) | (row rel)
     arg A   ::= a type, where a record field may be bounded: (nat lo hi) | (bytes lo hi) | N naming one
@@ -25,6 +27,10 @@ text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_
               | (fold (acc T init) (x rel) step body) | (super m)
     item    ::= (insert rel key val) | (upsert rel key val) | (retract rel key) | (KIND (f e)…)
 
+An activity precondition/start binds state, arg, req; resume binds state, captured, response,
+req. Its cursor and continuation are rows under self. The generated start_name/resume_name
+methods and retire method use the same row guards and install checker as handwritten methods.
+
 Every annotation the lowering writes comes from a declaration; nothing is inferred, so the
 surface never decides a type (the checker does). A method binds `rows state arg req`, a law
 `old new req`, a guard `state req edit old` (LANG-59: `old` is the row the edit replaces, as the
@@ -32,7 +38,7 @@ caller pinned it). A bounded argument field is checked before the body and refus
 imported super package: same state and relations, its laws kept and never overridden
 (`Lang.Proofs.Surface.layer_keeps_laws`).
 -/
-import Lang.Std
+import Lang.StdActivity
 import Lang.Print
 
 namespace Nanodregg.Lang.Surface
@@ -156,6 +162,7 @@ structure Ctx where
   rels : List (Label × RelDecl) := []
   /-- every method label of the package, sorted (`index`) -/
   methods : List Label := []
+  activityCode : List (Label × Term) := []
   layered : Bool := false
   place : Place := .top
 
@@ -170,7 +177,7 @@ def Ctx.lookupTy (c : Ctx) (n : String) : Option Ty :=
 /-- The words the lowering reads as forms; none may be a binder or a type name. -/
 def surfaceWords : List String :=
   ["ok", "done", "with", "some", "none", "is", "all", "check", "any", "and", "not", "index", "fold",
-   "super", "insert", "upsert", "retract", "refuse"]
+   "super", "insert", "upsert", "retract", "refuse", "activity-code"]
 
 /-- A binder name the surface would read as something else. -/
 def reservedName (c : Ctx) (x : String) : Bool :=
@@ -354,6 +361,10 @@ def withSx (c : Ctx) (p : Nat) (e : SExp) (given : List (Label × SExp)) : SExp 
 
 def term (c : Ctx) : Nat → List String → SExp → P SExp
   | 0, _, x => .error (.read (.tooDeep x.pos))
+  | _ + 1, _, .list p [.atom _ "activity-code", .atom _ n] =>
+    match Row.find? n c.activityCode with
+    | some t => termAt p t
+    | none => .error (.noMethod p n)
   | _ + 1, sc, x@(.atom p a) =>
     if sc.contains a then .ok x
     else if a = "ok" then okAt c p
@@ -491,6 +502,7 @@ structure Decls where
   methods : List (Nat × String × List SExp) := []
   laws : List (Nat × String × List SExp) := []
   guards : List (Nat × String × SExp) := []
+  activities : List (Nat × String × String × List SExp) := []
   machines : List (Nat × String × String × List SExp × List SExp) := []
   imports : List (Nat × String × String) := []
   layer : Option (Nat × String) := none
@@ -499,7 +511,7 @@ structure Decls where
 def declsOf (d : Decls) : List SExp → P Decls
   | [] => .ok { d with types := d.types.reverse, rels := d.rels.reverse, methods := d.methods.reverse,
                        laws := d.laws.reverse, guards := d.guards.reverse, machines := d.machines.reverse,
-                       imports := d.imports.reverse }
+                       imports := d.imports.reverse, activities := d.activities.reverse }
   | .list p [.atom _ "type", .atom _ n, t] :: rest => declsOf { d with types := (p, n, t) :: d.types } rest
   | .list p [.atom _ "state", t] :: rest =>
     if d.state.isSome then .error (.duplicate p "state") else declsOf { d with state := some (p, t) } rest
@@ -507,6 +519,8 @@ def declsOf (d : Decls) : List SExp → P Decls
   | .list p (.atom _ "method" :: .atom _ ℓ :: xs) :: rest => declsOf { d with methods := (p, ℓ, xs) :: d.methods } rest
   | .list p (.atom _ "law" :: .atom _ ℓ :: xs) :: rest => declsOf { d with laws := (p, ℓ, xs) :: d.laws } rest
   | .list p [.atom _ "guard", .atom _ g, b] :: rest => declsOf { d with guards := (p, g, b) :: d.guards } rest
+  | .list p (.atom _ "activity" :: .atom _ cursor :: .atom _ log :: xs) :: rest =>
+    declsOf { d with activities := (p, cursor, log, xs) :: d.activities } rest
   | .list p (.atom _ "machine" :: .atom _ f :: .atom _ i :: .list _ (.atom _ "methods" :: ms) :: es) :: rest =>
     declsOf { d with machines := (p, f, i, ms, es) :: d.machines } rest
   | .list p [.atom _ "import", .atom _ n, .str _ h] :: rest => declsOf { d with imports := (p, n, h) :: d.imports } rest
@@ -705,6 +719,79 @@ structure Lowered where
 
 def readTermAt (sx : SExp) : P Term := liftR (Read.term Read.depthMax [] sx)
 
+
+/-- Close an activity expression over its documented arguments, then pass it
+through the ordinary surface term lowering and core reader. -/
+def activityFunction (c : Ctx) (p : Nat) (args : List (String × Ty)) (body : SExp) : P Term := do
+  let b ← term c Read.depthMax (args.reverse.map (·.1)) body
+  let sx ← args.foldrM (fun (name, T) rest => do
+    pure (L p [A p "lam", A p name, ← tyAt p T, rest])) b
+  readTermAt sx
+
+/-- Activity surface: plan callbacks return state; resume binds state, captured,
+response, req. Each plan may supply a precondition (default true). -/
+def activityDecl (c : Ctx) (p : Nat) (cursor log : Label) (xs : List SExp)
+    (extraRels : List (Label × RelDecl) := []) (allCode : Bool := false) : P Package := do
+  let (cursorLimit, logLimit, rest) ← match xs with
+    | .list q [.atom _ "limits", .atom _ a, .atom _ b] :: rest =>
+      match a.toNat?, b.toNat? with
+      | some a, some b => pure (a, b, rest)
+      | _, _ => throw (.badClause q)
+    | _ => pure (64, 1024, xs)
+  let (expose, rest) ← match rest with
+    | .list _ (.atom _ "expose" :: names) :: rest =>
+      pure (some (← labelsOf names), rest)
+    | _ => pure (none, rest)
+  let (guardNames, rest) ← match rest with
+    | .list _ [.atom _ "guards", .atom _ queued, .atom _ waiting] :: rest =>
+      pure (some (queued, waiting), rest)
+    | _ => pure (none, rest)
+  let (vocabulary, rest) ← match rest with
+    | .list _ [.atom _ "refusals", .str _ resumer, .str _ missing, .str _ captured] :: rest =>
+      pure (({ notResumer := resumer, unstarted := missing, captured } : Std.ActivityVocabulary), rest)
+    | _ => pure ({}, rest)
+  let (resumer, rest) ← match rest with
+    | .list q [.atom _ "resumer", body] :: rest =>
+      pure (← activityFunction c q [("state", c.state), ("req", reqTy)] body, rest)
+    | _ => throw (.badClause p)
+  let plans ← rest.mapM fun x => do
+    match x with
+    | .list q (.atom _ "plan" :: .atom _ name ::
+        .list _ [.atom _ "arg", K] :: .list _ [.atom _ "resp", R] :: bodies) =>
+      let K ← ty c Read.depthMax K
+      let R ← ty c Read.depthMax R
+      let (pre, bodies) := match bodies with
+        | .list _ [.atom _ "pre", pre] :: bs => (pre, bs)
+        | bs => (A q "true", bs)
+      match bodies with
+      | [.list _ [.atom _ "start", start], .list _ [.atom _ "resume", resume]] =>
+        pure ({
+          name, captured := K, response := R,
+          precondition := ← activityFunction c q [("state", c.state), ("arg", K), ("req", reqTy)] pre,
+          start := ← activityFunction c q [("state", c.state), ("arg", K), ("req", reqTy)] start,
+          resume := ← activityFunction c q
+            [("state", c.state), ("captured", K), ("response", R), ("req", reqTy)] resume } : Std.ActivityPlan)
+      | _ => throw (.badClause q)
+    | _ => throw (.badClause x.pos)
+  match Std.activity c.state cursor log cursorLimit logLimit resumer plans with
+  | .ok _ =>
+    let pkg := Std.activityPackage c.state cursor log cursorLimit logLimit resumer plans
+      extraRels guardNames vocabulary
+    match expose with
+    | none => pure pkg
+    | some ns =>
+      for n in ns do
+        unless pkg.methods.contains n do throw (.noMethod p n)
+      if allCode then pure pkg else
+        let keep (n : Label) := !pkg.methods.contains n || ns.contains n
+        let .record ts := pkg.iface | throw (.badShape p)
+        let .record bs := pkg.body | throw (.badShape p)
+        pure { pkg with
+          methods := pkg.methods.filter (ns.contains ·),
+          iface := .record (ts.filter (keep ∘ Prod.fst)),
+          body := .record (bs.filter (keep ∘ Prod.fst)) }
+  | .error why => throw (.std p why.name)
+
 /-- Each field the layer adds: never a law of the super (`overridesLaw`), and a field the super
 has only at the super's own type (`retypedOverride`). -/
 def checkAdds (posOf : Label → Nat) (sup : Package) : List (Label × Ty × Term) → P Unit
@@ -754,17 +841,31 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
           match supers.find? (·.1 = b) with
           | some (_, P) => pure (some (b, P))
           | none => throw (.noSuper q n)
-  if sup.isSome && (d.state.isSome || !d.rels.isEmpty || !d.machines.isEmpty || d.imports.length != 1) then
+  if sup.isSome && (d.state.isSome || !d.rels.isEmpty || !d.machines.isEmpty || !d.activities.isEmpty || d.imports.length != 1) then
     throw (.layerShape p)
   let S ← match d.state, sup with
     | some (_, t), _ => ty c Read.depthMax t
     | none, some (_, P) => pure P.state
     | none, none => throw (.noState p)
+  let activities ← d.activities.mapM fun (q, cursor, log, xs) => do
+    pure (q, ← activityDecl { c with state := S } q cursor log xs)
+  let activityMethods := activities.flatMap (·.2.methods)
   let rels ← match sup with
     | some (_, P) => pure P.rels
     | none => do
       let rs ← d.rels.mapM fun (q, ℓ, xs) => do pure (ℓ, ← relDecl { c with state := S } q xs)
+      let rs := rs ++ activities.flatMap (·.2.rels)
+      unique p [] (rs.map (·.1))
       pure (Row.sort rs)
+  let activityParts ← d.activities.mapM fun (q, cursor, log, xs) => do
+    let extra := rels.filter fun r => r.1 != cursor && r.1 != log
+    pure (q, ← activityDecl { c with state := S } q cursor log xs extra)
+  let activityCode ← d.activities.flatMapM fun (q, cursor, log, xs) => do
+    let extra := rels.filter fun r => r.1 != cursor && r.1 != log
+    let full ← activityDecl { c with state := S } q cursor log xs extra true
+    let .record fs := full.body | throw (.badShape q)
+    pure (fs.filter (fun f => full.methods.contains f.1))
+  unique p [] (activityCode.map (·.1))
   -- a machine names the methods it steps; its edges may name only those (`unknownMethod`)
   let machineMethods ← d.machines.flatMapM fun (_, _, _, ms, _) => labelsOf ms
   let declared := d.methods.map (·.2.1)
@@ -772,9 +873,10 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
   -- a layer keeps its super's method indices: the super's methods first, in its order, then the new
   let allMethods := match sup with
     | some (_, P) => P.methods ++ sorted (declared.filter (!P.methods.contains ·))
-    | none => sorted (declared ++ machineMethods)
-  unique p [] (declared ++ machineMethods ++ d.laws.map (·.2.1) ++ d.guards.map (·.2.1) ++ d.machines.map (·.2.1))
-  c := { c with state := S, rels, methods := allMethods, layered := sup.isSome }
+    | none => sorted (declared ++ machineMethods ++ activityMethods)
+  unique p [] (declared ++ machineMethods ++ d.laws.map (·.2.1) ++ d.guards.map (·.2.1) ++ d.machines.map (·.2.1) ++
+    activities.flatMap (fun (_, P) => (recRow P.iface).map (·.1)))
+  c := { c with state := S, rels, methods := allMethods, activityCode, layered := sup.isSome }
   -- methods
   let ms ← d.methods.mapM fun (q, ℓ, xs) => do
     let (T, sx, res, bs) ← methodSx c q xs
@@ -820,6 +922,16 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
     fields := fields ++ [(ℓ, lawTy S, ← readTermAt sx)]; sxs := sxs ++ [(ℓ, sx, 0)]
   for (g, T, sx) in gs do
     fields := fields ++ [(g, T, ← readTermAt sx)]; sxs := sxs ++ [(g, sx, 0)]
+  for (q, P) in activityParts do
+    match P.iface, P.body with
+    | .record ts, .record bs =>
+      for (l, T) in ts do
+        match Row.find? l bs with
+        | some t =>
+          fields := fields ++ [(l, T, t)]
+          sxs := sxs ++ [(l, ← termAt q t, 0)]
+        | none => throw (.badShape q)
+    | _, _ => throw (.badShape q)
   let lawLabels := d.laws.map (·.2.1) ++ mlaws.map (·.1)
   match sup with
   | some (sid, P) =>
