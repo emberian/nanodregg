@@ -4954,3 +4954,117 @@ retained, so such a removal record would have been false. Here the removal is
 real and desired. Critique: deletion authorization must be explicit in the
 machine-checked landing record as well as the decision. Meta-critique: the old
 commit subject spans several layers; the precise path/hunk is the scope.
+
+## LANG-PE1 — receipt-first shadow obligation journal (2026-10-21, CX-PE1)
+
+**Decision.** Keep the existing judge authoritative and retain eight named Kernel
+obligations as immutable revisions with two archived evidence routes each.
+CalculusData.check inspects finite receipt data; Lean remains the external proof
+checker. The new Journal modules connect actual Closure admission to matching,
+successful, complete receipts and declared inputs, and instantiate Protocol's
+proved repair/composition laws. Kernel source and landed signatures are unchanged.
+
+The exporter walks actual types, proof values, inductive/constructor/recursor
+structure, axiom sets and local premise applications. Shared expression DAGs
+replace the initial expanding-tree encoding that exceeded 6G. Retained terms
+are independently kernel-checked against current types; fresh recipes are a
+separate baseline. Missing exports/imports never reduce the persistent inventory.
+An inverted support index is derived from the retained list oracle. Whole scratch
+outputs and source mutations are retained on hbox; gates/journal-report.md records
+the measured comparisons and exact candidate identities.
+
+PRICE PREMISES: landed theorems gaining hypotheses: none; restated: none.
+The scratch required-premise variant explicitly prices its new Bool equality and
+strengthened conclusion; the unused True binder is separately measured.
+CROSS-LAYER: GATES (ROOT granted the journal exporter beside the census tooling, real 10-21)
+
+**Critique.** The formal invariant stops at finite receipt data. It does not prove
+the producer, SHA-256 identity, arbitrary semantic audit coverage, or a dependent
+context bridge. The global-collision detector covers the exercised outer
+existential escape; a newly checked literal proof is still pruned for the
+advertised binding claim. Recipe source-closure hashes intentionally over-invalidate.
+Exact structural expression hashes retain generated binder hygiene labels, which
+also over-invalidate unrelated roots in the collision branch. Alpha canonicalization
+is proposed in the lane REPORT but not applied under its refusal-change pause rule.
+The exhausted-budget experiment has actual C timeouts while B still succeeds;
+A's suspended result reflects deliberately unavailable receipt-service tokens,
+not a fabricated kernel timeout or false target.
+
+**Meta-critique.** A dependency graph alone cannot decide claim authority. The
+pilot keeps old candidates and check receipts, token versions, pruning reasons,
+grounding choices, cost and audit evidence separate, and compares its status
+observation with actual kernel replay and reconstruction. Disagreement is evidence
+about that boundary, not automatically a defect in Lean or a proof of invalidity.
+The conservative false invalidations are reported rather than presented as an
+optimization. Index-query savings exclude producer/export cost and do not assert
+an end-to-end complexity theorem. ROOT's receipt-first ruling remains sequencing,
+not a reduced destination: the dependent-context bridge and mini/bread acceptance
+cases remain the next card.
+
+
+### LANG-PE1 reader correction (2026-10-21, CX-READER-PE1)
+
+**Decision.** Accept the explicitly measured conservative identity for this pilot
+under the reader brief. ROOT already granted option B, bound-variable-label
+normalization; the earlier pending-ASK wording records the builder's stale state,
+not an outstanding permission barrier. B is unimplemented: canonicalization law,
+roundtrip and both-direction plants remain follow-on obligations. Existing
+conservative-run numbers remain unchanged.
+
+Correct the scoped coverage receipt writer's literal backslash-n and add a
+check-disabled missing-import plant. It uses a real failed Lean import and its
+absent export: the enabled validator reports INCOMPLETE and retains eight owed
+obligations; a scratch-only missing-file refusal bypass claims complete with zero,
+which the coverage tooth rejects. No installed production check is weakened.
+
+PRICE PREMISES: landed theorems gaining hypotheses: none; restated: none.
+
+**Critique.** Exact binder labels still cause false invalidations (collision case
+16 old-candidate mismatches although six B/C roots pass). This is acceptable pilot
+evidence, not fulfillment of B or a semantic equivalence claim. The missing-import
+plant checks one producer failure mode, not arbitrary exporter completeness.
+
+**Meta-critique.** A green export plant does not substitute for the missing-import
+failure path, and a permission ruling is not implementation. Keep those distinctions
+in executable receipts and the comparison instead of relying on a builder summary.
+
+
+**P7 integration.** Rebased onto d7989d9 by preserving the exact own decision tail
+after main's decision. No P7-changed module is in the exported Kernel slice and
+all baseline recipe input hashes remain equal. The reached-module build checks
+the extracted HoleDecl import against the receipt adapter. No new premise or
+Kernel edit is introduced by PE1.
+
+
+### LANG-PE1 scoped Census release (2026-10-21, CX-READER-PE1; ROOT release)
+
+**Decision.** CONSOLIDATION-MAP-20261021.md §6 supersedes the original full-pilot
+landing scope above. Land only Census.JournalExpr, Census.Journal, Census.JournalRun,
+the six journal Python helpers and comparison report. Exclude all three unlanded
+Lang Journal modules and their 21 theorems. The exporter already stands independently
+of contextual theory. Move finite receipt records/checks into Census.JournalRun
+without a CalculusData instance; remove the toy-world command and its two active
+matrix cases. Keep the original 15-case comparison explicitly historical and
+preserve all old sources/outputs outside the landing. The remaining 13 source/policy
+cases use real exports, kernel checks, recipes and finite Census receipt checks.
+
+The finite disabling harness now tests Census receipt data directly. Historical
+migration compares named statuses, because the Census verdict constructors differ;
+new incremental/full comparisons still require exact detail equality. No claimed
+Closure/Protocol repair theorem lands. Consolidation S0 is the intended consumer of
+the real environment and declaration digests; the live bridge belongs to S13.
+
+PRICE PREMISES: landed theorems gaining hypotheses: none; restated: none.
+New theorems in this scoped landing: none.
+CROSS-LAYER: GATES (ROOT scoped release explicitly grants Census and journal helpers).
+
+**Critique.** The remaining checks do not prove exporter completeness, authenticity,
+hash injectivity or arbitrary semantic audit coverage. Candidate-set equality and
+index consistency are measurements. Bound-label normalization B remains unimplemented,
+with the measured conservative invalidation reported. Source tooling is useful before
+the live bridge exists, but must not be advertised as that bridge.
+
+**Meta-critique.** Reusing Closure through an identity calculus looked like integration
+while adding another language-shaped instance. The release keeps the actual Kernel
+export/check boundary and records the reduced formal claim explicitly, rather than
+moving the same degenerate instance into another directory.
