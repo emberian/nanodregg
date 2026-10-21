@@ -54,7 +54,7 @@ import shutil
 import subprocess
 import threading
 
-VERSION = b"GATES-20 traced key v5 (GATES-20m: namespace reads in host bind-source view)"
+VERSION = b"GATES-20 traced key v6 (GATES-20m: resumed unmounts and traced idle children)"
 WASTE = "gates/waste.tsv"
 EXCL = (".lake/runs/", ".lake/cargo-target/")
 BIN = ".lake/build/bin/"
@@ -226,10 +226,10 @@ def reduce(trace: str, root: str) -> dict | None:
         call = call or resumed
         # strace prints setup calls in two lines on a busy box. Their arguments are on the first
         # and success/child pid on the resumed line; neither line alone establishes a bind.
-        if call in (*CLONES, "mount", "pivot_root", "unshare", "setns") and not resumed and "<unfinished ...>" in rest:
+        if call in (*CLONES, "mount", "pivot_root", "unshare", "setns", "umount2") and not resumed and "<unfinished ...>" in rest:
             pending[(pid, call)] = rest.split("<unfinished ...>", 1)[0]
             continue
-        if resumed and call in (*CLONES, "mount", "pivot_root", "unshare", "setns"):
+        if resumed and call in (*CLONES, "mount", "pivot_root", "unshare", "setns", "umount2"):
             first = pending.pop((pid, call), None)
             if first is None:
                 unknown_mount.add(pid)
@@ -239,6 +239,12 @@ def reduce(trace: str, root: str) -> dict | None:
             r = RET.search(rest)
             if r:
                 child = r.group(2) or r.group(1)
+                # A host-PID annotation is itself a traced sighting of an idle child.
+                # An unannotated clone inside a PID namespace remains unkeyable.
+                if pid not in ns or r.group(2):
+                    seen_pids.add(child)
+                else:
+                    unknown_mount.add(child)
                 if pid in ns or "CLONE_NEWNS" in rest:
                     ns.add(child)
                     binds[child] = dict(binds.get(pid, {}))
