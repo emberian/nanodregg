@@ -48,6 +48,7 @@ import Kernel.Proofs.Logic.Triple
 import Lang.Proofs.Chain
 import Lang.Proofs.Extract
 import Lang.Proofs.Invoke
+import Lang.Proofs.Contextual.LawReceiver
 
 namespace Nanodregg.Kernel.Receive
 
@@ -378,10 +379,10 @@ theorem object_history_chain {X : Ctx D} (hX : X.Lawful) (hprog : X.program = La
           obtain ⟨hold, hj, hkeep, -, -, cell', hl', hk⟩ := object_step_some hs hl
           obtain ⟨hmem, hpk⟩ := hin _ (List.mem_cons_self ..)
           rw [hprog] at hj
-          have hj' : Lang.judge X.env.bytes X.digestOf look pkg laws old new r = .ok () := hj
-          have hj1 := judge_mem hj' hmem
+          have hj' : Lang.judgeContextual X.env.bytes X.digestOf look pkg laws old new r = .ok () := hj
+          have hj1 := Lang.judgeContextual_mem hj' hmem
           obtain ⟨o', n, ho', hn, hall⟩ :=
-            Lang.judgeOne_admits_relib X.env.bytes X.digestOf (hX.digestOf_bytes law) hpk hb hj1
+            Lang.judgeOneContextual_admits_relib X.env.bytes X.digestOf (hX.digestOf_bytes law) hpk hb hj1
           rw [hold, ho] at ho'
           cases ho'
           have hadm := hall ℓ hℓ t hf hlaw hnr []
@@ -444,9 +445,9 @@ theorem object_history_start {X : Ctx D} (hX : X.Lawful) (hprog : X.program = La
           obtain ⟨hold, hj, -⟩ := object_step_some hs hl
           obtain ⟨hmem, hpk⟩ := hin _ (List.mem_cons_self ..)
           rw [hprog] at hj
-          have hj' : Lang.judge X.env.bytes X.digestOf look pkg laws old new r = .ok () := hj
-          obtain ⟨L, g, p', o, n, hload, hpg, ho, -, -⟩ := Lang.judgeOne_ok X.env.bytes X.digestOf (judge_mem hj' hmem)
-          obtain ⟨hpg', -⟩ := Lang.load_top X.env.bytes X.digestOf (fuel := Lang.closureDepthMax - 1)
+          have hj' : Lang.judgeContextual X.env.bytes X.digestOf look pkg laws old new r = .ok () := hj
+          obtain ⟨L, g, p', o, n, hload, hpg, ho, -, -⟩ := Lang.judgeOneContextual_ok X.env.bytes X.digestOf (Lang.judgeContextual_mem hj' hmem)
+          obtain ⟨hpg', -⟩ := Lang.loadContextual_top X.env.bytes X.digestOf (fuel := Lang.closureDepthMax - 1)
             (hX.digestOf_bytes law) hpk hload
           rw [hpg'] at hpg
           cases hpg

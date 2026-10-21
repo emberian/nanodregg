@@ -252,6 +252,20 @@ theorem termOf_termTree : (t : Term) → termWire t = true → termOf (termTree 
   | .refuse a w, h => by
     simp only [termWire] at h
     simp [termTree, termOf, tyOf_tyTree a h]
+  | .hole n σ, h => by
+    simp only [termWire, Bool.and_eq_true, decide_eq_true_eq] at h
+    simp [termTree, termOf, termsTree_length, h.1.2, u32Of_bytes h.1.1, termsOf_termsTree σ h.2]
+
+theorem termsOf_termsTree : (ts : List Term) → termsWire ts = true →
+    termsOf (termsTree ts) = some ts
+  | [], _ => by simp [termsTree, termsOf]
+  | t :: ts, h => by
+    simp only [termsWire, Bool.and_eq_true] at h
+    simp [termsTree, termsOf, termOf_termTree t h.1, termsOf_termsTree ts h.2]
+
+theorem termsTree_length : (ts : List Term) → (termsTree ts).length = ts.length
+  | [] => rfl
+  | _ :: ts => by simp [termsTree, termsTree_length ts]
 
 theorem fieldsOf_fieldsTree : (fs : List (Label × Term)) → fieldsWire fs = true →
     fieldsOf (fieldsTree fs) = some fs
@@ -266,15 +280,17 @@ theorem fieldsTree_length : (fs : List (Label × Term)) → (fieldsTree fs).leng
   | _ :: fs => by simp [fieldsTree, fieldsTree_length fs]
 end
 
-theorem termOf_inv (n : Nat) :
+theorem termOf_inv_all (n : Nat) :
     (∀ (t : Tree), sizeOf t < n → ∀ {x : Term}, termOf t = some x → termTree x = t ∧ termWire x = true) ∧
     (∀ (cs : List Tree), sizeOf cs < n → ∀ {fs : List (Label × Term)}, fieldsOf cs = some fs →
-      fieldsTree fs = cs ∧ fieldsWire fs = true) := by
+      fieldsTree fs = cs ∧ fieldsWire fs = true) ∧
+    (∀ (cs : List Tree), sizeOf cs < n → ∀ {ts : List Term}, termsOf cs = some ts →
+      termsTree ts = cs ∧ termsWire ts = true) := by
   induction n with
-  | zero => exact ⟨fun _ h => absurd h (Nat.not_lt_zero _), fun _ h => absurd h (Nat.not_lt_zero _)⟩
+  | zero => exact ⟨fun _ h => absurd h (Nat.not_lt_zero _), fun _ h => absurd h (Nat.not_lt_zero _), fun _ h => absurd h (Nat.not_lt_zero _)⟩
   | succ n ih =>
-    obtain ⟨ihT, ihR⟩ := ih
-    refine ⟨?_, ?_⟩
+    obtain ⟨ihT, ihR, ihL⟩ := ih
+    refine ⟨?_, ?_, ?_⟩
     · intro t hs x h
       obtain ⟨tag, p, cs⟩ := t
       unfold termOf at h
@@ -408,6 +424,18 @@ theorem termOf_inv (n : Nat) :
         obtain ⟨a1, ha, rfl⟩ := h
         obtain ⟨ea, wa⟩ := tree_of_tyOf ha
         simp [termTree, termWire, ea, wa]
+      · rename_i q cs
+        split at h
+        · rename_i hc
+          split at h
+          · rename_i n ts hn ht
+            cases h
+            obtain ⟨en, wn⟩ := u32Of_some hn
+            obtain ⟨et, wt⟩ := ihL cs (by omega) ht
+            have hl : ts.length ≤ rowMax := by rw [← termsTree_length, et]; exact hc
+            simp [termTree, termWire, en, wn, et, wt, hl]
+          · simp at h
+        · simp at h
     · intro cs hs fs h
       unfold fieldsOf at h
       split at h
@@ -423,6 +451,26 @@ theorem termOf_inv (n : Nat) :
           simp [fieldsTree, fieldsWire, el, wl, et, wt, ef, wf]
         · simp at h
       · simp at h
+
+    · intro cs hs ts h
+      cases cs with
+      | nil => simp only [termsOf, Option.some.injEq] at h; subst ts; simp [termsTree, termsWire]
+      | cons c cs =>
+        simp only [termsOf] at h
+        split at h
+        · rename_i t ts' ht hts
+          cases h
+          simp at hs
+          obtain ⟨et, wt⟩ := ihT c (by omega) ht
+          obtain ⟨es, ws⟩ := ihL cs (by omega) hts
+          simp [termsTree, termsWire, et, wt, es, ws]
+        · simp at h
+
+theorem termOf_inv (n : Nat) :
+    (∀ (t : Tree), sizeOf t < n → ∀ {x : Term}, termOf t = some x → termTree x = t ∧ termWire x = true) ∧
+    (∀ (cs : List Tree), sizeOf cs < n → ∀ {fs : List (Label × Term)}, fieldsOf cs = some fs →
+      fieldsTree fs = cs ∧ fieldsWire fs = true) := by
+  exact ⟨(termOf_inv_all n).1, (termOf_inv_all n).2.1⟩
 
 theorem tree_of_termOf {t : Tree} {x : Term} (h : termOf t = some x) : termTree x = t ∧ termWire x = true :=
   (termOf_inv (sizeOf t + 1)).1 t (Nat.lt_succ_self _) h
@@ -582,22 +630,156 @@ theorem map_of_relsOf : (ts : List Tree) → ∀ {rs : List (Label × RelDecl)},
       simp [e1, w1, e2, w2]
     · simp at h
 
+/-! ### Contextual ROM declarations (version 4) -/
+
+theorem mapM_encoded {α β : Type} (enc : α → β) (dec : β → Option α) (ok : α → Bool)
+    (law : ∀ a, ok a = true → dec (enc a) = some a) :
+    ∀ (xs : List α), xs.all ok = true → (xs.map enc).mapM dec = some xs
+  | [], _ => rfl
+  | x :: xs, h => by
+      simp only [List.all_cons, Bool.and_eq_true] at h
+      simp [law x h.1, mapM_encoded enc dec ok law xs h.2]
+
+theorem mapM_decoded {α β : Type} (enc : α → β) (dec : β → Option α) (ok : α → Bool)
+    (law : ∀ b a, dec b = some a → enc a = b ∧ ok a = true) :
+    ∀ (bs : List β) (xs : List α), bs.mapM dec = some xs → xs.map enc = bs ∧ xs.all ok = true
+  | [], xs, h => by simp at h; subst xs; simp
+  | b :: bs, xs, h => by
+      simp only [List.mapM_cons, bind, Option.bind] at h
+      cases hd : dec b with
+      | none => simp [hd] at h
+      | some x =>
+        cases hs : bs.mapM dec with
+        | none => simp [hd, hs] at h
+        | some ys =>
+          simp [hd, hs] at h
+          subst xs
+          obtain ⟨he, hw⟩ := law b x hd
+          obtain ⟨hes, hws⟩ := mapM_decoded enc dec ok law bs ys hs
+          simp [he, hw, hes, hws]
+
+theorem holePinOf_tree {p : HolePin} (h : holePinWire p = true) :
+    holePinOf (holePinTree p) = some p := by
+  simp only [holePinWire, Bool.and_eq_true, decide_eq_true_eq] at h
+  simp [holePinTree, holePinOf, u32Of_bytes h.1, u64Of_bytes h.2]
+
+theorem tree_of_holePinOf {t : Tree} {p : HolePin} (h : holePinOf t = some p) :
+    holePinTree p = t ∧ holePinWire p = true := by
+  unfold holePinOf at h
+  split at h
+  · split at h
+    · rename_i r v hr hv
+      cases h
+      obtain ⟨er, wr⟩ := u32Of_some hr
+      obtain ⟨ev, wv⟩ := u64Of_some hv
+      simp [holePinTree, holePinWire, er, ev, wr, wv]
+    · simp at h
+  · simp at h
+
+theorem holeOptPinOf_tree {p : Option HolePin} (h : p.all holePinWire = true) :
+    holeOptPinOf (holeOptPinTree p) = some p := by
+  cases p with
+  | none => rfl
+  | some p => simp [holeOptPinTree, holeOptPinOf, holePinOf_tree h]
+
+theorem tree_of_holeOptPinOf {t : Tree} {p : Option HolePin} (h : holeOptPinOf t = some p) :
+    holeOptPinTree p = t ∧ p.all holePinWire = true := by
+  unfold holeOptPinOf at h
+  split at h
+  · split at h
+    · rename_i he
+      cases h
+      simp [holeOptPinTree, he]
+    · simp at h
+  · split at h
+    · rename_i he
+      rename_i ep tp
+      cases hd : holePinOf tp with
+      | none => simp [hd] at h
+      | some q =>
+        simp [hd] at h
+        subst p
+        obtain ⟨eq, wq⟩ := tree_of_holePinOf hd
+        simp [holeOptPinTree, he, eq, wq]
+    · simp at h
+  · simp at h
+
+theorem holeCodeOf_tree {c : HoleCode} (h : holeCodeWire c = true) :
+    holeCodeOf (holeCodeTree c) = some c := by
+  simp only [holeCodeWire, Bool.and_eq_true] at h
+  simp [holeCodeTree, holeCodeOf, termOf_termTree _ h.1,
+    mapM_encoded holePinTree holePinOf holePinWire (fun _ => holePinOf_tree) _ h.2]
+
+theorem tree_of_holeCodeOf {t : Tree} {c : HoleCode} (h : holeCodeOf t = some c) :
+    holeCodeTree c = t ∧ holeCodeWire c = true := by
+  unfold holeCodeOf at h
+  split at h
+  · split at h
+    · rename_i he
+      split at h
+      · rename_i b ps hb hp
+        cases h
+        obtain ⟨eb, wb⟩ := tree_of_termOf hb
+        obtain ⟨ep, wp⟩ := mapM_decoded holePinTree holePinOf holePinWire
+          (fun _ _ => tree_of_holePinOf) _ _ hp
+        obtain ⟨rfl, rfl⟩ := he
+        simp [holeCodeTree, holeCodeWire, eb, wb, ep, wp]
+      · simp at h
+    · simp at h
+  · simp at h
+
+theorem holeROMOf_tree {r : HoleROM} (h : holeROMWire r = true) :
+    holeROMOf (holeROMTree r) = some r := by
+  simp only [holeROMWire, Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨⟨⟨⟨⟨hn, hc⟩, ht⟩, hk⟩, hr⟩, hh⟩, hp⟩, hg⟩ := h
+  simp [holeROMTree, holeROMOf, u32Of_bytes hn, u32Of_bytes hr,
+    mapM_encoded tyTree tyOf tyWire tyOf_tyTree _ hc, tyOf_tyTree _ ht,
+    mapM_encoded holeCodeTree holeCodeOf holeCodeWire (fun _ => holeCodeOf_tree) _ hk,
+    mapM_encoded holeOptPinTree holeOptPinOf (Option.all holePinWire) (fun _ => holeOptPinOf_tree) _ hh,
+    holeOptPinOf_tree hp, termOf_termTree _ hg]
+
+theorem tree_of_holeROMOf {t : Tree} {r : HoleROM} (h : holeROMOf t = some r) :
+    holeROMTree r = t ∧ holeROMWire r = true := by
+  unfold holeROMOf at h
+  split at h
+  · split at h
+    · rename_i he
+      split at h
+      · rename_i n cs ty ks sr hs gp g hn hc ht hk hr hh hp hg
+        cases h
+        obtain ⟨en, wn⟩ := u32Of_some hn
+        obtain ⟨ec, wc⟩ := mapM_decoded tyTree tyOf tyWire (fun _ _ => tree_of_tyOf) _ _ hc
+        obtain ⟨et, wt⟩ := tree_of_tyOf ht
+        obtain ⟨ek, wk⟩ := mapM_decoded holeCodeTree holeCodeOf holeCodeWire
+          (fun _ _ => tree_of_holeCodeOf) _ _ hk
+        obtain ⟨er, wr⟩ := u32Of_some hr
+        obtain ⟨eh, wh⟩ := mapM_decoded holeOptPinTree holeOptPinOf (Option.all holePinWire)
+          (fun _ _ => tree_of_holeOptPinOf) _ _ hh
+        obtain ⟨ep, wp⟩ := tree_of_holeOptPinOf hp
+        obtain ⟨eg, wg⟩ := tree_of_termOf hg
+        obtain ⟨rfl, rfl, rfl⟩ := he
+        simp [holeROMTree, holeROMWire, en, wn, ec, wc, et, wt, ek, wk, er, wr, eh, wh, ep, wp, eg, wg]
+      · simp at h
+    · simp at h
+  · simp at h
+
 theorem packageOf_packageTree {p : Package} (h : packageWire p = true) :
     packageOf (packageTree p) = some p := by
   simp only [packageWire, Bool.and_eq_true] at h
-  obtain ⟨⟨⟨⟨⟨⟨⟨hd, hi⟩, hs⟩, hf⟩, hb⟩, hm⟩, hl⟩, hr⟩ := h
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨hd, hi⟩, hs⟩, hf⟩, hb⟩, hm⟩, hl⟩, hr⟩, hh⟩ := h
   simp only [packageTree, packageOf, hd, and_self, if_true, importsOf_map _ hi, tyOf_tyTree _ hs,
-    tyOf_tyTree _ hf, termOf_termTree _ hb, labelsOf_map _ hm, labelsOf_map _ hl, relsOf_map _ hr]
+    tyOf_tyTree _ hf, termOf_termTree _ hb, labelsOf_map _ hm, labelsOf_map _ hl, relsOf_map _ hr,
+    mapM_encoded holeROMTree holeROMOf holeROMWire (fun _ => holeROMOf_tree) _ hh]
 
 theorem tree_of_packageOf {t : Tree} {p : Package} (h : packageOf t = some p) :
     packageTree p = t ∧ packageWire p = true := by
   unfold packageOf at h
   split at h
-  · rename_i e ei is s i b em ms el ls er rs doc
+  · rename_i e ei is s i b em ms el ls er rs doc eh hs
     split at h
     · rename_i he
       split at h
-      · rename_i imports state iface body methods laws rels hi hs hf hb hm hl hr
+      · rename_i imports state iface body methods laws rels holes hi hs hf hb hm hl hr hh
         cases h
         obtain ⟨ei', wi⟩ := map_of_importsOf is hi
         obtain ⟨es, ws⟩ := tree_of_tyOf hs
@@ -606,8 +788,10 @@ theorem tree_of_packageOf {t : Tree} {p : Package} (h : packageOf t = some p) :
         obtain ⟨em', wm⟩ := map_of_labelsOf ms hm
         obtain ⟨el', wl⟩ := map_of_labelsOf ls hl
         obtain ⟨er', wr⟩ := map_of_relsOf rs hr
-        obtain ⟨rfl, rfl, rfl, rfl, rfl, hd⟩ := he
-        simp [packageTree, packageWire, ei', es, ef, eb, em', el', er', wi, ws, wf, wb, wm, wl, wr, hd]
+        obtain ⟨eh', wh⟩ := mapM_decoded holeROMTree holeROMOf holeROMWire
+          (fun _ _ => tree_of_holeROMOf) _ _ hh
+        obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl, hd⟩ := he
+        simp [packageTree, packageWire, ei', es, ef, eb, em', el', er', wi, ws, wf, wb, wm, wl, wr, hd, eh', wh]
       · simp at h
     · simp at h
   · simp at h
@@ -623,9 +807,9 @@ theorem packageCodec_label :
 /-- No version is 0: 0 is the first byte of every unversioned package. -/
 theorem packageWireVersion_ne_zero : Bounds.packageWireVersion ≠ 0 := by decide
 
-/-- **`lang/package-version` reads exactly the one byte `packageWireVersion`.** -/
+/-- **`lang/package-version/4` reads exactly the one byte `packageWireVersion`.** -/
 theorem packageVersion_lawful : Stream.Lawful packageVersion :=
-  Stream.refine_lawful Stream.u8_lawful "lang/package-version" (fun y => by cases y; exact if_pos rfl)
+  Stream.refine_lawful Stream.u8_lawful "lang/package-version/4" (fun y => by cases y; exact if_pos rfl)
     (fun x _ h => by
       split at h
       · rename_i hx; exact hx.symm
@@ -641,18 +825,18 @@ theorem packageStream_bytes (t : Tree.Fitting nodeMax depthMax) :
     packageStream.bytes ((), t) = ByteArray.mk #[Bounds.packageWireVersion] ++ treeStream.bytes t := by
   rw [packageStream, Stream.product_bytes treeStream_lawful]; rfl
 
-/-- **A byte other than `packageWireVersion` where a package starts is refused `lang/package-version` by
+/-- **A byte other than `packageWireVersion` where a package starts is refused `lang/package-version/4` by
 name**, before any tree is read. -/
 theorem packageStream_get_wrong_version {b : ByteArray} {i : Nat} (hi : i < b.size)
     (hv : b[i] ≠ Bounds.packageWireVersion) :
-    packageStream.get b i = .error (.rejected i "lang/package-version") := by
+    packageStream.get b i = .error (.rejected i "lang/package-version/4") := by
   simp [packageStream, Stream.product, packageVersion, Stream.refine, Stream.u8, hi, hv]
 
 /-- **Bytes at the wrong version are never a package**: `decodePackage` refuses them
-`lang/package-version`, so bytes written under an earlier package wire are refused, never reinterpreted. -/
+`lang/package-version/4`, so bytes written under an earlier package wire are refused, never reinterpreted. -/
 theorem decodePackage_wrong_version {b : ByteArray} (h0 : 0 < b.size)
     (hv : b[0] ≠ Bounds.packageWireVersion) :
-    decodePackage b = .error (.rejected 0 "lang/package-version") := by
+    decodePackage b = .error (.rejected 0 "lang/package-version/4") := by
   simp [decodePackage, Stream.decode, packageStream_get_wrong_version h0 hv]
 
 /-- Every package written before LANG-60 was `treeStream.bytes` of a node-0 root: its first byte is 0. -/
@@ -664,12 +848,12 @@ theorem treeStream_bytes_node0 {e : ByteArray} {cs : List Tree} (h : (Tree.node 
   simp [ByteArray.append_assoc, Stream.u8, Stream.bytes, ByteArray.getElem_append_left]
   rfl
 
-/-- **Every unversioned package is refused `lang/package-version`**: the bytes of any node-0 package
+/-- **Every unversioned package is refused `lang/package-version/4`**: the bytes of any node-0 package
 tree as `lang/package` and `lang/package/2` wrote them (no version byte) are never decoded, so no
 package of an earlier wire is read as a different one. -/
 theorem unversioned_package_refused {e : ByteArray} {cs : List Tree}
     (h : (Tree.node 0 e cs).fits nodeMax depthMax = true) :
-    decodePackage (treeStream.bytes ⟨.node 0 e cs, h⟩) = .error (.rejected 0 "lang/package-version") := by
+    decodePackage (treeStream.bytes ⟨.node 0 e cs, h⟩) = .error (.rejected 0 "lang/package-version/4") := by
   obtain ⟨h0, hb⟩ := treeStream_bytes_node0 h
   exact decodePackage_wrong_version h0 (by rw [hb]; exact packageWireVersion_ne_zero.symm)
 
@@ -680,7 +864,7 @@ theorem decodePackage_wrong_version_not_ok {b : ByteArray} (h0 : 0 < b.size)
 /-- The codec refuses them by the same name. -/
 theorem packageCodec_wrong_version {b : ByteArray} (h0 : 0 < b.size)
     (hv : b[0] ≠ Bounds.packageWireVersion) :
-    packageCodec.decode b = .error (.rejected 0 "lang/package-version") := by
+    packageCodec.decode b = .error (.rejected 0 "lang/package-version/4") := by
   simp [packageCodec, Stream.decode, Stream.refine, packageStream_get_wrong_version h0 hv]
 
 private theorem packageFit_eq {p : Package} (h : (packageTree p).fits nodeMax depthMax = true) :
@@ -693,7 +877,7 @@ private theorem packageCodec_bytes {p : Package} (h : (packageTree p).fits nodeM
   rw [packageFit_eq h]; rfl
 
 /-- **Every package's bytes begin with the current version** (the twin of
-`decodePackage_wrong_version`: what `encodePackage` writes is never refused `lang/package-version`). -/
+`decodePackage_wrong_version`: what `encodePackage` writes is never refused `lang/package-version/4`). -/
 theorem encodePackage_version {p : Package} {b : ByteArray} (h : encodePackage p = some b) :
     ∃ h0 : 0 < b.size, b[0] = Bounds.packageWireVersion := by
   unfold encodePackage at h
@@ -707,12 +891,12 @@ theorem encodePackage_version {p : Package} {b : ByteArray} (h : encodePackage p
     · cases h
   · cases h
 
-/-- **`lang/package/3` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
+/-- **`lang/package/4` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
 `fits`): those round-trip, and whatever it reads is one of them, spelled one way, at the current
 version. -/
 theorem packageCodec_lawfulOn :
     Stream.LawfulOn (fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) packageCodec := by
-  refine (Stream.refine_lawfulOn_where packageStream_lawful.on "lang/package/3"
+  refine (Stream.refine_lawfulOn_where packageStream_lawful.on "lang/package/4"
     (Q := fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) ?_ ?_ ?_).mono
     (fun _ h => h.2) (fun _ h => ⟨trivial, h⟩)
   · intro y _ hq
@@ -764,7 +948,7 @@ theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
     · simp at h
 
 
-/-- `decodePackage` accepts exactly what the `lang/package/3` codec reads (they differ only in which
+/-- `decodePackage` accepts exactly what the `lang/package/4` codec reads (they differ only in which
 refusal names an input that is both a non-package tree and followed by trailing bytes). -/
 theorem decodePackage_eq_codec {b : ByteArray} {p : Package} :
     decodePackage b = .ok p ↔ packageCodec.decode b = .ok p := by
@@ -784,7 +968,7 @@ theorem decodePackage_eq_codec {b : ByteArray} {p : Package} :
 /-- A package tree around a body tree (the teeth below). -/
 private def bodyTree (body : Tree) : Tree :=
   .node 0 .empty [.node 0 .empty [], tyTree (.record []), tyTree (.record []), body, .node 1 .empty [],
-    .node 1 .empty [], .node 2 .empty [], .node 0 .empty []]
+    .node 1 .empty [], .node 2 .empty [], .node 0 .empty [], .node 3 .empty []]
 
 /-- `decodePackage`'s refusal of a tree that is no package carries the codec's label, `lang/package/N`
 at version N, like `packageCodec_label`: the decoder's spelling of the name moves with the version too. -/
@@ -793,21 +977,21 @@ theorem decodePackage_refused_label {b : ByteArray} {t : Unit × Tree.Fitting no
     decodePackage b = .error (.rejected 0 s!"lang/package/{Bounds.packageWireVersion.toNat}") := by
   simp only [decodePackage, h, hn]; rfl
 
-/-- **`lang/package/3` refuses by name every tree `packageOf` does not read.** -/
+/-- **`lang/package/4` refuses by name every tree `packageOf` does not read.** -/
 theorem packageCodec_get_refused {b : ByteArray} {i j : Nat} {t : Unit × Tree.Fitting nodeMax depthMax}
     (h : packageStream.get b i = .ok (t, j)) (hn : packageOf t.2.val = none) :
-    packageCodec.get b i = .error (.rejected i "lang/package/3") := by
+    packageCodec.get b i = .error (.rejected i "lang/package/4") := by
   simp [packageCodec, Stream.refine, h, hn]
 
-/-- The plant: a body node of term tag 18 (no term has it) is no package, so `lang/package/3` refuses it
+/-- The plant: a body node of term tag 19 (no term has it) is no package, so `lang/package/4` refuses it
 (`packageCodec_get_refused`; the codec vectors' boundary row is a tree of the same layout). -/
-theorem package_refuses_unknown_term_tag : (packageOf (bodyTree (.node 18 .empty []))).isNone = true := by
+theorem package_refuses_unknown_term_tag : (packageOf (bodyTree (.node 19 .empty []))).isNone = true := by
   decide +kernel
 
-/-- `lang/package/3`'s domain is inhabited: the empty package has a tree in bounds. -/
+/-- `lang/package/4`'s domain is inhabited: the empty package has a tree in bounds. -/
 theorem empty_package_fits :
-    packageWire ⟨[], .record [], .record [], .record [], [], [], [], .empty⟩ = true ∧
-      (packageTree ⟨[], .record [], .record [], .record [], [], [], [], .empty⟩).fits nodeMax depthMax = true := by
+    packageWire ⟨[], .record [], .record [], .record [], [], [], [], .empty, []⟩ = true ∧
+      (packageTree ⟨[], .record [], .record [], .record [], [], [], [], .empty, []⟩).fits nodeMax depthMax = true := by
   decide +kernel
 
 /-- A doc holding a control character (a line feed) or bytes that are not UTF-8 is no doc. -/
@@ -817,7 +1001,7 @@ theorem nonUtf8_doc_refused : Bounds.docOk ⟨#[0x61, 0xff]⟩ = false := by dec
 /-- A package tree around a doc leaf (the decoder's doc teeth). -/
 private def docTree (doc : ByteArray) : Tree :=
   .node 0 .empty [.node 0 .empty [], tyTree (.record []), tyTree (.record []), termTree (.record []),
-    .node 1 .empty [], .node 1 .empty [], .node 2 .empty [], .node 0 doc []]
+    .node 1 .empty [], .node 1 .empty [], .node 2 .empty [], .node 0 doc [], .node 3 .empty []]
 
 /-- The decoder refuses a tree whose doc holds a line feed or is not UTF-8; its twin with a plain doc
 reads. -/

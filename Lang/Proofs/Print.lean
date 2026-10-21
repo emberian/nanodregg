@@ -20,6 +20,8 @@ import Lang.Proofs.Data
 import Lang.Proofs.Check
 import Std.Data.String.ToNat
 
+import Lang.Proofs.Load
+
 namespace Nanodregg.Lang.Print
 
 open Read
@@ -312,6 +314,12 @@ inductive Canon : Term → Prop
   | ref {i : Nat} : Canon (.ref i)
   | refuse {T : Ty} {w : ByteArray} : T.wf = true → Canon (.refuse T w)
 
+  | hole {n : Nat} {σ : List Term} : CanonList σ → Canon (.hole n σ)
+
+inductive CanonList : List Term → Prop
+  | nil : CanonList []
+  | cons {t : Term} {ts : List Term} : Canon t → CanonList ts → CanonList (t :: ts)
+
 inductive CanonRow : List (Label × Term) → Prop
   | nil : CanonRow []
   | cons {ℓ : Label} {t : Term} {r : List (Label × Term)} : Canon t → CanonRow r → CanonRow ((ℓ, t) :: r)
@@ -361,7 +369,7 @@ theorem isReserved_name (m : Nat) : isReserved (name m) = false := by
   have hk : ∀ w ∈ keywords, name m ≠ w := by
     intro w hw
     simp only [keywords, List.mem_cons, List.not_mem_nil, or_false] at hw
-    rcases hw with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact name_ne (by simp)
+    rcases hw with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> exact name_ne (by simp)
   have hp : primOf (name m) = none := by
     unfold primOf; split <;> first | rfl | (rename_i h; exact absurd h (name_ne (by simp)))
   simp only [isReserved, isLiteral_name, hp, Option.isSome_none, Bool.or_false, Bool.false_or]
@@ -394,7 +402,7 @@ theorem term_unreserved_head {d : Nat} {sc : List String} {p q i : Nat} {w : Str
   have hk2 : w ∉ keywords := fun h => by simp [h] at hk
   have hp2 : primOf w = none := by cases h : primOf w <;> simp_all
   simp only [keywords, List.mem_cons, List.not_mem_nil, or_false, not_or] at hk2
-  obtain ⟨k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k13⟩ := hk2
+  obtain ⟨k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k13, k14⟩ := hk2
   simp only [isLiteral, Bool.or_eq_false_iff, decide_eq_false_iff_not, Option.isSome_eq_false_iff,
     Option.isNone_iff_eq_none] at hl
   obtain ⟨⟨⟨ht, hf⟩, hn⟩, hh⟩ := hl
@@ -415,7 +423,7 @@ theorem term_unreserved_head {d : Nat} {sc : List String} {p q i : Nat} {w : Str
     obtain ⟨tb, ts2, hb, hm2, h2⟩ := mapM_cons_ok hm1
     simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at hm2
     subst h1 h2 hm2
-    simp [Read.term, appAll, hn, hh, hi, ha, hb, hp2, k5]; rfl
+    simp [Read.term, appAll, hn, hh, hi, ha, hb, hp2, k5, k14]; rfl
   | a :: b :: c :: rest, hm =>
     simp [Read.term, hn, hh, hi, hm, k1, k2, k3, k6, k7, k8, k9, k10]; rfl
 
@@ -515,7 +523,7 @@ theorem head_not_kw {k : Nat} {f : Term} {F Y : SExp} (h : termSx k f = some F) 
         hd _ 'e' (by simp) (by decide), hd _ 'c' (by simp) (by decide), hd _ 'r' (by simp) (by decide),
         hd _ 'd' (by simp) (by decide)⟩
   | lam _ _ | app _ _ | fix _ | prim _ _ _ | record _ | get _ _ | extend _ _ | inj _ _ _ | case _ _
-  | ite _ _ _ | ref _ | digest _ | refuse _ _ =>
+  | ite _ _ _ | ref _ | digest _ | refuse _ _ | hole _ _ =>
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     first
     | (obtain ⟨_, _, rfl⟩ := h; cases hs)
@@ -771,6 +779,42 @@ theorem term_termSx : ∀ (t : Term) (k d : Nat) {x y : SExp}, termSx k t = some
       simp only [need, needs, list, atom] at hn
       simp only [Read.term, term_termSx t k d hxt h1 (by omega) ht, arms_armsSx arms k d hxs hrow (by omega) harms]
       simp only [bind, Except.bind, pure, Except.pure, Row.sort_of_ascending hasc]
+  | .hole n σ, k, d, x, y, h, hs, hn, .hole hσ => by
+    simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xs, hxs, rfl⟩ := h
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+    obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨r, rfl⟩ := same_atom h0
+    obtain ⟨r', rfl⟩ := same_atom h1
+    obtain ⟨q', zs, rfl, hz⟩ := same_list h2
+    obtain ⟨z0, zs, rfl, hz0, hrest⟩ := sameL_cons hz
+    obtain ⟨r'', rfl⟩ := same_atom hz0
+    cases d with
+    | zero => simp [need, list] at hn
+    | succ d =>
+      simp only [need, needs, list, atom] at hn
+      have ht := terms_termsSx σ k d hxs hrest (by omega) hσ
+      simp only [Read.term, Nat.toNat?_repr, ht, bind, Except.bind, pure, Except.pure]
+
+theorem terms_termsSx : ∀ (ts : List Term) (k d : Nat) {xs ys : List SExp}, termsSx k ts = some xs →
+    SameL xs ys → needs xs ≤ d → CanonList ts →
+      ys.mapM (fun y => Read.term d (List.map name (List.range k)).reverse y) = .ok ts
+  | [], k, d, xs, ys, h, hs, _, .nil => by
+      simp only [termsSx, Option.some.injEq] at h
+      subst xs
+      cases sameL_nil hs
+      rfl
+  | t :: ts, k, d, xs, ys, h, hs, hn, .cons ht hts => by
+      simp only [termsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+      obtain ⟨xt, hxt, xr, hxr, rfl⟩ := h
+      obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+      simp only [needs] at hn
+      simp [List.mapM_cons, term_termSx t k d hxt hy (by omega) ht,
+        terms_termsSx ts k d hxr hrest (by omega) hts]
+      rfl
 
 theorem fields_fieldsSx : ∀ (fs : List (Label × Term)) (k d : Nat) {xs ys : List SExp}, fieldsSx k fs = some xs →
     SameL xs ys → needs xs ≤ d → CanonRow fs → Read.entries (fun e => Read.term d (List.map name (List.range k)).reverse e) ys = .ok fs
@@ -979,6 +1023,18 @@ theorem termSx_ok : ∀ (t : Term) (k : Nat) {x : SExp}, termSx k t = some x →
     simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨xc, hc, xa, ha, xb, hb, rfl⟩ := h
     exact .list (.cons (kw_ok _) (.cons (termSx_ok c _ hc) (.cons (termSx_ok a _ ha) (.cons (termSx_ok b _ hb) .nil))))
+  | .hole n σ, k, _, h => by
+    simp only [termSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xs, hx, rfl⟩ := h
+    exact .list (.cons (kw_ok _) (.cons (repr_ok n)
+      (.cons (.list (.cons (kw_ok _) (termsSx_ok σ k hx))) .nil)))
+
+theorem termsSx_ok : ∀ (ts : List Term) (k : Nat) {xs : List SExp}, termsSx k ts = some xs → OkL xs
+  | [], _, _, h => by simp only [termsSx, Option.some.injEq] at h; subst h; exact .nil
+  | t :: ts, k, _, h => by
+      simp only [termsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+      obtain ⟨xt, ht, xs, hs, rfl⟩ := h
+      exact .cons (termSx_ok t k ht) (termsSx_ok ts k hs)
 
 theorem fieldsSx_ok : ∀ (fs : List (Label × Term)) (k : Nat) {xs : List SExp}, fieldsSx k fs = some xs → OkL xs
   | [], _, _, h => by simp only [fieldsSx, Option.some.injEq] at h; subst h; exact .nil
@@ -1334,16 +1390,33 @@ theorem doc_read {w : ByteArray} {x y : SExp} (h : docSx w = some x) (hs : Same 
       simp only [Read.doc, htw, hd, he', Bool.not_false, Bool.and_self, if_true]
   · cases h
 
-/-- A package whose body is canonical and whose state, interface and relation types are canonical
+/- A package whose body is canonical and whose state, interface and relation types are canonical
 reads back from its text: `Read.readPackage` returns exactly the package that was printed. -/
-theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
-    (hr : p.rels.all relWf = true) (hb : Canon p.body) (h : package p = some s) : readPackage s = .ok p := by
-  simp only [package, bind, Option.bind_eq_some_iff] at h
-  obtain ⟨xs, hxs, h⟩ := h
+/-- Printing the package sections produces valid s-expressions even for
+noncanonical types; canonicality is needed for literal semantic roundtrip. -/
+theorem sectionsSx_ok {p : Package} {xs : List SExp} (h : sectionsSx p = some xs) :
+    OkL (atom "package" :: xs) := by
+  simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+  obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := h
+  exact .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _))) (.cons (docSx_ok hD)
+    (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hS) .nil)))
+    (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hI) .nil)))
+    (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
+    (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
+    (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
+    (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))))
+
+theorem readPackage_closedText {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
+    (hr : p.rels.all relWf = true) (hb : Canon p.body) (he : p.holes = []) (h : packageText p = some s) : Read.readPackage s = .ok p := by
+  simp only [packageText, he, List.isEmpty_nil, if_true, pure] at h
+  simp only [bind, Option.bind_eq_some_iff] at h
+  obtain ⟨xs, hxs, extra, hext, h⟩ := h
+  cases hext
+  simp only [List.append_nil] at h
   split at h
   · rename_i hf
     obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
-    simp only [pure, Option.some.injEq] at h; subst h
+    simp only [Option.some.injEq] at h; subst h
     simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
     obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
     have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
@@ -1357,7 +1430,7 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
         (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
         (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))))
     obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
-    simp only [readPackage, hy, bind, Except.bind]
+    simp only [Read.readPackage, hy, bind, Except.bind]
     obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hsame
     obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
     obtain ⟨yD, ys, rfl, hD', hlD⟩ := sameL_cons hl
@@ -1422,11 +1495,31 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
     have eM := labels_mapM p.methods hm t4
     have eL := labels_mapM p.laws hlw t5
     have eR := rels_mapM p.rels hR t6 bR hr
-    simp only [Read.package, eD, eS, eI, eB, eM, eL, eR]
+    simp only [Read.package, Read.packageBase, eD, eS, eI, eB, eM, eL, eR, ← he]
     rw [mapM_imports ?hf p.imports t1]
     · rfl
     · intro q i; simp [hex, unhex_hexChars]
   · cases h
+
+theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
+    (hr : p.rels.all relWf = true) (hb : Canon p.body) (h : package p = some s) : Read.readPackage s = .ok p := by
+  unfold package at h
+  simp only [bind, Option.bind_eq_some_iff] at h
+  obtain ⟨text, ht, h⟩ := h
+  split at h
+  · rename_i hempty
+    have he : p.holes = [] := List.isEmpty_iff.mp hempty
+    cases h
+    exact readPackage_closedText hs hi hr hb he ht
+  · unfold contextualText at h
+    split at h
+    · split at h
+      · rename_i he
+        subst he
+        cases h
+        assumption
+      · cases h
+    · cases h
 
 /-! ## Every checked term is canonical, so every checked term and package reads back -/
 
@@ -1544,7 +1637,8 @@ theorem checkFields_rels {p : Package} (h : p.checkFields = .ok ()) : p.rels.all
 /-- A package the install check accepts reads back from its text (over canonical import
 interfaces; `Package.checkShape` checks the package's own types). -/
 theorem readPackage_checked {ifaces : List Ty} {p : Package} {s : String} (hΔ : ∀ A ∈ ifaces, A.wf = true)
-    (hc : p.checkWith ifaces = .ok ()) (h : package p = some s) : readPackage s = .ok p := by
+    (hc : p.checkWith ifaces = .ok ()) (h : package p = some s) : Read.readPackage s = .ok p := by
+  have hfields := (checkWith_checked hc).2
   unfold Package.checkWith at hc
   split at hc
   · cases hc
@@ -1557,7 +1651,7 @@ theorem readPackage_checked {ifaces : List Ty} {p : Package} {s : String} (hΔ :
       split at hbody
       · rename_i heq
         subst heq
-        exact readPackage_package hS hI (checkFields_rels hc) (hasType_canon hΔ (by simp) (inferE_sound hT)) h
+        exact readPackage_package hS hI (checkFields_rels hfields) (hasType_canon hΔ (by simp) (inferE_sound hT)) h
       · cases hbody
     · cases hbody
 

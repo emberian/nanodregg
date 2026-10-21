@@ -379,7 +379,7 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       RowConforms ds (recordRow p.state) ∧
       ((∀ x, (digestOf (bytesOf x)).isSome = true) →
         readState digestOf (recordRow p.state) s = .ok (.record ds)) := by
-  unfold runMeasured at h
+  unfold runMeasured runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
   · cases h
@@ -505,6 +505,7 @@ theorem bigStep_relib {lib' : List Term} : ∀ {env : Env} {t : Term} {r : Excep
   | _, _, _, .bytes, _, _ => ⟨.bytes, fun v hv => by cases hv; exact .bytes⟩
   | _, _, _, .digest, _, _ => ⟨.digest, fun v hv => by cases hv; exact .digest⟩
   | _, _, _, .refuse, _, _ => ⟨.refuse, fun v hv => by cases hv⟩
+  | _, _, _, .hole, _, _ => ⟨.hole, fun v hv => by cases hv⟩
   | _, _, _, .prim ha hb hne, ht, he =>
     ⟨.prim (bigStep_relib ha ht.1 he).1 (bigStep_relib hb ht.2 he).1 hne, fun v hv => primEval_noRefVal hv⟩
   | _, _, _, .primL ha, ht, he => ⟨.primL (bigStep_relib ha ht.1 he).1, fun v hv => by cases hv⟩

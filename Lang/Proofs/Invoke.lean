@@ -131,7 +131,7 @@ theorem state_fields_dataTy {p : Package} (h : p.checkShape = .ok ()) (hw : Wire
     ∀ e ∈ recordRow p.state, Wire.dataTy e.2 = true := by
   have hs := (checkShape_ok h).1
   simp only [Wire.packageWire, Bool.and_eq_true] at hw
-  have hws := hw.1.1.1.1.1.2
+  have hws := hw.1.1.1.1.1.1.2
   intro e he
   cases hst : p.state with
   | record row =>
@@ -149,7 +149,7 @@ theorem methodArg_dataTy {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkSh
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodArg p.state p.rels mty = some A) :
     Wire.dataTy A = true := by
   simp only [Wire.packageWire, Bool.and_eq_true] at hpw
-  have hwi := hpw.1.1.1.1.2
+  have hwi := hpw.1.1.1.1.1.2
   obtain ⟨row, hrow, hf⟩ := recordRow_find hm
   rw [hrow] at hwi
   simp only [Wire.tyWire, Bool.and_eq_true] at hwi

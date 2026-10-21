@@ -35,9 +35,10 @@ theorem load_one {look : Pinned D} {fuel : Nat} {idb : ByteArray} {id : D} {p : 
     (hid : digestOf idb = some id) (hp : readPackage look id = .ok p) (himp : p.imports = [])
     (hadm : admitPackage digestOf idb p ⟨[], [], []⟩ [] = .ok r) :
     load digestOf look (fuel + 1) idb ⟨[], [], []⟩ = .ok r := by
-  rw [load]
+  unfold load
+  rw [loadUsing.eq_def]
   simp only [indexIn, idOf, hid, hp, himp]
-  rw [loadAll]
+  rw [loadAllUsing.eq_def]
   exact hadm
 
 theorem admit_one {idb : ByteArray} {p : Package} (hc : p.checkWith [] = .ok ())
@@ -57,7 +58,7 @@ private theorem setup_eq {look : Pinned D} {rv : RowView D} {pkg : D} {state : S
       { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
         ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
         reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by
-  simp [runSetup, hq, hl, hp, hm, hs, ha, had, hw, bind, Except.bind, pure, Except.pure]
+  simp [runSetup, runSetupWith, hq, hl, hp, hm, hs, ha, had, hw, bind, Except.bind, pure, Except.pure]
 
 private theorem judge_of_one {look : Pinned D} {L : Loaded} {g : Nat} {p : Package} {pkg : D}
     {old new : Slots} {r : Req D} {o n : Data} {ℓ : Label}
@@ -66,7 +67,7 @@ private theorem judge_of_one {look : Pinned D} {L : Loaded} {g : Nat} {p : Packa
     (hn : readState digestOf (recordRow p.state) new = .ok n) (hls : p.laws = [ℓ])
     (hlaw : runLaw L.lib (.get (.ref g) ℓ) o n (reqData bytesOf r) = .ok (.ok ())) :
     Lang.judge bytesOf digestOf look (some pkg) [] old new r = .ok () := by
-  simp [Lang.judge, judgeOne, hq, hl, hp, ho, hn, hls, hlaw, bind, Except.bind, pure, Except.pure]
+  simp [Lang.judge, judgeOne, judgeOneWith, hq, hl, hp, ho, hn, hls, hlaw, bind, Except.bind, pure, Except.pure]
 
 private theorem ok_of_check {α ε : Type} [DecidableEq α] {x : Except ε α} {a : α}
     (h : (match x with | .ok b => decide (b = a) | .error _ => false) = true) : x = .ok a := by
@@ -133,7 +134,7 @@ private theorem run1 : (match runMeasured bo dO look noRows pid s0 0 a1 r1 10000
     | .ok (s, _, _, _, _) => decide (s = slotsAt "held") | .error _ => false) = true := by
   have hS1 := setup_eq (bytesOf := bo) (digestOf := dO) (look := look) (rv := noRows) (pkg := pid)
     (method := 0) hq1 hload rfl rfl hs0 ha1 (by decide +kernel) hw0
-  unfold runMeasured
+  unfold runMeasured runMeasuredWith
   rw [hS1]
   decide +kernel
 
@@ -149,7 +150,7 @@ private theorem run2 : (match runMeasured bo dO look noRows pid (slotsAt "held")
     | .ok (s, _, _, _, _) => decide (s = slotsAt "released") | .error _ => false) = true := by
   have hS := setup_eq (bytesOf := bo) (digestOf := dO) (look := look) (rv := noRows) (pkg := pid)
     (method := 2) hq2 hload rfl rfl hs1 ha2 (by decide +kernel) hw0
-  unfold runMeasured
+  unfold runMeasured runMeasuredWith
   rw [hS]
   decide +kernel
 
@@ -165,6 +166,14 @@ private theorem judge1 : Lang.judge bo dO look (some pid) [] s0 (slotsAt "held")
 private theorem judge2 : Lang.judge bo dO look (some pid) [] (slotsAt "held") (slotsAt "released") r2 = .ok () :=
   judge_of_one hq2 hload rfl hs1 hs2 rfl (law_ok (by decide +kernel))
 
+private theorem judge_live {old new : Slots} {r : Req DD}
+    (h : Lang.judge bo dO look (some pid) [] old new r = .ok ()) :
+    (Lang.program bo dO).judge look (some pid) [] old new r = .ok () := by
+  change judgeContextual bo dO look (some pid) [] old new r = .ok ()
+  unfold judgeContextual
+  simp only [judgeOneContextual_leaf_closed (show dO (bo pid) = some pid from Codec.Deployed.digestOf_bytes pid) hread rfl rfl]
+  exact h
+
 private theorem run_ok {state : Slots} {m : Nat} {args : ByteArray} {r : Req DD} {s' : Slots}
     (h : (match runMeasured bo dO look noRows pid state m args r 100000 with
       | .ok (s, _, _, _, _) => decide (s = s') | .error _ => false) = true) :
@@ -174,8 +183,8 @@ private theorem run_ok {state : Slots} {m : Nat} {args : ByteArray} {r : Req DD}
     simp only [decide_eq_true_eq] at h
     subst h
     refine ⟨c, rw, t, ?_⟩
-    change (runMeasured bo dO look noRows pid state m args r 100000).map _ = _
-    rw [hm]
+    change (runMeasuredLive bo dO look noRows pid state m args r 100000).map _ = _
+    rw [runMeasuredLive_leaf_closed (show dO (bo pid) = some pid from Codec.Deployed.digestOf_bytes pid) hread rfl rfl, hm]
     rfl
   · cases h
 
@@ -189,7 +198,7 @@ theorem escrow_runs_witness : ∃ (pkg : Codec.Digest) (state : Slots) (runs : L
       payoutCalls runs = 1 := by
   obtain ⟨c1, w1, u1, h1⟩ := run_ok run1
   obtain ⟨c2, w2, u2, h2⟩ := run_ok run2
-  refine ⟨pid, s0, [c1, c2], .cons hread h1 judge1 (fun _ => rfl) (.cons hread h2 judge2 (fun _ => rfl) (.nil _)), ?_⟩
+  refine ⟨pid, s0, [c1, c2], .cons hread h1 (judge_live judge1) (fun _ => rfl) (.cons hread h2 (judge_live judge2) (fun _ => rfl) (.nil _)), ?_⟩
   obtain ⟨_, _, _, _, _, _, _, _, _, _, hx1⟩ := escrow_run_deployed hread h1
   obtain ⟨_, _, _, _, _, _, _, _, _, _, hx2⟩ := escrow_run_deployed hread h2
   rcases hx1 with ⟨-, -, _, _, _, -, -, -, rfl⟩ | ⟨h, -⟩ | ⟨h, -⟩ <;> try cases h
@@ -200,7 +209,7 @@ private theorem run3 : (match runMeasured bo dO look noRows pid (slotsAt "releas
     | .ok (s, _, _, _, _) => decide (s = slotsAt "released") | .error _ => false) = true := by
   have hS := setup_eq (bytesOf := bo) (digestOf := dO) (look := look) (rv := noRows) (pkg := pid)
     (method := 2) hq2 hload rfl rfl hs2 ha2 (by decide +kernel) hw0
-  unfold runMeasured
+  unfold runMeasured runMeasuredWith
   rw [hS]
   decide +kernel
 
@@ -224,7 +233,10 @@ theorem escrow_second_release_refused : ∃ (look : Pinned Codec.Digest) (rv : R
     rcases hx with ⟨h, -⟩ | ⟨h, -⟩ | ⟨-, -, _, -, rfl⟩ <;> try cases h
     simp [payoutCalls, isPayoutCall]
   · intro laws new r' hj
-    exact escrow_judge_settled (fun d => Codec.Deployed.digestOf_bytes d) hread hs2 (.inl ⟨_, rfl⟩) hj
+    obtain ⟨o, n, ho, _, ha⟩ := escrow_step_admits_live (fun d => Codec.Deployed.digestOf_bytes d) hread hj
+    rw [hs2] at ho
+    cases ho
+    exact escrow_absorbing (.inl ⟨_, rfl⟩) ha
 
 /-- **Tooth for the link: an admitted payout step repeated is two payouts.** The witness's release
 (from `held`, by the depositor) is a successful run of the node's program that the judge admits and
@@ -242,7 +254,7 @@ theorem escrow_link_bites : ∃ (look : Pinned Codec.Digest) (rv : RowView Codec
       [] state s r = .ok () ∧
     payoutCalls [calls, calls] = 2 ∧ ¬ ∀ k, state.get k = s.get k := by
   obtain ⟨c, w, u, h⟩ := run_ok run2
-  refine ⟨look, noRows, pid, slotsAt "held", slotsAt "released", a2, r2, c, w, u, hread, h, judge2, ?_, ?_⟩
+  refine ⟨look, noRows, pid, slotsAt "held", slotsAt "released", a2, r2, c, w, u, hread, h, judge_live judge2, ?_, ?_⟩
   · obtain ⟨_, _, _, _, _, _, _, _, _, _, hx⟩ := escrow_run_deployed hread h
     rcases hx with ⟨h, -⟩ | ⟨h, -⟩ | ⟨-, -, _, -, rfl⟩ <;> try cases h
     simp [payoutCalls, isPayoutCall]

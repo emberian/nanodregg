@@ -125,7 +125,7 @@ def rowbarCounts (r : Row) (res : Loopback.Result) : Except String (List (String
 this much, above the honest ratio. -/
 def rowbarStated : List (Mutation × String × String) :=
   [(.twiceEach, "frames-per-write", "21.871"), (.twiceEach, "steps-per-write", "1.977"),
-   (.staleBase, "reopen-bytes-per-byte-past-base", "5.259")]
+   (.staleBase, "reopen-bytes-per-byte-past-base", "5.260")]
 
 /-- THE BAR under each rowbar plant: its counts must move to their stated values, above the honest
 ones, and the mutation must have happened (`staleBase`: a measured reopen was handed an older base). -/
@@ -241,6 +241,9 @@ def runAll {D : Type} [Ord D] [DecidableEq D] (R : Params D) (selected : List Ro
   let mut pending := 0
   let mut hung := 0
   for r in selected do
+    -- Expand the bar's total once: --times N still means N births and N invokes,
+    -- rather than N executions of each side of its explicit checkpoint.
+    let (r, times) := if r.name == "bar" then (barWithCount (times.getD 64), none) else (r, times)
     match ← drive R r times control measures with
     | .pending why =>
         pending := pending + 1

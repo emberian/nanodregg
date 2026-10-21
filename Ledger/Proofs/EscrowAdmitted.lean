@@ -224,18 +224,22 @@ private theorem c1_invokeRun : invokeRun tX look1 c1 dep obj deposit none = .ok 
 private theorem c1_run :
     tX.program.run look1 rv1 pkg (stateOf objCell) deposit a1 req1 (min 1000 (poolOf c1.unsigned.body)) =
       .ok (slotsAt "held", calls1, [], 119) := by
-  show (runMeasured tEnv.bytes tDigestOf _ _ _ _ _ _ _ _).map _ = _
-  unfold runMeasured runSetup
+  show (runMeasuredLive tEnv.bytes tDigestOf _ _ _ _ _ _ _ _).map _ = _
+  rw [runMeasuredLive_leaf_closed (show tDigestOf (tEnv.bytes pkg) = some pkg from rfl)
+    (readPackage_esc c1_pkg) rfl rfl]
+  unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_esc c1_pkg]
   exact of_runIs (by decide +kernel)
 
 private theorem c1_judge : tX.program.judge look1 (some pkg) [] (stateOf objCell) (slotsAt "held") req1 = .ok () := by
   have h1 : judgeOne tEnv.bytes tDigestOf look1 pkg (stateOf objCell) (slotsAt "held") req1 = .ok () := by
-    unfold judgeOne
+    unfold judgeOne judgeOneWith
     rw [load_esc c1_pkg]
     exact of_isOkAs (by decide +kernel)
-  show Nanodregg.Lang.judge tEnv.bytes tDigestOf look1 (some pkg) [] (stateOf objCell) (slotsAt "held") req1 = .ok ()
-  unfold Nanodregg.Lang.judge
+  show Nanodregg.Lang.judgeContextual tEnv.bytes tDigestOf look1 (some pkg) [] (stateOf objCell) (slotsAt "held") req1 = .ok ()
+  unfold Nanodregg.Lang.judgeContextual
+  simp only [judgeOneContextual_leaf_closed (show tDigestOf (tEnv.bytes pkg) = some pkg from rfl)
+    (readPackage_esc c1_pkg) rfl rfl]
   simp only [h1]
   rfl
 
@@ -283,19 +287,23 @@ private theorem c2_state : stateOf cell2 = slotsAt "held" := by decide +kernel
 private theorem c2_run :
     tX.program.run look2 rv2 pkg (stateOf cell2) release a2 req2 (min 1000 (poolOf c2.unsigned.body)) =
       .ok (slotsAt "released", calls2, [], 113) := by
-  show (runMeasured tEnv.bytes tDigestOf _ _ _ _ _ _ _ _).map _ = _
-  unfold runMeasured runSetup
+  show (runMeasuredLive tEnv.bytes tDigestOf _ _ _ _ _ _ _ _).map _ = _
+  rw [runMeasuredLive_leaf_closed (show tDigestOf (tEnv.bytes pkg) = some pkg from rfl)
+    (readPackage_esc c2_pkg) rfl rfl]
+  unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_esc c2_pkg, c2_state]
   exact of_runIs (by decide +kernel)
 
 private theorem c2_judge :
     tX.program.judge look2 (some pkg) [] (stateOf cell2) (slotsAt "released") req2 = .ok () := by
   have h1 : judgeOne tEnv.bytes tDigestOf look2 pkg (stateOf cell2) (slotsAt "released") req2 = .ok () := by
-    unfold judgeOne
+    unfold judgeOne judgeOneWith
     rw [load_esc c2_pkg, c2_state]
     exact of_isOkAs (by decide +kernel)
-  show Nanodregg.Lang.judge tEnv.bytes tDigestOf look2 (some pkg) [] (stateOf cell2) (slotsAt "released") req2 = .ok ()
-  unfold Nanodregg.Lang.judge
+  show Nanodregg.Lang.judgeContextual tEnv.bytes tDigestOf look2 (some pkg) [] (stateOf cell2) (slotsAt "released") req2 = .ok ()
+  unfold Nanodregg.Lang.judgeContextual
+  simp only [judgeOneContextual_leaf_closed (show tDigestOf (tEnv.bytes pkg) = some pkg from rfl)
+    (readPackage_esc c2_pkg) rfl rfl]
   simp only [h1]
   rfl
 

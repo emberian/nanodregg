@@ -228,6 +228,10 @@ theorem agrees (N : Nat) :
         have := h.inv_fault (f := .refused w) rfl
         subst this
         exact .inl ⟨_, rfl, .refuse⟩
+      | hole n σ =>
+        have := h.inv_fault (f := .refused "holeUnresolved".toUTF8) rfl
+        subst this
+        exact .inl ⟨_, rfl, .hole⟩
     · intro n hn v ℓ k d o ho h
       cases v
       case record fs =>

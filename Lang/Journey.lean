@@ -21,7 +21,7 @@ the owner and the owner never changes). Rows:
   space has no bytes.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * LV (LANG-60) the package wire's version: `Owned`'s LANG-59 bytes (a fixture, no version byte) and
-  its current bytes at the previous version are refused `lang/package-version` at install and at decode.
+  its current bytes at the previous version are refused `lang/package-version/4` at install and at decode.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
 * L4 A invokes `set 101` — refused `lawDenied` by `bounded`, nothing written.
@@ -96,6 +96,7 @@ the owner and the owner never changes). Rows:
 * PLANT erase-payload: the occasion's payload is lost (a relaw names no laws, every invoke is
   method 0): L8e must be admitted and L10d refused, so the payload reaches the law.
 -/
+import Lang.StdContextualHole
 import Kernel.Sim
 import Lang.Program
 import Lang.Print
@@ -678,8 +679,8 @@ def measure (w : World D) (c : Call D) : Except String (Nat × Nat) :=
     let text : Receive.Refusal D → String := fun | .program s => s | e => e.name
     (do
       let (cell, p, r) ← invokeRun X look c c.unsigned.member obj method via
-      let (_, _, _, ticks, _) ← Lang.runMeasured X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget
-      let req ← Lang.Need.requiredOf X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget
+      let (_, _, _, ticks, _) ← Lang.runMeasuredLive X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget
+      let req ← Lang.Need.requiredOfLive X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget
       pure (req, ticks)).mapError text
   | _ => .error "not an invoke"
 
@@ -1924,14 +1925,24 @@ def hole_acceptedOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Bool :=
   | some (.ok (.bool b)) => some b
   | _ => none
 
-def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
+/-- The one-use amount is contextual ROM code, selected from a pinned row on
+every commitment. Both provider representations consume the supplied unit. -/
+def p8ContextBundle : Except String Std.HoleBundle :=
+  Std.contextualHole .nat
+    { name := 0, ctx := [.nat], ty := .nat,
+      code := [⟨.var 0, []⟩, ⟨.var 0, []⟩], selectionRel := 0, selectionKey := .empty,
+      hypotheses := [none], guardPin := none, guard := .var 0 }
+    [.var 1] (.lam Std.holeState (.lam .nat
+      (.prim .le (.var 0) (.get (.var 1) "cap"))))
+
+def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := false) : Run := Id.run do
   let prog := mode.program
   let mut r := r0
   for (name, want, got) in Std.holeCheckRows do
     r := note r s!"LH-prefix {name}: {got}" (got == want)
-  let bundle ← match Std.generatedHoleBundle with
+  let bundle ← match (if contextual then p8ContextBundle else Std.generatedHoleBundle.mapError (·.name)) with
     | .ok b => pure b
-    | .error e => return note r s!"LH0 generating the hole: {e.name}" false
+    | .error e => return note r s!"LH0 generating the hole: {e}" false
   let mut libraryIds : List D := []
   for lib in bundle.libraries do
     let some bytes := Wire.encodePackage lib | return note r "LH0 library has no bytes" false
@@ -1941,16 +1952,23 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
       (vL == "admitted" && bytes.size ≤ Lang.Bounds.bytesMax)
     let some id := tL.bind fun t => (createdIds t).head? | return note r "LH0 no helper ROM id" false
     libraryIds := libraryIds ++ [id]
-  let generated ← match bundle.link (libraryIds.map Sim.dc.bytes) with
+  let generated ← match (if contextual then bundle.linkContextual (libraryIds.map Sim.dc.bytes)
+      else (bundle.link (libraryIds.map Sim.dc.bytes)).mapError (·.name)) with
     | .ok p => pure p
-    | .error e => return note r s!"LH0 linking the hole: {e.name}" false
+    | .error e => return note r s!"LH0 linking the hole: {e}" false
   let some src := Print.package generated | return note r "LH0 hole is not printable" false
   let p ← match Surface.readPackage src with
     | .ok p => pure p
     | .error e => return note r s!"LH0 read the generated hole: {e.text src}" false
   r := note r s!"LH0 generated hole reads ({src.length} chars): methods {p.methods}, laws {p.laws}, relations {p.rels.map (·.1)}"
-    (p.methods == ["accept", "fill", "post", "propose", "prune", "rejudge", "repin", "resume_fill", "retire", "select", "unpost"] &&
-      p.laws == ["shape"] && p.rels.map (·.1) == ["candidates", "facts", "fills", "pending"])
+    (p.methods == (["accept", "fill", "post", "propose", "prune", "rejudge", "repin", "resume_fill", "retire", "select", "unpost"] ++
+      if contextual then ["choose_code", "execute"] else []).mergeSort &&
+      p.laws == ["shape"] && p.rels.map (·.1) == (["candidates", "facts", "fills", "pending"] ++
+      if contextual then ["computed", "selection"] else []).mergeSort &&
+      p.holes.isEmpty == !contextual)
+  let factsIndex := (p.rels.map (·.1)).idxOf "facts"
+  let fillsIndex := (p.rels.map (·.1)).idxOf "fills"
+  let pendingIndex := (p.rels.map (·.1)).idxOf "pending"
   let some pb := Wire.encodePackage p | return note r "LH0 no bytes" false
   let some dC := p.rels.lookup "candidates" | return note r "LH0 no candidates" false
   let some dF := p.rels.lookup "facts" | return note r "LH0 no facts" false
@@ -1965,8 +1983,8 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let some seed := stateSlots (recordRow p.state) seedData 0 | return note r "LH2 seed has no bytes" false
   let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ libraryIds)) (.create (some pkg) [] seed))
   let some obj := t2.bind fun t => (createdIds t).head? | return note r2 s!"LH2 no hole: {v2}" false
-  r := note r2 s!"LH2 A creates the hole (cap 10, chooser A, acceptor B): {v2}; all four relations born empty"
-    (v2 == "admitted" && [0, 1, 2, 3].all fun i => headCount r2.st.host obj i == some 0)
+  r := note r2 s!"LH2 A creates the hole (cap 10, chooser A, acceptor B): {v2}; all {p.rels.length} relations born empty"
+    (v2 == "admitted" && (List.range p.rels.length).all fun i => headCount r2.st.host obj i == some 0)
   -- LH3 A grants B accept (0), post (1), repin (4), unpost (6)
   let (r3, v3, t3) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj])
     (.grant obj b.id [.invoke (p.methods.idxOf "accept"), .invoke (p.methods.idxOf "post"), .invoke (p.methods.idxOf "repin"), .invoke (p.methods.idxOf "unpost"), .invoke (p.methods.idxOf "resume_fill")] none))
@@ -1986,17 +2004,17 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let p1' := Sim.dc.bytes gr
   let factKey (cell : ByteArray) : Data := .record [("cell", .digest cell)]
   let candKey (cand : ByteArray) : Data := .record [("cand", .digest cand)]
-  let pinFact (w : World D) (cell : ByteArray) := hole_pinAt obj w 1 dF (factKey cell)
+  let pinFact (w : World D) (cell : ByteArray) := hole_pinAt obj w factsIndex dF (factKey cell)
   let pinCand (w : World D) (cand : ByteArray) := hole_pinAt obj w 0 dC (candKey cand)
   let factPin (w : World D) (cell : ByteArray) : Option ByteArray :=
-    match (storyRow w obj 1 dF (factKey cell)).bind (·.field "pin") with
+    match (storyRow w obj factsIndex dF (factKey cell)).bind (·.field "pin") with
     | some (.digest d) => some d
     | _ => none
   -- LH4 B posts f1@p1 and f2@p2
   let (r4a, v4a, _) := go prog r (call r b "post" (hole_postArg f1 p1))
   r := note r4a s!"LH4a B posts fact f1 at pin p1: {v4a}" (v4a == "admitted" && factPin r4a.st.host f1 == some p1)
   let (r4b, v4b, _) := go prog r (call r b "post" (hole_postArg f2 p2))
-  r := note r4b s!"LH4b B posts fact f2 at pin p2: {v4b}" (v4b == "admitted" && headCount r4b.st.host obj 1 == some 2)
+  r := note r4b s!"LH4b B posts fact f2 at pin p2: {v4b}" (v4b == "admitted" && headCount r4b.st.host obj factsIndex == some 2)
   let (_, v4c, _) := go prog r (call r a "post" (hole_postArg f1 p1))
   r := note r s!"LH4c A posts f1 again (B's token): {v4c}" (v4c.startsWith "rejected keyTaken")
   -- LH5 candidates: c1 over f1@p1, f2@p2; c2 over f2@p2; c3 past the cap
@@ -2115,25 +2133,25 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let some dLog := p.rels.lookup "fills" | return note r "LH12 no activity log" false
   let some dPending := p.rels.lookup "pending" | return note r "LH12 no activity cursor" false
   let dispatchKey := Data.record [("agent", .digest (Sim.dc.bytes b.id)), ("notBefore", .nat dispatchAt)]
-  let captured := match (storyRow r.st.host obj 2 dLog dispatchKey).bind (·.field "captured") with
+  let captured := match (storyRow r.st.host obj fillsIndex dLog dispatchKey).bind (·.field "captured") with
     | some (.inj "fill" (.nat 7)) => true | _ => false
   r := note r "LH12 acceptance dispatched captured value 7; withdrawal did not rewrite it"
-    (captured && headCount r.st.host obj 2 == some 1 && headCount r.st.host obj 3 == some 1)
-  let dispatchPins (w : World D) := hole_pinAt obj w 2 dLog dispatchKey ++ hole_pinAt obj w 3 dPending dispatchKey
+    (captured && headCount r.st.host obj fillsIndex == some 1 && headCount r.st.host obj pendingIndex == some 1)
+  let dispatchPins (w : World D) := hole_pinAt obj w fillsIndex dLog dispatchKey ++ hole_pinAt obj w pendingIndex dPending dispatchKey
   let resumeArg := argBytes (.record [("agent", .digest), ("notBefore", .nat), ("response", .record [])])
     (.record [("agent", .digest (Sim.dc.bytes b.id)), ("notBefore", .nat dispatchAt), ("response", .record [])])
   let (r12, v12, _) := go prog r (call r b "resume_fill" resumeArg (dispatchPins r.st.host))
-  let answered := match (storyRow r12.st.host obj 2 dLog dispatchKey).bind (·.field "answered") with
+  let answered := match (storyRow r12.st.host obj fillsIndex dLog dispatchKey).bind (·.field "answered") with
     | some (.inj "some" (.inj "fill" (.record []))) => true | _ => false
   r := note r12 s!"LH12b acceptor acknowledges the dispatched filling: {v12}"
-    (v12 == "admitted" && answered && headCount r12.st.host obj 3 == some 0)
+    (v12 == "admitted" && answered && headCount r12.st.host obj pendingIndex == some 0)
   let (_, v12r, _) := go prog r (call r b "resume_fill" resumeArg (dispatchPins r.st.host))
   r := note r s!"LH12c the dispatch cannot be acknowledged twice: {v12r}"
     (deniedWith v12r "fills_waiting: answered")
   let retireArg := argBytes (keyTy dLog) dispatchKey
-  let (r13, v13, _) := go prog r (call r a "retire" retireArg (hole_pinAt obj r.st.host 2 dLog dispatchKey))
+  let (r13, v13, _) := go prog r (call r a "retire" retireArg (hole_pinAt obj r.st.host fillsIndex dLog dispatchKey))
   r := note r13 s!"LH13 retire the answered dispatch: {v13}"
-    (v13 == "admitted" && headCount r13.st.host obj 2 == some 0 &&
+    (v13 == "admitted" && headCount r13.st.host obj fillsIndex == some 0 &&
       hole_acceptedOf Sim.env r13.st.host obj == some true)
   return r
 
@@ -2155,7 +2173,7 @@ def p8CommitPackage (p : Package) : Except String Package := do
   let RT := resultTy p.state [C] (editTy p.rels) 1
   let arg (l : Label) := Term.get (.var 2) l
   let transfer := Term.inj C "transfer" (.record [
-    ("amount", .nat 1),
+    ("amount", .hole 0 [.nat 1]),
     ("dst", .inj acctRefTy "of" (.record [("asset", arg "asset"), ("owner", arg "cand")])),
     ("once", .inj (optTy .bytes) "none" (.record [])),
     ("src", .inj acctRefTy "well" (arg "asset")),
@@ -2176,7 +2194,7 @@ def p8CommitPackage (p : Package) : Except String Package := do
 /-- Core source for the generated root plus atomic commitment. Placeholder
 library identities are linked to actual installed helpers by p8Rows. -/
 def p8Text : String :=
-  match Std.generatedHoleBundle with
+  match p8ContextBundle with
   | .error _ => ""
   | .ok b => match p8CommitPackage { b.layout with
         imports := b.libraries.map fun _ => ByteArray.mk (Array.replicate 32 (0 : UInt8)) } with
@@ -2243,8 +2261,8 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   let p ← match Surface.readPackage src with
     | .ok p => pure p
     | .error e => return note r s!"P8 read: {e.text src}" false
-  let bundle ← match Std.generatedHoleBundle with
-    | .error e => return note r s!"P8 generate helpers: {e.name}" false
+  let bundle ← match p8ContextBundle with
+    | .error e => return note r s!"P8 generate helpers: {e}" false
     | .ok b => pure b
   let mut libraryIds : List D := []
   for lib in bundle.libraries do
@@ -2293,8 +2311,9 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
       (extra : List (D × D) := []) : Call D :=
     signedAt r.st a (Sim.S.pinsFor r.st.host ([a.id, obj, pkg] ++ libraryIds) ++ extra)
       (.invoke obj (p.methods.idxOf m) arg 100000 none)
-      r.st.host.height (r.st.host.height + 1024) rp
-  let pinF (w : World D) (g : D) := hole_pinAt obj w 1 df (.record [("cell", .digest (Sim.dc.bytes g))])
+      r.st.host.height (r.st.host.height + 1024)
+        (rp ++ hole_pinAt obj r.st.host 5 Std.codeSelection (.record [("hole", .nat 0)]))
+  let pinF (w : World D) (g : D) := hole_pinAt obj w 2 df (.record [("cell", .digest (Sim.dc.bytes g))])
   let pinC (w : World D) (owner : D) := hole_pinAt obj w 0 dc (.record [("cand", .digest (Sim.dc.bytes owner))])
   for ((g, pin), owner) in supports.zip [a.id, b.id] do
     let (r', v, _) := go prog r (invoke r "post" (hole_postArg (Sim.dc.bytes g) (Sim.dc.bytes pin)))
@@ -2306,6 +2325,11 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
     invoke r "commit" (p8Arg asset owner cap)
       (pinC r.st.host owner ++ pinF r.st.host (providers[i]?.getD 0))
       (Sim.S.pinsFor r.st.host [asset, accountId X owner asset, cap] ++ [supports[i]?.getD (0, 0)])
+  let chooseCode (r : Run) (i : Nat) :=
+    invoke r "choose_code" (argBytes (.record [("hole", .nat), ("index", .nat)])
+      (.record [("hole", .nat 0), ("index", .nat i)]))
+  let (r', vcode, _) := go prog r (chooseCode r 0)
+  r := note r' s!"P8 live contextual amount selected: {vcode}" (vcode == "admitted")
   let ready := r
   let cached := [0, 1].map fun i => Contextual.Trace.seed p8Guard (p8Iface false)
     (p8World r.st.host supports) (p8Candidate i)
@@ -2340,6 +2364,9 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   let badCert := Contextual.TransportKinds.recheck p8Registry 99 (p8World r.st.host supports) (p8Candidate 1) 1
   r := note r "P8.3 checked representation false -> true; unknownCertificate refused"
     (chosen == 1 && match badCert with | .error .unknownCertificate => true | _ => false)
+  let (r', vcode, _) := go prog r (chooseCode r chosen)
+  r := note r' s!"P8.3 transported provider selects contextual ROM candidate: {vcode}"
+    (vcode == "admitted")
   let selected := [a.id, b.id][chosen]?.getD 0
   let fresh := commit r chosen selected
   -- Cancellation exercises the kernel cancel operation on a scratch fork.
@@ -2540,18 +2567,18 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   let (r6, v6, _) := go prog r c6
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
   -- LV (LANG-60) the package wire's version: Owned's LANG-59 bytes (no version byte) and Owned's
-  -- current bytes at the previous version are each refused `lang/package-version` at install and at decode,
+  -- current bytes at the previous version are each refused `lang/package-version/4` at install and at decode,
   -- where the old bytes used to be read; the current bytes begin with the current version
-  let versionRefused (v : String) : Bool := v.startsWith "refused program" && (v.splitOn "lang/package-version").length > 1
+  let versionRefused (v : String) : Bool := v.startsWith "refused program" && (v.splitOn "lang/package-version/4").length > 1
   let (rv1, vv1, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install owned59))
   r := note rv1 s!"LV1 install Owned's LANG-59 bytes ({owned59.size} bytes): {vv1}" (owned59.size == 1788 && versionRefused vv1)
   let prev := ownedBytes.set! 0 (Bounds.packageWireVersion - 1)
   let (rv2, vv2, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install prev))
   r := note rv2 s!"LV2 install Owned's bytes at version {Bounds.packageWireVersion - 1}: {vv2}" (versionRefused vv2)
   let byName := fun (b : ByteArray) => match Wire.decodePackage b with
-    | .error (.rejected 0 "lang/package-version") => true
+    | .error (.rejected 0 "lang/package-version/4") => true
     | _ => false
-  r := note r s!"LV3 decode refuses both lang/package-version; Owned's bytes begin with version {Bounds.packageWireVersion} and decode"
+  r := note r s!"LV3 decode refuses both lang/package-version/4; Owned's bytes begin with version {Bounds.packageWireVersion} and decode"
     (byName owned59 && byName prev && ownedBytes[0]! == Bounds.packageWireVersion &&
       (Wire.decodePackage ownedBytes).toBool)
   r := installRows mode r a pkg
@@ -2700,7 +2727,7 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
 
 /-- Permanent real-Receive regression: declared support and blocker observations
 must be complete. The same rows are also part of the ordinary journey. -/
-def holeObservationJourney : Run := Id.run do
+def holeObservationJourney (contextual : Bool := false) : Run := Id.run do
   let mode : Mode := .honest
   let prog := mode.program
   let fk : List (ByteArray × ByteArray) :=
@@ -2714,7 +2741,7 @@ def holeObservationJourney : Run := Id.run do
   let r : Run := { st := { rng := ⟨1⟩, host := g, members } }
   let a := members.headD ⟨0, .empty, .empty⟩
   let b := members.getD 1 ⟨0, .empty, .empty⟩
-  return holeRows mode r a b
+  return holeRows mode r a b contextual
 
 def runAll (args : List String) : IO UInt32 := do
   if args == ["--hole-omitted-blocker-pin-admits"] then

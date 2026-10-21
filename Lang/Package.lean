@@ -10,6 +10,7 @@ the import ids and through them to the whole closure.
 -/
 import Lang.Wire
 import Lang.Check
+import Lang.HoleWire
 
 namespace Nanodregg.Lang
 
@@ -45,7 +46,9 @@ structure Package where
   /-- what the package says of itself, one line (LANG-60): `Bounds.docOk` bytes, printed as `(doc "…")`
   and on `read OBJ ?`'s `doc` line; never run, never judged -/
   doc : ByteArray := .empty
-  deriving Inhabited
+  /-- Live contextual declarations and candidate syntax committed by the ROM id. -/
+  holes : List HoleROM := []
+  deriving Inhabited, DecidableEq
 
 /-- Which act is judged (KERNEL's `Occasion`): a birth (the seed is `old = new`), a write, a law
 replacement by the listed law ids (their digest bytes concatenated in order; the state is unchanged),
@@ -233,6 +236,7 @@ def lawsMax : Nat := 16
 /-- Why `install` refuses a package (as `Refusal.program` text on the wire). -/
 inductive CheckError
   | tooManyImports | tooManyMethods | tooManyLaws
+  | contextualSignature | importType
   | stateNotData | ifaceNotRecord
   /-- the body does not check at the interface: which rule, where (`TypeErr`) -/
   | illTyped (why : TypeErr)
@@ -249,6 +253,7 @@ inductive CheckError
 
 /-- The refusal's name (law 7): its constructor's. -/
 def CheckError.name : CheckError → String
+  | .contextualSignature => "contextualSignature" | .importType => "importType"
   | .tooManyImports => "tooManyImports" | .tooManyMethods => "tooManyMethods"
   | .tooManyLaws => "tooManyLaws" | .stateNotData => "stateNotData"
   | .ifaceNotRecord => "ifaceNotRecord" | .illTyped _ => "illTyped"
@@ -266,6 +271,8 @@ def CheckError.wire : CheckError → String
 
 /-- For a human reading a resident's check. -/
 def CheckError.text : CheckError → String
+  | .contextualSignature => "contextual signature requires live checking"
+  | .importType => "import interface is not well formed"
   | .tooManyImports => "imports" | .tooManyMethods => "methods" | .tooManyLaws => "laws"
   | .stateNotData => "state type" | .ifaceNotRecord => "interface type"
   | .illTyped why => s!"body does not check at its interface: {why.text}"
@@ -443,7 +450,10 @@ def Package.checkWith (ifaces : List Ty) (p : Package) : Except CheckError Unit 
   match p.checkShape, checkE ifaces p.body p.iface with
   | .error e, _ => .error e
   | .ok (), .error why => .error (.illTyped why)
-  | .ok (), .ok () => p.checkFields
+  | .ok (), .ok () =>
+      if !p.holes.isEmpty then .error .contextualSignature
+      else if !ifaces.all Ty.wf then .error .importType
+      else p.checkFields
 
 /-! ## Relocation: a body's `ref i` becomes the closure's global index -/
 
@@ -465,7 +475,12 @@ def Term.relocate (f : Nat → Nat) : Term → Term
   | .case t arms => .case (t.relocate f) (Term.relocateRow f arms)
   | .ite c a b => .ite (c.relocate f) (a.relocate f) (b.relocate f)
   | .ref i => .ref (f i)
+  | .hole n σ => .hole n (Term.relocateList f σ)
   | .refuse T w => .refuse T w
+
+def Term.relocateList (f : Nat → Nat) : List Term → List Term
+  | [] => []
+  | t :: ts => t.relocate f :: Term.relocateList f ts
 
 def Term.relocateRow (f : Nat → Nat) : List (Label × Term) → List (Label × Term)
   | [] => []
@@ -478,12 +493,17 @@ mutual
 /-- The digest literals of a term, in order. -/
 def Term.digestLits : Term → List ByteArray
   | .digest s => [s]
+  | .hole _ σ => Term.listDigestLits σ
   | .var _ | .nat _ | .bool _ | .bytes _ | .ref _ | .refuse _ _ => []
   | .lam _ b | .fix b | .get b _ | .inj _ _ b => b.digestLits
   | .app f a | .prim _ f a => f.digestLits ++ a.digestLits
   | .record fs => Term.rowDigestLits fs
   | .extend t fs | .case t fs => t.digestLits ++ Term.rowDigestLits fs
   | .ite c a b => c.digestLits ++ a.digestLits ++ b.digestLits
+
+def Term.listDigestLits : List Term → List ByteArray
+  | [] => []
+  | t :: ts => t.digestLits ++ Term.listDigestLits ts
 
 def Term.rowDigestLits : List (Label × Term) → List ByteArray
   | [] => []
@@ -569,30 +589,31 @@ def packageTree (p : Package) : Tree :=
   .node 0 .empty
     [.node 0 .empty (p.imports.map fun d => .node 0 d []), tyTree p.state, tyTree p.iface,
      termTree p.body, .node 1 .empty (p.methods.map labelLeaf), .node 1 .empty (p.laws.map labelLeaf),
-     .node 2 .empty (p.rels.map relTree), .node 0 p.doc []]
+     .node 2 .empty (p.rels.map relTree), .node 0 p.doc [],
+     .node 3 .empty (p.holes.map holeROMTree)]
 
 def packageOf : Tree → Option Package
-  | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls, .node 2 er rs, .node 0 doc []] =>
-    if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty ∧ er = .empty ∧ Bounds.docOk doc = true then
-      match importsOf is, tyOf s, tyOf i, termOf b, labelsOf ms, labelsOf ls, relsOf rs with
-      | some imports, some state, some iface, some body, some methods, some laws, some rels =>
-        some { imports, state, iface, body, methods, laws, rels, doc }
-      | _, _, _, _, _, _, _ => none
+  | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls, .node 2 er rs, .node 0 doc [], .node 3 eh hs] =>
+    if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty ∧ er = .empty ∧ eh = .empty ∧ Bounds.docOk doc = true then
+      match importsOf is, tyOf s, tyOf i, termOf b, labelsOf ms, labelsOf ls, relsOf rs, hs.mapM holeROMOf with
+      | some imports, some state, some iface, some body, some methods, some laws, some rels, some holes =>
+        some { imports, state, iface, body, methods, laws, rels, doc, holes }
+      | _, _, _, _, _, _, _, _ => none
     else none
   | _ => none
 
 /-- The package has a tree that reads back to it. -/
 def packageWire (p : Package) : Bool :=
   Bounds.docOk p.doc && p.imports.all (fun d => decide (d.size ≤ importBytesMax)) && tyWire p.state &&
-    tyWire p.iface && termWire p.body && p.methods.all labelOk && p.laws.all labelOk && p.rels.all relWire
+    tyWire p.iface && termWire p.body && p.methods.all labelOk && p.laws.all labelOk && p.rels.all relWire && p.holes.all holeROMWire
 
 /-- The package tree stream at the language's bounds. -/
 def treeStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
 
 /-- The version byte (LANG-60): exactly `Bounds.packageWireVersion`; any other byte is refused
-`lang/package-version` by name, so bytes written at another version are never read as a package. -/
+`lang/package-version/4` by name, so bytes written at another version are never read as a package. -/
 def packageVersion : Stream Unit :=
-  Stream.refine "lang/package-version" Stream.u8
+  Stream.refine "lang/package-version/4" Stream.u8
     (fun v => if v = Bounds.packageWireVersion then some () else none) (fun _ => Bounds.packageWireVersion)
 
 /-- The one stream of a package: its version byte, then its tree. -/
@@ -605,12 +626,12 @@ def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
 /-- The package codec: the version byte and the tree stream, refined by `packageOf`, refused
-`lang/package/3` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
+`lang/package/4` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
 new term, type or primitive tag turns a refused boundary row into a read one, and the version must
 move, and with it this label, `lang/package/N` at version N: `Lang.Proofs.Wire.packageCodec_label`
 fails the build otherwise; cv 01a14e58-1586, LANG-60). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package/3" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
+  Stream.refine "lang/package/4" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -620,7 +641,7 @@ def encodePackage (p : Package) : Option ByteArray :=
     else none
   else none
 
-/-- The version byte (any other refused `lang/package-version`), then exactly one package tree, which reads as
+/-- The version byte (any other refused `lang/package-version/4`), then exactly one package tree, which reads as
 a package. `packageCodec`'s reading, with the tree
 stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
 packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
@@ -630,7 +651,7 @@ def decodePackage (b : ByteArray) : Except Refusal Package :=
   | .ok t =>
     match packageOf t.2.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package/3")
+    | none => .error (.rejected 0 "lang/package/4")
 
 end Wire
 end Nanodregg.Lang

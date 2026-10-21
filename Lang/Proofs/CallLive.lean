@@ -577,7 +577,7 @@ theorem runMeasured_kinds {bytesOf : D → ByteArray}
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       ∃ ks', ks'.Sublist sg.calls ∧
         Matched (fun b k => ∃ arms, k = .sum arms ∧ b.kindName ∈ arms.map Prod.fst) calls ks' := by
-  unfold runMeasured at h
+  unfold runMeasured runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
   · cases h

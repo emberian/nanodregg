@@ -15,8 +15,11 @@ A `case` must have at least one arm (its result type comes from the arms).
 -/
 import Lang.Bounds
 import Lang.Term
+import Lang.Contextual.HoleDecl
 
 namespace Nanodregg.Lang
+
+abbrev HoleSignature := List (Contextual.HoleDecl (List Ty) Ty)
 
 /-- Which typing rule a term breaks (law 7: each a constructor with a name). -/
 inductive TypeError
@@ -24,6 +27,8 @@ inductive TypeError
   | unbound (index : Nat)
   /-- `ref i` past the closure -/
   | noPackage (index : Nat)
+  | noHole (name : Nat)
+  | holeSubstitution
   /-- an annotation (a `lam` domain, an `inj` type) whose rows are not canonical -/
   | badType (ty : Ty)
   | notFunction (got : Ty)
@@ -63,6 +68,7 @@ def TypeError.name : TypeError → String
   | .notSum _ => "notSum" | .noArm _ => "noArm" | .payload _ _ => "payload" | .arms => "arms"
   | .armType _ _ => "armType" | .condition _ => "condition" | .branches _ _ => "branches"
   | .declared _ _ => "declared"
+  | .noHole _ => "noHole" | .holeSubstitution => "holeSubstitution"
 
 /-- A failed rule and where: the path from the checked term to the subterm, outermost first. -/
 structure TypeErr where
@@ -81,132 +87,151 @@ def TypeErr.text (e : TypeErr) : String :=
 def typeErr (e : TypeError) : Except TypeErr Ty := .error ⟨[], e⟩
 
 mutual
-def inferE (Δ Γ : List Ty) : Term → Except TypeErr Ty
-  | .var i =>
+def inferE (Δ Γ : List Ty) : Term → (Ω : HoleSignature := []) → Except TypeErr Ty
+  | .var i, _ =>
       match Γ[i]? with
       | some T => .ok T
       | none => typeErr (.unbound i)
-  | .lam A b =>
+  | .lam A b, Ω =>
       if A.wf then
-        match inferE Δ (A :: Γ) b with
+        match inferE (Ω := Ω) Δ (A :: Γ) b with
         | .ok B => .ok (.fn A B)
         | .error e => .error (e.at "body")
       else typeErr (.badType A)
-  | .app f a =>
-      match inferE Δ Γ f, inferE Δ Γ a with
+  | .app f a, Ω =>
+      match inferE (Ω := Ω) Δ Γ f, inferE (Ω := Ω) Δ Γ a with
       | .ok (.fn A B), .ok A' => if A = A' then .ok B else typeErr (.argument A A')
       | .ok F, .ok _ => typeErr (.notFunction F)
       | .error e, _ => .error (e.at "fn")
       | .ok _, .error e => .error (e.at "arg")
-  | .fix t =>
-      match inferE Δ Γ t with
+  | .fix t, Ω =>
+      match inferE (Ω := Ω) Δ Γ t with
       | .ok (.fn (.record r) (.record r')) =>
           if r = r' then .ok (.record r) else typeErr (.notSelfMap (.fn (.record r) (.record r')))
       | .ok F => typeErr (.notSelfMap F)
       | .error e => .error (e.at "fix")
-  | .nat n => if n < Bounds.natLimit then .ok .nat else typeErr (.natRange n)
-  | .bool _ => .ok .bool
-  | .bytes s => if s.size ≤ Bounds.bytesMax then .ok .bytes else typeErr (.bytesRange s.size)
-  | .digest s => if s.size ≤ Bounds.digestBytesMax then .ok .digest else typeErr (.digestRange s.size)
-  | .prim p a b =>
-      match inferE Δ Γ a, inferE Δ Γ b with
+  | .nat n, _ => if n < Bounds.natLimit then .ok .nat else typeErr (.natRange n)
+  | .bool _, _ => .ok .bool
+  | .bytes s, _ => if s.size ≤ Bounds.bytesMax then .ok .bytes else typeErr (.bytesRange s.size)
+  | .digest s, _ => if s.size ≤ Bounds.digestBytesMax then .ok .digest else typeErr (.digestRange s.size)
+  | .prim p a b, Ω =>
+      match inferE (Ω := Ω) Δ Γ a, inferE (Ω := Ω) Δ Γ b with
       | .ok A, .ok B => if A = p.left ∧ B = p.right then .ok p.result else typeErr (.operands p A B)
       | .error e, _ => .error (e.at "left")
       | .ok _, .error e => .error (e.at "right")
-  | .record fs =>
+  | .record fs, Ω =>
       if Row.ascending fs then
-        match inferFields Δ Γ fs with
+        match inferFields (Ω := Ω) Δ Γ fs with
         | .ok r => .ok (.record r)
         | .error e => .error e
       else typeErr .notCanonical
-  | .get t ℓ =>
-      match inferE Δ Γ t with
+  | .get t ℓ, Ω =>
+      match inferE (Ω := Ω) Δ Γ t with
       | .ok (.record r) =>
           match Row.find? ℓ r with
           | some T => .ok T
           | none => typeErr (.noField ℓ)
       | .ok T => typeErr (.notRecord T)
       | .error e => .error (e.at "target")
-  | .extend t fs =>
-      match inferE Δ Γ t with
+  | .extend t fs, Ω =>
+      match inferE (Ω := Ω) Δ Γ t with
       | .ok (.record r) =>
           if Row.ascending fs then
-            match inferFields Δ Γ fs with
+            match inferFields (Ω := Ω) Δ Γ fs with
             | .ok r2 => .ok (.record (Row.merge r r2))
             | .error e => .error e
           else typeErr .notCanonical
       | .ok T => typeErr (.notRecord T)
       | .error e => .error (e.at "target")
-  | .inj T ℓ t =>
+  | .inj T ℓ t, Ω =>
       match T with
       | .sum r =>
           if T.wf then
-            match Row.find? ℓ r, inferE Δ Γ t with
+            match Row.find? ℓ r, inferE (Ω := Ω) Δ Γ t with
             | some A, .ok A' => if A = A' then .ok T else typeErr (.payload A A')
             | none, _ => typeErr (.noArm ℓ)
             | some _, .error e => .error (e.at ℓ)
           else typeErr (.badType T)
       | T => typeErr (.notSum T)
-  | .case t arms =>
-      match inferE Δ Γ t with
-      | .ok (.sum r) => inferArms Δ Γ arms r
+  | .case t arms, Ω =>
+      match inferE (Ω := Ω) Δ Γ t with
+      | .ok (.sum r) => inferArms (Ω := Ω) Δ Γ arms r
       | .ok T => typeErr (.notSum T)
       | .error e => .error (e.at "target")
-  | .ite c t e =>
-      match inferE Δ Γ c, inferE Δ Γ t, inferE Δ Γ e with
+  | .ite c t e, Ω =>
+      match inferE (Ω := Ω) Δ Γ c, inferE (Ω := Ω) Δ Γ t, inferE (Ω := Ω) Δ Γ e with
       | .ok .bool, .ok A, .ok B => if A = B then .ok A else typeErr (.branches A B)
       | .ok C, .ok _, .ok _ => typeErr (.condition C)
       | .error x, _, _ => .error (x.at "cond")
       | .ok _, .error x, _ => .error (x.at "then")
       | .ok _, .ok _, .error x => .error (x.at "else")
-  | .ref i =>
+  | .ref i, _ =>
       match Δ[i]? with
       | some T => .ok T
       | none => typeErr (.noPackage i)
-  | .refuse T why =>
+  | .refuse T why, _ =>
       if T.wf then
         if Bounds.reasonOk why then .ok T else typeErr .badReason
       else typeErr (.badType T)
 
+  | .hole n σ, Ω =>
+      match Ω.find? (fun d => d.name == n) with
+      | none => typeErr (.noHole n)
+      | some d =>
+        match inferSubst Δ Γ σ d.ctx Ω with
+        | .ok () => .ok d.ty
+        | .error e => .error (e.at "substitution")
+
 /-- The row of a list of fields, label for label (an error is under its field's label). -/
-def inferFields (Δ Γ : List Ty) : List (Label × Term) → Except TypeErr (List (Label × Ty))
-  | [] => .ok []
-  | (ℓ, t) :: fs =>
-      match inferE Δ Γ t, inferFields Δ Γ fs with
+def inferFields (Δ Γ : List Ty) : List (Label × Term) → (Ω : HoleSignature := []) → Except TypeErr (List (Label × Ty))
+  | [], _ => .ok []
+  | (ℓ, t) :: fs, Ω =>
+      match inferE (Ω := Ω) Δ Γ t, inferFields (Ω := Ω) Δ Γ fs with
       | .ok T, .ok r => .ok ((ℓ, T) :: r)
       | .error e, _ => .error (e.at ℓ)
       | .ok _, .error e => .error e
 
 /-- The common type of the arms of a case over the sum row `r`: one arm per label, in order,
 each binding its payload; at least one arm (an error is under its arm's label). -/
-def inferArms (Δ Γ : List Ty) : List (Label × Term) → List (Label × Ty) → Except TypeErr Ty
-  | [(ℓ, b)], [(ℓ', A)] =>
+def inferArms (Δ Γ : List Ty) : List (Label × Term) → List (Label × Ty) → (Ω : HoleSignature := []) → Except TypeErr Ty
+  | [(ℓ, b)], [(ℓ', A)], Ω =>
       if ℓ = ℓ' then
-        match inferE Δ (A :: Γ) b with
+        match inferE (Ω := Ω) Δ (A :: Γ) b with
         | .ok B => .ok B
         | .error e => .error (e.at ℓ)
       else .error ⟨[], .arms⟩
-  | (ℓ, b) :: arms@(_ :: _), (ℓ', A) :: r =>
+  | (ℓ, b) :: arms@(_ :: _), (ℓ', A) :: r, Ω =>
       if ℓ = ℓ' then
-        match inferE Δ (A :: Γ) b, inferArms Δ Γ arms r with
+        match inferE (Ω := Ω) Δ (A :: Γ) b, inferArms (Ω := Ω) Δ Γ arms r with
         | .ok B, .ok B' => if B = B' then .ok B else .error ⟨[], .armType B B'⟩
         | .error e, _ => .error (e.at ℓ)
         | .ok _, .error e => .error e
       else .error ⟨[], .arms⟩
-  | _, _ => .error ⟨[], .arms⟩
+  | _, _, _ => .error ⟨[], .arms⟩
+/-- Check the complete explicit substitution against the declared context. -/
+def inferSubst (Δ Γ : List Ty) : List Term → List Ty → (Ω : HoleSignature := []) → Except TypeErr Unit
+  | [], [], _ => .ok ()
+  | t :: ts, A :: As, Ω =>
+      match inferE Δ Γ t Ω with
+      | .error e => .error e
+      | .ok B =>
+        if A = B then inferSubst Δ Γ ts As Ω
+        else .error ⟨[], .argument A B⟩
+  | _, _, _ => .error ⟨[], .holeSubstitution⟩
+
 end
 
 /-- The type of `t`, if it has one: `inferE` without the reason. -/
-def infer (Δ Γ : List Ty) (t : Term) : Option Ty := (inferE Δ Γ t).toOption
+def infer (Δ Γ : List Ty) (t : Term) (Ω : HoleSignature := []) : Option Ty := (inferE Δ Γ t Ω).toOption
 
 /-- A closed term checked against its declared type, or why not. -/
-def checkE (Δ : List Ty) (t : Term) (T : Ty) : Except TypeErr Unit :=
-  match inferE Δ [] t with
+def checkE (Δ : List Ty) (t : Term) (T : Ty) (Ω : HoleSignature := []) : Except TypeErr Unit :=
+  match inferE Δ [] t Ω with
   | .ok T' => if T' = T then .ok () else .error ⟨[], .declared T T'⟩
   | .error e => .error e
 
 /-- A closed term checked against its declared type. -/
-def check (Δ : List Ty) (t : Term) (T : Ty) : Bool := (checkE Δ t T).toBool
+def check (Δ : List Ty) (t : Term) (T : Ty) (Ω : HoleSignature := []) : Bool := (checkE Δ t T Ω).toBool
 
 /-- The closure's bodies are closed and have the types `ref` gives them. -/
 def checkLib (Δ : List Ty) (lib : List Term) : Bool :=

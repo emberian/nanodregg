@@ -72,7 +72,7 @@ theorem derives_unique : ∀ {env : Env} {t : Term} {r r' : Except Fault Val} {n
     | fix ht' => cases (derives_unique ht ht').1
     | fixE ht' => obtain ⟨hr, rfl⟩ := derives_unique ht ht'; exact ⟨hr, rfl⟩
   | _, _, _, _, _, _, .nat, h' | _, _, _, _, _, _, .bool, h' | _, _, _, _, _, _, .bytes, h'
-  | _, _, _, _, _, _, .digest, h' | _, _, _, _, _, _, .refuse, h'
+  | _, _, _, _, _, _, .digest, h' | _, _, _, _, _, _, .refuse, h' | _, _, _, _, _, _, .hole, h'
   | _, _, _, _, _, _, .record, h' => by cases h'; exact ⟨rfl, rfl⟩
   | _, _, _, _, _, _, .prim ha hb _, h' => by
     cases h' with
@@ -236,6 +236,10 @@ theorem need_derives_all : ∀ f : Nat,
         simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .bytes
       | digest s =>
         simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .digest
+      | hole n σ =>
+        simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        exact .hole
       | refuse T w =>
         simp only [Need.need, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact .refuse
       | prim p a b =>
@@ -705,8 +709,15 @@ theorem runMeasured_setup {look : Pinned D} {rv : RowView D} {pkg : D} {state : 
       runSetup bytesOf digestOf look rv pkg state method args r = .ok S ∧
       run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used ∧
       (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left) ∧ ticks = budget - left := by
-  unfold runMeasured at h
+  unfold runMeasured runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  rename_i S hs
+  have hp : S.preparation = 0 := by
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, rfl⟩ := runSetup_spec hs
+    rfl
+  rw [hp, Nat.sub_zero] at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h

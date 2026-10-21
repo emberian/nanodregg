@@ -774,13 +774,14 @@ theorem guardOld_unpinned_witness :
 as KERNEL's own check where row edits enter, since `Program` is abstract to it, as `run_calls` is
 for `notCallable`. -/
 
-theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasuredWith_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {setup : Kernel.Receive.Pinned D → Kernel.Receive.RowView D → D → Kernel.Slots → Nat → ByteArray → Kernel.Receive.Req D → Except (Kernel.Receive.Refusal D) RunSetup}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    (h : runMeasuredWith bytesOf digestOf setup look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∀ e ∈ rows, e.1.under.1 = r.self := by
-  unfold runMeasured at h
+  unfold runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
   · cases h
@@ -789,6 +790,14 @@ theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf 
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨-, -, rfl, -, -⟩ := h
   exact editsOf_under ‹editsOf _ _ _ = .ok _›
+
+theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
+    {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
+    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
+    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∀ e ∈ rows, e.1.under.1 = r.self := by
+  exact runMeasuredWith_rows_under (setup := runSetup bytesOf digestOf) h
 
 /-- **The rows `Lang.program` hands KERNEL**: every row act is under the run's own object. -/
 theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
@@ -803,7 +812,7 @@ theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteAr
   · rename_i x hx
     simp only [Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨-, -, rfl, -⟩ := h
-    exact runMeasured_rows_under hx
+    exact runMeasuredWith_rows_under (setup := runSetupLive bytesOf digestOf) hx
 
 /-- **A prefix of every field is the key** (PROTOCOL-51): `preBytes` at the key's full length is
 `keyBytes`, so a range's prefix and an edit's key are one encoding. -/

@@ -39,7 +39,7 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec Nanodregg.Codec.K
 
 deriving instance Repr for RowKey, RowSlot, RowLeaf, RowAct, RowTouch, RangeRead, Op, Cell, Entry, Slot, Leaf,
   Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, RefusalLeaf,
-  Refused, Step, Trie.Proof, Lang.Term, Lang.RelDecl, Lang.Package
+  Refused, Step, Trie.Proof, Lang.Term, Lang.HolePin, Lang.HoleCode, Lang.HoleROM, Lang.RelDecl, Lang.Package
 
 /-! ## Values, drawn from the simulation's generator -/
 
@@ -638,15 +638,15 @@ def rowLeafHashedVecs : G (List ByteArray) := do
 
 /-! ### A package (cv 01a14e58-1586, LANG-15's set)
 
-One row per term tag (0–17; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
+One row per term tag (0–18; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
 6, a row's field, rides in the record type), per primitive code (0–11), and per package section
 (imports, a relation with every option and one with none, methods and laws, a doc). Then the boundary:
-the first unused term tag (18), type tag (8) and primitive code (12), each refused `lang/package/3` by
+the first unused term tag (19), type tag (8) and primitive code (12), each refused `lang/package/4` by
 name. A Lang change that gives one of them a meaning flips its row from refused to read under an
 unchanged tag: the gate goes red, and `Bounds.packageWireVersion` moves (LANG-60). Then the doc's
-bound (a doc of `docMax` bytes read, one byte past it refused `lang/package/3`, a doc holding `"`
+bound (a doc of `docMax` bytes read, one byte past it refused `lang/package/4`, a doc holding `"`
 refused, a doc holding a line feed and one that is not UTF-8 each refused), and the version: the current tree at the previous version byte, and a LANG-59-era
-package's bytes as they were written (no version byte), each refused `lang/package-version`. -/
+package's bytes as they were written (no version byte), each refused `lang/package-version/4`. -/
 
 open Lang in
 /-- The empty package around a body and a state type. -/
@@ -666,7 +666,7 @@ def termRows : List Term :=
   [.var 0, .lam .nat (.var 0), .app (.var 0) (.nat 1), .fix (.var 0), .nat 7, .bool true, .bytes ⟨#[0x68, 0x69]⟩,
    .prim .add (.nat 1) (.nat 2), .record [("a", .nat 1)], .get (.var 0) "a", .extend (.var 0) [("b", .nat 2)],
    .inj (.sum [("a", .nat)]) "a" (.nat 1), .case (.var 0) [("a", .var 0)], .ite (.bool true) (.nat 1) (.nat 2),
-   .ref 0, .digest ⟨#[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]⟩, .refuse .nat "too big".toUTF8]
+   .ref 0, .digest ⟨#[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]⟩, .refuse .nat "too big".toUTF8, .hole 7 [.nat 3, .bool true]]
 
 open Lang in
 def tyRows : List Ty :=
@@ -692,14 +692,20 @@ def sectionRows : List Package :=
    { pkgOf (.record []) with rels := [("r", relAll)] },
    { pkgOf (.record []) with rels := [("r", relNone)] },
    { pkgOf (.record []) with methods := ["m"], laws := ["l"] },
-   { pkgOf (.record []) with doc := "one line about the package".toUTF8 }]
+   { pkgOf (.record []) with doc := "one line about the package".toUTF8 },
+   { pkgOf (.hole 7 [.bool true, .nat 3]) with holes := [
+     { name := 7, ctx := [.bool, .nat], ty := .nat,
+       code := [⟨.var 1, [⟨2, ⟨#[0x11, 0x22]⟩, 9⟩]⟩, ⟨.nat 5, []⟩],
+       selectionRel := 3, selectionKey := ⟨#[0x33, 0x44]⟩,
+       hypotheses := [none, some ⟨4, ⟨#[0x55]⟩, 10⟩],
+       guardPin := some ⟨5, ⟨#[0x66]⟩, 11⟩, guard := .var 0 }] }]
 
 open Lang Lang.Wire in
 /-- A package tree with `body` and `state` as given trees (the boundary rows: a node no reader knows). -/
 def rawPackage (body state : Tree) (doc : ByteArray := .empty) (version := Lang.Bounds.packageWireVersion) :
     ByteArray :=
   let t : Tree := .node 0 .empty [.node 0 .empty [], state, tyTree (.record []), body, .node 1 .empty [],
-    .node 1 .empty [], .node 2 .empty [], .node 0 doc []]
+    .node 1 .empty [], .node 2 .empty [], .node 0 doc [], .node 3 .empty []]
   if h : t.fits nodeMax depthMax then ByteArray.mk #[version] ++ treeStream.bytes ⟨t, h⟩ else ByteArray.empty
 
 /-- A LANG-59-era package as it was written (`lang/package/2`, no version byte): `pkgOf (.var 0)`, the
@@ -713,7 +719,8 @@ def packageVecs : List ByteArray :=
   -- through `encodePackage`: a row whose package had no tree in bounds would be empty bytes, refused
   (termRows.map pkgOf ++ tyRows.map (pkgOf (.record []) ·) ++ primRows.map pkgOf ++ sectionRows).map
       (fun p => (encodePackage p).getD ByteArray.empty) ++
-    [rawPackage (.node 18 .empty []) (tyTree (.record [])),
+    [rawPackage (.node 19 .empty []) (tyTree (.record [])),
+     rawPackage (.node 18 .empty []) (tyTree (.record [])),
      rawPackage (termTree (.record [])) (.node 8 .empty []),
      rawPackage (.node 7 (Stream.u8.bytes 12) [termTree (.nat 1), termTree (.nat 2)]) (tyTree (.record [])),
      rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨Array.replicate Lang.Bounds.docMax 0x61⟩,
@@ -792,9 +799,9 @@ def sites : List Site :=
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
     site "host/base/retained" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc)) baseVecs printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
-    ⟨"lang/package/3", Tag.of "lang/package/3" Lang.Wire.packageCodec, pure packageVecs,
+    ⟨"lang/package/4", Tag.of "lang/package/4" Lang.Wire.packageCodec, pure packageVecs,
       print Lang.Wire.packageCodec text⟩,
-    ⟨"lang/package-version", Tag.of "lang/package-version" Lang.Wire.packageVersion,
+    ⟨"lang/package-version/4", Tag.of "lang/package-version/4" Lang.Wire.packageVersion,
       pure [ByteArray.mk #[Lang.Bounds.packageWireVersion], ByteArray.mk #[Lang.Bounds.packageWireVersion - 1]],
       print Lang.Wire.packageVersion fun () => "()"⟩,
     ⟨"lang/key", Tag.of "lang/key" (Lang.Wire.dataStream keyVecTy), pure keyVecs,

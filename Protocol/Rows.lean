@@ -1275,23 +1275,32 @@ LIVENESS deadlines (a miss is `hang`, a non-verdict), not THE BAR's speed spec, 
 the end on a quiet box (`scripts/bar.sh`). The deterministic measures are the `WASTE invoke
 ticks-per-call` and `packages-checked-per-call` lines, pinned in gates/waste.tsv; the `BAR` lines
 are printed for the record and judged by nothing. (64 per landing; `rows --times 1000 bar` for the nightly number.) -/
-def bar : Row where
+def barWithCount (count : Nat) : Row where
   name := "bar"
   replaces := ["births", "perf", "growth", "journey/G"]
   ops := everyWrite
   kinds := ["install", "create", "invoke", "write"]
   drive := .members [
-    { actor := "sponsor", act := .cmd ["create"], expect := .ok, bind := some "obj", times := 64,
+    { actor := "sponsor", act := .cmd ["create"], expect := .ok, bind := some "obj", times := count,
       withinMs := some 5000 },
     okBind "sponsor" ["install", counter] "counter",
     okBind "sponsor" ["create", "--pkg", "@counter", "(record (total 0))"] "tally",
-    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := 64,
+    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := count - 23,
+      withinMs := some 5000 },
+    -- The last 23 invokes leave the old measured tail: 7912 bytes, under the 8192-byte
+    -- seal floor. Keep the total workload; do not let setup's wire size choose this boundary.
+    { actor := "operator", act := .seal, expect := .ok },
+    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := min count 23,
       withinMs := some 5000 },
     no "sponsor" ["invoke", "@tally", "0", "999999"] "lawDenied",
     { actor := "operator", act := .restart, expect := .ok, withinMs := some 60000 },
     { actor := "sponsor", act := .cmd ["write", "@obj", "1", "x"], expect := .ok, withinMs := some 5000 },
     ok "sponsor" ["read", "@obj", "1=x"]]
   plant := .caught .zeroDeadline 0 .hang
+
+
+/-- The standing workload. The runner applies --times to the total before splitting the tail. -/
+def bar : Row := barWithCount 64
 
 /-! ## Lean-internal rows
 

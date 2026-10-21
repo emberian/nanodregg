@@ -55,12 +55,12 @@ theorem lenLe_typed : infer [] [] (.prim .lenLe (.bytes ⟨#[1]⟩) (.nat 3)) = 
 theorem lenLe_nat_refused : infer [] [] (.prim .lenLe (.nat 1) (.nat 3)) = none := by decide +kernel
 
 /-- The empty package (WireTeeth's `tiny`): `readPackage_package`'s premises are met. -/
-theorem empty_package_prints : (package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty)).isSome = true := by
+theorem empty_package_prints : (package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [])).isSome = true := by
   decide
 
 theorem empty_package_reads :
-    Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty)).get empty_package_prints) =
-      .ok (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty) :=
+    Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [])).get empty_package_prints) =
+      .ok (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty []) :=
   readPackage_package rfl rfl rfl (.record rfl .nil) (Option.some_get _).symm
 
 /-- A relation whose value type is not canonical (a record with its fields descending): the
@@ -69,7 +69,7 @@ package prints, and reads back as a DIFFERENT package (the reader sorts the fiel
 private def badRel : Package :=
   Package.mk [] (.record []) (.record []) (.record []) [] []
     [("r", { key := [("k", .nat)], val := .record [("b", .nat), ("a", .nat)], limit := 1, sum := none,
-             cap := 0, retract := false, guard := none })] .empty
+             cap := 0, retract := false, guard := none })] .empty []
 
 theorem badRel_prints : (package badRel).isSome = true := by decide
 
@@ -77,6 +77,23 @@ theorem badRel_reads_other :
     (match Read.readPackage ((package badRel).get badRel_prints) with
      | .ok q => decide (q.rels ≠ badRel.rels)
      | .error _ => false) = true := by
-  native_decide
+  let xs : List Read.SExp := [(.list 0 [(.atom 0 "imports")]), (.list 0 [(.atom 0 "doc")]), (.list 0 [(.atom 0 "state"), (.list 0 [(.atom 0 "rec")])]), (.list 0 [(.atom 0 "iface"), (.list 0 [(.atom 0 "rec")])]), (.list 0 [(.atom 0 "methods")]), (.list 0 [(.atom 0 "laws")]), (.list 0 [(.atom 0 "rels"), (.list 0 [(.atom 0 "r"), (.list 0 [(.atom 0 "key"), (.list 0 [(.atom 0 "k"), (.atom 0 "nat")])]), (.list 0 [(.atom 0 "val"), (.list 0 [(.atom 0 "rec"), (.list 0 [(.atom 0 "b"), (.atom 0 "nat")]), (.list 0 [(.atom 0 "a"), (.atom 0 "nat")])])]), (.list 0 [(.atom 0 "limit"), (.atom 0 "1")]), (.list 0 [(.atom 0 "sum")]), (.list 0 [(.atom 0 "cap"), (.atom 0 "0")]), (.list 0 [(.atom 0 "retract"), (.atom 0 "false")]), (.list 0 [(.atom 0 "guard")])])]), (.list 0 [(.atom 0 "body"), (.list 0 [(.atom 0 "record")])])]
+  have hx : sectionsSx badRel = some xs := by rfl
+  have ht : package badRel = some (String.ofList
+      ('(' :: items ['\n', ' ', ' '] (atom "package" :: xs) ++ ['\n'])) := by rfl
+  have hs := Option.some.inj ((Option.some_get badRel_prints).trans ht)
+  obtain ⟨ys, hp, hsame⟩ := parse_layout (sep := ['\n', ' ', ' '])
+    ⟨by decide, by decide⟩ (sectionsSx_ok hx) (by decide) (by decide)
+  rw [hs]
+  simp only [Read.readPackage, hp, bind, Except.bind]
+  dsimp [xs, atom] at hsame
+  iterate 130 first | cases ‹Same _ _› | cases ‹SameL _ _›
+  simp only [Read.package, Read.packageBase, Read.depthMax, Wire.depthMax,
+    List.mapM_cons, List.mapM_nil, Read.rel, Read.ty, Read.entries, Read.term,
+    Read.doc, Read.labels, bind, Except.bind, pure, Except.pure]
+  have h1 : "1".toNat? = some 1 := Nat.toNat?_repr 1
+  have h0 : "0".toNat? = some 0 := Nat.toNat?_repr 0
+  simp [h1, h0, Read.keyFields, Read.optLabel, Read.ty, Read.depthMax, Wire.depthMax]
+  decide +kernel
 
 end Nanodregg.Lang.Print

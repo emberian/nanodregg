@@ -122,6 +122,7 @@ theorem derives_leads : ∀ {env : Env} {t : Term} {r : (Except Fault Val)} {n :
   | _, _, _, _, .digest, k, d
   | _, _, _, _, .record, k, d => ⟨0, _, Nat.le_refl _, .cons rfl (Nat.le_refl _) (.ok .refl)⟩
   | _, _, _, _, .refuse, k, d => ⟨0, _, Nat.le_refl _, .now (by simp [step])⟩
+  | _, _, _, _, .hole, k, d => ⟨0, _, Nat.le_refl _, .now (by simp [step])⟩
   | _, _, _, _, .app (a := a) (env := env) (b := b) (cenv := cenv) hf ha hb, k, d => by
     obtain ⟨Df, mf, hf', lf⟩ := derives_leads hf (.appL a env :: k) (d + 1)
     obtain ⟨Da, ma, ha', la⟩ := derives_leads ha (.appR (.clo b cenv) :: k) (d + 1)

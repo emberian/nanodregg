@@ -186,6 +186,7 @@ def step (lib : List Term) (s : State) : Step :=
         | some body => .next { s with control := .eval body [] }
         | none => .fault .stuck
     | .refuse _ why => .fault (.refused why)
+    | .hole _ _ => .fault (.refused "holeUnresolved".toUTF8)
   | .ret v =>
     match s.stack with
     | [] => .halt v

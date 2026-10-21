@@ -359,7 +359,7 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
   obtain ⟨hshape, T, hT⟩ := checkWith_parts hc
   obtain ⟨hni, hnm, hnl⟩ := checkShape_bounds hshape
   simp only [Wire.packageWire, Bool.and_eq_true] at hw
-  obtain ⟨⟨⟨⟨⟨⟨⟨hwd, -⟩, hws⟩, hwi⟩, hwb⟩, hwm⟩, hwl⟩, hwr⟩ := hw
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨hwd, -⟩, hws⟩, hwi⟩, hwb⟩, hwm⟩, hwl⟩, hwr⟩, -⟩ := hw
   obtain ⟨xd, hxd, hnd, hwxd⟩ := docSx_prints hwd
   obtain ⟨D, hD, hcs⟩ := fits_node hf
   simp only [Wire.depthMax] at hD
@@ -369,12 +369,7 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
   obtain ⟨xi, hxi, hni', hwxi⟩ := tyWire_prints p.iface hwi (hcs _ (by simp))
   obtain ⟨xb, hxb, hnb, hwxb⟩ := hasType_prints (inferE_sound hT) hwb (hcs _ (by simp))
   replace hxb : termSx 0 p.body = some xb := hxb
-  have hfields : p.checkFields = .ok () := by
-    unfold Package.checkWith at hc
-    split at hc
-    · cases hc
-    · cases hc
-    · exact hc
+  have hfields := (checkWith_checked hc).2
   obtain ⟨row, hcr⟩ := checkFields_checkRels hfields
   obtain ⟨hrl, hkl⟩ := checkRels_bounds hcr
   obtain ⟨D2, hD2, hc2⟩ := fits_node (hcs (.node 2 .empty (p.rels.map Wire.relTree)) (by simp))
@@ -382,7 +377,14 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
     ⟨List.all_eq_true.mp hwr r hr, hc2 _ (List.mem_map.mpr ⟨r, hr, rfl⟩), hkl r hr⟩)
   have hfit := package_fitsB (is := p.imports) (ms := p.methods) (ls := p.laws) hnd hwxd hni hnm hnl hns hwxs hni' hwxi hnb hwxb
     (xR := xR) (by simp only [Wire.depthMax] at hnR ⊢; omega) hwR (by omega)
-  simp [package, sectionsSx, hxd, hxs, hxi, hxb, labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, hfit]
+  obtain ⟨he, hΔ⟩ := checkWith_closed hc
+  have htext : (packageText p).isSome = true := by
+    simp [packageText, he, sectionsSx, hxd, hxs, hxi, hxb,
+      labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, hfit]
+  obtain ⟨text, ht⟩ := Option.isSome_iff_exists.mp htext
+  have hread := readPackage_closedText (checkShape_wf hshape).1 (checkShape_wf hshape).2
+    (checkFields_rels hfields) (hasType_canon hΔ (by simp) (inferE_sound hT)) he ht
+  simp [package, ht, he]
 
 /-- Bytes the decoder accepts, of a package the install check accepts, have a text. -/
 theorem installed_prints {ifaces : List Ty} {b : ByteArray} {p : Package} (hd : Wire.decodePackage b = .ok p)
@@ -443,7 +445,7 @@ theorem state_prints {p : Package} {b : ByteArray} (he : Wire.encodePackage p = 
     · rename_i hf
       simp only [Wire.packageWire, Bool.and_eq_true] at hw
       obtain ⟨D, hD, hcs⟩ := fits_node hf
-      have := tyWire_prints p.state hw.1.1.1.1.1.2 (hcs _ (by simp))
+      have := tyWire_prints p.state hw.1.1.1.1.1.1.2 (hcs _ (by simp))
       exact this.mono (by simp only [depthMax, Wire.depthMax] at hD ⊢; omega)
     · cases he
   · cases he
@@ -478,7 +480,7 @@ private def deepT : Nat → Term
   | n + 1 => .record [("f", deepT n)]
 
 /-- A package at the wire's depth bound: its body's and its interface's trees are 1023 deep. -/
-private def deepPkg : Package := ⟨[], .record [], deepTy 511, deepT 511, [], [], [], .empty⟩
+private def deepPkg : Package := ⟨[], .record [], deepTy 511, deepT 511, [], [], [], .empty, []⟩
 
 theorem deep_wire : Wire.packageWire deepPkg = true := by decide +kernel
 
@@ -504,12 +506,12 @@ theorem deep_needs_depthMax :
 
 /-- A label with a space is not one atom, so the wire refuses it as the printer does. -/
 theorem spaced_label_no_bytes :
-    (Wire.encodePackage ⟨[], .record [], .record [("a b", .nat)], .record [("a b", .nat 0)], [], [], [], .empty⟩).isNone = true := by
+    (Wire.encodePackage ⟨[], .record [], .record [("a b", .nat)], .record [("a b", .nat 0)], [], [], [], .empty, []⟩).isNone = true := by
   decide +kernel
 
 private def labelTree (ℓ : Label) : Tree :=
   .node 0 .empty [.node 0 .empty [], Wire.tyTree (.record []), .node 4 .empty [.node 6 ℓ.toUTF8 [.node 0 .empty []]],
-    Wire.termTree (.record []), .node 1 .empty [], .node 1 .empty [], .node 2 .empty [], .node 0 .empty []]
+    Wire.termTree (.record []), .node 1 .empty [], .node 1 .empty [], .node 2 .empty [], .node 0 .empty [], .node 3 .empty []]
 
 /-- The decoder's side of the narrowing: a package tree whose interface row holds the label `a b`
 reads as no package, and the same tree with `ab` reads. -/

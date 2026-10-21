@@ -56,6 +56,8 @@ constant: a deposit's grant-named transfer is not a payout).
 import Ledger.Proofs.Escrow
 import Lang.Proofs.Extract
 import Lang.Proofs.Invoke
+import Lang.Proofs.Contextual.ClosedLeaf
+import Lang.Proofs.Contextual.LawReceiver
 import Kernel.Proofs.RootedDeployed
 
 namespace Nanodregg.Ledger.Proofs
@@ -269,6 +271,21 @@ theorem escrow_run_calls (hdig : ∀ x, digestOf (bytesOf x) = some x)
         transferD, ofD, optSome, optNone, bind, Except.bind, pure, Except.pure, Except.map] at hc
     exact ⟨_, hsd, rfl, .inr (.inr ⟨rfl, hds ▸ hrb, _, rfl, hc.symm⟩)⟩
 
+private theorem runLive_of_program {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+    {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
+    {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (h : (Lang.program bytesOf digestOf).run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
+    ∃ n, runMeasuredLive bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, used, n) := by
+  change (runMeasuredLive bytesOf digestOf look rv pkg state method args r budget).map _ = _ at h
+  cases hm : runMeasuredLive bytesOf digestOf look rv pkg state method args r budget with
+  | error _ => rw [hm] at h; cases h
+  | ok y =>
+    obtain ⟨s', calls', rows', t', n'⟩ := y
+    rw [hm] at h
+    simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+    exact ⟨_, rfl⟩
+
 /-- **At the kernel's call**: `invoke` runs `X.program.run` on the object's package; where that
 program is the language over the World's own codec and the `Ctx` is lawful, a successful run of the
 escrow package returns exactly the method's one transfer (`escrow_run_calls`). -/
@@ -280,15 +297,9 @@ theorem escrow_program_calls {X : Ctx D} (hX : X.Lawful) (hp : X.program = Lang.
     (h : X.program.run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
     RunCalls X.digestOf state method args r.self calls s := by
   rw [hp] at h
-  change (runMeasured X.env.bytes X.digestOf look rv pkg state method args r budget).map _ = _ at h
-  cases hm : runMeasured X.env.bytes X.digestOf look rv pkg state method args r budget with
-  | error _ => rw [hm] at h; cases h
-  | ok y =>
-    obtain ⟨s', calls', rows', t', n'⟩ := y
-    rw [hm] at h
-    simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl, rfl, -⟩ := h
-    exact escrow_run_calls hX.digestOf_bytes hpkg hm
+  obtain ⟨n, hm⟩ := runLive_of_program h
+  rw [runMeasuredLive_leaf_closed (hX.digestOf_bytes pkg) hpkg rfl rfl] at hm
+  exact escrow_run_calls hX.digestOf_bytes hpkg hm
 
 end
 
@@ -331,21 +342,6 @@ inductive Runs (prog : Program D) (pkg : D) (p : Package) : Slots → List (List
       Runs prog pkg p next rest → Runs prog pkg p state (calls :: rest)
 
 variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
-
-private theorem run_of_program {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
-    {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
-    {rows : List (RowSlot D × RowAct)} {used : Nat}
-    (h : (Lang.program bytesOf digestOf).run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
-    ∃ t n, runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n) := by
-  change (runMeasured bytesOf digestOf look rv pkg state method args r budget).map _ = _ at h
-  cases hm : runMeasured bytesOf digestOf look rv pkg state method args r budget with
-  | error _ => rw [hm] at h; cases h
-  | ok y =>
-    obtain ⟨s', calls', rows', t', n'⟩ := y
-    rw [hm] at h
-    simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl, rfl, -⟩ := h
-    exact ⟨_, _, rfl⟩
 
 /-- **A settled escrow admits no run**: the receiver's judge of the escrow package (and any further
 laws) refuses every transition out of slots that read as a `released` or `refunded` state, whatever
@@ -393,6 +389,18 @@ theorem escrow_step_admits (hdig : ∀ x, digestOf (bytesOf x) = some x)
     ∃ o n, readState digestOf (recordRow escrow.state) old = .ok o ∧
       readState digestOf (recordRow escrow.state) new = .ok n ∧ Std.Admits [] law (reqData bytesOf r) n o := by
   obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_admits_relib bytesOf digestOf (hdig pkg) hpkg escrow_body (escrow_judgeOne h)
+  exact ⟨o, n, ho, hn, hall "escrow" (by rw [escrow_laws]; simp) law escrow_field escrow_law_isLaw escrow_law_noRef []⟩
+
+/-- Live package judging admits the escrow's same closed law; other judging laws may be contextual. -/
+theorem escrow_step_admits_live (hdig : ∀ x, digestOf (bytesOf x) = some x)
+    {look : Pinned D} {pkg : D} {laws : List D} {old new : Slots} {r : Req D}
+    (hpkg : readPackage look pkg = .ok escrow)
+    (h : Lang.judgeContextual bytesOf digestOf look (some pkg) laws old new r = .ok ()) :
+    ∃ o n, readState digestOf (recordRow escrow.state) old = .ok o ∧
+      readState digestOf (recordRow escrow.state) new = .ok n ∧ Std.Admits [] law (reqData bytesOf r) n o := by
+  have hj := judgeContextual_mem h (l := pkg) (by simp)
+  rw [judgeOneContextual_leaf_closed (hdig pkg) hpkg rfl rfl] at hj
+  obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_admits_relib bytesOf digestOf (hdig pkg) hpkg escrow_body hj
   exact ⟨o, n, ho, hn, hall "escrow" (by rw [escrow_laws]; simp) law escrow_field escrow_law_isLaw escrow_law_noRef []⟩
 
 /-- **What a run's calls say of the state it leaves**: at most one payout, and a payout only from
@@ -467,12 +475,13 @@ theorem runs_chain (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} :
   | nil => exact fun _ => ⟨[], rfl, .nil _, by simp⟩
   | @cons look rv state method args r budget s calls rows used laws next rest hpkg hrun hj hnext hr ih =>
       intro o ho
-      obtain ⟨o', n, ho', hn, hadm⟩ := escrow_step_admits hdig hpkg hj
+      obtain ⟨o', n, ho', hn, hadm⟩ := escrow_step_admits_live hdig hpkg hj
       rw [ho] at ho'
       cases ho'
       have hn' : readState digestOf (recordRow escrow.state) next = .ok n := (readState_get hnext).trans hn
       obtain ⟨ps, hps, hc, hp⟩ := ih hn'
-      obtain ⟨t, k, hm⟩ := run_of_program hrun
+      obtain ⟨k, hm⟩ := runLive_of_program hrun
+      rw [runMeasuredLive_leaf_closed (hdig pkg) hpkg rfl rfl] at hm
       have hpay := runCalls_payout (escrow_run_calls hdig hpkg hm) hn
       refine ⟨(calls, (reqData bytesOf r, n)) :: ps, by simp [hps], .cons hadm hc, fun x hx => ?_⟩
       rcases List.mem_cons.mp hx with rfl | hx
@@ -486,7 +495,7 @@ theorem runs_start (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {stat
     ∃ o, readState digestOf (recordRow escrow.state) state = .ok o := by
   cases h with
   | cons hpkg _ hj _ _ =>
-      obtain ⟨o, -, ho, -⟩ := escrow_step_admits hdig hpkg hj
+      obtain ⟨o, -, ho, -⟩ := escrow_step_admits_live hdig hpkg hj
       exact ⟨o, ho⟩
 
 /-- **After a payout, the receiver commits nothing more** on the escrow: a run that returned a

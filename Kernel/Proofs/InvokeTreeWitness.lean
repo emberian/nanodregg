@@ -187,11 +187,12 @@ private theorem load_one {look : Pinned UInt8} {id : UInt8} {b : ByteArray} {p :
     simp only [bind, Except.bind, hs, hd]
     rfl
   have hid : idOf wDigestOf (wEnv.bytes id) = .ok id := rfl
-  rw [Lang.load.eq_def]
+  unfold Lang.load
+  rw [Lang.loadUsing.eq_def]
   simp only [indexIn, closureDepthMax]
   rw [hid]
   simp only [hr, hi]
-  rw [Lang.loadAll.eq_def]
+  rw [Lang.loadAllUsing.eq_def]
 
 private theorem counter_decodes : Wire.decodePackage cBytes = .ok counter :=
   Wire.decodePackage_eq_ok_iff.mpr counter_encodes
@@ -233,6 +234,12 @@ private theorem c1_pkgC : readKind (pinned wCtx.env w0 c1.unsigned.pins) 9 kindP
 private theorem c1_pkgR : readKind (pinned wCtx.env w0 c1.unsigned.pins) 10 kindPackage = .ok rPkgCell := by
   rfl
 
+private theorem c1_readC : readPackage (pinned wCtx.env w0 c1.unsigned.pins) 9 = .ok counter :=
+  readPackage_installed c1_pkgC (by rfl) counter_encodes
+
+private theorem c1_readR : readPackage (pinned wCtx.env w0 c1.unsigned.pins) 10 = .ok relay :=
+  readPackage_installed c1_pkgR (by rfl) relay_encodes
+
 private theorem c1_invokeRunA :
     invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 7 6 0 none = .ok (aCell, 10, reqA) :=
   of_isOkAs (by decide +kernel)
@@ -240,22 +247,24 @@ private theorem c1_invokeRunA :
 private theorem c1_runA :
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 10 (stateOf aCell)
       0 (natBytes 0) reqA (min 1000 wk0.pool) = .ok (sA, [bodyB], [], 59) := by
-  show (runMeasured wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
-  unfold runMeasured runSetup
+  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 10) = some 10 from rfl) c1_readR rfl rfl]
+  unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_one c1_pkgR relay_decodes rfl]
   exact of_runIs (by decide +kernel)
 
 private theorem c1_judgeOneA :
     judgeOne wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) 10 (stateOf aCell) sA reqA = .ok () := by
-  unfold judgeOne
+  unfold judgeOne judgeOneWith
   rw [load_one c1_pkgR relay_decodes rfl]
   exact of_isOkAs (by decide +kernel)
 
 private theorem c1_judgeA :
     wCtx.program.judge (pinned wCtx.env w0 c1.unsigned.pins) (some 10) [] (stateOf aCell) sA reqA = .ok () := by
-  show Nanodregg.Lang.judge wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) (some 10) [] (stateOf aCell)
+  show Nanodregg.Lang.judgeContextual wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) (some 10) [] (stateOf aCell)
     sA reqA = .ok ()
-  unfold Nanodregg.Lang.judge
+  unfold Nanodregg.Lang.judgeContextual
+  simp only [judgeOneContextual_leaf_closed (show wDigestOf (wEnv.bytes 10) = some 10 from rfl) c1_readR rfl rfl]
   simp only [c1_judgeOneA]
   rfl
 
@@ -266,22 +275,24 @@ private theorem c1_invokeRunB :
 private theorem c1_runB :
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 9 (stateOf bCell)
       0 (natBytes 4) reqB (min 1000 wkA.pool) = .ok (sB, [], [], 41) := by
-  show (runMeasured wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
-  unfold runMeasured runSetup
+  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl) c1_readC rfl rfl]
+  unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_one c1_pkgC counter_decodes rfl]
   exact of_runIs (by decide +kernel)
 
 private theorem c1_judgeOneB :
     judgeOne wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) 9 (stateOf bCell) sB reqB = .ok () := by
-  unfold judgeOne
+  unfold judgeOne judgeOneWith
   rw [load_one c1_pkgC counter_decodes rfl]
   exact of_isOkAs (by decide +kernel)
 
 private theorem c1_judgeB :
     wCtx.program.judge (pinned wCtx.env w0 c1.unsigned.pins) (some 9) [] (stateOf bCell) sB reqB = .ok () := by
-  show Nanodregg.Lang.judge wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) (some 9) [] (stateOf bCell)
+  show Nanodregg.Lang.judgeContextual wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) (some 9) [] (stateOf bCell)
     sB reqB = .ok ()
-  unfold Nanodregg.Lang.judge
+  unfold Nanodregg.Lang.judgeContextual
+  simp only [judgeOneContextual_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl) c1_readC rfl rfl]
   simp only [c1_judgeOneB]
   rfl
 
@@ -353,8 +364,9 @@ private def sB5 : Slots := [(stateBase, natBytes 8)]
 private theorem c1_runB5 : ∃ cs rs u,
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 9 (stateOf bCell)
       0 (natBytes 5) reqB (min 1000 wkA.pool) = .ok (sB5, cs, rs, u) := by
-  show ∃ cs rs u, (runMeasured wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
-  unfold runMeasured runSetup
+  show ∃ cs rs u, (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl) c1_readC rfl rfl]
+  unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_one c1_pkgC counter_decodes rfl]
   exact of_runStateIs (by decide +kernel)
 

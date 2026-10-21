@@ -152,7 +152,12 @@ def termSx (d : Nat) : Term → Option SExp
   | .case t arms => do pure (list (atom "case" :: (← termSx d t) :: (← armsSx d arms)))
   | .ite c a b => do pure (list [atom "if", ← termSx d c, ← termSx d a, ← termSx d b])
   | .ref i => some (list [atom "ref", atom (Nat.repr i)])
+  | .hole n σ => do pure (list [atom "hole", atom (Nat.repr n), list (atom "subst" :: (← termsSx d σ))])
   | .refuse T w => do pure (list [atom "refuse", ← tySx T, bytesSx w])
+
+def termsSx (d : Nat) : List Term → Option (List SExp)
+  | [] => some []
+  | t :: ts => do pure ((← termSx d t) :: (← termsSx d ts))
 
 def fieldsSx (d : Nat) : List (Label × Term) → Option (List SExp)
   | [] => some []
@@ -214,6 +219,25 @@ a doc that is not `Bounds.docOk`. -/
 def docSx (w : ByteArray) : Option SExp :=
   if Bounds.docOk w then some (list (atom "doc" :: if w.isEmpty then [] else [bytesSx w])) else none
 
+def holePinSx (p : HolePin) : SExp :=
+  list [atom "pin", atom (Nat.repr p.rel), digestSx p.key, atom (Nat.repr p.ver)]
+
+def holeOptPinSx : Option HolePin → SExp
+  | none => list [atom "structural"]
+  | some p => holePinSx p
+
+def holeCodeSx (ctx : List Ty) (c : HoleCode) : Option SExp := do
+  pure (list [atom "candidate", ← termSx ctx.length c.body,
+    list (atom "supports" :: c.supports.map holePinSx)])
+
+def holeROMSx (h : HoleROM) : Option SExp := do
+  pure (list [atom "hole", atom (Nat.repr h.name),
+    list (atom "context" :: (← h.ctx.mapM tySx)), list [atom "result", ← tySx h.ty],
+    list [atom "selection", atom (Nat.repr h.selectionRel), digestSx h.selectionKey],
+    list (atom "hypotheses" :: h.hypotheses.map holeOptPinSx),
+    list [atom "guard", holeOptPinSx h.guardPin, ← termSx 1 h.guard],
+    list (atom "code" :: (← h.code.mapM (holeCodeSx h.ctx)))])
+
 /-- The eight sections of `(package …)`, in the order `Read.package` requires. -/
 def sectionsSx (p : Package) : Option (List SExp) := do
   pure [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)),
@@ -226,10 +250,27 @@ def sectionsSx (p : Package) : Option (List SExp) := do
     list [atom "body", ← termSx 0 p.body]]
 
 /-- The package's text, one section per line. -/
-def package (p : Package) : Option String := do
-  let xs := atom "package" :: (← sectionsSx p)
+def packageText (p : Package) : Option String := do
+  let base ← sectionsSx p
+  let extra ← if p.holes.isEmpty then some [] else do
+    pure [list (atom "holes" :: (← p.holes.mapM holeROMSx))]
+  let xs := atom "package" :: (base ++ extra)
   if fitsB (list xs) then
     pure (String.ofList ('(' :: items ['\n', ' ', ' '] xs ++ ['\n']))
   else none
+
+/-- Contextual ROM text must preserve the signature literally. The named refusal
+distinguishes a noncanonical contextual package from unprintable surface syntax. -/
+def contextualText (p : Package) (s : String) : Except String String :=
+  match Read.readPackage s with
+  | .ok q => if q = p then .ok s else .error "contextualPrintMismatch"
+  | .error _ => .error "contextualPrintRead"
+
+/-- Closed packages retain the existing printer's invalid-input behavior, whose
+roundtrip theorem requires canonical types/relations. Contextual ROMs additionally
+check literal readback, since their signature is a runtime commitment. -/
+def package (p : Package) : Option String := do
+  let s ← packageText p
+  if p.holes.isEmpty then some s else (contextualText p s).toOption
 
 end Nanodregg.Lang.Print

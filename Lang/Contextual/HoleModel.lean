@@ -39,7 +39,7 @@ def holeModelTemplate (V : Lang.Ty) (guard : E → Term → Bool) (chooser accep
     Template langData E where
   Γ := []
   T := V
-  P := .ref 0
+  P := .hole 0 []
   Ω := [holeModelIface V guard chooser acceptor]
   names := by simp
 

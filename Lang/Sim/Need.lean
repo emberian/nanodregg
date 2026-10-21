@@ -77,6 +77,7 @@ def need (lib : List Term) : Nat → Env → Term → Option (Except Fault Val �
     | .bytes s => some (.ok (.bytes s), 1)
     | .digest s => some (.ok (.digest s), 1)
     | .refuse _ w => some (.error (.refused w), 1)
+    | .hole _ _ => some (.error (.refused "holeUnresolved".toUTF8), 1)
     | .prim p a b =>
       match need lib f env a with
       | some (.error e, n) => some (.error e, n + 1)
@@ -258,6 +259,19 @@ def requiredOf (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (met
   | some (.ok v, n) =>
     match needExtract S.lib budget S.ty v with
     | some m => pure (n + m)
+    | none => throw (.program "required: extraction")
+  | some (.error _, _) => throw (.program "required: a fault is not a run")
+  | none => throw (.program "required: fuel")
+
+/-- The live method's derivation count plus its explicit ROM preparation charge.
+This uses the same authenticated setup as the deployed invocation. -/
+def requiredOfLive (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) : Except (Refusal D) Nat := do
+  let S ← runSetupLive bytesOf digestOf look rv pkg state method args r
+  match need S.lib budget S.env S.term with
+  | some (.ok v, n) =>
+    match needExtract S.lib budget S.ty v with
+    | some m => pure (S.preparation + n + m)
     | none => throw (.program "required: extraction")
   | some (.error _, _) => throw (.program "required: a fault is not a run")
   | none => throw (.program "required: fuel")

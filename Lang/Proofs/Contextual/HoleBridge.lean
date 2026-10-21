@@ -11,22 +11,11 @@ variable {E : Type}
 open Std
 
 /-- Every generated interface inhabits the landed closed-hole Lang instance.
-The boundary remains langTemplate_no_hyps; this does not claim contextual
-strengthening or hypothesis-derived support is reachable in Lang. -/
+This is the empty-context specialization of the live contextual signature. -/
 theorem holeModelTemplate_typed (V : Lang.Ty) (guard : E → Term → Bool)
     (chooser acceptor : Party) :
     Template.Typed (holeModelTemplate V guard chooser acceptor) LangHasTy := by
-  refine ⟨?_, ?_, .ref ?_⟩
-  · intro d hd
-    change d ∈ [⟨0, [], V⟩] at hd
-    simp only [List.mem_singleton] at hd
-    subst d
-    rfl
-  · intro n hn
-    simp only [holeModelTemplate, Term.usesRef, beq_iff_eq] at hn
-    subst n
-    rfl
-  · rfl
+  exact .hole (d := ⟨0, [], V⟩) rfl .nil
 
 /-- In the deployed closed fragment, checker/guard/support/blocker observations
 characterise verified judgment. Historical row status contributes no premise. -/

@@ -31,15 +31,11 @@ live. Withdrawal is a liveness change: it can suspend, it never refutes (`confli
 only from the checker and the guard, which read no token).
 -/
 
+import Lang.Contextual.HoleDecl
+
 namespace Nanodregg.Lang.Contextual
 
 /-! ## The abstract calculus -/
-
-/-- A hole declaration `u :: [Ψ ⊢ A]`: the hole's name, its local context, its type. -/
-structure HoleDecl (Ctx Ty : Type) where
-  name : Nat
-  ctx : Ctx
-  ty : Ty
 
 /-- The DATA of a contextual calculus the closure theory uses (its laws, with the typing relation,
 are `Lang.Proofs.Contextual.Closure.CalculusLaws`). -/

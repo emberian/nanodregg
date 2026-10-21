@@ -1,8 +1,9 @@
 /- A guarded hole: retained candidates, withdrawable facts and blocker reasons.
 Acceptance dispatches the selected value as an ordinary activity. -/
-import Lang.StdActivity
+import Lang.HoleSyntax
 
 namespace Nanodregg.Lang.Std
+open HoleSyntax
 
 def holeState : Ty := .record [("accepted", .bool), ("acceptor", .digest),
   ("cap", .nat), ("chooser", .digest), ("closes", .nat), ("selected", optTy .digest)]
@@ -33,32 +34,6 @@ def holeVerdict : Ty := .sum [
   ("support0Moved", .record []), ("support0Withdrawn", .record []),
   ("support1Moved", .record []), ("support1Withdrawn", .record []),
   ("verified", .record [])]
-
-private abbrev H := List Label → Term
-private def hv (x : Label) : H := fun sc => .var (sc.idxOf x)
-private def hc (t : Term) : H := fun _ => t
-private def hg (t : H) (l : Label) : H := fun sc => .get (t sc) l
-private def hr (fs : List (Label × H)) : H :=
-  fun sc => .record (Row.sort (fs.map fun (l, t) => (l, t sc)))
-private def hi (T : Ty) (l : Label) (t : H) : H := fun sc => .inj T l (t sc)
-private def hl (x : Label) (T : Ty) (t : H) : H := fun sc => .lam T (t (x :: sc))
-private def ha (f : H) (xs : List H) : H := fun sc => activityApply (f sc) (xs.map (· sc))
-private def hf (t : H) (arms : List (Label × Label × H)) : H :=
-  fun sc => .case (t sc) (Row.sort (arms.map fun (l, x, b) => (l, b (x :: sc))))
-private def ht (c a b : H) : H := fun sc => .ite (c sc) (a sc) (b sc)
-private def hp (p : Prim) (a b : H) : H := fun sc => .prim p (a sc) (b sc)
-private def he (T : Ty) (a b : H) : H := fun sc => eqData T (a sc) (b sc)
-private def hu (t : H) (fs : List (Label × H)) : H :=
-  fun sc => .extend (t sc) (Row.sort (fs.map fun (l, b) => (l, b sc)))
-private def hn : H := hr []
-private def hb (b : Bool) : H := hc (.bool b)
-private def hs (s : String) : H := hc (.bytes s.toUTF8)
-private def hnone (T : Ty) : H := hi (optTy T) "none" hn
-private def hsome (T : Ty) (t : H) : H := hi (optTy T) "some" t
-
-
-private def hlet (name : Label) (T : Ty) (value body : H) : H :=
-  ha (hl name T body) [value]
 
 /-- One point's observation: absent 0, same token 1, moved version 2. -/
 def holeProbePoint : Term :=
@@ -204,9 +179,6 @@ private def hcheck (_T : Ty) (c : H) (why : String) (rest : H) : H :=
 private def hunwrap (T : Ty) (value : H) (why : String) : H :=
   hf value [("none", "_", hc (.refuse T why.toUTF8)), ("some", "_value", hv "_value")]
 
-private def hguard (c : H) (why : String) (rest : H) : H :=
-  ht c rest (hc (refusedT why))
-
 /-- Poster-only fact edits. An upsert cannot transfer ownership. -/
 def holePosted : Term :=
   let yours (x : H) := hp .deq (hg x "by") (hg (hv "req") "agent")
@@ -267,10 +239,10 @@ def holeResumer : Term :=
 /-- Generate one hole object. Selection is still revisable; acceptance is the
 dispatch boundary and starts the immutable captured-value activity. The generic
 start_fill is not exported: only accept may dispatch a selected candidate. -/
-def holePackage (V : Ty) (clause : Term) : Package := Id.run do
+def holePackage (V : Ty) (clause : Term) (extraRels : List (Label × RelDecl) := []) : Package := Id.run do
   let p := holePlan V
   let base := activityPackage holeState "pending" "fills" 64 1024 holeResumer [p]
-    [("candidates", holeCandidates V), ("facts", holeFacts)]
+    ([("candidates", holeCandidates V), ("facts", holeFacts)] ++ extraRels)
   let rels := base.rels
   let E := editTy rels
   let candArg := Ty.record [("cand", .digest)]
@@ -398,8 +370,8 @@ def HoleBundle.link (b : HoleBundle) (ids : List ByteArray) : Except HoleRefusal
 
 /-- Emit a bounded import bundle. Helpers are ordinary checked ROMs; the root
 contains only field selections from them. No bound or wire format changes. -/
-def hole (V : Ty) (clause : Term) : Except HoleRefusal HoleBundle := do
-  let p := holePackage V clause
+def hole (V : Ty) (clause : Term) (extraRels : List (Label × RelDecl) := []) : Except HoleRefusal HoleBundle := do
+  let p := holePackage V clause extraRels
   match p.checkWith [] with
   | .error e => throw (.check e)
   | .ok () => pure ()

@@ -58,10 +58,10 @@ def docOk (w : ByteArray) : Bool :=
 
 /-- The package wire's version (LANG-60): the first byte of every package's bytes. Bumped by every
 `lang!` that changes what package bytes mean, so a package written at another version is refused
-`lang/package-version` by name, never read as a different package. The package codec's label is
+`lang/package-version/4` by name, never read as a different package. The package codec's label is
 `lang/package/N` at version N (`Lang.Proofs.Wire.packageCodec_label`), so the bump moves the vectors'
 tag too. 3: LANG-60 (a doc, and this byte); the unversioned wires before it were `lang/package` and
 `lang/package/2` (LANG-59), each a node-0 tree whose first byte is 0, which no version may be. -/
-def packageWireVersion : UInt8 := 3
+def packageWireVersion : UInt8 := 4
 
 end Nanodregg.Lang.Bounds

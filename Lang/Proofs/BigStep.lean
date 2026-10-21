@@ -46,6 +46,8 @@ inductive BigStep (lib : List Term) : Env → Term → (Except Fault Val) → Pr
   | digest {env s} : BigStep lib env (.digest s) (.ok (.digest s))
   /-- `refuse T why` means the refusal by its name (LANG-51) -/
   | refuse {env T w} : BigStep lib env (.refuse T w) (.error (.refused w))
+  /-- A residual hole refuses until live invocation has supplied its checked environment. -/
+  | hole {env n σ} : BigStep lib env (.hole n σ) (.error (.refused "holeUnresolved".toUTF8))
   | prim {env p a b x y} : BigStep lib env a (.ok x) → BigStep lib env b (.ok y) →
       primEval p x y ≠ .error .stuck → BigStep lib env (.prim p a b) (primEval p x y)
   | primL {env p a b e} : BigStep lib env a (.error e) → BigStep lib env (.prim p a b) (.error e)
@@ -129,7 +131,7 @@ theorem bigStep_deterministic {lib : List Term} :
     | fix ht' => cases bigStep_deterministic ht ht'
     | fixE ht' => exact bigStep_deterministic ht ht'
   | _, _, _, _, .nat, h' | _, _, _, _, .bool, h' | _, _, _, _, .bytes, h' | _, _, _, _, .digest, h'
-  | _, _, _, _, .record, h' | _, _, _, _, .refuse, h' => by cases h'; rfl
+  | _, _, _, _, .record, h' | _, _, _, _, .refuse, h' | _, _, _, _, .hole, h' => by cases h'; rfl
   | _, _, _, _, .prim ha hb _, h' => by
     cases h' with
     | prim ha' hb' _ => cases bigStep_deterministic ha ha'; cases bigStep_deterministic hb hb'; rfl

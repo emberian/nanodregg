@@ -1,5 +1,3 @@
 # decl	axiom	reason
 Nanodregg.Hosting.Proofs.invoke_slots	Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	the grain package on the deployed path (Lang.program run then judge on slots, both kinds x every phase x event); the slot codecs do not reduce in the kernel (decisions/hosting.md HOSTING-5)
 Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for invoke_slots
-Nanodregg.Lang.Print.badRel_reads_other	Nanodregg.Lang.Print.badRel_reads_other._native.native_decide.ax_1_1	the tooth of readPackage_package hr (LANG-49): a rel whose val record is not ascending prints and reads back as a different package; the reader over the printed text does not reduce under decide (maximum recursion depth)
-Nanodregg.Lang.Print.badRel_reads_other._native.native_decide.ax_1_1	Nanodregg.Lang.Print.badRel_reads_other._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for badRel_reads_other

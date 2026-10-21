@@ -4445,3 +4445,512 @@ An initial root-only accepted mutation changed no actual check and stayed
 GREEN; it was rejected as a no-op and replaced by the helper mutation. No
 production check was removed, no row expectation changed, no theorem weakened.
 The final source rebase also preserves HOSTING/0cd046c's unrelated startup fix.
+
+## LANG-P7 preparatory substitution and deployment fork (2026-10-21 real; CX-P7)
+
+**Scope.** Nano is a demonstration Mini can take. The ruled destination remains contextual
+holes in deployed Lang, not the closed-hole boundary of LANG-68. Main's fixed activities
+bundle is 68e704d. This preparatory entry does not claim that destination is implemented.
+
+**Decision before building the common foundation.** Add capture-avoiding simultaneous
+ordinary substitution over Lang.Term, with list substitution, lambda/case binder lifting,
+and its typing theorem over the current deployed HasType. This is necessary for either
+placement of contextual instantiation. The existing ref substitution is not replaced
+until the installed representation is settled. No existing executable/check changes.
+
+**PRICE PREMISES (foundation).** Landed theorems gaining hypotheses: none. Landed statements
+restated: none. Existing proof files touched: none. New proofs: substVarRow_ascending,
+upVarSubst_typed, substVar_typed, substVarFields_typed, substVarArms_typed,
+substListFn_typed, substList_typed, substList_lam_capture, substList_case_capture,
+substList_nested_capture, substList_ambient_checked, substList_replaces.
+All are implications or equations without a disjunctive escape.
+
+**Unresolved deployment fork, reported ASK to ROOT.** The generator's candidate relation stores
+value:V and checkRel requires its value to be data; the model's Candidate instead stores
+Term. The bridge explicitly assumes a closed context, empty hypothesis list and a typed
+filling. A substituted-hole constructor alone does not make syntax into a stored candidate.
+(1) Stage instantiation at authoring: check/fill/repair terms, emit and install each resulting
+closed package. This retains the old machine judgments as closed specializations with no
+added hypotheses, but the repair journey crosses authoring/install; it is not a dynamically
+resumable installed open term.
+(2) Retain a contextual signature and candidate code in package/ROMs, authenticate selected
+candidates through pinned rows, and instantiate for each fresh invocation. This requires a
+runtime hole environment and its typing, cost and provenance invariants, plus package-wire
+declarations. Old closed statements can remain specializations; the generalized statements
+must bind the environment checked by load, never assume an unverified filling is typed.
+Recommend (2) on semantics, not a cost argument against (1); no dependent change is made
+while this contract-required fork is pending. Re-genesis is never a design penalty.
+
+**Literature.** Murase, Nishiwaki and Igarashi, Contextual Modal Type Theory with Polymorphic
+Contexts (ESOP 2023, arXiv:1801.09225v2), abstract and introduction: context polymorphism
+abstracts over portions of a context and is the principled system for code under arbitrary
+ambient extensions. The ordinary weakening/substitution lemmas here are prerequisites,
+not an implementation of their context-polymorphic language. Norell, Towards a practical
+programming language based on dependent type theory (Chalmers PhD 2007), chapter 3,
+pp. 50–54: guarded constants in the signature retain a candidate and constraints and
+reduce only when the constraints are discharged. This precedes storing a blocked hole's
+guard with its declaration; it does not prove nano's withdrawal or effectful resumption.
+
+**Wire audit pending CODEC.** Bounds.packageWireVersion is 3. The unused term tag is 18
+(tag 15 is a row-field node, not a Term constructor). Adding hole at tag 18 requires a
+version bump, an updated boundary tooth and an explicit index/substitution encoding.
+Every package's leading version byte changes, so all package ROM IDs and transitive
+import IDs change. Old version-3 packages must refuse lang/package-version; no fallback.
+Emit/Vectors.lean owns termRows, rawPackage, packageVecs and the lang/package/3 site.
+Those are CODEC-owned; the lane has requested ROOT's patch or an explicit ownership grant.
+No source/vector meaning changes are claimed by this preparatory patch.
+
+**Critique.** This foundation is useful but not P7: no 18th constructor, no generalized
+LangHasTy and no deployed five-outcome journey yet. Proving capture avoidance without
+connecting it to fillRefs would merely move the same integration boundary. The final
+implementation must use this function at hole occurrences and test real installed code.
+**Meta-critique.** It would be convenient to call a repaired host-side Term a deployed hole,
+or to choose staging just because its proofs are smaller. The explicit fork keeps that
+scope choice visible. Conversely, a second evaluator for code bytes would create a twin;
+the live design must use the existing checker and demand machine.
+
+## LANG-P7 live contextual packages — implementation ruling (2026-10-21 real, CX-P7 run 2)
+
+**Decision before construction.** ROOT ruled the live shape: the typed hole signature and
+candidate code reside in the package ROM, current selections and their support are checked
+from pinned rows, and every fresh invocation instantiates the selected code with the explicit
+substitution at its hole occurrences. It runs the existing demand machine. No staged package
+replacement or second evaluator is introduced. Ordinary package refs and contextual holes have
+separate namespaces. The checker retains its closed API and gains a signature-indexed
+form of the SAME recursion; the typing relation checks each substitution entry against the
+corresponding declared context, including exact length. An unresolved hole is refused by name.
+
+**PRICE PREMISES.** Landed theorem hypotheses added: none. Existing closed APIs remain
+specializations; generalized results explicitly bind the checked signature and environment.
+Affected proofs: inferE_sound/complete, inferFields_sound/complete, inferArms_sound/complete,
+infer_sound/complete/iff, hasType_wf/fieldsTy_wf/armsTy_wf, relocate_typed and row/arm companions,
+relocate_id/relocateRow_id, load_libTy, bigStep_deterministic and sel/ext companions, agrees,
+derives_leads, derives_bigStep/bigStep_derives, step_sound/progress/preserves/depth,
+checkLib_sound/checked_never_stuck, stepBytes_le_paid/step_paid, Need/NeedComplete induction,
+bigStep_relib/sel_relib/ext_relib, relocate_noRef/relocateRow_noRef, step_lits,
+relocate_digestLits and row companion, term_termSx and row/arm companions, termSx_ok,
+hasType_canon/hasType_prints and companions, termOf_termTree/fieldsOf_fieldsTree,
+termOf_inv/tree_of_termOf and package inverse/version teeth. Contextual instance proofs:
+rename composition/identity/congruence, usesVar rename, strengthening factor, variable
+renaming typing, usesRef rename/fill origins, fillRefs_typed and row/arm companions,
+declaration lookup/filter, langHasTy_nil_iff, langLaws, lang_template_toy and HoleBridge.
+The explicitly authorized boundary langTemplate_no_hyps is replaced by deployed strengthening.
+This is a pre-build spread, not a claim all ports have compiled.
+
+**Literature and scope.** Murase, Nishiwaki and Igarashi, Contextual Modal Type Theory with
+Polymorphic Contexts (ESOP 2023; arXiv:1801.09225v2), motivates code typed under abstract
+ambient contexts; ordinary capture-avoiding substitution does not by itself implement their
+polymorphic calculus. Norell, Towards a practical programming language based on dependent
+type theory (2007), chapter 3 pp.50–54, supplies the precedent of guarded constants in the
+signature: a blocked declaration persists and reduces only once its guard discharges.
+Nano retains its explicit guard and authenticated dependency observations at invocation.
+
+**Wire contract.** Leading package version 03 becomes 04; lang/package/3 becomes
+lang/package/4. Hole term tag 18 (hex12), u32 index payload, children in substitution order.
+Existing term/type/primitive tag meanings do not move. Unknown-tag tooth becomes19;
+malformed tag18 payload and substitution children receive separate teeth. The signature and
+candidate sections are part of the ROM tree; their exact section table is recorded with the
+implementation before vector generation. Every package re-ids; import digest literals re-emit
+transitively. Version3 refuses lang/package-version. No old bytes are reinterpreted.
+ROOT grants Emit/Vectors.lean and generated CODEC outputs plus gates/codec-vectors.tsv;
+generated output is emitted, never hand-edited. No handoff is READY until vectors and the
+live deployed experiments have run.
+
+**Critique.** Invocation-time expansion must be bounded before allocation grows; candidate
+syntax must be checked against its own context rather than a same-result-type impostor.
+Loading ROM alone authenticates no selection row: the live runner must check pinned support
+and account for the actual chosen code, with wrong-context, cost and moved-support plants.
+**Meta-critique.** Calling author-time filling deployed would repeat LANG-68. Equally,
+changing every closed theorem to assume a sound runtime environment would hide a missing
+boundary proof. The closed specializations and the checked environment theorem prevent that.
+
+### LANG-P7 runtime boundary refinement (CX-P7, real 2026-10-21)
+PRICE PREMISES: no landed theorem gains a hypothesis. Existing load, install,
+runSetup and source/provenance statements remain the closed specializations;
+live loading must additionally prove the checked instantiation invariant.
+The generalized checker treats a hole signature like its library context;
+wellformedness of declared context/result types is checked at the package
+boundary, not imposed as an extra premise on the old arbitrary-type hole model.
+This avoids silently restricting its quantified result type.
+
+Live ROM declarations carry the contextual type, candidate syntax, a pinned
+selection location, context support locations and expected versions, and a
+typed guard. The selection row supplies only a candidate index, never code.
+All candidate syntax is checked when admitting the package and again when
+instantiating; selection and support are read from the authenticated RowView.
+The same evaluator runs the guard and the filled method. Preparation is per
+invocation, and no filled package is encoded, installed, or cached as a ROM.
+An unused withdrawn contextual assumption can be removed by strengthening;
+a used withdrawn assumption suspends that selection unless a supported candidate
+is explicitly selected. Guard failure stays blocked. Cost is computed from
+actual template and candidate syntax before output allocation.
+Critique: retaining closed APIs risks proving only the old path. The live
+deployed journey and live invariant theorems must therefore name the deployed
+entry points, including current-row reauthentication, not just the checker.
+Meta-critique: package bytes commit to syntax, while invocation pins commit to
+the evolving facts. Conflating those commitments would either stage the design
+or accept stale support. Both are excluded by the runtime boundary above.
+
+### LANG-P7 deployment bridge and textual identity (CX-P7, real 2026-10-21)
+PRICE PREMISES: none added. program_run_past_extraction now names runSetupLive
+and charges total budget = machine budget + S.preparation. Its machine run and
+extraction premises are unchanged; the original runMeasured_past_extraction
+remains the closed specialization. New live variants prove the actual deployed
+program path. loadUsing is one shared closure traversal, parameterized by
+admission; closed and contextual admission both produce closed typed machine
+libraries. The contextual admission retains original ROM packages, rechecks all
+candidate code and literals, and fills transient library bodies afresh.
+
+Readable package text adds a holes section containing hole/context/result,
+selection, hypotheses, guard, and code/candidate/supports forms. A candidate's
+explicit context uses the printer's existing xN binder names. Empty signatures
+retain the old source spelling (source is not the versioned wire). The printer
+checks its completed text against the one reader before returning: Read sorts
+rows, so otherwise malformed metadata could print as a different ROM. No decoder,
+gate, or canonicality check is relaxed. Positive live print/read rows and an
+identity mutation tooth are required, since a success implication alone cannot
+show the printer produces a useful artifact. Critique: this is an additional
+reader pass. Meta-critique: it shares the authoritative source normalization and
+makes textual ROM identity an executable invariant instead of maintaining a
+second normalization checker.
+
+### LANG-P7 CODEC flag day: exact moving bytes (CX-P7, real 2026-10-21)
+PRICE PREMISES: none gained. Wrong-version theorem conclusions restate the
+version-specific refusal site lang/package-version/4. The actual vector check
+caught that changing the accepted version under the old unversioned refinement
+name changes meaning under the same tag; the site is therefore renamed, not
+re-pinned under its old tag.
+
+| Location | Old bytes/schema | New bytes/schema |
+| --- | --- | --- |
+| Package prefix | 03 | 04 |
+| Package root child count | 08 | 09 |
+| Ninth root child, including closed packages | absent | tag 03, empty payload, hole-declaration children (empty section is 03 00 00) |
+| Term | tag 12 hex unused | tag 12 hex, four-byte little-endian hole name payload, direct ordered substitution term children |
+| First unknown term tooth | tag 12 hex | tag 13 hex; separate tag-12 empty-payload malformed-hole row retained |
+| Hole declaration | absent | tag 03, u32LE name payload, seven ordered children: context, result, candidates, selection, hypotheses, guard pin, guard code |
+| Context | absent | node0 empty payload, ordered tyTree children |
+| Candidates | absent | node0 empty payload, ordered candidate children; each node0 empty [termTree body, node0 empty support pins] |
+| Selection | absent | node0 key bytes [node0 u32LE relation leaf] |
+| Hypotheses | absent | node0 empty, one optional pin per contextual variable |
+| Pin | absent | node0 key bytes [node0 u32LE relation leaf, node0 u64BE version leaf] |
+| Optional pin | absent | none = node0 empty leaf; some = node1 empty [pin] |
+| Guard code | absent | existing termTree encoding; guard gets one boolean variable |
+| Refinement names/tags | lang/package/3 and lang/package-version | lang/package/4 and lang/package-version/4 |
+
+All existing type tags, primitive tags, term tags 0..17, and first eight package
+sections retain their internal encodings. Tree node/payload/child lengths retain
+the existing canonical varints. All packages re-id, including closed helpers:
+the prefix and ninth section change. Re-emit package ROMs/helper bundles, source
+unit installs and package vectors; regenerate generated.rs through emit-rust
+(the protocol table is expected byte-identical and must be checked). Old
+version-3 and unversioned packages refuse at lang/package-version/4 before their
+tree is interpreted. There is no old-version loader or reinterpretation. Source
+package text remains readable and gains an explicit holes section for live ROMs.
+The ordinary vectors emitter includes every constructor plus a declaration with
+both optional-pin cases, multiple candidates, supports, a guard and nonempty
+substitution; generated-files must compare it against a fresh emit.
+
+The closed checkWith specialization now explicitly refuses a nonempty contextual
+signature and non-wellformed import interfaces. The deployed contextual checker
+handles the live signature. These checks make the closed boundary explicit and
+retain every theorem's premises; no deployed valid import was previously allowed
+a malformed interface (every loaded package already passed checkShape).
+
+### LANG-P7 live resolution and final proof spread (CX-P7, real 2026-10-21)
+PRICE PREMISES: LANDED theorems gaining a hypothesis: none. Checker soundness,
+completeness, equivalences and uniqueness generalize the signature with the empty
+specialization preserved. Renaming/strengthening do likewise. fillRefs_typed,
+fillRefsFields_typed and fillRefsArms_typed replace the obsolete ref-as-hole
+hypotheses with contextual candidate typing and retained declarations; ordinary
+imports stay untouched. hasType_usesRef, fieldsTy_usesRef and armsTy_usesRef now
+name declared holes. step_fault includes the residual-hole refusal case.
+program_run_past_extraction names live setup and the charged preparation budget.
+The five version-refusal conclusions name the version-4 codec sites. Fixture
+constructors gain the empty signature field; the unknown-tag fixture moves to19.
+The sole deleted theorem is the explicitly superseded langTemplate_no_hyps;
+deployed generated_signature, linked_signature, selected_uses_context,
+strengthening_factor and strengthening_uses_argument replace its boundary.
+Other touched landed statements retain their hypotheses and conclusions.
+
+Resolution is a sum of authenticated selected code and a typed blocked refusal.
+A blocked resolution produces no selection receipt; demanding it fires the
+original refusal name. Independent management code remains callable to bootstrap
+or repair it. This is the ROOT-ruled Norell-style guard behavior; it does not turn
+a demanded refusal into an accepted result. Both cases enter the same final
+closed typing, literal-source and size checks. Guard execution is bounded to256
+machine ticks; the explicit structural preparation charge is bounded by the ROM's
+maximum candidate syntax and number of declarations. The cost theorems describe
+this language budget, not host wall-clock time.
+
+The closed printer retains its landed invalid-input behavior because relWf is
+load-bearing in badRel_prints/badRel_reads_other; contextual ROM text alone gets
+the new literal read-back equality check and its named refusal tooth.
+
+The signed journey executes the five outcomes and eight experiments through
+Receive.submit/World.admit with installed contextual ROMs, guarded selection
+rows and fresh authenticated observations. Contract change uses the same ROM
+under another object's immutable cap, not an unauthorized mutation of frozen
+state. The cyclic example compiles the three-node least-fixed-point computation
+into the selected contextual filling: withdrawing the grounding loses p and q
+while independent r survives. It is a finite concrete deployed experiment, not
+a claim that the runtime now supplies a general cyclic dependency engine.
+P8's atomic commitment demands hole0[nat1]; the selected open filling var0
+determines the consumed amount. The old full management regression is also
+parameterized over the live bundle to retain omitted-blocker refusal teeth.
+
+Critique: a success-only invariant could hide an always-refusing implementation.
+The positive signed journeys, explicit contextual argument dependence and
+mutation runs therefore accompany the boundary theorems. The provenance and
+final typing checks are defensive against implementation faults; their teeth
+inject such faults before disabling the corresponding boundary, rather than
+claiming welltyped ROM input normally reaches those errors.
+Meta-critique: a new proof API must preserve the live dependency on rv/self.
+The generic extraction lemma abstracts the complete setup function; it avoids
+forcing a row-dependent loader into the old row-independent loader parameter,
+which previously caused elaboration to exceed the6G cap.
+
+### LANG-P7 final convergence (CX-P7, real 2026-10-21)
+PRICE PREMISES: none gained. empty_package_surface only supplies the explicit
+empty ninth Package field in its two fixtures; its assertion is unchanged.
+The whole Lang.Proofs closure compiled with that final fixture port checked
+separately. The permanent contextual checks (59) and signed contextual journey
+pass after restoring every mutation. A fresh ordinary vector emit is byte-identical
+to gates/codec-vectors.tsv (263 vectors, 56 sites). emit-rust --check and
+emit-units --check pass: generated.rs and deploy/units are unchanged. Installed
+package ROMs still all re-id and must be re-emitted/reinstalled at the flag day;
+the unchanged units are service launch files, not serialized package ROMs.
+
+### LANG-P7 explicit contract succession (CX-P7 run 3, real 2026-10-21)
+ROOT ruled B after the reader exhibited the false old library-changing contract.
+This entry supersedes the run-2 claim that every old contract was preserved.
+PRICE PREMISES: no other landed theorem gains a hypothesis. The six obsolete
+ref-model names below are DELETED, not rebound to a different proposition:
+- fillRefs_typed -> fillHoles_typed: old import replacement could change Δ to Δ';
+  live filling preserves Δ, fills named holes with code typed in each declaration's
+  context via its occurrence substitution, and transports retained declarations Ω to Ω'.
+- fillRefsFields_typed -> fillHolesFields_typed: the same explicit contract change
+  for record fields; ordinary imported refs remain refs.
+- fillRefsArms_typed -> fillHolesArms_typed: the same explicit contract change for
+  case arms, preserving their payload binders through capture-avoiding substitution.
+- hasType_usesRef -> hasType_declaresHole: old used import positions belonged to Δ;
+  live used contextual hole names must occur in Ω, including holes in substitutions.
+- fieldsTy_usesRef -> fieldsTy_declaresHole: the same change for field occurrences.
+- armsTy_usesRef -> armsTy_declaresHole: the same change for arm occurrences.
+The reader's Δ=[nat], Δ'=[], t=ref0, filling=nat0 example is intentionally NOT
+an instance of the new filling contract: source and target have the SAME Δ.
+No retained theorem claims imports can be eliminated by contextual filling.
+The closed checker and renaming/strengthening statements keep their old names and
+byte-identical statements; generalized proofs receive explicit _live names.
+Touched proof families in this repair: Check; LangRenaming; LangSubstitution;
+LangFilling; LangOccurrences; LangInstance; closed deployment bridge and teeth.
+Deployed closed admission must use the existing closed admission exactly when
+the ROM has no holes: no contextual expansion is necessary, and the closed
+checker already excludes residual holes. This is the closed specialization of
+one loader, not a second substitution operation. We will prove equality through
+the actual live loading/setup/execution path, including charged ticks.
+Critique: claiming API preservation from inferred empty parameters concealed a
+real semantic replacement. Explicit names and counterexample teeth must expose it.
+Meta-critique: preserving a stale name to minimize a diff would repeat that error;
+preserving the closed executable specialization prevents redesign from silently
+charging closed packages for nonexistent contextual work.
+
+### LANG-P7 closed bridge and successor teeth (CX-P7 run 3, real 2026-10-21)
+PRICE PREMISES: none for every other landed theorem. The exact source-statement
+comparison restores all 13 checker statements, four renaming/strengthening
+statements and program_run_past_extraction under their original names. Their
+generalized results are named with _live. The latter old theorem now reaches
+the deployed Program.run through program_run_closed, rather than claiming the
+closed theorem alone establishes deployment.
+
+Closed admission delegates to admitPackage when holes=[]; contextual admission
+and all its selected/blocked checks remain in force for nonempty signatures.
+The closed checker already excludes holes, so no contextual work bound is
+charged or imposed on the closed body. The bridge derives a closed loaded
+closure from successful old load (no new old premise), proves its preparation
+charge zero, transports the same RunSetup and proves equality of runMeasuredLive
+and runMeasured for EVERY budget, including faults, calls, edits and charged
+ticks. checkInstallContextual's closed branch uses checkInstall exactly;
+law execution uses the same admitted library. Wire version4 remains a flag day:
+this preserves behavior of the re-emitted closed package, not loading version3.
+
+The six superseded statements' teeth are carried as follows:
+| Deleted statement | Live successor | Named successor tooth |
+| --- | --- | --- |
+| fillRefs_typed | fillHoles_typed | fillHoles_term_tooth |
+| fillRefsFields_typed | fillHolesFields_typed | fillHoles_fields_tooth |
+| fillRefsArms_typed | fillHolesArms_typed | fillHoles_arms_tooth |
+| hasType_usesRef | hasType_declaresHole | declaredHole_term_tooth |
+| fieldsTy_usesRef | fieldsTy_declaresHole | declaredHole_fields_tooth |
+| armsTy_usesRef | armsTy_declaresHole | declaredHole_arms_tooth |
+
+Main's shared lang_template_toy is retained over the actual hole constructor:
+declared checks, undeclared refuses, filling changes syntax, result types with
+the declaration removed. lang_strengthen_toy is unchanged. Main has no separate
+field/arm concrete teeth for these six; the named successors add them.
+reader_import_contract_tooth carries the reader's counterexample and shows the
+new contract cannot type its source at the proposed empty target library.
+fillHoles_preserves_import_tooth applies the successor with Δ=[nat] and proves
+the import remains typed there, while usesRef reports no contextual occurrence.
+Runtime rows successor-fill-{term,fields,arms}, successor-declared-{term,fields,arms},
+reader-import-contract and closed-admission-identity exercise those same boundaries.
+The last supplies a preparation function that always refuses: closed admission
+must succeed without invoking nonexistent contextual preparation.
+Critique: a success implication could hide a refused old package; the closed
+admission row is positive and the bridge constrains faults and tick accounting,
+not just the success projection. Meta-critique: maintaining both old import
+substitution and contextual filling would conceal two meanings; the old six
+names are absent, and the exact broken meanings remain in the succession entry.
+
+### LANG-P7 consumer ports and seventh contract succession (CX-READER-P7 run 3, real 2026-10-21)
+
+ROOT granted KERNEL InvokeWitness/History and LEDGER EscrowRun proof-consumer ports,
+including named dependent proof consumers. The additionally reached consumers are
+Kernel/Proofs/InvokeTreeWitness.lean, Ledger/Proofs/EscrowWitness.lean and
+Ledger/Proofs/EscrowAdmitted.lean. Their statements remain unchanged.
+
+PRICE PREMISES: none on every retained landed theorem, public or private.
+Compared against 3bd8c12, all retained statements in the six ported consumer files
+are byte-identical. The earlier P7 source receipt is unchanged except this appended
+decision and regenerated SIZE.md. The seventh superseded contract is:
+- Ledger.Proofs.EscrowRun.run_of_program (private) -> runLive_of_program (private).
+  OLD: successful deployed Program.run of ANY package implies there exist t,n
+  with successful CLOSED runMeasured returning (s,calls,rows,t,n).
+  NEW: that same success implies there exists n with successful runMeasuredLive
+  returning (s,calls,rows,used,n), preserving the Program.run charge used exactly.
+  The old generic closed implication is false for contextual packages. The new
+  statement names the actual deployed path; it does not assume a closed closure.
+  Escrow's callers derive the closed result from its fixed holes=[] and imports=[]
+  through runMeasuredLive_leaf_closed, with those facts discharged by reflexivity.
+
+ClosedLeaf proves equality of live and closed loading/setup/measured execution/law
+evaluation for a leaf ROM with empty signature and no imports. These equalities
+include refusals and charges; no success-only shortcut is used. Counter, relay and
+escrow witnesses run through this bridge. Existing payout, next-run, nested-invoke
+and history theorem statements and teeth remain intact.
+
+History cannot use a closed-package premise: its arbitrary package may contain
+contextual imports and its NoRef law may contain dormant holes. LawMeaning relates
+the source law to the law loader's unresolved preparation, then proves backward
+meaning preservation mutually for BigStep, selection and extension. The relation
+preserves labels, base values, faults, closure environments and suspended fields;
+an unresolved hole becomes only the same named refusal. It has no imported-ref
+constructor, matching the existing NoRef premise. LawReceiver extracts the actual
+contextual load, original ROM and prepared field and proves
+judgeOneContextual_admits_relib under every library, without adding any signature
+or closure premise. History's object_history_chain and object_history_start use it.
+
+Teeth: contextual_law_dormant_hole loads a nonempty-signature package from encoded
+ROM through loadContextual and the actual Program.judge, admits a law containing
+an undemanded hole, and derives the original ROM law's meaning. Its paired
+contextual_law_demanded_hole demands the hole and proves the exact deployed refusal
+lawDenied 7 "law: refused holeUnresolved". Existing escrow_second_release_refused,
+escrow_link_bites, admitted deposit/release, counter next-run and nested-invoke
+witnesses rebuild on the live path. No runtime check or gate is removed or changed.
+
+Critique: fixed closed witnesses alone would miss History's arbitrary contextual
+packages; NoRef excludes imports but does not exclude holes. The backward relation
+must cover suspended fields, knots and closures, not merely direct evaluations.
+The two contextual-law teeth exercise both dormant and demanded holes.
+Meta-critique: a small closure hypothesis would make the compiler green by reducing
+the theorem's scope. Instead the port pays for the semantic transport proof, while
+retaining the original public contracts and explicitly naming the one obsolete
+private contract. Proof duplication is limited to extraction scaffolding; the
+deployed evaluator, loader, substitution and checks have one implementation.
+
+The second-agent boundary is unchanged: CX-READER-P7 prepares READY-PORTS;
+CX-P7 run4 reads these new statements and lands with the full lang! judge.
+
+### LANG-P7 axiom census correction (CX-P7 run 4, real 2026-10-21)
+
+PRICE PREMISES: none. No theorem statement or proof changes in this correction.
+The live-constructor port already replaced Print.badRel_reads_other's native_decide
+proof with parse_layout, bounded case analysis and decide +kernel while retaining
+the exact statement. Its elaborated axiom set is now propext, Classical.choice
+and Quot.sound; the full judge correctly rejects the two obsolete allow rows for
+that theorem and its absent _native.native_decide.ax_1_1 auxiliary.
+
+ROOT granted removal of those two rows from gates/axioms-allow.tsv in this lang!
+on real 10-21. The two Hosting invoke_slots rows are unchanged. This removes unused
+trust exceptions; the census code, refusal rules and remaining allow entries are
+unchanged. The existing malformed relation tooth still proves the same unequal
+readback result. No new check or theorem is introduced by the table correction.
+
+Critique: a successful proof build alone does not establish that the old native
+exception disappeared. The full axiom census reports the stale rows and a direct
+#print axioms query independently finds only the three standard axioms.
+Meta-critique: keeping stale exceptions would misstate the current trust boundary;
+deleting them alongside the kernel-checked replacement preserves the statement
+and lets the unchanged census enforce the smaller exception set.
+
+
+The corresponding LANG-owned native_decide component row is also removed from
+gates/tcb.tsv (SHARED in OWNERS). Its documented lift condition is now met:
+badRel_reads_other is checked by the kernel. The unchanged source TCB gate
+requires this table to agree with axioms-allow.tsv and rejected the stale row.
+No TCB checker rule or other component changes.
+
+### LANG-P7 restore the bar's measured tail (CX-P7 run 4, real 2026-10-21)
+
+PRICE PREMISES: none. No theorem statement or proof is changed by this fixture
+repair. ROOT granted Protocol/Rows.lean, Protocol/Rows/Loopback.lean and
+Protocol/Rows/Run.lean for the bar fixture/instrumentation, plus the measured
+staleBase pin change for the six wire-4 install bytes; every ceiling stays fixed.
+
+The full judge exposed a real measurement failure. With wire 4, the final invoke
+sealed at offset 41518, exactly the synced end. The cold open read 520 framing
+bytes over zero tail bytes. A zero denominator means the fixture no longer
+exercises its subject and remains a refusal.
+
+Restore the old workload shape with an explicit operator seal before the last
+23 of the SAME 64 invokes: 41 invokes, seal, then 23 invokes leaving 7912 bytes.
+The birth count also remains 64. barWithCount materializes --times N as N births
+and N total invokes before splitting its suffix; the runner does not multiply
+both parts by N. The candidate that added seven invokes instead was measured and
+rejected: frames/write rose to 10.978 and steps/write to 0.993, above their
+unchanged ceilings. Retaining the workload restores all honest counts exactly.
+
+| Measure | Parent | Restored wire-4 fixture |
+| --- | --- | --- |
+| Honest reopen bytes / bytes past base | 8432 / 7912 = 1.066 | 8432 / 7912 = 1.066 |
+| Mandatory framing beyond the tail | 520 | 520 |
+| staleBase bytes / bytes past base | 41612 / 7912 = 5.259 | 41618 / 7912 = 5.260 |
+| Frames / write commands | 1449 / 132 = 10.977 | 1449 / 132 = 10.977 |
+| Steps / write commands | 131 / 132 = 0.992 | 131 / 132 = 0.992 |
+| twiceEach frames / write commands | 2887 / 132 = 21.871 | 2887 / 132 = 21.871 |
+| twiceEach steps / write commands | 261 / 132 = 1.977 | 261 / 132 = 1.977 |
+
+The six bytes are required wire data: the empty hole section 03 00 00 adds three
+bytes to each closed package; the install Turn records it both in the created
+ROM cell's slot 0 (Receive.install) and in the signed call (sealTurn.event).
+Version and root-arity bytes change values without changing their widths.
+Codec.Kernel.turn serializes both copies. Thus staleBase's whole-log read grows
+by six, while the restored honest tail and framing are unchanged. Only the
+plant's exact ratio moves to 5.260. The waste table's numerical columns stay
+byte-identical; its source text records the new plant and these counts.
+
+The staleBase plant applies to the measured cold reopen. The unmeasured operator
+seal uses the newest durable base, so the fault actually reaches the intended
+measurement instead of destroying setup. The actual older-base flag must still
+be true. Zero denominators, exact MOVED values, BLIND comparisons and the
+zeroDeadline known-red control are unchanged.
+
+Critique: the package flag day can change the seal boundary even when every
+command succeeds; successful execution alone cannot validate the measured tail.
+The original zero-tail run and the setup-sabotaging mutant are both observed reds.
+The explicit suffix gives the bar the same measured work as its parent.
+Meta-critique: increasing total work also changes per-command framing ratios.
+Holding all 64 invokes and naming the checkpoint boundary preserves those
+comparison units and exposes the six-byte wire cost in the mutant's exact pin.
+
+### LANG-P7 obsolete-exception removal record (CX-P7 run 4, real 2026-10-21)
+PRICE PREMISES: none. The stale-path guard correctly requires --reverts
+42c261b93025 for the two intentionally deleted badRel_reads_other allow rows
+introduced by that commit. ROOT explicitly authorized their removal after the
+kernel proof made them unused. The generated REVERTS hunk names exactly these
+two exceptions; it does not revert the rows design, theorem, or any check.
+This differs from the rejected escrow_link_bites exception: that theorem was
+retained, so such a removal record would have been false. Here the removal is
+real and desired. Critique: deletion authorization must be explicit in the
+machine-checked landing record as well as the decision. Meta-critique: the old
+commit subject spans several layers; the precise path/hunk is the scope.

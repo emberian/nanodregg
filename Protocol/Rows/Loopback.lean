@@ -827,8 +827,9 @@ def restart (sealFirst : Bool) : M D Expect := do
         | .ok _ => pure ()
       let d ← st.mem.disk.get
       let bs ← st.mem.bases.get
-      -- the plant: the open handed the genesis base, the newest one ignored
-      let base := if st.sys.staleBase then (bs.history[0]?.map (·.1)).getD bs.file else bs.file
+      -- The plant targets the measured cold reopen, not the unmeasured setup seal.
+      -- That reopen receives the genesis base instead of the newest durable base.
+      let base := if st.sys.staleBase && !sealFirst then (bs.history[0]?.map (·.1)).getD bs.file else bs.file
       let t0 ← nowNs
       match Writer.reopenCounted st.sys.writer bs.headers bs.index base d.synced with
       | (.error f, _) => pure (.refused f)

@@ -39,7 +39,7 @@ theorem judgeOne_ok {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Re
       L.pkgs[g]? = some p ∧ readState digestOf (recordRow p.state) old = .ok o ∧
       readState digestOf (recordRow p.state) new = .ok n ∧
       ∀ ℓ ∈ p.laws, runLaw L.lib (.get (.ref g) ℓ) o n (reqData bytesOf r) = .ok (.ok ()) := by
-  unfold judgeOne at h
+  unfold judgeOne judgeOneWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
   · split at h
@@ -101,7 +101,7 @@ theorem load_top {look : Pinned D} {law : D} {p : Package} {fuel : Nat} {L : Loa
     (hid : digestOf (bytesOf law) = some law) (hp : readPackage look law = .ok p)
     (h : load digestOf look (fuel + 1) (bytesOf law) ⟨[], [], []⟩ = .ok (L, g)) :
     L.pkgs[g]? = some p ∧ ∃ f, L.lib[g]? = some (p.body.relocate f) := by
-  unfold load at h
+  unfold load loadUsing at h
   simp only [indexIn, idOf, hid, hp] at h
   split at h
   · cases h
@@ -128,6 +128,7 @@ mutual
 /-- `t` mentions no closure package: relocation cannot change it. -/
 def NoRef : Term → Prop
   | .ref _ => False
+  | .hole _ σ => NoRefList σ
   | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .refuse _ _ => True
   | .lam _ b => NoRef b
   | .app f a => NoRef f ∧ NoRef a
@@ -139,6 +140,10 @@ def NoRef : Term → Prop
   | .inj _ _ t => NoRef t
   | .case t fs => NoRef t ∧ NoRefRow fs
   | .ite c a b => NoRef c ∧ NoRef a ∧ NoRef b
+
+def NoRefList : List Term → Prop
+  | [] => True
+  | t :: ts => NoRef t ∧ NoRefList ts
 
 def NoRefRow : List (Label × Term) → Prop
   | [] => True
@@ -160,6 +165,12 @@ theorem relocate_noRef (f : Nat → Nat) : ∀ t : Term, NoRef t → t.relocate 
   | .case t fs, h => by simp [Term.relocate, relocate_noRef f t h.1, relocateRow_noRef f fs h.2]
   | .ite c a b, h => by
     simp [Term.relocate, relocate_noRef f c h.1, relocate_noRef f a h.2.1, relocate_noRef f b h.2.2]
+  | .hole n σ, h => by simp [Term.relocate, relocateList_noRef f σ h]
+
+theorem relocateList_noRef (f : Nat → Nat) : ∀ ts : List Term, NoRefList ts →
+    Term.relocateList f ts = ts
+  | [], _ => rfl
+  | t :: ts, h => by simp [Term.relocateList, relocate_noRef f t h.1, relocateList_noRef f ts h.2]
 
 theorem relocateRow_noRef (f : Nat → Nat) : ∀ fs : List (Label × Term), NoRefRow fs →
     Term.relocateRow f fs = fs

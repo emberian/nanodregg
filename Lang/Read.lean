@@ -218,7 +218,7 @@ def isLiteral (a : String) : Bool := a = "true" || a = "false" || a.toNat?.isSom
 
 /-- The head words of the forms `term` reads (besides the primitives, `primOf`). -/
 def keywords : List String :=
-  ["lam", "fn", "let", "fix", ".", "record", "extend", "inj", "case", "if", "ref", "digest", "refuse"]
+  ["lam", "fn", "let", "fix", ".", "record", "extend", "inj", "case", "if", "ref", "digest", "refuse", "hole"]
 
 /-- A name `term` reads as something other than a variable: a literal, a head word, a primitive. -/
 def isReserved (a : String) : Bool := isLiteral a || keywords.contains a || (primOf a).isSome
@@ -296,6 +296,10 @@ def term : Nat → List String → SExp → P Term
     match i.toNat? with
     | some n => .ok (.ref n)
     | none => .error (.badRef p)
+  | d + 1, sc, .list p [.atom _ "hole", .atom _ i, .list _ (.atom _ "subst" :: ts)] =>
+    match i.toNat? with
+    | some n => do pure (.hole n (← ts.mapM fun t => term d sc t))
+    | none => .error (.badRef p)
   | d + 1, sc, .list _ [.atom q op, a, b] =>
     match primOf op with
     | some p => do pure (.prim p (← term d sc a) (← term d sc b))
@@ -339,7 +343,53 @@ def doc (p : Nat) : List SExp → P ByteArray
   | [.str q t] => if Bounds.docOk t.toUTF8 && !t.toUTF8.isEmpty then .ok t.toUTF8 else .error (.badDoc q)
   | _ => .error (.badDoc p)
 
-def package (x : SExp) : P Package :=
+/-- The stable binder names used for a contextual candidate's explicit context. -/
+def holeScope (n : Nat) : List String :=
+  ((List.range n).map (fun i => "x" ++ Nat.repr i)).reverse
+
+def holeNat : SExp → P Nat
+  | .atom p a => match a.toNat? with
+    | some n => .ok n
+    | none => .error (.badEntry p)
+  | x => .error (.badEntry x.pos)
+
+def holeBytes : SExp → P ByteArray
+  | .atom p a => match hexBytes? a with
+    | some b => .ok b
+    | none => .error (.badEntry p)
+  | x => .error (.badEntry x.pos)
+
+def holePin : SExp → P HolePin
+  | .list _ [.atom _ "pin", r, k, v] => do pure ⟨← holeNat r, ← holeBytes k, ← holeNat v⟩
+  | x => .error (.badEntry x.pos)
+
+def holeOptPin : SExp → P (Option HolePin)
+  | .list _ [.atom _ "structural"] => .ok none
+  | x => (holePin x).map some
+
+def holeCode (ctx : List Ty) : SExp → P HoleCode
+  | .list _ [.atom _ "candidate", b, .list _ (.atom _ "supports" :: ps)] => do
+    pure ⟨← term depthMax (holeScope ctx.length) b, ← ps.mapM holePin⟩
+  | x => .error (.badEntry x.pos)
+
+def holeROM : SExp → P HoleROM
+  | .list _ [.atom _ "hole", n, .list _ (.atom _ "context" :: cs),
+      .list _ [.atom _ "result", t], .list _ [.atom _ "selection", r, k],
+      .list _ (.atom _ "hypotheses" :: hs), .list _ [.atom _ "guard", p, g],
+      .list _ (.atom _ "code" :: ks)] => do
+    let ctx ← cs.mapM (ty depthMax)
+    let name ← holeNat n
+    let result ← ty depthMax t
+    let selectionRel ← holeNat r
+    let selectionKey ← holeBytes k
+    let hypotheses ← hs.mapM holeOptPin
+    let guardPin ← holeOptPin p
+    let guard ← term depthMax (holeScope 1) g
+    let code ← ks.mapM (holeCode ctx)
+    pure { name, ctx, ty := result, selectionRel, selectionKey, hypotheses, guardPin, guard, code }
+  | x => .error (.badEntry x.pos)
+
+def packageBase (x : SExp) : P Package :=
   match x with
   | .list _ [.atom _ "package", .list _ (.atom _ "imports" :: is), .list q (.atom _ "doc" :: ds),
       .list _ [.atom _ "state", s],
@@ -354,6 +404,13 @@ def package (x : SExp) : P Package :=
     pure { imports, state := ← ty depthMax s, iface := ← ty depthMax i, body := ← term depthMax [] b,
            methods := ← labels ms, laws := ← labels ls, rels := ← rs.mapM rel, doc }
   | y => .error (.notPackage y.pos)
+
+def package (x : SExp) : P Package :=
+  match x with
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "holes" :: hs)] => do
+    let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
+    pure { base with holes := ← hs.mapM holeROM }
+  | _ => packageBase x
 
 /-! ## Data literals at a known type
 

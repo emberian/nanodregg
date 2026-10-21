@@ -24,14 +24,17 @@ open Print
 
 /-! ## The surface reads every printed core text as the core reader does -/
 
-theorem read_print_surface {p : Package} {s : String} (h : Print.package p = some s) :
-    readPackage s = liftR (Read.readPackage s) := by
-  simp only [Print.package, bind, Option.bind_eq_some_iff] at h
-  obtain ⟨xs, hxs, h⟩ := h
+theorem read_closedText_surface {p : Package} {s : String} (he : p.holes = [])
+    (h : Print.packageText p = some s) : readPackage s = liftR (Read.readPackage s) := by
+  simp only [Print.packageText, he, List.isEmpty_nil, if_true, pure] at h
+  simp only [bind, Option.bind_eq_some_iff] at h
+  obtain ⟨xs, hxs, extra, hext, h⟩ := h
+  cases hext
+  simp only [List.append_nil] at h
   split at h
   · rename_i hf
     obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
-    simp only [pure, Option.some.injEq] at h; subst h
+    simp only [Option.some.injEq] at h; subst h
     simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
     obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
     have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
@@ -55,6 +58,64 @@ theorem read_print_surface {p : Package} {s : String} (h : Print.package p = som
     simp only [readPackage, readWith, Read.readPackage, hy, liftR, bind, Except.bind, readSExpWith, hc, if_true]
     cases Read.package (.list 0 (.atom r0 "package" :: .list q1 (.atom r1 "imports" :: zs') :: ys'')) <;> rfl
   · cases h
+
+theorem packageBase_isCore {x : SExp} {p : Package} (h : Read.packageBase x = .ok p) :
+    isCore x = true := by
+  unfold Read.packageBase at h
+  split at h
+  · rfl
+  · cases h
+
+theorem package_isCore {x : SExp} {p : Package} (h : Read.package x = .ok p) :
+    isCore x = true := by
+  unfold Read.package at h
+  split at h
+  · simp only [bind, Except.bind, pure, Except.pure] at h
+    split at h
+    · cases h
+    · rename_i base hbase
+      have hc := packageBase_isCore hbase
+      unfold isCore at hc
+      split at hc
+      · rename_i heq
+        injection heq with _ hlist
+        injection hlist with _ htail
+        injection htail with his _
+        rw [his]
+        rfl
+      · cases hc
+  · exact packageBase_isCore h
+
+theorem read_core_success_surface {s : String} {p : Package}
+    (h : Read.readPackage s = .ok p) : readPackage s = liftR (Read.readPackage s) := by
+  unfold Read.readPackage at h
+  simp only [bind, Except.bind] at h
+  cases hp : Read.parse s with
+  | error e => simp [hp] at h
+  | ok x =>
+    rw [hp] at h
+    have hc := package_isCore h
+    simp only [readPackage, readWith, Read.readPackage, hp, liftR, bind, Except.bind,
+      readSExpWith, hc, if_true, h, pure, Except.pure]
+
+theorem read_print_surface {p : Package} {s : String} (h : Print.package p = some s) :
+    readPackage s = liftR (Read.readPackage s) := by
+  unfold Print.package at h
+  simp only [bind, Option.bind_eq_some_iff] at h
+  obtain ⟨text, ht, h⟩ := h
+  split at h
+  · rename_i hempty
+    have he : p.holes = [] := List.isEmpty_iff.mp hempty
+    cases h
+    exact read_closedText_surface he ht
+  · unfold Print.contextualText at h
+    split at h
+    · rename_i q hread
+      split at h
+      · cases h
+        exact read_core_success_surface hread
+      · cases h
+    · cases h
 
 /-! ## A layer keeps its super's laws -/
 

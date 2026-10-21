@@ -43,6 +43,11 @@ theorem relocate_id : ∀ t : Term, t.relocate (fun i => i) = t
   | .inj _ _ t => by simp [Term.relocate, relocate_id t]
   | .case t fs => by simp [Term.relocate, relocate_id t, relocateRow_id fs]
   | .ite c a b => by simp [Term.relocate, relocate_id c, relocate_id a, relocate_id b]
+  | .hole n σ => by simp [Term.relocate, relocateList_id σ]
+
+theorem relocateList_id : ∀ ts : List Term, Term.relocateList (fun i => i) ts = ts
+  | [] => rfl
+  | t :: ts => by simp [Term.relocateList, relocate_id t, relocateList_id ts]
 
 theorem relocateRow_id : ∀ fs : List (Label × Term), Term.relocateRow (fun i => i) fs = fs
   | [] => rfl
@@ -93,7 +98,22 @@ theorem checkWith_checked {ifs : List Ty} {p : Package} (h : p.checkWith ifs = .
   split at h
   · simp at h
   · simp at h
-  · rename_i hs _; exact ⟨hs, h⟩
+  · rename_i hs _
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · exact ⟨hs, h⟩
+
+theorem checkWith_closed {ifs : List Ty} {p : Package} (h : p.checkWith ifs = .ok ()) :
+    p.holes = [] ∧ ∀ T ∈ ifs, T.wf = true := by
+  unfold Package.checkWith at h
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  constructor
+  · simpa using ‹(!p.holes.isEmpty) ≠ true›
+  · have hi : ifs.all Ty.wf = true := by simpa using ‹(!ifs.all Ty.wf) ≠ true›
+    exact List.all_eq_true.mp hi
 
 theorem indexIn_lt {b : ByteArray} : ∀ {ids : List ByteArray} {i : Nat}, indexIn b ids = some i →
     i < ids.length
@@ -184,7 +204,7 @@ mutual
 theorem load_inv (fuel : Nat) (idb : ByteArray) (acc : Loaded) {L : Loaded} {g : Nat}
     (hi : Inv acc) (h : load digestOf look fuel idb acc = .ok (L, g)) :
     Inv L ∧ g < L.pkgs.length ∧ ∃ ext, L.pkgs = acc.pkgs ++ ext := by
-  unfold load at h
+  unfold load loadUsing at h
   split at h
   · rename_i i hidx
     simp only [Except.ok.injEq, Prod.mk.injEq] at h
@@ -209,7 +229,7 @@ termination_by (fuel, 0)
 theorem loadAll_inv (fuel : Nat) (ds : List ByteArray) (acc : Loaded) {L : Loaded}
     {gs : List Nat} (hi : Inv acc) (h : loadAll digestOf look fuel ds acc = .ok (L, gs)) :
     Inv L ∧ (∀ g ∈ gs, g < L.pkgs.length) ∧ ∃ ext, L.pkgs = acc.pkgs ++ ext := by
-  unfold loadAll at h
+  unfold loadAll loadAllUsing at h
   split at h
   · simp only [Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
@@ -372,6 +392,30 @@ theorem method_run_sound {D : Type} {digestOf : ByteArray → Option D} {look : 
 /-- **What a run starts from** (LANG-41): `runSetup` admits exactly when the request is in bounds,
 the closure loads, the method resolves, the state reads at its row and the arguments decode at their
 type with every digest accepted; the setup is then those values. -/
+theorem runSetupWith_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
+    {charge : Loaded → Nat}
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray}
+    {r : Req D} {S : RunSetup}
+    (h : runSetupWith bytesOf digestOf loader charge look rv pkg state method args r = .ok S) :
+    ∃ (L : Loaded) (g : Nat) (p : Package) (ℓ : Label) (sg : Sig) (sd ad wd : Data),
+      reqOk bytesOf r = true ∧
+      loader look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
+      resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
+      readState digestOf (recordRow p.state) state = .ok sd ∧
+      Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
+      readsData digestOf p.rels rv r.self sg.reads = .ok wd ∧
+      S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
+            ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
+            reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal], preparation := charge L } := by
+  unfold runSetupWith at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (simp at h; done) | skip
+  simp only [Except.ok.injEq] at h
+  subst h
+  exact ⟨_, _, _, _, _, _, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, rfl⟩
+
 theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {S : RunSetup}
@@ -386,7 +430,7 @@ theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArr
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
             reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by
-  unfold runSetup at h
+  unfold runSetup runSetupWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first | (simp at h; done) | skip
@@ -417,8 +461,9 @@ theorem install_loads {D : Type} {digestOf : ByteArray → Option D} {look : Pin
     refine ⟨{ ids := L.ids ++ [idb], lib := L.lib ++ [p.body.relocate fun i => gis.getD i 0],
                pkgs := L.pkgs ++ [p] }, L.ids.length, p, ?_, ?_, ?_⟩
     · show load digestOf look (7 + 1) idb _ = _
-      unfold load
+      unfold load loadUsing
       simp only [indexIn, idOf, hid, hp, closureDepthMax] at hl ⊢
+      unfold loadAll at hl
       rw [hl]
       simp only [admitPackage, hif, hc, h]
     · simp only [hd]

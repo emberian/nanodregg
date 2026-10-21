@@ -47,11 +47,11 @@ theorem ArmsTy.find : ∀ {Γ : List Ty} {arms : List (Label × Term)} {r : List
     {B : Ty}, ArmsTy Δ Γ arms r B →
     ∀ {ℓ : Label} {A : Ty}, Row.find? ℓ r = some A →
       ∃ body, Row.find? ℓ arms = some body ∧ HasType Δ (A :: Γ) body B
-  | _, _, _, _, @ArmsTy.one _ _ k _ _ _ hb, ℓ, _, hA => by
+  | _, _, _, _, @ArmsTy.one _ _ _ k _ _ _ hb, ℓ, _, hA => by
     by_cases e : ℓ = k
     · simp [Row.find?, e] at hA ⊢; subst hA; exact hb
     · simp [Row.find?, e] at hA
-  | _, _, _, _, @ArmsTy.cons _ _ k _ _ _ _ _ hb h _, ℓ, _, hA => by
+  | _, _, _, _, @ArmsTy.cons _ _ _ k _ _ _ _ _ hb h _, ℓ, _, hA => by
     by_cases e : ℓ = k
     · simp [Row.find?, e] at hA ⊢; subst hA; exact hb
     · simp only [Row.find?, e, if_false] at hA ⊢; exact ArmsTy.find h hA
@@ -170,6 +170,7 @@ theorem step_sound {lib : List Term} {s : State} {T : Ty} (hlib : LibTy Δ lib)
       obtain ⟨body, hbody, hbt⟩ := hlib _ _ hi
       simp only [step, hbody]; exact .next (.eval .nil hbt hk)
     | refuse _ _ => simp only [step]; exact .fault (by simp)
+    | hole hd _ => simp at hd
   | @ret v A k d T hv hk =>
     cases hk with
     | nil => exact .halt hv
@@ -273,12 +274,14 @@ theorem eval_sound {lib : List Term} {b : Nat} {t : Term} {env : List Val} {Γ :
 by the refusal its program wrote (LANG-51). -/
 theorem step_fault {lib : List Term} {s : State} {f : Fault} (h : step lib s = .fault f) :
     f = .stuck ∨ (∃ p a j v k d, s = ⟨.ret v, .primR p a j :: k, d⟩ ∧ primEval p a v = .error f) ∨
-      ∃ T w env k d, s = ⟨.eval (.refuse T w) env, k, d⟩ ∧ f = .refused w := by
+      (∃ T w env k d, s = ⟨.eval (.refuse T w) env, k, d⟩ ∧ f = .refused w) ∨
+      ∃ n σ env k d, s = ⟨.eval (.hole n σ) env, k, d⟩ ∧ f = .refused "holeUnresolved".toUTF8 := by
   obtain ⟨c, k, d⟩ := s
   cases c with
   | eval t env =>
     cases t with
-    | refuse T w => simp only [step, Step.fault.injEq] at h; exact .inr (.inr ⟨T, w, env, k, d, rfl, h.symm⟩)
+    | refuse T w => simp only [step, Step.fault.injEq] at h; exact .inr (.inr (.inl ⟨T, w, env, k, d, rfl, h.symm⟩))
+    | hole n σ => simp only [step, Step.fault.injEq] at h; exact .inr (.inr (.inr ⟨n, σ, env, k, d, rfl, h.symm⟩))
     | _ => left; simp only [step, push] at h <;> (repeat' split at h) <;> simp_all
   | ret v =>
     cases k with

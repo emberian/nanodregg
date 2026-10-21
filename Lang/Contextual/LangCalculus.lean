@@ -1,18 +1,18 @@
 /-
 # Lang.Contextual.LangCalculus — the DEPLOYED term language as a `CalculusData` (ACTIVITIES-2)
 
-The data half of an instance of CLOSURE's abstract calculus (`Lang.Contextual.Closure`) over
-`Lang.Term`: a template's holes are its `ref`s (`ref n` is the hole named `n`; fillings are
-CLOSED terms, so filling shifts nothing), a hole's local context is a `List Ty` of ordinary
-variables, strengthening and weakening are variable renamings at a position (CMTT-CORE's
-`lowerIdx`/`liftIdx`). The laws are `Lang.Proofs.Contextual.LangInstance.langLaws`, over
-`LangHasTy`, which requires every hole's context to be EMPTY: the measurement this instance makes
-is what that costs (`langHasTy_closed_holes`).
+The data half of CLOSURE's calculus over deployed Lang.Term. A substituted
+hole `hole n σ` carries explicit arguments for its declared local context;
+fillRefs applies the selected open filling to σ without capturing variables.
+Ordinary `ref` terms remain imports. Strengthening and weakening rename ordinary
+variables at a position using CMTT-CORE's lowerIdx/liftIdx. The signature-aware
+laws live in Lang.Proofs.Contextual.LangInstance; deployed strengthening is
+exercised and proved over the installed contextual ROM generator.
 
 Binders: `lam` binds one variable, every `case` arm binds its payload at index 0; record and
 extend fields bind nothing.
 -/
-import Lang.Check
+import Lang.Contextual.LangSubstitution
 import Lang.Contextual.Core
 import Lang.Contextual.Closure
 
@@ -137,6 +137,13 @@ def Term.decEq : (a b : Term) → Decidable (a = b)
     | isFalse h0 => isFalse (by intro e; injection e with e0; exact h0 e0)
     | isTrue h0 =>
       isTrue (by subst h0; rfl)
+  | .hole n ts, .hole m us =>
+    match _root_.decEq n m with
+    | isFalse h => isFalse (by intro e; injection e with e; exact h e)
+    | isTrue h =>
+      match Term.decEqList ts us with
+      | isFalse h2 => isFalse (by intro e; injection e with _ e; exact h2 e)
+      | isTrue h2 => isTrue (by subst h; subst h2; rfl)
   | .refuse a0 a1, .refuse b0 b1 =>
     match _root_.decEq a0 b0 with
     | isFalse h0 => isFalse (by intro e; injection e with e0 e1; exact h0 e0)
@@ -417,6 +424,50 @@ def Term.decEq : (a b : Term) → Decidable (a = b)
   | .refuse _ _, .case _ _
   | .refuse _ _, .ite _ _ _
   | .refuse _ _, .ref _ => isFalse (by intro e; cases e)
+  | .hole _ _, .var _
+  | .var _, .hole _ _
+  | .hole _ _, .lam _ _
+  | .lam _ _, .hole _ _
+  | .hole _ _, .app _ _
+  | .app _ _, .hole _ _
+  | .hole _ _, .fix _
+  | .fix _, .hole _ _
+  | .hole _ _, .nat _
+  | .nat _, .hole _ _
+  | .hole _ _, .bool _
+  | .bool _, .hole _ _
+  | .hole _ _, .bytes _
+  | .bytes _, .hole _ _
+  | .hole _ _, .digest _
+  | .digest _, .hole _ _
+  | .hole _ _, .prim _ _ _
+  | .prim _ _ _, .hole _ _
+  | .hole _ _, .record _
+  | .record _, .hole _ _
+  | .hole _ _, .get _ _
+  | .get _ _, .hole _ _
+  | .hole _ _, .extend _ _
+  | .extend _ _, .hole _ _
+  | .hole _ _, .inj _ _ _
+  | .inj _ _ _, .hole _ _
+  | .hole _ _, .case _ _
+  | .case _ _, .hole _ _
+  | .hole _ _, .ite _ _ _
+  | .ite _ _ _, .hole _ _
+  | .hole _ _, .ref _
+  | .ref _, .hole _ _
+  | .hole _ _, .refuse _ _
+  | .refuse _ _, .hole _ _ => isFalse (by intro e; cases e)
+def Term.decEqList : (ts us : List Term) → Decidable (ts = us)
+  | [], [] => isTrue rfl
+  | t :: ts, u :: us =>
+    match Term.decEq t u with
+    | isFalse h => isFalse (by intro e; exact h (List.cons.inj e).1)
+    | isTrue h =>
+      match Term.decEqList ts us with
+      | isFalse h2 => isFalse (by intro e; exact h2 (List.cons.inj e).2)
+      | isTrue h2 => isTrue (by subst h; subst h2; rfl)
+  | [], _ :: _ | _ :: _, [] => isFalse (by intro e; cases e)
 /-- Decide equality of rows (record fields, case arms). -/
 def Term.decEqRow : (fs gs : List (Label × Term)) → Decidable (fs = gs)
   | [], [] => isTrue rfl
@@ -437,40 +488,12 @@ instance Term.instDecEq : DecidableEq Term := Term.decEq
 
 /-! ## Variables: renaming and occurrence -/
 
-mutual
-/-- Rename the free variables (`lam` and every `case` arm bind one more). -/
-def Term.renameVar (ρ : Nat → Nat) : Term → Term
-  | .var i => .var (ρ i)
-  | .lam a b => .lam a (Term.renameVar (upR ρ) b)
-  | .app f a => .app (Term.renameVar ρ f) (Term.renameVar ρ a)
-  | .fix t => .fix (Term.renameVar ρ t)
-  | .nat n => .nat n
-  | .bool b => .bool b
-  | .bytes s => .bytes s
-  | .digest s => .digest s
-  | .prim p a b => .prim p (Term.renameVar ρ a) (Term.renameVar ρ b)
-  | .record fs => .record (Term.renameVarRow ρ fs)
-  | .get t ℓ => .get (Term.renameVar ρ t) ℓ
-  | .extend t fs => .extend (Term.renameVar ρ t) (Term.renameVarRow ρ fs)
-  | .inj a ℓ t => .inj a ℓ (Term.renameVar ρ t)
-  | .case t arms => .case (Term.renameVar ρ t) (Term.renameVarArms ρ arms)
-  | .ite c a b => .ite (Term.renameVar ρ c) (Term.renameVar ρ a) (Term.renameVar ρ b)
-  | .ref i => .ref i
-  | .refuse T w => .refuse T w
-/-- Fields bind nothing. -/
-def Term.renameVarRow (ρ : Nat → Nat) : List (Label × Term) → List (Label × Term)
-  | [] => []
-  | (ℓ, t) :: fs => (ℓ, Term.renameVar ρ t) :: Term.renameVarRow ρ fs
-/-- Every arm binds its payload at index 0. -/
-def Term.renameVarArms (ρ : Nat → Nat) : List (Label × Term) → List (Label × Term)
-  | [] => []
-  | (ℓ, t) :: as => (ℓ, Term.renameVar (upR ρ) t) :: Term.renameVarArms ρ as
-end
 
 mutual
 /-- Does the term use the free variable `k`? -/
 def Term.usesVar (k : Nat) : Term → Bool
   | .var i => i == k
+  | .hole _ σ => Term.usesVarList k σ
   | .lam _ b => Term.usesVar (k + 1) b
   | .app f a => Term.usesVar k f || Term.usesVar k a
   | .fix t => Term.usesVar k t
@@ -482,6 +505,9 @@ def Term.usesVar (k : Nat) : Term → Bool
   | .inj _ _ t => Term.usesVar k t
   | .case t arms => Term.usesVar k t || Term.usesVarArms k arms
   | .ite c a b => Term.usesVar k c || Term.usesVar k a || Term.usesVar k b
+def Term.usesVarList (k : Nat) : List Term → Bool
+  | [] => false
+  | t :: ts => Term.usesVar k t || Term.usesVarList k ts
 def Term.usesVarRow (k : Nat) : List (Label × Term) → Bool
   | [] => false
   | (_, t) :: fs => Term.usesVar k t || Term.usesVarRow k fs
@@ -490,18 +516,22 @@ def Term.usesVarArms (k : Nat) : List (Label × Term) → Bool
   | (_, t) :: as => Term.usesVar (k + 1) t || Term.usesVarArms k as
 end
 
-/-! ## Holes: the `ref`s -/
+/-! ## Named contextual holes (ordinary imports are excluded) -/
 
 mutual
-/-- Does the term use the hole (`ref`) `n`? -/
+/-- Does the term contain contextual hole `n`, including in its substitutions? -/
 def Term.usesRef (n : Nat) : Term → Bool
-  | .ref i => i == n
+  | .ref _ => false
+  | .hole i σ => i == n || Term.usesRefList n σ
   | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .refuse _ _ => false
   | .lam _ b | .fix b | .get b _ | .inj _ _ b => Term.usesRef n b
   | .app f a | .prim _ f a => Term.usesRef n f || Term.usesRef n a
   | .record fs => Term.usesRefRow n fs
   | .extend t fs | .case t fs => Term.usesRef n t || Term.usesRefRow n fs
   | .ite c a b => Term.usesRef n c || Term.usesRef n a || Term.usesRef n b
+def Term.usesRefList (n : Nat) : List Term → Bool
+  | [] => false
+  | t :: ts => Term.usesRef n t || Term.usesRefList n ts
 def Term.usesRefRow (n : Nat) : List (Label × Term) → Bool
   | [] => false
   | (_, t) :: fs => Term.usesRef n t || Term.usesRefRow n fs
@@ -526,8 +556,16 @@ def Term.fillRefs (σ : Nat → Option Term) : Term → Term
   | .inj a ℓ t => .inj a ℓ (Term.fillRefs σ t)
   | .case t arms => .case (Term.fillRefs σ t) (Term.fillRefsRow σ arms)
   | .ite c a b => .ite (Term.fillRefs σ c) (Term.fillRefs σ a) (Term.fillRefs σ b)
-  | .ref n => (σ n).getD (.ref n)
+  | .ref n => .ref n
+  | .hole n ts =>
+      let ts' := Term.fillRefsList σ ts
+      match σ n with
+      | none => .hole n ts'
+      | some t => Term.substList ts' t
   | .refuse T w => .refuse T w
+def Term.fillRefsList (σ : Nat → Option Term) : List Term → List Term
+  | [] => []
+  | t :: ts => Term.fillRefs σ t :: Term.fillRefsList σ ts
 def Term.fillRefsRow (σ : Nat → Option Term) : List (Label × Term) → List (Label × Term)
   | [] => []
   | (ℓ, t) :: fs => (ℓ, Term.fillRefs σ t) :: Term.fillRefsRow σ fs
@@ -541,11 +579,10 @@ def tyOf (Ω : List (HoleDecl (List Lang.Ty) Lang.Ty)) (n : Nat) : Option Lang.T
 def holeBound (Ω : List (HoleDecl (List Lang.Ty) Lang.Ty)) : Nat :=
   Ω.foldr (fun d m => max (d.name + 1) m) 0
 
-/-- The package types the holes stand at: `ref n` has hole `n`'s type. The `.nat` placeholder at
-an undeclared name makes no theorem true: `LangHasTy`'s `RefsDeclared` conjunct supplies `tyOf Ω n`
-for every `ref` a template uses, and a `ref` surviving `fillRefs` was used before and unfilled, never
-born inside a filling (`usesRef_fillRefs` with `refsDeclared_nil` on the closed filling), so
-`ΔOf_getElem?` is only ever applied at a declared name. -/
+/-- Legacy name-indexed type projection retained for its lookup API.
+Live LangHasTy uses HoleSignature directly; this list no longer interprets holes
+as imported package refs. Undeclared positions use a placeholder only in this
+projection and do not authorize a hole in the deployed checker. -/
 def ΔOf (Ω : List (HoleDecl (List Lang.Ty) Lang.Ty)) : List Lang.Ty :=
   (List.range (holeBound Ω)).map fun n => (tyOf Ω n).getD .nat
 

@@ -15,9 +15,9 @@ namespace Nanodregg.Lang.Surface
 
 /-- The empty package's text (`Print.empty_package_prints`) is read by the surface as by the core. -/
 theorem empty_package_surface :
-    readPackage ((Print.package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty)).get
+    readPackage ((Print.package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [])).get
       Print.empty_package_prints) =
-    liftR (Read.readPackage ((Print.package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty)).get
+    liftR (Read.readPackage ((Print.package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [])).get
       Print.empty_package_prints)) :=
   read_print_surface (Option.some_get _).symm
 

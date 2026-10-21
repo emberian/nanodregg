@@ -23,6 +23,7 @@ import Lang.Wire.Data
 import Lang.Read
 import Lang.Call
 import Lang.Rel
+import Lang.LiveHoles
 
 namespace Nanodregg.Lang
 
@@ -112,7 +113,7 @@ def admitPackage (idb : ByteArray) (p : Package) (acc : Loaded) (gis : List Nat)
 
 mutual
 /-- Load package `idb` and its closure into `acc` (each package once); its index in the closure. -/
-def load (look : Pinned D) (fuel : Nat) (idb : ByteArray) (acc : Loaded) :
+def loadUsing (admit : ByteArray → Package → Loaded → List Nat → Except (Refusal D) (Loaded × Nat)) (look : Pinned D) (fuel : Nat) (idb : ByteArray) (acc : Loaded) :
     Except (Refusal D) (Loaded × Nat) :=
   match indexIn idb acc.ids with
   | some i => .ok (acc, i)
@@ -126,24 +127,94 @@ def load (look : Pinned D) (fuel : Nat) (idb : ByteArray) (acc : Loaded) :
         match readPackage look id with
         | .error e => .error e
         | .ok p =>
-          match loadAll look fuel p.imports acc with
+          match loadAllUsing admit look fuel p.imports acc with
           | .error e => .error e
-          | .ok (acc', gis) => admitPackage digestOf idb p acc' gis
+          | .ok (acc', gis) => admit idb p acc' gis
 termination_by (fuel, 0)
 
-def loadAll (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) :
+def loadAllUsing (admit : ByteArray → Package → Loaded → List Nat → Except (Refusal D) (Loaded × Nat)) (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) :
     Except (Refusal D) (Loaded × List Nat) :=
   match ds with
   | [] => .ok (acc, [])
   | d :: ds =>
-    match load look fuel d acc with
+    match loadUsing admit look fuel d acc with
     | .error e => .error e
     | .ok (acc', g) =>
-      match loadAll look fuel ds acc' with
+      match loadAllUsing admit look fuel ds acc' with
       | .error e => .error e
       | .ok (acc'', gs) => .ok (acc'', g :: gs)
 termination_by (fuel, ds.length + 1)
 end
+
+/-- The closed specialization of the shared closure traversal. -/
+def load (look : Pinned D) (fuel : Nat) (idb : ByteArray) (acc : Loaded) :
+    Except (Refusal D) (Loaded × Nat) :=
+  loadUsing digestOf (admitPackage digestOf) look fuel idb acc
+
+def loadAll (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) :
+    Except (Refusal D) (Loaded × List Nat) :=
+  loadAllUsing digestOf (admitPackage digestOf) look fuel ds acc
+
+/-- All ROM code, including unselected candidates, passes the World's literal boundary. -/
+def checkROMLits (p : Package) : Except (Refusal D) Unit :=
+  if digestsOk digestOf (p.body.digestLits ++ p.holes.flatMap
+      (fun h => h.guard.digestLits ++ h.code.flatMap (fun c => c.body.digestLits)))
+  then .ok () else .error (.program "notDigest")
+
+/-- A residual hole is a typed refusal when no row view is available (install
+and law checking). Ordinary fields still evaluate; no selected code is guessed. -/
+def unresolvedBody (p : Package) : Except String Term :=
+  if p.holes.isEmpty then .ok p.body
+  else Contextual.Term.fillBounded Wire.nodeMax 1
+    (fun n => ((holeSignature p.holes).find? (fun d => d.name == n)).map
+      (fun d => .refuse d.ty "holeUnresolved".toUTF8)) p.body
+
+/-- Shared live admission. The package retained in Loaded is the original ROM;
+only the transient machine library receives an instantiated body. -/
+def admitContextual (prepare : List Ty → Package → Except String Term)
+    (idb : ByteArray) (p : Package) (acc : Loaded) (gis : List Nat) :
+    Except (Refusal D) (Loaded × Nat) :=
+  if p.holes.isEmpty then admitPackage digestOf idb p acc gis
+  else match ifacesAt acc.pkgs gis with
+  | none => .error (.program "closure")
+  | some ifs =>
+    match p.checkContextual ifs with
+    | .error e => .error (.program e)
+    | .ok () =>
+      match prepare ifs p with
+      | .error e => .error (.program e)
+      | .ok body =>
+        match checkE ifs body p.iface with
+        | .error e => .error (.program s!"holeInstanceType {e.text}")
+        | .ok () =>
+          match checkROMLits digestOf p, checkLits digestOf { p with body } with
+          | .ok (), .ok () =>
+            .ok ({ ids := acc.ids ++ [idb],
+                   lib := acc.lib ++ [body.relocate fun i => gis.getD i 0],
+                   pkgs := acc.pkgs ++ [p] }, acc.ids.length)
+          | .error e, _ | _, .error e => .error e
+
+def loadContextual (look : Pinned D) (fuel : Nat) (idb : ByteArray) (acc : Loaded) :
+    Except (Refusal D) (Loaded × Nat) :=
+  loadUsing digestOf (admitContextual digestOf (fun _ => unresolvedBody)) look fuel idb acc
+
+def loadAllContextual (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) :
+    Except (Refusal D) (Loaded × List Nat) :=
+  loadAllUsing digestOf (admitContextual digestOf (fun _ => unresolvedBody)) look fuel ds acc
+
+def loadLive (rv : RowView D) (self : D) (look : Pinned D) (fuel : Nat)
+    (idb : ByteArray) (acc : Loaded) : Except (Refusal D) (Loaded × Nat) :=
+  loadUsing digestOf (admitContextual digestOf (fun Δ p =>
+    (instantiateHoles rv self Δ p).map (·.body))) look fuel idb acc
+
+/-- Conservative preparation charge derived entirely from the actual ROM syntax;
+the selected candidate cannot exceed the maximum over its committed candidates. -/
+def Package.preparationCost (p : Package) : Nat :=
+  if p.holes.isEmpty then 0
+  else Contextual.Term.nodes p.body *
+    (1 + (p.holes.flatMap (fun h => h.code)).foldl
+      (fun n c => max n (Contextual.Term.nodes c.body)) 1) + 256 * p.holes.length
+
 
 def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := do
   let p ← match Wire.decodePackage b with
@@ -156,6 +227,17 @@ def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := 
   match p.checkWith ifaces with
   | .ok () => checkLits digestOf p
   | .error e => throw (.program e.wire)
+
+def checkInstallContextual (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := do
+  let p ← match Wire.decodePackage b with
+    | .ok p => pure p
+    | .error e => throw (.program (decodeText e))
+  if p.holes.isEmpty then return ← checkInstall digestOf look b
+  let (L, gis) ← loadAllContextual digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩
+  let some ifaces := ifacesAt L.pkgs gis | throw (.program "closure")
+  match p.checkContextual ifaces with
+  | .error e => throw (.program e)
+  | .ok () => checkROMLits digestOf p
 
 /-- The state slots of a record row: field `i` at `stateBase + i`; `none` if a field has no bytes at
 its type (extraction at the state type makes that unreachable; it is refused by name, not written). -/
@@ -232,10 +314,10 @@ def recordRow : Ty → List (Label × Ty)
 
 /-- Every law of the package at closure index `g` (whose id is `law`) on `old → new`, each run by
 the one law runner `runLaw` on the package's field. -/
-def judgeOne (look : Pinned D) (law : D) (old new : Slots) (r : Req D) :
+def judgeOneWith (loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)) (look : Pinned D) (law : D) (old new : Slots) (r : Req D) :
     Except (Refusal D) Unit := do
   unless reqOk bytesOf r do throw (.program "request out of bounds")
-  let (L, g) ← load digestOf look closureDepthMax (bytesOf law) ⟨[], [], []⟩
+  let (L, g) ← loader look closureDepthMax (bytesOf law) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
   let row := recordRow p.state
   let deny (why : String) : Refusal D := .lawDenied law why
@@ -246,6 +328,16 @@ def judgeOne (look : Pinned D) (law : D) (old new : Slots) (r : Req D) :
     | .ok (.ok ()) => pure ()
     | .ok (.error why) => throw (deny s!"{ℓ}: {reasonText why}")
     | .error f => throw (deny s!"{ℓ}: {faultText f}")
+
+def judgeOne (look : Pinned D) (law : D) (old new : Slots) (r : Req D) : Except (Refusal D) Unit :=
+  judgeOneWith bytesOf digestOf (load digestOf) look law old new r
+
+def judgeContextual (look : Pinned D) (pkg : Option D) (laws : List D) (old new : Slots) (r : Req D) :
+    Except (Refusal D) Unit := do
+  if let some p := pkg then
+    judgeOneWith bytesOf digestOf (loadContextual digestOf) look p old new r
+  for l in laws do
+    judgeOneWith bytesOf digestOf (loadContextual digestOf) look l old new r
 
 def judge (look : Pinned D) (pkg : Option D) (laws : List D) (old new : Slots) (r : Req D) :
     Except (Refusal D) Unit := do
@@ -281,14 +373,16 @@ structure RunSetup where
   reads : Data
   term : Term
   env : Env
+  preparation : Nat := 0
 
 /-- The front half of every method run: the request's bounds, the closure loaded and re-checked
 (LANG-16), the method resolved, the state read at its row and the arguments decoded at their type,
 each refused by name. `runMeasured` runs from it; the WASTE counter (`Lang.Need`) counts from it. -/
-def runSetup (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+def runSetupWith (loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat))
+    (charge : Loaded → Nat) (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) : Except (Refusal D) RunSetup := do
   unless reqOk bytesOf r do throw (.program "request out of bounds")
-  let (L, g) ← load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
+  let (L, g) ← loader look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩
   let some p := L.pkgs[g]? | throw (.program "closure")
   let (ℓ, sg) ← resolveMethod p method
   let row := recordRow p.state
@@ -299,7 +393,22 @@ def runSetup (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (metho
   let rows ← readsData digestOf p.rels rv r.self sg.reads
   pure { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row,
          ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := s,
-         args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal] }
+         args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal], preparation := charge L }
+
+/-- Closed specialization retained for its landed statements. -/
+def runSetup (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) : Except (Refusal D) RunSetup :=
+  runSetupWith bytesOf digestOf (load digestOf) (fun _ => 0) look rv pkg state method args r
+
+def Loaded.preparationCost (L : Loaded) : Nat :=
+  (L.pkgs.map Package.preparationCost).foldl (· + ·) 0
+
+/-- The deployed setup reauthenticates every contextual selection for this invocation. -/
+def runSetupLive (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) : Except (Refusal D) RunSetup :=
+  runSetupWith bytesOf digestOf (loadLive digestOf rv r.self)
+    Loaded.preparationCost
+    look rv pkg state method args r
 
 /-- Every edit judged by its relation's guard, if it has one, over the state before the run, the
 request, and the edit with its old row (LANG-49: O(edits), never a relation; one law runner,
@@ -322,14 +431,17 @@ makes as the object (`callsOf`, in slot order), with what the run cost (WASTE ro
 the machine steps the method and its extraction used, and the packages of the closure loaded and
 re-checked (LANG-16). `runMethod` and `program`'s `run` are its components, so a measured number
 is the deployed run's. -/
-def runMeasured (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+def runMeasuredWith
+    (setup : Pinned D → RowView D → D → Slots → Nat → ByteArray → Req D → Except (Refusal D) RunSetup) (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) :
     Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat × Nat) := do
-  let S ← runSetup bytesOf digestOf look rv pkg state method args r
-  match run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) with
+  let S ← setup look rv pkg state method args r
+  if S.preparation > budget then throw (.program "holeTicks")
+  let machineBudget := budget - S.preparation
+  match run S.lib Bounds.stackMax machineBudget 0 (State.init S.term S.env) with
   | .fault f _ => throw (.program s!"{S.label}: {faultText f}")
   | .value v used =>
-    match (Machine.mk S.lib).extract S.ty (budget - used) v with
+    match (Machine.mk S.lib).extract S.ty (machineBudget - used) v with
     | .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) =>
       match stateSlots S.row ds 0 with
       | some slots => do
@@ -340,6 +452,16 @@ def runMeasured (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (me
       | none => throw (.program s!"{S.label}: state bytes")
     | .ok _ => throw (.program s!"{S.label}: state")
     | .error f => throw (.program s!"{S.label}: {faultText f}")
+
+def runMeasured (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) :
+    Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat × Nat) :=
+  runMeasuredWith bytesOf digestOf (runSetup bytesOf digestOf) look rv pkg state method args r budget
+
+def runMeasuredLive (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
+    (r : Req D) (budget : Nat) :
+    Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat × Nat) :=
+  runMeasuredWith bytesOf digestOf (runSetupLive bytesOf digestOf) look rv pkg state method args r budget
 
 def runMethod (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct)) :=
@@ -383,11 +505,11 @@ end
 
 /-- The language, as the kernel's receivers see it. -/
 def program (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) : Program D where
-  checkInstall := checkInstall digestOf
-  judge := judge bytesOf digestOf
+  checkInstall := checkInstallContextual digestOf
+  judge := judgeContextual bytesOf digestOf
   -- the slots, the calls the method makes as the object, and the ticks it used (LEDGER-8 (e))
   run := fun look rv pkg state method args r budget =>
-    (runMeasured bytesOf digestOf look rv pkg state method args r budget).map fun x =>
+    (runMeasuredLive bytesOf digestOf look rv pkg state method args r budget).map fun x =>
       (x.1, x.2.1, x.2.2.1, x.2.2.2.1)
   rels := relsOf bytesOf
 

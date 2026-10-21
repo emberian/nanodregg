@@ -35,6 +35,7 @@ import Lang.Program
 import Lang.Std
 import Lang.Proofs.Wire
 import Lang.Proofs.Receiver
+import Lang.Proofs.Contextual.ClosedLeaf
 
 namespace Nanodregg.Kernel.Receive
 
@@ -203,11 +204,12 @@ private theorem readPackage_counter {look : Pinned UInt8} (h : readKind look 9 k
 private theorem load_counter {look : Pinned UInt8} (h : readKind look 9 kindPackage = .ok pkgCell) :
     Lang.load wDigestOf look closureDepthMax (wEnv.bytes 9) ⟨[], [], []⟩ =
       admitPackage wDigestOf (wEnv.bytes 9) counter ⟨[], [], []⟩ [] := by
-  rw [Lang.load.eq_def]
+  unfold Lang.load
+  rw [Lang.loadUsing.eq_def]
   simp only [indexIn, closureDepthMax]
   rw [show idOf wDigestOf (wEnv.bytes 9) = .ok 9 from rfl]
   simp only [readPackage_counter h, show counter.imports = [] from rfl]
-  rw [Lang.loadAll.eq_def]
+  rw [Lang.loadAllUsing.eq_def]
 
 /-! ## The first call, on `w0` -/
 
@@ -235,22 +237,26 @@ private theorem c1_invokeRun :
 private theorem c1_run :
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 9 (stateOf objCell)
       0 (natBytes 4) req1 (min 1000 (poolOf c1.unsigned.body)) = .ok (s1, [], [], 41) := by
-  show (runMeasured wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
-  unfold runMeasured runSetup
+  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl)
+    (readPackage_counter c1_pkg) rfl rfl]
+  unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_counter c1_pkg]
   exact of_runIs (by decide +kernel)
 
 private theorem c1_judgeOne :
     judgeOne wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) 9 (stateOf objCell) s1 req1 = .ok () := by
-  unfold judgeOne
+  unfold judgeOne judgeOneWith
   rw [load_counter c1_pkg]
   exact of_isOkAs (by decide +kernel)
 
 private theorem c1_judge :
     wCtx.program.judge (pinned wCtx.env w0 c1.unsigned.pins) (some 9) [] (stateOf objCell) s1 req1 = .ok () := by
-  show Nanodregg.Lang.judge wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) (some 9) [] (stateOf objCell)
+  show Nanodregg.Lang.judgeContextual wEnv.bytes wDigestOf (pinned wCtx.env w0 c1.unsigned.pins) (some 9) [] (stateOf objCell)
     s1 req1 = .ok ()
-  unfold Nanodregg.Lang.judge
+  unfold Nanodregg.Lang.judgeContextual
+  simp only [judgeOneContextual_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl)
+    (readPackage_counter c1_pkg) rfl rfl]
   simp only [c1_judgeOne]
   rfl
 
@@ -291,22 +297,26 @@ private theorem c2_invokeRun :
 private theorem c2_run :
     wCtx.program.run (pinned wCtx.env w1 c2.unsigned.pins) (rowView wCtx.env w1 c2.unsigned) 9 (stateOf cell2)
       0 (natBytes 2) req2 (min 1000 (poolOf c2.unsigned.body)) = .ok (s2, [], [], 41) := by
-  show (runMeasured wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
-  unfold runMeasured runSetup
+  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl)
+    (readPackage_counter c2_pkg) rfl rfl]
+  unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_counter c2_pkg]
   exact of_runIs (by decide +kernel)
 
 private theorem c2_judgeOne :
     judgeOne wEnv.bytes wDigestOf (pinned wCtx.env w1 c2.unsigned.pins) 9 (stateOf cell2) s2 req2 = .ok () := by
-  unfold judgeOne
+  unfold judgeOne judgeOneWith
   rw [load_counter c2_pkg]
   exact of_isOkAs (by decide +kernel)
 
 private theorem c2_judge :
     wCtx.program.judge (pinned wCtx.env w1 c2.unsigned.pins) (some 9) [] (stateOf cell2) s2 req2 = .ok () := by
-  show Nanodregg.Lang.judge wEnv.bytes wDigestOf (pinned wCtx.env w1 c2.unsigned.pins) (some 9) [] (stateOf cell2)
+  show Nanodregg.Lang.judgeContextual wEnv.bytes wDigestOf (pinned wCtx.env w1 c2.unsigned.pins) (some 9) [] (stateOf cell2)
     s2 req2 = .ok ()
-  unfold Nanodregg.Lang.judge
+  unfold Nanodregg.Lang.judgeContextual
+  simp only [judgeOneContextual_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl)
+    (readPackage_counter c2_pkg) rfl rfl]
   simp only [c2_judgeOne]
   rfl
 

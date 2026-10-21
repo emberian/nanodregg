@@ -1,7 +1,7 @@
 /-
 # Lang.Term — the core term language (DECISIONS LANG-1)
 
-Seventeen constructors. De Bruijn variables; `lam` and `inj` carry their types so checking is a
+Eighteen constructors. De Bruijn variables; `lam` and `inj` carry their types so checking is a
 function with no inference of annotations. `fix t` ties the record knot: `t : R → R` for a record
 type `R`, and the knot is the final self of open recursion (`mix l u` is the lambda
 `λself. λsuper. u self (l self super)`, which the authoring tool writes; it is not a constructor).
@@ -66,6 +66,8 @@ inductive Term
   /-- The run ends here, refused by the NAME `why` (LANG-51): a `Fault.refused why`. Typed at its
   annotation, like `inj`; the reason is a literal, so a refusal's name is fixed in the text (law 7). -/
   | refuse (ty : Ty) (why : ByteArray)
+  /-- A contextual hole, instantiated by its explicit ordinary substitution. -/
+  | hole (name : Nat) (subst : List Term)
   deriving Inhabited
 
 end Nanodregg.Lang

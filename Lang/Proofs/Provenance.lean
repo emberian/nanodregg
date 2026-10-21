@@ -33,6 +33,9 @@ import Lang.Proofs.CallTeeth
 import Kernel.Proofs.Lawful
 import Codec.Deployed
 
+import Lang.Proofs.Contextual.LiveInvoke
+import Lang.Proofs.Contextual.ClosedDeployment
+
 namespace Nanodregg.Lang
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
@@ -208,6 +211,7 @@ theorem step_lits {lib : List Term} {s : State} (hlib : LibLits P lib) (hs : Sta
   | eval t env =>
     obtain ⟨ht, he⟩ := hc
     cases t with
+    | hole _ _ => trivial
     | var i =>
       simp only [step]
       split
@@ -545,6 +549,14 @@ theorem relocate_digestLits (f : Nat → Nat) : ∀ t : Term, (t.relocate f).dig
   | .ite c a b => by
     simp [Term.relocate, Term.digestLits, relocate_digestLits f c, relocate_digestLits f a,
       relocate_digestLits f b]
+  | .hole n σ => by
+    simp [Term.relocate, Term.digestLits, relocateList_digestLits f σ]
+
+theorem relocateList_digestLits (f : Nat → Nat) :
+    ∀ ts : List Term, Term.listDigestLits (Term.relocateList f ts) = Term.listDigestLits ts
+  | [] => rfl
+  | t :: ts => by
+    simp [Term.relocateList, Term.listDigestLits, relocate_digestLits f t, relocateList_digestLits f ts]
 
 theorem relocateRow_digestLits (f : Nat → Nat) :
     ∀ fs : List (Label × Term), Term.rowDigestLits (Term.relocateRow f fs) = Term.rowDigestLits fs
@@ -594,6 +606,80 @@ theorem admitPackage_lits {idb : ByteArray} {p : Package} {acc L : Loaded} {gis 
         · rw [relocate_digestLits] at hb
           exact checkLits_lits h3 b hb
 
+
+theorem admitContextual_lits {prepare : List Ty → Package → Except String Term}
+    {idb : ByteArray} {p : Package} {acc L : Loaded} {gis : List Nat} {g : Nat}
+    (hacc : ClosureLits digestOf acc)
+    (h : admitContextual digestOf prepare idb p acc gis = .ok (L, g)) :
+    ClosureLits digestOf L := by
+  unfold admitContextual at h
+  split at h
+  · exact admitPackage_lits hacc h
+  ·
+    repeat' split at h
+    all_goals first | (cases h; done) | skip
+    simp only [Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    intro t ht b hb
+    simp only [List.mem_append, List.mem_singleton] at ht
+    rcases ht with ht | rfl
+    · exact hacc t ht b hb
+    · rw [relocate_digestLits] at hb
+      exact checkLits_lits ‹_› b hb
+
+section
+variable (digestOf : ByteArray → Option D) (look : Pinned D)
+  (admit : ByteArray → Package → Loaded → List Nat → Except (Refusal D) (Loaded × Nat))
+
+mutual
+/-- Every closure `load` builds holds only id literals `digestOf` accepts: each package passed
+`checkLits` when it was admitted, and relocation keeps a body's literals. -/
+theorem loadUsing_lits (hadmit : ∀ {idb p acc gis L g}, ClosureLits digestOf acc →
+    admit idb p acc gis = .ok (L, g) → ClosureLits digestOf L) (fuel : Nat) (idb : ByteArray) (acc : Loaded) {L : Loaded} {g : Nat}
+    (hacc : ClosureLits digestOf acc) (h : loadUsing digestOf admit look fuel idb acc = .ok (L, g)) :
+    ClosureLits digestOf L := by
+  unfold loadUsing at h
+  split at h
+  · simp only [Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact hacc
+  · split at h
+    · simp at h
+    · rename_i fuel
+      split at h
+      · simp at h
+      · split at h
+        · simp at h
+        · split at h
+          · simp at h
+          · rename_i acc' gis hall
+            exact hadmit (loadAllUsing_lits hadmit fuel _ acc hacc hall) h
+termination_by (fuel, 0)
+
+theorem loadAllUsing_lits (hadmit : ∀ {idb p acc gis L g}, ClosureLits digestOf acc →
+    admit idb p acc gis = .ok (L, g) → ClosureLits digestOf L) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) {L : Loaded} {gs : List Nat}
+    (hacc : ClosureLits digestOf acc) (h : loadAllUsing digestOf admit look fuel ds acc = .ok (L, gs)) :
+    ClosureLits digestOf L := by
+  unfold loadAllUsing at h
+  split at h
+  · simp only [Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact hacc
+  · rename_i d ds
+    split at h
+    · simp at h
+    · rename_i acc1 g1 h1
+      split at h
+      · simp at h
+      · rename_i acc2 gs2 h2
+        simp only [Except.ok.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        exact loadAllUsing_lits hadmit fuel ds acc1 (loadUsing_lits hadmit fuel d acc hacc h1) h2
+termination_by (fuel, ds.length + 1)
+end
+
+end
+
 section
 variable (digestOf : ByteArray → Option D) (look : Pinned D)
 
@@ -603,7 +689,7 @@ mutual
 theorem load_lits (fuel : Nat) (idb : ByteArray) (acc : Loaded) {L : Loaded} {g : Nat}
     (hacc : ClosureLits digestOf acc) (h : load digestOf look fuel idb acc = .ok (L, g)) :
     ClosureLits digestOf L := by
-  unfold load at h
+  unfold load loadUsing at h
   split at h
   · simp only [Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
@@ -624,7 +710,7 @@ termination_by (fuel, 0)
 theorem loadAll_lits (fuel : Nat) (ds : List ByteArray) (acc : Loaded) {L : Loaded} {gs : List Nat}
     (hacc : ClosureLits digestOf acc) (h : loadAll digestOf look fuel ds acc = .ok (L, gs)) :
     ClosureLits digestOf L := by
-  unfold loadAll at h
+  unfold loadAll loadAllUsing at h
   split at h
   · simp only [Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
@@ -872,6 +958,50 @@ theorem runSetup_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true
   · exact readsData_digests hrows b h
   · exact hlits t ht b h
 
+theorem runSetupLive_sources {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat}
+    {args : ByteArray} {r : Req D} {S : RunSetup} {budget used fuel left : Nat} {v : Val} {d : Data}
+    (hS : runSetupLive bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
+    (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
+    ∀ b ∈ d.digests, RunSource bytesOf r S S.reads b := by
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, -, -, -, -, -, -, hrows, rfl⟩ := runSetupWith_spec hS
+  refine run_extract_lits (RunSource bytesOf r _ wd) (fun t ht b hb => ?_) (apply4_lits _ g ℓ) ?_ hr hx
+  · exact .inr (.inr (.inr (.inr (.inr (.inr ⟨t, ht, hb⟩)))))
+  · refine env4_lits _ (fun b hb => ?_) (fun b hb => .inr (.inr (.inr (.inl hb))))
+      (fun b hb => .inr (.inr (.inr (.inr (.inl hb)))))
+      (fun b hb => .inr (.inr (.inr (.inr (.inr (.inl hb))))))
+    rw [reqData_digests] at hb
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
+    rcases hb with rfl | rfl | rfl
+    · exact .inl rfl
+    · exact .inr (.inl rfl)
+    · exact .inr (.inr (.inl rfl))
+
+/-- Every source is accepted where it entered: the arguments and the state by `runSetup`'s digest
+checks, the rows by `readsData`'s `checked` (`readsData_digests`), the closure's literals by
+`checkLits` at load, and the request's ids because they are the World's own (`hdig`, the World's
+codec reads its ids back). So every digest a method run returns is one `digestOf` accepts. -/
+theorem runSetupLive_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+    {rv : RowView D} {pkg : D}
+    {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
+    {budget used fuel left : Nat} {v : Val} {d : Data}
+    (hS : runSetupLive bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
+    (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
+    ∀ b ∈ d.digests, (digestOf b).isSome = true := by
+  have hsrc := runSetupLive_sources hS hr hx
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, -, -, hst, -, hda, hrows, rfl⟩ := runSetupWith_spec hS
+  have hlits := loadUsing_lits digestOf look _ (fun ha hr => admitContextual_lits ha hr) _ _ _ (fun t ht => by simp at ht) hl
+  intro b hb
+  rcases hsrc b hb with rfl | rfl | rfl | h | h | h | ⟨t, ht, h⟩
+  · exact hdig _
+  · exact hdig _
+  · exact hdig _
+  · exact digestsOk_mem hda b h
+  · exact readState_digests hst b h
+  · exact readsData_digests hrows b h
+  · exact hlits t ht b h
+
 theorem mem_rowDigests {b : ByteArray} {ℓ : Label} {d : Data} :
     ∀ {fs : List (Label × Data)}, (ℓ, d) ∈ fs → b ∈ d.digests → b ∈ Data.rowDigests fs
   | [], h, _ => by simp at h
@@ -944,8 +1074,60 @@ private theorem runMeasured_past_extraction_of (hdig : ∀ x, (digestOf (bytesOf
               simp [hn] at this
             | ok calls =>
               refine ⟨c, e, ds, calls, rfl, hc, ?_⟩
-              unfold runMeasured
-              simp only [bind, Except.bind, hS', hr, hx]
+              unfold runMeasured runMeasuredWith
+              simp only [bind, Except.bind, hS', Nat.not_lt_zero, if_false, Nat.sub_zero, hr, hx]
+              cases stateSlots (recordRow p.state) ds 0 <;>
+                simp [hc, pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
+private theorem runMeasuredLive_past_extraction_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+    {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D}
+    {budget : Nat} {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
+    (hS : runSetupLive bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
+    (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
+    ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
+      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf digestOf c = .ok calls ∧
+      runMeasuredLive bytesOf digestOf look rv pkg state method args r (budget + S.preparation) =
+        match stateSlots S.row ds 0 with
+        | some slots => do
+            let es ← editsOf S.rels r.self e
+            guardEdits bytesOf digestOf S rv pkg r es
+            pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget + S.preparation - left, S.pkgs)
+        | none => .error (.program s!"{S.label}: state bytes") := by
+  have hacc := runSetupLive_accepted_of hdig hS hr hx
+  have hS' := hS
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, hr0, hl, hp, hres, hst, hargs, -, hrows, rfl⟩ := runSetupWith_spec hS
+  obtain ⟨mty, hm, hA⟩ := resolveMethod_spec hres
+  have hok := invoke_live_never_stuck (ticks := budget) hl hp hm hA hst hargs hrows hr0
+  simp only at hr hx
+  rw [hr] at hok
+  have hcf := extract_conforms (loadLive_libTy hl).1 (resultTy p.state sg.calls (editTy p.rels) sg.edits) hok hx
+  have hks := methodSig_slots hA
+  have hstate := checkShape_state ((loadLive_checked hl g p hp).1)
+  cases hcf with
+  | record hrow =>
+    cases hrow with
+    | cons hcalls hrest =>
+      cases hrest with
+      | cons hed hrest2 =>
+        cases hrest2 with
+        | cons hst' hnil =>
+          cases hnil
+          rw [hstate] at hst'
+          cases hst' with
+          | record hds =>
+            rename_i c e ds
+            cases hc : callsOf digestOf c with
+            | error err =>
+              exfalso
+              obtain ⟨ℓ', q, f, b, hn, hb, -, -⟩ := callsOf_live hks hcalls err hc
+              have := hacc b (by simp only [Data.digests, Data.rowDigests, List.mem_append]; exact .inl (digestAt_mem hb))
+              simp [hn] at this
+            | ok calls =>
+              refine ⟨c, e, ds, calls, rfl, hc, ?_⟩
+              unfold runMeasuredLive runMeasuredWith
+              simp only [bind, Except.bind, hS', Nat.add_sub_cancel]
+              rw [if_neg (by omega)]
+              simp only [hr, hx]
               cases stateSlots (recordRow p.state) ds 0 <;>
                 simp [hc, pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
 end
@@ -993,6 +1175,36 @@ next is exactly the state's slots (refused only for state without bytes), `edits
 premise is shown to bite by a run: journey LD5 (PLANT unlawful-codec), a program whose decoder refuses
 a member's id inside a lawful Sim `Ctx`, where `callsOf` refuses by name. The deployed `Ctx` meets both
 (`Receive.deployed_ctx_lawful`, `deployed_program_own_codec`). -/
+theorem program_run_past_extraction_live {D : Type} {X : Ctx D} (hX : X.Lawful)
+    (hp : X.program = Lang.program X.env.bytes X.digestOf) {look : Pinned D} {rv : RowView D}
+    {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
+    {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
+    (hS : runSetupLive X.env.bytes X.digestOf look rv pkg state method args r = .ok S)
+    (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
+    (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
+    ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
+      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf c = .ok calls ∧
+      X.program.run look rv pkg state method args r (budget + S.preparation) =
+        match stateSlots S.row ds 0 with
+        | some slots => do
+            let es ← editsOf S.rels r.self e
+            guardEdits X.env.bytes X.digestOf S rv pkg r es
+            pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget + S.preparation - left)
+        | none => .error (.program s!"{S.label}: state bytes") := by
+  obtain ⟨c, e, ds, calls, hd, hc, hm⟩ := runMeasuredLive_past_extraction_of (fun x => by simp [hX.digestOf_bytes x]) hS hr hx
+  refine ⟨c, e, ds, calls, hd, hc, ?_⟩
+  rw [hp]
+  show (runMeasuredLive X.env.bytes X.digestOf look rv pkg state method args r (budget + S.preparation)).map _ = _
+  rw [hm]
+  cases stateSlots S.row ds 0 with
+  | none => rfl
+  | some slots =>
+    simp only [bind, Except.bind]
+    cases editsOf S.rels r.self e with
+    | error _ => rfl
+    | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
+
+/- Landed closed statement preserved through the proved deployment bridge. -/
 theorem program_run_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful)
     (hp : X.program = Lang.program X.env.bytes X.digestOf) {look : Pinned D} {rv : RowView D}
     {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
@@ -1011,9 +1223,7 @@ theorem program_run_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful)
         | none => .error (.program s!"{S.label}: state bytes") := by
   obtain ⟨c, e, ds, calls, hd, hc, hm⟩ := runMeasured_past_extraction hX hS hr hx
   refine ⟨c, e, ds, calls, hd, hc, ?_⟩
-  rw [hp]
-  show (runMeasured X.env.bytes X.digestOf look rv pkg state method args r budget).map _ = _
-  rw [hm]
+  rw [hp, program_run_closed hS, hm]
   cases stateSlots S.row ds 0 with
   | none => rfl
   | some slots =>

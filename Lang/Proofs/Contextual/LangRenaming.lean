@@ -1,0 +1,418 @@
+/- Binder-aware renaming and strengthening for every contextual Lang term. -/
+import Lang.Contextual.LangCalculus
+import Lang.Proofs.Check
+import Lang.Proofs.Contextual.Core
+
+namespace Nanodregg.Lang.Contextual
+
+/-! ## Row shapes -/
+
+theorem renameVarRow_ascending (ρ : Nat → Nat) :
+    ∀ fs : List (Label × Term), Row.ascending (Term.renameVarRow ρ fs) = Row.ascending fs
+  | [] => rfl
+  | [_] => rfl
+  | (a, s) :: (b, t) :: rest => by
+      have ih := renameVarRow_ascending ρ ((b, t) :: rest)
+      simp only [Term.renameVarRow] at ih ⊢
+      simp only [Row.ascending, ih]
+
+theorem fillRefsRow_ascending (σ : Nat → Option Term) :
+    ∀ fs : List (Label × Term), Row.ascending (Term.fillRefsRow σ fs) = Row.ascending fs
+  | [] => rfl
+  | [_] => rfl
+  | (a, s) :: (b, t) :: rest => by
+      have ih := fillRefsRow_ascending σ ((b, t) :: rest)
+      simp only [Term.fillRefsRow] at ih ⊢
+      simp only [Row.ascending, ih]
+
+/-! ## Renaming composes -/
+
+mutual
+theorem renameVar_renameVar (ρ ρ' : Nat → Nat) : ∀ t : Term,
+    Term.renameVar ρ (Term.renameVar ρ' t) = Term.renameVar (fun i => ρ (ρ' i)) t
+  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .ref _ | .refuse _ _ => rfl
+  | .lam _ b => by simp only [Term.renameVar, renameVar_renameVar (upR ρ) (upR ρ') b, upR_upR]
+  | .app f a => by
+    simp only [Term.renameVar, renameVar_renameVar ρ ρ' f, renameVar_renameVar ρ ρ' a]
+  | .fix t => by simp only [Term.renameVar, renameVar_renameVar ρ ρ' t]
+  | .prim _ a b => by
+    simp only [Term.renameVar, renameVar_renameVar ρ ρ' a, renameVar_renameVar ρ ρ' b]
+  | .record fs => by simp only [Term.renameVar, renameVarRow_renameVarRow ρ ρ' fs]
+  | .get t _ => by simp only [Term.renameVar, renameVar_renameVar ρ ρ' t]
+  | .extend t fs => by
+    simp only [Term.renameVar, renameVar_renameVar ρ ρ' t, renameVarRow_renameVarRow ρ ρ' fs]
+  | .inj _ _ t => by simp only [Term.renameVar, renameVar_renameVar ρ ρ' t]
+  | .case t as => by
+    simp only [Term.renameVar, renameVar_renameVar ρ ρ' t, renameVarArms_renameVarArms ρ ρ' as]
+  | .ite c a b => by
+    simp only [Term.renameVar, renameVar_renameVar ρ ρ' c, renameVar_renameVar ρ ρ' a,
+      renameVar_renameVar ρ ρ' b]
+  | .hole n σ => by simp only [Term.renameVar, renameVarList_renameVarList ρ ρ' σ]
+theorem renameVarList_renameVarList (ρ ρ' : Nat → Nat) : ∀ fs : List Term,
+    Term.renameVarList ρ (Term.renameVarList ρ' fs) = Term.renameVarList (fun i => ρ (ρ' i)) fs
+  | [] => rfl
+  | t :: fs => by
+    simp only [Term.renameVarList, renameVar_renameVar ρ ρ' t, renameVarList_renameVarList ρ ρ' fs]
+theorem renameVarRow_renameVarRow (ρ ρ' : Nat → Nat) : ∀ fs : List (Label × Term),
+    Term.renameVarRow ρ (Term.renameVarRow ρ' fs) = Term.renameVarRow (fun i => ρ (ρ' i)) fs
+  | [] => rfl
+  | (_, t) :: fs => by
+    simp only [Term.renameVarRow, renameVar_renameVar ρ ρ' t, renameVarRow_renameVarRow ρ ρ' fs]
+theorem renameVarArms_renameVarArms (ρ ρ' : Nat → Nat) : ∀ as : List (Label × Term),
+    Term.renameVarArms ρ (Term.renameVarArms ρ' as) = Term.renameVarArms (fun i => ρ (ρ' i)) as
+  | [] => rfl
+  | (_, t) :: as => by
+    simp only [Term.renameVarArms, renameVar_renameVar (upR ρ) (upR ρ') t, upR_upR,
+      renameVarArms_renameVarArms ρ ρ' as]
+end
+
+mutual
+theorem renameVar_id : ∀ t : Term, Term.renameVar (fun i => i) t = t
+  | .var _ | .nat _ | .bool _ | .bytes _ | .digest _ | .ref _ | .refuse _ _ => rfl
+  | .lam _ b => by simp only [Term.renameVar, upR_id, renameVar_id b]
+  | .app f a => by simp only [Term.renameVar, renameVar_id f, renameVar_id a]
+  | .fix t => by simp only [Term.renameVar, renameVar_id t]
+  | .prim _ a b => by simp only [Term.renameVar, renameVar_id a, renameVar_id b]
+  | .record fs => by simp only [Term.renameVar, renameVarRow_id fs]
+  | .get t _ => by simp only [Term.renameVar, renameVar_id t]
+  | .extend t fs => by simp only [Term.renameVar, renameVar_id t, renameVarRow_id fs]
+  | .inj _ _ t => by simp only [Term.renameVar, renameVar_id t]
+  | .case t as => by simp only [Term.renameVar, renameVar_id t, renameVarArms_id as]
+  | .ite c a b => by simp only [Term.renameVar, renameVar_id c, renameVar_id a, renameVar_id b]
+  | .hole n σ => by simp only [Term.renameVar, renameVarList_id σ]
+theorem renameVarList_id : ∀ fs : List Term, Term.renameVarList (fun i => i) fs = fs
+  | [] => rfl
+  | t :: fs => by simp only [Term.renameVarList, renameVar_id t, renameVarList_id fs]
+theorem renameVarRow_id : ∀ fs : List (Label × Term), Term.renameVarRow (fun i => i) fs = fs
+  | [] => rfl
+  | (_, t) :: fs => by simp only [Term.renameVarRow, renameVar_id t, renameVarRow_id fs]
+theorem renameVarArms_id : ∀ as : List (Label × Term), Term.renameVarArms (fun i => i) as = as
+  | [] => rfl
+  | (_, t) :: as => by simp only [Term.renameVarArms, upR_id, renameVar_id t, renameVarArms_id as]
+end
+
+/-! ## A renaming acts only through the variables a term uses -/
+
+mutual
+theorem renameVar_congr : ∀ (t : Term) (ρ ρ' : Nat → Nat),
+    (∀ k, Term.usesVar k t = true → ρ k = ρ' k) → Term.renameVar ρ t = Term.renameVar ρ' t
+  | .var i, ρ, ρ', h => by simp only [Term.renameVar, h i (by simp [Term.usesVar])]
+  | .nat _, _, _, _ | .bool _, _, _, _ | .bytes _, _, _, _ | .digest _, _, _, _
+  | .ref _, _, _, _ | .refuse _ _, _, _, _ => rfl
+  | .lam _ b, ρ, ρ', h => by
+    have h' : ∀ k, Term.usesVar k b = true → upR ρ k = upR ρ' k := by
+      intro k hk; cases k with
+      | zero => rfl
+      | succ j => simp only [upR, h j (by simpa [Term.usesVar] using hk)]
+    simp only [Term.renameVar, renameVar_congr b _ _ h']
+  | .app f a, ρ, ρ', h => by
+    simp only [Term.renameVar,
+      renameVar_congr f ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk]),
+      renameVar_congr a ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .fix t, ρ, ρ', h => by
+    simp only [Term.renameVar, renameVar_congr t ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .prim _ a b, ρ, ρ', h => by
+    simp only [Term.renameVar,
+      renameVar_congr a ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk]),
+      renameVar_congr b ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .record fs, ρ, ρ', h => by
+    simp only [Term.renameVar,
+      renameVarRow_congr fs ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .get t _, ρ, ρ', h => by
+    simp only [Term.renameVar, renameVar_congr t ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .extend t fs, ρ, ρ', h => by
+    simp only [Term.renameVar,
+      renameVar_congr t ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk]),
+      renameVarRow_congr fs ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .inj _ _ t, ρ, ρ', h => by
+    simp only [Term.renameVar, renameVar_congr t ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .case t as, ρ, ρ', h => by
+    simp only [Term.renameVar,
+      renameVar_congr t ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk]),
+      renameVarArms_congr as ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .ite c a b, ρ, ρ', h => by
+    simp only [Term.renameVar,
+      renameVar_congr c ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk]),
+      renameVar_congr a ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk]),
+      renameVar_congr b ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+  | .hole n σ, ρ, ρ', h => by
+    simp only [Term.renameVar,
+      renameVarList_congr σ ρ ρ' fun k hk => h k (by simp [Term.usesVar, hk])]
+theorem renameVarList_congr : ∀ (fs : List Term) (ρ ρ' : Nat → Nat),
+    (∀ k, Term.usesVarList k fs = true → ρ k = ρ' k) →
+      Term.renameVarList ρ fs = Term.renameVarList ρ' fs
+  | [], _, _, _ => rfl
+  | t :: fs, ρ, ρ', h => by
+    simp only [Term.renameVarList,
+      renameVar_congr t ρ ρ' fun k hk => h k (by simp [Term.usesVarList, hk]),
+      renameVarList_congr fs ρ ρ' fun k hk => h k (by simp [Term.usesVarList, hk])]
+theorem renameVarRow_congr : ∀ (fs : List (Label × Term)) (ρ ρ' : Nat → Nat),
+    (∀ k, Term.usesVarRow k fs = true → ρ k = ρ' k) →
+      Term.renameVarRow ρ fs = Term.renameVarRow ρ' fs
+  | [], _, _, _ => rfl
+  | (_, t) :: fs, ρ, ρ', h => by
+    simp only [Term.renameVarRow,
+      renameVar_congr t ρ ρ' fun k hk => h k (by simp [Term.usesVarRow, hk]),
+      renameVarRow_congr fs ρ ρ' fun k hk => h k (by simp [Term.usesVarRow, hk])]
+theorem renameVarArms_congr : ∀ (as : List (Label × Term)) (ρ ρ' : Nat → Nat),
+    (∀ k, Term.usesVarArms k as = true → ρ k = ρ' k) →
+      Term.renameVarArms ρ as = Term.renameVarArms ρ' as
+  | [], _, _, _ => rfl
+  | (_, t) :: as, ρ, ρ', h => by
+    have h' : ∀ k, Term.usesVar k t = true → upR ρ k = upR ρ' k := by
+      intro k hk; cases k with
+      | zero => rfl
+      | succ j => simp only [upR, h j (by simp [Term.usesVarArms, hk])]
+    simp only [Term.renameVarArms, renameVar_congr t _ _ h',
+      renameVarArms_congr as ρ ρ' fun k hk => h k (by simp [Term.usesVarArms, hk])]
+end
+
+/-! ## Renaming moves occurrences only along the renaming -/
+
+/-- Where an occurrence of `k` in a renamed term comes from. -/
+def VarFrom (ρ : Nat → Nat) (k : Nat) (u : Nat → Bool) : Prop := ∃ j, u j = true ∧ ρ j = k
+
+theorem VarFrom.mono {ρ : Nat → Nat} {k : Nat} {u u' : Nat → Bool}
+    (hu : ∀ j, u j = true → u' j = true) : VarFrom ρ k u → VarFrom ρ k u'
+  | ⟨j, hj, e⟩ => ⟨j, hu j hj, e⟩
+
+mutual
+theorem usesVar_renameVar : ∀ (t : Term) (ρ : Nat → Nat) (k : Nat),
+    Term.usesVar k (Term.renameVar ρ t) = true → VarFrom ρ k (fun j => Term.usesVar j t)
+  | .var i, ρ, k, h => ⟨i, by simp [Term.usesVar], by simpa [Term.renameVar, Term.usesVar] using h⟩
+  | .nat _, _, _, h | .bool _, _, _, h | .bytes _, _, _, h | .digest _, _, _, h
+  | .ref _, _, _, h | .refuse _ _, _, _, h => by simp [Term.renameVar, Term.usesVar] at h
+  | .lam _ b, ρ, k, h => by
+    obtain ⟨j, hj, e⟩ := usesVar_renameVar b (upR ρ) (k + 1) (by simpa [Term.renameVar, Term.usesVar] using h)
+    cases j with
+    | zero => simp [upR] at e
+    | succ j => exact ⟨j, by simpa [Term.usesVar] using hj, by simpa [upR] using e⟩
+  | .app f a, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact (usesVar_renameVar f ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+    · exact (usesVar_renameVar a ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .fix t, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar] at h
+    exact (usesVar_renameVar t ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .prim _ a b, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact (usesVar_renameVar a ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+    · exact (usesVar_renameVar b ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .record fs, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar] at h
+    exact (usesVarRow_renameVarRow fs ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .get t _, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar] at h
+    exact (usesVar_renameVar t ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .extend t fs, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact (usesVar_renameVar t ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+    · exact (usesVarRow_renameVarRow fs ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .inj _ _ t, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar] at h
+    exact (usesVar_renameVar t ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .case t as, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact (usesVar_renameVar t ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+    · exact (usesVarArms_renameVarArms as ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .ite c a b, ρ, k, h => by
+    simp only [Term.renameVar, Term.usesVar, Bool.or_eq_true] at h
+    rcases h with (h | h) | h
+    · exact (usesVar_renameVar c ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+    · exact (usesVar_renameVar a ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+    · exact (usesVar_renameVar b ρ k h).mono fun j hj => by simp [Term.usesVar, hj]
+  | .hole n σ, ρ, k, h => by
+    exact (usesVarList_renameVarList σ ρ k h).mono fun j hj => hj
+theorem usesVarList_renameVarList : ∀ (fs : List Term) (ρ : Nat → Nat) (k : Nat),
+    Term.usesVarList k (Term.renameVarList ρ fs) = true →
+      VarFrom ρ k (fun j => Term.usesVarList j fs)
+  | [], _, _, h => by simp [Term.renameVarList, Term.usesVarList] at h
+  | t :: fs, ρ, k, h => by
+    simp only [Term.renameVarList, Term.usesVarList, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact (usesVar_renameVar t ρ k h).mono fun j hj => by simp [Term.usesVarList, hj]
+    · exact (usesVarList_renameVarList fs ρ k h).mono fun j hj => by simp [Term.usesVarList, hj]
+theorem usesVarRow_renameVarRow : ∀ (fs : List (Label × Term)) (ρ : Nat → Nat) (k : Nat),
+    Term.usesVarRow k (Term.renameVarRow ρ fs) = true →
+      VarFrom ρ k (fun j => Term.usesVarRow j fs)
+  | [], _, _, h => by simp [Term.renameVarRow, Term.usesVarRow] at h
+  | (_, t) :: fs, ρ, k, h => by
+    simp only [Term.renameVarRow, Term.usesVarRow, Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact (usesVar_renameVar t ρ k h).mono fun j hj => by simp [Term.usesVarRow, hj]
+    · exact (usesVarRow_renameVarRow fs ρ k h).mono fun j hj => by simp [Term.usesVarRow, hj]
+theorem usesVarArms_renameVarArms : ∀ (as : List (Label × Term)) (ρ : Nat → Nat) (k : Nat),
+    Term.usesVarArms k (Term.renameVarArms ρ as) = true →
+      VarFrom ρ k (fun j => Term.usesVarArms j as)
+  | [], _, _, h => by simp [Term.renameVarArms, Term.usesVarArms] at h
+  | (_, t) :: as, ρ, k, h => by
+    simp only [Term.renameVarArms, Term.usesVarArms, Bool.or_eq_true] at h
+    rcases h with h | h
+    · obtain ⟨j, hj, e⟩ := usesVar_renameVar t (upR ρ) (k + 1) h
+      cases j with
+      | zero => simp [upR] at e
+      | succ j => exact ⟨j, by simp [Term.usesVarArms, hj], by simpa [upR] using e⟩
+    · exact (usesVarArms_renameVarArms as ρ k h).mono fun j hj => by simp [Term.usesVarArms, hj]
+end
+
+/-- **Weakening at `x` never uses `x`.** -/
+theorem usesVar_shiftAt (x : Nat) (t : Term) : Term.usesVar x (Term.renameVar (liftIdx x) t) = false := by
+  cases h : Term.usesVar x (Term.renameVar (liftIdx x) t) with
+  | false => rfl
+  | true =>
+    obtain ⟨j, _, e⟩ := usesVar_renameVar t (liftIdx x) x h
+    simp only [liftIdx] at e
+    split at e <;> omega
+
+/-- **The factorisation `t ≡ t₀[π]` at any position.** -/
+theorem Term.shiftAt_unshiftAt {x : Nat} {t : Term} (hu : Term.usesVar x t = false) :
+    Term.renameVar (liftIdx x) (Term.renameVar (lowerIdx x) t) = t := by
+  rw [renameVar_renameVar]
+  conv => rhs; rw [← renameVar_id t]
+  refine renameVar_congr t _ _ fun k hk => ?_
+  have hkx : k ≠ x := by intro e; subst e; rw [hu] at hk; exact absurd hk (by decide)
+  simp only [liftIdx, lowerIdx]
+  by_cases hlt : k < x
+  · simp [hlt]
+  · have h2 : ¬ (k - 1 < x) := by omega
+    simp only [hlt, h2, if_false]
+    omega
+
+/-! ## Typing under renaming -/
+
+theorem upR_lookup {Γ Γ' : List Lang.Ty} (A : Lang.Ty) (ρ : Nat → Nat) (u : Nat → Bool)
+    (hρ : ∀ i B, u (i + 1) = true → Γ[i]? = some B → Γ'[ρ i]? = some B) :
+    ∀ i B, u i = true → (A :: Γ)[i]? = some B → (A :: Γ')[upR ρ i]? = some B
+  | 0, _, _, hB => by simpa [upR] using hB
+  | i + 1, B, hu, hB => by simpa [upR] using hρ i B hu (by simpa using hB)
+
+mutual
+/-- **Renaming**, restricted to the variables the term uses. -/
+theorem hasType_renameVar_live {Δ : List Lang.Ty} {Ω : HoleSignature} : ∀ {Γ : List Lang.Ty} {t : Term} {T : Lang.Ty},
+    HasType (Ω := Ω) Δ Γ t T → ∀ (Γ' : List Lang.Ty) (ρ : Nat → Nat),
+      (∀ i B, Term.usesVar i t = true → Γ[i]? = some B → Γ'[ρ i]? = some B) →
+      HasType (Ω := Ω) Δ Γ' (Term.renameVar ρ t) T
+  | _, _, _, .var h, _, _, hρ => .var (hρ _ _ (by simp [Term.usesVar]) h)
+  | _, _, _, .lam (A := A) (b := b) hw hb, Γ', ρ, hρ =>
+    .lam hw (hasType_renameVar_live hb (A :: Γ') (upR ρ)
+      (upR_lookup A ρ (fun i => Term.usesVar i b) fun i B hu hB =>
+        hρ i B (by simpa [Term.usesVar] using hu) hB))
+  | _, _, _, .app h1 h2, Γ', ρ, hρ =>
+    .app (hasType_renameVar_live h1 Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+      (hasType_renameVar_live h2 Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .fix h, Γ', ρ, hρ =>
+    .fix (hasType_renameVar_live h Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .nat h, _, _, _ => .nat h
+  | _, _, _, .bool, _, _, _ => .bool
+  | _, _, _, .bytes h, _, _, _ => .bytes h
+  | _, _, _, .digest h, _, _, _ => .digest h
+  | _, _, _, .prim h1 h2, Γ', ρ, hρ =>
+    .prim (hasType_renameVar_live h1 Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+      (hasType_renameVar_live h2 Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .record ha h, Γ', ρ, hρ => by
+    simp only [Term.renameVar]
+    exact .record (by rw [renameVarRow_ascending]; exact ha)
+      (renameVarFields_typed_live h Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .get h hl, Γ', ρ, hρ =>
+    .get (hasType_renameVar_live h Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB) hl
+  | _, _, _, .extend h ha hfs, Γ', ρ, hρ => by
+    simp only [Term.renameVar]
+    exact .extend (hasType_renameVar_live h Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+      (by rw [renameVarRow_ascending]; exact ha)
+      (renameVarFields_typed_live hfs Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .inj hw hl h, Γ', ρ, hρ =>
+    .inj hw hl (hasType_renameVar_live h Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .case h ha, Γ', ρ, hρ =>
+    .case (hasType_renameVar_live h Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+      (renameVarArms_typed_live ha Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .ite h1 h2 h3, Γ', ρ, hρ =>
+    .ite (hasType_renameVar_live h1 Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+      (hasType_renameVar_live h2 Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+      (hasType_renameVar_live h3 Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVar, hu]) hB)
+  | _, _, _, .ref h, _, _, _ => .ref h
+  | _, _, _, .refuse hw hn, _, _, _ => .refuse hw hn
+  | _, _, _, .hole hd hs, Γ', ρ, hρ =>
+    .hole hd (renameVarSubst_typed hs Γ' ρ hρ)
+theorem renameVarSubst_typed {Δ : List Lang.Ty} {Ω : HoleSignature} :
+    ∀ {Γ : List Lang.Ty} {σ : List Term} {Ψ : List Lang.Ty},
+      SubstTy Δ Γ σ Ψ Ω → ∀ (Γ' : List Lang.Ty) (ρ : Nat → Nat),
+        (∀ i B, Term.usesVarList i σ = true → Γ[i]? = some B → Γ'[ρ i]? = some B) →
+        SubstTy Δ Γ' (Term.renameVarList ρ σ) Ψ Ω
+  | _, _, _, .nil, _, _, _ => .nil
+  | _, _, _, .cons h hs, Γ', ρ, hρ =>
+    .cons (hasType_renameVar_live h Γ' ρ fun i B hu hB =>
+      hρ i B (by simp [Term.usesVarList, hu]) hB)
+      (renameVarSubst_typed hs Γ' ρ fun i B hu hB =>
+        hρ i B (by simp [Term.usesVarList, hu]) hB)
+theorem renameVarFields_typed_live {Δ : List Lang.Ty} {Ω : HoleSignature} : ∀ {Γ : List Lang.Ty}
+    {fs : List (Label × Term)} {r : List (Label × Lang.Ty)},
+    FieldsTy (Ω := Ω) Δ Γ fs r → ∀ (Γ' : List Lang.Ty) (ρ : Nat → Nat),
+      (∀ i B, Term.usesVarRow i fs = true → Γ[i]? = some B → Γ'[ρ i]? = some B) →
+      FieldsTy (Ω := Ω) Δ Γ' (Term.renameVarRow ρ fs) r
+  | _, _, _, .nil, _, _, _ => .nil
+  | _, _, _, .cons h hs, Γ', ρ, hρ =>
+    .cons (hasType_renameVar_live h Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVarRow, hu]) hB)
+      (renameVarFields_typed_live hs Γ' ρ fun i B hu hB => hρ i B (by simp [Term.usesVarRow, hu]) hB)
+theorem renameVarArms_typed_live {Δ : List Lang.Ty} {Ω : HoleSignature} : ∀ {Γ : List Lang.Ty}
+    {as : List (Label × Term)} {r : List (Label × Lang.Ty)} {B : Lang.Ty},
+    ArmsTy (Ω := Ω) Δ Γ as r B → ∀ (Γ' : List Lang.Ty) (ρ : Nat → Nat),
+      (∀ i C, Term.usesVarArms i as = true → Γ[i]? = some C → Γ'[ρ i]? = some C) →
+      ArmsTy (Ω := Ω) Δ Γ' (Term.renameVarArms ρ as) r B
+  | _, _, _, _, .one (A := A) (b := b) h, Γ', ρ, hρ =>
+    .one (hasType_renameVar_live h (A :: Γ') (upR ρ)
+      (upR_lookup A ρ (fun i => Term.usesVar i b) fun i C hu hC =>
+        hρ i C (by simp [Term.usesVarArms, hu]) hC))
+  | _, _, _, _, .cons (A := A) (b := b) (arms := a :: as) h ha _, Γ', ρ, hρ =>
+    .cons (hasType_renameVar_live h (A :: Γ') (upR ρ)
+        (upR_lookup A ρ (fun i => Term.usesVar i b) fun i C hu hC =>
+          hρ i C (by simp [Term.usesVarArms, hu]) hC))
+      (renameVarArms_typed_live ha Γ' ρ fun i C hu hC => hρ i C
+        (by show (Term.usesVar (i + 1) b || Term.usesVarArms i (a :: as)) = true
+            rw [hu, Bool.or_true]) hC)
+      (by simp [Term.renameVarArms])
+  | _, _, _, _, .cons (arms := []) _ _ hne, _, _, _ => absurd rfl hne
+end
+
+/-- **Strengthening at any position.** -/
+theorem hasType_unshiftAt_live {Δ Γ : List Lang.Ty} {Ω : HoleSignature} {t : Term} {T : Lang.Ty} {x : Nat}
+    (h : HasType (Ω := Ω) Δ Γ t T) (hu : Term.usesVar x t = false) :
+    HasType (Ω := Ω) Δ (Γ.eraseIdx x) (Term.renameVar (lowerIdx x) t) T := by
+  refine hasType_renameVar_live h _ _ fun i B hi hB => ?_
+  have hix : i ≠ x := by intro e; subst e; rw [hu] at hi; exact absurd hi (by decide)
+  simp only [lowerIdx]
+  by_cases hlt : i < x
+  · rw [if_pos hlt, List.getElem?_eraseIdx_of_lt hlt]; exact hB
+  · rw [if_neg hlt, List.getElem?_eraseIdx_of_ge (by omega), Nat.sub_add_cancel (by omega)]
+    exact hB
+
+/- Closed theorem API: statements copied verbatim from landed main. -/
+theorem hasType_renameVar {Δ : List Lang.Ty} : ∀ {Γ : List Lang.Ty} {t : Term} {T : Lang.Ty},
+    HasType Δ Γ t T → ∀ (Γ' : List Lang.Ty) (ρ : Nat → Nat),
+      (∀ i B, Term.usesVar i t = true → Γ[i]? = some B → Γ'[ρ i]? = some B) →
+      HasType Δ Γ' (Term.renameVar ρ t) T :=
+  hasType_renameVar_live (Ω := [])
+
+theorem renameVarFields_typed {Δ : List Lang.Ty} : ∀ {Γ : List Lang.Ty}
+    {fs : List (Label × Term)} {r : List (Label × Lang.Ty)},
+    FieldsTy Δ Γ fs r → ∀ (Γ' : List Lang.Ty) (ρ : Nat → Nat),
+      (∀ i B, Term.usesVarRow i fs = true → Γ[i]? = some B → Γ'[ρ i]? = some B) →
+      FieldsTy Δ Γ' (Term.renameVarRow ρ fs) r :=
+  renameVarFields_typed_live (Ω := [])
+
+theorem renameVarArms_typed {Δ : List Lang.Ty} : ∀ {Γ : List Lang.Ty}
+    {as : List (Label × Term)} {r : List (Label × Lang.Ty)} {B : Lang.Ty},
+    ArmsTy Δ Γ as r B → ∀ (Γ' : List Lang.Ty) (ρ : Nat → Nat),
+      (∀ i C, Term.usesVarArms i as = true → Γ[i]? = some C → Γ'[ρ i]? = some C) →
+      ArmsTy Δ Γ' (Term.renameVarArms ρ as) r B :=
+  renameVarArms_typed_live (Ω := [])
+
+theorem hasType_unshiftAt {Δ Γ : List Lang.Ty} {t : Term} {T : Lang.Ty} {x : Nat}
+    (h : HasType Δ Γ t T) (hu : Term.usesVar x t = false) :
+    HasType Δ (Γ.eraseIdx x) (Term.renameVar (lowerIdx x) t) T :=
+  hasType_unshiftAt_live (Ω := []) h hu
+
+end Nanodregg.Lang.Contextual

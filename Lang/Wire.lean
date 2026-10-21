@@ -166,6 +166,11 @@ def termTree : Term → Tree
   | .ite c t e => .node 13 .empty [termTree c, termTree t, termTree e]
   | .ref i => .node 14 (u32Bytes i) []
   | .refuse T w => .node 17 w [tyTree T]
+  | .hole n σ => .node 18 (u32Bytes n) (termsTree σ)
+
+def termsTree : List Term → List Tree
+  | [] => []
+  | t :: ts => termTree t :: termsTree ts
 
 def fieldsTree : List (Label × Term) → List Tree
   | [] => []
@@ -227,7 +232,20 @@ def termOf : Tree → Option Term
     else none
   | .node 14 p [] => (u32Of p).map .ref
   | .node 17 p [a] => (tyOf a).map (.refuse · p)
+  | .node 18 p ts =>
+    if ts.length ≤ rowMax then
+      match u32Of p, termsOf ts with
+      | some n, some σ => some (.hole n σ)
+      | _, _ => none
+    else none
   | _ => none
+
+def termsOf : List Tree → Option (List Term)
+  | [] => some []
+  | t :: ts =>
+    match termOf t, termsOf ts with
+    | some t, some ts => some (t :: ts)
+    | _, _ => none
 
 def fieldsOf : List Tree → Option (List (Label × Term))
   | [] => some []
@@ -255,6 +273,11 @@ def termWire : Term → Bool
   | .case t arms => termWire t && decide (arms.length ≤ rowMax) && fieldsWire arms
   | .ite c t e => termWire c && termWire t && termWire e
   | .refuse T _ => tyWire T
+  | .hole n σ => decide (n < 2 ^ 32) && decide (σ.length ≤ rowMax) && termsWire σ
+
+def termsWire : List Term → Bool
+  | [] => true
+  | t :: ts => termWire t && termsWire ts
 
 def fieldsWire : List (Label × Term) → Bool
   | [] => true
