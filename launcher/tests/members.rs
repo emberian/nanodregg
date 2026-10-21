@@ -513,6 +513,67 @@ fn starts(log: &str, name: &str, role: &str) -> usize {
         .count()
 }
 
+/// Hold the real Host before startup until the test releases it, then delay every attempt.
+/// The motivating output is gate-4/b9a703534e14.log:579-602: stdio started twice before
+/// `refused missing key`. This wrapper widens that actual bind-to-refusal window, not a fake verdict.
+fn slow_follow(w: &World, r: &Roots) -> Members {
+    let wrapper = r.base.0.join("slow-supervise.py");
+    fs::write(&wrapper, format!(
+        "#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\ni=a.index('--')\nif a[i+2]=='follow':\n a=a[:i]+['--exec','/bin/sh','--exec','/bin/sleep']+['--','/bin/sh','-c','echo delayed-follow-startup >&2; while ! test -e \"$3/startup-go\"; do sleep 0.05; done; sleep 2; exec \"$@\"','sh']+a[i+1:]\nos.execv({0:?},[{0:?}]+a)\n",
+        nd_supervise().to_str().unwrap()
+    )).unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+    let c = argv(
+        w,
+        r,
+        uid(&r.member.0),
+        &lean_bin("hosting-residents"),
+        &broker_args(w)
+            .iter()
+            .map(|a| a.as_os_str())
+            .collect::<Vec<_>>(),
+    );
+    let mut a: Vec<_> = c.get_args().map(|a| a.to_os_string()).collect();
+    a[7] = wrapper.into();
+    let mut c = Command::new(c.get_program());
+    c.args(a);
+    Members::spawn(c, r)
+}
+
+#[test]
+fn a_slow_follower_passes_startup_before_stdio_binds() {
+    let w = World::genesis("ndready");
+    let r = Roots::new('y');
+    w.provision(&r, &w.r1);
+    let m = slow_follow(&w, &r);
+    until(
+        "the delayed follower",
+        30,
+        || m.log().contains("delayed-follow-startup"),
+        &|| m.log(),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    assert_eq!(
+        starts(&m.log(), &w.r1, "stdio"),
+        0,
+        "stdio before startup:\n{}",
+        m.log()
+    );
+    fs::write(r.state().join(&w.r1).join("store/startup-go"), b"").unwrap();
+    until(
+        "the checked follower's stdio",
+        30,
+        || starts(&m.log(), &w.r1, "stdio") == 1,
+        &|| m.log(),
+    );
+    until(
+        "a command through the checked follower",
+        30,
+        || nd_via(&r.sock(&w.r1), &["sync"]).is_ok_and(|(e, _)| e == command_exit::OK),
+        &|| m.log(),
+    );
+}
+
 /// A member whose follower can never run (its Store is an empty directory: `host follow` refuses
 /// it) is started again at most every RESTART_AFTER, and past STARTS_MAX starts it is named
 /// `memberCrashLoop` and left unbound with no socket directory.
@@ -524,7 +585,7 @@ fn a_member_that_always_crashes_is_named_crash_loop_and_left_unbound() {
     let store = r.state().join(&w.r1).join("store");
     fs::remove_dir_all(&store).unwrap();
     nanodregg_devtools::mkdirs(&store).unwrap();
-    let m = Members::start(&w, &r, uid(&r.member.0));
+    let m = slow_follow(&w, &r);
     until(
         "the first start",
         30,
@@ -537,6 +598,7 @@ fn a_member_that_always_crashes_is_named_crash_loop_and_left_unbound() {
         "restarted without waiting RESTART_AFTER:\n{}",
         m.log()
     );
+    fs::write(store.join("startup-go"), b"").unwrap();
     let named = format!("memberCrashLoop {} follow", w.r1);
     until(
         "the crash loop named",
@@ -550,10 +612,11 @@ fn a_member_that_always_crashes_is_named_crash_loop_and_left_unbound() {
         "STARTS_MAX starts:\n{}",
         m.log()
     );
-    // nd-supervise binds the follow socket once host follow is spawned, before host refuses its
-    // Store, so a stdio start may fall in that instant; never more than one
-    assert!(
-        starts(&m.log(), &w.r1, "stdio") <= 1,
+    assert!(m.log().contains("refused missing key"), "{}", m.log());
+    // The follower never answered: even a deliberately slow refusal starts no stdio child.
+    assert_eq!(
+        starts(&m.log(), &w.r1, "stdio"),
+        0,
         "stdio children without a follower:\n{}",
         m.log()
     );

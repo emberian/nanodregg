@@ -11,7 +11,7 @@
 //!   `host follow STATE/<name>/store MEMBER GRANT`, MEMBER and GRANT read from the provisioning
 //!   step's `STATE/<name>/follow` (`HEX HEX` and LF, 0600, chain-checked), confined to write that
 //!   Store, with MEMBERS hidden;
-//! - once that socket exists, `MEMBER/<name>/nd.sock` → `nd --stdio MEMBERS/<name>
+//! - once that follower answers a command (after all its startup checks), `MEMBER/<name>/nd.sock` → `nd --stdio MEMBERS/<name>
 //!   FOLLOW/<name>/follow.sock HOST_SOCK`, confined to write the workspace and connect [HOST_SOCK,
 //!   its own follow socket] (CLIENT-24), with STATE hidden: it reads the World only through the
 //!   follow socket and can neither write nor read a follower Store or a `follow` file (HOSTING-32,
@@ -37,8 +37,11 @@ use std::io::ErrorKind;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nanodregg_client::run::Follow;
+use nanodregg_client::{sockets::FollowSocket, table};
 use nanodregg_launcher::broker_generated::{GRAIN_NAME_MAX, RESIDENTS_MAX, SOCK_PATH_MAX};
 use nanodregg_launcher::broker_generated::{decider_exit, members_exit as exit};
 use nanodregg_launcher::residents::{self, DeciderEnd};
@@ -307,7 +310,7 @@ fn reap(stopping: &mut Stopping, keep: usize) {
         if gone {
             let _ = std::fs::remove_file(&p.pid_file);
         }
-        !gone
+        !(gone && p.probe.as_ref().is_none_or(JoinHandle::is_finished))
     });
 }
 
@@ -484,6 +487,37 @@ fn socket_dir(d: &Path, mode: u32, group: Option<u32>, sock: &str) -> Result<(),
 struct Proc {
     child: Child,
     pid_file: PathBuf,
+    /// At most one bounded probe per child; it never blocks the residents tick.
+    probe: Option<JoinHandle<bool>>,
+    ready: bool,
+}
+
+impl Proc {
+    /// A socket bind only witnesses the supervisor. A decoded reply witnesses the Host loop:
+    /// followVerb opens the Store and runResident checks threads before it reads any command.
+    /// Empty argv asks for no effect (Lean answers noVerb); no custody or Host access is needed.
+    fn ready(&mut self, socket: &Path) -> Result<bool, String> {
+        if self.ready {
+            return Ok(true);
+        }
+        if self.probe.as_ref().is_some_and(JoinHandle::is_finished) {
+            self.ready = self.probe.take().is_some_and(|p| p.join().unwrap_or(false));
+        }
+        if !self.ready && self.probe.is_none() {
+            let socket = socket.to_owned();
+            self.probe = Some(
+                std::thread::Builder::new()
+                    .name("member-ready".into())
+                    .spawn(move || {
+                        FollowSocket::connect(&socket, table::REPLY)
+                            .and_then(|mut f| f.command(&[]))
+                            .is_ok()
+                    })
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        Ok(self.ready)
+    }
 }
 
 /// One role of a resident (its follower, its stdio): the running child and its recent starts.
@@ -501,7 +535,10 @@ impl Slot {
         {
             say(&format!("{name} {role} ended {st}"));
             let _ = std::fs::remove_file(&p.pid_file);
-            self.proc = None;
+            // Keep the slot until its probe finishes: no detached probes accumulate on restarts.
+            if p.probe.as_ref().is_none_or(JoinHandle::is_finished) {
+                self.proc = None;
+            }
         }
     }
 
@@ -551,7 +588,7 @@ impl Pair {
     }
 
     /// Reap ended children and start what is due: the follower first, the stdio child only once
-    /// the follow socket exists (its connect grant resolves the socket at launch). `Err` names
+    /// the current follower answers (a bind alone precedes its startup checks). `Err` names
     /// the crash loop or the failed spawn.
     fn tend(&mut self, conf: &Conf, name: &str) -> Result<(), String> {
         self.follow.reap(name, "follow");
@@ -569,7 +606,13 @@ impl Pair {
             self.follow.start(conf, name, "follow", &a)?;
         }
         let bound = std::fs::symlink_metadata(&fsock).is_ok_and(|m| m.file_type().is_socket());
-        if bound && self.stdio.due(name, "stdio")? {
+        let ready = if bound && let Some(p) = &mut self.follow.proc {
+            p.ready(&fsock)
+                .map_err(|e| format!("memberSpawn {name} readiness {e}"))?
+        } else {
+            false
+        };
+        if ready && self.stdio.due(name, "stdio")? {
             let msock = conf.member.join(name).join("nd.sock");
             let (f, n, hs, w) = (
                 fsock.as_os_str(),
@@ -633,5 +676,10 @@ fn spawn(conf: &Conf, name: &str, role: &str, args: &[&OsStr]) -> Result<Proc, S
         return Err(format!("memberSpawn {name} {role} pidFile {e}"));
     }
     say(&format!("{name} {role} {}", child.id()));
-    Ok(Proc { child, pid_file })
+    Ok(Proc {
+        child,
+        pid_file,
+        probe: None,
+        ready: false,
+    })
 }
