@@ -1,7 +1,7 @@
 """gates/readset.py — traced read-sets (GATES-20; design redregg/work/GATES-20-DESIGN.md, ROOT F1/F2).
 
 Every verdict run executes under
-`strace -f -qq -y --seccomp-bpf --decode-pids=pidns -e trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir,open_tree,move_mount,fsopen,fsconfig,fsmount,mount_setattr,umount2`
+`strace -f -q -y --seccomp-bpf --decode-pids=pidns -e trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir,open_tree,move_mount,fsopen,fsconfig,fsmount,mount_setattr,umount2`
 (wrap). Its trace is reduced to a READ-SET over the judged tree (reduce):
   T = every tree path the run touched by name: opened, exec'd, probed and absent (ENOENT is a read of
       absence), and stat'ed, accessed or readlink'd BY CARGO: cargo's fingerprint compares a source's
@@ -54,7 +54,7 @@ import shutil
 import subprocess
 import threading
 
-VERSION = b"GATES-20 traced key v6 (GATES-20m: resumed unmounts and traced idle children)"
+VERSION = b"GATES-20 traced key v7 (GATES-20o: proved pre-bind child exits)"
 WASTE = "gates/waste.tsv"
 EXCL = (".lake/runs/", ".lake/cargo-target/")
 BIN = ".lake/build/bin/"
@@ -62,6 +62,7 @@ RUNNER = ("gates/runs.py", "gates/tree.py", "gates/readset.py")
 LINE = re.compile(r"^(\d+)\s+(?:<\.\.\. (\w+) resumed>|(\w+)\()(.*)$")
 STR = re.compile(r'"((?:[^"\\]|\\.)*)"')
 TOOLCHAIN = (".elan", ".cargo", ".rustup")
+EXIT = re.compile(r"^(\d+)\s+\+\+\+ exited with \d+ \+\+\+$")
 
 
 def available() -> str | None:
@@ -79,7 +80,7 @@ def available() -> str | None:
 
 
 def wrap(strace: str, argv: list[str], out: str) -> list[str]:
-    return [strace, "-f", "-qq", "-y", "--seccomp-bpf", "--decode-pids=pidns", "-e",
+    return [strace, "-f", "-q", "-y", "--seccomp-bpf", "--decode-pids=pidns", "-e",
             "trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir,open_tree,move_mount,fsopen,fsconfig,fsmount,mount_setattr,umount2",
             "-e", "signal=none",
             "-s", "4096", "-o", out] + list(argv)
@@ -182,6 +183,9 @@ def reduce(trace: str, root: str) -> dict | None:
     cwd: dict[str, str] = {}
     parsed = 0
     seen_pids: set[str] = set()
+    exited: set[str] = set()  # -q records a child exit; -qq did not
+    setup_attempt: set[str] = set()  # no pre-bind exception after any mount or pivot attempt
+    after_exit: set[str] = set()  # a reused pid or malformed trace cannot prove a final exit
 
     def host_path(pid: str, path: str) -> str | None:
         path = os.path.normpath(path)
@@ -217,13 +221,25 @@ def reduce(trace: str, root: str) -> dict | None:
         return r
 
     for line in lines:
+        e = EXIT.match(line)
+        if e:
+            ep = e.group(1)
+            if ep in exited:
+                after_exit.add(ep)
+            exited.add(ep)
+            seen_pids.add(ep)
+            continue
         m = LINE.match(line)
         if not m:
             continue
         parsed += 1
         seen_pids.add(m.group(1))
         pid, resumed, call, rest = m.group(1), m.group(2), m.group(3), m.group(4)
+        if pid in exited:
+            after_exit.add(pid)
         call = call or resumed
+        if call in ("mount", "pivot_root", "umount2"):
+            setup_attempt.add(pid)
         # strace prints setup calls in two lines on a busy box. Their arguments are on the first
         # and success/child pid on the resumed line; neither line alone establishes a bind.
         if call in (*CLONES, "mount", "pivot_root", "unshare", "setns", "umount2") and not resumed and "<unfinished ...>" in rest:
@@ -401,7 +417,11 @@ def reduce(trace: str, root: str) -> dict | None:
         (C if pid in comp else T).add(r)
     if parsed == 0:
         return _none("no strace line in the trace")
-    host_view = not ns or all(p in seen_pids and p in mapped and p not in unknown_mount for p in ns)
+    host_view = not ns or all(
+        p in seen_pids and p not in unknown_mount and (
+            p in mapped or (p in exited and p not in setup_attempt and p not in after_exit
+                            and pivots.get(p, 0) == 0))
+        for p in ns)
     own = lambda r: any(r == m or r.startswith(m + "/") for m in made)
     T = {r for r in T if not own(r)}
     C = {r for r in C if not own(r)} - T
