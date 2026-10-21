@@ -787,22 +787,21 @@ def envelopeOf (me : Self D) (start upTo : Nat) (s : Signed) : Envelope D :=
 def adoptEnvelope (X : Ctx D) (me : Self D) (upTo offset : Nat) : ByteArray :=
   envelopeMessage X me offset upTo
 
-/-- The pin an `adopt` takes: that of an invitation `Invite.accept` accepts under the trusted `key`,
+/-- The pin an `adopt` takes: that of an invitation `Invite.acceptStart` accepts under the trusted `key`,
 to the member's own World (re-derived at every step from the argv, like every plan). -/
 def adoptPin (X : Ctx D) (me : Self D) (inv key : ByteArray) : Except (Refusal D) (Invite.Invitation D) :=
-  match Invite.accept X key inv with
+  match Invite.acceptStart X key inv with
   | .error r => .error (.invite r)
-  | .ok (i, g) => if g.origin = me.world then .ok i else .error (.invite .otherWorld)
+  | .ok (i, o) => if o = me.world then .ok i else .error (.invite .otherWorld)
 
 /-- `invite`'s check of its INPUT: the inputs decode and make the member's own World. -/
 def inviteInput (X : Ctx D) (me : Self D) (input : ByteArray) : Except (Refusal D) Unit :=
-  match genesisInput.decode input with
-  | .error _ => .error (.invite .badInvitation)
-  | .ok (name, nonce, allowance, fs) =>
-    match Invite.foundersOf X fs with
-    | none => .error (.invite .badInvitation)
-    | some founders =>
-      if originOf X name nonce allowance founders = me.world then .ok () else .error (.invite .otherWorld)
+  match Invite.startOf X input with
+  | none => .error (.invite .badInvitation)
+  | some start =>
+    match Invite.startOrigin X start with
+    | .error r => .error (.invite r)
+    | .ok o => if o = me.world then .ok () else .error (.invite .otherWorld)
 
 /-! ## The incoming key (PROTOCOL-46, CLIENT-13 amended)
 
@@ -940,7 +939,7 @@ def hintReps : List (Refusal Nat) :=
   ([.badPage, .baseMoved 0, .baseMismatch, .pageMismatch, .baseTooLarge 0, .baseUndecodable,
     .notBehind 0, .notAtGenesis 0, .incomplete 0 0, .wrongWorld] : List Thin.Refusal).map Refusal.thin ++
   CustodyRefusal.all.map Refusal.custody ++
-  (([.badInvitation, .notSponsor, .pinMismatch, .otherWorld, .noBase, .baseMismatch] : List Invite.Refusal) ++
+  (([.badInvitation, .notSponsor, .pinMismatch, .otherWorld, .noBase, .baseMismatch, .carried] : List Invite.Refusal) ++
     ([.nameTooLong, .nonceTooLong, .tooManyFounders, .founderKeyTooLong 0, .founderNextTooLong 0,
       .allowanceTooLarge] : List GenesisRefusal).map Invite.Refusal.inputs).map Refusal.invite
 

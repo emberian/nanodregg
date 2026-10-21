@@ -162,7 +162,7 @@ inductive Cmd (D : Type)
   | account (asset : D) (owner : Option D)
   | transfer (src dst : AcctRef D) (amount : Nat) (via : Option D) (once : Option ByteArray)
   | credit (well : D) (acct : AcctRef D) (amount : Nat) (via : Option D)
-  /-- the World's origin inputs (`Receive.genesisInput` bytes) -/
+  /-- the World's signed-start inputs (`Invite.startInput` bytes) -/
   | invite (input : ByteArray)
   /-- the signed call's bytes (`Ctx.callBytes`), decoded by the machine -/
   | receipt (call : ByteArray)

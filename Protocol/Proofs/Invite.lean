@@ -23,7 +23,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 omit [Ord D] [DecidableEq D] in
 theorem ofBytes_said {X : Ctx D} {b : ByteArray} {inv : Invitation D} (h : ofBytes X b = some inv) :
-    said X inv.unsigned = some ⟨inv.name, inv.nonce, inv.allowance, inv.founders, inv.pin, inv.sponsor, inv.key⟩ := by
+    said X inv.unsigned = some ⟨inv.start, inv.pin, inv.sponsor, inv.key⟩ := by
   unfold ofBytes at h
   split at h
   · cases h
@@ -36,14 +36,13 @@ theorem ofBytes_said {X : Ctx D} {b : ByteArray} {inv : Invitation D} (h : ofByt
       show said X u.1 = _
       rw [hv]
 
-/-- **An accepted invitation is what the trusted key signed.** Its fields are the decode of the
-bytes the key verifies over, and the World is the genesis of the inputs among them. -/
-theorem accept_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : World D}
-    (h : accept X trusted b = .ok (inv, w)) :
-    said X inv.unsigned = some ⟨inv.name, inv.nonce, inv.allowance, inv.founders, inv.pin, inv.sponsor, inv.key⟩ ∧
-      inv.key = trusted ∧ X.verify trusted (message inv.unsigned) inv.signature = true ∧
-      genesis X inv.name inv.nonce inv.allowance inv.founders = .ok w := by
-  unfold accept at h
+omit [Ord D] [DecidableEq D] in
+/-- Both admissions require the trusted key's signature over the exact decoded fields. -/
+theorem verified_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
+    (h : verified X trusted b = .ok inv) :
+    said X inv.unsigned = some ⟨inv.start, inv.pin, inv.sponsor, inv.key⟩ ∧
+      inv.key = trusted ∧ X.verify trusted (message inv.unsigned) inv.signature = true := by
+  unfold verified at h
   cases hb : ofBytes X b with
   | none => simp [hb] at h
   | some i =>
@@ -52,37 +51,94 @@ theorem accept_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : 
     · simp only [hk, ne_eq, not_true_eq_false, ↓reduceIte] at h
       by_cases hv : X.verify trusted (message i.unsigned) i.signature = true
       · simp only [hv, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-        cases hg : genesis X i.name i.nonce i.allowance i.founders with
-        | error r => simp [hg] at h
-        | ok w' =>
-          simp only [hg] at h
-          cases h
-          exact ⟨ofBytes_said hb, hk, hv, hg⟩
-      · simp only [hv] at h; simp at h; cases h
+        cases h
+        exact ⟨ofBytes_said hb, hk, hv⟩
+      · simp [hv] at h; cases h
     · simp [hk] at h; cases h
 
-/-- The joiner's World is the World of the signed inputs: its origin is computed from them. -/
+theorem accept_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : World D}
+    (h : accept X trusted b = .ok (inv, w)) :
+    said X inv.unsigned = some ⟨inv.start, inv.pin, inv.sponsor, inv.key⟩ ∧
+      inv.key = trusted ∧ X.verify trusted (message inv.unsigned) inv.signature = true ∧
+      startGenesis X inv.start = .ok w := by
+  unfold accept at h
+  cases hv : verified X trusted b with
+  | error e => simp [hv, bind, Except.bind] at h
+  | ok i =>
+    simp only [hv, bind, Except.bind] at h
+    cases hg : startGenesis X i.start with
+    | error e => simp [hg] at h
+    | ok v =>
+      simp only [hg, pure, Except.pure] at h
+      cases h
+      exact ⟨(verified_ok hv).1, (verified_ok hv).2.1, (verified_ok hv).2.2, hg⟩
+
+/-- Genesis-only admission produces a genesis with the signed inputs, never a carried start. -/
+theorem accept_genesis {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : World D}
+    (h : accept X trusted b = .ok (inv, w)) :
+    ∃ name nonce allowance fs, inv.start = .genesis name nonce allowance fs ∧
+      genesis X name nonce allowance fs = .ok w := by
+  have hg := (accept_ok h).2.2.2
+  cases hs : inv.start with
+  | genesis name nonce allowance fs =>
+    refine ⟨name, nonce, allowance, fs, rfl, ?_⟩
+    cases he : genesis X name nonce allowance fs with
+    | error r => simp [hs, startGenesis, he, Except.mapError] at hg
+    | ok g => simpa [hs, startGenesis, he, Except.mapError] using hg
+  | carried o name nonce fromO height chain => simp [hs, startGenesis] at hg
+
 theorem accept_origin {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : World D}
     (h : accept X trusted b = .ok (inv, w)) :
-    w = genesisWorld X inv.name inv.nonce inv.allowance inv.founders :=
-  (genesis_ok.mp (accept_ok h).2.2.2).2
+    ∃ name nonce allowance fs, inv.start = .genesis name nonce allowance fs ∧
+      w = genesisWorld X name nonce allowance fs := by
+  obtain ⟨name, nonce, allowance, fs, hs, hg⟩ := accept_genesis h
+  exact ⟨name, nonce, allowance, fs, hs, (genesis_ok.mp hg).2⟩
 
-/-- A signature that does not verify over the bytes carried (a relay changed an input, the pin or
-the sponsor after the sponsor signed) is refused `pinMismatch`, whatever the inputs make. -/
+theorem acceptStart_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {o : D}
+    (h : acceptStart X trusted b = .ok (inv, o)) :
+    said X inv.unsigned = some ⟨inv.start, inv.pin, inv.sponsor, inv.key⟩ ∧
+      inv.key = trusted ∧ X.verify trusted (message inv.unsigned) inv.signature = true ∧
+      startOrigin X inv.start = .ok o := by
+  unfold acceptStart at h
+  cases hv : verified X trusted b with
+  | error e => simp [hv, bind, Except.bind] at h
+  | ok i =>
+    simp only [hv, bind, Except.bind] at h
+    cases hg : startOrigin X i.start with
+    | error e => simp [hg] at h
+    | ok v =>
+      simp only [hg, pure, Except.pure] at h
+      cases h
+      exact ⟨(verified_ok hv).1, (verified_ok hv).2.1, (verified_ok hv).2.2, hg⟩
+
+/-- The accepted origin is exactly the carried origin inside the signed start. -/
+theorem acceptStart_carried_origin {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
+    {o signed fromO chain : D} {name nonce : ByteArray} {height : Nat}
+    (ha : acceptStart X trusted b = .ok (inv, o))
+    (hs : inv.start = .carried signed name nonce fromO height chain) : o = signed := by
+  have h := (acceptStart_ok ha).2.2.2
+  simpa [hs, startOrigin] using h.symm
+
 theorem accept_unverified {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
     (hb : ofBytes X b = some inv) (hk : inv.key = trusted)
     (hv : X.verify trusted (message inv.unsigned) inv.signature = false) :
     accept X trusted b = .error .pinMismatch := by
-  unfold accept
-  simp [hb, hk, hv]
-  rfl
+  simp [accept, verified, hb, hk, hv, bind, Except.bind, pure, Except.pure]
 
-/-- An invitation signed by any key but the trusted one is refused `notSponsor`. -/
 theorem accept_untrusted {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
     (hb : ofBytes X b = some inv) (hk : inv.key ≠ trusted) :
     accept X trusted b = .error .notSponsor := by
-  unfold accept
-  simp [hb, hk]
-  rfl
+  simp [accept, verified, hb, hk, bind, Except.bind]
+
+theorem acceptStart_unverified {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
+    (hb : ofBytes X b = some inv) (hk : inv.key = trusted)
+    (hv : X.verify trusted (message inv.unsigned) inv.signature = false) :
+    acceptStart X trusted b = .error .pinMismatch := by
+  simp [acceptStart, verified, hb, hk, hv, bind, Except.bind, pure, Except.pure]
+
+theorem acceptStart_untrusted {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
+    (hb : ofBytes X b = some inv) (hk : inv.key ≠ trusted) :
+    acceptStart X trusted b = .error .notSponsor := by
+  simp [acceptStart, verified, hb, hk, bind, Except.bind]
 
 end Nanodregg.Protocol.Invite

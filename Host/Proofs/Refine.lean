@@ -17,7 +17,7 @@ function), and every edge the Host takes on it is one of three kinds:
   defer and leave the World. `host_run_folds` composes a batch from any accumulator;
   `host_run_audits` says the follower's audit accepts what the Host staged, reaching the World the
   Host keeps.
-* **a start** — `host genesis`, `host join` (`Protocol.Invite.accept`) and `host import` (KERNEL's
+* **a start** — `host genesis`, genesis `host join` and `host import` (also the carried join's import under its signed origin) (KERNEL's
   carry) each make a fresh World, never a step from one: `host_start_kept` says each is `Kept`
   (the relation's invariant half), so `host_run_kept` applies from the first batch.
 * **a reopen** (the crash edge) — `host_reopen_folds`: the World the deployed open returns is the
@@ -460,9 +460,10 @@ theorem host_run_kept {w : World D} (hk : Kept w) (qs : List (Request Frame)) :
   exact ⟨kept_fold hk hf, hf, hh, ha⟩
 
 /-- **The three starts are `Kept`.** The World `host genesis` makes (`Receive.genesis`), the one
-`host join` accepts (`Protocol.Invite.accept`: the genesis World of the signed inputs), and the one
+genesis `host join` accepts (`Protocol.Invite.accept`: the genesis World of the signed inputs), and the one
 `host import` carries (`Carry.importWorld`, KERNEL's carry): none is a step, each is a fresh World,
-and each meets the relation's invariant. -/
+and each meets the relation's invariant. The import arm includes a carried join under its signed
+origin; Host.Cli.join_carried_trusted links the actual join effect to that independent pin. -/
 theorem host_start_kept :
     (∀ {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {w : World D},
       Receive.genesis X name nonce allowance founders = .ok w → Kept w) ∧
@@ -475,8 +476,10 @@ theorem host_start_kept :
     intro name nonce allowance founders w h
     obtain ⟨hf, rfl⟩ := Receive.genesis_ok.mp h
     exact kept_of_fits (genesisWorld_codecFits hf)
-  exact ⟨hg, fun h => hg (Protocol.Invite.accept_ok h).2.2.2,
-    fun h => kept_of_fits (importWorld_codecFits h)⟩
+  refine ⟨hg, ?_, fun h => kept_of_fits (importWorld_codecFits h)⟩
+  intro trusted inv i w h
+  obtain ⟨_, _, _, _, _, hgen⟩ := Protocol.Invite.accept_genesis h
+  exact hg hgen
 
 /-- A run of deployed reopen steps over records is the fold of the steps those records decode to. -/
 private theorem foldlM_foldStep_folds :

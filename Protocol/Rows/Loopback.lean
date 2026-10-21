@@ -218,6 +218,7 @@ structure St (D : Type) [Ord D] where
   lineage : D
   /-- the lineage's FIRST genesis World (height 0): what a follower Store from before a carry holds -/
   first : World D
+  carriedFile : Option ByteArray := none
   actors : List (String × Actor D) := []
   binds : List (String × String) := []
   ops : List Op := []
@@ -315,20 +316,51 @@ def acceptAs (s : Sys D) (key bytes : ByteArray) : Except Invite.Refusal (Invite
   if s.trustFirstUse then
     match Invite.ofBytes s.follow bytes with
     | none => .error .badInvitation
-    | some i => match genesis s.follow i.name i.nonce i.allowance i.founders with
+    | some i => match Invite.startGenesis s.follow i.start with
       | .ok w => .ok (i, w)
-      | .error r => .error (.inputs r)
+      | .error r => .error r
   else Invite.accept s.follow key bytes
+
+def flipLast (b : ByteArray) : ByteArray :=
+  if h : 0 < b.size then b.set (b.size - 1) (b[b.size - 1] ^^^ 1) (by omega) else b
+
+/-- A sponsor-signed invitation to the imported origin, using the retained export as IN. -/
+def acceptCarried (st : St D) (wrongOrigin : Bool := false) : Except String (World D) := do
+  let some file := st.carriedFile | throw "noCarry"
+  let X := st.sys.follow
+  let R := st.sys.writer.R
+  let r ← (Host.Carry.read X.env R.dc file).mapError (·.name)
+  let origin := if wrongOrigin then st.first.origin else st.genesis.origin
+  let start := Invite.Start.carried origin Rows.Params.worldName (flipLast Rows.Params.nonce)
+    r.head.fromOrigin r.head.height r.head.chain
+  let some u := Invite.unsignedBytes X (Invite.startBytes X start)
+      ⟨st.genesis.steps, R.keys.worldDigest (R.world.bytes st.genesis)⟩
+      (founderId X st.lineage 0) (keyOf R "sponsor" 0) | throw "invitationTooLarge"
+  let some b := Invite.bytes u (R.sign (secretOf "sponsor" 0) (Invite.message u)) | throw "invitationTooLarge"
+  let (i, _) ← (Invite.acceptStart X (keyOf R "sponsor" 0) b).mapError (·.name)
+  let .carried o name nonce _ _ _ := i.start | throw "notCarried"
+  let pin := if st.sys.importTrustsFile then Host.Carry.Pin.digest (Host.Carry.digestOf file) else .origin o
+  let (w, _) ← (Host.Carry.importWorld X R.dc name nonce pin file).mapError (·.2)
+  pure w
 
 def freshActor (name : String) : M D (Actor D) := do
   let st ← get
   let X := st.sys.writer.X
   -- a founder's World is its own genesis; a joiner's is what the founding invitation makes, or,
-  -- after a carry, the carried World as given (no invitation reaches it)
+  -- after a carry, the World reconstructed under the sponsor-signed carried origin
   let w ← match founderIndex name with
-    | some _ => pure st.genesis
+    | some _ =>
+      if st.carriedFile.isSome then
+        match acceptCarried st with
+        | .ok w => pure w
+        | .error e => throw (IO.userError e)
+      else pure st.genesis
     | none =>
-      if st.genesis.origin ≠ st.lineage then pure st.genesis else
+      if st.carriedFile.isSome then
+        match acceptCarried st with
+        | .ok w => pure w
+        | .error e => throw (IO.userError e)
+      else
       match acceptAs st.sys (keyOf st.sys.writer.R "sponsor" 0) st.invitation with
       | .ok (_, w) => pure w
       | .error r => throw (IO.userError s!"the founding invitation refused {r.name}")
@@ -497,8 +529,6 @@ def followAsk (name : String) (self : Self D) (op : Op) (payload : ByteArray) :
 
 /-! ## Transport faults on a log page -/
 
-def flipLast (b : ByteArray) : ByteArray :=
-  if h : 0 < b.size then b.set (b.size - 1) (b[b.size - 1] ^^^ 1) (by omega) else b
 
 def editPage (f : List ByteArray → List ByteArray) (reply : ByteArray) : ByteArray :=
   match Command.hostReply reply with
@@ -857,7 +887,10 @@ def forgeInvite (R : Rows.Params D) (X : Ctx D) (resign : Bool) (b : ByteArray) 
   match Invite.ofBytes X b with
   | none => b
   | some i =>
-    let input := Invite.inputBytes X i.name (flipLast i.nonce) i.allowance i.founders
+    let start := match i.start with
+      | .genesis name nonce allowance fs => .genesis name (flipLast nonce) allowance fs
+      | .carried o name nonce fromO height chain => .carried o name (flipLast nonce) fromO height chain
+    let input := Invite.startBytes X start
     let key := if resign then keyOf R "relay" 0 else i.key
     match Invite.unsignedBytes X input i.pin i.sponsor key with
     | none => b
@@ -1013,18 +1046,20 @@ def runAct (l : Line) : M D (Expect × String) := do
             | .error e => pure (.refused e, "")
             | .ok (mem, r) =>
                 let h ← Writer.start st.sys.writer mem r
-                set { st with host := h, mem, genesis := w' }
+                set { st with host := h, mem, genesis := w', carriedFile := some f }
                 pure (.ok, "")
       | .ok (exit, _) => pure (.refused s!"writer{exit.name}", "")
   | .window n => do
       let a ← actor l.actor
       setActor l.actor { a with self := { a.self with window := n } }
       pure (.ok, "")
-  | .rejoin => do
+  | .acceptCarry wrongOrigin => do
       let a ← actor l.actor
-      let g := (← get).genesis
-      setActor l.actor { a with self := { a.self with world := g.origin }, follow := { world := g } }
-      pure (.ok, "")
+      match acceptCarried (← get) wrongOrigin with
+      | .error e => pure (.refused e, "")
+      | .ok g =>
+        setActor l.actor { a with self := { a.self with world := g.origin }, follow := { world := g } }
+        pure (.ok, "")
   | .rejoinBehind => do
       let a ← actor l.actor
       let st ← get

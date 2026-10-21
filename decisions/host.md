@@ -3210,3 +3210,33 @@ as host-file-sim already does. It establishes this physical branch, not a theore
 retention walks. The existing full-Store and retained-Store checks remain.
 **Meta-critique.** Matching just indexCorrupt would repeat HOST-68's coverage mistake. The probe
 records the whole verdict and asserts the successful open as well as the full refusal name.
+
+## HOST-72 · carried join uses the signed origin and nonce through the one importer (2026-10-20, CX-HOST, PROTOCOL-61)
+
+The cross-layer Host half of PROTOCOL-61 is in the same protocol! commit: importWithPin takes the
+byte-array name and parsed pin; importWith parses the operator's CLI pin and calls it. joinWith
+uses acceptStart, requires IN for a carried start and forbids IN for genesis, then imports under
+the signed nonce and origin. All signed export-head fields match before the first Store write.
+A matching reopen is still required. import reports start; join ends with input.
+
+Premise price: import_genesis_iff, accept_premises and host_start_kept keep their statements;
+join_genesis_iff restates the sum/effects. No landed trust premise grows. sealed_opens / seal_facts
+are untouched. New join_carried_iff connects the first effect to the pinned import and budget;
+join_carried_trusted discharges CheckpointTrusted at the accepted invitation origin. Its separate
+proof file avoids the existing Size → Proofs.Cli → Trusted cycle. Vacuity read: no new conclusion
+disjunct; the bidirectional effect result is false if the importer skips a check or never writes.
+
+Critique: this does not fix the genesis-offset thin-adopt rotation collision (HOST-71's rejected
+header replacement must not return). The CLI's import comparison verifies carried bytes on
+reopen; physical crash recovery remains the existing Store's responsibility.
+Meta-critique: no cost argument changes which origin is pinned; the ordinary import path and its
+existing trusted theorem are the connection, rather than a second special carried-join writer.
+
+Validation addendum: the real disabled-guard run in logs/CX-HOST-join-plant.log
+builds then prints FAIL for missing carried IN, wrong origin, mismatching signed
+anchor and extra genesis IN; MUTANT-RC 1. Source restored in finally, then the
+reached build and isolated CLI checks pass (CX-HOST-start-build-final.log and
+CX-HOST-join-control.log). The ONE Rust join test still reaches the independent
+thin-adopt defect: nd follow status 2 at adopt (CX-HOST-join-current.log), ROOT's
+item 1. No check is bypassed to make it pass; the full judge retains parent
+attribution. The filtered protocol rows are green at both parameter sets.

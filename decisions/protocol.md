@@ -1924,3 +1924,82 @@ The writer's fact was masked by custody's reason (law 7).
 - "Never sent" is relative to follow's World. Follow may lag the writer, so a cancel that follow's World records can still be declined by the writer (`replayed`, `refusedFinal`, `outsideWindow`). Only the other-member case (`badSignature`) holds whatever the lag.
 - A writer that logs a cancel twice, or outside its window, is also refused `cancelForged`, the audit's name (`forgedName`), even though no signature was forged. The name covers any cancel record the follower's re-judge does not reproduce.
 - `outsideWindow` is reached only past the window (validUntil < height + 1). A cancel before the call's `notBefore` cannot be built through nd, which signs `notBefore` = follow's height.
+
+## PROTOCOL-61 · a sponsor-signed carried start pins the origin (2026-10-20, CX-HOST; ROOT's card 7a (B′))
+
+**Decision.** An invitation contains one Start: genesis(name, nonce, allowance, founders), or
+carried(origin, name, nonce, fromOrigin, height, chain). startInput is the sum of genesisInput
+and carriedStart, encoded by the existing raw Stream combinators. Invitation.start replaces the
+four flat genesis fields. The signature domain is invitation/v2, explicitly separating old
+invitations. verified is the shared signature admission. accept remains genesis-only (carriedWorld);
+acceptStart returns the checked invitation and its origin. invite accepts a start only for its
+own origin; adopt uses the same accepted origin.
+
+host genesis/join print input in the new encoding. host import prints start, carrying the NEW
+origin, exact name/nonce and original export head. host join STORE INVITE KEY [IN] accepts
+genesis without IN and carried with IN; other arities refuse usage in before writing.
+importWithPin is the one importer behind the operator's import and the carried join. The latter
+passes the signed nonce, byte-array name and origin, never fresh entropy or an export digest.
+It also checks all signed export-head fields before genesis. Wrong origin is the existing
+carryMismatch wrongWorld; head mismatch is carryMismatch anchor. The one ImportFx record serves
+both verbs. The carried row no longer assigns a received World as the result of rejoin: it
+verifies a signed carried invitation and imports the retained export under its signed origin.
+Actors first used after carry use that same admission.
+
+**Flag day.** Re-emit genesis start inputs and all invitations; old signatures use v1 and refuse.
+Rows regenerate invitations and input vectors at both parameter sets. No Store, carry-export,
+kernel-origin or other codec byte moves. The codec-vector table has no invitation/start site
+(no new refine site was added); its existing vectors remain byte-identical and the source
+vector gate passes. There is no Store re-genesis in this protocol flag day.
+
+**Premise price.** No LANDED theorem gains a trust hypothesis. ofBytes_said, accept_ok and
+accept_origin restate the flat fields through Start; accept_genesis extracts their genesis
+constructor. accept_unverified and accept_untrusted keep their statements. import_genesis_iff,
+accept_premises and host_start_kept keep their statements. join_genesis_iff restates the sum and
+expanded effect record; join_budget_reaches remains its genesis case. sealed_opens and seal_facts
+are untouched and retain their statements. New join_carried_iff assumes parsed, accepted carried
+inputs and characterizes BOTH directions of the first Store write; its import/anchor/budget/key
+conditions are in the conclusion, not assumed. join_carried_trusted consumes that effect result
+and import_trusted_pinned to discharge CheckpointTrusted at the independently accepted origin.
+It lives in a new proof module because Trusted already imports Proofs.Cli through Size.
+
+**Vacuity read, including THE DISJUNCT CHECK.** Every changed/new theorem was read at its statement
+and consumers: ofBytes_said; verified_ok; accept_ok/genesis/origin; acceptStart_ok/carried_origin;
+accept{,Start}_{unverified,untrusted}; import_genesis_iff; join_genesis_iff; join_carried_iff;
+accept_premises; host_start_kept; join_carried_trusted. None introduces a conclusion disjunction.
+The iff statements' reverse directions fail for a no-write implementation or a different nonce/pin.
+The signature soundness statements bind the fields decoded from the very verified bytes; the
+refusal teeth fail if verification is bypassed. The origin equality is consumed by the trust
+theorem, which needs both actual successful import and budget. No new axiom, admitted proof,
+unbounded collision predicate or budget premise on a previously unconditional theorem.
+
+**Tests and plants.** Filtered invite, carry, carriedInviteWrongWorld and thin rows pass at toy
+and deployed parameters (logs/CX-HOST-start-rows2.log and CX-HOST-start-rows-deployed.log).
+The REAL carriedInviteWrongWorld line 7 is refused carryMismatch wrongWorld; the existing
+importTrustsFile mutation drops the origin pin and produces ok at that same line, caught by
+the row. The original carry wrong-digest tooth remains. Host.Sim.Join drives the real joinWith
+with observable first-write/reopen effects: matching signed nonce/origin writes the matching
+World, missing carried IN and extra genesis IN refuse before writes, wrong origin and a
+signed mismatching anchor refuse before writes. These run through host-sim's main.
+
+**Critique.** The transport of IN is still the operator's file handoff. This change exposes the
+carried arm in host join; the Rust nd --join wrapper has no IN argument yet and is not silently
+changed across CLIENT ownership. Sponsor authentication remains the same out-of-band key
+assumption. The copied export's origin commitment and the signed head authenticate the import,
+not a replay of its erased history. A follower's thin adoption Store-rotation defect is independent
+and remains a HOST representation question; this change does not bypass headerFault.
+
+**Meta-critique.** It would have been easy to retain the rows' TOFU assignment and call only the
+wire sum done, or to substitute an export digest because import already accepted one. Both miss
+the agreed independent origin. The actual effect-order theorem and wrong-origin tooth connect
+the new signature to the existing trusted import. Keeping the protocol and Host pieces in one
+flag-day commit avoids a period in which one side emits a start the other side cannot read.
+
+Validation addendum: the real disabled-guard run in logs/CX-HOST-join-plant.log
+builds then prints FAIL for missing carried IN, wrong origin, mismatching signed
+anchor and extra genesis IN; MUTANT-RC 1. Source restored in finally, then the
+reached build and isolated CLI checks pass (CX-HOST-start-build-final.log and
+CX-HOST-join-control.log). The ONE Rust join test still reaches the independent
+thin-adopt defect: nd follow status 2 at adopt (CX-HOST-join-current.log), ROOT's
+item 1. No check is bypassed to make it pass; the full judge retains parent
+attribution. The filtered protocol rows are green at both parameter sets.

@@ -107,7 +107,7 @@ inductive Act
   | carry (rightDigest : Bool)
   /-- the actor is re-invited to the carried World: its `Self.world` is the new origin and its
   follow starts from the carried World (members, grants and accounts are carried cells) -/
-  | rejoin
+  | acceptCarry (wrongOrigin : Bool)
   /-- the actor is re-invited to the carried World (its `Self.world` the new origin) but its follow
   is the lineage's FIRST genesis, height 0: a follower Store from before the import's first step,
   which never adopted the carried base -/
@@ -1094,8 +1094,7 @@ import, never by history. A committed call; an import with a wrong digest is ref
 `carryMismatch` and the old writer still serves; the import with the file's digest makes the
 carried World the writer. There the last committed call is still answered `ok` by lookup (the
 journal is carried, PROTOCOL-30); a NEW call signed for the old origin is `wrongWorld` (`declined`, PROTOCOL-41); a member
-re-invited to the new origin (`rejoin`: trust on first use, the one row act that still is: a carried
-World is made from a file, not from inputs an invitation could carry, PROTOCOL-42) writes on the carried cells, and a founder acting for the first time
+re-invited to the new origin through a sponsor-signed carried start writes on the carried cells, and a founder acting for the first time
 after the carry does so under the id the lineage's first genesis minted. -/
 def carry : Row where
   name := "carry"
@@ -1110,13 +1109,25 @@ def carry : Row where
     { actor := "operator", act := .carry true, expect := .ok },
     { actor := "newcomer", act := .retry, expect := .ok },
     { actor := "sponsor", act := .forge ["write", "@shared", "3", "1"], expect := .declined "wrongWorld" },
-    { actor := "newcomer", act := .rejoin, expect := .ok },
+    { actor := "newcomer", act := .acceptCarry false, expect := .ok },
     ok "newcomer" ["write", "@shared", "2", "3", "--via", "@g"],
     ok "newcomer" ["read", "@shared", "2=3"],
     -- a founder's FIRST act after the carry: its id is the lineage's (minted at the first
     -- genesis), never recomputed from the carried origin (KERNEL-40, opacity)
-    { actor := "operator", act := .rejoin, expect := .ok },
+    { actor := "operator", act := .acceptCarry false, expect := .ok },
     ok "operator" ["create", "@permit"]])
+  plant := .caught .importTrustsFile 7 .ok
+
+/-- A valid sponsor signature naming another origin cannot authorize this export. -/
+def carriedInviteWrongWorld : Row where
+  name := "carriedInviteWrongWorld"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant"]
+  drive := .members (welcome ++ [
+    { actor := "operator", act := .carry true, expect := .ok },
+    { actor := "newcomer", act := .acceptCarry true, expect := .refused "carryMismatch wrongWorld" },
+    { actor := "newcomer", act := .acceptCarry false, expect := .ok }])
   plant := .caught .importTrustsFile 7 .ok
 
 /-- cv 01a151bc-6ef3 (HOST-61's `beforeLog`): a member re-invited to the carried World whose follow
@@ -1594,7 +1605,7 @@ def cancelForgedRow : Row where
   plant := .caught .followVerifyAll 8 (.refused "chainMismatch")
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow]
 

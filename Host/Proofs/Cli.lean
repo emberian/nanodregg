@@ -45,7 +45,7 @@ theorem import_genesis_iff (name : String) (pinHex : PinArg) (nonceR : Except St
     ∃ pin nonce bytes r, pinHex.parse = some pin ∧ nonceR = .ok nonce ∧ inR = .ok bytes ∧
       Carry.importWorld X Codec.Deployed.digestCodec name.toUTF8 nonce pin bytes = .ok (w, r) ∧
       budgetFault w = none ∧ keyR = some k := by
-  unfold importWith
+  unfold importWith importWithPin
   cases hd : pinHex.parse <;> cases nonceR <;> cases inR <;>
     simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
@@ -54,22 +54,57 @@ theorem import_genesis_iff (name : String) (pinHex : PinArg) (nonceR : Except St
 
 /-- **`host join` writes no Store path before the invitation is accepted** (PROTOCOL-42, HOST-12's
 condition). `genesis` is reached, with key `k` and World `w`, EXACTLY when INVITE and KEY parsed,
-`Invite.accept` accepted the invitation under KEY making `w`, and the key effect answered `k`. Its
+`Invite.acceptStart` accepted a genesis start under KEY, that start makes `w`, and the key effect answered `k`. Its
 `→` half is refuse-before-write; its `←` half is the tooth: an accepted invitation reaches genesis
 with the World `accept` made, so the claim is false of a `join` that writes first or writes another
 World. -/
 theorem join_genesis_iff (inviteHex keyHex : String) (keyR : Option Digest) (k : Digest) (w : World D) :
     joinWith (m := Except (Option (Digest × World D)))
-        { key := pure keyR, genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
+        { nonce := pure (.ok ByteArray.empty), readIn := throw none, reopen := fun _ => throw none,
+          key := pure keyR, genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
           refuse := fun _ _ => pure 1, report := fun _ => pure () } inviteHex keyHex = .error (some (k, w)) ↔
-    ∃ inv trusted i, Protocol.Text.ofHex inviteHex = some inv ∧ Protocol.Text.ofHex keyHex = some trusted ∧
-      Protocol.Invite.accept X trusted inv = .ok (i, w) ∧ budgetFault w = none ∧ keyR = some k := by
+    ∃ inv trusted i o name nonce allowance fs,
+      Protocol.Text.ofHex inviteHex = some inv ∧ Protocol.Text.ofHex keyHex = some trusted ∧
+      Protocol.Invite.acceptStart X trusted inv = .ok (i, o) ∧
+      i.start = .genesis name nonce allowance fs ∧
+      Protocol.Invite.startGenesis X i.start = .ok w ∧ budgetFault w = none ∧ keyR = some k := by
   unfold joinWith
   cases hi : Protocol.Text.ofHex inviteHex <;> cases hk : Protocol.Text.ofHex keyHex <;>
     simp only [bind, Except.bind, pure, Except.pure] <;>
     (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
   all_goals (try (intro h₁; subst h₁; simp_all))
   all_goals (try (exact ⟨fun hh => ⟨hh.2, hh.1, hh.2 ▸ ‹budgetFault _ = none›⟩, fun hh => ⟨hh.2.1, hh.1⟩⟩))
+
+/-- A carried join writes exactly the imported World under the invitation's origin and nonce,
+after checking every signed head field. A missing or different export never reaches genesis. -/
+theorem join_carried_iff (inviteHex keyHex path : String)
+    (inR : Except (StoreFault (Record.Fault (Reject D))) ByteArray) (keyR : Option Digest)
+    (k : Digest) (w : World D)
+    {inv trusted : ByteArray} {i : Protocol.Invite.Invitation D} {accepted o fromO chain : D}
+    {name nonce : ByteArray} {height : Nat}
+    (hi : Protocol.Text.ofHex inviteHex = some inv)
+    (hk : Protocol.Text.ofHex keyHex = some trusted)
+    (ha : Protocol.Invite.acceptStart X trusted inv = .ok (i, accepted))
+    (hs : i.start = .carried o name nonce fromO height chain) :
+    joinWith (m := Except (Option (Digest × World D)))
+        { nonce := pure (.ok ByteArray.empty), readIn := pure inR, reopen := fun _ => throw none,
+          key := pure keyR, genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
+          refuse := fun _ _ => pure 1, report := fun _ => pure () } inviteHex keyHex (some path) =
+        .error (some (k, w)) ↔
+    ∃ bytes r, inR = .ok bytes ∧
+      Carry.importWorld X Codec.Deployed.digestCodec name nonce (.origin o) bytes = .ok (w, r) ∧
+      r.head.fromOrigin = fromO ∧ r.head.height = height ∧ r.head.chain = chain ∧
+      budgetFault w = none ∧ keyR = some k := by
+  simp only [joinWith, hi, hk, ha, hs, bind, Except.bind, pure, Except.pure]
+  unfold importWithPin
+  cases inR <;> simp only [bind, Except.bind, pure, Except.pure] <;>
+    (repeat' split) <;> simp_all [Prod.ext_iff, and_comm]
+  all_goals (try (intro h; subst w; simp_all))
+  constructor
+  · rintro ⟨rfl, rfl⟩
+    exact ⟨_, ⟨rfl, rfl⟩, ‹_ ∧ _ ∧ _›.1, ‹_ ∧ _ ∧ _›.2.1, ‹_ ∧ _ ∧ _›.2.2, rfl, ‹budgetFault _ = none›⟩
+  · rintro ⟨_, ⟨hw, _⟩, _, _, _, hk, _⟩
+    exact ⟨hk, hw⟩
 
 /-- **`host seal` writes only after the writer's open succeeded** (HOST-43): the seal effect, the
 one that writes, is reached with the opened Store `r` EXACTLY when the key read and the writer's
@@ -158,7 +193,7 @@ makes is KERNEL's genesis World of its signed inputs (PROTOCOL's `accept_ok`, `g
 theorem accept_premises {trusted inv : ByteArray} {i : Protocol.Invite.Invitation D} {w : World D}
     (h : Protocol.Invite.accept X trusted inv = .ok (i, w)) :
     w.Canon X.env ∧ w.Slotted X.env ∧ w.RowsCanon X.env := by
-  have hg := (Protocol.Invite.accept_ok h).2.2.2
+  obtain ⟨_, _, _, _, _, hg⟩ := Protocol.Invite.accept_genesis h
   obtain ⟨-, rfl⟩ := Receive.genesis_ok.mp hg
   exact ⟨receive_genesis_canon X _ _ _ _, receive_genesis_slotted X _ _ _ _, receive_genesis_rowsCanon X _ _ _ _⟩
 
@@ -172,7 +207,7 @@ theorem import_budget_reaches {name nonce : ByteArray} {pin : Carry.Pin D} {f : 
   let ⟨hc, hs, hr⟩ := importWorld_premises h
   budget_reaches hb hc hs hr hf
 
-/-- **`budget_reaches` at every World `host join` admits** (HOST-59). -/
+/-- **`budget_reaches` at every genesis World `host join` admits** (HOST-59). -/
 theorem join_budget_reaches {trusted inv : ByteArray} {i : Protocol.Invite.Invitation D} {w w' : World D}
     {l : List (Step D)} (h : Protocol.Invite.accept X trusted inv = .ok (i, w))
     (hb : budgetFault w = none) (hf : World.fold X.env w l = .ok w') :
