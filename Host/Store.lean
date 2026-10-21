@@ -3,8 +3,8 @@
 
     STORE/key            32 bytes, 0600: the integrity-at-rest key (HOST-16); written once by genesis;
                          its read handle is flock'd: THE writer lock (HOST-64)
-    STORE/seg.<o>.log    one slice of the segment from logical offset o, opened by its checkpoint
-                         header (Host.Segment): one file per seal start; the newest is appended to
+    STORE/seg.<id>.log   physical identity id = generation * 2^64 + logical start; an authenticated
+                         physical header fronts one logical slice; the selected newest file is appended to
     STORE/index.<k0>.log fixed-width MAC'd entries k0, k0+1, … (one per record before the newest
                          base, each tagged with its position: HOST-30, HOST-33); the base names k0
     STORE/base.world     the newest sealed base (Host.Base); replaced atomically through base.tmp
@@ -13,7 +13,7 @@
 
 The segment is ONE logical byte sequence (Host.Segment): every base, entry and page names a logical
 offset, and `Segs` reads logical ranges across the files. A base sits at the start of its own file
-(`seg.<base offset>.log`), so the open reads that file's header, the file, its successors (the tail),
+in the generation authenticated by the atomic base, so the open reads its header, its successors (the tail),
 and at most the file before it (the base's last indexed record, HOST-63): O(1) files.
 
 The lock is the key file's read handle, flock'd for the writer's life (`Writer.lock`, kept by
@@ -33,6 +33,7 @@ a writer with a finite retention removes the surplus at open. Without `--retain`
 -/
 import Host.File
 import Host.Open
+import Host.Physical
 
 namespace Nanodregg.Host
 
@@ -119,33 +120,49 @@ def SegFault.store {F : Type} : SegFault → StoreFault F
   | .foreignOrigin _ => .base .foreignOrigin
   | .short stop next => .base (.segmentShort stop next)
 
-/-- The header of `seg.<o>.log`, verified and naming `o`, with the file's body size. -/
-def readHeader (dir : System.FilePath) (keys : Keys) (o : Nat) :
+/-- The selected physical header, verified against its generation and logical start `o`, with body size. -/
+def readHeader (dir : System.FilePath) (keys : Keys) (o : Nat) (generation : Nat := 0) :
     IO (Except SegFault (Header × ByteArray × Nat)) := do
-  unless ← (segPath dir o).pathExists do return .error (.missing o)
-  let f ← File.open (segPath dir o) .read
+  let id := segmentIdentity generation o
+  unless ← (segPath dir id).pathExists do return .error (.missing id)
+  let f ← File.open (segPath dir id) .read
   let size := (← f.size).toNat
-  if size < headerBytes keys then return .error (.corrupt o)
-  let hb ← f.readAt 0 (headerBytes keys).toUSize
-  match Header.read keys hb with
-  | none => return .error (.corrupt o)
-  | some h => if h.start = o then return .ok (h, hb, size - headerBytes keys) else return .error (.foreign o)
+  if size < physicalHeaderBytes keys then return .error (.corrupt id)
+  let bytes ← f.readAt 0 (physicalHeaderBytes keys).toUSize
+  match physicalHeaderRead keys generation o bytes with
+  | .ok (h, hb) => return .ok (h, hb, size - physicalHeaderBytes keys)
+  | .error .foreignSegment => return .error (.foreign id)
+  | .error _ => return .error (.corrupt id)
 
 /-- The logical segment of one Store, read across its files: `starts` are the known files' starts,
 ascending and contiguous (each file's body ends where the next starts), never below `floor` (the
 oldest retained file). The newest known file may still grow; a file after it is found by name
-(`seg.<end>.log`) when a read or `size` passes its end. -/
+in the same generation when a read or `size` passes its end. -/
 structure Segs where
   dir : System.FilePath
   keys : Keys
   origin : ByteArray
   starts : IO.Ref (Array Nat)
   floor : Nat
+  generation : Nat := 0
+
+/-- Check the generation in the atomically selected base before a live tail read.
+One stable file handle and eight bytes at a fixed distance from its end; no World
+decode. The unauthenticated metadata can only cause a refusal, never adoption. -/
+def Segs.current (s : Segs) : IO (Except (StoreFault F) Unit) := do
+  if let some e ← missingOf s.dir [.base] then return .error e
+  let f ← File.open (basePath s.dir) .read
+  let size := (← f.size).toNat
+  if size < physicalBytes then return .error (.base .baseCorrupt)
+  let bytes ← f.readAt (size - physicalBytes).toUInt64 8
+  match generationFault s.generation bytes with
+  | some e => return .error (.base e)
+  | none => return .ok ()
 
 /-- The body size of a known file. -/
 def Segs.body (s : Segs) (o : Nat) : IO Nat := do
-  let f ← File.open (segPath s.dir o) .read
-  return (← f.size).toNat - headerBytes s.keys
+  let f ← File.open (segPath s.dir (segmentIdentity s.generation o)) .read
+  return (← f.size).toNat - physicalHeaderBytes s.keys
 
 /-- Learn every file after the newest known one; the logical end of the segment. A successor's
 header must verify, name its own start, the Store's origin and its predecessor (`foreignSegment`). -/
@@ -155,14 +172,14 @@ def Segs.size (s : Segs) : IO (Except SegFault Nat) := do
   -- the newest known file must still exist: a reader standing in a file a finite retention since
   -- unlinked is refused by name (`missing`) in the steady state, not thrown out of; a drop racing
   -- this very read still throws (HOST-70, HOST-50's WEAK (v))
-  unless ← (segPath s.dir last).pathExists do return .error (.missing last)
+  unless ← (segPath s.dir (segmentIdentity s.generation last)).pathExists do return .error (.missing (segmentIdentity s.generation last))
   let mut cur := last
   let mut stop := cur + (← s.body cur)
   for _ in [0:1 <<< 20] do
     -- an empty file has no successor: a rotation at its start is none (`fileCheckpoint.rotate`)
     if stop = cur then break
-    unless ← (segPath s.dir stop).pathExists do break
-    match ← readHeader s.dir s.keys stop with
+    unless ← (segPath s.dir (segmentIdentity s.generation stop)).pathExists do break
+    match ← readHeader s.dir s.keys stop s.generation with
     | .error e => return .error e
     | .ok (h, _, body) =>
       if h.prev ≠ cur then return .error (.foreign stop)
@@ -180,12 +197,12 @@ def Segs.cover (s : Segs) (off : Nat) : IO (Except SegFault Unit) := do
   for _ in [0:1 <<< 20] do
     let some first := starts[0]? | break
     if first ≤ off ∨ first ≤ s.floor then break
-    match ← readHeader s.dir s.keys first with
+    match ← readHeader s.dir s.keys first s.generation with
     | .error e => return .error e
     | .ok (h, _, _) =>
       if first ≤ h.prev then break
       if h.prev < s.floor then break
-      match ← readHeader s.dir s.keys h.prev with
+      match ← readHeader s.dir s.keys h.prev s.generation with
       | .error e => return .error e
       | .ok (hp, _, body) =>
         if hp.start + body < first then return .error (.short (hp.start + body) first)
@@ -211,11 +228,11 @@ def Segs.read (s : Segs) (off len : Nat) : IO (Except SegFault ByteArray) := do
   -- `open: No such file or directory` exception out of `size` before this, plant-segs-dropped
   -- reaches this guard: `size` sees the newest file, the read begins in an unlinked older one)
   if let some o := ((starts.filter (· ≤ off)).back?).orElse (fun _ => starts[0]?) then
-    unless ← (segPath s.dir o).pathExists do return .error (.missing o)
-  segRead (fun o => return (← readHeader s.dir s.keys o).map (·.1.tag.bytes))
+    unless ← (segPath s.dir (segmentIdentity s.generation o)).pathExists do return .error (.missing (segmentIdentity s.generation o))
+  segRead (fun o => return (← readHeader s.dir s.keys o s.generation).map (·.1.tag.bytes))
     (fun o p n => do
-      let f ← File.open (segPath s.dir o) .read
-      f.readAt (headerBytes s.keys + p).toUInt64 n.toUSize)
+      let f ← File.open (segPath s.dir (segmentIdentity s.generation o)) .read
+      f.readAt (physicalHeaderBytes s.keys + p).toUInt64 n.toUSize)
     starts.toList off len
 
 def SegFault.text : SegFault → String
@@ -234,6 +251,7 @@ structure PageFiles where
   origin : ByteArray
   kept : IO.Ref (Nat × Nat)
   starts : IO.Ref (Array Nat)
+  generation : IO.Ref Nat
 
 /-- The first kept index entry and the logical readers of the segment and the index for one page.
 A segment file the page needs and does not find is an IO error naming it (`missing seg.<o>.log`),
@@ -242,7 +260,7 @@ def PageFiles.readers (p : PageFiles) :
     IO (Nat × (Nat → Nat → IO ByteArray) × (Nat → Nat → IO ByteArray)) := do
   let (rf, k0) ← p.kept.get
   p.starts.modify fun a => let a := a.filter (rf ≤ ·); if a.isEmpty then #[rf] else a
-  let segs : Segs := ⟨p.dir, p.keys, p.origin, p.starts, rf⟩
+  let segs : Segs := ⟨p.dir, p.keys, p.origin, p.starts, rf, ← p.generation.get⟩
   let idx ← File.open (indexPathAt p.dir k0) .read
   let eb := entryBytes p.keys
   return (k0,
@@ -261,6 +279,7 @@ structure Files where
   newest : Nat
   retainedFrom : Nat
   indexFrom : Nat
+  generation : Nat
 
 /-- The one open (writer and follower) over a Store directory: `base.world` present (`missing`
 otherwise, before any handle opens); the base's file and index file present; then `openWith` over
@@ -269,21 +288,20 @@ def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) :
     IO (Except (StoreFault F) (Opening W × Files)) := do
   if let some f ← missingOf dir [.base] then return .error f
-  match ← readBounded (basePath dir) (Log.frameMax c.baseRecordMax) (fun n => .base (.baseTooLarge n)) with
+  match ← readBounded (basePath dir) (Log.frameMax c.baseRecordMax + physicalBytes) (fun n => .base (.baseTooLarge n)) with
   | .error e => return .error e
-  | .ok file =>
+  | .ok physical =>
+    let (generation, file) ← match physicalBaseRead keys c physical with
+      | .error e => return .error (.base e)
+      | .ok p => pure p
     -- an unreadable trailer is not a base: the open refuses it by Base.read's own name
     let (o, rf, k0) := (Base.peek file).getD (0, 0, 0)
-    if let some f ← missingOf dir [.segment o, .index k0] then return .error f
-    let hb ← match ← readHeader dir keys o with
+    if let some f ← missingOf dir [.segment (segmentIdentity generation o), .index k0] then return .error f
+    let hb ← match ← readHeader dir keys o generation with
       | .ok (_, hb, _) => pure hb
-      | .error (.missing o) => return .error (.missing (.segment o))
-      | .error _ =>
-        -- the bytes as they are: `openWith`'s header check names the fault
-        let f ← File.open (segPath dir o) .read
-        f.readAt 0 (headerBytes keys).toUSize
+      | .error e => return .error e.store
     let segs : Segs := ⟨dir, keys, (Header.read keys hb).map (·.origin) |>.getD ByteArray.empty,
-      ← IO.mkRef #[o], rf⟩
+      ← IO.mkRef #[o], rf, generation⟩
     let size ← match ← segs.size with
       | .ok n => pure n
       | .error e => return .error e.store
@@ -302,7 +320,7 @@ def openAt (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W
     | .error e => return .error e
     | .ok op =>
       let newest := (← segs.starts.get).back?.getD o
-      return .ok (op, ⟨segs, newest, rf, k0⟩)
+      return .ok (op, ⟨segs, newest, rf, k0, generation⟩)
 
 /-- The loop's state as an open leaves it. -/
 def Opening.resident (o : Opening W) : Resident W :=
@@ -328,6 +346,7 @@ structure Writer (W : Type) where
   kept : IO.Ref (Nat × Nat)
   retain : Retain
   opening : Opening W
+  generation : IO.Ref Nat
 
 /-- Keep the writer's lock to here: the lock's handle lives as long as a later use of it. -/
 def Writer.hold (wr : Writer W) : IO Unit := do
@@ -362,19 +381,19 @@ def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stre
   match ← openAt dir keys c world mark origin step with
   | .error e => return .error e
   | .ok (o, fs) =>
-    let segment ← File.open (segPath dir fs.newest) .append
+    let segment ← File.open (segPath dir (segmentIdentity fs.generation fs.newest)) .append
     if 0 < o.opened.torn then
       -- a torn tail is only ever in the newest file: a file is started after a synced commit
       if o.pos.offset < fs.newest then return .error (.log (.corrupt o.pos.offset))
-      segment.truncate (headerBytes keys + (o.pos.offset - fs.newest)).toUInt64
+      segment.truncate (physicalHeaderBytes keys + (o.pos.offset - fs.newest)).toUInt64
       segment.sync
     let index ← File.open (indexPathAt dir fs.indexFrom) .append
     if 0 < o.orphan then
       index.truncate ((o.sealed.index.count - fs.indexFrom) * entryBytes keys).toUInt64
       index.sync
-    if retain.isSome then removeSurplus dir fs.retainedFrom fs.indexFrom
+    if retain.isSome then removeSurplus dir (segmentIdentity fs.generation fs.retainedFrom) fs.indexFrom
     return .ok ⟨lock, ← IO.mkRef segment, ← IO.mkRef fs.newest, ← IO.mkRef index,
-      ← IO.mkRef (fs.retainedFrom, fs.indexFrom), retain, o⟩
+      ← IO.mkRef (fs.retainedFrom, fs.indexFrom), retain, o, ← IO.mkRef fs.generation⟩
 
 /-- Open the Store as a follower of its directory: the same open, no lock, nothing written. -/
 def openFollower (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
@@ -388,12 +407,12 @@ def fileStore (wr : Writer W) : Store where
   sync := do (← wr.segment.get).sync
 
 /-- The files from `newest` back to `floor` (walking each header's `prev`), newest first. -/
-def filesBack (dir : System.FilePath) (keys : Keys) (newest floor : Nat) :
+def filesBack (dir : System.FilePath) (keys : Keys) (newest floor : Nat) (generation : Nat := 0) :
     IO (Except SegFault (List (Nat × Header))) := do
   let mut acc : Array (Nat × Header) := #[]
   let mut cur := newest
   for _ in [0:1 <<< 20] do
-    match ← readHeader dir keys cur with
+    match ← readHeader dir keys cur generation with
     | .error e => return .error e
     | .ok (h, _, _) =>
       acc := acc.push (cur, h)
@@ -404,9 +423,9 @@ def filesBack (dir : System.FilePath) (keys : Keys) (newest floor : Nat) :
 /-- What a drop keeping the `n` newest files (ending with `newest`, none below `floor`) keeps and
 unlinks: the oldest kept file's start, its header's index count (the first kept entry), and the
 starts of the files before it. -/
-def keepFrom (dir : System.FilePath) (keys : Keys) (newest floor n : Nat) :
+def keepFrom (dir : System.FilePath) (keys : Keys) (newest floor n : Nat) (generation : Nat := 0) :
     IO (Except SegFault (Nat × Nat × List Nat)) := do
-  match ← filesBack dir keys newest floor with
+  match ← filesBack dir keys newest floor generation with
   | .error e => return .error e
   | .ok fs =>
     let kept := fs.take n
@@ -414,11 +433,59 @@ def keepFrom (dir : System.FilePath) (keys : Keys) (newest floor n : Nat) :
     | none => return .error (.missing newest)
     | some (o, h) => return .ok (o, h.indexCount, (fs.drop n).map Prod.fst)
 
+/-- Allocate a generation beyond every segment identity already present, including headers
+left by interrupted adoptions. The writer lock excludes concurrent allocation. -/
+def freshGeneration (dir : System.FilePath) : IO (Except SealFault Nat) := do
+  let mut ids := []
+  for e in ← dir.readDir do
+    match e.fileName.splitOn "." with
+    | ["seg", id, "log"] =>
+      if let some n := id.toNat? then ids := n :: ids
+    | _ => pure ()
+  let generation := nextGeneration ids
+  if generation < 2 ^ 64 then return .ok generation
+  else return .error (.positionUnfit generation)
+
+/-- The durable header phase of adoption, deliberately separate from atomic base publication.
+It checks the old logical header at the genesis position, writes a fresh identity, and returns
+the base that MAY publish it. A crash here leaves the old base and its entire generation intact. -/
+def prepareAdoption (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
+    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (wr : Writer W)
+    (old w : W) (pos : Position) : IO (Except SealFault (Nat × ByteArray × IndexAt)) := do
+  let generation ← wr.generation.get
+  let newest ← wr.newest.get
+  let (rf, k0) ← wr.kept.get
+  unless newest = pos.offset ∧ k0 = 0 ∧ origin old = origin w ∧
+      pos.offset = frameSize (origin old) do return .error (.positionUnfit pos.offset)
+  let (h, hb, body) ← match ← readHeader dir keys newest generation with
+    | .error e => return .error (.io e.text)
+    | .ok h => pure h
+  unless body = 0 ∧ h.start = pos.offset ∧ rf ≤ pos.offset do
+    return .error (.positionUnfit pos.offset)
+  if (headerFault keys hb (origin old) pos.offset pos.tag (mark old) 0).isSome then
+    return .error (.positionUnfit pos.offset)
+  let index ← wr.index.get
+  match Base.seal (keys.forStore (origin w)) c world w pos indexStart #[] (← index.size).toNat
+      ⟨pos.offset, 0⟩ with
+  | .error e => return .error e
+  | .ok (_, ix, file) =>
+    let h := Header.at pos (mark w) 0 pos.offset (origin w)
+    unless h.fits keys.chainBytes do return .error (.positionUnfit pos.offset)
+    let g ← match ← freshGeneration dir with
+      | .error e => return .error e
+      | .ok g => pure g
+    try
+      -- createNew, never rename over a segment: no header in place is ever replaced.
+      writeNew (segPath dir (segmentIdentity g pos.offset)) (physicalHeader keys g h)
+      syncDir dir.toString
+      return .ok (g, file, ix)
+    catch e => return .error (.io (toString e))
+
 /-- The base sealer over a Store directory (`Base.seal`), with the writer's handles.
 
 `rotate` starts the file a seal at `pos` will name (HOST-64): its header (the position, the World's
 step count and chain, the entries before it, the newest file before it) written to `seg.tmp`, synced,
-renamed to `seg.<pos>.log`, the directory synced, and the append handle moved to it. When the
+renamed to the physical identity for this generation and `pos`, the directory synced, and the append handle moved to it. When the
 newest file already starts at `pos` (a seal at the position of a seal that never installed, or of the
 base the writer opened at) nothing is written, and that file is reused only if its header passes
 `headerFault` at the place the base will name: else `positionUnfit` (HOST-64 F6;
@@ -437,43 +504,61 @@ by name. -/
 def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
     (mark : W → Nat × ByteArray) (origin : W → ByteArray) (wr : Writer W) (async : Bool := true) : Checkpoint W where
   async
+  adopt old w pos := do
+    match ← prepareAdoption dir keys c world mark origin wr old w pos with
+    | .error e => return .error e
+    | .ok (generation, bytes, ix) =>
+      try
+        if let some f ← (missingOf dir [.base] : IO (Option (StoreFault Unit))) then
+          return .error (.io f.text)
+        installBase dir (physicalPack keys "base-identity" generation bytes)
+        wr.segment.set (← File.open (segPath dir (segmentIdentity generation pos.offset)) .append)
+        wr.newest.set pos.offset
+        wr.generation.set generation
+        wr.kept.set (pos.offset, 0)
+        return .ok (world.size w, keys.worldDigest (worldBytesOf bytes (world.size w)), ix)
+      catch e => return .error (.io (toString e))
   rotate w pos count := do
     let newest ← wr.newest.get
+    let generation ← wr.generation.get
     if newest = pos.offset then
       -- the newest file already starts here (a seal at the position of one that never installed,
       -- or of the base the writer opened at): it is the file this seal names only if its header
       -- passes the open's own check at the place the base will name (`headerFault`, HOST-64 F6);
       -- otherwise the seal refuses `positionUnfit` before anything is written
       try
-        let f ← File.open (segPath dir pos.offset) .read
-        let hb ← f.readAt 0 (headerBytes keys).toUSize
+        let f ← File.open (segPath dir (segmentIdentity generation pos.offset)) .read
+        let physical ← f.readAt 0 (physicalHeaderBytes keys).toUSize
+        let some (g, hb) := physicalRead keys "header-identity" physical | return .error (.positionUnfit pos.offset)
+        unless g = generation do return .error (.positionUnfit pos.offset)
         match headerFault keys hb (origin w) pos.offset pos.tag (mark w) count with
         | none => return .ok ()
         | some f =>
           -- the operator's distinction from a position past 2^64: the header's own fault, by name
-          IO.eprintln s!"STATUS rotate offset={pos.offset} reused=seg.{pos.offset}.log refused=positionUnfit header={f.name}"
+          IO.eprintln s!"STATUS rotate offset={pos.offset} reused=seg.{segmentIdentity generation pos.offset}.log refused=positionUnfit header={f.name}"
           return .error (.positionUnfit pos.offset)
       catch e => return .error (.io (toString e))
     let h := Header.at pos (mark w) count newest (origin w)
     unless h.fits keys.chainBytes do return .error (.positionUnfit pos.offset)
     try
       if ← (segTmpPath dir).pathExists then IO.FS.removeFile (segTmpPath dir)
-      if ← (segPath dir pos.offset).pathExists then return .error (.io s!"seg.{pos.offset}.log exists")
-      writeNew (segTmpPath dir) (Header.bytes keys h)
-      IO.FS.rename (segTmpPath dir) (segPath dir pos.offset)
+      if ← (segPath dir (segmentIdentity generation pos.offset)).pathExists then return .error (.io s!"seg.{segmentIdentity generation pos.offset}.log exists")
+      writeNew (segTmpPath dir) (physicalHeader keys generation h)
+      IO.FS.rename (segTmpPath dir) (segPath dir (segmentIdentity generation pos.offset))
       syncDir dir.toString
-      wr.segment.set (← File.open (segPath dir pos.offset) .append)
+      wr.segment.set (← File.open (segPath dir (segmentIdentity generation pos.offset)) .append)
       wr.newest.set pos.offset
       return .ok ()
     catch e => return .error (.io (toString e))
   write w seg entries ipos := do
     let at_ := s!"height={(mark w).1} offset={seg.offset} entries={entries.size} index_count={ipos.count}"
+    let generation ← wr.generation.get
     let (rf, k0) ← wr.kept.get
     let eb := entryBytes keys
     let (rf', k0', dropped) ← match wr.retain with
       | none => pure (rf, k0, [])
       | some n =>
-        match ← keepFrom dir keys seg.offset rf n with
+        match ← keepFrom dir keys seg.offset rf n generation with
         | .ok x => pure x
         | .error _ =>
           IO.eprintln s!"STATUS seal {at_} refused=checkpointCorrupt"
@@ -506,15 +591,15 @@ def fileCheckpoint (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : 
           writeNew (indexTmpPath dir) (old ++ page)
           IO.FS.rename (indexTmpPath dir) (indexPathAt dir k0')
           syncDir dir.toString
-        installBase dir bytes
+        installBase dir (physicalPack keys "base-identity" generation bytes)
         if k0' ≠ k0 then
           wr.index.set (← File.open (indexPathAt dir k0') .append)
           IO.FS.removeFile (indexPathAt dir k0)
         for o in dropped do
-          if ← (segPath dir o).pathExists then IO.FS.removeFile (segPath dir o)
+          if ← (segPath dir (segmentIdentity generation o)).pathExists then IO.FS.removeFile (segPath dir (segmentIdentity generation o))
         unless dropped.isEmpty && k0' = k0 do syncDir dir.toString
         wr.kept.set (rf', k0')
-        IO.eprintln s!"STATUS seal {at_} base_bytes={bytes.size} world_bytes={world.size w} entry_bytes={page.size} retained_from_offset={rf'} index_from={k0'} dropped={dropped.length}"
+        IO.eprintln s!"STATUS seal {at_} base_bytes={bytes.size + physicalBytes} world_bytes={world.size w} entry_bytes={page.size} retained_from_offset={rf'} index_from={k0'} dropped={dropped.length}"
         return .ok (world.size w, keys.worldDigest (worldBytesOf bytes (world.size w)), ipos')
       catch e =>
         IO.eprintln s!"STATUS seal {at_} refused=io"
@@ -535,11 +620,11 @@ def genesis (dir : System.FilePath) (key : Digest) (keys : Keys) (c : Cadence) (
       if ← p.pathExists then return .error .exists
     IO.FS.createDirAll dir
     writeNew (keyPath dir) key.bytes
-    writeNew (segPath dir 0) (img.header0 ++ img.segment)
-    writeNew (segPath dir img.segment.size) img.header
+    writeNew (segPath dir 0) (physicalPack keys "header-identity" 0 img.header0 ++ img.segment)
+    writeNew (segPath dir img.segment.size) (physicalPack keys "header-identity" 0 img.header)
     writeNew (indexPathAt dir 0) img.index
     syncDir dir.toString
-    installBase dir img.base
+    installBase dir (physicalPack keys "base-identity" 0 img.base)
     return .ok ()
 
 end Nanodregg.Host

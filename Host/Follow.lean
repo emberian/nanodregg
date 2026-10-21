@@ -120,11 +120,13 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
         | some pd => match ← settle pd with
           | .ok sealed => pure { r with sealed, pending := none }
           | .error e => return (.sealFailed e, { r with pending := none })
-      match ← settle (← spawnSeal ck recorder.mark w' r.pos { r.sealed with index := indexStart } #[]) with
+      match ← ck.adopt r.world w' r.pos with
       | .error e =>
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
         return (.sealFailed e, { r with pending := none })
-      | .ok sealed =>
+      | .ok (bytes, digest, ix) =>
+        let sealed : Sealed := ⟨r.pos.offset, bytes, (recorder.mark w').1,
+          (recorder.mark w').2, digest, ix⟩
         dl.set fs'.memory
         port.send ⟨f.conn, status, payload⟩
         loop keys me store ck port dl fuel

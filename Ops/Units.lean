@@ -309,7 +309,7 @@ def hostAction : Status → String
   | .locked => "another writer holds the Store: find its unit; never start a second"
   | .exists => "genesis into an existing Store: choose another path"
   | .badKey => "`STORE/key` is not 32 bytes: restore it from the backup"
-  | .missing => "a Store file (key, a segment file `seg.<o>.log`, the index file `index.<k0>.log`, or base.world; stderr names it, a segment file by its start) is absent from an existing STORE directory: never re-create it or genesis over it; restore the Store's files together from one backup (RUNBOOK §5); a directory left by a genesis that crashed part way is moved aside by hand, never deleted by a unit; if STORE names a directory that holds no Store at all, check the path"
+  | .missing => "a Store file (key, a segment file `seg.<o>.log`, the index file `index.<k0>.log`, or base.world; stderr names the missing file) is absent from an existing STORE directory: never re-create it or genesis over it; restore the Store's files together from one backup (RUNBOOK §5); a directory left by a genesis that crashed part way is moved aside by hand, never deleted by a unit; if STORE names a directory that holds no Store at all, check the path"
   | .shortRead => "a file changed under the open: stop every writer, then `host check`"
   | .baseTooLarge | .baseCorrupt | .baseUndecodable | .segmentShort | .tailTooLong =>
     "the Store is damaged or not a Store: restore (RUNBOOK §5)"

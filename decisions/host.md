@@ -3240,3 +3240,127 @@ CX-HOST-join-control.log). The ONE Rust join test still reaches the independent
 thin-adopt defect: nd follow status 2 at adopt (CX-HOST-join-current.log), ROOT's
 item 1. No check is bypassed to make it pass; the full judge retains parent
 attribution. The filtered protocol rows are green at both parameter sets.
+
+## HOST-71 · atomic adoption selects a fresh segment identity (2026-10-21, CX-HOST, ROOT ruling A)
+
+**PRICE PREMISES, before building.** Landed HOST theorems gaining a hypothesis: none.
+Landed theorems restated: none. sealed_opens / seal_facts retain their statements over
+LOGICAL readers. HOST-68's StoreIndexes, sealed_indexes / sealed_indexes_deployed,
+sealed_indexes_same / sealed_indexes_deployed_same, and its deployed page theorems
+are unchanged. HOST-69's WriterLife / writer_life_trusted, genesis_life_trusted,
+import_life_trusted and life_opened_size_le are unchanged; received-base adoption
+still does not discharge CheckpointTrusted or become a WriterLife admitted-fold link.
+host_run_folds / host_run_kept retain submit/cancel as the World movers. The NEW
+IdentityLife induction proves filename/header correspondence for the modeled genesis,
+put, body, publish and drop operations. Mapping the IO writer paths to these operations
+is read off the code under the stated filesystem assumptions, not an IO refinement theorem.
+
+**Decision.** A segment identity is (generation, logical start), encoded injectively as
+generation * 2^64 + start in its numeric filename. Starts remain u64 logical offsets.
+The physical base and each physical header carry an authenticated generation trailer;
+the logical Base and Header codecs consumed by existing proofs are unchanged. The
+Store shape stamp names both physical wrappers. Readers select the generation recorded
+in the atomic base, check each physical header against its filename, and follow only
+that generation's contiguous logical files. Normal rotation publishes a successor in
+the same generation before appends, retaining the existing recovery of acknowledged
+records even while a seal is in flight. Adoption creates a new generation and publishes
+it ONLY in the atomic base: its new header is never installed over an old header.
+Generation allocation skips existing generations, so an interrupted attempt cannot be
+overwritten or accidentally selected. The adoption base keeps retainedFrom = its logical
+offset and indexFrom = 0: the adopted header is HOST-68's retained run start, including
+its starting steps. Old-generation files survive the publication boundary.
+
+**Flag day.** Every Store re-geneses (genesis, import and joined/followed local Stores).
+An old Store refuses shapeMismatch before any World/base/header decode. The physical
+header and base wrappers change; logical records, index entries and transport do not.
+A re-genesis costs a judge, never a design point.
+
+**Critique.** The physical-to-logical theorem must describe what the writer actually
+does, including the interrupted adoption state; a theorem solely about the completed
+base is insufficient. Existing OS durability assumptions remain explicit: a synced,
+renamed base is atomic and directory sync orders publication. A live reader pinned to
+the previous generation retains the previous history; it cannot silently mix histories.
+Physical wrapper verification must precede file traversal, and the logical headerFault
+check remains required. The received World retains its existing external trust boundary.
+
+**Meta-critique.** The rejected in-place repair passed the join test while destroying
+both reopen paths in the window reproduced at logs/CX-HOST-probe/result.log:3-4.
+Logical offset was mistaken for physical identity. This design follows ROOT's A ruling;
+it does not introduce an adoption record or reinterpret received bases as admitted steps.
+
+**Implementation and reader boundary.** The physical trailer is u64 generation followed
+by a 32-byte checkpoint MAC over a distinct kind prefix, the complete logical bytes,
+and that generation. physicalBaseRead authenticates the logical frame and checks its
+shape stamp before any World decode or identity traversal. physicalHeaderRead is the
+same pure check called by Store.readHeader; success establishes the authenticated
+generation and exact logical start, and mismatches refuse foreignSegment. The logical
+headerFault check remains in place, including the reused-header path.
+
+ROOT's live-tail ruling is A: before Tail.next, one stable base handle supplies eight
+bytes at a fixed distance from its end. A changed generation refuses foreignSegment;
+the caller reopens the RECEIVED base through its existing trust boundary. This metadata
+is unauthenticated and used ONLY to refuse, never to adopt a World. A call racing the
+atomic rename may linearize before it; the next call observes the published generation.
+
+The writer lock excludes concurrent generation allocation. nextGeneration enumerates
+numeric segment identities, including orphan preparations, and exceeds every represented
+generation. This is directory-size work at received-base adoption, not at each record;
+ordinary append/rotation keeps the selected generation. freshGeneration refuses a result
+outside u64. prepareAdoption first reads the existing selected file, so its identity is
+among that enumeration. Adoption retains its logical offset as the run start. Subsequent
+file and memory seals preserve that start; the memory backend models atomic logical base
+publication, while the interruption plant exercises real physical files.
+
+**Proof and vacuity read (CX-HOST).** All nineteen new theorem conclusions were read,
+including the DISJUNCT CHECK: none has a disjunctive conclusion. segmentIdentity_injective
+needs the logical-offset bounds; dropping them permits cross-generation aliasing.
+physicalHeaderRead_ok/foreign constrain the deployed pure reader, not a surrogate.
+nextGeneration_gt/fresh derive freshness from an existing filename; generationFault_moved/
+same specify the actual refusal check. identity_empty/put/body/publish/drop and identity_life
+prove filename/header correspondence by induction from genesis through all writer operation
+kinds; identity_at connects that invariant to selected logical reads. The structural facts
+do not claim every possible filesystem is available or authentic.
+
+adoption_prepared_at/base preserve the old selected image; adoption_allocated_at discharges
+freshness with nextGeneration; adoption_interrupted_opens lifts that preservation through
+the actual segRead/openWith core to the SAME successful Opening, including World and
+position. Its premise is the previous successful open, not success of the interrupted
+one. adoption_published_at shows the opposite boundary: publishing selects the new header.
+The in-place mutation refutes the interrupted-open claim when distinct identity is removed.
+No cryptographic injectivity assumption, axiom, weakened refusal, or new premise on a
+LANDED theorem is introduced. The OS boundary remains durable disjoint-file writes,
+complete directory enumeration under the writer lock, and atomic base replacement.
+Host/Proofs/Seal.lean has no diff: sealed_opens and seal_facts still use LOGICAL readers.
+
+**Flag-day consumers.** Besides all Store creation/open/rotation/adoption paths, the
+OPS Plants header-width and base-peek helpers use the physical codec; generated STORE.md
+and EXITS.md follow the corrected layout and missing-file wording. The HOSTING grain
+test obtains its logical end from the deployed host check STATUS seg_bytes, retaining
+every assertion. It no longer duplicates header sizes or interprets physical filenames as
+logical offsets. ROOT granted these named foreign paths in this host!; no unit behavior
+or OPS predicate changes.
+
+**Measured teeth so far.** The complete file simulation and OPS store-plants read ALL PASS,
+and the exact grain test passed against the candidate binary. The focused adoption control
+is logs/CX-HOST-host71-adoption-green.log:3,5,7,10,12,14,16,18. Actual mutations (whole outputs
+read): inplace-red reproduces both foreignSegment reopens from the original probe;
+identity-red opens the wrong authenticated identity; wrapper-mac-red opens both damaged
+wrappers; live-tail-red returns empty; old-shape-red returns baseCorrupt instead of the
+required pre-decode shapeMismatch; retained-start-red fails selection and later check
+foreignSegment; orphan-generation-red collides with the prepared orphan and fails publication.
+Each is a real nonzero simulator run after a successful build. Restored source and the
+focused control are GREEN. An initial identity mutant's unused-variable compile failure
+was rejected as evidence, corrected, and rerun; no linter was disabled.
+
+**Final hand-check additions.** The memory backend's next ordinary seal also keeps
+the adopted retainedFrom: its real control prints true, the Keep.all-equivalent
+mutation prints false and fails plant-adopt-memory-seal, and restoration passes
+(CX-HOST-host71-memory-seal-red.log / memory-restored-green.log). This is the eighth
+runtime mutation. The full Host proof library/affected executables build (334 jobs);
+host-sim seed 1 ALL PASS; invite/carry/carriedInviteWrongWorld/thin rows at both toy
+and deployed widths ALL PASS; isolated CLI join plants ALL PASS. The named client
+join test passes with ND_LEAN_BIN explicitly set to this candidate's built host
+(CX-HOST-host71-join-candidate.log, one test, 3.07 s). The required post-landing
+confirmation will use the landed binary. The grep control over runtime mutation,
+OPS and grain logs finds only OPS's intentional missing-store IO refusal, not a
+harness error. All source mutations have been restored.

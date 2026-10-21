@@ -47,7 +47,7 @@ open Nanodregg.Host.Sim (segFiles indexFile logical logicalSize writeLogical cop
 
 /-- A deployed segment file's checkpoint header, in bytes (`Host.headerBytes` at the deployed chain
 width, `Keys.ofKey`'s). -/
-def hdr : Nat := headerBytes (Keys.ofKey Codec.Digest.zero shapes)
+def hdr : Nat := physicalHeaderBytes (Keys.ofKey Codec.Digest.zero shapes)
 
 def name : String := "plants"
 
@@ -508,9 +508,14 @@ def missingPlants (exe : String) (intact dir : System.FilePath) : IO Nat := do
   let mut failed := 0
   let want := Status.missing.code.toUInt32
   let indexName := ((← indexFile intact).fileName).getD ""
-  let some (o, _, _) := Base.peek (← IO.FS.readBinFile (basePath intact))
+  let .ok key ← (readKey intact : IO (Except (StoreFault Unit) Codec.Digest))
+    | IO.eprintln "intact: unreadable Store key"; return 1
+  let .ok (generation, logicalBase) := physicalBaseRead (Keys.ofKey key shapes) c
+      (← IO.FS.readBinFile (basePath intact))
+    | IO.eprintln "intact: unreadable physical base"; return 1
+  let some (o, _, _) := Base.peek logicalBase
     | IO.eprintln "intact: base.world names no offset"; return 1
-  let segName := (StorePart.segment o).name
+  let segName := (StorePart.segment (segmentIdentity generation o)).name
   for (label, f) in [("missing-key", "key"), ("missing-base", "base.world"),
       ("missing-index", indexName), ("missing-segment", segName)] do
     let d := dir / label

@@ -1,20 +1,20 @@
 /-
 # Host.Segment — the segment as files, each opened by a checkpoint header (HOST-64; KERNEL-44 Part 2)
 
-    STORE/seg.<o>.log = header ‖ the segment's bytes [o, o + body)
+    logical slice at o = header ‖ the segment's bytes [o, o + body)
+    physical file     = Host.Physical's authenticated generation wrapper around the header, then body
     header            = u64 start ‖ u64 steps ‖ u64 indexCount ‖ u64 prev ‖ tag32 ‖ origin ‖ chain
                         ‖ mac32, the checkpoint sealer (`Keys.checkpoint`) over everything before it
 
 The SEGMENT is one logical byte sequence, exactly the bytes `seg.log` held before the split: the same
 frames, the same tag chain, absolute offsets. Every base, index entry and page names a LOGICAL
-offset; a file holds one slice of it. Its header states where the slice starts (`start`, also the
-file's name), the segment tag there (`tag`, the `prev` of the slice's first frame), the World's
+offset; a file holds one slice of it. Its header states where the slice starts (`start`; the physical filename also includes the base-selected generation), the segment tag there (`tag`, the `prev` of the slice's first frame), the World's
 step count and chain there, how many index entries index the records before it (`indexCount`), the
 genesis chain of the Store's origin (`origin`, the Store's identity, HOST-25), and where the file
 before it starts (`prev`; the first file names itself).
 
 The loop starts a new file exactly where it starts a seal (`Host.Loop.spawnSeal` → `Checkpoint.rotate`),
-so every base sits at the start of its own file and names it by its offset. Genesis writes
+so every base sits at the start of its own file; its logical offset and physical generation name it. Genesis writes
 `seg.0.log` (the origin frame) and the empty file of its base.
 
 The header binds the position as (steps, chain), not the base's digest: the digest exists only once
@@ -24,7 +24,8 @@ digest.
 
 A Store keeps the files from `retainedFrom` (the base names it) on; files before it were DROPPED by a
 retention count (`host serve --retain N`, `Host.Store`). The default keeps everything: `retainedFrom` = 0
-for ever, and the logical segment and index bytes are those of a Store before the split.
+until a received-base adoption begins a new retained run at its logical position. Adoption selects
+a fresh generation atomically and does not add a record to the logical stream (HOST-71).
 -/
 import Host.Base
 

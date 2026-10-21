@@ -34,27 +34,21 @@ use nanodregg_devtools::lean_bin;
 
 const LABEL: &str = "w";
 
-/// A deployed segment file's checkpoint header (HOST-64: four u64, a tag, the origin and the chain
-/// at 32 bytes, the MAC), in bytes.
-const SEG_HEADER: u64 = 4 * 8 + 32 + 2 * 32 + 32;
-
-/// The logical end of a Store's segment (HOST-64): the newest `seg.<o>.log`'s start plus its bytes
-/// after the header. Two Stores holding the same log end at the same offset.
+/// The logical end reported by the deployed reader, including its committed segment identity.
+/// Physical header sizes and filenames are Host's format, never a second codec in this test.
 fn seg_end(store: &Path) -> u64 {
-    fs::read_dir(store)
+    let out = std::process::Command::new(lean_bin("host"))
+        .arg("check")
+        .arg(store)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "host check: {}", both(&out));
+    text(&out)
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("seg_bytes="))
+        .expect("host check reports seg_bytes")
+        .parse()
         .unwrap()
-        .filter_map(|e| {
-            let e = e.unwrap();
-            let name = e.file_name().into_string().ok()?;
-            let start: u64 = name
-                .strip_prefix("seg.")?
-                .strip_suffix(".log")?
-                .parse()
-                .ok()?;
-            Some(start + e.metadata().unwrap().len() - SEG_HEADER)
-        })
-        .max()
-        .expect("a Store holds a segment file")
 }
 
 #[test]

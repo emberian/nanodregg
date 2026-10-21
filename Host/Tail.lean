@@ -70,9 +70,13 @@ def Tail.open (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Codec
 
 /-- What was appended since `t`, absorbed: one read of at most `Log.frameMax c.recordBytesMax`
 bytes at the tail's position (so a call costs O(appended bytes), bounded), every whole frame
-folded. Nothing new: the tail unchanged and no outputs. -/
+folded. A base generation change refuses foreignSegment: reopen the received base under
+the caller's trust boundary. Within the same generation, nothing new leaves the tail unchanged
+with no outputs. The bounded footer read can linearize before a concurrent base rename; the
+next call observes that rename. -/
 def Tail.next (keys : Keys) (c : Cadence) (step : W → ByteArray → Except F (W × O)) (seg : Segs)
     (t : Tail W) : IO (Except (StoreFault F) (Tail W × Array O)) := do
+  if let .error e ← seg.current then return .error e
   let size ← match ← seg.size with
     | .ok n => pure n
     | .error e => return .error e.store

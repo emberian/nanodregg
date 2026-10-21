@@ -183,7 +183,7 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   check s!"{p} fires: the live Store sealed (its base is off genesis) and its tail holds records"
     (0 < live.sealed.offset && 0 < live.opened.records) failures
   let baseCopy ← IO.FS.readBinFile (basePath dir)
-  let segAtCopy ← logical dir (headerBytes keys)
+  let segAtCopy ← logical dir (physicalHeaderBytes keys)
   let rest := if sealFirst then frames.drop 163 else frames.drop 123
   if sealFirst then
     match ← serveDir dir keys cadence seed ((frames.drop 123).take 40) with
@@ -194,7 +194,7 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   match ← follow dir keys cadence with
   | .error e => check s!"{p}: the Store opens before the tear ({e.name})" false failures
   | .ok cur =>
-  let segBefore ← logicalSize dir (headerBytes keys)
+  let segBefore ← logicalSize dir (physicalHeaderBytes keys)
   let idxBefore ← fileSize (← indexFile dir)
   let extra := Log.frame keys.segment cur.pos.tag.bytes
     ((Record.codec dc).bytes [(.turn (mkTurn 77777 0 1024 [77777]), 0)])
@@ -206,12 +206,12 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   let g ← File.open (← indexFile dir) .append
   g.writeAll orphan
   g.sync
-  let segTorn ← logicalSize dir (headerBytes keys)
+  let segTorn ← logicalSize dir (physicalHeaderBytes keys)
   let idxTorn ← fileSize (← indexFile dir)
   check s!"{p} fires: half a frame appended to seg.log and half an entry to index.log, both grew"
     (segBefore = cur.pos.offset && segBefore < segTorn &&
       idxBefore = cur.sealed.index.count * entryBytes keys && idxBefore < idxTorn) failures
-  let tornSeg ← logical dir (headerBytes keys)
+  let tornSeg ← logical dir (physicalHeaderBytes keys)
   let tornIdx ← IO.FS.readBinFile (← indexFile dir)
   -- the restart, scoped: only a Bool leaves it, so the Writer (its handles and lock) is freed here
   let opened ← do
@@ -220,12 +220,12 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   let released ← do
     let h ← File.open (keyPath dir) .read
     h.tryLock
-  let segCut ← logicalSize dir (headerBytes keys)
+  let segCut ← logicalSize dir (physicalHeaderBytes keys)
   let idxCut ← fileSize (← indexFile dir)
   check s!"{p}: the restart opens, cuts seg.log to its valid end and index.log to count · entryBytes, and releases its lock"
     (opened && released && segCut = cur.pos.offset && idxCut = cur.sealed.index.count * entryBytes keys)
     failures
-  let segCutBytes ← logical dir (headerBytes keys)
+  let segCutBytes ← logical dir (physicalHeaderBytes keys)
   let idxCutBytes ← IO.FS.readBinFile (← indexFile dir)
   match ← serveDir dir keys cadence seed rest with
   | .error e => check s!"{p}: the restarted writer serves on ({e})" false failures
@@ -233,7 +233,7 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   check s!"{p} fires: the restarted writer sealed again (its base moved past the copied one)"
     (cur.sealed.offset < r2.sealed.offset) failures
   let idx ← IO.FS.readBinFile (← indexFile dir)
-  let seg ← logical dir (headerBytes keys)
+  let seg ← logical dir (physicalHeaderBytes keys)
   check s!"{p} fires: the later seg.log and index.log are the cuts plus appends, NOT the torn files plus appends"
     (seg.extract 0 segCutBytes.size == segCutBytes && seg.extract 0 tornSeg.size != tornSeg &&
       idx.extract 0 idxCutBytes.size == idxCutBytes && idx.extract 0 tornIdx.size != tornIdx) failures
@@ -245,7 +245,7 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
     IO.FS.writeBinFile (basePath d) baseCopy
     IO.FS.writeBinFile (d / idxName) idx
     copySegs dir d
-    writeLogical d (headerBytes keys) s
+    writeLogical d (physicalHeaderBytes keys) s
   let atLeast : Except Fault (Opening (World Nat)) → Bool
     | .ok o => o.sealed.offset == live.sealed.offset && live.opened.records ≤ o.opened.records
     | .error _ => false
@@ -324,7 +324,7 @@ def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failu
   match ← follow wdir keys wide with
   | .error e => check s!"{p}: the writer Store opens ({e.name})" false failures
   | .ok o =>
-  let seg ← logical wdir (headerBytes keys)
+  let seg ← logical wdir (physicalHeaderBytes keys)
   let idx ← IO.FS.readBinFile (← indexFile wdir)
   -- the writer records pairs in log order (its origin frame first, not a batch)
   let rv := Log.recover keys.segment wide.recordBytesMax segmentInitial seg
@@ -372,7 +372,7 @@ def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failu
   let gdir := root / "greedy"
   let _ ← (Host.genesis gdir key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
   check s!"{q} fires: the one page holds {pairs.length} pairs, more than recordTurnsMax" (recordTurnsMax < pairs.length) failures
-  let before ← logicalSize gdir (headerBytes keys)
+  let before ← logicalSize gdir (physicalHeaderBytes keys)
   let res ← do
     match ← (openWriter gdir keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
     | .error e => pure (Except.error s!"open {e.name}")
@@ -380,7 +380,7 @@ def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failu
       let x ← followAppend gdir keys fwr fwr.opening.resident pairs
       fwr.hold
       pure x
-  let after ← logicalSize gdir (headerBytes keys)
+  let after ← logicalSize gdir (physicalHeaderBytes keys)
   check s!"{q}: the follower append refuses `recordTooLarge` and writes nothing ({match res with | .ok _ => "appended" | .error e => e}, seg.log {before} -> {after})"
     ((match res with | .error e => e = "recordTooLarge" | .ok _ => false) && before = after) failures
   let re ← follow gdir keys wide
@@ -411,7 +411,7 @@ def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
     let staged := #[pair n]
     let size := (Record.encode dc staged).map (·.size)
     check s!"{p}{tag} fires: the record is {size} bytes, want {n} (the derived bound is {bound}, the deployed cadence's {wide.recordBytesMax})" (size == some n) failures
-    let before ← logicalSize dir (headerBytes keys)
+    let before ← logicalSize dir (physicalHeaderBytes keys)
     let res ← do
       match ← (openWriter dir keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
       | .error e => pure (Except.error s!"open {e.name}")
@@ -421,7 +421,7 @@ def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
           wide (fileStore fwr) r r.world staged
         fwr.hold
         pure (match x with | .error e => Except.error e.name | .ok _ => Except.ok ())
-    let after ← logicalSize dir (headerBytes keys)
+    let after ← logicalSize dir (physicalHeaderBytes keys)
     let shown := match res with | .ok () => "appended" | .error e => e
     if tag == "" then
       check s!"{p}: the append refuses `recordTooLarge` and writes nothing ({shown}, seg.log {before} -> {after})"
@@ -433,17 +433,17 @@ def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
   for (tag, n, want) in [("", bound + 1, "corrupt"), ("-control", bound, "record")] do
     let dir := root / s!"reader{tag}"
     let _ ← (Host.genesis dir key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
-    let seg ← logical dir (headerBytes keys)
+    let seg ← logical dir (physicalHeaderBytes keys)
     -- every frame ends with its tag: the tag the next frame chains from is the segment's last 32 bytes
     let prev := seg.extract (seg.size - Log.tagBytes) seg.size
     let fr := Log.frame keys.segment prev (ByteArray.mk (Array.replicate n 255))
     let f ← File.open (← newestSeg dir) .append
     f.writeAll fr
     f.sync
-    let before ← logicalSize dir (headerBytes keys)
+    let before ← logicalSize dir (physicalHeaderBytes keys)
     check s!"{q}{tag} fires: the appended frame is {fr.size} bytes over a {n}-byte record" (before == seg.size + Log.frameMax n) failures
     let opened ← (openWriter dir keys wide world recorder.mark originChain foldStep : IO (Except Fault _))
-    let after ← logicalSize dir (headerBytes keys)
+    let after ← logicalSize dir (physicalHeaderBytes keys)
     let name := match opened with | .ok _ => "opened" | .error e => e.name
     check s!"{q}{tag}: a verifying frame of a {n}-byte record is refused `{want}` and the file is unchanged ({name}, seg.log {before} -> {after})"
       (name == want && before == after) failures
@@ -514,18 +514,18 @@ def emptyPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
   let p := "plant-empty-record"
   let dir := root / "reader"
   let _ ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
-  let seg ← logical dir (headerBytes keys)
+  let seg ← logical dir (physicalHeaderBytes keys)
   let prev := seg.extract (seg.size - Log.tagBytes) seg.size
   let rec0 := (Record.codec dc).bytes []
   let f ← File.open (← newestSeg dir) .append
   f.writeAll (Log.frame keys.segment prev rec0)
   f.sync
-  let before ← logicalSize dir (headerBytes keys)
+  let before ← logicalSize dir (physicalHeaderBytes keys)
   check s!"{p} fires: a verifying frame of the {rec0.size}-byte record of no steps follows the genesis base ({seg.size} -> {before})"
     (before == seg.size + Log.frameMax rec0.size) failures
   let o ← follow dir keys cadence
   let w ← (openWriter dir keys cadence world recorder.mark originChain foldStep : IO (Except Fault _))
-  let after ← logicalSize dir (headerBytes keys)
+  let after ← logicalSize dir (physicalHeaderBytes keys)
   let isEmpty {α : Type} : Except Fault α → Bool
     | .error (.log (.record 0 f)) => f.name == "emptyRecord"
     | _ => false
@@ -554,7 +554,7 @@ def emptyPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
       ("-control", #[(.turn (mkTurn 4242 0 1024 [4242]), 0)])] do
     let dir := root / s!"writer{tag}"
     let _ ← (Host.genesis dir key keys cadence world recorder.mark Sim.genesis : IO (Except Fault Unit))
-    let before ← logicalSize dir (headerBytes keys)
+    let before ← logicalSize dir (physicalHeaderBytes keys)
     let res ← do
       match ← (openWriter dir keys cadence world recorder.mark originChain foldStep : IO (Except Fault _)) with
       | .error e => pure (Except.error s!"open {e.name}")
@@ -566,7 +566,7 @@ def emptyPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
         pure (match x with
           | .error e => Except.error e.name
           | .ok r' => Except.ok (r'.pos.offset == r.pos.offset && r'.index.size == r.index.size))
-    let after ← logicalSize dir (headerBytes keys)
+    let after ← logicalSize dir (physicalHeaderBytes keys)
     let shownR := match res with | .ok b => s!"appended, resident unchanged={b}" | .error e => e
     if tag == "" then
       check s!"{p}-writer: the append of an empty batch writes nothing and leaves the resident unchanged ({shownR}, seg.log {before} -> {after})"
@@ -625,7 +625,7 @@ def checkKept (dir : System.FilePath) (keys : Keys) :
 def keptPage (dir : System.FilePath) (keys : Keys) (o : Opening (World Nat)) (fs : Files) (start : Nat) :
     IO (Except Page.Fault Page.Acc) := do
   let files : PageFiles := ⟨dir, keys, originChain o.opened.world, ← IO.mkRef (fs.retainedFrom, fs.indexFrom),
-    ← IO.mkRef #[o.sealed.offset]⟩
+    ← IO.mkRef #[o.sealed.offset], ← IO.mkRef fs.generation⟩
   let (k0, read, readIndex) ← files.readers
   Page.kept env dc digestOf keys.segment cadence.recordBytesMax Page.budget k0 read
     (Page.entryAt (keys.forStore (originChain o.opened.world)) readIndex o.sealed.index.count o.index)
@@ -639,8 +639,8 @@ def oldestHeaderIndexPlant (root src : System.FilePath) (keys : Keys) (oldest : 
     copyStore src d
     let path := segPath d oldest.start
     let bytes ← IO.FS.readBinFile path
-    IO.FS.writeBinFile path (Header.bytes keys { oldest with indexCount := count } ++
-      bytes.extract (headerBytes keys) bytes.size)
+    IO.FS.writeBinFile path (physicalHeader keys 0 { oldest with indexCount := count } ++
+      bytes.extract (physicalHeaderBytes keys) bytes.size)
     let opened := match ← follow d keys cadence with | .ok _ => "opened" | .error f => f.name
     let checked := match ← checkKept d keys with | .ok _ => "checked" | .error f => f
     IO.println s!"oldest-header-index-{tag}: count={count} indexFrom={indexFrom} oldest={oldest.start} base={baseOffset} open={opened} check={checked}"
@@ -703,7 +703,7 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
   | _, .error e => check s!"plant-retain-two: the kept Store passes the check ({e})" false failures
   | .ok (oa, fsa, ha, _), .ok (ob, fsb, hb, _) =>
   oldestHeaderIndexPlant root two keys hb fsb.indexFrom ob.sealed.offset failures
-  let la ← logical all (headerBytes keys)
+  let la ← logical all (physicalHeaderBytes keys)
   let rv := Log.recover keys.segment cadence.recordBytesMax segmentInitial la
   check s!"plant-retain-all: every file kept from seg.0.log, the logical segment a clean seg.log from segmentInitial with the origin frame first, index.0.log, checked from 0"
     ((fa[0]?.map (·.1)) == some 0 && fsa.retainedFrom == 0 && fsa.indexFrom == 0 && ha.start == 0 &&
@@ -714,7 +714,7 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
     (fb.size == retainFloor && (fb[0]?.map (·.1)) == some fsb.retainedFrom && 0 < fsb.retainedFrom &&
       0 < fsb.indexFrom && hb.start == fsb.retainedFrom && 0 < hb.steps &&
       ((fb.back?.map (·.1)) == some ob.sealed.offset)) failures
-  let lb ← logical two (headerBytes keys)
+  let lb ← logical two (physicalHeaderBytes keys)
   let ia ← IO.FS.readBinFile (← indexFile all)
   let ib ← IO.FS.readBinFile (← indexFile two)
   let eb := entryBytes keys
@@ -751,7 +751,7 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
     copyStore all d
     let f := segPath d oa.sealed.offset
     let b ← IO.FS.readBinFile f
-    IO.FS.writeBinFile f (hb' ++ b.extract (headerBytes keys) b.size)
+    IO.FS.writeBinFile f (physicalPack keys "header-identity" 0 hb' ++ b.extract (physicalHeaderBytes keys) b.size)
     let got := match ← follow d keys cadence with | .ok _ => "opened" | .error e => e.name
     check s!"plant-header-{tag}: the base's own file's header {if tag == "control" then "as written opens" else s!"is refused `{want}`"} ({got})"
       (got == want) failures
@@ -761,7 +761,7 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
   copyStore all d0
   let f0 := segPath d0 0
   let b0 ← IO.FS.readBinFile f0
-  IO.FS.writeBinFile f0 (flipByte b0 (headerBytes keys + 5))
+  IO.FS.writeBinFile f0 (flipByte b0 (physicalHeaderBytes keys + 5))
   let opened := match ← follow d0 keys cadence with | .ok _ => "opened" | .error e => e.name
   let checked ← match ← checkKept d0 keys with | .ok _ => pure "checked" | .error e => pure e
   check s!"plant-origin-frame: a byte flipped in the origin frame's record (seg.0.log): the open never reads it ({opened}), the check refuses `corrupt history` ({checked})"
@@ -810,7 +810,9 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
   -- the honest `indexFrom` opens and checks.
   let k0 := fsb.indexFrom
   let mut fromOff : String × String × String := ("unforged", "unforged", "unforged")
-  match Base.read keys cadence world (← IO.FS.readBinFile (basePath two)) with
+  let physical ← IO.FS.readBinFile (basePath two)
+  let file := (physicalBaseRead keys cadence physical).toOption.map Prod.snd |>.getD ByteArray.empty
+  match Base.read keys cadence world file with
   | .error _ => pure ()
   | .ok (b, _, _) =>
     let reseal (d : System.FilePath) (k : Nat) : IO String := do
@@ -818,7 +820,7 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
       match Base.file keys cadence world b.world ⟨b.offset, b.tag⟩ ⟨b.indexCount, b.indexLast⟩ ⟨b.retainedFrom, k⟩ with
       | .error f => return f.name
       | .ok file =>
-        IO.FS.writeBinFile (basePath d) file
+        IO.FS.writeBinFile (basePath d) (physicalPack keys "base-identity" 0 file)
         if k ≠ k0 then IO.FS.rename (indexPathAt d k0) (indexPathAt d k)
         return "resealed"
     let dOff := root / "index-from-off"
@@ -898,7 +900,7 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
   let fs3 ← segFiles d3
   match fs3.toList.map (·.1) with
   | a :: b :: cc :: _ =>
-    let segs : Segs := ⟨d3, keys, originChain oa.opened.world, ← IO.mkRef #[a, b, cc], 0⟩
+    let segs : Segs := ⟨d3, keys, originChain oa.opened.world, ← IO.mkRef #[a, b, cc], 0, 0⟩
     IO.FS.removeFile (segPath d3 a)
     let sized ← match ← segs.size with | .ok n => pure s!"size {n}" | .error e => pure e.text
     let got : String ← try
@@ -909,6 +911,147 @@ def checkpointPlants (root : System.FilePath) (key : Digest) (keys : Keys) (seed
     check s!"plant-segs-dropped: a Segs knowing files {a}, {b}, {cc} with seg.{a}.log unlinked: `size` passes ({sized}), a read beginning in the unlinked file is refused `missing seg.{a}.log` ({got})"
       (sized.startsWith "size " && got == s!"missing seg.{a}.log") failures
   | _ => check s!"plant-segs-dropped: the full Store has at least three segment files ({fs3.size})" false failures
+
+/-- HOST-71: the interruption found by the real CX-HOST-probe/result.log:3-4 must
+now reopen the previous base. The same prepared header is invisible until base publication.
+Observed control names: logs/CX-HOST-host71-adoption-green.log:3,5,7,10,12,14,16,18.
+The mutation logs record the actual refusals/accepts, not synthesized expected stdout. -/
+def adoptionPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures : IO.Ref Nat) : IO Unit := do
+  let src := root / "source"
+  let dst := root / "adopter"
+  for d in [src, dst] do
+    let g ← (Host.genesis d key keys wide world recorder.mark Sim.genesis : IO (Except Fault Unit))
+    check s!"adopt genesis {d}: {match g with | .ok _ => "ok" | .error e => e.name}" g.isOk failures
+  -- An actual pre-HOST-71 shape and unwrapped base: refuse before any segment/header decode.
+  let oldLayout := "host/segment/header/v1: u64 start, u64 steps, u64 indexCount, u64 prev, tag32, origin, chain, mac32 under the checkpoint sealer"
+  let oldStamp := Hash.digest domShapes ((Tag.of "host/base" (Base.codec world)).bytes ++
+    (Tag.of "host/batch" (Record.codec dc)).bytes ++ entryLayout.toUTF8 ++ oldLayout.toUTF8)
+  let oldKeys := { keys with shapes := oldStamp }
+  let oldDir := root / "old-shape"
+  copyStore dst oldDir
+  match genesisImage oldKeys wide world recorder.mark Sim.genesis with
+  | .error e => check s!"old Store encoding {e.name}" false failures
+  | .ok img =>
+    IO.FS.writeBinFile (basePath oldDir) img.base
+    IO.FS.writeBinFile (segPath oldDir 0) (img.header0 ++ img.segment)
+    IO.FS.writeBinFile (segPath oldDir img.segment.size) img.header
+    let result ← follow oldDir keys wide
+    let name := match result with | .error e => e.name | .ok _ => "opened"
+    IO.println s!"old Store open: {name}"
+    check s!"plant-old-store-shape: {name}" (name == "shapeMismatch") failures
+  let frames := (List.range 20).map fun i => submitFrame i (.turn (mkTurn (1000+i) 0 1024 [5000+i]))
+  let target ← match ← serveDir src keys wide 1 frames with
+    | .error e => check s!"adopt source {e}" false failures; return
+    | .ok (r, _) => pure r.world
+  -- The logical memory backend preserves the same retained run through the next seal.
+  match memGenesis keys wide world recorder.mark originChain foldStep Sim.genesis with
+  | .error e => check s!"adopt memory genesis {e.name}" false failures
+  | .ok (disk, bases, resident) =>
+    let disk ← IO.mkRef disk
+    let bases ← IO.mkRef bases
+    let ck := memCheckpoint disk bases keys wide world recorder.mark originChain
+    let adopted ← ck.adopt resident.world target resident.pos
+    let sealed ← ck.write target resident.pos #[] indexStart
+    let selected := Base.peek (← bases.get).file
+    let kept := selected.map (fun (_, rf, k0) => rf == resident.pos.offset && k0 == 0) |>.getD false
+    IO.println s!"adopt memory seal keeps run start: {kept}"
+    check "plant-adopt-memory-seal: later seal preserves the received run start"
+      (adopted.isOk && sealed.isOk && kept) failures
+  let oldBase ← IO.FS.readBinFile (basePath dst)
+  let oldSegments ← snapshot dst
+  let prepared ← do
+    match ← (openWriter dst keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
+    | .error e => pure (.error (.io e.text) : Except SealFault (Nat × ByteArray × IndexAt))
+    | .ok wr =>
+      let result ← prepareAdoption dst keys wide world recorder.mark originChain wr
+        wr.opening.opened.world target wr.opening.pos
+      wr.hold
+      pure result
+  let (g, _, _) ← match prepared with
+    | .error e => check s!"adopt prepare {e.name}" false failures; return
+    | .ok x => pure x
+  let follower ← follow dst keys wide
+  let reopened ← do
+    match ← (openWriter dst keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
+    | .error e => pure (.error e : Except Fault Nat)
+    | .ok wr => wr.hold; pure (.ok wr.opening.opened.world.steps)
+  let unchanged ← oldSegments.allM fun (n, b) => return (← IO.FS.readBinFile (dst / n)) == b
+  IO.println s!"adopt interruption generation={g} follower={match follower with | .ok o => s!"opened {o.opened.world.steps}" | .error e => e.name} writer={match reopened with | .ok n => s!"opened {n}" | .error e => e.name}"
+  check "plant-adopt-interruption: prepared identity leaves every previous file intact and both opens at the previous base"
+    (unchanged && (match follower with | .ok o => world.bytes o.opened.world == world.bytes Sim.genesis | _ => false) &&
+      (match reopened with | .ok n => n == Sim.genesis.steps | _ => false)) failures
+  let tailStep : World Nat → ByteArray → Except (Record.Fault (Reject Nat)) (World Nat × Unit) :=
+    fun w r => (foldStep w r).map fun w' => (w', ())
+  let live ← Tail.open dst keys wide world recorder.mark originChain tailStep
+  let adopted ← do
+    match ← (openWriter dst keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
+    | .error e => pure (.error (.io e.text) : Except SealFault Nat)
+    | .ok wr =>
+      let ck := fileCheckpoint dst keys wide world recorder.mark originChain wr false
+      match ← ck.adopt wr.opening.opened.world target wr.opening.pos with
+      | .error e => wr.hold; pure (.error e)
+      | .ok _ => let generation ← wr.generation.get; wr.hold; pure (.ok generation)
+  let generation ← match adopted with
+    | .error e => check s!"adopt publish {e.name}" false failures; return
+    | .ok g' => pure g'
+  match live with
+  | .error e => check s!"adopt live tail open {e.name}" false failures
+  | .ok (t, seg) =>
+    let result ← Tail.next keys wide tailStep seg t
+    let name := match result with
+      | .error e => e.name
+      | .ok (_, os) => if os.isEmpty then "empty" else "records"
+    IO.println s!"adopt live tail: {name}"
+    check s!"plant-adopt-live-tail: {name}" (name == "foreignSegment") failures
+  let opened ← openAt dst keys wide world recorder.mark originChain foldStep
+  let (o, fs) ← match opened with
+    | .error e => check s!"adopt open {e.name}" false failures; return
+    | .ok x => pure x
+  check "plant-adopt-selected: atomic base selects a new identity beyond the orphan, retaining the adopted run start"
+    (g < generation && fs.generation == generation && fs.retainedFrom == o.pos.offset &&
+      fs.indexFrom == 0 && world.bytes o.opened.world == world.bytes target && oldBase != (← IO.FS.readBinFile (basePath dst))) failures
+  -- Flip only the OUTER physical wrapper tag; the logical base/header still verify.
+  for (label, part, expected) in [("base-wrapper", StorePart.base, "baseCorrupt"),
+      ("header-wrapper", StorePart.segment (segmentIdentity generation o.sealed.offset), "checkpointCorrupt")] do
+    let d := root / label
+    copyStore dst d
+    let path := part.path d
+    let bytes ← IO.FS.readBinFile path
+    let at_ := bytes.size - 1
+    let changed := bytes.extract 0 at_ ++ ByteArray.mk #[bytes[at_]! ^^^ 1]
+    IO.FS.writeBinFile path changed
+    let result ← follow d keys wide
+    let name := match result with | .error e => e.name | .ok _ => "opened"
+    IO.println s!"adopt {label}: {name}"
+    check s!"plant-adopt-{label}: {name}" (name == expected) failures
+  let missing := root / "missing-identity"
+  copyStore dst missing
+  let id := segmentIdentity generation o.sealed.offset
+  IO.FS.removeFile (segPath missing id)
+  let miss ← follow missing keys wide
+  let name := match miss with | .error e => e.text | .ok _ => "opened"
+  IO.println s!"adopt missing identity: {name}"
+  check s!"plant-adopt-missing-identity: {name}" (name == s!"missing seg.{id}.log") failures
+  let wrong := root / "wrong-identity"
+  copyStore dst wrong
+  match ← readHeader dst keys o.sealed.offset generation with
+  | .error e => check s!"adopt header {e.text}" false failures
+  | .ok (h, _, _) =>
+    IO.FS.writeBinFile (segPath wrong id) (physicalHeader keys (generation + 1) h)
+    let result ← follow wrong keys wide
+    let name := match result with | .error e => e.name | .ok _ => "opened"
+    IO.println s!"adopt wrong identity: {name}"
+    check s!"plant-adopt-wrong-identity: {name}" (name == "foreignSegment") failures
+  match ← serveDir dst keys wide 2 [submitFrame 99 (.turn (mkTurn 99999 0 1024 [99999]))] with
+  | .error e => check s!"adopt append {e}" false failures
+  | .ok (r, _) =>
+    match ← openAt dst keys wide world recorder.mark originChain foldStep with
+    | .error e => check s!"adopt append reopen {e.name}" false failures
+    | .ok (after, fs) =>
+      let clean ← Check.keptClean dst keys wide.recordBytesMax (originChain target) after fs
+      IO.println s!"adopt append check: {match clean with | .ok _ => "checked" | .error (_, e) => e}"
+      check "plant-adopt-append-check: subsequent records begin at the adopted steps and check from its header"
+        (target.steps < r.world.steps && world.bytes after.opened.world == world.bytes r.world && clean.isOk) failures
 
 def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : IO UInt32 := do
   let failures ← IO.mkRef 0
@@ -937,11 +1080,11 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
       let f ← File.open (← newestSeg dir) .append
       f.writeAll half
       f.sync
-      let before ← logicalSize dir (headerBytes keys)
+      let before ← logicalSize dir (physicalHeaderBytes keys)
       match ← follow dir keys cadence with
       | .error e => check s!"plant-crash-mid-seal: follower opens ({e.name})" false failures
       | .ok o =>
-        let after ← logicalSize dir (headerBytes keys)
+        let after ← logicalSize dir (physicalHeaderBytes keys)
         check "plant-crash-mid-seal: follower sees the torn tail and truncates nothing"
           (o.opened.torn = half.size ∧ before = after ∧
             sameWorld o.opened.world r.world) failures
@@ -954,7 +1097,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
       | .ok (r2, _) =>
         check "plant-crash-mid-seal: writer truncated the tail, ignored the tmp, served on, through the deployed channelPort in rounds of 5 with frames put back, one reply per request"
           (r.world.height < r2.world.height) failures
-        let size ← logicalSize dir (headerBytes keys)
+        let size ← logicalSize dir (physicalHeaderBytes keys)
         let reopened ← follow dir keys cadence
         check "reopen after the crash is clean and reaches the loop's World"
           (match reopened with
@@ -968,7 +1111,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
     match ← serveDir dir keys still seed (frames.take 60) with
     | .error e => check s!"plant-foreign-frame: serve ({e})" false failures
     | .ok _ =>
-      let seg ← logical dir (headerBytes keys)
+      let seg ← logical dir (physicalHeaderBytes keys)
       let rv := Log.recover keys.segment still.recordBytesMax segmentInitial seg
       match rv.records with
       | o0 :: r1 :: _ :: _ :: _ =>
@@ -976,7 +1119,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
         let cut := frameSize o0
         let foreign := Log.frame (fileKeys (← newKey)).segment segmentInitial r1
         let spliced := seg.extract 0 cut ++ foreign ++ seg.extract (cut + foreign.size) seg.size
-        writeLogical dir (headerBytes keys) spliced
+        writeLogical dir (physicalHeaderBytes keys) spliced
         check "plant-foreign-frame: a frame under another key is refused `corrupt`"
           (match ← follow dir keys still with | .error f => f.name = "corrupt" | _ => false) failures
       | _ => check "plant-foreign-frame: at least three frames" false failures
@@ -995,15 +1138,15 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
       match ← serveDir dir2 keys2 still seed (frames.take 30) with
       | .error e => check s!"plant-foreign-segment: the other Store serves ({e})" false failures
       | .ok _ =>
-        let mine ← logical dir (headerBytes keys)
-        let theirs ← logical dir2 (headerBytes keys2)
+        let mine ← logical dir (physicalHeaderBytes keys)
+        let theirs ← logical dir2 (physicalHeaderBytes keys2)
         removeSegs dir
         copySegs dir2 dir
-        let before ← logicalSize dir (headerBytes keys)
+        let before ← logicalSize dir (physicalHeaderBytes keys)
         check "plant-foreign-segment fires: the copied segment is another Store's (longer, other bytes)"
           (mine.size < theirs.size && mine != theirs.extract 0 mine.size) failures
         let opened ← (openWriter dir keys still world recorder.mark originChain foldStep : IO (Except Fault _))
-        let after ← logicalSize dir (headerBytes keys)
+        let after ← logicalSize dir (physicalHeaderBytes keys)
         check s!"plant-foreign-segment: the writer refuses `checkpointCorrupt` and the files are unchanged ({match opened with | .error f => f.name | .ok _ => "opened"})"
           ((match opened with | .error f => f.name = "checkpointCorrupt" | .ok _ => false) && before = after) failures
   missingPlants (dirB / "missing") key keys failures
@@ -1014,6 +1157,7 @@ def body (seed : Nat) (dirA dirB : System.FilePath) (control : Bool := false) : 
   budgetPlants failures
   positionPlant (dirB / "position") key keys failures
   checkpointPlants (dirB / "checkpoint") key keys seed frames failures
+  adoptionPlants (dirB / "adoption") key keys failures
   if control then check "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false failures
   let n ← failures.get
   IO.println (if n = 0 then "ALL PASS" else s!"{n} FAILED")
@@ -1026,18 +1170,27 @@ def run (args : List String) : IO UInt32 := do
   -- `--harness-control` (GATES-15): one check nothing meets, inside the ordinary run. Any other
   -- argument that is not `SEED [DIR]` is refused, never read as seed 1 or as a directory.
   let control := args.contains "--harness-control"
-  let (some seed, root) := (match args.filter (· != "--harness-control") with
+  let adoptionOnly := args.contains "--adoption-only"
+  let (some seed, root) := (match args.filter (fun a => a != "--harness-control" && a != "--adoption-only") with
       | [] => (some 1, ".lake/host-file-sim")
       | [s] => (s.toNat?, ".lake/host-file-sim")
       | [s, d] => (s.toNat?, d)
       | _ => (none, ""))
-    | IO.eprintln s!"usage: host-file-sim [SEED [DIR]] [--harness-control] (got {args})"; return 2
+    | IO.eprintln s!"usage: host-file-sim [SEED [DIR]] [--adoption-only] [--harness-control] (got {args})"; return 2
   let root : System.FilePath := root
   let runDir := root / s!"run-{seed}-{← IO.rand 0 (1 <<< 30)}"
   if ← runDir.pathExists then
     IO.eprintln s!"refused exists {runDir}"; return 2
   IO.FS.createDirAll runDir
-  try body seed (runDir / "a") (runDir / "b") control
+  try
+    if adoptionOnly then
+      let failures ← IO.mkRef 0
+      let key ← newKey
+      adoptionPlants runDir key (fileKeys key) failures
+      if control then check "harness-control" false failures
+      if (← failures.get) = 0 then IO.println "ALL PASS"; return (0 : UInt32)
+      else return (1 : UInt32)
+    else body seed (runDir / "a") (runDir / "b") control
   finally IO.FS.removeDirAll runDir
 
 end Nanodregg.Host.Sim.File

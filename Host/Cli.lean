@@ -378,7 +378,7 @@ def serveVerb (store : String) (retain : Retain) : IO UInt32 := do
     | .error f => refuseStore f
     | .ok wr => serving do
       let files : PageFiles := ⟨store, keys, originChain wr.opening.opened.world, wr.kept,
-        ← IO.mkRef #[wr.opening.sealed.offset]⟩
+        ← IO.mkRef #[wr.opening.sealed.offset], wr.generation⟩
       let code ← runResident "serve" wr.opening.resident fun port =>
         restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark originChain wr) c
             (fileStore wr) (pager keys files) port limits fuelBatches)

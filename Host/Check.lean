@@ -144,7 +144,7 @@ the kept files (`Page.kept`: `checkpointed` below them). -/
 def chainAt (store : System.FilePath) (k : Kept) (h : Nat) : IO (Except Page.Fault ByteArray) := do
   let o := k.opening
   let files : PageFiles := ⟨store, k.keys, originChain o.opened.world,
-    ← IO.mkRef (k.files.retainedFrom, k.files.indexFrom), ← IO.mkRef #[o.sealed.offset]⟩
+    ← IO.mkRef (k.files.retainedFrom, k.files.indexFrom), ← IO.mkRef #[o.sealed.offset], ← IO.mkRef k.files.generation⟩
   let (k0, read, readIndex) ← files.readers
   -- budget 0: the page holds no event, so its chain is the chain AT step `h`
   let r ← Page.kept X.env Codec.Deployed.digestCodec X.digestOf k.keys.segment c.recordBytesMax 0 k0 read
@@ -164,7 +164,7 @@ where it starts (`foreignSegment`), and the walk ending exactly at `retainedFrom
 counting `indexFrom` entries (`indexCorrupt from`). The oldest kept header. -/
 def keptHeaders (store : System.FilePath) (keys : Keys) (origin : ByteArray) (baseOffset : Nat) (fs : Files) :
     IO (Except (Status × String) Header) := do
-  match ← filesBack store keys baseOffset fs.retainedFrom with
+  match ← filesBack store keys baseOffset fs.retainedFrom fs.generation with
   | .error e => return .error ((e.store : StoreFault Unit).status, e.text)
   | .ok hs =>
     let some (oldest, ho) := hs.getLast? | return .error (.corrupt, "corrupt history")
@@ -172,7 +172,7 @@ def keptHeaders (store : System.FilePath) (keys : Keys) (origin : ByteArray) (ba
     for (s, h) in hs do
       unless h.origin = origin do return .error (.foreignOrigin, "foreignOrigin")
       if s ≠ oldest then
-        let body ← match ← readHeader store keys h.prev with
+        let body ← match ← readHeader store keys h.prev fs.generation with
           | .ok (_, _, b) => pure b
           | .error e => return .error ((e.store : StoreFault Unit).status, e.text)
         if h.prev + body < s then return .error (.segmentShort, "segmentShort")

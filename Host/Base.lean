@@ -110,7 +110,7 @@ def Base.codec {W : Type} (world : Stream W) : Stream (Base W) :=
 /-- The layout of a segment file's checkpoint header (`Host.Segment`), as a version the shape stamp
 covers: fixed-width bytes, not a CODEC stream, so its layout enters the stamp by name (HOST-64). -/
 def headerLayout : String :=
-  "host/segment/header/v1: u64 start, u64 steps, u64 indexCount, u64 prev, tag32, origin, chain, mac32 under the checkpoint sealer"
+  "host/segment/header/v2: physical base and header append u64 generation and domain-separated mac32; identity = generation*2^64+start; logical u64 start, u64 steps, u64 indexCount, u64 prev, tag32, origin, chain, mac32 under the checkpoint sealer"
 
 /-- The domain of the shape stamp. -/
 def domShapes : String := "nanodregg/host/shapes/v1"
@@ -404,7 +404,7 @@ structure StoreFile where
 /-- A file every Store directory holds (a row of `Store.layout`, `base.tmp` aside). -/
 inductive StorePart where
   | key
-  /-- the segment file starting at logical offset `start` (HOST-64) -/
+  /-- the segment file with physical identity `start` (HOST-71); its header names the logical offset -/
   | segment (start : Nat)
   /-- the index file holding entries from `k0` (HOST-64) -/
   | index (k0 : Nat)
@@ -419,7 +419,7 @@ def StorePart.name : StorePart → String
   | .base => "base.world"
 
 /-- The file's FAMILY as the layout and the runbook name it: a segment file is `seg.<o>.log` whatever
-its start, an index file `index.<k0>.log`. -/
+its physical identity, an index file `index.<k0>.log`. -/
 def StorePart.pattern : StorePart → String
   | .key => "key"
   | .segment _ => "seg.<o>.log"
@@ -427,21 +427,21 @@ def StorePart.pattern : StorePart → String
   | .base => "base.world"
 
 /-- One part of each family, in the order the open checks them (a check over a family names its
-member at the place: `missing seg.<o>.log` with the start). -/
+member at the place: `missing seg.<o>.log` with the physical identity). -/
 def StorePart.families : List StorePart := [.key, .segment 0, .index 0, .base]
 
 namespace Store
 
 /-- Every file of a Store directory, in the order genesis writes them (a pattern names a family:
-`<o>` a segment file's logical start, `<k0>` the first index entry the base keeps). A seal appends its
+`<o>` a segment file's physical identity, `<k0>` the first index entry the base keeps). A seal appends its
 entries to the index file and syncs them before `base.tmp` is renamed over `base.world`; a batch is
 appended to the newest segment file and synced before it is answered; a seal starts a new segment
 file first (HOST-64). -/
 def layout : List StoreFile :=
   [⟨StorePart.key.name, .once, "32 bytes, mode 0600: the integrity-at-rest key (HOST-16); its read handle is flock'd, the writer lock"⟩,
-   ⟨(StorePart.segment 0).pattern, .appendOnly, "a checkpoint header (Host.Segment), then the frames (Host.Log) from logical offset o: one batch record per frame; one file per seal start, from genesis's seg.0.log (the origin frame); only the newest is appended to; the files before the base's retainedFrom are dropped (--retain)"⟩,
+   ⟨(StorePart.segment 0).pattern, .appendOnly, "an authenticated physical header (Host.Physical), then frames (Host.Log) from the header's logical start; o is generation * 2^64 + start, not a logical offset; the atomic base selects the generation; only its newest file is appended to; adoption creates a fresh generation without replacing old headers; retention drops files before retainedFrom in the selected generation"⟩,
    ⟨(StorePart.index 0).pattern, .appendOnly, "fixed-width keyed entries k0, k0+1, ..., one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33); k0 is the base's indexFrom, 0 unless a drop moved it"⟩,
-   ⟨StorePart.base.name, .replaced, "the newest sealed base: the World, the segment position after it (its own file's start), how many index entries it counts with the last one's tag, and what it keeps (retainedFrom, indexFrom)"⟩,
+   ⟨StorePart.base.name, .replaced, "the newest sealed base: the World, logical segment position, index count and last tag, retainedFrom and indexFrom, plus the authenticated generation selecting its physical segment files; the complete base is published atomically"⟩,
    ⟨"base.tmp", .transient, "a base being installed; a crash may leave one, which no open reads"⟩,
    ⟨"seg.tmp", .transient, "a segment file being started; a crash may leave one, which no open reads"⟩,
    ⟨"index.tmp", .transient, "a kept index being written by a drop; a crash may leave one, which no open reads"⟩]

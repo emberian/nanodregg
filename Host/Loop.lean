@@ -111,6 +111,9 @@ structure Checkpoint (W : Type) where
   already, it is reused only if its header passes `headerFault` at that place, else `positionUnfit` -/
   rotate : W → Position → Nat → IO (Except SealFault Unit)
   async : Bool
+  /-- Received-base adoption, atomically selecting a fresh physical identity. -/
+  adopt : W → W → Position → IO (Except SealFault (Nat × ByteArray × IndexAt)) :=
+    fun _ _ pos => pure (.error (.positionUnfit pos.offset))
 
 /-- How the loop writes a batch record and indexes it: the record of the staged entries (each step
 with the roots digest after it, HOST-29, KERNEL-47) given the World after them, and the log

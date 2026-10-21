@@ -64,6 +64,25 @@ header the file a seal starts would open with (HOST-64), after the bytes synced 
 def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys : Keys) (c : Cadence)
     (world : Codec.Stream W) (mark : W → Nat × ByteArray) (origin : W → ByteArray) : Checkpoint W where
   async := false
+  adopt old w pos := do
+    let b ← bases.get
+    let d ← disk.get
+    unless b.index.isEmpty ∧ d.synced.size = pos.offset ∧ origin old = origin w ∧
+        pos.offset = frameSize (origin old) do return .error (.positionUnfit pos.offset)
+    if (headerFault keys (headerOf b.headers b.file) (origin old) pos.offset pos.tag (mark old) 0).isSome then
+      return .error (.positionUnfit pos.offset)
+    let h := Header.at pos (mark w) 0 pos.offset (origin w)
+    unless h.fits keys.chainBytes do return .error (.positionUnfit pos.offset)
+    match Base.seal (keys.forStore (origin w)) c world w pos indexStart #[] b.index.size ⟨pos.offset, 0⟩ with
+    | .error e => return .error e
+    | .ok (_, ix, file) =>
+      bases.set { b with
+        file := file
+        headers := #[(pos.offset, Header.bytes keys h)]
+        history := b.history.push (file, d.synced.size)
+        indexAt := b.indexAt.push 0
+        written := b.written + file.size }
+      return .ok (world.size w, keys.worldDigest (worldBytesOf file (world.size w)), ix)
   rotate w pos count := do
     let b ← bases.get
     let newest := (b.headers.back?.map (·.1)).getD 0
@@ -78,7 +97,10 @@ def memCheckpoint {W : Type} (disk : IO.Ref Disk) (bases : IO.Ref Bases) (keys :
     bases.set { b with headers := b.headers.push (pos.offset, Header.bytes keys h) }
     return .ok ()
   write w seg entries ipos := do
-    match Base.seal (keys.forStore (origin w)) c world w seg ipos entries (← bases.get).index.size Keep.all with
+    let current ← bases.get
+    let (_, rf, k0) := (Base.peek current.file).getD (0, 0, 0)
+    -- A normal seal preserves the adopted run start just as fileCheckpoint.write does.
+    match Base.seal (keys.forStore (origin w)) c world w seg ipos entries current.index.size ⟨rf, k0⟩ with
     | .error f => return .error f
     | .ok (page, ipos', file) =>
       let synced := (← disk.get).synced.size
