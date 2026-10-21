@@ -36,8 +36,10 @@ C's change. The second test is GATES-20b' (ROOT 10-21, PERF-6's false positive):
 bench-worstworld block using the bench-worstcut lines as CONTEXT; PERF-12 deleted those lines and kept
 the block, so the merge, re-anchored on the surviving context, inserted the block a SECOND time and
 `stale` refused a copy that reverts nothing. A merge that would only duplicate lines X already holds is
-not a lack. (holds compares whole blocks: a removed block X still holds, or an added one it does not,
-reads LACKING, the refusing side.) A path whose candidate lacks C's change while main's
+not a lack. A purely added Lean theorem is also held when its exact statement occurs once as
+active code anywhere in X, even if its proof moved or changed; an absent added theorem is lacking
+even when its replay conflicts on other edits (GATES-20p). Other blocks still compare whole:
+a removed block X still holds, or an added one it does not, reads LACKING. A path whose candidate lacks C's change while main's
 copy contains it would revert C: refused `stale path: P`, unless the lander names it with `--reverts
 C`. A named revert of another layer's commit needs that layer named in a CROSS-LAYER line (reverting
 another layer's change is cross-layer by definition), and its hunk is appended to the message under
@@ -275,10 +277,75 @@ def window(repo: str, main: str, path: str) -> list[str]:
     return git(repo, "rev-list", "--first-parent", *rng, "--", f":(top,literal){path}", check=False).stdout.decode().split()
 
 
+def active_lean_statement(source: bytes, statement: bytes) -> bool:
+    """The exact statement occurs once as code, not as a copy inside a Lean comment or string."""
+    found = 0
+    depth = 0
+    line_comment = string = escaped = False
+    i = 0
+    while i < len(source):
+        if depth == 0 and not line_comment and not string and source.startswith(statement, i):
+            if (i == 0 or source[i - 1] == 10) and (i + len(statement) == len(source)
+                                                    or source[i + len(statement) - 1] == 10):
+                found += 1
+        if line_comment:
+            if source[i] == 10:
+                line_comment = False
+        elif string:
+            if escaped:
+                escaped = False
+            elif source[i] == 92:
+                escaped = True
+            elif source[i] == 34:
+                string = False
+        elif source.startswith(b"/-", i):
+            depth += 1
+            i += 1
+        elif depth and source.startswith(b"-/", i):
+            depth -= 1
+            i += 1
+        elif not depth and source.startswith(b"--", i):
+            line_comment = True
+            i += 1
+        elif not depth and source[i] == 34:
+            string = True
+        i += 1
+    return found == 1
+
+
+def added_theorem_statement(pre: bytes, added: bytes) -> bytes | None:
+    """The exact statement of a sole new theorem in an insertion block, if identifiable."""
+    declarations = list(re.finditer(rb"(?m)^theorem [A-Za-z_][A-Za-z_0-9']*\b[^\n]*"
+                                    rb"(?:\n(?!theorem |lemma |def |instance |structure |inductive |"
+                                    rb"namespace |end ).*)*?:= by\n", added))
+    if len(declarations) != 1:
+        return None
+    statement = declarations[0].group()
+    if re.search(rb"(?m)^(?:theorem|lemma|def|instance|structure|inductive|namespace|end)\b",
+                 added[declarations[0].end():]):
+        return None
+    return statement if not active_lean_statement(pre, statement) else None
+
+
+def retained_added_theorem(x: bytes, pre: bytes, added: bytes) -> bool:
+    """A pure insertion may move/change a proof if its original theorem statement survives."""
+    statement = added_theorem_statement(pre, added)
+    return statement is not None and active_lean_statement(x, statement)
+
+
+def missing_added_theorem(x: bytes, pre: bytes, post: bytes) -> bytes | None:
+    """The missing exact statement, even where replay conflicts on unrelated edits."""
+    a, b = pre.splitlines(keepends=True), post.splitlines(keepends=True)
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "insert":
+            statement = added_theorem_statement(pre, b"".join(b[j1:j2]))
+            if statement is not None and not active_lean_statement(x, statement):
+                return statement
+    return None
+
+
 def holds(x: bytes, pre: bytes, post: bytes) -> bool:
-    """X holds the change pre -> post whatever its context: each hunk's added lines are in X as one
-    contiguous block, and each hunk's removed lines are not (a hunk that only removes: its block absent).
-    Lines are compared whole (a block matches only at line boundaries)."""
+    """X holds each changed block, or the exact active statement of a purely added theorem."""
     a, b = pre.splitlines(keepends=True), post.splitlines(keepends=True)
     hay = b"\n" + x + (b"" if x.endswith(b"\n") else b"\n")
 
@@ -290,7 +357,8 @@ def holds(x: bytes, pre: bytes, post: bytes) -> bool:
         if op == "equal":
             continue
         if j2 > j1 and not has(b[j1:j2]):
-            return False
+            if i2 != i1 or not retained_added_theorem(x, pre, b"".join(b[j1:j2])):
+                return False
         if i2 > i1 and has(a[i1:i2]):
             return False
     return True
@@ -298,6 +366,8 @@ def holds(x: bytes, pre: bytes, post: bytes) -> bool:
 
 def lacks(x: bytes, pre: bytes, post: bytes) -> bool | None:
     """True: X lacks the change pre -> post; False: X contains it; None: neither (it conflicts)."""
+    if missing_added_theorem(x, pre, post) is not None:
+        return True
     rc, data, _ = merge3(x, pre, post)
     if rc != 0:
         return None
@@ -340,14 +410,21 @@ def stale(repo: str, snap: str, main: str, message: str, reverts: list[str]) -> 
                 continue
             short = git(repo, "rev-parse", "--short=12", c).stdout.decode().strip()
             subj = git(repo, "log", "-1", "--format=%s", c).stdout.decode().strip()[:90]
-            _rc, redone, _ = merge3(x, bpre, bpost)
-            with tempfile.TemporaryDirectory() as d:
-                a, b = os.path.join(d, "a"), os.path.join(d, "b")
-                open(a, "wb").write(redone)
-                open(b, "wb").write(x)
-                diff = subprocess.run(["git", "diff", "--no-index", "--no-color", "-U1", "--src-prefix=main/",
-                                       "--dst-prefix=landed/", a, b], capture_output=True).stdout.decode(errors="replace")
-            body = [l for l in diff.splitlines() if not l.startswith(("diff --git", "index ", "--- ", "+++ "))][:60]
+            replay_rc, redone, _ = merge3(x, bpre, bpost)
+            missing = missing_added_theorem(x, bpre, bpost)
+            if replay_rc != 0 and missing is not None:
+                # The replay conflicts on unrelated edits: show the precise missing declaration,
+                # not conflict markers or the first 60 lines of an unrelated whole-file diff.
+                body = ["@@ added theorem statement absent from candidate @@"]
+                body += ["-" + line for line in missing.decode(errors="replace").splitlines()]
+            else:
+                with tempfile.TemporaryDirectory() as d:
+                    a, b = os.path.join(d, "a"), os.path.join(d, "b")
+                    open(a, "wb").write(redone)
+                    open(b, "wb").write(x)
+                    diff = subprocess.run(["git", "diff", "--no-index", "--no-color", "-U1", "--src-prefix=main/",
+                                           "--dst-prefix=landed/", a, b], capture_output=True).stdout.decode(errors="replace")
+                body = [l for l in diff.splitlines() if not l.startswith(("diff --git", "index ", "--- ", "+++ "))][:60]
             layer = layer_of(repo, c)
             foreign = bool(layer) and layer not in mine and not owners.named(reasons, layer)
             fix = f"--reverts {short}" + (f" and name {layer} in --cross-layer (e.g. \"{layer}-N agreed: …\", or "
