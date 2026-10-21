@@ -4018,3 +4018,97 @@ validate the repair; the full judge still decides this landing.
 **Meta-critique.** A pre-existing clippy failure is not evidence against P6, but
 also not a reason to bypass the judge. ROOT's explicit ownership grant permits
 this behavior-preserving repair in the same landing.
+
+## LANG-P8 Atomic one-use integration over the real receive path (2026-10-20 real; CX-P8)
+
+**Purpose and decision.** A demonstration Mini can take. Extend the hole journey with
+a fresh session: A owns the open requester; B owns the value source and grants the
+requester Right.transfer 1. Two provider authorities and candidate rows are retained.
+The additional commit method copies the existing selection checks and, in the SAME
+kernel turn, records the selected provider, marks acceptance, and transfers one unit.
+Nano is the single-transaction case of the LPCFS comparison: one Store writer, several
+cells in one atomic turn, no distributed agreement or external exactly-once claim.
+The application deadline and signed-call window are checked separately. Cancellation
+uses Receive.cancel (the cancel operation used by PROTOCOL-63), not a new cancel flag.
+
+P10 observes each provider's actual live kernel grant and its recorded version pin.
+An unrelated birth preserves the trace and the previously signed plan still submits.
+P9's polynomial retains both candidates and evaluates against every live World; after
+one grant is revoked it reads [false,true], and the old instantiation refuses stale.
+The changed fact-row correspondence separately refuses support0 moved. P4/P11b
+recheck an old/new provider-index representation through a checked involution; the
+returned image's provider index is used to construct the actual commit call. Unknown
+certificate ids refuse unknownCertificate. This is rechecked evidence, never internal
+evidence. The schema checker is explicitly data-only, not a new Lang typechecker.
+
+**Six objectives and scope.** Integration.lean applies LANG-67's substitution judgment;
+specializes P10 observation completeness and P9's all-environment bridge to the actual
+journey World adapter; proves the correspondence/registry, destination validity,
+returned-image provider preservation and equality of the actual invocation arguments; derives the event/id/journal receipt from
+submit_ok, receiveWith_sealed, sealTurn_ok and admit_journaled; specializes
+LEDGER-18/19 grant_moves_le_cap to one unit; and composes HOST-64's actual openWith
+path with a spent-base invariant and audited-tail assumption. ReadyWriter explicitly
+requires fresh journal/refusal state, successful checked re-execution, and admissibility
+of that turn. Its progress theorem proves one submit, not network fairness or eventual
+service. The abstract protocol-to-package lowering is exercised by rows, not proved
+as a compiler refinement. The journey retains its documented toy crypto parameters.
+
+Recovery names what is assumed: the decoded base has CheckpointTrusted at the pinned
+origin, canonical cells, contiguous ledgers, and zero left in this grant; the trusted
+writer's replayed tail has an audited history. A received/pruned checkpoint does not
+acquire this from its MAC alone. The theorem binds its base to Base.read and its tail
+to the actual open result, and shows zero further consumption in that audited history and EVERY future audited
+continuation after reopening (the two histories compose by audit_append_to).
+The executable row folds the committed suffix and reads the real spent ledger and
+journal again. It is not an IO fault-injection test or a proof of filesystem durability.
+
+After commitment, P8.4 freshly re-executes through submit: exact replay refuses replayed,
+a freshly signed commit refuses accepted, and a competing transfer at the real counted
+receiver refuses transferSpent. No saved effectful continuation is filled and resumed.
+
+**Price premises.** Landed theorems gaining hypotheses: none. Landed theorem statements
+restated or renamed: none. All old journey checks remain. Only Lang/Journey.lean,
+Lang/Proofs/Contextual/Integration.lean and this append are authored. No wire, Store,
+key, pin format, gate or foreign layer file changes. ROOT owns review and landing.
+
+**Validation.** Scoped builds and lang-journey under SWARM_MEM_MAX=6G,
+LEAN_NUM_THREADS=2, maxHeartbeats 200000. Real package mutations remove the deadline,
+support equality and accepted-prefix checks: respectively the invalid commit admits,
+the moved correspondence admits, and the named refusal falls through to transferSpent.
+Controls pass. Additional adapter/cap mutations exercise live provenance, the support
+pin in the real signed call, certificate lookup and counted amount. Exact real output
+locations and source-gate results are retained in the private lane report.
+
+**Critique.** This is a concrete composition experiment, not a general proof that every
+surface package implements an abstract protocol. Provider authority is read by the
+journey adapter and included in its generated signed pin set; the package's fact rows
+alone do not inspect arbitrary kernel cells. The correspondence changes a provider
+index's representation, not the installed package ABI. Recovery still trusts the
+writer/checkpoint premises and the stated audit correspondence. The bound covers unit
+transfers through the counted grant, not unrestricted actions of the well's owner.
+
+**Meta-critique.** The easy but wrong shortcut was to equate an accepted flag with durable
+consumption, or to reuse the pure fill-and-resume story across a transfer. The counted
+ledger and the atomic nested transfer provide independent evidence. Another shortcut
+would have returned an arbitrary base or empty witness history in recovery: its final
+statement binds Base.read, the actual replay output, the audited log and the chain's
+step projection. Conversely, a generic ready-writer lemma is only one-step progress;
+the executable positive session supplies its concrete client, not a claim of liveness.
+
+**Independent second reader (Codex CX-READER-P8, 2026-10-20 real): LAND.**
+All fifteen statements and their proofs read with the disjunct check. The six
+objectives consume the concrete Journey adapters or landed protocol, receive,
+ledger and checkpoint theorems. No landed hypothesis or foreign source changes.
+The amount disjunction is a universally constrained measurement premise, not an
+escape conclusion; the chain projects to the supplied history. Recovery bounds
+every future audited continuation from the actual reopened World, assuming a
+spent trusted decoded base and an audited path to that World. That premise does
+not certify IO crash safety or identify each disk record with an audited step.
+ReadyWriter is explicitly one-step progress under receiver/kernel readiness,
+not eventual service. Nano is the single-Store atomic transaction case.
+All nine complete semantic mutation outputs and successful source-mutant builds
+were read, together with their drivers and passing control. The initial unused-
+variable environment mutation failed compilation and remains excluded. The three
+package-string mutants installed actual checked packages before their rows failed.
+A scoped build and fresh elaboration of both changed Lean modules passed at
+6G/two threads with maxHeartbeats 200000. No source correction was required.

@@ -102,6 +102,9 @@ import Lang.Print
 import Lang.Resident
 import Lang.Std
 import Lang.Sim.Need
+import Lang.Contextual.Trace
+import Lang.Contextual.Provenance
+import Lang.Contextual.TransportKinds
 
 namespace Nanodregg.Lang.Journey
 
@@ -2112,6 +2115,237 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
   r := note r s!"LH11b B prunes c2: {v11b}" (v11b.startsWith "refused grantRight" || refusedBy v11b "prune" "notChooser")
   return r
 
+
+/-! P8: one Store, one writer, one atomic turn across the hole and value cells.
+The checked commitment re-executes the selected method; it never resumes a saved
+effectful continuation. The grant is the kernel's counted Right.transfer 1.
+Toy cryptographic parameters are those of the rest of this journey. -/
+
+/-- Add an atomic commitment to the existing open artifact. Its support checks are
+the select method's checks, and the transfer is part of the SAME kernel turn. -/
+def p8Text : String :=
+  let select := (((holeText.splitOn "  (method select").getD 1 "").splitOn
+    "  ; the acceptor takes").headD ""
+  let body := ("  (method commit" ++ select)
+    |>.replace "(arg (rec (cand digest)))" "(arg (rec (asset digest) (cand digest) (grant digest))) (calls (transfer))"
+    |>.replace "((not state.accepted) \"accepted\")"
+      "((not state.accepted) \"accepted\") ((<= req.validUntil state.closes) \"closed\")"
+    |>.replace "(done (with state (selected (some digest arg.cand))))"
+      "(done (with state (selected (some digest arg.cand)) (accepted true)) (transfer (amount 1) (dst (AcctRef of (record (asset arg.asset) (owner arg.cand)))) (once (none bytes)) (src (AcctRef well arg.asset)) (via (some digest arg.grant))))"
+  holeText.replace "  ; the acceptor takes" (body ++ "  ; the acceptor takes")
+
+/-- The provider index's old/new wire representation. This is a finite data schema,
+not a substitute typechecker for Lang packages; the package is installed normally. -/
+def p8Data : Contextual.CalculusData where
+  Ty := Bool
+  Ctx := Unit
+  Tm := Nat × Bool
+  tmEq := inferInstance
+  msubst _ t := t
+  check _ t ty := t.2 == ty
+  uses _ _ := false
+  drop _ _ := ()
+  strengthen _ t := t
+  weaken _ t := t
+  var n := (n, false)
+  lookup _ _ := none
+
+def p8Guard : Contextual.Trace.Guard p8Data Nat Bool :=
+  ⟨fun t => [t.1], fun _ vs => vs.all id⟩
+
+def p8Iface (repr : Bool) : Contextual.Iface p8Data (Nat → Bool) :=
+  p8Guard.install ⟨0, (), repr, [], by simp, fun _ _ => true, 1, 0, 1⟩
+
+def p8Candidate (i : Nat) : Contextual.Candidate p8Data :=
+  ⟨(i, false), [], [], 1, 0, .verified⟩
+
+def p8Swap (t : Nat × Bool) : Nat × Bool := (t.1, !t.2)
+def p8Correspondence : Contextual.RepairObjects.Correspondence p8Data (Nat → Bool) :=
+  ⟨p8Iface false, p8Iface true, p8Swap, p8Swap⟩
+def p8Registry : Contextual.RepairObjects.Registry p8Data (Nat → Bool) :=
+  fun n => if n = 8 then some p8Correspondence else none
+
+/-- Authority is read from the live kernel view, at the recorded version.
+A tombstoned grant or a changed pin cannot specialize to true. -/
+def p8World (w : World D) (supports : List (D × D)) : Contextual.World (Nat → Bool) :=
+  ⟨fun _ => false, fun i => match supports[i]? with
+    | none => false
+    | some (g, pin) => (w.live Sim.env g).isSome && (pinOf Sim.env (w.entry Sim.env g) == pin)⟩
+
+def p8Available (w : World D) (supports : List (D × D)) : List Bool :=
+  (Contextual.P9.provenance (p8Iface false) [p8Candidate 0, p8Candidate 1]).map
+    (fun m => m.eval (p8Iface false) (p8World w supports))
+
+def p8Arg (asset cand grant : D) : ByteArray :=
+  argBytes (.record [("asset", .digest), ("cand", .digest), ("grant", .digest)])
+    (.record [("asset", .digest (Sim.dc.bytes asset)), ("cand", .digest (Sim.dc.bytes cand)),
+      ("grant", .digest (Sim.dc.bytes grant))])
+
+/-- Read the REAL grant ledger, not an auxiliary spent flag. -/
+def p8Left (w : World D) (g : D) : Option Nat :=
+  (w.live Sim.env g).bind fun c => match ledgerLeft transferBase g c with
+    | .ok (_, n) => some n
+    | .error _ => none
+
+def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.run do
+  let mut r := r0
+  let prog := langProgram
+  let X := ctxWith prog
+  let p ← match Surface.readPackage src with
+    | .ok p => pure p
+    | .error e => return note r s!"P8 read: {e.text src}" false
+  let some pb := Wire.encodePackage p | return note r "P8 no package bytes" false
+  let some dc := p.rels.lookup "candidates" | return note r "P8 no candidates" false
+  let some df := p.rels.lookup "facts" | return note r "P8 no facts" false
+  let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
+  r := note r1 s!"P8 install checked open artifact: {v1}" (v1 == "admitted")
+  let some pkg := t1.bind fun t => (createdIds t).head? | return r
+  let some seed := stateSlots (recordRow p.state)
+    [("accepted", .bool false), ("acceptor", .digest (Sim.dc.bytes b.id)), ("cap", .nat 1),
+     ("chooser", .digest (Sim.dc.bytes a.id)), ("closes", .nat 100000),
+     ("selected", .inj "none" (.record []))] 0 | return note r "P8 seed" false
+  let (r2, v2, t2) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, pkg])
+    (.create (some pkg) [] seed))
+  r := note r2 s!"P8 requester cell: {v2}" (v2 == "admitted")
+  let some obj := t2.bind fun t => (createdIds t).head? | return r
+  let (r3, v3, t3) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id]) (.issue 10))
+  r := note r3 s!"P8 B's value cell: {v3}" (v3 == "admitted")
+  let some asset := t3.bind fun t => (createdIds t).head? | return r
+  for owner in [a.id, b.id] do
+    let (r', v, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.account asset owner))
+    r := note r' s!"P8 provider account {owner}: {v}" (v == "admitted")
+  let (r4, v4, t4) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, asset, obj])
+    (.grant asset obj [.transfer 1] none))
+  r := note r4 s!"P8 B authorizes requester for ONE unit: {v4}" (v4 == "admitted")
+  let some cap := t4.bind fun t => (createdIds t).head? | return r
+  -- Two retained provider authorities; each can accept the open artifact.
+  let mut providers : List D := []
+  for owner in [a.id, b.id] do
+    let (r', v, t) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, obj, owner])
+      (.grant obj owner [.invoke (p.methods.idxOf "accept")] none))
+    r := note r' s!"P8 provider authority {owner}: {v}" (v == "admitted")
+    let some g := t.bind fun t => (createdIds t).head? | return r
+    providers := providers ++ [g]
+  let supports := providers.map fun g => (g, pinOf Sim.env (r.st.host.entry Sim.env g))
+  let invoke (r : Run) (m : String) (arg : ByteArray) (rp : List (RowSlot D × D) := [])
+      (extra : List (D × D) := []) : Call D :=
+    signedAt r.st a (Sim.S.pinsFor r.st.host [a.id, obj, pkg] ++ extra)
+      (.invoke obj (p.methods.idxOf m) arg 100000 none)
+      r.st.host.height (r.st.host.height + 1024) rp
+  let pinF (w : World D) (g : D) := hole_pinAt obj w 1 df (.record [("cell", .digest (Sim.dc.bytes g))])
+  let pinC (w : World D) (owner : D) := hole_pinAt obj w 0 dc (.record [("cand", .digest (Sim.dc.bytes owner))])
+  for ((g, pin), owner) in supports.zip [a.id, b.id] do
+    let (r', v, _) := go prog r (invoke r "post" (hole_postArg (Sim.dc.bytes g) (Sim.dc.bytes pin)))
+    r := note r' s!"P8 post versioned provider support: {v}" (v == "admitted")
+    let (r', v, _) := go prog r (invoke r "propose"
+      (hole_proposeArg (Sim.dc.bytes owner) (hole_supportData (Sim.dc.bytes g) (Sim.dc.bytes pin)) hole_noSupport 1))
+    r := note r' s!"P8 retain candidate {owner}: {v}" (v == "admitted")
+  let commit (r : Run) (i : Nat) (owner : D) : Call D :=
+    invoke r "commit" (p8Arg asset owner cap)
+      (pinC r.st.host owner ++ pinF r.st.host (providers[i]?.getD 0))
+      (Sim.S.pinsFor r.st.host [asset, accountId X owner asset, cap] ++ [supports[i]?.getD (0, 0)])
+  let ready := r
+  let cached := [0, 1].map fun i => Contextual.Trace.seed p8Guard (p8Iface false)
+    (p8World r.st.host supports) (p8Candidate i)
+  let plan := commit r 1 b.id
+  -- An unrelated birth changes height and cells, but none of the signed dependencies.
+  let (r', vu, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.issue 2))
+  r := note r' s!"P8.1 unrelated update: {vu}" (vu == "admitted")
+  let pass := Contextual.Trace.repair p8Guard (p8Iface false) (p8World r.st.host supports) cached 0
+  let (_, usable, _) := go prog r plan
+  r := note r s!"P8.1 old signed plan after unrelated update: {usable}; trace rejudged {pass.rejudged}"
+    (usable == "admitted" && pass.rejudged.isEmpty)
+  -- Withdraw one authority without discarding the conditional protocol or its alternatives.
+  let oldPlan := commit r 0 a.id
+  let (r', vr, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, providers[0]!])
+    (.revoke providers[0]!))
+  r := note r' s!"P8.2 withdraw provider 0: {vr}" (vr == "admitted")
+  let (_, stale, _) := go prog r oldPlan
+  r := note r s!"P8.2 withdrawn instantiation: {stale}; live provenance {p8Available r.st.host supports}"
+    (stale.startsWith "rejected stale" && p8Available r.st.host supports == [false, true] &&
+      headCount r.st.host obj 0 == some 2)
+  let tombSupport := [(providers[0]!, pinOf Sim.env (r.st.host.entry Sim.env providers[0]!))]
+  let wrongSupport := [(providers[1]!, 0)]
+  let unavailable (ss : List (D × D)) := Contextual.judge (p8Iface false)
+    (p8World r.st.host ss) (p8Candidate 0) == .conflict .guardFails
+  r := note r "P8.2 re-pinned tombstone: conflict guardFails" (unavailable tombSupport)
+  r := note r "P8.2 mismatched live authority pin: conflict guardFails" (unavailable wrongSupport)
+  -- Repair is a rechecked representation change; its image selects the actual second provider.
+  let transported := Contextual.TransportKinds.recheck p8Registry 8 (p8World r.st.host supports) (p8Candidate 1) 1
+  let chosen ← match transported with
+    | .ok (.rechecked ev) => pure ev.image.filling.1
+    | _ => return note r "P8.3 no rechecked repair" false
+  let badCert := Contextual.TransportKinds.recheck p8Registry 99 (p8World r.st.host supports) (p8Candidate 1) 1
+  r := note r "P8.3 checked representation false -> true; unknownCertificate refused"
+    (chosen == 1 && match badCert with | .error .unknownCertificate => true | _ => false)
+  let selected := [a.id, b.id][chosen]?.getD 0
+  let fresh := commit r chosen selected
+  -- Cancellation exercises the kernel cancel operation on a scratch fork.
+  match Receive.cancel X r.st.host fresh (Sim.toySign a.key (X.cancelMessage fresh)) with
+  | .recorded _ rec wc =>
+    let cancelled := { r with st := { r.st with host := wc, log := r.st.log ++ [.refusal rec] } }
+    let (_, vc, _) := go prog cancelled fresh
+    r := note r s!"P8 cancel recorded; submit cancelled plan: {vc}"
+      (vc.startsWith "rejected refusedFinal" && p8Left wc cap == some 1)
+  | _ => r := note r "P8 cancel did not record" false
+  -- The same checked artifact outside its signed window refuses by name.
+  let expired := { r with st := { r.st with host := { r.st.host with height := fresh.unsigned.validUntil + 1 } } }
+  let (_, ve, _) := go prog expired fresh
+  r := note r s!"P8 deadline: {ve}" (ve.startsWith "rejected outsideWindow" || ve.startsWith "refused outsideWindow")
+  let late := { r with st := { r.st with host := { r.st.host with height := 99999 } } }
+  let (_, vl, _) := go prog late (commit late chosen selected)
+  r := note r s!"P8 contract deadline: {vl}" (refusedBy vl "commit" "closed")
+  let g1 := providers[1]!
+  let (moved, vm, _) := go prog r (invoke r "repin"
+    (hole_postArg (Sim.dc.bytes g1) (Sim.dc.bytes cap)) (pinF r.st.host g1))
+  let (_, vs, _) := go prog moved (commit moved chosen selected)
+  r := note r s!"P8 support correspondence moved ({vm}): {vs}"
+    (vm == "admitted" && refusedBy vs "commit" "support0 moved")
+  let before := r
+  let (r', vc, tc) := go prog r fresh
+  r := note r' s!"P8.4 RE-EXECUTE atomic checked commitment: {vc}; counted left {p8Left r'.st.host cap}"
+    (vc == "admitted" && p8Left r'.st.host cap == some 0 &&
+      hole_acceptedOf Sim.env r'.st.host obj == some true &&
+      hole_selectedOf Sim.env r'.st.host obj == some (some (Sim.dc.bytes selected)))
+  let (_, replay, _) := go prog r fresh
+  r := note r s!"P8.4 replay: {replay}" (replay.startsWith "rejected replayed")
+  let (_, resumed, _) := go prog r (commit r chosen selected)
+  r := note r s!"P8.4 freshly re-executed committed artifact: {resumed}" (refusedBy resumed "commit" "accepted")
+  -- Isolate the kernel counted-right check using the object as the authorized actor.
+  let spent := Receive.transfer X (pinned Sim.env r.st.host
+    (Sim.S.pinsFor r.st.host [asset, accountId X a.id asset, cap]))
+    ⟨obj, 0⟩ (.well asset) (.of a.id asset) 1 (some cap) none
+  r := note r s!"P8.4 competing use of the same counted right: {match spent with | .error e => e.name | .ok _ => "admitted"}"
+    (match spent with | .error (.transferSpent g) => g == cap | _ => false)
+  match tc with
+  | none => r := note r "P8 no receipt" false
+  | some t =>
+    r := note r "P8 receipt binds checked call and atomic transition"
+      (t.event == X.callBytes fresh &&
+       r.st.host.journalAt Sim.env (txIdOf X fresh) == some (before.st.host.height + 1, turnDigest Sim.env t))
+    match World.fold Sim.env before.st.host [.turn t] with
+    | .ok recovered =>
+      let (_, rv, _) := go prog { r with st := { r.st with host := recovered } } fresh
+      r := note r s!"P8 recovered suffix: left {p8Left recovered cap}; retry {rv}"
+        (Sim.same recovered r.st.host && p8Left recovered cap == some 0 && rv.startsWith "rejected replayed")
+    | .error _ => r := note r "P8 recovery failed" false
+  r := note r "P8 initial authority was live for both candidates"
+    (p8Available ready.st.host supports == [true, true])
+  return r
+
+/-- A fresh concrete integration session, also used by the mutation probes. -/
+def p8Session (src : String := p8Text) : Run :=
+  let X := ctxWith langProgram
+  let fk := [("p8-a".toUTF8, "p8-a-next".toUTF8), ("p8-b".toUTF8, "p8-b-next".toUTF8)]
+  match genesis X Sim.worldName (Sim.nonceOf 8) 100000000
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+  | .error e => note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
+      s!"P8 genesis: {e.name}" false
+  | .ok g =>
+    let ms := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Sim.Member)
+    p8Rows { st := { rng := ⟨1⟩, host := g, members := ms } }
+      (ms.headD ⟨0, .empty, .empty⟩) (ms.getD 1 ⟨0, .empty, .empty⟩) src
+
 def journey (bell : String) (mode : Mode) : Run := Id.run do
   let prog := mode.program
   let fk : List (ByteArray × ByteArray) :=
@@ -2391,6 +2625,7 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
     r := windowedRows mode r a
   if mode = .honest then
     r := gateRows mode r a
+
   r := callRows mode r a
   -- L7 follower and auditor
   match World.fold Sim.env g r.st.log with
@@ -2434,6 +2669,7 @@ def runAll (args : List String) : IO UInt32 := do
   IO.println s!"{if okd then "ok  " else "FAIL"} {ld}"
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
     .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow, .foreignRow].map (journey bell)
+  let runs := runs ++ [p8Session]
   let runs := match control, runs with
     | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
     | _, rs => rs
