@@ -303,6 +303,167 @@ theorem selectHole_live_selects {h : HoleROM} {amount ver i used : Nat} {bytes :
   simp only [hrow, hdec, hc, h1, h2, h3, hch, hg, bind, Except.bind, pure, Except.pure]
   exact ⟨_, rfl, rfl, rfl⟩
 
+
+/-- What an installed ROM's check gives a selection: the hypothesis list is context-length, every code types at the
+hole's context and type. -/
+private theorem holeROM_check_code {Δ : List Ty} {h : HoleROM} (hc : h.check Δ = .ok ()) :
+    h.hypotheses.length = h.ctx.length ∧ ∀ c ∈ h.code, HasType Δ h.ctx c.body h.ty := by
+  unfold HoleROM.check at hc
+  simp only [bind, Except.bind, pure, Except.pure] at hc
+  repeat' split at hc
+  all_goals first | (simp at hc; done) | skip
+  rename_i hlen _ _ _ _ v hfor
+  cases v
+  refine ⟨hlen, fun c hcm => ?_⟩
+  obtain ⟨i, hi⟩ := List.mem_iff_getElem?.mp hcm
+  have hmem : (c, i) ∈ h.code.zipIdx := List.mem_zipIdx_iff_getElem?.mpr hi
+  refine forIn_yield_ok (fun ci : HoleCode × Nat => HasType Δ h.ctx ci.1.body h.ty) _ _ ?_ hfor _ hmem
+  intro ⟨c', i'⟩ u st hst
+  simp only at hst ⊢
+  split at hst
+  · rename_i T hT
+    split at hst
+    · cases hst; exact ⟨rfl, ‹T = h.ty› ▸ inferE_sound hT⟩
+    · cases hst
+  · cases hst
+
+private theorem zipIdx_snd_lt {α : Type} : ∀ (l : List α) (n : Nat),
+    (l.zipIdx n).Pairwise (fun a b => a.2 < b.2)
+  | [], _ => List.Pairwise.nil
+  | a :: l, n => by
+    rw [List.zipIdx_cons]
+    refine List.Pairwise.cons (fun b hb => ?_) (zipIdx_snd_lt l (n + 1))
+    obtain ⟨b1, b2⟩ := b
+    have := (List.mem_zipIdx hb).1
+    simp only
+    omega
+
+/-- One erasure step keeps the factor typed and its re-embedding fixed: the invariant of `factorHole`'s fold. -/
+private theorem factor_fold_spec {Δ : List Ty} {T : Ty} (t0 : Term) : ∀ (xs : List Nat) (Γ : List Ty) (t : Term)
+    (E : List Nat), xs.Pairwise (· > ·) → (∀ x ∈ xs, Term.usesVar x t = false ∧ x < Γ.length) →
+    HasType Δ Γ t T → E.length = Γ.length → Term.renameVar (fun n => E.getD n n) t = t0 →
+    HasType Δ (xs.foldl (fun (a : List Ty × Term × List Nat) x =>
+        (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2.1, a.2.2.eraseIdx x)) (Γ, t, E)).1
+      (xs.foldl (fun (a : List Ty × Term × List Nat) x =>
+        (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2.1, a.2.2.eraseIdx x)) (Γ, t, E)).2.1 T ∧
+    Term.renameVar (fun n => (xs.foldl (fun (a : List Ty × Term × List Nat) x =>
+        (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2.1, a.2.2.eraseIdx x)) (Γ, t, E)).2.2.getD n n)
+      (xs.foldl (fun (a : List Ty × Term × List Nat) x =>
+        (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2.1, a.2.2.eraseIdx x)) (Γ, t, E)).2.1 = t0
+  | [], _, _, _, _, _, hT, _, heq => ⟨hT, heq⟩
+  | x :: xs, Γ, t, E, hp, hx, hT, hE, heq => by
+    rw [List.foldl_cons]
+    obtain ⟨hgt, hp'⟩ := List.pairwise_cons.mp hp
+    obtain ⟨hu, hlt⟩ := hx x List.mem_cons_self
+    have hlen : (Γ.eraseIdx x).length = Γ.length - 1 := by simp [List.length_eraseIdx, hlt]
+    have hElen : (E.eraseIdx x).length = Γ.length - 1 := by simp [List.length_eraseIdx, hE, hlt]
+    refine factor_fold_spec t0 xs _ _ _ hp' (fun y hy => ⟨?_, ?_⟩) (hasType_unshiftAt_live hT hu)
+      (hElen.trans hlen.symm) ?_
+    · have hyx := hgt y hy
+      cases huy : Term.usesVar y (Term.renameVar (lowerIdx x) t) with
+      | false => rfl
+      | true =>
+        obtain ⟨j, hj, hjy⟩ := usesVar_renameVar t (lowerIdx x) y huy
+        simp only [lowerIdx] at hjy hj
+        split at hjy
+        · subst hjy; rw [(hx j (List.mem_cons_of_mem _ hy)).1] at hj; cases hj
+        · have : j = x := by omega
+          subst this; rw [hu] at hj; cases hj
+    · have := hgt y hy; rw [hlen]; omega
+    · rw [renameVar_renameVar, ← heq]
+      refine renameVar_congr t _ _ fun k hk => ?_
+      have hkl := hasType_usesVar_lt hT k hk
+      have hkx : k ≠ x := by intro e; subst e; rw [hu] at hk; cases hk
+      simp only [List.getD_eq_getElem?_getD, lowerIdx]
+      split
+      · rename_i hkx'
+        rw [List.getElem?_eq_getElem (by omega), List.getElem?_eq_getElem (by omega),
+          List.getElem_eraseIdx_of_lt _ hkx']
+      · rename_i hkx'
+        rw [List.getElem?_eq_getElem (by omega), List.getElem?_eq_getElem (by omega),
+          List.getElem_eraseIdx_of_ge _ (by omega)]
+        simp only [Option.getD_some]
+        congr 1
+        omega
+
+/-- What a selection is made of: its code, its strengthened positions, its factor and its re-embedded body. -/
+private theorem selectHole_factor_inv {h : HoleROM} {s : HoleSelection}
+    (hs : selectHole digestOf look rv self h = .ok s) :
+    ∃ c, h.code[s.index]? = some c ∧ s.original = c.body ∧
+      changedHypotheses digestOf look rv self h c = .ok s.strengthened ∧
+      factorHole h c s.strengthened = (s.context, s.filling, s.embedding) ∧
+      s.body = reembed s.embedding s.filling := by
+  unfold selectHole at hs
+  simp only [bind, Except.bind, pure, Except.pure] at hs
+  repeat' split at hs
+  all_goals first | (simp at hs; done) | skip
+  simp only [Except.ok.injEq] at hs
+  subst s
+  exact ⟨_, ‹h.code[_]? = some _›, rfl, ‹changedHypotheses digestOf look rv self h _ = .ok _›, rfl, rfl⟩
+
+/-- **The factor is typed and re-embeds to the ROM code** (C5 part 2, LANG-75.6; successor of `strengthening_sound`'s
+factor clause and, at the deployed runtime, of `CalculusLaws.strengthen_lemma`/`strengthen_factor`): on an installed
+ROM (`h.check Δ`, which `instantiateHoles` runs first), the strengthened filling types at the strengthened context,
+and the body a selection runs is exactly the selected ROM code. Under a mis-embedding that keeps node count (a
+second kept variable sent to 0), `selectHole_nodes` stays true and this is false. -/
+theorem selectHole_factor {Δ : List Ty} {h : HoleROM} {s : HoleSelection} (hchk : h.check Δ = .ok ())
+    (hs : selectHole digestOf look rv self h = .ok s) :
+    HasType Δ s.context s.filling h.ty ∧ s.body = s.original := by
+  obtain ⟨c, hc, ho, hch, hf, hb⟩ := selectHole_factor_inv hs
+  obtain ⟨hlen, hcode⟩ := holeROM_check_code hchk
+  have hT := hcode c (List.mem_of_getElem? hc)
+  unfold changedHypotheses at hch
+  obtain ⟨hr, hu⟩ := changed_fold h c _ [] _ hch
+  rw [List.nil_append] at hr
+  have hasc : s.strengthened.Pairwise (· < ·) := by
+    rw [hr]
+    unfold deadPositions
+    refine List.pairwise_filterMap.mpr ((zipIdx_snd_lt h.hypotheses 0).imp ?_)
+    intro ⟨oa, ia⟩ ⟨ob, ib⟩ hab x hx y hy
+    have ex : x = ia := by
+      cases oa with
+      | none => cases hx
+      | some p =>
+        simp only at hx
+        split at hx
+        · cases hx
+        · exact (Option.some.inj hx).symm
+    have ey : y = ib := by
+      cases ob with
+      | none => cases hy
+      | some p =>
+        simp only at hy
+        split at hy
+        · cases hy
+        · exact (Option.some.inj hy).symm
+    subst ex; subst ey; exact hab
+  have hmem : ∀ x ∈ s.strengthened, Term.usesVar x c.body = false ∧ x < h.ctx.length := by
+    intro x hx
+    rw [hr] at hx
+    obtain ⟨⟨o, y⟩, hy, he⟩ := List.mem_filterMap.mp hx
+    cases o with
+    | none => cases he
+    | some p =>
+      simp only at he
+      split at he
+      · cases he
+      · cases he
+        rename_i hl
+        refine ⟨hu _ hy p rfl (by simpa using hl), ?_⟩
+        have := (List.mem_zipIdx hy).2.1
+        omega
+  have hinit : Term.renameVar (fun n => (List.range h.ctx.length).getD n n) c.body = c.body := by
+    conv => rhs; rw [← renameVar_id c.body]
+    refine renameVar_congr c.body _ _ fun k hk => ?_
+    have := hasType_usesVar_lt hT k hk
+    simp [List.getD_eq_getElem?_getD, List.getElem?_range this]
+  have hspec := factor_fold_spec (Δ := Δ) c.body s.strengthened.reverse h.ctx c.body (List.range h.ctx.length)
+    (List.pairwise_reverse.mpr hasc) (fun x hx => hmem x (List.mem_reverse.mp hx)) hT (by simp) hinit
+  unfold factorHole at hf
+  rw [hf] at hspec
+  unfold reembed at hb
+  exact ⟨hspec.1, hb.trans (hspec.2.trans ho.symm)⟩
+
 end HypothesisSelection
 
 /-- Blocked code cannot be mistaken for an authenticated selection receipt. -/
@@ -530,17 +691,17 @@ end
 /-! ## From `Lang.Proofs.Contextual.LiveCost`: Live preparation is charged from its committed ROM, including blocked holes. -/
 section
 
-theorem factor_fold_nodes (xs : List Nat) (Γ : List Ty) (t : Term) :
-    Term.nodes ((xs.foldl (fun (a : List Ty × Term) x =>
-      (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2)) (Γ, t)).2) = Term.nodes t := by
-  induction xs generalizing Γ t with
+theorem factor_fold_nodes (xs : List Nat) (Γ : List Ty) (t : Term) (E : List Nat) :
+    Term.nodes ((xs.foldl (fun (a : List Ty × Term × List Nat) x =>
+      (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2.1, a.2.2.eraseIdx x)) (Γ, t, E)).2.1) = Term.nodes t := by
+  induction xs generalizing Γ t E with
   | nil => rfl
   | cons x xs ih =>
     rw [List.foldl_cons, ih, renameVar_nodes]
 
 theorem factorHole_nodes (h : HoleROM) (c : HoleCode) (removed : List Nat) :
     Term.nodes (factorHole h c removed).2.1 = Term.nodes c.body :=
-  factor_fold_nodes removed.reverse h.ctx c.body
+  factor_fold_nodes removed.reverse h.ctx c.body _
 
 theorem selectHole_nodes {D : Type} {digestOf : ByteArray → Option D} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {self : D}
     {h : HoleROM} {s : HoleSelection} (hs : selectHole digestOf look rv self h = .ok s) :
@@ -551,7 +712,7 @@ theorem selectHole_nodes {D : Type} {digestOf : ByteArray → Option D} {look : 
   all_goals first | (simp at hs; done) | skip
   simp only [Except.ok.injEq] at hs
   subst s
-  rw [renameVar_nodes]
+  rw [reembed, renameVar_nodes]
   exact factorHole_nodes _ _ _
 
 theorem foldMax_start {α : Type} (f : α → Nat) (xs : List α) (n : Nat) :

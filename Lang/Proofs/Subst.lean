@@ -385,6 +385,85 @@ theorem renameVarArms_typed_live {Δ : List Lang.Ty} {Ω : HoleSignature} : ∀ 
   | _, _, _, _, .cons (arms := []) _ _ hne, _, _, _ => absurd rfl hne
 end
 
+/-! A variable a typed term uses is in its context (C5, LANG-75.6: the factor's re-embedding reads only those). -/
+mutual
+/-- A variable a typed term uses is in its context. -/
+theorem hasType_usesVar_lt {Δ : List Ty} {Ω : HoleSignature} : ∀ {Γ : List Ty} {t : Term} {T : Ty},
+    HasType (Ω := Ω) Δ Γ t T → ∀ k, Term.usesVar k t = true → k < Γ.length
+  | _, _, _, .var h, k, hk => by
+    simp only [Term.usesVar, beq_iff_eq] at hk
+    subst hk; exact (List.getElem?_eq_some_iff.mp h).1
+  | _, _, _, .lam _ hb, k, hk => by
+    have := hasType_usesVar_lt hb (k + 1) (by simpa [Term.usesVar] using hk)
+    simpa using this
+  | _, _, _, .app h1 h2, k, hk => by
+    simp only [Term.usesVar, Bool.or_eq_true] at hk
+    rcases hk with hk | hk
+    · exact hasType_usesVar_lt h1 k hk
+    · exact hasType_usesVar_lt h2 k hk
+  | _, _, _, .fix h, k, hk => hasType_usesVar_lt h k (by simpa [Term.usesVar] using hk)
+  | _, _, _, .nat _, k, hk => by simp [Term.usesVar] at hk
+  | _, _, _, .bool, k, hk => by simp [Term.usesVar] at hk
+  | _, _, _, .bytes _, k, hk => by simp [Term.usesVar] at hk
+  | _, _, _, .digest _, k, hk => by simp [Term.usesVar] at hk
+  | _, _, _, .prim h1 h2, k, hk => by
+    simp only [Term.usesVar, Bool.or_eq_true] at hk
+    rcases hk with hk | hk
+    · exact hasType_usesVar_lt h1 k hk
+    · exact hasType_usesVar_lt h2 k hk
+  | _, _, _, .record _ h, k, hk => fieldsTy_usesVar_lt h k (by simpa [Term.usesVar] using hk)
+  | _, _, _, .get h _, k, hk => hasType_usesVar_lt h k (by simpa [Term.usesVar] using hk)
+  | _, _, _, .extend h _ hfs, k, hk => by
+    simp only [Term.usesVar, Bool.or_eq_true] at hk
+    rcases hk with hk | hk
+    · exact hasType_usesVar_lt h k hk
+    · exact fieldsTy_usesVar_lt hfs k hk
+  | _, _, _, .inj _ _ h, k, hk => hasType_usesVar_lt h k (by simpa [Term.usesVar] using hk)
+  | _, _, _, .case h ha, k, hk => by
+    simp only [Term.usesVar, Bool.or_eq_true] at hk
+    rcases hk with hk | hk
+    · exact hasType_usesVar_lt h k hk
+    · exact armsTy_usesVar_lt ha k hk
+  | _, _, _, .ite h1 h2 h3, k, hk => by
+    simp only [Term.usesVar, Bool.or_eq_true] at hk
+    rcases hk with (hk | hk) | hk
+    · exact hasType_usesVar_lt h1 k hk
+    · exact hasType_usesVar_lt h2 k hk
+    · exact hasType_usesVar_lt h3 k hk
+  | _, _, _, .ref _, k, hk => by simp [Term.usesVar] at hk
+  | _, _, _, .refuse _ _, k, hk => by simp [Term.usesVar] at hk
+  | _, _, _, .hole _ hs, k, hk => substTy_usesVar_lt hs k (by simpa [Term.usesVar] using hk)
+theorem substTy_usesVar_lt {Δ : List Ty} {Ω : HoleSignature} : ∀ {Γ : List Ty} {σ : List Term} {Ψ : List Ty},
+    SubstTy Δ Γ σ Ψ Ω → ∀ k, Term.usesVarList k σ = true → k < Γ.length
+  | _, _, _, .nil, k, hk => by simp [Term.usesVarList] at hk
+  | _, _, _, .cons h hs, k, hk => by
+    simp only [Term.usesVarList, Bool.or_eq_true] at hk
+    rcases hk with hk | hk
+    · exact hasType_usesVar_lt h k hk
+    · exact substTy_usesVar_lt hs k hk
+theorem fieldsTy_usesVar_lt {Δ : List Ty} {Ω : HoleSignature} : ∀ {Γ : List Ty}
+    {fs : List (Label × Term)} {r : List (Label × Ty)},
+    FieldsTy (Ω := Ω) Δ Γ fs r → ∀ k, Term.usesVarRow k fs = true → k < Γ.length
+  | _, _, _, .nil, k, hk => by simp [Term.usesVarRow] at hk
+  | _, _, _, .cons h hs, k, hk => by
+    simp only [Term.usesVarRow, Bool.or_eq_true] at hk
+    rcases hk with hk | hk
+    · exact hasType_usesVar_lt h k hk
+    · exact fieldsTy_usesVar_lt hs k hk
+theorem armsTy_usesVar_lt {Δ : List Ty} {Ω : HoleSignature} : ∀ {Γ : List Ty}
+    {as : List (Label × Term)} {r : List (Label × Ty)} {B : Ty},
+    ArmsTy (Ω := Ω) Δ Γ as r B → ∀ k, Term.usesVarArms k as = true → k < Γ.length
+  | _, _, _, _, .one h, k, hk => by
+    have := hasType_usesVar_lt h (k + 1) (by simpa [Term.usesVarArms] using hk)
+    simpa using this
+  | _, _, _, _, .cons h ha _, k, hk => by
+    simp only [Term.usesVarArms, Bool.or_eq_true] at hk
+    rcases hk with hk | hk
+    · have := hasType_usesVar_lt h (k + 1) hk
+      simpa using this
+    · exact armsTy_usesVar_lt ha k hk
+end
+
 /-- **Strengthening at any position.** -/
 theorem hasType_unshiftAt_live {Δ Γ : List Lang.Ty} {Ω : HoleSignature} {t : Term} {T : Lang.Ty} {x : Nat}
     (h : HasType (Ω := Ω) Δ Γ t T) (hu : Term.usesVar x t = false) :

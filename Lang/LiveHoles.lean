@@ -181,12 +181,18 @@ def runHoleGuard {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D
 
 /-- Remove unused positions from right to left so every index still names its
 original assumption. The embedding records where each retained variable came
-from; fillRefs receives that re-embedded factor, not unchecked row syntax. -/
+from; fillRefs receives that re-embedded factor, not unchecked row syntax. The context, the term and the embedding
+move in one fold: the embedding is the context's own position list under the same erasures (C5, LANG-75.6). -/
 def factorHole (h : HoleROM) (c : HoleCode) (removed : List Nat) :
     List Ty × Term × List Nat :=
-  let small := removed.reverse.foldl (fun (a : List Ty × Term) x =>
-    (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2)) (h.ctx, c.body)
-  (small.1, small.2, (List.range h.ctx.length).filter (fun i => !removed.contains i))
+  removed.reverse.foldl (fun (a : List Ty × Term × List Nat) x =>
+    (a.1.eraseIdx x, Term.renameVar (lowerIdx x) a.2.1, a.2.2.eraseIdx x))
+    (h.ctx, c.body, List.range h.ctx.length)
+
+/-- The body a selection runs: the factor's filling with every retained variable sent back to the position it came
+from. Named so `selectHole_factor` reads this step itself (C5, LANG-75.6). -/
+def reembed (embedding : List Nat) (filling : Term) : Term :=
+  Term.renameVar (fun n => embedding.getD n n) filling
 
 /-- Selection is fresh on each invocation. Its bytes contain a code index,
 never a filling supplied by the caller. All derivation supports and used
@@ -209,7 +215,7 @@ def selectHole {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) 
   let removed ← changedHypotheses digestOf look rv self h c
   let used ← runHoleGuard digestOf look rv self h
   let (ctx, filling, embedding) := factorHole h c removed
-  let body := Term.renameVar (fun n => embedding.getD n n) filling
+  let body := reembed embedding filling
   pure ⟨h.name, i, version, body, removed, used, ctx, filling, embedding, c.body⟩
 
 /-- A blocked hole is not a candidate receipt. Its original named refusal

@@ -6078,3 +6078,41 @@ they would read after my edit, not as they read: the read caught it. The BIAS: a
 make, cited as if it were the tree.
 
 Status: landed by CX-PROMO-2 (lang:). Next: C5 part 2 (`selectHole_factor`).
+
+### LANG-75.6 C5 (part 2) · the factor is typed and re-embeds to the ROM code: `selectHole_factor`; the embedding moves in the factor's own fold (2026-10-22; CX-PROMO-2; IMPACT `redregg/work/promo/IMPACT-C5.md` §3.3 (option A); cross-family read `redregg/work/promo/READ-C5-grok.md` §2; RULE/RELEASE R-0040)
+
+**Decision.** `selectHole_factor` lands in `Lang/Proofs/LiveHoles.lean`, statement as judged: on an installed ROM
+(`h.check Δ`, which `instantiateHoles` runs first), the strengthened filling types at the strengthened context, and
+the body a selection runs is exactly the selected ROM code. The factor stays (R-0040 refuted my "nothing reads it":
+the journey rows `strengthened-context` and `LP strengthened over deployed ROM` decide its context and filling, and a
+mis-embedding keeps the node count `selectHole_nodes` checks).
+
+**Deployed changes, behaviour identical** (journey byte-identical, 793 lines): `factorHole` computes the embedding in
+its own fold — the context's position list under the same erasures — instead of a second computation
+(`(List.range n).filter (!removed.contains ·)`) of the surviving positions; the re-embedding is named `reembed`, so the
+theorem reads that step itself.
+
+**New general fact.** `hasType_usesVar_lt` (with its list/row/arm/substitution siblings, `Lang/Proofs/Subst.lean`):
+a variable a typed term uses is in its context. The re-embedding is correct only on those.
+
+**Plant** (READ-C2 §3; `redregg/work/promo/C5/plants-landed/pT3-*`): `reembed` sends the second kept variable to 0
+when a strengthening moved it — the shape no tooth runs (two kept variables after one strengthening). The five teeth
+GREEN, `lang-journey` GREEN and byte-identical, `Lang.Proofs.LiveHoles` RED at `selectHole_factor`'s
+`s.body = s.original` step, by name; witness (context `[nat, bool, nat]`, the bool dead and unused, code `x0 + x2`):
+`body-is-original true` → `false`.
+
+**Measured.** Digest against LANG-75.5's: vanished 0; type-digest changed 1 — `factor_fold_nodes` RESTATED: it gains
+the fold's embedding component (a binder `E`), its conclusion (the term's node count is kept) unchanged; values
+changed 8 (`factorHole`, `selectHole` and the proofs that unfold them); new 44 (`reembed`, `selectHole_factor`, the
+four scope lemmas, four private lemmas, generated equations). Premise price 0. Whole tree GREEN (725); `check.py` ok.
+Theorems 5,872 → 5,881.
+
+**Critique.** `selectHole_factor` needs `h.check Δ`: it is true on every live path because `instantiateHoles` checks
+first, but `selectHole` alone does not check, so the theorem is about the composition, not about `selectHole` by
+itself.
+
+**Meta-critique.** I argued for deleting the factor on the ground that its theorem would be an identity. The read's
+answer was that an identity nobody has proved is exactly what a mis-embedding hides behind; the BIAS: taking "it is
+the identity on the fixtures" (the teeth's `rfl`) for "it is the identity".
+
+Status: landed by CX-PROMO-2 (lang:). Next: C7 (`promo/IMPACT-C7.md`), then C6.
