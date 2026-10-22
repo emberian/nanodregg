@@ -252,7 +252,11 @@ def resolutionMax (rs : List HoleResolution) : Nat :=
 expansion bound of `Term.fillBounded` plus one guard allowance (`Bounds.holeGuardFuel`) per declared hole;
 the same formula at two different `m`s, not the same number. The invocation's
 actual cost is this at the resolved candidates (`instantiateHoles`); the static charge is this at the largest
-committed candidate (`Package.preparationCost`). -/
+committed candidate (`Package.preparationCost`).
+
+With `holeSignature`, this is the hole boundary (C6, LANG-75.8): typing and cost, never behaviour. No
+consumer reads a projection of a selected filling; the abstract `consumer_boundary` left with LANG-75.3
+for that reason. -/
 def Package.holeCharge (p : Package) (m : Nat) : Nat :=
   if p.holes.isEmpty then 0
   else Term.nodes p.body * (m + 1) + Bounds.holeGuardFuel * p.holes.length

@@ -46,6 +46,9 @@ structure HoleROM where
 def HoleROM.decl (h : HoleROM) : HoleDecl (List Ty) Ty :=
   ⟨h.name, h.ctx, h.ty⟩
 
+/-- The whole boundary a package's holes present to typing (C6, LANG-75.8): each hole's name, context
+and type (Ω). The install check (`checkE … (Ω := holeSignature p.holes)`) and the residual-hole refusal
+(`unresolvedBody`) see nothing else of a hole. A candidate's behaviour is not part of it. -/
 def holeSignature (hs : List HoleROM) : HoleSignature := hs.map HoleROM.decl
 
 end Nanodregg.Lang

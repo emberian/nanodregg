@@ -6150,3 +6150,25 @@ to the reader question decided the card, and it was available from `HoleROM.lean
 BIAS: letting an ordered procedure (plant first) stand in for the question that decides the card (consumer first).
 
 Status: landed by CX-PROMO-3 (lang:). Next: C6 (`promo/IMPACT-C6.md`).
+
+### LANG-75.8 C6 · boundary = Ω: the hole boundary is typing and cost, never behaviour, as two docstrings (2026-10-22; CX-PROMO-3; IMPACT `redregg/work/promo/IMPACT-C6.md`; RELEASE R-0043, no read: a pure docstring)
+
+**Decision.** No theorem. A package's holes show the rest of the system two things. `holeSignature` gives each hole's
+name, context and type: all that `checkE … (Ω := holeSignature p.holes)` sees at install, and all that
+`unresolvedBody` uses to refuse a residual hole by its type. `Package.holeCharge` gives the expansion bound plus one
+guard allowance per hole. What a selected candidate does belongs to neither. The deletion half of the card,
+`Consumer`, `Consumer.holds` and `consumer_boundary`, went with `Closure.lean` in LANG-75.3; it had no deployed reader.
+
+**What lands.** A docstring on `holeSignature` (`Lang/HoleROM.lean`) and a paragraph on `Package.holeCharge`
+(`Lang/LiveHoles.lean`).
+
+**Price.** 0: comments only.
+
+**Critique.** "Never behaviour" holds only while no consumer pins a filling's value. Activities design experiment 6
+(a consumer pinning an exported `value` row) is where it stops holding, and that row is not built.
+
+**Meta-critique.** The plan wrote C6 as "boundary = Ω" before LANG-75.3 deleted the abstract consumer, so most of the
+card was done by a deletion two landings earlier. The BIAS: keeping a card's original size after the work that
+shrank it has already landed.
+
+Status: landed by CX-PROMO-3 (lang:). P2 complete. Next: PROT-1 (`promo/IMPACT-PROT-1.md`, R-0044).
