@@ -6116,3 +6116,37 @@ answer was that an identity nobody has proved is exactly what a mis-embedding hi
 the identity on the fixtures" (the teeth's `rfl`) for "it is the identity".
 
 Status: landed by CX-PROMO-2 (lang:). Next: C7 (`promo/IMPACT-C7.md`), then C6.
+
+### LANG-75.7 C7 · acyclicity over the pin graph is a docstring: a support precedes its Turn by `touchCheck_pin`, and no support names a selection (2026-10-22; CX-PROMO-3; IMPACT `redregg/work/promo/IMPACT-C7.md`; plants `redregg/work/promo/C7/`; GRANT R-0042 (unused: nothing lands in Kernel))
+
+**Decision (plan §8.2; R-0042's own condition).** No theorem. `support_precedes` was written as a statement and built
+in scratch, GREEN at 100ad08. It says that for an admitted Turn, a write or retire touch's pin is the pin of the entry
+before the Turn, and that no World from the post-state on holds that pin again, unless the two pin inputs collide
+(`CollidesAmong` over an explicit two-element list). Its proof composes `touchCheck_pin`, the private `touchCheck_adv`
+carried through `commit`, `fold_entryStep` and `pinPre_adv_ne`. That is `stale_behind_forever` started at the
+pre-state, plus `touchCheck_pin`. The plant R-0042 names, `touchCheck` comparing against the entry the act leaves, was
+built and run first. It reds `touchCheck_pin` (Admit.lean:74) and `touchCheck_stale` (:162) by name, with both
+statements false, and lake stops at `Kernel.Proofs.Admit`. Every home `support_precedes` could have imports that
+module, so the plant can never red it by name. A write that keeps its version, the only other way the conclusion can
+fail, stops earlier at a `CellsFit` proof script.
+
+**No reader.** A ROM row support is a row of the hole object itself, and a cell support says only that a cell stands.
+In `Std.hole`, a support is the hole's own `facts` row (activities card F (2): a support is never a hole's row). The
+cell a fact names is checked for liveness only. So a support never names another hole's selection, and the deployed
+support graph has depth one: every support is a kernel fact of the World before the Turn.
+
+**What lands.** The docstring on `SupportPin` (`Lang/HoleROM.lean`) says this, and gives the theorem's trigger: card F
+(3), the first row that needs a hole to cite a hole, where supports become transitive through selections and get a
+reader over `rowStep_pin` as well as `touchCheck_pin`. The trigger is cv 01a165f2-bb33.
+
+**Price.** 0: comments only. No statement, no definition, no wire.
+
+**Critique.** "Well-founded by height", the plan's wording, has no object in the kernel. No entry records the height
+that wrote it; the order that exists is `EAdv`, per cell. A theorem stated over heights would have needed a history
+record the kernel does not keep.
+
+**Meta-critique.** I built the statement and both plants before asking who reads it, as the brief ordered. The answer
+to the reader question decided the card, and it was available from `HoleROM.lean:7` and card F without a build. The
+BIAS: letting an ordered procedure (plant first) stand in for the question that decides the card (consumer first).
+
+Status: landed by CX-PROMO-3 (lang:). Next: C6 (`promo/IMPACT-C6.md`).
