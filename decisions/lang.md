@@ -5171,3 +5171,44 @@ then defaulted to deleting them, because a re-home was outside this worker's gra
 reason. The reader refused it. The bias is letting the edge of one's own grant decide what a fact is worth.
 
 Status: landed by CX-FOLD; next S1b (KERNEL/HOST re-home, R-0006), S1c (Integration), then LANG-74.2 (S2).
+
+### LANG-74.1b S1b · the two deployed facts of `Integration.lean` re-homed to KERNEL and HOST before it is deleted (2026-10-22; CX-FOLD; cross-family read `redregg/work/fold/READ-S1-grok.md` ruling (b); GRANT R-0006)
+
+**Decision.** Before S1c deletes `Lang/Proofs/Contextual/Integration.lean`, its two statements about deployed objects
+move to the layers that own those objects:
+- `Kernel.Receive.audit_append` in `Kernel/Proofs/Audit.lean`: `audit X w pre = .ok mid → audit X mid suffix = .ok
+  final → audit X w (pre ++ suffix) = .ok final`, for every `D` with `[Ord D] [DecidableEq D]` and every `X : Ctx D`.
+  Integration's private `audit_append_to` stated it at `Host.Deployed.D`/`Host.Deployed.X` only; the proof is the same
+  induction on `audit`. It was the tree's only append law for `audit` (`fold_append` is about `World.fold`; `audit_ok`
+  relates `audit` to a fold only with `Honest`, which has no append law). Consumer:
+  `Host.Deployed.recovery_preserves_consumption`.
+- `Host.Deployed.SpentCheckpoint` (the premise bundle: trusted, canonical cells, contiguous ledger, the grant's left
+  at 0) and `Host.Deployed.recovery_preserves_consumption` in the new `Host/Proofs/SpentCheckpoint.lean`: a successful
+  `Host.openWith` from a spent trusted base, with an audited tail, opens to a trusted World, and the tail followed by
+  any audited future moves nothing through the grant. It sits beside `openWith_trusted`, which it composes with
+  `Ledger.Proofs.grant_moves_le_cap` (whose other consumers are `Ledger/Proofs/GrantCapTooth.lean`,
+  `Ledger/Proofs/EscrowAdmitted.lean` and the certificate pin) through `audit_append`.
+
+**Statements.** Re-homed exactly. Measured in one environment holding both: the new
+`recovery_preserves_consumption`, `SpentCheckpoint`, its constructor and its four fields are structurally equal
+(`Expr ==`, and equal printed form) to Integration's after renaming the one constant
+`Integration.Recovery.SpentCheckpoint` ↦ `Host.Deployed.SpentCheckpoint`; the control comparisons (unrenamed; another
+theorem) are false. `audit_append` at `D := Host.Deployed.D`, `X := Host.Deployed.X` proves the old private statement
+verbatim (an `example` that elaborates). Generalizing `audit_append` added no premise: the polymorphic statement's
+instance binders are the file's `[Ord D] [DecidableEq D]`, which `Host.Deployed.D` has. No landed theorem gains a
+hypothesis or changes.
+
+**What breaks.** Nothing. Census digest diff of the whole tree against f665e94: 12 new constants (the two theorems,
+the structure and its generated constants), 0 vanished, 0 statement or value-hash changes (one lazily realized
+`Lang.Std.lawCase5.eq_1` re-owned, statement identical). `Host/Proofs/SpentCheckpoint.lean` is the first Host module
+to import a Ledger module (`Ledger.Proofs.GrantCap`); it is a proof leaf, outside every exe closure, and Ledger
+imports no Host module, so no cycle and no deployed closure changes. The two copies in Integration exist until S1c,
+the next landing.
+
+**Critique.** `recovery_preserves_consumption` keeps its premise `htail` (the tail has SOME audited history): that is
+the re-execution-honesty assumption of the local opener, named, not discharged here; a reopen that audits its tail
+would discharge it, and nothing does yet. **Meta-critique.** I priced the re-home as "outside this worker's grant"
+and defaulted to deleting the facts; the reader's ruling made it a grant. The bias was treating the edge of the grant
+I held as the edge of what the fold should preserve.
+
+Status: landed by CX-FOLD under R-0006; next S1c deletes Integration.lean.

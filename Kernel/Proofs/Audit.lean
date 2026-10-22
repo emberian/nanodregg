@@ -412,4 +412,29 @@ theorem rowTouchesOf_unpinned_key {pins : List (RowSlot D × D)} {key : RowKey D
     simp only [List.any_eq_false, decide_eq_true_eq]; exact hp
   simp [rowTouchesOf, forEx, req, ha, hany, RowSlot.under, RowSlot.keyBytes, bind, Except.bind]
 
+/-- **An audited log composes over `++`**: auditing `pre` from `w` to `mid`, then `suffix` from `mid` to `final`, is
+auditing `pre ++ suffix` from `w` to `final`. `World.fold`'s `fold_append` does not state it: `audit` re-derives each
+step (`auditStep`), and `audit_ok` relates it to a fold only together with `Honest`, which has no append law here.
+Consumer: `Host.Deployed.recovery_preserves_consumption` (a reopened World's audited tail followed by any audited
+future). Re-homed from `Lang/Proofs/Contextual/Integration.lean`'s private `audit_append_to`, which stated it at the
+deployed `D` only (LANG-74.1b). -/
+theorem audit_append {X : Ctx D} {w mid final : World D} {pre suffix : List (Step D)}
+    (hp : audit X w pre = .ok mid) (hs : audit X mid suffix = .ok final) :
+    audit X w (pre ++ suffix) = .ok final := by
+  induction pre generalizing w with
+  | nil =>
+    simp only [audit, Except.ok.injEq] at hp
+    subst w
+    exact hs
+  | cons step rest ih =>
+    cases he : auditStep X w step with
+    | error e => simp [audit, he] at hp
+    | ok next =>
+      cases hr : audit X next rest with
+      | error e => cases e; simp [audit, he, hr] at hp
+      | ok result =>
+        have eq : result = mid := by simpa [audit, he, hr] using hp
+        subst result
+        simp [audit, he, ih hr]
+
 end Nanodregg.Kernel.Receive
