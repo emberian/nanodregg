@@ -165,7 +165,7 @@ def checkROMLits (p : Package) : Except (Refusal D) Unit :=
 and law checking). Ordinary fields still evaluate; no selected code is guessed. -/
 def unresolvedBody (p : Package) : Except String Term :=
   if p.holes.isEmpty then .ok p.body
-  else Contextual.Term.fillBounded Wire.nodeMax 1
+  else Term.fillBounded Wire.nodeMax 1
     (fun n => ((holeSignature p.holes).find? (fun d => d.name == n)).map
       (fun d => .refuse d.ty "holeUnresolved".toUTF8)) p.body
 
@@ -211,9 +211,9 @@ def loadLive (rv : RowView D) (self : D) (look : Pinned D) (fuel : Nat)
 the selected candidate cannot exceed the maximum over its committed candidates. -/
 def Package.preparationCost (p : Package) : Nat :=
   if p.holes.isEmpty then 0
-  else Contextual.Term.nodes p.body *
+  else Term.nodes p.body *
     (1 + (p.holes.flatMap (fun h => h.code)).foldl
-      (fun n c => max n (Contextual.Term.nodes c.body)) 1) + 256 * p.holes.length
+      (fun n c => max n (Term.nodes c.body)) 1) + 256 * p.holes.length
 
 
 def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := do

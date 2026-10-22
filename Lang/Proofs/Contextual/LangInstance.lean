@@ -1,4 +1,5 @@
 /- The deployed language, including substituted contextual holes, is a lawful calculus. -/
+import Lang.Contextual.LangInstance
 import Lang.Proofs.Contextual.LangOccurrences
 import Lang.Proofs.Contextual.ClosureStatements
 
@@ -13,50 +14,33 @@ theorem hasType_closed_lift {M : Term} {A : Lang.Ty} (h : HasType [] [] M A)
 
 /-! ## The holes' declarations -/
 
-theorem tyOf_some {Ω : List (HoleDecl (List Lang.Ty) Lang.Ty)} {n : Nat} {A : Lang.Ty}
-    (h : tyOf Ω n = some A) : ∃ d ∈ Ω, d.name = n ∧ d.ty = A := by
-  unfold tyOf at h
+theorem holeTy_some {Ω : List (HoleDecl (List Lang.Ty) Lang.Ty)} {n : Nat} {A : Lang.Ty}
+    (h : holeTy Ω n = some A) : ∃ d ∈ Ω, d.name = n ∧ d.ty = A := by
+  unfold holeTy at h
   simp only [Option.map_eq_some_iff] at h
   obtain ⟨d, hd, ht⟩ := h
   exact ⟨d, List.mem_of_find?_eq_some hd, by simpa using List.find?_some hd, ht⟩
 
 /-- Removing declarations of OTHER names (or none of name `n`) leaves `n`'s type alone. -/
-theorem tyOf_filter (p : HoleDecl (List Lang.Ty) Lang.Ty → Bool) (n : Nat) :
+theorem holeTy_filter (p : HoleDecl (List Lang.Ty) Lang.Ty → Bool) (n : Nat) :
     ∀ Ω : List (HoleDecl (List Lang.Ty) Lang.Ty), (∀ d ∈ Ω, d.name = n → p d = true) →
-      tyOf (Ω.filter p) n = tyOf Ω n
+      holeTy (Ω.filter p) n = holeTy Ω n
   | [], _ => rfl
   | d :: Ω, h => by
-    have ih := tyOf_filter p n Ω fun d' hd' => h d' (List.mem_cons_of_mem _ hd')
+    have ih := holeTy_filter p n Ω fun d' hd' => h d' (List.mem_cons_of_mem _ hd')
     by_cases hn : d.name = n
     · have hp := h d List.mem_cons_self hn
-      simp only [tyOf, List.filter_cons_of_pos hp, List.find?_cons, hn, beq_self_eq_true]
+      simp only [holeTy, List.filter_cons_of_pos hp, List.find?_cons, hn, beq_self_eq_true]
     · have hb : (d.name == n) = false := by simp [hn]
       by_cases hp : p d = true
-      · simp only [tyOf, List.filter_cons_of_pos hp, List.find?_cons, hb] at ih ⊢
+      · simp only [holeTy, List.filter_cons_of_pos hp, List.find?_cons, hb] at ih ⊢
         exact ih
-      · simp only [tyOf, List.filter_cons_of_neg hp, List.find?_cons, hb] at ih ⊢
+      · simp only [holeTy, List.filter_cons_of_neg hp, List.find?_cons, hb] at ih ⊢
         exact ih
-
-theorem lt_holeBound : ∀ {Ω : List (HoleDecl (List Lang.Ty) Lang.Ty)} {d : HoleDecl (List Lang.Ty) Lang.Ty},
-    d ∈ Ω → d.name < holeBound Ω
-  | d' :: Ω, d, h => by
-    simp only [holeBound, List.foldr_cons] at *
-    rcases List.mem_cons.1 h with rfl | h
-    · omega
-    · have := lt_holeBound h; simp only [holeBound] at this; omega
-
-theorem ΔOf_getElem? {Ω : List (HoleDecl (List Lang.Ty) Lang.Ty)} {n : Nat} {A : Lang.Ty}
-    (h : tyOf Ω n = some A) : (ΔOf Ω)[n]? = some A := by
-  obtain ⟨d, hd, hn, _⟩ := tyOf_some h
-  have hlt : n < holeBound Ω := hn ▸ lt_holeBound hd
-  simp [ΔOf, hlt, h]
-
-theorem ΔOf_nil : ΔOf [] = [] := rfl
-
 
 /-- Every contextual hole occurrence has its named declaration. -/
 def RefsDeclared (Ω : HoleSignature) (t : Term) : Prop :=
-  ∀ n, Term.usesRef n t = true → (tyOf Ω n).isSome = true
+  ∀ n, Term.usesRef n t = true → (holeTy Ω n).isSome = true
 
 /-- The contextual judgment uses the deployed checker signature. Ordinary imports
 remain unavailable to standalone calculus fillings; their namespace is distinct. -/
@@ -66,7 +50,7 @@ def LangHasTy (Ω : HoleSignature) (Γ : List Lang.Ty) (t : Term) (T : Lang.Ty) 
 theorem refsDeclared_nil {t : Term} (h : RefsDeclared [] t) (n : Nat) : Term.usesRef n t = false := by
   cases hn : Term.usesRef n t with
   | false => rfl
-  | true => have := h n hn; simp [tyOf] at this
+  | true => have := h n hn; simp [holeTy] at this
 
 theorem langHasTy_nil_iff {Γ : List Lang.Ty} {t : Term} {T : Lang.Ty} :
     LangHasTy [] Γ t T ↔ HasType [] Γ t T := Iff.rfl
@@ -76,7 +60,7 @@ theorem langHasTy_declared {Ω : HoleSignature} {Γ : List Lang.Ty} {t : Term} {
     (h : LangHasTy Ω Γ t T) : RefsDeclared Ω t := by
   intro n hn
   have hd := hasType_declaresHole h n hn
-  simpa [tyOf] using hd
+  simpa [holeTy] using hd
 
 theorem langLaws : CalculusLaws langData LangHasTy where
   msubst_lemma := by

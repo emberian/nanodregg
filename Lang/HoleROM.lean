@@ -1,6 +1,6 @@
 /- Contextual declarations and candidate code are immutable ROM, not row values. -/
 import Lang.Check
-import Lang.Contextual.LangCalculus
+import Lang.Subst
 
 namespace Nanodregg.Lang
 
@@ -33,7 +33,7 @@ structure HoleROM where
   guard : Term
   deriving Inhabited, DecidableEq
 
-def HoleROM.decl (h : HoleROM) : Contextual.HoleDecl (List Ty) Ty :=
+def HoleROM.decl (h : HoleROM) : HoleDecl (List Ty) Ty :=
   ⟨h.name, h.ctx, h.ty⟩
 
 def holeSignature (hs : List HoleROM) : HoleSignature := hs.map HoleROM.decl

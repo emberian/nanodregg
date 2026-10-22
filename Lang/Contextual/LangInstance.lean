@@ -1,7 +1,36 @@
-/- The two-support, one-blocker deployed fragment of the existing Lang calculus. -/
-import Lang.Contextual.LangCalculus
+/-
+# Lang.Contextual.LangInstance — the DEPLOYED term language as a `CalculusData` (ACTIVITIES-2)
+
+The data half of CLOSURE's calculus over deployed `Lang.Term`, built from the operations the Host runs
+(`Lang.Subst`): `msubst` is `fillRefs`; strengthening and weakening rename ordinary variables at a position
+with `lowerIdx`/`liftIdx` (`Lang.Index`). The signature-aware laws live in
+`Lang.Proofs.Contextual.LangInstance`; deployed strengthening is exercised and proved over the installed
+contextual ROM generator. No deployed module imports this one.
+
+Below `langData`: the two-support, one-blocker deployed fragment of the same calculus that the `Std.hole`
+bridge (`Lang.Proofs.Contextual.HoleBridge`) is stated over.
+-/
+import Lang.Subst
+import Lang.Contextual.Closure
 
 namespace Nanodregg.Lang.Contextual
+
+/-- `Lang.Term` as a `CalculusData`. -/
+def langData : CalculusData where
+  Ty := Lang.Ty
+  Ctx := List Lang.Ty
+  Tm := Term
+  tmEq := Term.decEq
+  msubst := Term.fillRefs
+  check Ψ M A := decide (Lang.infer [] Ψ M = some A)
+  uses M x := Term.usesVar x M
+  drop Ψ x := Ψ.eraseIdx x
+  strengthen x := Term.renameVar (lowerIdx x)
+  weaken x := Term.renameVar (liftIdx x)
+  var := Term.var
+  lookup Ψ x := Ψ[x]?
+
+/-! ## The two-support, one-blocker fragment of `langData` for the `Std.hole` bridge -/
 
 variable {E : Type}
 
@@ -44,4 +73,3 @@ def holeModelTemplate (V : Lang.Ty) (guard : E → Term → Bool) (chooser accep
   names := by simp
 
 end Nanodregg.Lang.Contextual
-

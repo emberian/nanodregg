@@ -43,17 +43,17 @@ def gateRows : List (String × Bool) := Id.run do
   let sig : HoleSignature := [⟨7, [.nat], .nat⟩]
   let closed := { plain with holes := [] }
   return [
-    ("successor-fill-term", decide (Contextual.Term.fillRefs fill termHole = .nat 9)),
-    ("successor-fill-fields", decide (Contextual.Term.fillRefsRow fill [("v", termHole)] = [("v", .nat 9)])),
-    ("successor-fill-arms", decide (Contextual.Term.fillRefsRow fill [("v", armHole)] = [("v", .prim .add (.var 0) (.nat 9))])),
-    ("successor-declared-term", Contextual.Term.usesRef 7 termHole && (inferE [] [] termHole sig).isOk && !(inferE [] [] termHole).isOk),
-    ("successor-declared-fields", Contextual.Term.usesRefRow 7 [("v", termHole)] && (inferFields [] [] [("v", termHole)] sig).isOk &&
+    ("successor-fill-term", decide (Term.fillRefs fill termHole = .nat 9)),
+    ("successor-fill-fields", decide (Term.fillRefsRow fill [("v", termHole)] = [("v", .nat 9)])),
+    ("successor-fill-arms", decide (Term.fillRefsRow fill [("v", armHole)] = [("v", .prim .add (.var 0) (.nat 9))])),
+    ("successor-declared-term", Term.usesRef 7 termHole && (inferE [] [] termHole sig).isOk && !(inferE [] [] termHole).isOk),
+    ("successor-declared-fields", Term.usesRefRow 7 [("v", termHole)] && (inferFields [] [] [("v", termHole)] sig).isOk &&
       !(inferFields [] [] [("v", termHole)]).isOk),
-    ("successor-declared-arms", Contextual.Term.usesRefRow 7 [("v", armHole)] && (inferArms [] [] [("v", armHole)] [("v", .nat)] sig).isOk &&
+    ("successor-declared-arms", Term.usesRefRow 7 [("v", armHole)] && (inferArms [] [] [("v", armHole)] [("v", .nat)] sig).isOk &&
       !(inferArms [] [] [("v", armHole)] [("v", .nat)]).isOk),
-    ("reader-import-contract", decide (Contextual.Term.fillRefs (fun _ => some (.nat 0)) (.ref 0) = .ref 0) &&
+    ("reader-import-contract", decide (Term.fillRefs (fun _ => some (.nat 0)) (.ref 0) = .ref 0) &&
       (inferE [.nat] [] (.ref 0)).isOk && !(inferE [] [] (.ref 0)).isOk &&
-      !Contextual.Term.usesRef 0 (.ref 0)),
+      !Term.usesRef 0 (.ref 0)),
     ("closed-admission-identity", (admitContextual (fun _ => some (3 : Sim.D))
       (fun _ _ => .error "must-not-prepare-closed") .empty closed ⟨[], [], []⟩ []).isOk),
 
@@ -82,8 +82,8 @@ def gateRows : List (String × Bool) := Id.run do
     ("selection-support-version", named (selectHole (view (some 0) (some 1) (left := some 2)) (3 : Sim.D) h)
       "holeDerivationMoved 0"),
     ("guard-budget", named (selectHole good (3 : Sim.D) { h with guard := longGuard }) "holeGuardFault 0"),
-    ("expansion-work-bound", named (Contextual.Term.fillBounded 1 1 (fun _ => none) (.nat 1)) "holeWorkBound"),
-    ("expansion-size-bound", named (Contextual.Term.fillBounded 64 3 (fun _ => some duplicate) nested) "holeSizeBound"),
+    ("expansion-work-bound", named (Term.fillBounded 1 1 (fun _ => none) (.nat 1)) "holeWorkBound"),
+    ("expansion-size-bound", named (Term.fillBounded 64 3 (fun _ => some duplicate) nested) "holeSizeBound"),
     ("contextual-print-mismatch", printMismatch),
     ("contextual-print-unreadable", named (Print.contextualText p "(") "contextualPrintRead"),
     ("rom-candidate-literals", match checkROMLits (fun _ => (none : Option Sim.D))

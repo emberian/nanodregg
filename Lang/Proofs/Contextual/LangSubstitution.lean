@@ -1,6 +1,6 @@
 /- Ordinary substitution preserves the deployed typing judgment.
 No new assumption is attached to a landed theorem. -/
-import Lang.Contextual.LangSubstitution
+import Lang.Subst
 import Lang.Proofs.Contextual.LangRenaming
 
 namespace Nanodregg.Lang.Contextual

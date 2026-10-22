@@ -71,7 +71,7 @@ an empty-signature or no-hole premise. -/
 theorem contextual_law_dormant_hole :
     ∃ (p : Package) (look : Pinned UInt8) (t : Term),
       p.holes ≠ [] ∧ readPackage look 7 = .ok p ∧
-      p.body = .record [("law", t)] ∧ NoRef t ∧ Contextual.Term.usesRef 0 t = true ∧
+      p.body = .record [("law", t)] ∧ NoRef t ∧ Term.usesRef 0 t = true ∧
       (program toothEncode toothDecode).judge look (some 7) [] [] [] toothReq = .ok () ∧
       Std.Admits [] t (reqData toothEncode toothReq) (.record []) (.record []) := by
   have hj : judgeOneWith toothEncode toothDecode (loadContextual toothDecode)

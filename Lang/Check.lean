@@ -15,11 +15,11 @@ A `case` must have at least one arm (its result type comes from the arms).
 -/
 import Lang.Bounds
 import Lang.Term
-import Lang.Contextual.HoleDecl
+import Lang.HoleDecl
 
 namespace Nanodregg.Lang
 
-abbrev HoleSignature := List (Contextual.HoleDecl (List Ty) Ty)
+abbrev HoleSignature := List (HoleDecl (List Ty) Ty)
 
 /-- Which typing rule a term breaks (law 7: each a constructor with a name). -/
 inductive TypeError

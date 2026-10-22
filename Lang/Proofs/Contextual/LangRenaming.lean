@@ -1,5 +1,5 @@
 /- Binder-aware renaming and strengthening for every contextual Lang term. -/
-import Lang.Contextual.LangCalculus
+import Lang.Subst
 import Lang.Proofs.Check
 import Lang.Proofs.Contextual.Core
 

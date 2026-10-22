@@ -31,7 +31,7 @@ live. Withdrawal is a liveness change: it can suspend, it never refutes (`confli
 only from the checker and the guard, which read no token).
 -/
 
-import Lang.Contextual.HoleDecl
+import Lang.HoleDecl
 
 namespace Nanodregg.Lang.Contextual
 

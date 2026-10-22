@@ -25,6 +25,8 @@ The judgments (`HasTy`, `HasSubst`, `Step`) are statements, so they live in the 
 `Lang.Proofs.Contextual.Typing` (gate C3); this module is data only.
 -/
 
+import Lang.Index
+
 namespace Nanodregg.Lang.Contextual
 
 /-- Simple types with the contextual box `[Ψ ⊢ A]`. -/
@@ -67,11 +69,6 @@ inductive Tm
   deriving Repr
 
 /-! ## Renaming of ordinary variables -/
-
-/-- A renaming under one more ordinary binder. -/
-def upR (ρ : Nat → Nat) : Nat → Nat
-  | 0 => 0
-  | i + 1 => ρ i + 1
 
 mutual
 /-- Rename the ordinary free variables of a term (not inside `box`: a box body is closed over the
@@ -352,12 +349,6 @@ def check (Γ : Ctx) (t : Tm) (A : Ty) : Bool :=
   | none => false
 
 /-! ## Strengthening at any position -/
-
-/-- The index map of weakening at `x`: indices from `x` up move up by one. -/
-def liftIdx (x i : Nat) : Nat := if i < x then i else i + 1
-
-/-- Its inverse away from `x`: indices above `x` move down by one. -/
-def lowerIdx (x i : Nat) : Nat := if i < x then i else i - 1
 
 /-- Weakening at `x` (the projection `π` that forgets hypothesis `x`), as a term map. -/
 def shiftAt (x : Nat) (t : Tm) : Tm := rename (liftIdx x) t

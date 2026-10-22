@@ -322,7 +322,7 @@ end
 mutual
 theorem lawTerm_fill (σ : Nat → Option Term)
     (hs : ∀ n v, σ n = some v → ∃ A, v = .refuse A "holeUnresolved".toUTF8) :
-    ∀ {t}, NoRef t → LawTerm t (Contextual.Term.fillRefs σ t)
+    ∀ {t}, NoRef t → LawTerm t (Term.fillRefs σ t)
   | .var _, _ => .var
   | .nat _, _ => .nat
   | .bool _, _ => .bool
@@ -342,14 +342,14 @@ theorem lawTerm_fill (σ : Nat → Option Term)
   | .ref _, h => False.elim h
   | .hole n ts, _ => by
     cases hv : σ n with
-    | none => simp only [Contextual.Term.fillRefs, hv]; exact .hole
+    | none => simp only [Term.fillRefs, hv]; exact .hole
     | some v =>
       obtain ⟨A, rfl⟩ := hs n v hv
-      simp only [Contextual.Term.fillRefs, hv, Contextual.Term.substList, Contextual.Term.substVar]
+      simp only [Term.fillRefs, hv, Term.substList, Term.substVar]
       exact .blocked
 theorem lawTerms_fill (σ : Nat → Option Term)
     (hs : ∀ n v, σ n = some v → ∃ A, v = .refuse A "holeUnresolved".toUTF8) :
-    ∀ {fs}, NoRefRow fs → LawTerms fs (Contextual.Term.fillRefsRow σ fs)
+    ∀ {fs}, NoRefRow fs → LawTerms fs (Term.fillRefsRow σ fs)
   | [], _ => .nil
   | _ :: _, h => .cons (lawTerm_fill σ hs h.1) (lawTerms_fill σ hs h.2)
 end
@@ -383,11 +383,11 @@ theorem LawTerms.relocate_right {ts us} (h : LawTerms ts us) (f : Nat → Nat) :
 end
 
 theorem find_fillRefsRow (σ : Nat → Option Term) (l : Label) :
-    ∀ fs, Row.find? l (Contextual.Term.fillRefsRow σ fs) =
-      (Row.find? l fs).map (Contextual.Term.fillRefs σ)
+    ∀ fs, Row.find? l (Term.fillRefsRow σ fs) =
+      (Row.find? l fs).map (Term.fillRefs σ)
   | [] => rfl
   | (k,t)::fs => by
-    simp only [Contextual.Term.fillRefsRow, Row.find?]
+    simp only [Term.fillRefsRow, Row.find?]
     split <;> simp_all [find_fillRefsRow σ l fs]
 
 /-- A prepared record retains each law field with only unresolved-hole refusals inserted. -/
@@ -399,13 +399,13 @@ theorem unresolvedBody_field {p : Package} {fs : List (Label × Term)} {b : Term
   split at hp
   · cases hp
     exact ⟨fs, hb, fun l t hf ht => ⟨t, hf, LawTerm.same ht⟩⟩
-  · unfold Contextual.Term.fillBounded at hp
+  · unfold Term.fillBounded at hp
     repeat' split at hp
     all_goals first | (cases hp; done) | skip
     cases hp
     rw [hb]
     refine ⟨_, rfl, fun l t hf ht => ?_⟩
-    refine ⟨Contextual.Term.fillRefs (fun n =>
+    refine ⟨Term.fillRefs (fun n =>
       ((holeSignature p.holes).find? (fun d => d.name == n)).map
         (fun d => .refuse d.ty "holeUnresolved".toUTF8)) t, ?_, ?_⟩
     · rw [find_fillRefsRow, hf]; rfl

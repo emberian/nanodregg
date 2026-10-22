@@ -1,5 +1,5 @@
 /- The generated hole's decision gate against the landed contextual judgment. -/
-import Lang.Contextual.HoleModel
+import Lang.Contextual.LangInstance
 import Lang.Proofs.Contextual.Judge
 import Lang.Proofs.Contextual.LangInstance
 import Lang.Proofs.StdHoleCoverage

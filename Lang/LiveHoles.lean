@@ -7,7 +7,6 @@ import Kernel.Receive.Call
 
 namespace Nanodregg.Lang
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
-open Contextual
 
 /-- Signature validation checks every candidate at exactly its declared context,
 including candidates not currently selected. A candidate cannot introduce another hole. -/

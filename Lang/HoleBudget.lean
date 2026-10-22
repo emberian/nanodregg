@@ -1,8 +1,8 @@
 /- Bound contextual expansion before allocating its resulting syntax.
 Counts are syntax nodes, including row/substitution cons cells. -/
-import Lang.Contextual.LangCalculus
+import Lang.Subst
 
-namespace Nanodregg.Lang.Contextual
+namespace Nanodregg.Lang
 
 mutual
 def Term.nodes : Term → Nat
@@ -85,4 +85,4 @@ def Term.fillBounded (limit candidateMax : Nat) (σ : Nat → Option Term) (t : 
   else if Term.fillNodes σ t > limit then .error "holeSizeBound"
   else .ok (Term.fillRefs σ t)
 
-end Nanodregg.Lang.Contextual
+end Nanodregg.Lang

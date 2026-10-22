@@ -5400,3 +5400,77 @@ seven definitions with no theorem for five landings; the reader's S1 note is wha
 treating a plan's step boundaries as dependencies.
 
 Status: landed by CX-FOLD; the pure-deletion phase S1–S5 is complete; next LANG-74.6 (S6).
+
+### LANG-74.6 S6 · the deployed term operations leave `Contextual`: `Lang/Index`, `Lang/Subst`, `Lang/HoleDecl` (2026-10-22; CX-FOLD-2; IMPACT `redregg/work/fold/IMPACT-S6.md`; rename map `redregg/work/fold/S6-renames.tsv`; cross-family read `redregg/work/fold/READ-S6-grok.md`; RELEASE R-0011; cv task 01a16201-ef03)
+
+**Decision.** The code the Host runs no longer lives in the theory directory or its namespace (map F1, F6).
+
+What moved:
+- `Lang/Index.lean` (new): `upR`, `liftIdx`, `lowerIdx`, out of `Lang/Contextual/Core.lean`. The CMTT core imports it.
+- `Lang/Subst.lean` (new): `Lang/Contextual/LangSubstitution.lean` whole (renaming, substitution) and the term half
+  of `Lang/Contextual/LangCalculus.lean`: `Term.decEq*`, `Term.instDecEq`, `usesVar*`, `usesRef*`, `fillRefs*`, and
+  `tyOf`, renamed **`holeTy`** (with its lemmas `holeTy_some`/`holeTy_filter`). At `Nanodregg.Lang` it would have
+  shadowed `Lang.Wire.tyOf` under `open Lang.Wire`; the first build failed on exactly that at
+  `Lang/Proofs/WireTeeth.lean`:80.
+- `Lang/HoleDecl.lean` (from `Lang/Contextual/HoleDecl.lean`).
+- `Lang/Contextual/LangInstance.lean` (new): `langData` (the tail of `LangCalculus`) and `Lang/Contextual/HoleModel.lean`
+  whole. This is the deployed language as a closure calculus, imported by no deployed module.
+- `Lang/HoleBudget.lean` stays in its file and leaves namespace `Contextual` (`Term.nodes` stays with the other node
+  counts).
+
+All moved names go from `Nanodregg.Lang.Contextual` to `Nanodregg.Lang`, except `langData` and the HoleModel defs,
+whose names are unchanged. Old → new is the 45-row rename map. Consumers changed only imports and qualifiers:
+`Check`, `HoleROM`, `LiveHoles` (drops `open Contextual`), `Program`:168/214/216, `Journey/ContextualChecks`, `Closure`,
+and the proof modules `LawMeaning`, `LawReceiverTeeth`, `LangRenaming`, `LangSubstitution`, `HoleBridge`,
+`LangInstance`.
+
+Deleted (D-NOOP; the explicit deletion authorization of this landing): `holeBound`, `ΔOf` and the three lemmas about
+them only, `lt_holeBound`, `ΔOf_getElem?`, `ΔOf_nil`. Files deleted: `Lang/Contextual/{HoleDecl,HoleModel,
+LangCalculus,LangSubstitution}.lean`.
+
+**What breaks.** Every old spelling `Contextual.Term.*`, `Contextual.HoleDecl`, `Contextual.upR` etc. no longer
+resolves. The tree has no remaining user of them.
+
+The Host closure goes from 91 to 89 modules: the CMTT core, the abstract closure and `LangCalculus` leave it. No
+deployed module imports `Lang/Contextual/*`.
+
+**Census digest diff against a27b2da under the rename map** (`redregg/work/fold/diff-S6.txt`, full lists, no
+truncation):
+- No user statement changes.
+- 11 declared constants vanish: the five deleted declarations and six of their generated constants.
+- 510 constants change module, all from a moved module.
+- The rest is ONE CLASS of generated constants, named so that a reader of the digest six weeks out does not take
+  it for a statement change.
+  - Cause: Lean shares a structurally identical matcher within a module. With `usesVar*`/`fillRefs` now in the file
+    that holds `renameVar*`, they reuse `renameVarList.match_1`/`renameVarRow.match_1`/`renameVar.match_1`, and `upR`
+    in its own file gets `upR.match_1`.
+  - Effect 1: the matchers `fillRefs.match_3`, `usesVarList.match_1` and `usesVarRow.match_1` and their 34 lazily
+    realized private equation/splitter lemmas vanish (37).
+  - Effect 2: 26 matcher lemmas appear.
+  - Effect 3: the **15 equation lemmas** `Term.fillRefs.eq_16/eq_17/eq_def`, `fillRefsList.eq_def`,
+    `fillRefsRow.eq_2/eq_def`, `usesRefList.eq_def`, `usesRefRow.eq_2/eq_def`, `usesVarArms.eq_2/eq_def`,
+    `usesVarList.eq_def`, `usesVarRow.eq_2/eq_def` and `upR.eq_2` change printed type. They name the shared matcher
+    and take its binder names. Their left sides and meaning are unchanged, and no consumer cites them.
+  - Effect 4: 36 value hashes change. These are the compiled bodies (`._f`, `._sunfold`, `._unsafe_rec`, `.eq_def`)
+    of those functions, `upR`'s own value (its matcher), and the three `HoleDecl` projections, whose `Expr.proj` is
+    keyed by the structure name and is not rewritten by the digest tool.
+
+Wire: `codec-vectors --check` is ok, and `--write` regenerates a table byte-identical to `gates/codec-vectors.tsv`
+(54 `lang/package/4` vectors among 263). `Term`/`Package`/`Wire` are untouched, hence `lang:`, not `lang!`. Whole tree
+with `host`, `lang-journey` and `codec-vectors` GREEN (631 jobs); the journey GREEN. Re-emit: none. Nothing refuses to
+load.
+
+**Not here, a GATES card** (cv 01a16201-ef03, R-0011): `gates/size.py`'s "Lean lines (deployed)" still counts every
+non-proof module, so `Lang/Contextual/*` is still reported as deployed although no exe closure contains it.
+
+**Critique.** `langData` now sits beside the closure it instantiates, and the Host does not link the theory. But the
+proof closures of Kernel/Ledger still reach the CMTT metatheory (`P/Core`, `P/Typing`) through
+`P/LangRenaming`'s two `upR` lemmas. That is S7's cut, and until it lands the theory is still on the deployed
+proofs' path.
+
+**Meta-critique.** I first wrote the digest diff as an exact-string comparison of printed types. It reported 440
+"statement changes" that were hygienic binder names embedding the module path, and I nearly read the result as
+"moves are inherently noisy" instead of fixing the comparison. The bias is trusting an instrument's first number
+over its semantics. Binder names are not statements; the tool now says so in its code.
+
+Status: landed by CX-FOLD-2; next LANG-74.7 (S7).
