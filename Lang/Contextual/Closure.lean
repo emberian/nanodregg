@@ -543,27 +543,6 @@ def Consumer.holds {V : Type} (k : Consumer D V) (cl : Closure D E) : Bool :=
   | some M => k.ok (k.proj M)
   | none => false
 
-/-! ## Support closure: least fixpoint versus counting (experiment 4) -/
-
-structure Rule where
-  head : Nat
-  body : List Nat
-
-/-- Bounded iteration of the immediate-consequence operator from the facts. -/
-def lfpIter (R : List Rule) (F : Nat → Bool) : Nat → Nat → Bool
-  | 0, x => F x
-  | n + 1, x => lfpIter R F n x || R.any fun r => r.head == x && r.body.all (lfpIter R F n)
-
-/-- The number of supports of `x` in the alive set `A`: its fact, plus every rule firing in `A`. -/
-def supportCount (R : List Rule) (F : Nat → Bool) (A : Nat → Bool) (x : Nat) : Nat :=
-  (if F x then 1 else 0) + (R.filter fun r => r.head == x && r.body.all A).length
-
-/-- Naive COUNTING maintenance: starting from the old alive set, an atom dies only when its count of
-supports among the currently alive atoms reaches zero. -/
-def countRun (R : List Rule) (F : Nat → Bool) (A : Nat → Bool) : Nat → Nat → Bool
-  | 0 => A
-  | n + 1 => fun x => countRun R F A n x && decide (0 < supportCount R F (countRun R F A n) x)
-
 end Nanodregg.Lang.Contextual
 
 /-- A retained candidate filling, with its last recorded judgment.

@@ -71,19 +71,4 @@ def Available (w : World E) (cl : Closure D E) : Prop :=
 def Coherent (w : World E) (cl : Closure D E) : Prop :=
   ∀ I ∈ cl.tpl.Ω, ∀ c ∈ (cl.slot I.name).cands, c.status = judge I w c
 
-/-- The guard is a function of the filling's VALUE only. -/
-def ValueGuard {V : Type} (value : D.Tm → V) (g : E → D.Tm → Bool) : Prop :=
-  ∃ g' : E → V → Bool, ∀ e t, g e t = g' e (value t)
-
-/-- The guard's verdict is stable under the term map `s`. -/
-def StableUnder (g : E → D.Tm → Bool) (s : D.Tm → D.Tm) : Prop :=
-  ∀ e t, g e (s t) = g e t
-
-/-- Least-fixpoint grounding: an atom holds iff a well-founded derivation from live facts exists. -/
-inductive Derives (R : List Rule) (F : Nat → Bool) : Nat → Prop where
-  | fact {x : Nat} : F x = true → Derives R F x
-  | rule {r : Rule} : r ∈ R → (∀ y ∈ r.body, Derives R F y) → Derives R F r.head
-
-
-
 end Nanodregg.Lang.Contextual

@@ -5364,3 +5364,39 @@ made the fourth's statement appendix feel like paperwork, and I generated it rat
 reading it was built to force.
 
 Status: landed by CX-FOLD; next LANG-74.5 (S5).
+
+### LANG-74.5 S5 · the worlds, the acyclic adapter and stability, with the experiment-4 definitions only they used (2026-10-22; CX-FOLD; IMPACT `redregg/work/fold/IMPACT-S5.md`; cross-family read `redregg/work/fold/READ-S5-grok.md`; RELEASE R-0010)
+
+**Decision.** Delete these 5 modules (819 lines; 45 theorems). Group D-RULES (map §2.2): a second rule semantics
+beside the closure.
+- `Lang/Contextual/Worlds.lean` + `Lang/Proofs/Contextual/Worlds.lean`: P3's alternative worlds / stable-model rule
+  programs with their own `Report`, and the last copies of the counting teeth over them;
+- `Lang/Contextual/Acyclic.lean` + `Lang/Proofs/Contextual/Acyclic.lean`: P12's rank-witnessed unrolling adapter with
+  its own `Expr`/`Graph`/`Refusal`/`Derives` (`P/DeployedCycle` is the substrate version);
+- `Lang/Proofs/Contextual/Stability.lean`: `lfpIter_sound`, `stability_class`, the value-guard facts.
+With them go seven spine definitions whose last theorems were in these modules (map S10 scheduled the first four;
+the last three were unlisted): `Rule`, `lfpIter`, `supportCount`, `countRun` (the experiment-4 section,
+`Lang/Contextual/Closure.lean`:546–566) and the Prop definitions `ValueGuard`, `StableUnder`, `Derives`
+(`Lang/Proofs/Contextual/ClosureStatements.lean`:74–85). None is read by `Closure.judge`, `langData`, `LiveHoles`,
+`Std.hole`, `HoleBridge`, the journey or the Host. This list is the explicit deletion authorization of this landing.
+
+**The 42 spine constants that vanish, exactly** (the seven definitions and their generated constants; full list
+`redregg/work/fold/S5-spine-vanished.txt`):
+- `Lang.Contextual.Closure` (28): `Rule`, `Rule._sizeOf_1`, `Rule._sizeOf_inst`, `Rule.body`, `Rule.casesOn`, `Rule.ctorIdx`, `Rule.head`, `Rule.mk`, `Rule.mk._flat_ctor`, `Rule.mk.inj`, `Rule.mk.injEq`, `Rule.mk.noConfusion`, `Rule.mk.sizeOf_spec`, `Rule.noConfusion`, `Rule.noConfusionType`, `Rule.rec`, `Rule.recOn`, `countRun`, `countRun._f`, `countRun._sunfold`, `countRun._unsafe_rec`, `countRun.match_1`, `lfpIter`, `lfpIter._f`, `lfpIter._sunfold`, `lfpIter._unsafe_rec`, `lfpIter.match_1`, `supportCount`;
+- `Lang.Proofs.Contextual.ClosureStatements` (14): `Derives`, `Derives.below`, `Derives.below.casesOn`, `Derives.below.fact`, `Derives.below.rec`, `Derives.below.rule`, `Derives.brecOn`, `Derives.casesOn`, `Derives.fact`, `Derives.rec`, `Derives.recOn`, `Derives.rule`, `StableUnder`, `ValueGuard`.
+(`countRun.eq_1`/`eq_2`/`eq_def` were realized in `P/Worlds` since S1 and are counted among its 458.)
+
+**What breaks.** Nothing that survives. Census digest diff of the whole tree against a747368: 500 constants vanish,
+the 458 of the 5 modules and the 42 above; 0 surviving statement or value-hash changes; 0 new; 0 re-owned; 0
+surviving constants referenced the 5 modules. Whole-tree build with `host` and `lang-journey` GREEN (630 jobs); the
+journey GREEN. The Host closure loses 21 lines of source (Closure's section), not a module. Re-emit: none.
+
+**Critique.** With `countRun` and the worlds gone, the program no longer states the counting-versus-least-fixpoint
+boundary at all (experiment 4): the closure's supports are one level, so the boundary had no subject in the
+deployed judge, and P7's grounded cycle (`P/DeployedCycle`) is the substrate's answer. If multi-level supports ever
+reach the deployed hole, that experiment is re-asked over the deployed judge, not restored from here.
+**Meta-critique.** The map put these seven in a later "tidy" step, and I nearly followed it, which would have left
+seven definitions with no theorem for five landings; the reader's S1 note is what made me check. The bias is
+treating a plan's step boundaries as dependencies.
+
+Status: landed by CX-FOLD; the pure-deletion phase S1–S5 is complete; next LANG-74.6 (S6).
