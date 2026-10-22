@@ -17,6 +17,17 @@
 # HOST-43) and started again (C6): the final reopen reads a base past genesis and the second half's
 # tail, never the tailMax worst cut (~25k records away: tailMax ~18.9 MB at deployed cadence since
 # HOST-47; a Bench case).
+# Contention (PERF-13): a write whose pin another member's write passed is declined `stale` by the
+# writer (KERNEL-54: not recorded, final by version monotonicity, no refusal budget spent); nd ends
+# `CommandExit.declined` printing `declined stale`. That one answer, and no other, is re-run after one
+# `nd sync`. The exit code and the submit operation are read from client/src/generated.rs, the table
+# nd is built from (emit-rust --check holds it to the Lean). Full mode meets contention by chance;
+# --standing forces exactly ONE: in the first half, the first write of an actor's own object has its
+# submit frame held by a relay on that actor's host socket while the next planned write of the same
+# object by another member commits, then released. The run must read stale-writes 1, stale-reruns 1,
+# stale-after-sync 0 (RED by name otherwise; also pinned in gates/waste.tsv), so the re-run path is
+# judged on every standing run. The held pair commutes with the writes it moves past (none touch
+# that object), so every other count is the serial run's.
 # Every `nd` is timed from its spawner (exec to exit). Then each follow is synced to the tip and
 # checked against the writer (`host check W --anchor` its head), the writer and one follow are
 # stopped by their PID files and started again (the cold reopens: spawn -> first reply).
@@ -39,8 +50,9 @@
 #
 # --harness-control (GATES-15's known-red control): every comparator gets one expectation nothing
 # meets: limits 0 (any measured time is over; judged at any load and in --standing), use must be 4 of 3, the
-# follow-at-tip check expects one step more than the writer holds, and bench-count runs with its own
-# --harness-control. The verdict is RED naming `harness-control` only when ALL FOUR fired; a control in which one stayed quiet prints the pass
+# follow-at-tip check expects one step more than the writer holds, bench-count runs with its own
+# --harness-control, and (in --standing) the forced stale expects 2 stale writes of the 1 forced. The
+# verdict is RED naming `harness-control` only when ALL of them fired; a control in which one stayed quiet prints the pass
 # line and exits 0, so the runner (gates/runs.py) refuses every verdict of this row.
 #
 # Two fresh directories. The Stores (the bulk, and the device whose fsync a write pays) go under
@@ -161,8 +173,8 @@ scale=1; [ $control = 1 ] && scale=0
 wlim=$(awk -v l="$(lim write-p99-ms)" -v s="$scale" 'BEGIN{print l*s}')
 rlim=$(awk -v l="$(lim reopen-ms)" -v s="$scale" 'BEGIN{print l*s}')
 
-python3 -I - "$root" "$HOST" "$BIN" "$records" "$standing" "$control" "$stores" "$pids" <<'PY' > "$root/out"
-import os, socket, struct, subprocess, sys, threading, time
+python3 -I - "$root" "$HOST" "$BIN" "$records" "$standing" "$control" "$stores" "$pids" "$here" <<'PY' > "$root/out"
+import os, re, socket, struct, subprocess, sys, threading, time
 root, host, bindir = sys.argv[1], sys.argv[2], sys.argv[3]
 count = os.path.join(os.path.dirname(host), "bench-count")
 records, standing, control, stores, pids = int(sys.argv[4]), sys.argv[5] == "1", sys.argv[6] == "1", sys.argv[7], sys.argv[8]
@@ -179,6 +191,16 @@ def stderrs():
 def die(why):
     stderrs()
     print(f"BAR verdict RED setup: {why}"); sys.stdout.flush(); raise SystemExit(1)
+
+def generated(mod, name):
+    """A constant of client/src/generated.rs, the emitted table nd is built from."""
+    text = open(os.path.join(sys.argv[9], "client", "src", "generated.rs")).read()
+    m = re.search(r"pub mod " + mod + r" \{(.*?)\n\}", text, re.S)
+    v = m and re.search(r"pub const " + name + r": u8 = (\d+);", m.group(1))
+    if not v: die(f"client/src/generated.rs has no {mod}::{name}")
+    return int(v.group(1))
+DECLINED, SUBMIT = generated("command_exit", "DECLINED"), generated("host_op", "SUBMIT")
+STALE = "declined stale"   # CommandExit.declined prints `declined NAME`; the forced stale proves the name
 
 def run(cmd, env=None, timeout=60):
     return subprocess.run(cmd, env=env, capture_output=True, timeout=timeout, text=True)
@@ -324,10 +346,12 @@ times, lock, stale, recur, staled = [], threading.Lock(), [0], [0], [0]
 STALE_MAX = 8
 def nd_ok(a, args, key=None):
     """One timed `nd ARGS` as actor a; its `key` line's value, or "" (None after a red). A write
-    refused `stale` (another member's write moved the object it pinned: concurrent friends meet it)
-    is run again after one `nd sync` (the friend catches up first), at most STALE_MAX times; the
-    record's time is from the first exec to the committed exit. Counted: writes that met a stale
-    at all, re-runs, and re-runs that were stale AGAIN after the sync (`BAR count stale-…`)."""
+    declined `stale` (exit DECLINED, `declined stale`: another member's write moved the object it
+    pinned; KERNEL-54) is run again after one `nd sync` (the friend catches up first), at most
+    STALE_MAX times; any other end, a `refused stale` included (a recorded stale, which the audit
+    refuses), is RED. The record's time is from the first exec to the committed exit. Counted:
+    writes that met a stale at all, re-runs, and re-runs that were stale AGAIN after the sync
+    (`BAR count stale-…`)."""
     t0 = time.monotonic_ns()
     for attempt in range(STALE_MAX + 1):
         try:
@@ -335,7 +359,7 @@ def nd_ok(a, args, key=None):
         except subprocess.TimeoutExpired:
             with lock: red.append(f"{a['who']} nd {args[0]}: no exit in 60 s")
             return None
-        if r.returncode and r.stderr.strip() == "refused stale" and attempt < STALE_MAX:
+        if r.returncode == DECLINED and r.stderr.strip() == STALE and attempt < STALE_MAX:
             with lock:
                 stale[0] += 1
                 if attempt == 0: staled[0] += 1
@@ -374,11 +398,66 @@ for j in range(writes):
     else:
         b = actors[(i + 1) % len(actors)]
         plan[i].append(["write", b["obj"], str(n % 16 + 1), f"v{n:06d}", "--via", b["pub"]])
-def workload(plan):
+def recvn(s, n):
+    b = b""
+    while len(b) < n:
+        c = s.recv(n - len(b))
+        if not c: break
+        b += c
+    return b
+
+held, release, holds = threading.Event(), threading.Event(), [0]
+def hold_relay(path, upstream):
+    """A relay on PATH to the writer's socket UPSTREAM that holds the FIRST submit frame (u32 LE body
+    length, then the operation byte SUBMIT) sent through it until `release`, then passes every byte."""
+    srv = socket.socket(socket.AF_UNIX); srv.bind(path); srv.listen(8)
+    def down(u, c):
+        while (b := u.recv(65536)): c.sendall(b)
+        c.shutdown(socket.SHUT_WR)
+    def up(c, u):
+        while len(hdr := recvn(c, 4)) == 4:
+            body = recvn(c, struct.unpack("<I", hdr)[0])
+            if body[:1] == bytes([SUBMIT]) and holds[0] == 0:
+                holds[0] += 1; held.set(); release.wait(60)
+            u.sendall(hdr + body)
+        u.sendall(hdr); u.shutdown(socket.SHUT_WR)
+    def serve():
+        while True:
+            try: c, _ = srv.accept()
+            except OSError: return
+            u = socket.socket(socket.AF_UNIX); u.connect(upstream)
+            threading.Thread(target=up, args=(c, u), daemon=True).start()
+            threading.Thread(target=down, args=(u, c), daemon=True).start()
+    threading.Thread(target=serve, daemon=True).start()
+    return srv
+
+def forced_stale(order):
+    """--standing's one contention: ORDER is the serial (actor, args) list. Actor A's first write of
+    its own object is run with its host socket on the hold relay; once its submit is held, the next
+    planned write of that object (another member's, through the grant) commits, and A's submit is
+    released: the writer declines it `stale`, and nd_ok re-runs it after one sync. Returns ORDER
+    without the moved write. None of the writes it moves past touch that object."""
+    p = next(k for k, (i, args) in enumerate(order) if "--via" not in args)
+    i, args = order[p]
+    q = next(k for k in range(p + 1, len(order)) if order[k][1][1] == args[1])
+    j, bargs = order[q]
+    if j == i: die("forced stale: the next write of the held object is the same member's")
+    link = os.path.join(actors[i]["ws"], "host.sock")
+    srv = hold_relay(os.path.join(root, "hold.sock"), wsock)
+    os.unlink(link); os.symlink(os.path.join(root, "hold.sock"), link)
+    t = threading.Thread(target=nd_ok, args=(actors[i], args)); t.start()
+    if held.wait(60): nd_ok(actors[j], bargs)
+    else: red.append(f"forced stale: {actors[i]['who']}'s submit never reached the hold relay")
+    release.set(); t.join()
+    os.unlink(link); os.symlink(wsock, link); srv.close()
+    return order[:p] + order[p + 1:q] + order[q + 1:]
+
+def workload(plan, force=False):
     if standing:
-        for k in range(max(len(p) for p in plan)):
-            for i, a in enumerate(actors):
-                if k < len(plan[i]) and not red: nd_ok(a, plan[i][k])
+        order = [(i, plan[i][k]) for k in range(max(len(p) for p in plan)) for i in range(len(actors)) if k < len(plan[i])]
+        if force and not red: order = forced_stale(order)
+        for i, args in order:
+            if not red: nd_ok(actors[i], args)
     else:
         def member(i):
             for args in plan[i]:
@@ -391,7 +470,7 @@ def workload(plan):
 # C6: a base past genesis. Half the writes, then every actor waits while the writer is stopped by its
 # PID file, sealed (`host seal`, HOST-43: the writer's own open and checkpoint, inline) and started
 # again; then the other half. The final reopen reads that base and the second half's tail.
-workload([p[:len(p) // 2] for p in plan])
+workload([p[:len(p) // 2] for p in plan], force=standing)
 stop("writer", writer)
 sl = run([host, "seal", W])
 if sl.returncode or not sl.stdout.startswith("sealed steps="): die(f"host seal W: {(sl.stderr or sl.stdout).strip()}")
@@ -492,7 +571,16 @@ for m, v in counts:
     # the /proc io counts drift by one between identical runs: reported, not pinned (PERF-2)
     if standing and not control and not m.startswith(("writer-read-", "writer-write-", "writer-written-")):
         print(f"WASTE bar {m} {ratio(v)}")
-print(f"BAR count stale-writes {staled[0]} stale-reruns {stale[0]} stale-after-sync {recur[0]} (writes that met `refused stale`; re-runs, each after one nd sync; re-runs stale again. A stale refusal is a recorded step and spends the member's refusal budget)")
+print(f"BAR count stale-writes {staled[0]} stale-reruns {stale[0]} stale-after-sync {recur[0]} (writes declined `stale`, KERNEL-54: not recorded, no refusal budget spent; re-runs, each after one nd sync; re-runs stale again)")
+if standing:
+    # the forced contention: exactly one stale, re-run once, committed after its sync (PERF-13)
+    want = (2 if control else 1, 1, 0)
+    got = (staled[0], stale[0], recur[0])
+    if got != want:
+        (fired if control and got == (1, 1, 0) else red).append(
+            f"forced stale: stale-writes {got[0]} stale-reruns {got[1]} stale-after-sync {got[2]}, want {want[0]} {want[1]} {want[2]} (holds {holds[0]})")
+    if not control:
+        for m, v in zip(("stale-writes", "stale-reruns", "stale-after-sync"), got): print(f"WASTE bar {m} {v}")
 print(f"BAR count reopen-tail-steps {int(s1['steps']) - int(s1['base_steps'])} (steps past the base the writer's reopen folds, no signature verified: HOST-22)")
 tailb = int(s1['seg_bytes']) - int(s1['base_offset'])
 print(f"BAR count reopen-tail-bytes {tailb} past the base at step {s1['base_steps']} (sealed mid-run, C6; not the tailMax worst cut)")
@@ -548,6 +636,7 @@ elif [ $control = 1 ]; then
   case $fired in *"use "*) ;; *) missed="$missed use" ;; esac
   case $fired in *"follow "*) ;; *) missed="$missed at-tip" ;; esac
   case $fired in *"bench-count harness-control"*) ;; *) missed="$missed count" ;; esac
+  if [ $standing = 1 ]; then case $fired in *"forced stale"*) ;; *) missed="$missed stale" ;; esac; fi
   if [ -z "$missed" ]; then verdict="RED harness-control: $over; $fired"
   else  # a planted expectation stayed quiet: the control PASSES, so the runner reads no verdict of this row
     echo "BAR control: a planted expectation stayed quiet:$missed"; echo "BAR verdict PASS"; exit 0

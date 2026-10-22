@@ -73,7 +73,8 @@ births and writes, and I did not check that a write-heavy mix behaves the same.
   - `host check`'s `use=` must be exactly 3 (PROTOCOL-43, cv 01a14e19-a82f).
   - Every follow must be at the writer's step count, and the writer must hold each follow's head
     (`host check W --anchor`).
-  - A write refused `stale` is re-run after one `nd sync`, at most 8 times, and counted.
+  - A write declined `stale` is re-run after one `nd sync`, at most 8 times, and counted (PERF-13: since
+    KERNEL-54 the writer declines a stale, `declined stale`, exit CommandExit.declined; it was `refused stale` here).
 - **Two modes.** Full (default) is concurrent: THE BAR's clock, release binaries, limits judged only when
   load1 < 2. `--standing` runs one command at a time on the dev profile, judges counts only, and reports the
   clock. In serial order every count is a function of N alone.
@@ -117,6 +118,7 @@ defects nothing else could have seen:
 - nd-supervise leaks ~2 fds and a thread per connection, so at 1000 records connections are dropped silently
   (cv 01a14ed9-8c59, CLIENT-7).
 - An honest stale re-run spends the refusal budget (KERNEL-19, PROTOCOL-13; work/PERF-LOG.md FINDING 2).
+  CLOSED by KERNEL-54 (b48c10f): a stale is declined, never recorded, and spends no budget.
 
 **CRITIQUE.**
 - (1) The "resident" is a third member with hosted custody. It shares the CLI path, and no model chooses its
@@ -783,5 +785,89 @@ more than tailMax`), and every honest run read `BENCH-WORSTCUT <shape> PASS`.
   before I wrote the rows.
 - The signer is a factorization of CODEC's `sign` in PERF's tree, held equal by two theorems. CODEC could
   expose `sign` in that shape itself, and then the copy goes.
+
+**Status.** Landed with this entry.
+
+## PERF-13 · THE BAR re-runs the stale the kernel declines, and the standing run forces one (2026-10-22, ROOT for PERF, R-0037)
+
+**The defect (measured).** THE BAR at e9c126f, after phase one, read `RED friend2 nd write exit 53: declined
+stale` (logs/root-bar-P1.log). The same RED came back at f8d04ac, before phase one, and at e9c126f again: 3 of
+3 full runs. Since KERNEL-54 (b48c10f) the writer declines a stale write. It is not recorded, it is final by
+version monotonicity and it spends no budget. nd ends `CommandExit.declined` (53) and prints `declined stale`.
+bar.sh:338 re-ran only an exact `refused stale`. The first honest contention in full mode was therefore fatal.
+Nothing saw it for 153 commits, because every BAR since then ran `--standing`. That mode is serial and never
+contends. Diagnosis: redregg work/promo/BAR-P1-DIAGNOSIS.md.
+
+**Decision.**
+- **One answer is re-run: exit `command_exit::DECLINED` with stderr `declined stale`.** The old `refused
+  stale` match is deleted. Under KERNEL-54 a recorded stale is a kernel violation (`auditRefusal` refuses it),
+  so it stays RED by name. Every other end stays RED: another exit-53 reason (`declined refusalBudget`, …),
+  `open`, `uncertain`. STALE_MAX stays 8.
+- **The code is the emitted table's.** bar.sh reads `command_exit::DECLINED` and `host_op::SUBMIT` from
+  client/src/generated.rs. That is the table nd itself is built from, and `emit-rust --check` holds it to the
+  Lean. The refusal name `stale` has no emitted table a script can read: `Kernel.rejectNames` is not emitted.
+  So the name stays a literal, and the forced stale below is its tooth. If the name or the printed shape
+  drifts, the forced stale is no longer re-run, and the standing row goes RED on every judge.
+- **--standing forces exactly ONE contention.** In the first half, actor A's first write of its own object
+  runs with A's `host.sock` pointed at a relay. The relay passes every frame and holds the FIRST frame whose
+  operation byte is SUBMIT. While it is held, the next planned write of that object commits: resident →
+  friend1's object, through the grant. Then the frame is released. The writer declines A's call stale, and
+  bar.sh syncs and re-runs it, which commits. The moved write commutes with the four writes it passes, none of
+  which touch that object. So every other count is the serial run's: steps 1.000, records 1.000, seg-bytes
+  757.700, reopen-tail 350.300, verifies 1.000 and trie hashes 1.000, all unchanged on two runs.
+- **Judged both ways.** bar.sh requires stale-writes 1, stale-reruns 1, stale-after-sync 0 exactly, and is
+  RED `forced stale: … want 1 1 0` otherwise. gates/waste.tsv pins the three as `bar` rows, which waste.py
+  holds as ceilings. `--harness-control` expects 2 stale writes in --standing, and the control needs that
+  comparator to fire too.
+
+**Measured (hbox, e9c126f + this change; logs/barfix-*.log).**
+- --standing --records 60, two runs: PASS, `stale-writes 1 stale-reruns 1 stale-after-sync 0`, every other
+  WASTE line equal to its row.
+- --harness-control: `RED harness-control: …; forced stale: stale-writes 1 stale-reruns 1 stale-after-sync
+  0, want 2 1 0 (holds 1)`.
+- Full, N=1000: UNJUDGED (load1 11.14; hbox carries a standing load ≥ 2), p99 62.5 ms, reopen 171.8 ms,
+  follow reopen 124.3 ms, use 3, 1 natural stale re-run. Before this change, full runs were RED at both trees.
+- Plants, each in a copy of bar.sh run from this tree, then removed:
+  - STALE_MAX = 0 (the re-run disabled): `RED friend1 nd write exit 53: declined stale`.
+  - The pre-fix matcher (`r.returncode and stderr == "refused stale"`): `RED friend1 nd write exit 53:
+    declined stale`. This is the defect itself, now caught by the standing row.
+  - The forced stale switched off (`force=False`): `RED forced stale: stale-writes 0 stale-reruns 0
+    stale-after-sync 0, want 1 1 0 (holds 0)`.
+
+**What this does not widen.** STALE_MAX is unchanged. No exit-53 reason other than `stale` is accepted, and
+a stale must arrive as exit 53 with exactly that line. No limit and no load rule moved. No ceiling rose: the
+three rows are new, and the one row whose text changed (`bar steps-per-command`) keeps 1.000.
+
+**Alternatives.**
+- (a) Accept both `refused stale` and `declined stale`. Refused: two shapes. The first is now a kernel
+  violation, and accepting it would let a recorded stale pass THE BAR.
+- (b) Accept any exit 53. Refused: `declined refusalBudget` is the cliff KERNEL-54 removed for stale, and THE
+  BAR must see it if it returns.
+- (c) Force the stale with two concurrent nd processes. Refused: a race is not a standing count. The hold relay
+  makes the order deterministic, with the deployed writer, nd and follow on both sides.
+- (d) A `--plant no-retry` flag that a gate runs. Not taken: one more argv shape for a mutation that the
+  control and the three plants above already cover. The forced-stale comparator is in --harness-control,
+  which runs.tsv runs on every judge.
+- (e) Emit `rejectNames` so the script reads `stale` from a table. Not in PERF's grant (Emit/Kernel). Filed as
+  the follow-up for EMIT if a second consumer appears. The forced stale already holds the literal to the
+  binary.
+
+**CRITIQUE.**
+- The relay is harness code between nd and the writer. It forwards bytes unparsed except for one length and
+  one operation byte, but it is a new place where a frame-format change could break THE BAR while the system
+  is fine. If it breaks, it breaks loud (RED `forced stale` or a socket error), never quietly.
+- The forced stale is a BEHIND stale: a pin the fold passed. KERNEL-54's AHEAD stale settles `open` (exit 54),
+  and nothing here exercises it. An honest client cannot produce one.
+- Full mode still judges nothing on hbox. The box's load floor is now above 2, from processes that are
+  Ember's. That is not this entry's to fix, and the quiet-box rule is not relaxed.
+
+**META-CRITIQUE.**
+- The bias I caught in myself is **the gate's own green as proof**. I first wrote the diagnosis's fix as "one
+  word, re-run on `declined stale`". That would have turned THE BAR green and left the path as unexercised as
+  the defect had been for 153 commits. The forced stale exists because a harness path that no standing run
+  takes is a gate that cannot go red.
+- I measured the commuting claim (two standing runs, every pinned count equal) instead of arguing it. I did
+  not prove it. A future workload change that puts a write to the held object among the passed writes would
+  move counts, and the standing row would show that, not hide it.
 
 **Status.** Landed with this entry.
