@@ -5068,3 +5068,106 @@ the live bridge exists, but must not be advertised as that bridge.
 while adding another language-shaped instance. The release keeps the actual Kernel
 export/check boundary and records the reduced formal claim explicitly, rather than
 moving the same degenerate instance into another directory.
+
+## LANG-74 Consolidation of the contextual program: one module per concept; the toys, the second judges and the second shapes are deleted (2026-10-22; CX-FOLD; `redregg/work/CONSOLIDATION-MAP-20261021.md`, `REVIEW-20261021.md`; rulings ledger R-0001–R-0003)
+
+**Decision.** `Lang/Contextual` + `Lang/Proofs/Contextual` (92 modules, 17,389 lines, 908 theorems at d7989d9) fold
+into one module per concept. A module stays in Lang only if a deployed object reaches it, its theorems are about a
+deployed object, or it is the abstract spine (calculus laws, closure, judge, provenance, repair, soundness) of which
+the deployed language is a proved instance. Everything whose subject is a toy calculus, a private language, a second
+judge with its own status type, or a paper's definitions restated is deleted. The steps, one landing each, one Lang
+worker at a time (R-0001), each preceded by an IMPACT file read by a cross-family reader:
+- S1, S3, S4, S5: pure deletions of the beside-modules (44 modules; S1's `Integration.lean` waits for S1b, which re-homes its two deployed facts to KERNEL/HOST); S2 drops the journey's `p8Data` toy rows first,
+  because the journey is S4's only outside consumer;
+- S6–S8: the deployed term operations and their proofs leave namespace `Contextual` for `Lang/` and `Lang/Proofs/`
+  (`Lang/Index`, `Lang/Subst`, `Lang/HoleDecl`; `Lang/Proofs/{Index,Subst,Fill,HoleBudget,LiveHoles,LiveClosed,
+  LawMeaning,LawReceiver,LiveTeeth,LiveJourney}`), statements identical by census digest; `ΔOf`/`holeBound` (a no-op)
+  deleted; S8 changes four Kernel/Ledger import lines under CROSS-LAYER (R-0002);
+- S9: P7's conformance (refusal constructors, bounds in `Bounds`, one preparation charge, named closed/contextual
+  entry points), a `lang!`;
+- S10: the all-environment provenance replaces the env-specialized twin; experiment 4's `Rule`/`lfpIter`/`countRun`
+  leave `Closure`; S11: `Trace.collect` and its three lemmas move beside `StdHoleModel`, the cache theory is deleted;
+  S12: the P6 certificate reader moves to `Census`;
+- S13–S15 wait for Ember's rulings R1 (the open-protocol calculus, default delete), R2 (keep `judge` in Lang only with
+  a proved live bridge, default build it), R3 (the CMTT core, default delete after S13).
+
+**Per step, the gate that can refute it**: the statement-digest diff of the whole tree's elaborated environment,
+before against after, under the step's declared delete/rename map (every vanished name in the delete list, every
+surviving name's statement digest equal, every new name in the rename image); the reached build; `gates/check.py`;
+the journey after S2/S9; the whole-tree build after S6–S8/S12.
+
+**Erratum: the decision ids of the contextual program.** This file has two `## LANG-72` headings (Boundary
+declarations, CX-P2; Alternative worlds, CX-P3), no LANG-71, and LANG-70 (P5/P1, CX-P15) after LANG-73. From this
+entry on, the SECOND LANG-72 (Alternative worlds and world-indexed grounding, CX-P3) is cited as **LANG-71**; LANG-70
+keeps its number out of order. The card-named entries LANG-P10, LANG-P12, LANG-P11b, LANG-P9, LANG-P11a, LANG-P6,
+LANG-P8, LANG-ACT, LANG-P13, both LANG-P7 entries and LANG-PE1 keep their ids, because commit messages cite them; as
+to their modules each is superseded by the LANG-74.n step that deletes or rehomes them. The headings above are not
+edited: this file is an append-only record, and an old id must stay findable by its old text.
+
+**Alternatives.** (1) A `Research` lean_lib for the breadth cards (review B4 P9): the same twin behind a different
+lakefile line, still built by every Lang change and still a second vocabulary. (2) One status type extended with
+P5's `refuted`/`outside` and P1's `partial` (review §A2): keeps the toy vocabularies alive; no deployed object needs
+them. One status type is reached by deleting the others. (3) Keep the toys as documentation of the theory's
+lineage: git keeps them at d7989d9, with their docstrings and literature pointers.
+
+**Critique.** The fold deletes about 590 theorems. None is consumed by a surviving theorem (measured per step), but
+several are teeth: concrete executions of the closure's judge on calculi where the general theorem could have been
+vacuous. After the fold the spine is exercised concretely by the CMTT instance (until R3), `langLaws`, `HoleBridge`
+and the deployed experiments (`P/Deployed`, `P/DeployedCycle`, the journey); if R3 deletes the CMTT core, the only
+non-identity instances left are the deployed language's, which is the point but narrows the falsifiers to one
+calculus. **Meta-critique.** The map that orders this fold was written from a read of the tree, not a build; its
+counts (151 theorems in S1) came from a regex and its reach from `^import` lines. I measured each again on the
+elaborated environment before landing, and the regex was off by twelve Prop-structure fields in S1. The bias to name
+is trusting a plan's numbers because the plan is careful: every step re-measures on the current tip.
+
+Status: ruled by ROOT 2026-10-21 (R-0001, R-0002); steps land as LANG-74.n.
+
+### LANG-74.1 S1 · thirteen modules with no importer (2026-10-22; CX-FOLD; IMPACT `redregg/work/fold/IMPACT-S1.md`; cross-family read `redregg/work/fold/READ-S1-grok.md`; RELEASE R-0005, GRANT R-0006)
+
+**Decision.** Delete these 13 modules (1,949 lines; 140 theorem constants: 136 `theorem` declarations and the four
+fields of the Prop structure `P5.Interfaces.Definition14`), each with its reason (map §2.2):
+- D-TOY (`decide` sessions over a toy, next to the general theorem they instance; the deployed experiments are P7's
+  `P/Deployed`, `P/DeployedCycle`, `Lang/Journey/Contextual*`): `Lang/Proofs/Contextual/Experiments.lean` (ToyCalc,
+  `toyLaws`, the eight experiments), `Lang/Proofs/Contextual/P11bExperiments.lean`,
+  `Lang/Proofs/Contextual/ProvenanceExperiments.lean`, `Lang/Proofs/Contextual/RepairExperiments.lean`,
+  `Lang/Proofs/Contextual/TraceExamples.lean` + `Lang/Contextual/TraceExamples.lean`,
+  `Lang/Proofs/Contextual/AcyclicExamples.lean` + `Lang/Contextual/AcyclicExamples.lean`;
+- D-RULES (a second rule semantics beside the closure): `Lang/Proofs/Contextual/WorldsField.lean` (stable worlds =
+  labellings for P3's `Worlds`, which S5 deletes; `StableLabelling` is defined in the same file);
+- D-JUDGE (second and third judges and their status types): `Lang/Proofs/Contextual/NogoodGameBridge.lean`,
+  `Lang/Proofs/Contextual/Interfaces.lean` + `Lang/Contextual/Interfaces.lean` (de Alfaro–Henzinger Definition 14
+  restated), `Lang/Proofs/Contextual/P1.lean` (P1's interaction guards with their own `Report`).
+
+Two doc sentences that named deleted modules are rewritten in the same landing: `Lang/Contextual/Closure.lean`:6–8
+(the instances are now `cmttLaws` and `langLaws`; it named the toy) and `Lang/Proofs/Contextual/Worlds.lean`:321–322
+(it named `WorldsField`). This list is the explicit deletion authorization of this landing (map §5.4).
+
+**Not in this step: `Lang/Proofs/Contextual/Integration.lean`** (map S1's fourteenth). The cross-family read found
+that it holds the only statements of two facts about deployed objects: the private `audit_append_to`
+(`Kernel.Receive.audit` composes over `++`; `Kernel.Proofs.Fold.fold_append` is about `World.fold`, and `audit_ok`
+plus `fold_append` does not state it, there being no `Honest`-append lemma) and `recovery_preserves_consumption` (a
+`Host.openWith` from a spent trusted base admits zero further grant movement on any audited future). R-0006: S1b
+re-homes a polymorphic `audit_append` in `Kernel/Proofs/Audit.lean` and the recovery theorem with its premise bundle
+in a Host proof module; S1c then deletes Integration with its p8 statements and the three aliases of landed theorems
+(`one_use_consumption`, `reexecute_committed_effect`, `progress_under_ready_writer`).
+
+**What breaks.** Nothing that survives. Measured over the whole tree's elaborated environment (all 11 libraries)
+before and after this candidate: every vanished constant is a constant of the 13 modules; zero surviving constants
+change their elaborated type or value hash; zero surviving constants reference a deleted constant (edges by the
+exporter's `Census.Journal.expressionEdges`; the same detector reports 76 references for an imported control module).
+Lazily realized equation lemmas of the surviving `Closure.countRun` are now realized by another module, with identical
+statements. No lakefile target, gates table row, rows fixture, generated file or wire vector names a deleted module.
+Re-emit: none. The modules `P/P5`, `P/Nogoods`, `P/NogoodGames` and `P/ProvenanceTeeth` lose their last importers here
+and stay built by the glob until S3/S10.
+Census digest diff, base 71db964 (Lean tree = 3070fac) against the candidate: 54,249 → 53,699 constants; 550 vanished,
+all of the 13 modules; 3 lazily realized `countRun` equation lemmas re-owned with identical statements; 0 new; 0
+statement changes; 0 value-hash changes. Whole-tree build of the 11 libraries GREEN at 541 jobs (554 − 13).
+
+**Critique.** `Worlds.Experiment.counting_keeps_cycle_over_worlds` is now the only tooth that immediate-support
+counting keeps a withdrawn cycle; S5 deletes it while `Closure.countRun` still exists, so S5 must delete `countRun`
+or keep that tooth (S10's plan moves `countRun` out of `Closure`; S5's IMPACT must order the two). **Meta-critique.** A
+pure deletion invites a pure-deletion read ("zero importers, done"). My own IMPACT named Integration's two facts and
+then defaulted to deleting them, because a re-home was outside this worker's grant: a scope boundary priced as a
+reason. The reader refused it. The bias is letting the edge of one's own grant decide what a fact is worth.
+
+Status: landed by CX-FOLD; next S1b (KERNEL/HOST re-home, R-0006), S1c (Integration), then LANG-74.2 (S2).

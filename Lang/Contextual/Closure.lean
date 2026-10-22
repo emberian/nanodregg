@@ -3,9 +3,9 @@
 
 The object of ACTIVITIES-PROPOSAL doc 2 §9, over an ABSTRACT calculus (its data `CalculusData` here, its laws
 `CalculusLaws` in the proof module), so the theory
-does not wait on a particular CMTT core. Two instances exist: the toy of
-`Lang.Proofs.Contextual.Experiments`, and the CMTT core's, `Lang/Proofs/Contextual/CoreInstance.lean`,
-which lands as the second commit.
+does not wait on a particular CMTT core. Instances: the CMTT core's `cmttLaws`
+(`Lang/Proofs/Contextual/CoreInstance.lean`) and the deployed language's `langLaws`
+(`Lang/Proofs/Contextual/LangInstance.lean`).
 
 Limits, stated: fillings are typed in the EMPTY meta-context (`HasTy [] Ψ M A`: no hole inside a
 hole's filling); supports are one level (tokens, never another hole's selection), so a support cycle
