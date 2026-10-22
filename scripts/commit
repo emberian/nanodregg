@@ -10,7 +10,10 @@
 #     worktree's HEAD copy as the base, the working copy; a directory means every file under it, a
 #     deleted file is recorded as deleted), each merged 3-way with main's copy (GATES-20b); a path
 #     that would revert a commit of main's last 300 is refused `stale path: P` unless named by
-#     --reverts C (C's layer named in a CROSS-LAYER line when it is another layer's);
+#     --reverts C (C's layer named in a CROSS-LAYER line when it is another layer's); a `.lean` module's
+#     lack is not refused by text: the judge decides it from the declarations holding those lines, and
+#     every declaration the landing deletes or restates is named by a `RESTATES:`/`RENAMES:`/`DELETES:`
+#     message line (gates/decls.py, GATES-20t);
 #  3. writes SIZE.md, a purely generated view, for that candidate (gates/size.py --write). SIZE.md
 #     is refused as a PATH: ceilings are edited in gates/ceilings.tsv;
 #  4. refuses if the candidate differs from main anywhere outside PATH... and SIZE.md;
@@ -226,7 +229,7 @@ git -C "$repo" diff --stat "$base" "$cand"
 # that main's copy holds would revert it; refused unless named (--reverts C), and a named revert's hunk
 # is appended to the message under REVERTS:.
 python3 "$scripts/../gates/rebase.py" stale --repo "$repo" --snapshot "$snap" --main "$base" --message "$msg" \
-  "${reverts[@]}" || { echo "scripts/commit: REFUSED — nothing was written"; exit 1; }
+  --lean-lacks "$tmp/lean-lacks" "${reverts[@]}" || { echo "scripts/commit: REFUSED — nothing was written"; exit 1; }
 
 # GATES-22: FAST unless a flag day or a change of the judge's code (main's gates/fast.py decides, on the
 # real candidate).
@@ -234,7 +237,7 @@ git -C "$repo" diff --name-only "$base" "$cand" > "$tmp/changed"
 mode=$(python3 "$scripts/../gates/fast.py" mode --message "$msg" --changed "$tmp/changed") ||
   { echo "scripts/commit: gates/fast.py mode failed; nothing written"; exit 2; }
 echo "scripts/commit: judge: ${mode}"
-pp=(--index --base "$base" --message "$msg"); [ -n "$nobuild" ] && pp+=(--no-build)
+pp=(--index --base "$base" --message "$msg" --lean-lacks "$tmp/lean-lacks"); [ -n "$nobuild" ] && pp+=(--no-build)
 if [ "$mode" = fast ]; then
   pp+=(--fast)
 else

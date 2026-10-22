@@ -56,3 +56,4 @@ standing:bench-worstworld	{fresh} synthetic 200000	BENCH-WORSTWORLD PASS	{fresh}
 certificate-tests	(none)	certificate-tests: GREEN	--harness-control
 script:gates/certificate.py	{fresh}	certificate-vector: GREEN	{fresh} --harness-control
 script:gates/statement_plants.py	{fresh}	STATEMENT PLANTS GREEN	{fresh} --harness-control
+script:gates/decls_plants.py	--synthetic {fresh}	decls-synthetic: GREEN	--synthetic {fresh} --harness-control

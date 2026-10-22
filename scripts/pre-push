@@ -23,6 +23,8 @@
 #                                               it reaches (gates/fast.py targets/crates). The census, the rows, the
 #                                               benches, the waste measurements, the generated files and clippy run
 #                                               at the next CONVERGENCE (scripts/converge), not here
+#   --lean-lacks FILE                           (scripts/commit, GATES-20t) the `.lean` lacks gates/rebase.py `stale`
+#                                               found by text and did not refuse: the declaration diff decides them
 #
 # Steps, all against a private copy of exactly that tree (never the shared working tree):
 #   0. ownership: every changed path belongs to the layer named by the subject prefix, per the
@@ -39,6 +41,10 @@
 #      closure holds a changed module, the measured waste ratios against their ceilings,
 #      and every gates/generated.tsv file equal to what its
 #      Lean generator emits (`lake exe emit-rust --check client/src/generated.rs`);
+#   2b. the declaration diff (gates/decls.py, GATES-20t, R-0023), in both modes after the build: every
+#      declaration of the parent the candidate lacks, and every theorem whose statement it changes, is named by a
+#      `RESTATES:`/`RENAMES:`/`DELETES:` message line; a `.lean` copy that lacks a window commit's change is
+#      refused by the declarations holding those lines (--lean-lacks), never by their text;
 #   4. the Rust workspace whole (root Cargo.toml) when a member or the root manifest/lock changed:
 #      `cargo check --locked --workspace --all-targets`, clippy -D warnings, `cargo fmt --all --check`.
 # Prints one verdict line. Exit 0 = may land; 1 = RED; 76 = not judged (KILLED(load), a run past its
@@ -47,7 +53,7 @@
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
 
-mode=index rev="" msg="" build=1 basec=refs/heads/main record="" reuse="" verify="" fast=0
+mode=index rev="" msg="" build=1 basec=refs/heads/main record="" reuse="" verify="" fast=0 leanlacks=""
 while [ $# -gt 0 ]; do
   case $1 in
     --index) mode=index ;;
@@ -59,6 +65,7 @@ while [ $# -gt 0 ]; do
     --reuse) reuse=$2; shift ;;
     --verify) verify=$2; shift ;;
     --fast) fast=1 ;;
+    --lean-lacks) leanlacks=$2; shift ;;
     *) echo "usage: scripts/pre-push [--index [--base COMMIT] | --rev REV] [--message FILE] [--no-build]" >&2; exit 2 ;;
   esac
   shift
@@ -194,6 +201,35 @@ step() {
 
 git -C "$repo" diff --name-only "$base" "$cand" > "$G/changed"
 
+# GATES-20t (R-0023): THE DECLARATION DIFF, by the JUDGE's gates/decls.py over the census environment. DC is the
+# per-tree digest cache: the parent's digest is read from it (each landing caches its candidate's, which is main's
+# tree once it lands); on a miss the parent is built in this slot and exported whole BEFORE the candidate is built.
+DC=$common/nanodregg-decls
+decls_lean() { grep -qE '\.lean$' "$G/changed"; }
+decls_parent() {
+  [ "$mode" = index ] && [ "$build" = 1 ] && decls_lean || return 0
+  python3 "$J/decls.py" have --cache "$DC" --tree "$base" && return 0
+  echo "  decls: the parent's declarations are not cached (${base:0:12}): the parent is built in this slot and exported whole"
+  # shellcheck disable=SC2046
+  if materialize "$base" "$G/tree" &&
+     wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(python3 "$J/decls.py" libs --root "$G/tree") >> "$log" 2>&1 &&
+     wrapped python3 "$J/decls.py" bootstrap --root "$G/tree" --cache "$DC" --tree "$base" >> "$log" 2>&1; then :
+  else echo "  decls: the parent could not be built and exported (the judge below reads NO VERDICT; see the log)"; fi
+  materialize "$cand" "$G/tree" || exit 2
+}
+decls_judge() {
+  [ "$mode" = index ] || return 0
+  if [ "$build" = 0 ] && decls_lean; then
+    echo "  decls: RED — a changed module cannot be judged without a build (--no-build)"; fail="$fail decls"; return
+  fi
+  case " $fail $killed " in *" build "*) echo "  decls: SKIPPED (the build did not pass)"; return ;; esac
+  local da=(--root "$G/tree" --base-root "$G/base" --cache "$DC" --base "$base" --cand "$cand" --changed "$G/changed" --message "$msg")
+  [ -n "$leanlacks" ] && da+=(--lean-lacks "$leanlacks")
+  step decls wrapped python3 "$J/decls.py" judge "${da[@]}"
+  grep -E '^decls: ok' "$G/step.out" | sed 's/^/  /' || true
+}
+decls_parent
+
 # runs_reds TREE OUT: run TREE's selected verdict exes with the JUDGE's runner ($J: this script's tree,
 # main's copy under scripts/commit) over the CANDIDATE's table ($G/judge, a copy of its runs.tsv and
 # waste.tsv: data only), and print the red keys (`run EXE ARGS`, `waste OP METRIC`) judged against the
@@ -308,6 +344,7 @@ if [ $fast = 1 ]; then
   else
     echo "  build: none (no module, and no build input, changed)"
   fi
+  decls_judge
   case $crates in
     "") echo "  cargo: none (no workspace member changed)" ;;
     workspace)
@@ -340,11 +377,13 @@ fi
 if [ "$build" = 0 ]; then
   if grep -qE '^NO-BUILD:[[:space:]]*[^[:space:]]' "$msg"; then echo "  build: SKIPPED (NO-BUILD in message)"; note="$note (build skipped)"
   else echo "  build: --no-build needs a 'NO-BUILD: <reason>' message line"; fail="$fail no-build"; fi
+  decls_judge
 else
   # shellcheck disable=SC2046
   step build wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$G/tree")
   if [ -n "$killed" ]; then echo "  census: SKIPPED (the build was killed)"
   else compute_keys; keyed_step census wrapped python3 "$G/tree/gates/census.py" "$G/tree"; fi
+  [ -n "$killed" ] || decls_judge
   # The verdict runs of every exe whose import closure holds a changed module (gates/runs.py,
   # gates/runs.tsv): a sim is a verdict a build cannot give (ROOT/HOSTING 10-17). Pending rows
   # (exit 3) do not block; a killed run is KILLED(load). A measured waste ratio above its ceiling

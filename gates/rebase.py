@@ -3,7 +3,7 @@
 
   rebase.py snapshot  --repo DIR --out FILE -- PATH...
   rebase.py candidate --repo DIR --snapshot FILE --main REV
-  rebase.py stale     --repo DIR --snapshot FILE --main REV --message FILE [--reverts C]...
+  rebase.py stale     --repo DIR --snapshot FILE --main REV --message FILE [--reverts C]... [--lean-lacks FILE]
   rebase.py writeback --repo DIR --snapshot FILE --landed REV
 
 THE LANDED COPY (GATES-20b, ROOT 10-21). A lander's copy of a path is never taken as the working
@@ -36,12 +36,14 @@ C's change. The second test is GATES-20b' (ROOT 10-21, PERF-6's false positive):
 bench-worstworld block using the bench-worstcut lines as CONTEXT; PERF-12 deleted those lines and kept
 the block, so the merge, re-anchored on the surviving context, inserted the block a SECOND time and
 `stale` refused a copy that reverts nothing. A merge that would only duplicate lines X already holds is
-not a lack. A purely added Lean theorem is also held when its exact statement occurs once as
-active code anywhere in X, even if its proof moved or changed; an absent added theorem is lacking
-even when its replay conflicts on other edits (GATES-20p). Other blocks still compare whole:
-a removed block X still holds, or an added one it does not, reads LACKING. A path whose candidate lacks C's change while main's
-copy contains it would revert C: refused `stale path: P`, unless the lander names it with `--reverts
-C`. A named revert of another layer's commit needs that layer named in a CROSS-LAYER line (reverting
+not a lack. Blocks compare whole: a removed block X still holds, or an added one it does not, reads
+LACKING. A path whose candidate lacks C's change while main's copy contains it would revert C: refused
+`stale path: P`, unless the lander names it with `--reverts C`. A `.lean` module is the exception
+(GATES-20t, R-0023): text cannot tell a moved, re-proved or declared-restated declaration from a stale copy,
+and the census environment can, so its lack is written to --lean-lacks (the blocks' lines in main's copy, or
+in the candidate's for a block C removed) and gates/decls.py, after the build, maps those lines to the
+declarations whose recorded ranges hold them and refuses by name what is not explained (GATES-20p's Python
+lexer of Lean statements is deleted). A named revert of another layer's commit needs that layer named in a CROSS-LAYER line (reverting
 another layer's change is cross-layer by definition), and its hunk is appended to the message under
 `REVERTS:`, so the revert is findable later; a `--reverts C` the candidate does not revert is refused.
 A merge that conflicts is neither (a later edit of C's lines is not a revert of them).
@@ -277,75 +279,8 @@ def window(repo: str, main: str, path: str) -> list[str]:
     return git(repo, "rev-list", "--first-parent", *rng, "--", f":(top,literal){path}", check=False).stdout.decode().split()
 
 
-def active_lean_statement(source: bytes, statement: bytes) -> bool:
-    """The exact statement occurs once as code, not as a copy inside a Lean comment or string."""
-    found = 0
-    depth = 0
-    line_comment = string = escaped = False
-    i = 0
-    while i < len(source):
-        if depth == 0 and not line_comment and not string and source.startswith(statement, i):
-            if (i == 0 or source[i - 1] == 10) and (i + len(statement) == len(source)
-                                                    or source[i + len(statement) - 1] == 10):
-                found += 1
-        if line_comment:
-            if source[i] == 10:
-                line_comment = False
-        elif string:
-            if escaped:
-                escaped = False
-            elif source[i] == 92:
-                escaped = True
-            elif source[i] == 34:
-                string = False
-        elif source.startswith(b"/-", i):
-            depth += 1
-            i += 1
-        elif depth and source.startswith(b"-/", i):
-            depth -= 1
-            i += 1
-        elif not depth and source.startswith(b"--", i):
-            line_comment = True
-            i += 1
-        elif not depth and source[i] == 34:
-            string = True
-        i += 1
-    return found == 1
-
-
-def added_theorem_statement(pre: bytes, added: bytes) -> bytes | None:
-    """The exact statement of a sole new theorem in an insertion block, if identifiable."""
-    declarations = list(re.finditer(rb"(?m)^theorem [A-Za-z_][A-Za-z_0-9']*\b[^\n]*"
-                                    rb"(?:\n(?!theorem |lemma |def |instance |structure |inductive |"
-                                    rb"namespace |end ).*)*?:= by\n", added))
-    if len(declarations) != 1:
-        return None
-    statement = declarations[0].group()
-    if re.search(rb"(?m)^(?:theorem|lemma|def|instance|structure|inductive|namespace|end)\b",
-                 added[declarations[0].end():]):
-        return None
-    return statement if not active_lean_statement(pre, statement) else None
-
-
-def retained_added_theorem(x: bytes, pre: bytes, added: bytes) -> bool:
-    """A pure insertion may move/change a proof if its original theorem statement survives."""
-    statement = added_theorem_statement(pre, added)
-    return statement is not None and active_lean_statement(x, statement)
-
-
-def missing_added_theorem(x: bytes, pre: bytes, post: bytes) -> bytes | None:
-    """The missing exact statement, even where replay conflicts on unrelated edits."""
-    a, b = pre.splitlines(keepends=True), post.splitlines(keepends=True)
-    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
-        if op == "insert":
-            statement = added_theorem_statement(pre, b"".join(b[j1:j2]))
-            if statement is not None and not active_lean_statement(x, statement):
-                return statement
-    return None
-
-
-def holds(x: bytes, pre: bytes, post: bytes) -> bool:
-    """X holds each changed block, or the exact active statement of a purely added theorem."""
+def _blocks(x: bytes, pre: bytes, post: bytes) -> tuple[list[list[bytes]], list[list[bytes]]]:
+    """The line blocks C added that X lacks, and the blocks C removed that X still holds (difflib, no autojunk)."""
     a, b = pre.splitlines(keepends=True), post.splitlines(keepends=True)
     hay = b"\n" + x + (b"" if x.endswith(b"\n") else b"\n")
 
@@ -353,25 +288,45 @@ def holds(x: bytes, pre: bytes, post: bytes) -> bool:
         body = b"".join(block)
         return (b"\n" + body + (b"" if body.endswith(b"\n") else b"\n")) in hay
 
+    added, removed = [], []
     for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
         if op == "equal":
             continue
         if j2 > j1 and not has(b[j1:j2]):
-            if i2 != i1 or not retained_added_theorem(x, pre, b"".join(b[j1:j2])):
-                return False
+            added.append(b[j1:j2])
         if i2 > i1 and has(a[i1:i2]):
-            return False
-    return True
+            removed.append(a[i1:i2])
+    return added, removed
+
+
+def holds(x: bytes, pre: bytes, post: bytes) -> bool:
+    """X holds each block C added, contiguous at line boundaries, and none it removed (GATES-20b′)."""
+    added, removed = _blocks(x, pre, post)
+    return not added and not removed
 
 
 def lacks(x: bytes, pre: bytes, post: bytes) -> bool | None:
     """True: X lacks the change pre -> post; False: X contains it; None: neither (it conflicts)."""
-    if missing_added_theorem(x, pre, post) is not None:
-        return True
     rc, data, _ = merge3(x, pre, post)
     if rc != 0:
         return None
     return data != x and not holds(x, pre, post)
+
+
+def spans(text: bytes, block: list[bytes]) -> list[str]:
+    """Every `first-last` line span (1-based) at which BLOCK occurs in TEXT, contiguous at line boundaries."""
+    lines = [l.rstrip(b"\n") for l in text.splitlines(keepends=True)]
+    want = [l.rstrip(b"\n") for l in block]
+    n, out = len(want), []
+    for i in range(len(lines) - n + 1):
+        if lines[i:i + n] == want:
+            out.append(f"{i + 1}-{i + n}")
+    return out
+
+
+def lean_module(p: str) -> bool:
+    """A path whose declarations the census environment holds (GATES-20t): a `.lean` module, not the lakefile."""
+    return p.endswith(".lean") and p != "lakefile.lean"
 
 
 def layer_of(repo: str, c: str) -> str | None:
@@ -381,9 +336,11 @@ def layer_of(repo: str, c: str) -> str | None:
     return sorted(layers)[0] if layers else None
 
 
-def stale(repo: str, snap: str, main: str, message: str, reverts: list[str]) -> int:
+def stale(repo: str, snap: str, main: str, message: str, reverts: list[str], lean_lacks: str | None = None) -> int:
     """On the final candidate (the caller's GIT_INDEX_FILE): refuse a path that would revert a commit of
-    the window, unless named by --reverts; append each named revert's hunk to MESSAGE."""
+    the window, unless named by --reverts; append each named revert's hunk to MESSAGE. A `.lean` module's
+    lack is not refused here (GATES-20t): it is written to LEAN_LACKS (path, C, subject, side, spans) and
+    the judge decides it from the declarations that hold those lines (gates/decls.py)."""
     named = {git(repo, "rev-parse", "--verify", f"{r}^{{commit}}").stdout.decode().strip(): r for r in reverts}
     msg = open(message, encoding="utf-8").read()
     m = re.match(r"([a-z]+)(?:\([^)]*\))?!?:", msg.strip().splitlines()[0] if msg.strip() else "")
@@ -394,7 +351,7 @@ def stale(repo: str, snap: str, main: str, message: str, reverts: list[str]) -> 
         if rec:
             meta, p = rec.decode().split("\t", 1)
             staged[p] = meta.split()[1]
-    refused, used, notes = [], set(), []
+    refused, used, notes, forwarded = [], set(), [], []
     for p in sorted({row[0] for row in read_snapshot(snap)}):
         cand = staged.get(p)
         mm = tree_entry(repo, main, p)
@@ -410,21 +367,24 @@ def stale(repo: str, snap: str, main: str, message: str, reverts: list[str]) -> 
                 continue
             short = git(repo, "rev-parse", "--short=12", c).stdout.decode().strip()
             subj = git(repo, "log", "-1", "--format=%s", c).stdout.decode().strip()[:90]
-            replay_rc, redone, _ = merge3(x, bpre, bpost)
-            missing = missing_added_theorem(x, bpre, bpost)
-            if replay_rc != 0 and missing is not None:
-                # The replay conflicts on unrelated edits: show the precise missing declaration,
-                # not conflict markers or the first 60 lines of an unrelated whole-file diff.
-                body = ["@@ added theorem statement absent from candidate @@"]
-                body += ["-" + line for line in missing.decode(errors="replace").splitlines()]
-            else:
-                with tempfile.TemporaryDirectory() as d:
-                    a, b = os.path.join(d, "a"), os.path.join(d, "b")
-                    open(a, "wb").write(redone)
-                    open(b, "wb").write(x)
-                    diff = subprocess.run(["git", "diff", "--no-index", "--no-color", "-U1", "--src-prefix=main/",
-                                           "--dst-prefix=landed/", a, b], capture_output=True).stdout.decode(errors="replace")
-                body = [l for l in diff.splitlines() if not l.startswith(("diff --git", "index ", "--- ", "+++ "))][:60]
+            if c not in named and lean_module(p) and lean_lacks is not None:
+                added, removed = _blocks(x, bpre, bpost)
+                for side, text, blocks in (("add", mx, added), ("remove", x, removed)):
+                    if blocks:
+                        where = sorted({s for blk in blocks for s in (spans(text, blk) or ["0-0"])},
+                                       key=lambda s: int(s.split("-")[0]))
+                        forwarded.append("\t".join([p, short, subj.replace("\t", " "), side, ",".join(where)]))
+                print(f"scripts/commit: {p}: your copy lacks {short}'s change by text; the judge decides it from the "
+                      f"declarations holding those lines (GATES-20t)")
+                continue
+            _, redone, _ = merge3(x, bpre, bpost)
+            with tempfile.TemporaryDirectory() as d:
+                a, b = os.path.join(d, "a"), os.path.join(d, "b")
+                open(a, "wb").write(redone)
+                open(b, "wb").write(x)
+                diff = subprocess.run(["git", "diff", "--no-index", "--no-color", "-U1", "--src-prefix=main/",
+                                       "--dst-prefix=landed/", a, b], capture_output=True).stdout.decode(errors="replace")
+            body = [l for l in diff.splitlines() if not l.startswith(("diff --git", "index ", "--- ", "+++ "))][:60]
             layer = layer_of(repo, c)
             foreign = bool(layer) and layer not in mine and not owners.named(reasons, layer)
             fix = f"--reverts {short}" + (f" and name {layer} in --cross-layer (e.g. \"{layer}-N agreed: …\", or "
@@ -450,6 +410,9 @@ def stale(repo: str, snap: str, main: str, message: str, reverts: list[str]) -> 
     if refused:
         print("\n".join(refused))
         return 1
+    if lean_lacks is not None:
+        with open(lean_lacks, "w", encoding="utf-8") as fh:
+            fh.write("".join(l + "\n" for l in forwarded))
     if notes:
         with open(message, "a", encoding="utf-8") as fh:
             fh.write("\n" + "\n".join(notes) + "\n")
@@ -675,6 +638,7 @@ def main() -> int:
         if name == "stale":
             x.add_argument("--message", required=True)
             x.add_argument("--reverts", action="append", default=[])
+            x.add_argument("--lean-lacks")
     for name in ("keys", "verify"):
         k = sub.add_parser(name)
         k.add_argument("--listing", required=True)
@@ -704,7 +668,7 @@ def main() -> int:
         if a.cmd == "candidate":
             return candidate(a.repo, a.snapshot, a.main)
         if a.cmd == "stale":
-            return stale(a.repo, a.snapshot, a.main, a.message, a.reverts)
+            return stale(a.repo, a.snapshot, a.main, a.message, a.reverts, a.lean_lacks)
         return writeback(a.repo, a.snapshot, a.landed)
     except (OSError, subprocess.CalledProcessError) as e:
         err = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) and e.stderr else e
