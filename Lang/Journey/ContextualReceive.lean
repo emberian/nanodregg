@@ -6,7 +6,7 @@ namespace Nanodregg.Lang.Journey
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 def liveDeclaration : HoleROM :=
-  let pin (n : Nat) := { Contextual.factPinAt n with ver := 0 }
+  let pin (n : Nat) : SupportPin := .row 2 (Contextual.factKeyAt n) 0
   { Contextual.declaration with
     code := [⟨.var 1, [pin 2]⟩, ⟨.var 1, [pin 3]⟩, ⟨.nat 9, []⟩,
       ⟨.prim .add (.nat 2) (.nat 5), []⟩,
@@ -71,7 +71,8 @@ def contextualRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     (argBytes (.record [("cell", .digest)]) (factData n))
   let value (r : Run) := match storyRow r.st.host obj 1 (Std.codeOutput .nat) choiceKey with
     | some (.nat n) => some n | _ => none
-  let receipt (r : Run) := selectHole (rowView X.env r.st.host (exec r).unsigned) obj p.holes[0]!
+  let receipt (r : Run) := selectHole Sim.digestOf (pinned X.env r.st.host (exec r).unsigned.pins)
+    (rowView X.env r.st.host (exec r).unsigned) obj p.holes[0]!
   let (_, v0, _) := go prog r (exec r)
   r := note r s!"LP suspended before selection: {v0}" (refusedBy v0 "execute" "holeSelectionAbsent 0")
   for n in [1, 2, 3, 4] do

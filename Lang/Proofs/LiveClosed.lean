@@ -126,7 +126,7 @@ theorem loadLive_of_load {D : Type} {digestOf : ByteArray → Option D}
     loadLive digestOf rv self look fuel idb ⟨[], [], []⟩ = .ok (L, g) ∧
       L.preparationCost = 0 := by
   obtain ⟨hl, hc⟩ := load_closed_live digestOf look
-    (fun Δ p => (instantiateHoles rv self Δ p).map (·.body)) fuel idb _ (by simp) h
+    (fun Δ p => (instantiateHoles digestOf look rv self Δ p).map (·.body)) fuel idb _ (by simp) h
   exact ⟨hl, Loaded.preparationCost_closed L hc⟩
 
 /-- Every successful closed setup is byte-for-byte the setup used by live deployment. -/
@@ -226,7 +226,7 @@ theorem runSetupLive_leaf_closed {D : Type} {bytesOf : D → ByteArray}
     runSetupLive bytesOf digestOf look rv pkg state method args r =
       runSetup bytesOf digestOf look rv pkg state method args r := by
   have hl := loadUsing_leaf_closed hid hp hi hc
-    (fun Δ p => (instantiateHoles rv r.self Δ p).map (·.body)) (closureDepthMax - 1)
+    (fun Δ p => (instantiateHoles digestOf look rv r.self Δ p).map (·.body)) (closureDepthMax - 1)
   change loadLive digestOf rv r.self look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ =
     load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ at hl
   unfold runSetupLive runSetup runSetupWith

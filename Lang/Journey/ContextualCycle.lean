@@ -17,26 +17,29 @@ def cycleTerm : Term :=
   .record [("p", p), ("q", q), ("r", .var 1)]
 
 /-- Read a declared immutable fact token through the fixed generator's complete
-observation adapter. Missing coverage refuses; pinned absence is false. -/
-def observedFact (n : Nat) : Term :=
-  let support := Term.record [("cell", .digest (Sim.dc.bytes (UInt64.ofNat n))),
+observation adapter. Missing coverage refuses; pinned absence is false. A fact names a kernel cell
+that must be LIVE (E1): the cycle's two groundings are the two members' cells. -/
+def observedFact (n : Sim.D) : Term :=
+  let support := Term.record [("cell", .digest (Sim.dc.bytes n)),
     ("pin", .digest (Sim.dc.bytes 0))]
   .ite (Std.activityApply Std.holeSupportCovered [support, .var 3])
     (.prim .eq (Std.activityApply Std.holeSupportProbe [support, .var 3]) (.nat 1))
     (.refuse .bool "holeUnpinned".toUTF8)
 
-def cycleBundle : Except String Std.HoleBundle :=
+def cycleBundle (c1 c5 : Sim.D) : Except String Std.HoleBundle :=
   Std.contextualHole (.record [])
     { name := 0, ctx := [.bool, .bool], ty := cycleTy,
       code := [⟨cycleTerm, []⟩], selectionRel := 0, selectionKey := .empty,
       hypotheses := [none, none], guardPin := none, guard := .var 0 }
-    [observedFact 1, observedFact 5] (.lam Std.holeState (.lam cycleTy (.bool true)))
-    [("facts", ⟨3, none⟩)]
+    [observedFact c1, observedFact c5] (.lam Std.holeState (.lam cycleTy (.bool true)))
+    [("facts", ⟨3, none, true⟩)]
 
 def cycleRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let mut r := r0
   let prog := langProgram
-  let bundle ← match cycleBundle with
+  -- the groundings "1" and "5" are the members' cells a and b
+  let cellOf (n : Nat) : Sim.D := if n = 1 then a.id else b.id
+  let bundle ← match cycleBundle a.id b.id with
     | .ok b => pure b | .error why => return note r s!"LP E4 generate: {why}" false
   let mut ids : List D := []
   for lib in bundle.libraries do
@@ -61,7 +64,7 @@ def cycleRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ ids)) (.create (some pkg) [] seed))
   r := note rr s!"LP E4 create: {v}" (v == "admitted")
   let some obj := t.bind fun t => (createdIds t).head? | return r
-  let factKey (n : Nat) := Data.record [("cell", .digest (Sim.dc.bytes (UInt64.ofNat n)))]
+  let factKey (n : Nat) := Data.record [("cell", .digest (Sim.dc.bytes (cellOf n)))]
   let key := Data.record [("hole", .nat 0)]
   let pins (r : Run) (omitted : Option Nat := none) :=
     ([1, 5].filter (fun n => omitted != some n)).flatMap
@@ -69,7 +72,7 @@ def cycleRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     hole_pinAt obj r.st.host 5 Std.codeSelection key ++
     hole_pinAt obj r.st.host 1 (Std.codeOutput cycleTy) key
   let call (r : Run) (m : Label) (args : ByteArray) (omitted : Option Nat := none) :=
-    signedAt r.st a (Sim.S.pinsFor r.st.host ([a.id, obj, pkg] ++ ids))
+    signedAt r.st a (Sim.S.pinsFor r.st.host ([a.id, b.id, obj, pkg] ++ ids))
       (.invoke obj (p.methods.idxOf m) args 100000 none)
       r.st.host.height (r.st.host.height + 1024) (pins r omitted)
   let exec (r : Run) := call r "execute" (argBytes (.record []) (.record []))
@@ -78,7 +81,7 @@ def cycleRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     | _ => none
   for n in [1, 5] do
     let (rr, v, _) := go prog r (call r "post"
-      (hole_postArg (Sim.dc.bytes (UInt64.ofNat n)) (Sim.dc.bytes 0)) (some n))
+      (hole_postArg (Sim.dc.bytes (cellOf n)) (Sim.dc.bytes 0)) (some n))
     r := note rr s!"LP E4 ground fact{n}: {v}" (v == "admitted")
   let (rr, v, _) := go prog r (call r "choose_code"
     (argBytes (.record [("hole", .nat), ("index", .nat)])

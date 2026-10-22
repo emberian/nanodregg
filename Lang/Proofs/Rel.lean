@@ -193,19 +193,28 @@ theorem editsOf_conforms {rels : List (Label × RelDecl)} {self : D} {m : Nat} {
 
 /-- The datum a point slot holds for one pin, as `relReads` builds it (its digest checks aside):
 the pinned key read back, and the row's value if the pin holds a row. `none`: the pin is refused. -/
-private def pinD (d : RelDecl) (p : ByteArray × Option RowLeaf) : Option Data :=
+private def pinD (digestOf : ByteArray → Option D) (look : Pinned D) (d : RelDecl) (live : Bool)
+    (p : ByteArray × Option RowLeaf) : Option Data :=
   match keyOf d d.key.length p.1 with
   | .error _ => none
   | .ok k =>
-    match p.2 with
-    | none => some (.record [("key", k), ("val", optD none)])
-    | some (.row _ b _) =>
-      match Wire.decodeData d.val b with
-      | .ok w => some (.record [("key", k), ("val", optD (some w))])
-      | .error _ => none
-    | some (.head ..) => none
+    let val : Option Data := match p.2 with
+      | none => some (optD none)
+      | some (.row _ b _) =>
+        match Wire.decodeData d.val b with
+        | .ok w => some (optD (some w))
+        | .error _ => none
+      | some (.head ..) => none
+    val.bind fun val =>
+      if live then
+        match keyCell k with
+        | none => none
+        | some b => (digestOf b).bind fun g =>
+          match look g with
+          | .ok _ => some (.record [("key", k), ("live", .bool (cellLive look g)), ("val", val)])
+          | .error _ => none
+      else some (.record [("key", k), ("val", val)])
 
-/-- The first `n` slots of a record, in order. -/
 private def pointSlots (n : Nat) : Data → List Data
   | .record fs => (fs.take n).map (·.2)
   | _ => []
@@ -256,13 +265,14 @@ theorem valOf_decodes {digestOf : ByteArray → Option D} {d : RelDecl} {what : 
 
 /-- **A relation's point slots hold exactly the caller's pins** (LANG-49): on success, the pins
 under `(self, i)` fit the method's `x.points` slots, each pin reads (`pinD`: its key `keyOf` of the
-pinned key bytes, its value decoded from the row's bytes), and slot `j` holds pin `j` in pin order
-and `none` past the last pin. -/
-theorem relReads_points {digestOf : ByteArray → Option D} {rv : RowView D} {self : D} {i : Nat}
+pinned key bytes, its value decoded from the row's bytes, and on a live read (E1) its key's cell
+liveness `cellLive look g` read through the caller's pinned view), and slot `j` holds pin `j` in pin
+order and `none` past the last pin. -/
+theorem relReads_points {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D} {i : Nat}
     {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
-    (h : relReads digestOf rv self i ℓ d x = .ok v) :
+    (h : relReads digestOf look rv self i ℓ d x = .ok v) :
     (rv.points self i).length ≤ x.points ∧
-    ∃ ps, (rv.points self i).mapM (pinD d) = some ps ∧
+    ∃ ps, (rv.points self i).mapM (pinD digestOf look d x.live) = some ps ∧
       pointSlots x.points v = (List.range x.points).map fun j => optD ps[j]? := by
   unfold relReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -272,19 +282,90 @@ theorem relReads_points {digestOf : ByteArray → Option D} {rv : RowView D} {se
     cases h
     refine ⟨‹(rv.points self i).length ≤ x.points›, _,
       mapM_except_option (fun p y hy => ?_) ‹List.mapM _ (rv.points self i) = Except.ok _›, ?_⟩
-    · repeat' split at hy
-      all_goals first | (cases hy; done) | skip
-      all_goals
-        cases hy
-        simp only [pinD, liftS_eq ‹liftS _ _ = _›, checked_eq ‹checked _ _ _ = _›]
-        first
-          | (simp_all; done)
-          | (obtain ⟨u, hu, hs⟩ := map_some_ok ‹(some <$> valOf digestOf d _ _) = Except.ok _›
-             cases hs
-             simp_all [valOf_decodes hu])
+    · split at hy
+      · cases hy
+      · rename_i kv hkv
+        obtain ⟨k, val⟩ := kv
+        obtain ⟨k0, h1, h2, hv⟩ := readPoint_ok hkv
+        have hk := liftS_eq h1
+        have hkk := checked_eq h2
+        subst hkk
+        rcases hv with ⟨rfl, hp2⟩ | ⟨v', b', ver, w, hp2, hw, rfl⟩
+        · rcases pointData_ok hy with ⟨hl, rfl⟩ | ⟨hl, b, g, c, hb, hg, hc, rfl⟩
+          · simp [pinD, hk, hp2, hl]
+          · simp [pinD, hk, hp2, hl, hb, hg, hc]
+        · rcases pointData_ok hy with ⟨hl, rfl⟩ | ⟨hl, b, g, c, hb, hg, hc, rfl⟩
+          · simp [pinD, hk, hp2, hl, valOf_decodes hw]
+          · simp [pinD, hk, hp2, hl, hb, hg, hc, valOf_decodes hw]
     · simp only [pointSlots]
       rw [List.take_append_of_le_length (by simp [length_slotsD]), List.take_of_length_le (by simp [length_slotsD]),
         slotsD_snd]
+
+/-! ## The live read (E1, LANG-75.1) -/
+
+/-- **One liveness** (E1): `cellLive` is exactly "the caller pinned `g` and the World holds a live
+cell there" (`pinned` returns `World.live`, which is `none` at a tombstone or an absence). -/
+theorem cellLive_iff {look : Pinned D} {g : D} :
+    cellLive look g = true ↔ ∃ c, look g = .ok (some c) := by
+  unfold cellLive
+  split <;> simp_all
+
+theorem mapM_ok_getElem {α β ε : Type} {f : α → Except ε β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = .ok ys →
+      ∃ hl : ys.length = xs.length, ∀ j (hj : j < ys.length), f xs[j] = .ok ys[j]
+  | [], ys, h => by
+    simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at h; subst h
+    exact ⟨rfl, fun j hj => absurd hj (by simp)⟩
+  | x :: xs, ys, h => by
+    rw [List.mapM_cons] at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i y hy
+      split at h
+      · cases h
+      · rename_i ys' hys
+        simp only [pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        obtain ⟨hl, hj⟩ := mapM_ok_getElem hys
+        refine ⟨by simp [hl], fun j hj' => ?_⟩
+        cases j with
+        | zero => simpa using hy
+        | succ j => simpa using hj j (by simpa using hj')
+
+/-- **The live column is authenticated** (E1, LANG-75.1; sibling of `holeRow_authenticated`): on a
+live read, slot `j` of the rows argument is the caller's `j`-th pinned point, its key read back from
+the pinned key bytes, and its `live` bit is `cellLive look g` for the kernel cell `g` that key
+names — the caller's pinned view of THAT cell, never a field a method or a poster wrote. -/
+theorem cited_authenticated {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D}
+    {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
+    (h : relReads digestOf look rv self i ℓ d x = .ok v) (hl : x.live = true) :
+    ∃ ps rest, v = .record (slotsD "p" x.points ps ++ rest) ∧
+      ∃ hlen : ps.length = (rv.points self i).length,
+      ∀ j (hj : j < ps.length), ∃ k b g val,
+        keyOf d d.key.length ((rv.points self i)[j]'(hlen ▸ hj)).1 = .ok k ∧
+        keyCell k = some b ∧ digestOf b = some g ∧
+        ps[j] = .record [("key", k), ("live", .bool (cellLive look g)), ("val", val)] := by
+  unfold relReads at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  all_goals
+    cases h
+    obtain ⟨hlen, hget⟩ := mapM_ok_getElem ‹List.mapM _ (rv.points self i) = Except.ok _›
+    refine ⟨_, _, rfl, hlen, fun j hj => ?_⟩
+    have hq := hget j hj
+    split at hq
+    · cases hq
+    · rename_i kv hkv
+      obtain ⟨k, val⟩ := kv
+      obtain ⟨k0, h1, h2, -⟩ := readPoint_ok hkv
+      have hk := liftS_eq h1
+      have hkk := checked_eq h2
+      subst hkk
+      rcases pointData_ok hq with ⟨hf, -⟩ | ⟨-, b, g, c, hb, hg, -, he⟩
+      · rw [hl] at hf; cases hf
+      · exact ⟨_, b, g, _, hk, hb, hg, he⟩
 
 /-! ## A key's bytes read back -/
 
@@ -662,14 +743,14 @@ private def onePin : RowView Nat :=
 /-- The tooth of `relReads_points`' bound: a view with one more pin than the method's slots is
 refused. -/
 theorem relReads_pins_past_slots :
-    (match relReads (fun _ => none) twoPins 7 0 "t" tRel ⟨1, none⟩ with
+    (match relReads (fun _ => none) (fun g => .error (.unpinned g)) twoPins 7 0 "t" tRel ⟨1, none, false⟩ with
      | .error _ => true
      | .ok _ => false) = true := by decide
 
 /-- `relReads_points` is not about a refusal: one pin into two slots reads to the pinned key, then
 an empty slot. -/
 theorem relReads_points_witness :
-    (match relReads (fun _ => none) onePin 7 0 "t" tRel ⟨2, none⟩ with
+    (match relReads (fun _ => none) (fun g => .error (.unpinned g)) onePin 7 0 "t" tRel ⟨2, none, false⟩ with
      | .ok v =>
        (match pointSlots 2 v with
         | [.inj "some" (.record [("key", .record [("a", .nat 1)]), ("val", .inj "none" (.record []))]),
@@ -820,5 +901,28 @@ theorem preBytes_full (d : RelDecl) (k : Data) : preBytes d d.key.length k = key
   unfold preBytes keyBytes keyToWire
   rw [List.take_length]
   cases d.key.zipIdx.mapM (fun p => (k.field p.1.1).map fun x => ("k" ++ toString p.2, x)) <;> rfl
+
+/-! ### The live read's install rule (E1, LANG-75.1; READ-E1-grok condition 1) -/
+
+private def liveRel (key : Ty) : RelDecl :=
+  { key := [("k", key)], val := .nat, limit := 4, sum := none, cap := 0, retract := false, guard := none }
+
+/-- A one-method package reading relation `r` (keyed by `key`) with its keys' cell liveness. -/
+private def liveReader (key : Ty) : Package :=
+  { imports := [], state := .record [], body := .record [], methods := ["m"], laws := [],
+    rels := [("r", liveRel key)],
+    iface := .record [("m", methodTy (.record []) (.record []) []
+      (readsTy [("r", liveRel key)] [("r", ⟨1, none, true⟩)]) (editTy [("r", liveRel key)]) 0)] }
+
+/-- A live read of a relation that is NOT cell-keyed is refused at install by its own name,
+`liveNotCellKeyed`, never as a generic `badMethod`. -/
+theorem live_read_not_cell_keyed_refused :
+    (match (liveReader .nat).checkFields with
+     | .error e => decide (e = .liveNotCellKeyed "m")
+     | .ok _ => false) = true := by decide
+
+/-- The control: the same read of a relation keyed by one digest installs. -/
+theorem live_read_cell_keyed_admitted :
+    (match (liveReader .digest).checkFields with | .ok _ => true | .error _ => false) = true := by decide
 
 end Nanodregg.Lang

@@ -404,7 +404,7 @@ theorem runSetupWith_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : Byt
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
-      readsData digestOf p.rels rv r.self sg.reads = .ok wd ∧
+      readsData digestOf look p.rels rv r.self sg.reads = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
             reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal], preparation := charge L } := by
@@ -426,7 +426,7 @@ theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArr
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
-      readsData digestOf p.rels rv r.self sg.reads = .ok wd ∧
+      readsData digestOf look p.rels rv r.self sg.reads = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
             reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by

@@ -141,8 +141,8 @@ theorem holeCheckedJudge_application (V : Ty) (clause : Term)
 /-- The ordinary admission gate preserves collection refusals. Successful
 execution is exactly complete observation plus a verified current judgment. -/
 theorem holeCheckedAdmission_evaluated_iff (c0 c1 cb : Bool) (l : Label)
-    (hl : l ∈ ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-      "support1Moved", "support1Withdrawn", "verified"])
+    (hl : l ∈ ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+      "support1Dead", "support1Moved", "support1Withdrawn", "verified"])
     (lib : List Term) (env : Env) (t : Term)
     (ht : BigStep lib env t (holeCheckedOutcome c0 c1 cb l)) :
     (∃ v, BigStep lib env (.app holeVerdictCheck t) (.ok v)) ↔

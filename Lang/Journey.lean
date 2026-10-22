@@ -21,7 +21,7 @@ the owner and the owner never changes). Rows:
   space has no bytes.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * LV (LANG-60) the package wire's version: `Owned`'s LANG-59 bytes (a fixture, no version byte) and
-  its current bytes at the previous version are refused `lang/package-version/4` at install and at decode.
+  its current bytes at the previous version are refused `lang/package-version/5` at install and at decode.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
 * L4 A invokes `set 101` — refused `lawDenied` by `bounded`, nothing written.
@@ -1932,6 +1932,18 @@ def p8ContextBundle : Except String Std.HoleBundle :=
     [.var 1] (.lam Std.holeState (.lam .nat
       (.prim .le (.var 0) (.get (.var 1) "cap"))))
 
+/-- The methods of a package that read relation `rel`, each with whether it reads it LIVE (E1): the
+generator-level tooth of C1 (READ-E1-grok's residual). B1–B3 hold for packages whose fact reads are
+live reads; a Std.hole whose generator emitted a facts read without `live` would treat a pin match
+as current again, so the generated package is checked, not assumed. -/
+def readsOfRel (p : Package) (rel : Label) : List (Label × Bool) :=
+  p.methods.filterMap fun ℓ =>
+    match Row.find? ℓ (recordRow p.iface) with
+    | some t => match methodSig p.state p.rels t with
+      | some sg => (sg.reads.lookup rel).map fun x => (ℓ, x.live)
+      | none => none
+    | none => none
+
 def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := false) : Run := Id.run do
   let prog := mode.program
   let mut r := r0
@@ -1963,6 +1975,9 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
       p.laws == ["shape"] && p.rels.map (·.1) == (["candidates", "facts", "fills", "pending"] ++
       if contextual then ["computed", "selection"] else []).mergeSort &&
       p.holes.isEmpty == !contextual)
+  let fr := readsOfRel p "facts"
+  r := note r s!"LH0f every generated method reading facts reads it live: {fr}"
+    (!fr.isEmpty && fr.all (·.2))
   let factsIndex := (p.rels.map (·.1)).idxOf "facts"
   let fillsIndex := (p.rels.map (·.1)).idxOf "fills"
   let pendingIndex := (p.rels.map (·.1)).idxOf "pending"
@@ -1987,7 +2002,8 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
     (.grant obj b.id [.invoke (p.methods.idxOf "accept"), .invoke (p.methods.idxOf "post"), .invoke (p.methods.idxOf "repin"), .invoke (p.methods.idxOf "unpost"), .invoke (p.methods.idxOf "resume_fill")] none))
   r := note r3 s!"LH3 A grants B accept, post, repin, unpost: {v3}" (v3 == "admitted")
   let some gr := t3.bind fun t => (createdIds t).head? | return note r "LH3 no grant id" false
-  let pinsOf (r : Run) (m : Sim.Member) := Sim.S.pinsFor r.st.host ([m.id, obj, pkg] ++ libraryIds ++ if m.id == b.id then [gr] else [])
+  -- the facts' cells (f1 = a, f2 = b) are pinned: a fact read is a live read of its cell (E1)
+  let pinsOf (r : Run) (m : Sim.Member) := Sim.S.pinsFor r.st.host ([m.id, a.id, b.id, obj, pkg] ++ libraryIds ++ if m.id == b.id then [gr] else [])
   let viaOf (m : Sim.Member) : Option D := if m.id == b.id then some gr else none
   let call (r : Run) (m : Sim.Member) (method : Label) (x : ByteArray) (rowPins : List (RowSlot D × D) := []) : Call D :=
     signedAt r.st m (pinsOf r m) (.invoke obj (p.methods.idxOf method) x 100000 (viaOf m)) r.st.host.height (r.st.host.height + 1024) rowPins
@@ -2108,6 +2124,25 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
   r := note rJ s!"LH8s rejudge releases c2 and retains its reason: {vJ}; {hole_statusOf rJ.st.host obj dC c2}"
     (vJ == "admitted" && hole_statusOf rJ.st.host obj dC c2 == some "verified" &&
       asBytes reason == some "policy".toUTF8)
+  -- LH14 (C1, LANG-75.1, cv 01a1649d) on a scratch branch: a fact is the poster's claim; every reader
+  -- checks the cell it names. A cell the kernel never had: unpinned, the read refuses by name; pinned
+  -- (at its absence), the candidate is recorded suspended and its selection refuses by name.
+  let ghost : D := 0x5eed5eed5eed5eed
+  let fG := Sim.dc.bytes ghost
+  let c14 := Sim.dc.bytes (founderId (ctxWith prog) r.st.host.origin 14)
+  let (rG, vG, _) := go prog r (call r a "post" (hole_postArg fG p1))
+  let withGhost (r : Run) (method : Label) (x : ByteArray) (rowPins : List (RowSlot D × D)) : Call D :=
+    signedAt r.st a (pinsOf r a ++ Sim.S.pinsFor r.st.host [ghost]) (.invoke obj (p.methods.idxOf method) x 100000 none)
+      r.st.host.height (r.st.host.height + 1024) rowPins
+  let proposeG := hole_proposeArg c14 (hole_supportData fG p1) hole_noSupport 3
+  let (_, vU, _) := go prog rG (call rG a "propose" proposeG (pinFact rG.st.host fG))
+  let (rP, vP, _) := go prog rG (withGhost rG "propose" proposeG (pinFact rG.st.host fG))
+  let (_, vS, _) := go prog rP (withGhost rP "select" (hole_selectArg c14) (pinCand rP.st.host c14 ++ pinFact rP.st.host fG))
+  r := note r s!"LH14a support of a digest the kernel never had, its cell unpinned: post {vG}; propose {vU}"
+    (vG == "admitted" && (r.st.host.entry Sim.env ghost).isNone && vU.startsWith "refused unpinned")
+  r := note r s!"LH14b support of a digest the kernel never had, its cell pinned absent: propose {vP}, recorded {hole_statusOf rP.st.host obj dC c14}; select {vS}"
+    (vP == "admitted" && hole_statusOf rP.st.host obj dC c14 == some "suspended \"support0 dead\"" &&
+      refusedBy vS "select" "support0 dead")
   -- LH9 B accepts; LH9b a select after acceptance
   let dispatchAt := r.st.host.height
   let (r9, v9, _) := go prog r (call r b "accept" (argBytes (.record []) (.record [])) (pinCand r.st.host c2 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2))
@@ -2235,6 +2270,8 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
     libraryIds := libraryIds ++ [id]
   let p := { p with imports := libraryIds.map Sim.dc.bytes }
   let some pb := Wire.encodePackage p | return note r "P8 no package bytes" false
+  let fr := readsOfRel p "facts"
+  r := note r s!"P8 every method reading facts reads it live: {fr}" (!fr.isEmpty && fr.all (·.2))
   let some dc := p.rels.lookup "candidates" | return note r "P8 no candidates" false
   let some df := p.rels.lookup "facts" | return note r "P8 no facts" false
   let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host (a.id :: libraryIds)) (.install pb))
@@ -2279,7 +2316,8 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
     let (r', v, _) := go prog r (invoke r "post" (hole_postArg (Sim.dc.bytes g) (Sim.dc.bytes pin)))
     r := note r' s!"P8 post versioned provider support: {v}" (v == "admitted")
     let (r', v, _) := go prog r (invoke r "propose"
-      (hole_proposeArg (Sim.dc.bytes owner) (hole_supportData (Sim.dc.bytes g) (Sim.dc.bytes pin)) hole_noSupport 1) (pinF r.st.host g))
+      (hole_proposeArg (Sim.dc.bytes owner) (hole_supportData (Sim.dc.bytes g) (Sim.dc.bytes pin)) hole_noSupport 1) (pinF r.st.host g)
+      (Sim.S.pinsFor r.st.host [g]))
     r := note r' s!"P8 retain candidate {owner}: {v}" (v == "admitted")
   let commit (r : Run) (i : Nat) (owner : D) : Call D :=
     invoke r "commit" (p8Arg asset owner cap)
@@ -2303,12 +2341,24 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
     (.revoke providers[0]!))
   r := note r' s!"P8.2 withdraw provider 0: {vr}" (vr == "admitted")
   let (_, stale, _) := go prog r oldPlan
+  -- The plan signed before the revoke pins g0 at its live version: the commit reads the cell as it
+  -- is (dead) and refuses by name; the kernel's stale stands behind it (as LH7b for a moved row).
   r := note r s!"P8.2 withdrawn instantiation: {stale}; live authority {p8Live r.st.host supports}"
-    (stale.startsWith "rejected stale" && p8Live r.st.host supports == [false, true] &&
-      headCount r.st.host obj 0 == some 2)
+    ((refusedBy stale "commit" "support0 dead" || stale.startsWith "rejected stale") &&
+      p8Live r.st.host supports == [false, true] && headCount r.st.host obj 0 == some 2)
+  -- C1 (LANG-75.1, cv 01a16171): a commit that RE-PINS the withdrawn provider's grant at its
+  -- TOMBSTONE passes the kernel's pin check; the commit's live read of the facts sees the cited cell
+  -- dead and refuses by name, in the same Turn as the spend. Before C1 it was admitted and spent
+  -- the unit (fold/S2-tombstone-probe.txt; promo/E1-support-probe.txt).
+  let g0 := providers[0]!
+  let (_, vt, _) := go prog r (invoke r "commit" (p8Arg asset a.id cap)
+      (pinC r.st.host a.id ++ pinF r.st.host g0)
+      (Sim.S.pinsFor r.st.host [asset, accountId X a.id asset, cap, g0]))
+  r := note r s!"P8.2 re-pinned tombstone: {vt}; counted left {p8Left r.st.host cap}"
+    (refusedBy vt "commit" "support0 dead" && p8Left r.st.host cap == some 1 &&
+      (match r.st.host.entry Sim.env g0 with | some .tomb => true | _ => false))
   -- A commit that pins the live provider's authority at a version it never had is refused by
-  -- the kernel's pin check. (A commit that pins the withdrawn provider's TOMBSTONE is admitted:
-  -- the package reads its fact rows, not the grant; LANG-P8's critique, measured in LANG-74.2.)
+  -- the kernel's pin check.
   let (_, vw, _) := go prog r (invoke r "commit" (p8Arg asset b.id cap)
       (pinC r.st.host b.id ++ pinF r.st.host providers[1]!)
       (Sim.S.pinsFor r.st.host [asset, accountId X b.id asset, cap] ++ [(providers[1]!, 0)]))
@@ -2518,18 +2568,18 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   let (r6, v6, _) := go prog r c6
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
   -- LV (LANG-60) the package wire's version: Owned's LANG-59 bytes (no version byte) and Owned's
-  -- current bytes at the previous version are each refused `lang/package-version/4` at install and at decode,
+  -- current bytes at the previous version are each refused `lang/package-version/5` at install and at decode,
   -- where the old bytes used to be read; the current bytes begin with the current version
-  let versionRefused (v : String) : Bool := v.startsWith "refused program" && (v.splitOn "lang/package-version/4").length > 1
+  let versionRefused (v : String) : Bool := v.startsWith "refused program" && (v.splitOn "lang/package-version/5").length > 1
   let (rv1, vv1, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install owned59))
   r := note rv1 s!"LV1 install Owned's LANG-59 bytes ({owned59.size} bytes): {vv1}" (owned59.size == 1788 && versionRefused vv1)
   let prev := ownedBytes.set! 0 (Bounds.packageWireVersion - 1)
   let (rv2, vv2, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install prev))
   r := note rv2 s!"LV2 install Owned's bytes at version {Bounds.packageWireVersion - 1}: {vv2}" (versionRefused vv2)
   let byName := fun (b : ByteArray) => match Wire.decodePackage b with
-    | .error (.rejected 0 "lang/package-version/4") => true
+    | .error (.rejected 0 "lang/package-version/5") => true
     | _ => false
-  r := note r s!"LV3 decode refuses both lang/package-version/4; Owned's bytes begin with version {Bounds.packageWireVersion} and decode"
+  r := note r s!"LV3 decode refuses both lang/package-version/5; Owned's bytes begin with version {Bounds.packageWireVersion} and decode"
     (byName owned59 && byName prev && ownedBytes[0]! == Bounds.packageWireVersion &&
       (Wire.decodePackage ownedBytes).toBool)
   r := installRows mode r a pkg

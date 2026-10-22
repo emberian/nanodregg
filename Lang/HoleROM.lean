@@ -4,17 +4,19 @@ import Lang.Subst
 
 namespace Nanodregg.Lang
 
-/-- A fact at one authenticated row slot and one exact version. -/
-structure HolePin where
-  rel : Nat
-  key : ByteArray
-  ver : Nat
+/-- What a ROM support, hypothesis or guard pin asserts (E1, LANG-75.1): a row of the hole object at
+one exact version, or a kernel cell that is LIVE in the caller's pinned view. A cell is never pinned
+"at a version": a grant's slots move on every spend (KERNEL-60), so the assumption is the fact that
+the cell stands, which a revoke contradicts (de Kleer 1986 §4.9). -/
+inductive SupportPin where
+  | row (rel : Nat) (key : ByteArray) (ver : Nat)
+  | cell (id : ByteArray)
   deriving Inhabited, DecidableEq
 
 /-- A code candidate and the derivation supports required independently of its variables. -/
 structure HoleCode where
   body : Term
-  supports : List HolePin := []
+  supports : List SupportPin := []
   deriving Inhabited, DecidableEq
 
 /-- One live contextual declaration. Selection rows contain an index into code.
@@ -28,8 +30,8 @@ structure HoleROM where
   code : List HoleCode
   selectionRel : Nat
   selectionKey : ByteArray
-  hypotheses : List (Option HolePin)
-  guardPin : Option HolePin
+  hypotheses : List (Option SupportPin)
+  guardPin : Option SupportPin
   guard : Term
   deriving Inhabited, DecidableEq
 

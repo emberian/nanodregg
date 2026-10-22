@@ -219,23 +219,24 @@ a doc that is not `Bounds.docOk`. -/
 def docSx (w : ByteArray) : Option SExp :=
   if Bounds.docOk w then some (list (atom "doc" :: if w.isEmpty then [] else [bytesSx w])) else none
 
-def holePinSx (p : HolePin) : SExp :=
-  list [atom "pin", atom (Nat.repr p.rel), digestSx p.key, atom (Nat.repr p.ver)]
+def supportPinSx : SupportPin → SExp
+  | .row rel key ver => list [atom "pin", atom (Nat.repr rel), digestSx key, atom (Nat.repr ver)]
+  | .cell id => list [atom "cell", digestSx id]
 
-def holeOptPinSx : Option HolePin → SExp
+def supportOptPinSx : Option SupportPin → SExp
   | none => list [atom "structural"]
-  | some p => holePinSx p
+  | some p => supportPinSx p
 
 def holeCodeSx (ctx : List Ty) (c : HoleCode) : Option SExp := do
   pure (list [atom "candidate", ← termSx ctx.length c.body,
-    list (atom "supports" :: c.supports.map holePinSx)])
+    list (atom "supports" :: c.supports.map supportPinSx)])
 
 def holeROMSx (h : HoleROM) : Option SExp := do
   pure (list [atom "hole", atom (Nat.repr h.name),
     list (atom "context" :: (← h.ctx.mapM tySx)), list [atom "result", ← tySx h.ty],
     list [atom "selection", atom (Nat.repr h.selectionRel), digestSx h.selectionKey],
-    list (atom "hypotheses" :: h.hypotheses.map holeOptPinSx),
-    list [atom "guard", holeOptPinSx h.guardPin, ← termSx 1 h.guard],
+    list (atom "hypotheses" :: h.hypotheses.map supportOptPinSx),
+    list [atom "guard", supportOptPinSx h.guardPin, ← termSx 1 h.guard],
     list (atom "code" :: (← h.code.mapM (holeCodeSx h.ctx)))])
 
 /-- The eight sections of `(package …)`, in the order `Read.package` requires. -/

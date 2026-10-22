@@ -93,6 +93,18 @@ def optD : Option Data → Data
 def slotsD (c : String) (n : Nat) (xs : List Data) : List (Label × Data) :=
   (slotLabels c n).zipIdx.map fun p => (p.1, optD xs[p.2]?)
 
+/-- Kernel cell `g` is LIVE in the caller's pinned view (E1): pinned, and neither a tombstone nor
+absent (KERNEL-54's three pin domains). Never "at a version" (KERNEL-60). -/
+def cellLive {D : Type} (look : Kernel.Receive.Pinned D) (g : D) : Bool :=
+  match look g with
+  | .ok (some _) => true
+  | _ => false
+
+/-- The kernel cell a cell-keyed relation's key names (`RelDecl.cellKeyed`): its one digest field. -/
+def keyCell : Data → Option ByteArray
+  | .record [(_, .digest b)] => some b
+  | _ => none
+
 /-- The index of a relation by label. -/
 def relIndex (rels : List (Label × RelDecl)) (ℓ : Label) : Option Nat := rels.findIdx? (·.1 = ℓ)
 
@@ -125,20 +137,42 @@ def rangeRowData (ℓ : Label) (d : RelDecl) (rows : List (RowSlot D × RowLeaf)
       pure (Data.record [("key", kd), ("val", ← valOf digestOf d s!"rows: {ℓ}" v)])
     | _ => throw (.program s!"rows: {ℓ}: not a row")
 
+/-- One pinned point read back: its key (`keyOf`, `checked`) and the row's value if the pin holds a
+row (`valOf`); a head under a point is refused. -/
+def readPoint (ℓ : Label) (d : RelDecl) (p : ByteArray × Option RowLeaf) :
+    Except (Refusal D) (Data × Option Data) := do
+  let key ← checked digestOf s!"rows: {ℓ}: key" (← liftS s!"rows: {ℓ}" (keyOf d d.key.length p.1))
+  let val ← match p.2 with
+    | none => pure none
+    | some (.row _ v _) => some <$> valOf digestOf d s!"rows: {ℓ}" v
+    | some (.head ..) => throw (.program s!"rows: {ℓ}: not a row")
+  pure (key, val)
+
+/-- A point's record: its key and value; on a live read (E1, LANG-75.1) also whether the kernel
+cell its key names is LIVE in the caller's pinned view. An unpinned cell is the kernel's own
+`unpinned` refusal, by name. -/
+def pointData (look : Pinned D) (ℓ : Label) (live : Bool) (kv : Data × Option Data) :
+    Except (Refusal D) Data :=
+  if live then
+    match keyCell kv.1 with
+    | none => .error (.program s!"rows: {ℓ}: not cell-keyed")
+    | some b =>
+      match digestOf b with
+      | none => .error (.program s!"rows: {ℓ}: key: not a digest")
+      | some g =>
+        match look g with
+        | .error e => .error e
+        | .ok _ => .ok (.record [("key", kv.1), ("live", .bool (cellLive look g)), ("val", optD kv.2)])
+  else .ok (.record [("key", kv.1), ("val", optD kv.2)])
+
 /-- One relation's reads: the caller's pins under it in pin order (at most `x.points`, else
 refused), and its one signed range, if the method declares one (its `most` at most the method's
 slots; exactly one signed range, else refused: none signed is `rangeUnpinned`, naming the relation). -/
-def relReads (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl) (x : RelRead) :
-    Except (Refusal D) Data := do
+def relReads (look : Pinned D) (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl)
+    (x : RelRead) : Except (Refusal D) Data := do
   let pts := rv.points self i
   unless pts.length ≤ x.points do throw (.program s!"rows: {ℓ}: {pts.length} pins past {x.points} slots")
-  let ps ← pts.mapM fun p => do
-    let key ← checked digestOf s!"rows: {ℓ}: key" (← liftS s!"rows: {ℓ}" (keyOf d d.key.length p.1))
-    let val ← match p.2 with
-      | none => pure none
-      | some (.row _ v _) => some <$> valOf digestOf d s!"rows: {ℓ}" v
-      | some (.head ..) => throw (.program s!"rows: {ℓ}: not a row")
-    pure (Data.record [("key", key), ("val", optD val)])
+  let ps ← pts.mapM fun p => do pointData digestOf look ℓ x.live (← readPoint digestOf ℓ d p)
   let range ← match x.range with
     | none => pure []
     | some (m, k) => do
@@ -154,12 +188,13 @@ def relReads (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl) (
   pure (.record (slotsD "p" x.points ps ++ range))
 
 /-- A method's rows argument: for each relation it reads, `relReads`. -/
-def readsData (rels : List (Label × RelDecl)) (rv : RowView D) (self : D) (rs : List (Label × RelRead)) :
+def readsData (look : Pinned D) (rels : List (Label × RelDecl)) (rv : RowView D) (self : D)
+    (rs : List (Label × RelRead)) :
     Except (Refusal D) Data := do
   let fs ← rs.mapM fun r => do
     let some i := relIndex rels r.1 | throw (.program s!"rows: no relation {r.1}")
     let some d := Row.find? r.1 rels | throw (.program s!"rows: no relation {r.1}")
-    pure (r.1, ← relReads digestOf rv self i r.1 d r.2)
+    pure (r.1, ← relReads digestOf look rv self i r.1 d r.2)
   pure (.record fs)
 
 end

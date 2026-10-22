@@ -470,7 +470,7 @@ def term (c : Ctx) : Nat → List String → SExp → P SExp
       let k ← match c.place with
         | .method _ _ _ reads =>
           match Row.find? rel reads with
-          | some ⟨_, some (_, k)⟩ => pure k
+          | some ⟨_, some (_, k), _⟩ => pure k
           | _ => throw (.noRange s rel)
         | _ => throw (.noRange s rel)
       let T ← termTy c t
@@ -571,15 +571,24 @@ structure MethodHead where
 def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
   | [b] => .ok (h, b)
   | .list _ (.atom _ "reads" :: rs) :: rest => do
+    -- `(live)` last: the points carry their key's cell liveness (E1; a cell-keyed relation only)
+    let liveOf : List SExp → List SExp × Bool := fun xs =>
+      match xs.getLast? with
+      | some (.list _ [.atom _ "live"]) => (xs.dropLast, true)
+      | _ => (xs, false)
     let reads ← rs.mapM fun
-      | .list _ [.atom _ rel, .list _ [.atom _ "points", .atom q n]] =>
-        match n.toNat? with | some n => .ok (rel, ⟨n, none⟩) | none => .error (.badClause q)
-      | .list _ [.atom _ rel, .list _ [.atom _ "range", .atom q m, .atom _ k]] =>
-        match m.toNat?, k.toNat? with | some m, some k => .ok (rel, ⟨0, some (m, k)⟩) | _, _ => .error (.badClause q)
-      | .list _ [.atom _ rel, .list _ [.atom _ "points", .atom q n], .list _ [.atom _ "range", .atom _ m, .atom _ k]] =>
-        match n.toNat?, m.toNat?, k.toNat? with
-        | some n, some m, some k => .ok (rel, ⟨n, some (m, k)⟩)
-        | _, _, _ => .error (.badClause q)
+      | .list p xs =>
+        let (xs, live) := liveOf xs
+        match xs with
+        | [.atom _ rel, .list _ [.atom _ "points", .atom q n]] =>
+          match n.toNat? with | some n => .ok (rel, ⟨n, none, live⟩) | none => .error (.badClause q)
+        | [.atom _ rel, .list _ [.atom _ "range", .atom q m, .atom _ k]] =>
+          match m.toNat?, k.toNat? with | some m, some k => .ok (rel, ⟨0, some (m, k), live⟩) | _, _ => .error (.badClause q)
+        | [.atom _ rel, .list _ [.atom _ "points", .atom q n], .list _ [.atom _ "range", .atom _ m, .atom _ k]] =>
+          match n.toNat?, m.toNat?, k.toNat? with
+          | some n, some m, some k => .ok (rel, ⟨n, some (m, k), live⟩)
+          | _, _, _ => .error (.badClause q)
+        | _ => .error (.badClause p)
       | x => .error (.badClause x.pos)
     methodHead { h with reads := Row.sort reads } rest
   | .list _ [.atom _ "arg", a] :: rest => methodHead { h with arg := a } rest

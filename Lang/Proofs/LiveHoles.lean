@@ -45,14 +45,15 @@ theorem holeRow_authenticated {D : Type} {rv : RowView D} {self : D}
     exact List.mem_of_find?_eq_some hf
 
 /-- A selected filling is literally code at the authenticated row's index.
-Neither code nor the expected support versions come from the caller. -/
-theorem selectHole_origin {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {s : HoleSelection}
-    (hs : selectHole rv self h = .ok s) :
+Neither code nor the expected support versions come from the caller. Every support holds: a row
+support at its ROM version, a cell support pinned and LIVE (E1, LANG-75.1). -/
+theorem selectHole_origin {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D} {h : HoleROM} {s : HoleSelection}
+    (hs : selectHole digestOf look rv self h = .ok s) :
     ∃ c amount bytes,
       holeRow rv self h.selectionRel h.selectionKey = .ok (some (.row amount bytes s.version)) ∧
       Wire.decodeData .nat bytes = .ok (.nat s.index) ∧
       h.code[s.index]? = some c ∧ s.original = c.body ∧
-      c.supports.all (holePinHolds rv self) = true := by
+      c.supports.all (supportLive digestOf look rv self) = true := by
   unfold selectHole at hs
   simp only [bind, Except.bind, pure, Except.pure] at hs
   repeat' split at hs
@@ -61,16 +62,72 @@ theorem selectHole_origin {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {
   subst s
   exact ⟨_, _, _, ‹_›, ‹_›, ‹_›, rfl, ‹_›⟩
 
+/-- **A selected candidate's cell supports are live** (E1, LANG-75.1): every `.cell id` support of
+the selected candidate names a kernel cell the caller pinned and the World holds live. This is
+not implied by `selectHole_origin` alone: under the mutation `supportLive (.cell _) := true` that
+theorem still holds and this one fails. -/
+theorem selectHole_cell_support {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
+    {rv : RowView D} {self : D} {h : HoleROM} {s : HoleSelection}
+    (hs : selectHole digestOf look rv self h = .ok s) :
+    ∃ c, h.code[s.index]? = some c ∧
+      ∀ id, SupportPin.cell id ∈ c.supports → ∃ g cell, digestOf id = some g ∧ look g = .ok (some cell) := by
+  obtain ⟨c, _, _, _, _, hc, _, hall⟩ := selectHole_origin hs
+  refine ⟨c, hc, fun id hid => ?_⟩
+  have hl := List.all_eq_true.mp hall _ hid
+  simp only [supportLive] at hl
+  cases hd : digestOf id with
+  | none => simp [hd] at hl
+  | some g =>
+    simp only [hd, Option.any_some] at hl
+    unfold cellLive at hl
+    split at hl
+    · exact ⟨g, _, rfl, ‹_›⟩
+    · cases hl
+
+/-- **A revoked support refuses by itself** (B1 at ROM grain, LANG-75.1): when the selection row
+picks a candidate that cites a kernel cell the caller pinned at its tombstone (or absence), no
+selection exists, the hole resolves blocked (no receipt), and demanding it faults with its named
+refusal (`blocked_step`). The through-`submit` tooth is the journey row "P8.2 re-pinned tombstone". -/
+theorem revoked_support_refused {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
+    {rv : RowView D} {self : D} {h : HoleROM} {amount : Nat} {bytes : ByteArray} {ver i : Nat}
+    {c : HoleCode} {id : ByteArray} {g : D}
+    (hrow : holeRow rv self h.selectionRel h.selectionKey = .ok (some (.row amount bytes ver)))
+    (hdec : Wire.decodeData .nat bytes = .ok (.nat i)) (hc : h.code[i]? = some c)
+    (hcell : SupportPin.cell id ∈ c.supports) (hg : digestOf id = some g) (hdead : look g = .ok none) :
+    (∀ s, selectHole digestOf look rv self h ≠ .ok s) ∧
+      (resolveHole digestOf look rv self h).receipt = none := by
+  have hno : ∀ s, selectHole digestOf look rv self h ≠ .ok s := by
+    intro s hs
+    obtain ⟨c', amount', bytes', hrow', hdec', hc', _, _⟩ := selectHole_origin hs
+    rw [hrow] at hrow'
+    simp only [Except.ok.injEq, Option.some.injEq, RowLeaf.row.injEq] at hrow'
+    obtain ⟨-, rfl, -⟩ := hrow'
+    rw [hdec] at hdec'
+    simp only [Except.ok.injEq, Data.nat.injEq] at hdec'
+    subst hdec'
+    obtain ⟨c'', hc'', hlive⟩ := selectHole_cell_support hs
+    rw [hc] at hc''
+    cases hc''
+    obtain ⟨g', cell, hg', hl⟩ := hlive id hcell
+    rw [hg] at hg'
+    cases hg'
+    rw [hdead] at hl
+    cases hl
+  refine ⟨hno, ?_⟩
+  cases he : selectHole digestOf look rv self h with
+  | ok s => exact absurd he (hno s)
+  | error why => simp [resolveHole, he, HoleResolution.receipt]
+
 /-- Blocked code cannot be mistaken for an authenticated selection receipt. -/
 theorem blocked_has_no_receipt (n : Nat) (T : Ty) (why : HoleRefusal) :
     (HoleResolution.blocked n T why).receipt = none := rfl
 
 /-- Resolution preserves the exact refusal returned by fresh authentication.
 This equation names the transient term that fillRefs substitutes. -/
-theorem resolveHole_refusal {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {why : HoleRefusal}
-    (he : selectHole rv self h = .error why) :
-    (resolveHole rv self h).body = .refuse h.ty why.wire.toUTF8 ∧
-      (resolveHole rv self h).receipt = none := by
+theorem resolveHole_refusal {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D} {h : HoleROM} {why : HoleRefusal}
+    (he : selectHole digestOf look rv self h = .error why) :
+    (resolveHole digestOf look rv self h).body = .refuse h.ty why.wire.toUTF8 ∧
+      (resolveHole digestOf look rv self h).receipt = none := by
   simp [resolveHole, he, HoleResolution.body, HoleResolution.receipt]
 
 /-- Demanding the blocked term fires that same named refusal in one machine step. -/
@@ -80,9 +137,9 @@ theorem blocked_step (n : Nat) (T : Ty) (why : HoleRefusal) (lib : List Term) (e
 
 /-- Successful bounded contextual preparation is closed and typed at the
 unchanged interface, and its actual allocated syntax is within the bound. -/
-theorem instantiateHoles_typed {D : Type} {rv : RowView D} {self : D}
+theorem instantiateHoles_typed {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D}
     {Δ : List Ty} {p : Package} {i : HoleInstance}
-    (h : instantiateHoles rv self Δ p = .ok i) :
+    (h : instantiateHoles digestOf look rv self Δ p = .ok i) :
     HasType Δ [] i.body p.iface ∧ Term.nodes i.body ≤ Wire.nodeMax := by
   unfold instantiateHoles at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -96,9 +153,9 @@ theorem instantiateHoles_typed {D : Type} {rv : RowView D} {self : D}
 /-- The instantiated body introduces no digest literal outside the template
 and the actual selected ROM candidates. This binds provenance to this run's
 selection receipts rather than arbitrary code in the package. -/
-theorem instantiateHoles_sources {D : Type} {rv : RowView D} {self : D}
+theorem instantiateHoles_sources {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D}
     {Δ : List Ty} {p : Package} {i : HoleInstance}
-    (h : instantiateHoles rv self Δ p = .ok i) :
+    (h : instantiateHoles digestOf look rv self Δ p = .ok i) :
     ∀ b ∈ i.body.digestLits,
       b ∈ p.body.digestLits ++ i.selections.flatMap (fun s => s.original.digestLits) := by
   unfold instantiateHoles at h
@@ -116,8 +173,8 @@ theorem instantiateHoles_sources {D : Type} {rv : RowView D} {self : D}
     exact hm
 
 /-- A guard cannot consume more ticks than its fixed invocation allowance. -/
-theorem runHoleGuard_cost {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {used : Nat}
-    (hr : runHoleGuard rv self h = .ok used) : used ≤ Bounds.holeGuardFuel := by
+theorem runHoleGuard_cost {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D} {h : HoleROM} {used : Nat}
+    (hr : runHoleGuard digestOf look rv self h = .ok used) : used ≤ Bounds.holeGuardFuel := by
   unfold runHoleGuard at hr
   simp only [bind, Except.bind, pure, Except.pure] at hr
   repeat' split at hr
@@ -125,7 +182,7 @@ theorem runHoleGuard_cost {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {
   all_goals
     cases hr
     have hb := run_used_le (lib := []) (cap := Bounds.stackMax) Bounds.holeGuardFuel
-      (State.init h.guard [.bool (h.guardPin.all (holePinHolds rv self))])
+      (State.init h.guard [.bool (h.guardPin.all (supportLive digestOf look rv self))])
     rw [‹run _ _ _ _ _ = _›] at hb
     exact hb
 
@@ -298,8 +355,8 @@ theorem factorHole_nodes (h : HoleROM) (c : HoleCode) (removed : List Nat) :
     Term.nodes (factorHole h c removed).2.1 = Term.nodes c.body :=
   factor_fold_nodes removed.reverse h.ctx c.body
 
-theorem selectHole_nodes {D : Type} {rv : Kernel.Receive.RowView D} {self : D}
-    {h : HoleROM} {s : HoleSelection} (hs : selectHole rv self h = .ok s) :
+theorem selectHole_nodes {D : Type} {digestOf : ByteArray → Option D} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {self : D}
+    {h : HoleROM} {s : HoleSelection} (hs : selectHole digestOf look rv self h = .ok s) :
     Term.nodes s.body = Term.nodes s.original := by
   unfold selectHole at hs
   simp only [bind, Except.bind, pure, Except.pure] at hs
@@ -337,15 +394,15 @@ theorem foldMax_le {α : Type} (f : α → Nat) (xs : List α) (n m : Nat)
 
 /-- Selected code retains the ROM candidate's size through strengthening;
 a blocked refusal has one node. Both fit the same committed maximum. -/
-theorem resolutionMax_committed {D : Type} (rv : Kernel.Receive.RowView D) (self : D)
+theorem resolutionMax_committed {D : Type} (digestOf : ByteArray → Option D) (look : Kernel.Receive.Pinned D) (rv : Kernel.Receive.RowView D) (self : D)
     (hs : List HoleROM) :
-    resolutionMax (hs.map (resolveHole rv self)) ≤
+    resolutionMax (hs.map (resolveHole digestOf look rv self)) ≤
       (hs.flatMap (fun h => h.code)).foldl (fun n c => max n (Term.nodes c.body)) 1 := by
   apply foldMax_le
   · exact foldMax_start _ _ _
   · intro r hr
     obtain ⟨h, hh, rfl⟩ := List.mem_map.mp hr
-    cases he : selectHole rv self h with
+    cases he : selectHole digestOf look rv self h with
     | error why =>
       simp only [resolveHole, he, HoleResolution.body, Term.nodes]
       exact foldMax_start _ _ _
@@ -359,11 +416,11 @@ theorem resolutionMax_committed {D : Type} (rv : Kernel.Receive.RowView D) (self
 
 /-- The actual selected/blocked expansion and all signature-guard allowances
 fit the preparation charged by the deployed loader from the original ROM. -/
-theorem instantiateHoles_cost {D : Type} {rv : Kernel.Receive.RowView D} {self : D}
+theorem instantiateHoles_cost {D : Type} {digestOf : ByteArray → Option D} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {self : D}
     {Δ : List Ty} {p : Package} {i : HoleInstance}
-    (h : instantiateHoles rv self Δ p = .ok i) :
+    (h : instantiateHoles digestOf look rv self Δ p = .ok i) :
     i.cost ≤ p.preparationCost := by
-  have hc : i.cost = p.holeCharge (resolutionMax (p.holes.map (resolveHole rv self))) := by
+  have hc : i.cost = p.holeCharge (resolutionMax (p.holes.map (resolveHole digestOf look rv self))) := by
     unfold instantiateHoles at h
     simp only [bind, Except.bind, pure, Except.pure] at h
     repeat' split at h
@@ -375,7 +432,7 @@ theorem instantiateHoles_cost {D : Type} {rv : Kernel.Receive.RowView D} {self :
   rw [hc, Package.preparationCost, Package.holeCharge, Package.holeCharge]
   split
   · exact Nat.le_refl 0
-  · have hm := resolutionMax_committed rv self p.holes
+  · have hm := resolutionMax_committed digestOf look rv self p.holes
     have hmul := Nat.mul_le_mul_left (Term.nodes p.body) (Nat.add_le_add_right hm 1)
     exact Nat.add_le_add_right hmul _
 

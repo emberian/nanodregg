@@ -44,7 +44,7 @@ theorem invoke_live_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
     (hstate : readState digestOf (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData sg.arg args = .ok ad)
-    (hrows : readsData digestOf p.rels rv r.self sg.reads = .ok wd)
+    (hrows : readsData digestOf look p.rels rv r.self sg.reads = .ok wd)
     (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces (resultTy p.state sg.calls (editTy p.rels) sg.edits)
       (run L.lib Bounds.stackMax ticks 0

@@ -155,10 +155,22 @@ def loadAll (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) 
     Except (Refusal D) (Loaded × List Nat) :=
   loadAllUsing digestOf (admitPackage digestOf) look fuel ds acc
 
-/-- All ROM code, including unselected candidates, passes the World's literal boundary. -/
+/-- The cell ids a ROM pin names (E1): each enters a run as a digest of the World (LANG-38). -/
+def SupportPin.cellIds : SupportPin → List ByteArray
+  | .row .. => []
+  | .cell id => [id]
+
+/-- Every cell id a ROM names, in its supports, hypotheses and guard pin. -/
+def HoleROM.cellIds (h : HoleROM) : List ByteArray :=
+  h.code.flatMap (fun c => c.supports.flatMap SupportPin.cellIds) ++
+    h.hypotheses.flatMap (fun o => (o.map SupportPin.cellIds).getD []) ++
+    (h.guardPin.map SupportPin.cellIds).getD []
+
+/-- All ROM code, including unselected candidates, passes the World's literal boundary; so does
+every cell id its pins name. -/
 def checkROMLits (p : Package) : Except (Refusal D) Unit :=
   if digestsOk digestOf (p.body.digestLits ++ p.holes.flatMap
-      (fun h => h.guard.digestLits ++ h.code.flatMap (fun c => c.body.digestLits)))
+      (fun h => h.guard.digestLits ++ h.code.flatMap (fun c => c.body.digestLits) ++ h.cellIds))
   then .ok () else .error (.program "notDigest")
 
 /-- A residual hole is a typed refusal when no row view is available (install
@@ -207,7 +219,7 @@ def loadAllContextual (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc 
 def loadLive (rv : RowView D) (self : D) (look : Pinned D) (fuel : Nat)
     (idb : ByteArray) (acc : Loaded) : Except (Refusal D) (Loaded × Nat) :=
   loadUsing digestOf (admitContextual digestOf (fun Δ p =>
-    (instantiateHoles rv self Δ p).map (·.body))) look fuel idb acc
+    (instantiateHoles digestOf look rv self Δ p).map (·.body))) look fuel idb acc
 
 /-- Conservative preparation charge derived entirely from the actual ROM syntax;
 the selected candidate cannot exceed the maximum over its committed candidates. -/
@@ -389,7 +401,7 @@ def runSetupWith (loader : Pinned D → Nat → ByteArray → Loaded → Except 
   let a ← match Wire.decodeData sg.arg args with
     | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
     | .error e => throw (.program s!"arguments: {decodeText e}")
-  let rows ← readsData digestOf p.rels rv r.self sg.reads
+  let rows ← readsData digestOf look p.rels rv r.self sg.reads
   pure { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row,
          ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := s,
          args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal], preparation := charge L }

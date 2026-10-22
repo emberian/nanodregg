@@ -11,7 +11,7 @@ def factKeyAt (n : Nat) : ByteArray :=
   (Wire.encodeData (keyTy Std.holeFacts)
     (.record [("cell", .digest (Sim.dc.bytes (UInt64.ofNat n)))])).getD .empty
 
-def factPinAt (n : Nat) : HolePin := ⟨2, factKeyAt n, 1⟩
+def factPinAt (n : Nat) : SupportPin := .row 2 (factKeyAt n) 1
 
 /-- A contextual filling that uses its nat assumption and can lose its unused bool. -/
 def declaration : HoleROM where
@@ -48,6 +48,9 @@ def look (b : Std.HoleBundle) (p : Package) : Pinned Sim.D := fun id =>
   else match ((libraryIds b).zip b.libraries).find? (fun q => q.1 == id) with
     | some (_, lib) => .ok (packageCell lib)
     | none => .error (.unpinned id)
+
+/-- A view that pins no kernel cell: for ROMs whose pins are all rows. -/
+def noCells : Pinned Sim.D := fun g => .error (.unpinned g)
 
 def key : ByteArray :=
   (keyBytes Std.codeSelection (.record [("hole", .nat 0)])).getD .empty
@@ -106,8 +109,14 @@ def boundaryRows : List (String × Bool) := Id.run do
   let good := view (some 0) (some 1)
   let withdrawn := view (some 0) none
   let blocked := view none none
-  let selected := selectHole good (3 : Sim.D) h
-  let strengthened := selectHole withdrawn (3 : Sim.D) h
+  let L := look b p
+  let selected := selectHole Sim.digestOf L good (3 : Sim.D) h
+  let strengthened := selectHole Sim.digestOf L withdrawn (3 : Sim.D) h
+  -- E1 at ROM grain: a candidate whose support is a kernel CELL selects only while that cell is
+  -- pinned and live (99 is the pinned package cell; 77 is pinned at its tombstone; 78 is unpinned)
+  let tomb : Pinned Sim.D := fun id => if id = 77 then .ok none else L id
+  let cellCode (id : Sim.D) : HoleROM :=
+    { h with code := [⟨.var 1, [factPinAt 2, .cell (Sim.dc.bytes id)]⟩] }
   let chosen : Ty := .record [("hole", .nat), ("index", .nat)]
   let choice := Data.record [("hole", .nat 0), ("index", .nat 0)]
   let extraKey := (keyBytes Std.codeSelection (.record [("hole", .nat 1)])).getD .empty
@@ -130,7 +139,12 @@ def boundaryRows : List (String × Bool) := Id.run do
     ("kept-context", match selected with | .ok s => s.strengthened.isEmpty | _ => false),
     ("blocked-name", (invoke b p blocked "execute" (.nat 7) .nat |> resultName) ==
       "execute: refused holeSelectionAbsent 0"),
-    ("blocked-not-selected", (resolveHole blocked (3 : Sim.D) h).receipt.isNone),
+    ("blocked-not-selected", (resolveHole Sim.digestOf L blocked (3 : Sim.D) h).receipt.isNone),
+    ("cell-support-live", (selectHole Sim.digestOf tomb good (3 : Sim.D) (cellCode 99)).isOk),
+    ("cell-support-dead", match selectHole Sim.digestOf tomb good (3 : Sim.D) (cellCode 77) with
+      | .error why => decide (why = .supportDead 0) | .ok _ => false),
+    ("cell-support-unpinned", match selectHole Sim.digestOf tomb good (3 : Sim.D) (cellCode 78) with
+      | .error why => decide (why = .unpinned) | .ok _ => false),
     ("management-bootstrap", (invoke b p blocked "choose_code" choice chosen).isOk),
     ("management-authority", (invoke b p blocked "choose_code" choice chosen 2 |> resultName) != "ok"),
     ("management-accepted", (invoke b p blocked "choose_code" choice chosen 1 true |> resultName) != "ok"),

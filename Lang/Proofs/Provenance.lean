@@ -830,8 +830,8 @@ theorem rangeRowData_digests {ℓ : Label} {dl : RelDecl} {rows : List (RowSlot 
     · exact checked_digests ‹_› z hz
     · exact valOf_digests ‹_› z hz
 
-theorem relReads_digests {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl : RelDecl} {x : RelRead}
-    {v : Data} (h : relReads digestOf rv self i ℓ dl x = .ok v) :
+theorem relReads_digests {look : Pinned D} {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl : RelDecl} {x : RelRead}
+    {v : Data} (h : relReads digestOf look rv self i ℓ dl x = .ok v) :
     ∀ b ∈ v.digests, (digestOf b).isSome = true := by
   unfold relReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -842,18 +842,24 @@ theorem relReads_digests {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl
     rintro b (hb | hb)
     · refine slotsD_digests (fun y hy => ?_) "p" _ b hb
       obtain ⟨q, -, hq⟩ := mapM_ok_mem ‹List.mapM _ (rv.points self i) = Except.ok _› y hy
-      repeat' split at hq
-      all_goals first | cases hq | skip
-      all_goals
-        simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append]
-        rintro z (hz | hz)
-        · exact checked_digests ‹_› z hz
-        · refine optD_digests (fun w hw => ?_) z hz
-          first
-            | (cases hw; done)
-            | (cases hw
-               obtain ⟨u, hu, hs⟩ := map_some_ok ‹(some <$> valOf digestOf dl _ _) = Except.ok _›
-               cases hs; exact valOf_digests hu)
+      split at hq
+      · cases hq
+      · rename_i kv hkv
+        obtain ⟨k, val⟩ := kv
+        obtain ⟨k0, -, h2, hv⟩ := readPoint_ok hkv
+        have hvd : ∀ z ∈ (optD val).digests, (digestOf z).isSome = true := optD_digests (fun w hw => by
+          rcases hv with ⟨rfl, -⟩ | ⟨_, _, _, w', -, hw', rfl⟩
+          · cases hw
+          · cases hw; exact valOf_digests hw')
+        rcases pointData_ok hq with ⟨-, rfl⟩ | ⟨-, -, -, -, -, -, -, rfl⟩
+        · simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append]
+          rintro z (hz | hz)
+          · exact checked_digests h2 z hz
+          · exact hvd z hz
+        · simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append, List.nil_append]
+          rintro z (hz | hz)
+          · exact checked_digests h2 z hz
+          · exact hvd z hz
     · first
         | (simp [Data.digests, Data.rowDigests] at hb; done)
         | (rename_i rs hrows
@@ -864,8 +870,8 @@ theorem relReads_digests {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl
 
 /-- **Every digest of the rows a run reads is one `digestOf` accepted** (LANG-49): what `readsData`
 builds from the caller's row view holds only keys, prefixes and values that passed `checked`. -/
-theorem readsData_digests {rels : List (Label × RelDecl)} {rv : RowView D} {self : D}
-    {rs : List (Label × RelRead)} {wd : Data} (h : readsData digestOf rels rv self rs = .ok wd) :
+theorem readsData_digests {look : Pinned D} {rels : List (Label × RelDecl)} {rv : RowView D} {self : D}
+    {rs : List (Label × RelRead)} {wd : Data} (h : readsData digestOf look rels rv self rs = .ok wd) :
     ∀ b ∈ wd.digests, (digestOf b).isSome = true := by
   unfold readsData at h
   simp only [bind, Except.bind, pure, Except.pure] at h

@@ -167,16 +167,36 @@ def editTy (rels : List (Label × RelDecl)) : Ty := .sum (rels.map fun r => (r.1
 def editsTy (rels : List (Label × RelDecl)) (m : Nat) : Ty :=
   .record ((slotLabels "e" m).map fun l => (l, optTy (editTy rels)))
 
+/-- A read point's record: its key, its key's cell liveness on a live read (E1), and the row's
+value if the row is there. `optTy (pointRecTy d false)` is `pointTy d`. -/
+def pointRecTy (d : RelDecl) (live : Bool) : Ty :=
+  .record ([("key", keyTy d)] ++ (if live then [("live", .bool)] else []) ++ [("val", optTy d.val)])
+
+/-- A relation whose key is exactly one digest field: its rows are keyed by a kernel cell id, so a
+method may read each point with the cell's liveness (`livePointTy`, E1). -/
+def RelDecl.cellKeyed (d : RelDecl) : Bool :=
+  match d.key with
+  | [(_, .digest)] => true
+  | _ => false
+
+/-- A point read of a cell-keyed relation with its key's kernel cell (E1, LANG-75.1): the key the
+caller pinned, whether the cell that key names is LIVE in the caller's pinned view (the runtime
+fills it from `Pinned`; no method writes it, and no edit type names it), and the row's value if
+the row is there. -/
+def livePointTy (d : RelDecl) : Ty := optTy (pointRecTy d true)
+
 /-- What a method declares it reads of one relation: `points` point slots, and a range over the
-key's first `pre` fields with `rows` slots, if any. -/
+key's first `pre` fields with `rows` slots, if any; `live`: the points carry their key's cell
+liveness (a cell-keyed relation only). -/
 structure RelRead where
   points : Nat
   range : Option (Nat × Nat)
+  live : Bool
   deriving DecidableEq, Repr
 
 /-- The rows a method reads of relation `d`, as the record it receives. -/
 def relReadTy (d : RelDecl) (x : RelRead) : Ty :=
-  .record ((slotLabels "p" x.points).map (fun l => (l, pointTy d)) ++
+  .record ((slotLabels "p" x.points).map (fun l => (l, optTy (pointRecTy d x.live))) ++
     match x.range with
     | none => []
     | some (m, k) => [("range", .record [("pre", preTy d m),
@@ -249,6 +269,8 @@ inductive CheckError
   | relKey (label : Label)
   /-- a relation's value, limit, sum column or guard is not what it must be -/
   | badRel (label : Label)
+  /-- a method reads a relation that is not cell-keyed with its keys' cell liveness (E1) -/
+  | liveNotCellKeyed (label : Label)
   deriving DecidableEq, Repr
 
 /-- The refusal's name (law 7): its constructor's. -/
@@ -260,11 +282,13 @@ def CheckError.name : CheckError → String
   | .noMethod _ => "noMethod" | .badMethod _ => "badMethod"
   | .noLaw _ => "noLaw" | .badLaw _ => "badLaw"
   | .tooManyRels => "tooManyRels" | .relKey _ => "relKey" | .badRel _ => "badRel"
+  | .liveNotCellKeyed _ => "liveNotCellKeyed"
 
 /-- What goes on the wire inside `Refusal.program`: the name, then the label it is about (for
 `illTyped`, the failed rule and its path: `illTyped noField @body.f`). -/
 def CheckError.wire : CheckError → String
-  | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) | e@(.relKey ℓ) | e@(.badRel ℓ) =>
+  | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) | e@(.relKey ℓ) | e@(.badRel ℓ)
+  | e@(.liveNotCellKeyed ℓ) =>
       s!"{e.name} {ℓ}"
   | e@(.illTyped why) => s!"{e.name} {why.text}"
   | e => e.name
@@ -280,6 +304,7 @@ def CheckError.text : CheckError → String
   | .noLaw ℓ => s!"no law {ℓ}" | .badLaw ℓ => s!"law {ℓ} has the wrong type"
   | .tooManyRels => "relations" | .relKey ℓ => s!"relation {ℓ} has no fixed-width key"
   | .badRel ℓ => s!"relation {ℓ} is malformed"
+  | .liveNotCellKeyed ℓ => s!"method {ℓ} reads a relation that is not cell-keyed (live)"
 
 def isRecordData : Ty → Bool
   | t@(.record _) => t.wf && t.isData
@@ -300,9 +325,9 @@ def editSlotsOf (rels : List (Label × RelDecl)) (row : List (Label × Ty)) : Op
   if row.length ≤ editsMax ∧ row = (slotLabels "e" row.length).map (fun l => (l, optTy (editTy rels)))
   then some row.length else none
 
-/-- What one relation's read record declares: its point slots, and its range (the prefix's field
+/-- The read a record type spells, whatever the relation (`relReadOf` adds the relation's rule). What one relation's read record declares: its point slots, and its range (the prefix's field
 count and its row slots), read back by rebuilding the record and comparing. -/
-def relReadOf (d : RelDecl) : Ty → Option RelRead
+def relReadShape (d : RelDecl) : Ty → Option RelRead
   | T@(.record fs) =>
     let n := (fs.filter (·.1 ≠ "range")).length
     let range : Option (Option (Nat × Nat)) :=
@@ -314,10 +339,26 @@ def relReadOf (d : RelDecl) : Ty → Option RelRead
     match range with
     | none => none
     | some r =>
-      let x : RelRead := ⟨n, r⟩
-      if n ≤ pointsMax ∧ (r.all fun mk => 1 ≤ mk.2 ∧ mk.2 ≤ rangeRowsMax) ∧ relReadTy d x = T then some x
+      let ok (x : RelRead) := n ≤ pointsMax ∧ (r.all fun mk => 1 ≤ mk.2 ∧ mk.2 ≤ rangeRowsMax) ∧ relReadTy d x = T
+      if ok ⟨n, r, false⟩ then some ⟨n, r, false⟩
+      else if ok ⟨n, r, true⟩ then some ⟨n, r, true⟩
       else none
   | _ => none
+
+/-- What one relation's read record declares; a `live` read only of a cell-keyed relation (E1). -/
+def relReadOf (d : RelDecl) (T : Ty) : Option RelRead :=
+  match relReadShape d T with
+  | some x => if x.live && !d.cellKeyed then none else some x
+  | none => none
+
+/-- A method type whose rows argument asks a relation that is not cell-keyed for its keys' cell
+liveness: refused `liveNotCellKeyed` by name at install (E1, law 7), not as a bad method. -/
+def liveNotCellKeyed (rels : List (Label × RelDecl)) : Ty → Bool
+  | .fn (.record row) _ =>
+    row.any fun e => match Row.find? e.1 rels with
+      | some d => !d.cellKeyed && (relReadShape d e.2).any (·.live)
+      | none => false
+  | _ => false
 
 /-- What a method's rows argument declares, read back exactly (`readsTy rels rs = R`). -/
 def readsOf (rels : List (Label × RelDecl)) : Ty → Option (List (Label × RelRead))
@@ -347,7 +388,10 @@ def checkMethods (S : Ty) (rels : List (Label × RelDecl)) (row : List (Label ×
   | ℓ :: ms =>
       match Row.find? ℓ row with
       | none => .error (.noMethod ℓ)
-      | some t => if (methodArg S rels t).isSome then checkMethods S rels row ms else .error (.badMethod ℓ)
+      | some t =>
+        if (methodArg S rels t).isSome then checkMethods S rels row ms
+        else if liveNotCellKeyed rels t then .error (.liveNotCellKeyed ℓ)
+        else .error (.badMethod ℓ)
 
 mutual
 /-- A key field's type is fixed-width data: a natural, a boolean, a digest, an enumeration (a sum
@@ -611,9 +655,9 @@ def packageWire (p : Package) : Bool :=
 def treeStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
 
 /-- The version byte (LANG-60): exactly `Bounds.packageWireVersion`; any other byte is refused
-`lang/package-version/4` by name, so bytes written at another version are never read as a package. -/
+`lang/package-version/5` by name, so bytes written at another version are never read as a package. -/
 def packageVersion : Stream Unit :=
-  Stream.refine "lang/package-version/4" Stream.u8
+  Stream.refine "lang/package-version/5" Stream.u8
     (fun v => if v = Bounds.packageWireVersion then some () else none) (fun _ => Bounds.packageWireVersion)
 
 /-- The one stream of a package: its version byte, then its tree. -/
@@ -626,12 +670,12 @@ def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
 /-- The package codec: the version byte and the tree stream, refined by `packageOf`, refused
-`lang/package/4` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
+`lang/package/5` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
 new term, type or primitive tag turns a refused boundary row into a read one, and the version must
 move, and with it this label, `lang/package/N` at version N: `Lang.Proofs.Wire.packageCodec_label`
 fails the build otherwise; cv 01a14e58-1586, LANG-60). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package/4" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
+  Stream.refine "lang/package/5" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -641,7 +685,7 @@ def encodePackage (p : Package) : Option ByteArray :=
     else none
   else none
 
-/-- The version byte (any other refused `lang/package-version/4`), then exactly one package tree, which reads as
+/-- The version byte (any other refused `lang/package-version/5`), then exactly one package tree, which reads as
 a package. `packageCodec`'s reading, with the tree
 stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
 packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
@@ -651,7 +695,7 @@ def decodePackage (b : ByteArray) : Except Refusal Package :=
   | .ok t =>
     match packageOf t.2.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package/4")
+    | none => .error (.rejected 0 "lang/package/5")
 
 end Wire
 end Nanodregg.Lang

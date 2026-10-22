@@ -44,14 +44,22 @@ theorem holeDecision_application (allowed blocked : Bool) (s0 s1 : Nat)
           by_cases h2 : s1 = 2
           · simp [holeVerdictLabel, *]
             exact .iteT (by simpa [e, *] using eq1 2) (.inj .record)
-          · simp [holeVerdictLabel, *]
-            exact .iteF (by simpa [e, *] using eq1 2) (.inj .record)
+          · apply BigStep.iteF (by simpa [e, *] using eq1 2)
+            by_cases h3 : s1 = 3
+            · simp [holeVerdictLabel, *]
+              exact .iteT (by simpa [e, *] using eq1 3) (.inj .record)
+            · simp [holeVerdictLabel, *]
+              exact .iteF (by simpa [e, *] using eq1 3) (.inj .record)
       · apply BigStep.iteF (by simpa [e, *] using eq0 1)
         by_cases h2 : s0 = 2
         · simp [holeVerdictLabel, *]
           exact .iteT (by simpa [e, *] using eq0 2) (.inj .record)
-        · simp [holeVerdictLabel, *]
-          exact .iteF (by simpa [e, *] using eq0 2) (.inj .record)
+        · apply BigStep.iteF (by simpa [e, *] using eq0 2)
+          by_cases h3 : s0 = 3
+          · simp [holeVerdictLabel, *]
+            exact .iteT (by simpa [e, *] using eq0 3) (.inj .record)
+          · simp [holeVerdictLabel, *]
+            exact .iteF (by simpa [e, *] using eq0 3) (.inj .record)
 
 
 theorem holeDecision_meaning (allowed blocked : Bool) (s0 s1 : Nat)
@@ -89,21 +97,21 @@ theorem holeJudge_application (V : Ty) (clause : Term)
 /-- Each well-formed judgment reaches exactly its named refusal or success.
 This is the actual shared gate invoked by select/fill/accept. -/
 theorem holeVerdictCheck_application (l : Label)
-    (hl : l ∈ ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-      "support1Moved", "support1Withdrawn", "verified"])
+    (hl : l ∈ ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+      "support1Dead", "support1Moved", "support1Withdrawn", "verified"])
     (lib : List Term) (env : Env) (t : Term)
     (ht : BigStep lib env t (.ok (.inj l (.record [])))) :
     BigStep lib env (.app holeVerdictCheck t) (holeAdmission l) := by
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hl
-  rcases hl with h | h | h | h | h | h | h <;> subst l
+  rcases hl with h | h | h | h | h | h | h | h | h <;> subst l
   all_goals
     apply BigStep.app .lam ht
     apply BigStep.case (.var rfl) rfl
     first | exact .refuse | exact .bool
 
 theorem holeVerdictCheck_meaning (l : Label)
-    (hl : l ∈ ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-      "support1Moved", "support1Withdrawn", "verified"])
+    (hl : l ∈ ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+      "support1Dead", "support1Moved", "support1Withdrawn", "verified"])
     (lib : List Term) (env : Env) :
     BigStep lib (.inj l (.record []) :: env)
       (.app holeVerdictCheck (.var 0)) (holeAdmission l) :=
@@ -112,8 +120,8 @@ theorem holeVerdictCheck_meaning (l : Label)
 /-- The checked gate admits precisely the verified branch; arbitrary alternative
 evaluations cannot turn a refusal into a success. -/
 theorem holeVerdictCheck_admits_iff (l : Label)
-    (hl : l ∈ ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-      "support1Moved", "support1Withdrawn", "verified"])
+    (hl : l ∈ ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+      "support1Dead", "support1Moved", "support1Withdrawn", "verified"])
     (lib : List Term) (env : Env) :
     (∃ v, BigStep lib (.inj l (.record []) :: env)
       (.app holeVerdictCheck (.var 0)) (.ok v)) ↔ l = "verified" := by
@@ -121,7 +129,7 @@ theorem holeVerdictCheck_admits_iff (l : Label)
   · rintro ⟨v, hv⟩
     have he := bigStep_deterministic (holeVerdictCheck_meaning l hl lib env) hv
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hl
-    rcases hl with h | h | h | h | h | h | h <;> subst l <;>
+    rcases hl with h | h | h | h | h | h | h | h | h <;> subst l <;>
       simp [holeAdmission] at he ⊢
   · intro he
     subst l
@@ -131,8 +139,8 @@ theorem holeVerdictCheck_admits_iff (l : Label)
 /-- Gate equivalence for an evaluated judgment expression, including the
 generated holeJudge application, rather than only a literal verdict. -/
 theorem holeVerdictCheck_evaluated_iff (l : Label)
-    (hl : l ∈ ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-      "support1Moved", "support1Withdrawn", "verified"])
+    (hl : l ∈ ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+      "support1Dead", "support1Moved", "support1Withdrawn", "verified"])
     (lib : List Term) (env : Env) (t : Term)
     (ht : BigStep lib env t (.ok (.inj l (.record [])))) :
     (∃ v, BigStep lib env (.app holeVerdictCheck t) (.ok v)) ↔ l = "verified" := by
@@ -140,7 +148,7 @@ theorem holeVerdictCheck_evaluated_iff (l : Label)
   · rintro ⟨v, hv⟩
     have he := bigStep_deterministic (holeVerdictCheck_application l hl lib env t ht) hv
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hl
-    rcases hl with h | h | h | h | h | h | h <;> subst l <;>
+    rcases hl with h | h | h | h | h | h | h | h | h <;> subst l <;>
       simp [holeAdmission] at he ⊢
   · intro he
     subst l
@@ -149,15 +157,15 @@ theorem holeVerdictCheck_evaluated_iff (l : Label)
 /-- Rejudge's renderer records every negative judgment, including the retained
 pruning reason; it does not convert a negative judgment into an evaluation fault. -/
 theorem holeStatusOf_application (l : Label) (reason : ByteArray)
-    (hl : l ∈ ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-      "support1Moved", "support1Withdrawn", "verified"])
+    (hl : l ∈ ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+      "support1Dead", "support1Moved", "support1Withdrawn", "verified"])
     (lib : List Term) (env : Env) (rt vt : Term)
     (hr : BigStep lib env rt (.ok (.bytes reason)))
     (hv : BigStep lib env vt (.ok (.inj l (.record [])))) :
     BigStep lib env (activityApply holeStatusOf [rt, vt])
       (.ok (holeRecordedStatus l reason).toVal) := by
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hl
-  rcases hl with h | h | h | h | h | h | h <;> subst l
+  rcases hl with h | h | h | h | h | h | h | h | h <;> subst l
   all_goals
     apply BigStep.app (BigStep.app .lam hr .lam) hv
     apply BigStep.case (.var rfl) rfl
@@ -165,8 +173,8 @@ theorem holeStatusOf_application (l : Label) (reason : ByteArray)
 
 
 theorem holeStatusOf_meaning (l : Label) (reason : ByteArray)
-    (hl : l ∈ ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-      "support1Moved", "support1Withdrawn", "verified"])
+    (hl : l ∈ ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+      "support1Dead", "support1Moved", "support1Withdrawn", "verified"])
     (lib : List Term) (env : Env) :
     BigStep lib (.inj l (.record []) :: .bytes reason :: env)
       (activityApply holeStatusOf [.var 1, .var 0])

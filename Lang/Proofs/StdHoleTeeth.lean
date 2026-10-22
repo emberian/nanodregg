@@ -9,9 +9,10 @@ private def support (cell pin : String) : Data :=
 
 private def noPoint : Data := .inj "none" (.record [])
 
-private def point (cell : String) (pin : Option String) : Data :=
+private def point (cell : String) (pin : Option String) (live : Bool := true) : Data :=
   .inj "some" (.record [
     ("key", .record [("cell", .digest cell.toUTF8)]),
+    ("live", .bool live),
     ("val", match pin with
       | none => .inj "none" (.record [])
       | some p => .inj "some" (.record [("by", .digest "poster".toUTF8), ("pin", .digest p.toUTF8)]))])
@@ -31,6 +32,18 @@ theorem hole_probe_current :
 
 theorem hole_probe_moved :
     probe (support "cell" "v1") (rows (point "cell" (some "v2")) noPoint noPoint) = some 2 := by
+  decide +kernel
+
+/-- C1 (LANG-75.1): the poster's fact at the support's pin, at a cell that is not live (revoked,
+retired, never existed), is DEAD, not current. Under the mutation "`holeProbePoint` ignores `live`"
+this probes 1 and the theorem is false. -/
+theorem hole_probe_dead :
+    probe (support "cell" "v1") (rows (point "cell" (some "v1") false) noPoint noPoint) = some 3 := by
+  decide +kernel
+
+/-- A moved pin is moved whether or not the cell is live: the poster's claim is checked first. -/
+theorem hole_probe_dead_moved :
+    probe (support "cell" "v1") (rows (point "cell" (some "v2") false) noPoint noPoint) = some 2 := by
   decide +kernel
 
 theorem hole_probe_withdrawn :

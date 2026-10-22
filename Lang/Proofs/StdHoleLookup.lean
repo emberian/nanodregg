@@ -4,8 +4,15 @@ import Lang.Proofs.StdHole
 namespace Nanodregg.Lang.Std
 
 
-/-- Actual lookup distinguishes absent, current and moved by cell identity and
-version equality for arbitrary digest bytes and poster, not just fixtures. -/
+private theorem ite_live (lib : List Term) (env : Env) (c : Term) (b : Bool)
+    (h : BigStep lib env c (.ok (.bool b))) :
+    BigStep lib env (.ite c (.nat 1) (.nat 3)) (.ok (.nat (if b then 1 else 3))) := by
+  cases b
+  · exact .iteF h .nat
+  · exact .iteT h .nat
+
+/-- Actual lookup distinguishes absent, current, moved and dead by cell identity, version
+equality and the cell's liveness, for arbitrary digest bytes and poster, not just fixtures. -/
 theorem holeProbePoint_meaning (cell pin : ByteArray) (point : Option HolePoint)
     (lib : List Term) (env : Env) :
     BigStep lib ((holePointData point).toVal :: (holeSupportData cell pin).toVal :: env)
@@ -45,8 +52,14 @@ theorem holeProbePoint_meaning (cell pin : ByteArray) (point : Option HolePoint)
           .prim (p := .deq) (x := .digest v) (y := .digest pin) (.get (.var rfl) (.field rfl (.var rfl)))
             (.get (.var rfl) (.field rfl (.var rfl))) (by simp [primEval])
         by_cases hv : v = pin
-        · simpa only [holePointObservation, hcell, ↓reduceIte, hpin, hv] using
-            (BigStep.iteT (by simpa only [holePointData, hcell, hpin, hv, decide_true] using hp) (BigStep.nat (n := 1)))
+        · subst hv
+          simp only [decide_true] at hp
+          rw [show holePointObservation cell v (some p) = (if p.live then 1 else 3) by
+            simp [holePointObservation, hcell, hpin]]
+          refine BigStep.iteT (by simpa only [holePointData, hcell, hpin] using hp)
+            (ite_live lib _ _ p.live ?_)
+          exact .get (.var rfl) (.field (t := .var 0) (env := [Val.bool p.live])
+            (by simp [Data.toVal, Data.rowToVal, Row.find?]) (.var rfl))
         · simpa only [holePointObservation, hcell, ↓reduceIte, hpin, hv] using
             (BigStep.iteF (by simpa only [holePointData, hcell, hpin, hv, decide_false] using hp) (BigStep.nat (n := 2)))
     · simpa only [holePointObservation, hcell, ↓reduceIte] using

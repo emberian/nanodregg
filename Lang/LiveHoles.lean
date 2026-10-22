@@ -4,6 +4,7 @@ import Lang.HoleBudget
 import Lang.Eval
 import Lang.Wire.Data
 import Kernel.Receive.Call
+import Lang.Rel
 
 namespace Nanodregg.Lang
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
@@ -28,6 +29,8 @@ inductive HoleRefusal where
   | selectionType (hole : Nat)
   | selectionIndex (hole : Nat)
   | derivationMoved (hole : Nat)
+  /-- a selected candidate's cell support is not live in the caller's pinned view (E1) -/
+  | supportDead (hole : Nat)
   | expansion (b : ExpansionBound)
   | provenance
   | instanceRecheck
@@ -52,6 +55,7 @@ def HoleRefusal.wire : HoleRefusal → String
   | .selectionType n => s!"holeSelectionType {n}"
   | .selectionIndex n => s!"holeSelectionIndex {n}"
   | .derivationMoved n => s!"holeDerivationMoved {n}"
+  | .supportDead n => s!"holeSupportDead {n}"
   | .expansion .work => "holeWorkBound"
   | .expansion .size => "holeSizeBound"
   | .provenance => "holeProvenance"
@@ -90,10 +94,35 @@ def holeRow {D : Type} (rv : RowView D) (self : D) (rel : Nat) (key : ByteArray)
   | none => .error .unpinned
   | some (_, leaf) => .ok leaf
 
-def holePinHolds {D : Type} (rv : RowView D) (self : D) (p : HolePin) : Bool :=
-  match holeRow rv self p.rel p.key with
-  | .ok (some (.row _ _ ver)) => ver == p.ver
-  | _ => false
+/-- Whether a ROM pin holds: a row support at exactly its version; a cell support live. -/
+def supportLive {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
+    (self : D) : SupportPin → Bool
+  | .row rel key ver =>
+    match holeRow rv self rel key with
+    | .ok (some (.row _ _ v)) => v == ver
+    | _ => false
+  | .cell id => (digestOf id).any (cellLive look)
+
+/-- Whether a ROM pin's cell was observed: a cell support must be pinned (a pinned tombstone is
+observed, an unpinned cell is not); a row support is checked by `holeRow`. -/
+def supportObserved {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) : SupportPin → Bool
+  | .row .. => true
+  | .cell id =>
+    match digestOf id with
+    | some g => match look g with | .ok _ => true | .error _ => false
+    | none => false
+
+/-- A row pin holds; a cell pin is not judged here (`supportLive` on its own arm). -/
+def rowSupportHolds {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
+    (self : D) : SupportPin → Bool
+  | p@(.row ..) => supportLive digestOf look rv self p
+  | .cell _ => true
+
+/-- The caller observed the pin: its row under `self` (absent and unpinned differ) or its cell. -/
+def supportPinned {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
+    (self : D) : SupportPin → Except HoleRefusal Unit
+  | .row rel key _ => (holeRow rv self rel key).map fun _ => ()
+  | p@(.cell _) => if supportObserved digestOf look p then .ok () else .error .unpinned
 
 /-- A successful invocation receipt retains the selected code index, exact
 selection version, and the hypothesis positions removed by strengthening. -/
@@ -112,23 +141,24 @@ structure HoleSelection where
 
 /-- Positions whose support moved. Only genuinely unused variables may be
 strengthened away; a moved support actually used by the candidate is refused. -/
-def changedHypotheses {D : Type} (rv : RowView D) (self : D) (h : HoleROM) (c : HoleCode) :
+def changedHypotheses {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
+    (rv : RowView D) (self : D) (h : HoleROM) (c : HoleCode) :
     Except HoleRefusal (List Nat) :=
   h.hypotheses.zipIdx.foldlM (fun removed pi =>
     match pi.1 with
     | none => .ok removed
     | some pin => do
-      let _ ← holeRow rv self pin.rel pin.key
-      if holePinHolds rv self pin then .ok removed
+      supportPinned digestOf look rv self pin
+      if supportLive digestOf look rv self pin then .ok removed
       else if Term.usesVar pi.2 c.body then .error (.supportMoved h.name pi.2)
       else .ok (removed ++ [pi.2])) []
 
 /-- Evaluate the signature guard on the current authenticated guard pin. -/
-def runHoleGuard {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : Except HoleRefusal Nat := do
+def runHoleGuard {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
+    (self : D) (h : HoleROM) : Except HoleRefusal Nat := do
   if let some p := h.guardPin then
-    let _ ← holeRow rv self p.rel p.key
-    pure ()
-  let present := h.guardPin.all (holePinHolds rv self)
+    supportPinned digestOf look rv self p
+  let present := h.guardPin.all (supportLive digestOf look rv self)
   match run [] Bounds.stackMax Bounds.holeGuardFuel 0 (State.init h.guard [.bool present]) with
   | .value (.bool true) used => .ok used
   | .value (.bool false) _ => .error (.guardBlocked h.name)
@@ -145,15 +175,19 @@ def factorHole (h : HoleROM) (c : HoleCode) (removed : List Nat) :
 
 /-- Selection is fresh on each invocation. Its bytes contain a code index,
 never a filling supplied by the caller. All derivation supports and used
-contextual assumptions must still have the ROM-pinned versions. -/
-def selectHole {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : Except HoleRefusal HoleSelection := do
+contextual assumptions must still have the ROM-pinned versions; every cell support must be pinned
+(`unpinned`) and live (`supportDead`). -/
+def selectHole {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
+    (self : D) (h : HoleROM) : Except HoleRefusal HoleSelection := do
   let leaf ← holeRow rv self h.selectionRel h.selectionKey
   let some (.row _ bytes version) := leaf | throw (.selectionAbsent h.name)
   let .ok (.nat i) := Wire.decodeData .nat bytes | throw (.selectionType h.name)
   let some c := h.code[i]? | throw (.selectionIndex h.name)
-  unless c.supports.all (holePinHolds rv self) do throw (.derivationMoved h.name)
-  let removed ← changedHypotheses rv self h c
-  let used ← runHoleGuard rv self h
+  unless c.supports.all (supportObserved digestOf look) do throw .unpinned
+  unless c.supports.all (rowSupportHolds digestOf look rv self) do throw (.derivationMoved h.name)
+  unless c.supports.all (supportLive digestOf look rv self) do throw (.supportDead h.name)
+  let removed ← changedHypotheses digestOf look rv self h c
+  let used ← runHoleGuard digestOf look rv self h
   let (ctx, filling, embedding) := factorHole h c removed
   let body := Term.renameVar (fun n => embedding.getD n n) filling
   pure ⟨h.name, i, version, body, removed, used, ctx, filling, embedding, c.body⟩
@@ -176,8 +210,9 @@ def HoleResolution.receipt : HoleResolution → Option HoleSelection
   | .selected s => some s
   | .blocked _ _ _ => none
 
-def resolveHole {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : HoleResolution :=
-  match selectHole rv self h with
+def resolveHole {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
+    (self : D) (h : HoleROM) : HoleResolution :=
+  match selectHole digestOf look rv self h with
   | .ok s => .selected s
   | .error why => .blocked h.name h.ty why
 
@@ -204,10 +239,11 @@ structure HoleInstance where
   resolutions : List HoleResolution
   cost : Nat
 
-def instantiateHoles {D : Type} (rv : RowView D) (self : D) (Δ : List Ty) (p : Package) :
+def instantiateHoles {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
+    (rv : RowView D) (self : D) (Δ : List Ty) (p : Package) :
     Except HoleRefusal HoleInstance := do
   p.checkContextual Δ
-  let rs := p.holes.map (resolveHole rv self)
+  let rs := p.holes.map (resolveHole digestOf look rv self)
   let ss := rs.filterMap HoleResolution.receipt
   let body ← match Term.fillBounded Wire.nodeMax (resolutionMax rs) (resolutionEnv rs) p.body with
     | .error b => throw (.expansion b)

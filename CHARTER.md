@@ -21,7 +21,7 @@ who consent by re-execution, and an operator who sees every byte. It demonstrate
 could be better where that is cheap. Two demonstrations are approved: documents and escrow. No
 other minidregg aspect is pulled in to demonstrate.
 
-Three things are outside nanodregg by ruling, not by omission:
+Three things are ruled, not omitted: the first two are outside nanodregg, the third bounds it.
 
 1. **Proof systems.** Nothing. Admission is re-execution; the proof slot stays empty; no circuit,
    STARK, folding scheme or accumulator is built here or enters the TCB. breadstuffs holds that
@@ -29,15 +29,20 @@ Three things are outside nanodregg by ruling, not by omission:
 2. **Hiding from the Host.** Nothing. The operator is a trusted vat: the Host and every key holding
    a follow grant see every byte; membership is the confidentiality boundary; a member is kept out
    of a World by holding no follow grant (decisions/protocol.md PROTOCOL-3, ruling (a)).
-3. **Multi-node agreement.** Nothing. One writer per Store; followers re-derive every Turn (law 1,
-   PROTOCOL-4). There is no agreement mesh, no second writer, no replication of the writer.
+3. **Writers.** One writer per World; followers re-derive every Turn (law 1, PROTOCOL-4). Many parties and
+   many processes over one writer are in scope: residents, member sockets, followers, and the protocols
+   between objects, with the member socket modelled. Many Worlds are in scope: a protocol between Worlds
+   runs on receipts checked against held heads; it has no atomic cross-World commitment. Replication of a
+   World's writer by agreement is a planned, priced phase that keeps one decided log per World; liveness is
+   measured, never proved. Merging divergent histories of one World is refused: a fork is a new World.
+   (Ember, real 2026-10-22, approving `redregg/work/PROGRAM-20261022.md` §2(d); decisions/lang.md LANG-75.)
 
-A lane briefed to "add a proof", "hide it from the Host", "replicate the writer" or "bring in
-another minidregg feature as a demo" is briefed against this section: the brief is wrong, not the
-charter. The meta-critique below applies here too: a scope chosen to avoid a hard part is the
-smell. This one is chosen because each excluded part is a measured failure of the trees before
-it: breadstuffs' soundness apex vacuous at BabyBear, minidregg's empty proof slot, an agreement
-mesh with one host.
+A lane briefed to "add a proof", "hide it from the Host", "merge two histories of a World", "replicate
+the writer" outside its planned phase, or "bring in another minidregg feature as a demo" is briefed
+against this section: the brief is wrong, not the charter. The meta-critique below applies here too: a
+scope chosen to avoid a hard part is the smell. This one is chosen because each excluded part is a
+measured failure of the trees before it: breadstuffs' soundness apex vacuous at BabyBear, minidregg's
+empty proof slot, an agreement mesh with one host.
 
 ## Laws (every commit obeys; a reviewer may revert on sight)
 

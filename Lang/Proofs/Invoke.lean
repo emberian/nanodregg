@@ -343,9 +343,48 @@ theorem rangeRowData_length {D : Type} {digestOf : ByteArray → Option D} {ℓ 
   unfold rangeRowData at h
   exact mapM_ok_length h
 
-theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rv : RowView D} {self : D}
+/-- What `readPoint` reads back (E1 factoring of `relReads`): the pinned key read back and `checked`,
+and the row's value decoded (`valOf`) if the pin holds a row, `none` if the pin holds an absence. -/
+theorem readPoint_ok {D : Type} {digestOf : ByteArray → Option D} {ℓ : Label} {d : RelDecl}
+    {p : ByteArray × Option RowLeaf} {k : Data} {val : Option Data}
+    (h : readPoint digestOf ℓ d p = .ok (k, val)) :
+    ∃ k0, liftS (D := D) s!"rows: {ℓ}" (keyOf d d.key.length p.1) = .ok k0 ∧
+      checked digestOf s!"rows: {ℓ}: key" k0 = .ok k ∧
+      ((val = none ∧ p.2 = none) ∨
+        ∃ v b ver w, p.2 = some (.row v b ver) ∧ valOf digestOf d s!"rows: {ℓ}" b = .ok w ∧ val = some w) := by
+  unfold readPoint at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  all_goals simp only [Except.ok.injEq, Prod.mk.injEq] at h
+  · obtain ⟨rfl, rfl⟩ := h
+    exact ⟨_, ‹_›, ‹_›, .inl ⟨rfl, ‹_›⟩⟩
+  · obtain ⟨rfl, rfl⟩ := h
+    obtain ⟨u, hu, hs⟩ := map_some_ok ‹(some <$> valOf digestOf d _ _) = Except.ok _›
+    exact ⟨_, ‹_›, ‹_›, .inr ⟨_, _, _, u, ‹_›, hu, hs⟩⟩
+
+/-- What `pointData` makes of a point read back: its key and value, and on a live read (E1) the
+liveness of the cell its key names, read through the pinned view at a pinned cell. -/
+theorem pointData_ok {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {ℓ : Label}
+    {live : Bool} {kv : Data × Option Data} {y : Data}
+    (h : pointData digestOf look ℓ live kv = .ok y) :
+    (live = false ∧ y = .record [("key", kv.1), ("val", optD kv.2)]) ∨
+    (live = true ∧ ∃ b g c, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok c ∧
+      y = .record [("key", kv.1), ("live", .bool (cellLive look g)), ("val", optD kv.2)]) := by
+  unfold pointData at h
+  split at h
+  · rename_i hl
+    repeat' split at h
+    all_goals first | (cases h; done) | skip
+    simp only [Except.ok.injEq] at h
+    exact .inr ⟨hl, _, _, _, ‹_›, ‹_›, ‹_›, h.symm⟩
+  · rename_i hl
+    simp only [Except.ok.injEq] at h
+    exact .inl ⟨by simpa using hl, h.symm⟩
+
+theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D}
     {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
-    (h : relReads digestOf rv self i ℓ d x = .ok v) : Conforms v (relReadTy d x) := by
+    (h : relReads digestOf look rv self i ℓ d x = .ok v) : Conforms v (relReadTy d x) := by
   unfold relReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
@@ -356,16 +395,20 @@ theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rv : R
     case pts =>
       intro y hy
       obtain ⟨q, -, hq⟩ := mapM_ok_mem ‹List.mapM _ (rv.points self i) = Except.ok _› y hy
-      repeat' split at hq
-      all_goals first | cases hq | skip
-      all_goals
-        refine .record (.cons (key_conf ‹_› ‹_›) (.cons ?_ .nil))
-        exact optD_conforms (fun w hw => by
-          first
-            | (cases hw; done)
-            | (cases hw
-               obtain ⟨u, hu, hs⟩ := map_some_ok ‹(some <$> valOf digestOf d _ _) = Except.ok _›
-               cases hs; exact valOf_conforms hu))
+      split at hq
+      · cases hq
+      · rename_i kv hkv
+        obtain ⟨k, val⟩ := kv
+        obtain ⟨k0, h1, h2, hv⟩ := readPoint_ok hkv
+        have hval : Conforms (optD val) (optTy d.val) := optD_conforms (fun w hw => by
+          rcases hv with ⟨rfl, -⟩ | ⟨_, _, _, w', -, hw', rfl⟩
+          · cases hw
+          · cases hw; exact valOf_conforms hw')
+        rcases pointData_ok hq with ⟨hl, rfl⟩ | ⟨hl, -, -, -, -, -, -, rfl⟩
+        · simp only [pointRecTy, hl, Bool.false_eq_true, if_false, List.cons_append, List.nil_append]
+          exact .record (.cons (key_conf h2 h1) (.cons hval .nil))
+        · simp only [pointRecTy, hl, if_true, List.cons_append, List.nil_append]
+          exact .record (.cons (key_conf h2 h1) (.cons .bool (.cons hval .nil)))
     case rng =>
       first
         | exact .nil
@@ -399,9 +442,9 @@ theorem mapM_rowConforms {α ε : Type} {f : α → Except ε (Label × Data)} {
 
 /-- **The rows a run reads are a value of the method's declared rows type** (LANG-49): what
 `readsData` builds from the caller's row view is data at `readsTy`, whatever the view holds. -/
-theorem readsData_conforms {D : Type} {digestOf : ByteArray → Option D} {rels : List (Label × RelDecl)}
+theorem readsData_conforms {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rels : List (Label × RelDecl)}
     {rv : RowView D} {self : D} {rs : List (Label × RelRead)} {v : Data}
-    (h : readsData digestOf rels rv self rs = .ok v) : Conforms v (readsTy rels rs) := by
+    (h : readsData digestOf look rels rv self rs = .ok v) : Conforms v (readsTy rels rs) := by
   unfold readsData at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
@@ -424,7 +467,7 @@ theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : By
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
     (hstate : readState digestOf (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData sg.arg args = .ok ad)
-    (hrows : readsData digestOf p.rels rv r.self sg.reads = .ok wd)
+    (hrows : readsData digestOf look p.rels rv r.self sg.reads = .ok wd)
     (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces (resultTy p.state sg.calls (editTy p.rels) sg.edits)
       (run L.lib Bounds.stackMax ticks 0

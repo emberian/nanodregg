@@ -43,7 +43,7 @@ theorem linked_signature {b : Std.HoleBundle} {ids : List ByteArray} {p : Packag
 /-- The selected ROM filling actually uses hypothesis 1. This is the nonempty
 context that the old langTemplate_no_hyps boundary made unreachable. -/
 theorem selected_uses_context :
-    (selectHole (view (some 0) (some 1)) (3 : Kernel.Sim.D)
+    (selectHole Kernel.Sim.digestOf noCells (view (some 0) (some 1)) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key }).map
         (fun s => (s.context, Term.usesVar 1 s.body)) = .ok ([.bool, .nat], true) := by
   rfl
@@ -51,7 +51,7 @@ theorem selected_uses_context :
 /-- Dropping the unused bool produces a typed open nat filling, with the
 embedding reconstructing the original open term. No closed witness is invented. -/
 theorem strengthening_factor :
-    (selectHole (view (some 0) none) (3 : Kernel.Sim.D)
+    (selectHole Kernel.Sim.digestOf noCells (view (some 0) none) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key }).map
         (fun s => (s.context, s.filling, s.body, inferE [] s.context s.filling (Ω := []))) =
       .ok ([.nat], .var 0, .var 1, .ok .nat) := by
@@ -61,13 +61,13 @@ theorem strengthening_factor :
 /-- For every supplied nat, capture-avoiding contextual instantiation returns
 that nat after the deployed factorization. -/
 theorem strengthening_uses_argument (n : Nat) :
-    (selectHole (view (some 0) none) (3 : Kernel.Sim.D)
+    (selectHole Kernel.Sim.digestOf noCells (view (some 0) none) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key }).map
         (fun s => Term.substList [.bool true, .nat n] s.body) = .ok (.nat n) := by
   rfl
 
 theorem kept_context :
-    (selectHole (view (some 0) (some 1)) (3 : Kernel.Sim.D)
+    (selectHole Kernel.Sim.digestOf noCells (view (some 0) (some 1)) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key }).map
         (fun s => (s.index, s.strengthened, s.body)) = .ok (0, [], .var 1) := by
   rfl
@@ -75,7 +75,7 @@ theorem kept_context :
 /-- Changing only the authenticated selected derivation preserves its filling
 after the first route's support is withdrawn. -/
 theorem alternative_same_filling :
-    (selectHole (view (some 1) (some 1) (left := none)) (3 : Kernel.Sim.D)
+    (selectHole Kernel.Sim.digestOf noCells (view (some 1) (some 1) (left := none)) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key }).map
         (fun s => (s.index, s.body)) = .ok (1, .var 1) := by
   rfl
@@ -83,7 +83,7 @@ theorem alternative_same_filling :
 /-- The chooser can select retained code with a different filling; the new
 constant is checked at the declaration's original contextual type. -/
 theorem replacement_filling :
-    (selectHole (view (some 2) none (used := none)) (3 : Kernel.Sim.D)
+    (selectHole Kernel.Sim.digestOf noCells (view (some 2) none (used := none)) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key }).map
         (fun s => (s.index, s.context, s.body)) = .ok (2, [], .nat 9) := by
   rfl
@@ -91,9 +91,38 @@ theorem replacement_filling :
 /-- A used withdrawn hypothesis suspends this very filling, by its exact name.
 It cannot be strengthened as though the variable were unused. -/
 theorem used_hypothesis_suspends :
-    selectHole (view (some 0) (some 1) (used := none)) (3 : Kernel.Sim.D)
+    selectHole Kernel.Sim.digestOf noCells (view (some 0) (some 1) (used := none)) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key } =
       .error (.supportMoved 0 1) := by
+  rfl
+
+/-- A pinned view of three cells: 76 live, 77 at its tombstone; every other cell unpinned. -/
+private def cells : Kernel.Receive.Pinned Kernel.Sim.D := fun g =>
+  if g = 77 then .ok none else if g = 76 then .ok (some ⟨Kernel.Receive.kindPackage, .rom, []⟩) else noCells g
+
+private def withCell (g : Kernel.Sim.D) : HoleROM :=
+  let c : SupportPin := .cell (Nanodregg.Kernel.Sim.dc.bytes g)
+  { declaration with selectionRel := 5, selectionKey := key, code := [⟨.var 1, [factPinAt 2, c]⟩] }
+
+/-- E1 at ROM grain (LANG-75.1): the selected route, given a second support that is a kernel CELL,
+selects while the cell is pinned and live. -/
+theorem cell_support_live_selects :
+    (selectHole Kernel.Sim.digestOf cells (view (some 0) (some 1)) (3 : Kernel.Sim.D) (withCell 76)).map
+      (·.index) = .ok 0 := by
+  rfl
+
+/-- The tooth of `selectHole_cell_support` and `revoked_support_refused` at a concrete ROM: a cell
+support pinned at its tombstone (`look g = .ok none`) refuses `supportDead`, by name. Under the
+mutation `supportLive (.cell _) := true` this candidate selects and the theorem is false. -/
+theorem cell_support_dead_refused :
+    (selectHole Kernel.Sim.digestOf cells (view (some 0) (some 1)) (3 : Kernel.Sim.D) (withCell 77)).map
+      (·.index) = .error (.supportDead 0) := by
+  rfl
+
+/-- An unpinned cell support is not absence: it refuses `unpinned`, by name. -/
+theorem cell_support_unpinned_refused :
+    (selectHole Kernel.Sim.digestOf cells (view (some 0) (some 1)) (3 : Kernel.Sim.D) (withCell 78)).map
+      (·.index) = .error .unpinned := by
   rfl
 
 end DeployedContextual

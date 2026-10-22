@@ -630,7 +630,7 @@ theorem map_of_relsOf : (ts : List Tree) → ∀ {rs : List (Label × RelDecl)},
       simp [e1, w1, e2, w2]
     · simp at h
 
-/-! ### Contextual ROM declarations (version 4) -/
+/-! ### Contextual ROM declarations (version 4; cell pins since version 5) -/
 
 theorem mapM_encoded {α β : Type} (enc : α → β) (dec : β → Option α) (ok : α → Bool)
     (law : ∀ a, ok a = true → dec (enc a) = some a) :
@@ -658,49 +658,54 @@ theorem mapM_decoded {α β : Type} (enc : α → β) (dec : β → Option α) (
           obtain ⟨hes, hws⟩ := mapM_decoded enc dec ok law bs ys hs
           simp [he, hw, hes, hws]
 
-theorem holePinOf_tree {p : HolePin} (h : holePinWire p = true) :
-    holePinOf (holePinTree p) = some p := by
-  simp only [holePinWire, Bool.and_eq_true, decide_eq_true_eq] at h
-  simp [holePinTree, holePinOf, u32Of_bytes h.1, u64Of_bytes h.2]
+theorem supportPinOf_tree {p : SupportPin} (h : supportPinWire p = true) :
+    supportPinOf (supportPinTree p) = some p := by
+  cases p with
+  | row rel key ver =>
+    simp only [supportPinWire, Bool.and_eq_true, decide_eq_true_eq] at h
+    simp [supportPinTree, supportPinOf, u32Of_bytes h.1, u64Of_bytes h.2]
+  | cell id => rfl
 
-theorem tree_of_holePinOf {t : Tree} {p : HolePin} (h : holePinOf t = some p) :
-    holePinTree p = t ∧ holePinWire p = true := by
-  unfold holePinOf at h
+theorem tree_of_supportPinOf {t : Tree} {p : SupportPin} (h : supportPinOf t = some p) :
+    supportPinTree p = t ∧ supportPinWire p = true := by
+  unfold supportPinOf at h
   split at h
   · split at h
     · rename_i r v hr hv
       cases h
       obtain ⟨er, wr⟩ := u32Of_some hr
       obtain ⟨ev, wv⟩ := u64Of_some hv
-      simp [holePinTree, holePinWire, er, ev, wr, wv]
+      simp [supportPinTree, supportPinWire, er, ev, wr, wv]
     · simp at h
+  · cases h
+    simp [supportPinTree, supportPinWire]
   · simp at h
 
-theorem holeOptPinOf_tree {p : Option HolePin} (h : p.all holePinWire = true) :
-    holeOptPinOf (holeOptPinTree p) = some p := by
+theorem supportOptPinOf_tree {p : Option SupportPin} (h : p.all supportPinWire = true) :
+    supportOptPinOf (supportOptPinTree p) = some p := by
   cases p with
   | none => rfl
-  | some p => simp [holeOptPinTree, holeOptPinOf, holePinOf_tree h]
+  | some p => simp [supportOptPinTree, supportOptPinOf, supportPinOf_tree h]
 
-theorem tree_of_holeOptPinOf {t : Tree} {p : Option HolePin} (h : holeOptPinOf t = some p) :
-    holeOptPinTree p = t ∧ p.all holePinWire = true := by
-  unfold holeOptPinOf at h
+theorem tree_of_supportOptPinOf {t : Tree} {p : Option SupportPin} (h : supportOptPinOf t = some p) :
+    supportOptPinTree p = t ∧ p.all supportPinWire = true := by
+  unfold supportOptPinOf at h
   split at h
   · split at h
     · rename_i he
       cases h
-      simp [holeOptPinTree, he]
+      simp [supportOptPinTree, he]
     · simp at h
   · split at h
     · rename_i he
       rename_i ep tp
-      cases hd : holePinOf tp with
+      cases hd : supportPinOf tp with
       | none => simp [hd] at h
       | some q =>
         simp [hd] at h
         subst p
-        obtain ⟨eq, wq⟩ := tree_of_holePinOf hd
-        simp [holeOptPinTree, he, eq, wq]
+        obtain ⟨eq, wq⟩ := tree_of_supportPinOf hd
+        simp [supportOptPinTree, he, eq, wq]
     · simp at h
   · simp at h
 
@@ -708,7 +713,7 @@ theorem holeCodeOf_tree {c : HoleCode} (h : holeCodeWire c = true) :
     holeCodeOf (holeCodeTree c) = some c := by
   simp only [holeCodeWire, Bool.and_eq_true] at h
   simp [holeCodeTree, holeCodeOf, termOf_termTree _ h.1,
-    mapM_encoded holePinTree holePinOf holePinWire (fun _ => holePinOf_tree) _ h.2]
+    mapM_encoded supportPinTree supportPinOf supportPinWire (fun _ => supportPinOf_tree) _ h.2]
 
 theorem tree_of_holeCodeOf {t : Tree} {c : HoleCode} (h : holeCodeOf t = some c) :
     holeCodeTree c = t ∧ holeCodeWire c = true := by
@@ -720,8 +725,8 @@ theorem tree_of_holeCodeOf {t : Tree} {c : HoleCode} (h : holeCodeOf t = some c)
       · rename_i b ps hb hp
         cases h
         obtain ⟨eb, wb⟩ := tree_of_termOf hb
-        obtain ⟨ep, wp⟩ := mapM_decoded holePinTree holePinOf holePinWire
-          (fun _ _ => tree_of_holePinOf) _ _ hp
+        obtain ⟨ep, wp⟩ := mapM_decoded supportPinTree supportPinOf supportPinWire
+          (fun _ _ => tree_of_supportPinOf) _ _ hp
         obtain ⟨rfl, rfl⟩ := he
         simp [holeCodeTree, holeCodeWire, eb, wb, ep, wp]
       · simp at h
@@ -735,8 +740,8 @@ theorem holeROMOf_tree {r : HoleROM} (h : holeROMWire r = true) :
   simp [holeROMTree, holeROMOf, u32Of_bytes hn, u32Of_bytes hr,
     mapM_encoded tyTree tyOf tyWire tyOf_tyTree _ hc, tyOf_tyTree _ ht,
     mapM_encoded holeCodeTree holeCodeOf holeCodeWire (fun _ => holeCodeOf_tree) _ hk,
-    mapM_encoded holeOptPinTree holeOptPinOf (Option.all holePinWire) (fun _ => holeOptPinOf_tree) _ hh,
-    holeOptPinOf_tree hp, termOf_termTree _ hg]
+    mapM_encoded supportOptPinTree supportOptPinOf (Option.all supportPinWire) (fun _ => supportOptPinOf_tree) _ hh,
+    supportOptPinOf_tree hp, termOf_termTree _ hg]
 
 theorem tree_of_holeROMOf {t : Tree} {r : HoleROM} (h : holeROMOf t = some r) :
     holeROMTree r = t ∧ holeROMWire r = true := by
@@ -753,9 +758,9 @@ theorem tree_of_holeROMOf {t : Tree} {r : HoleROM} (h : holeROMOf t = some r) :
         obtain ⟨ek, wk⟩ := mapM_decoded holeCodeTree holeCodeOf holeCodeWire
           (fun _ _ => tree_of_holeCodeOf) _ _ hk
         obtain ⟨er, wr⟩ := u32Of_some hr
-        obtain ⟨eh, wh⟩ := mapM_decoded holeOptPinTree holeOptPinOf (Option.all holePinWire)
-          (fun _ _ => tree_of_holeOptPinOf) _ _ hh
-        obtain ⟨ep, wp⟩ := tree_of_holeOptPinOf hp
+        obtain ⟨eh, wh⟩ := mapM_decoded supportOptPinTree supportOptPinOf (Option.all supportPinWire)
+          (fun _ _ => tree_of_supportOptPinOf) _ _ hh
+        obtain ⟨ep, wp⟩ := tree_of_supportOptPinOf hp
         obtain ⟨eg, wg⟩ := tree_of_termOf hg
         obtain ⟨rfl, rfl, rfl⟩ := he
         simp [holeROMTree, holeROMWire, en, wn, ec, wc, et, wt, ek, wk, er, wr, eh, wh, ep, wp, eg, wg]
@@ -807,9 +812,9 @@ theorem packageCodec_label :
 /-- No version is 0: 0 is the first byte of every unversioned package. -/
 theorem packageWireVersion_ne_zero : Bounds.packageWireVersion ≠ 0 := by decide
 
-/-- **`lang/package-version/4` reads exactly the one byte `packageWireVersion`.** -/
+/-- **`lang/package-version/5` reads exactly the one byte `packageWireVersion`.** -/
 theorem packageVersion_lawful : Stream.Lawful packageVersion :=
-  Stream.refine_lawful Stream.u8_lawful "lang/package-version/4" (fun y => by cases y; exact if_pos rfl)
+  Stream.refine_lawful Stream.u8_lawful "lang/package-version/5" (fun y => by cases y; exact if_pos rfl)
     (fun x _ h => by
       split at h
       · rename_i hx; exact hx.symm
@@ -825,18 +830,18 @@ theorem packageStream_bytes (t : Tree.Fitting nodeMax depthMax) :
     packageStream.bytes ((), t) = ByteArray.mk #[Bounds.packageWireVersion] ++ treeStream.bytes t := by
   rw [packageStream, Stream.product_bytes treeStream_lawful]; rfl
 
-/-- **A byte other than `packageWireVersion` where a package starts is refused `lang/package-version/4` by
+/-- **A byte other than `packageWireVersion` where a package starts is refused `lang/package-version/5` by
 name**, before any tree is read. -/
 theorem packageStream_get_wrong_version {b : ByteArray} {i : Nat} (hi : i < b.size)
     (hv : b[i] ≠ Bounds.packageWireVersion) :
-    packageStream.get b i = .error (.rejected i "lang/package-version/4") := by
+    packageStream.get b i = .error (.rejected i "lang/package-version/5") := by
   simp [packageStream, Stream.product, packageVersion, Stream.refine, Stream.u8, hi, hv]
 
 /-- **Bytes at the wrong version are never a package**: `decodePackage` refuses them
-`lang/package-version/4`, so bytes written under an earlier package wire are refused, never reinterpreted. -/
+`lang/package-version/5`, so bytes written under an earlier package wire are refused, never reinterpreted. -/
 theorem decodePackage_wrong_version {b : ByteArray} (h0 : 0 < b.size)
     (hv : b[0] ≠ Bounds.packageWireVersion) :
-    decodePackage b = .error (.rejected 0 "lang/package-version/4") := by
+    decodePackage b = .error (.rejected 0 "lang/package-version/5") := by
   simp [decodePackage, Stream.decode, packageStream_get_wrong_version h0 hv]
 
 /-- Every package written before LANG-60 was `treeStream.bytes` of a node-0 root: its first byte is 0. -/
@@ -848,12 +853,12 @@ theorem treeStream_bytes_node0 {e : ByteArray} {cs : List Tree} (h : (Tree.node 
   simp [ByteArray.append_assoc, Stream.u8, Stream.bytes, ByteArray.getElem_append_left]
   rfl
 
-/-- **Every unversioned package is refused `lang/package-version/4`**: the bytes of any node-0 package
+/-- **Every unversioned package is refused `lang/package-version/5`**: the bytes of any node-0 package
 tree as `lang/package` and `lang/package/2` wrote them (no version byte) are never decoded, so no
 package of an earlier wire is read as a different one. -/
 theorem unversioned_package_refused {e : ByteArray} {cs : List Tree}
     (h : (Tree.node 0 e cs).fits nodeMax depthMax = true) :
-    decodePackage (treeStream.bytes ⟨.node 0 e cs, h⟩) = .error (.rejected 0 "lang/package-version/4") := by
+    decodePackage (treeStream.bytes ⟨.node 0 e cs, h⟩) = .error (.rejected 0 "lang/package-version/5") := by
   obtain ⟨h0, hb⟩ := treeStream_bytes_node0 h
   exact decodePackage_wrong_version h0 (by rw [hb]; exact packageWireVersion_ne_zero.symm)
 
@@ -864,7 +869,7 @@ theorem decodePackage_wrong_version_not_ok {b : ByteArray} (h0 : 0 < b.size)
 /-- The codec refuses them by the same name. -/
 theorem packageCodec_wrong_version {b : ByteArray} (h0 : 0 < b.size)
     (hv : b[0] ≠ Bounds.packageWireVersion) :
-    packageCodec.decode b = .error (.rejected 0 "lang/package-version/4") := by
+    packageCodec.decode b = .error (.rejected 0 "lang/package-version/5") := by
   simp [packageCodec, Stream.decode, Stream.refine, packageStream_get_wrong_version h0 hv]
 
 private theorem packageFit_eq {p : Package} (h : (packageTree p).fits nodeMax depthMax = true) :
@@ -877,7 +882,7 @@ private theorem packageCodec_bytes {p : Package} (h : (packageTree p).fits nodeM
   rw [packageFit_eq h]; rfl
 
 /-- **Every package's bytes begin with the current version** (the twin of
-`decodePackage_wrong_version`: what `encodePackage` writes is never refused `lang/package-version/4`). -/
+`decodePackage_wrong_version`: what `encodePackage` writes is never refused `lang/package-version/5`). -/
 theorem encodePackage_version {p : Package} {b : ByteArray} (h : encodePackage p = some b) :
     ∃ h0 : 0 < b.size, b[0] = Bounds.packageWireVersion := by
   unfold encodePackage at h
@@ -891,12 +896,12 @@ theorem encodePackage_version {p : Package} {b : ByteArray} (h : encodePackage p
     · cases h
   · cases h
 
-/-- **`lang/package/4` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
+/-- **`lang/package/5` is lawful on exactly the packages that have a tree in bounds** (`packageWire` and
 `fits`): those round-trip, and whatever it reads is one of them, spelled one way, at the current
 version. -/
 theorem packageCodec_lawfulOn :
     Stream.LawfulOn (fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) packageCodec := by
-  refine (Stream.refine_lawfulOn_where packageStream_lawful.on "lang/package/4"
+  refine (Stream.refine_lawfulOn_where packageStream_lawful.on "lang/package/5"
     (Q := fun p => packageWire p = true ∧ (packageTree p).fits nodeMax depthMax = true) ?_ ?_ ?_).mono
     (fun _ h => h.2) (fun _ h => ⟨trivial, h⟩)
   · intro y _ hq
@@ -948,7 +953,7 @@ theorem decodePackage_eq_ok_iff {b : ByteArray} {p : Package} :
     · simp at h
 
 
-/-- `decodePackage` accepts exactly what the `lang/package/4` codec reads (they differ only in which
+/-- `decodePackage` accepts exactly what the `lang/package/5` codec reads (they differ only in which
 refusal names an input that is both a non-package tree and followed by trailing bytes). -/
 theorem decodePackage_eq_codec {b : ByteArray} {p : Package} :
     decodePackage b = .ok p ↔ packageCodec.decode b = .ok p := by
@@ -977,18 +982,18 @@ theorem decodePackage_refused_label {b : ByteArray} {t : Unit × Tree.Fitting no
     decodePackage b = .error (.rejected 0 s!"lang/package/{Bounds.packageWireVersion.toNat}") := by
   simp only [decodePackage, h, hn]; rfl
 
-/-- **`lang/package/4` refuses by name every tree `packageOf` does not read.** -/
+/-- **`lang/package/5` refuses by name every tree `packageOf` does not read.** -/
 theorem packageCodec_get_refused {b : ByteArray} {i j : Nat} {t : Unit × Tree.Fitting nodeMax depthMax}
     (h : packageStream.get b i = .ok (t, j)) (hn : packageOf t.2.val = none) :
-    packageCodec.get b i = .error (.rejected i "lang/package/4") := by
+    packageCodec.get b i = .error (.rejected i "lang/package/5") := by
   simp [packageCodec, Stream.refine, h, hn]
 
-/-- The plant: a body node of term tag 19 (no term has it) is no package, so `lang/package/4` refuses it
+/-- The plant: a body node of term tag 19 (no term has it) is no package, so `lang/package/5` refuses it
 (`packageCodec_get_refused`; the codec vectors' boundary row is a tree of the same layout). -/
 theorem package_refuses_unknown_term_tag : (packageOf (bodyTree (.node 19 .empty []))).isNone = true := by
   decide +kernel
 
-/-- `lang/package/4`'s domain is inhabited: the empty package has a tree in bounds. -/
+/-- `lang/package/5`'s domain is inhabited: the empty package has a tree in bounds. -/
 theorem empty_package_fits :
     packageWire ⟨[], .record [], .record [], .record [], [], [], [], .empty, []⟩ = true ∧
       (packageTree ⟨[], .record [], .record [], .record [], [], [], [], .empty, []⟩).fits nodeMax depthMax = true := by

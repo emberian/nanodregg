@@ -23,34 +23,36 @@ def holeCandidates (V : Ty) : RelDecl :=
 def holeFacts : RelDecl := ⟨[("cell", .digest)],
   .record [("by", .digest), ("pin", .digest)], 64, none, 0, true, some "posted"⟩
 
-/-- A read of at most three fact rows: two positive supports and one blocker.
-Matching is by cell identity, never by the order in which the pins arrived. -/
-def holeFactsView : Ty := readsTy [("facts", holeFacts)] [("facts", ⟨3, none⟩)]
+/-- A read of at most three fact rows: two positive supports and one blocker, each with its cell's
+liveness in the caller's pinned view (E1: `facts` is keyed by `cell : digest`, so the read is a live
+read). Matching is by cell identity, never by the order in which the pins arrived. -/
+def holeFactsView : Ty := readsTy [("facts", holeFacts)] [("facts", ⟨3, none, true⟩)]
 
 /-- Internal judgment preserves each refusal name until it is rendered either
 as a retained row status or a method refusal. -/
 def holeVerdict : Ty := .sum [
   ("conflict", .record []), ("pruned", .record []),
-  ("support0Moved", .record []), ("support0Withdrawn", .record []),
-  ("support1Moved", .record []), ("support1Withdrawn", .record []),
+  ("support0Dead", .record []), ("support0Moved", .record []), ("support0Withdrawn", .record []),
+  ("support1Dead", .record []), ("support1Moved", .record []), ("support1Withdrawn", .record []),
   ("verified", .record [])]
 
-/-- One point's observation: absent 0, same token 1, moved version 2. -/
+/-- One point's observation: absent 0, same token at a live cell 1, moved version 2, same token at
+a cell that is not live (revoked, retired, never existed: C1) 3. -/
 def holeProbePoint : Term :=
-  (hl "s" holeSupport (hl "point" (pointTy holeFacts)
+  (hl "s" holeSupport (hl "point" (livePointTy holeFacts)
     (hf (hv "point") [
       ("none", "_", hc (.nat 0)),
       ("some", "p", ht (hp .deq (hg (hg (hv "p") "key") "cell") (hg (hv "s") "cell"))
         (hf (hg (hv "p") "val") [
           ("none", "_", hc (.nat 0)),
           ("some", "f", ht (hp .deq (hg (hv "f") "pin") (hg (hv "s") "pin"))
-            (hc (.nat 1)) (hc (.nat 2)))])
+            (ht (hg (hv "p") "live") (hc (.nat 1)) (hc (.nat 3))) (hc (.nat 2)))])
         (hc (.nat 0)))]))) []
 
 /-- Bounded lookup by identity. Bind the probe once; its syntax is not copied
 into every continuation branch. Real row views have at most one point per key. -/
 def holeSupportProbe : Term :=
-  let pointTy := Ty.fn holeSupport (.fn (pointTy holeFacts) .nat)
+  let pointTy := Ty.fn holeSupport (.fn (livePointTy holeFacts) .nat)
   let probe (i : Label) := ha (hv "probe") [hv "s", hg (hg (hv "rows") "facts") i]
   let anyEq (n : Nat) := ht (hp .eq (hv "p0") (hc (.nat n))) (hb true)
     (ht (hp .eq (hv "p1") (hc (.nat n))) (hb true) (hp .eq (hv "p2") (hc (.nat n))))
@@ -58,19 +60,20 @@ def holeSupportProbe : Term :=
     (hlet "probe" pointTy (hc holeProbePoint)
       (hlet "p0" .nat (probe "p0") (hlet "p1" .nat (probe "p1")
         (hlet "p2" .nat (probe "p2")
-          (ht (anyEq 1) (hc (.nat 1)) (ht (anyEq 2) (hc (.nat 2)) (hc (.nat 0)))))))))) []
+          (ht (anyEq 1) (hc (.nat 1)) (ht (anyEq 3) (hc (.nat 3))
+            (ht (anyEq 2) (hc (.nat 2)) (hc (.nat 0))))))))))) []
 
 /-- Presence is independent of liveness: an observed absent row is covered,
 but an omitted point is not. Keys are rows under self, never cell pins. -/
 def holePointCovered : Term :=
-  (hl "s" holeSupport (hl "point" (pointTy holeFacts)
+  (hl "s" holeSupport (hl "point" (livePointTy holeFacts)
     (hf (hv "point") [
       ("none", "_", hb false),
       ("some", "p", hp .deq (hg (hg (hv "p") "key") "cell") (hg (hv "s") "cell"))]))) []
 
 /-- Complete observation of one declared support key in the bounded self view. -/
 def holeSupportCovered : Term :=
-  let P := Ty.fn holeSupport (.fn (pointTy holeFacts) .bool)
+  let P := Ty.fn holeSupport (.fn (livePointTy holeFacts) .bool)
   let probe (i : Label) := ha (hv "present") [hv "s", hg (hg (hv "rows") "facts") i]
   (hl "s" holeSupport (hl "rows" holeFactsView
     (hlet "present" P (hc holePointCovered)
@@ -97,8 +100,10 @@ def holeCoverageTerms : List Term :=
 
 def holeVerdictLabel (allowed blocked : Bool) (s0 s1 : Nat) : Label :=
   if !allowed then "conflict" else if blocked then "pruned"
-  else if s0 != 1 then (if s0 = 2 then "support0Moved" else "support0Withdrawn")
-  else if s1 != 1 then (if s1 = 2 then "support1Moved" else "support1Withdrawn")
+  else if s0 != 1 then
+    (if s0 = 2 then "support0Moved" else if s0 = 3 then "support0Dead" else "support0Withdrawn")
+  else if s1 != 1 then
+    (if s1 = 2 then "support1Moved" else if s1 = 3 then "support1Dead" else "support1Withdrawn")
   else "verified"
 
 /-- The fixed judgment truth table, as executable core code. -/
@@ -110,9 +115,11 @@ def holeDecision : Term :=
         (ht (hp .eq (hv "s0") (hc (.nat 1)))
           (ht (hp .eq (hv "s1") (hc (.nat 1))) (verdict "verified")
             (ht (hp .eq (hv "s1") (hc (.nat 2)))
-              (verdict "support1Moved") (verdict "support1Withdrawn")))
+              (verdict "support1Moved")
+              (ht (hp .eq (hv "s1") (hc (.nat 3))) (verdict "support1Dead") (verdict "support1Withdrawn"))))
           (ht (hp .eq (hv "s0") (hc (.nat 2)))
-            (verdict "support0Moved") (verdict "support0Withdrawn"))))
+            (verdict "support0Moved")
+            (ht (hp .eq (hv "s0") (hc (.nat 3))) (verdict "support0Dead") (verdict "support0Withdrawn")))))
       (verdict "conflict")))))) []
 
 /-- Observation expressions in scope probe, rows, candidate, state. Each term
@@ -152,8 +159,10 @@ def holeStatusOf : Term :=
     (hf (hv "verdict") [
       ("conflict", "_", hi holeStatus "conflict" (hs "clause")),
       ("pruned", "_", hi holeStatus "pruned" (hv "reason")),
+      ("support0Dead", "_", hi holeStatus "suspended" (hs "support0 dead")),
       ("support0Moved", "_", hi holeStatus "suspended" (hs "support0 moved")),
       ("support0Withdrawn", "_", hi holeStatus "suspended" (hs "support0 withdrawn")),
+      ("support1Dead", "_", hi holeStatus "suspended" (hs "support1 dead")),
       ("support1Moved", "_", hi holeStatus "suspended" (hs "support1 moved")),
       ("support1Withdrawn", "_", hi holeStatus "suspended" (hs "support1 withdrawn")),
       ("verified", "_", hi holeStatus "verified" hn)]))) []
@@ -164,8 +173,10 @@ def holeVerdictCheck : Term :=
   (hl "verdict" holeVerdict (hf (hv "verdict") [
     ("conflict", "_", hc (.refuse .bool "conflict".toUTF8)),
     ("pruned", "_", hc (.refuse .bool "pruned".toUTF8)),
+    ("support0Dead", "_", hc (.refuse .bool "support0 dead".toUTF8)),
     ("support0Moved", "_", hc (.refuse .bool "support0 moved".toUTF8)),
     ("support0Withdrawn", "_", hc (.refuse .bool "support0 withdrawn".toUTF8)),
+    ("support1Dead", "_", hc (.refuse .bool "support1 dead".toUTF8)),
     ("support1Moved", "_", hc (.refuse .bool "support1 moved".toUTF8)),
     ("support1Withdrawn", "_", hc (.refuse .bool "support1 withdrawn".toUTF8)),
     ("verified", "_", hb true)])) []
@@ -250,8 +261,8 @@ def holePackage (V : Ty) (clause : Term) (extraRels : List (Label × RelDecl) :=
     ("s1", optTy holeSupport), ("value", V)]
   let pruneArg := Ty.record [("blocker", holeSupport), ("cand", .digest), ("why", .bytes)]
   let factArg := Ty.record [("cell", .digest), ("pin", .digest)]
-  let readFacts := readsTy rels [("facts", ⟨3, none⟩)]
-  let readBoth := readsTy rels [("candidates", ⟨1, none⟩), ("facts", ⟨3, none⟩)]
+  let readFacts := readsTy rels [("facts", ⟨3, none, true⟩)]
+  let readBoth := readsTy rels [("candidates", ⟨1, none, false⟩), ("facts", ⟨3, none, true⟩)]
   let facts := hr [("facts", hg (hv "rows") "facts")]
   let judge (c : H) := ha (hv "holeJudge") [hv "state", c, facts]
   let status (c : H) := ha (hc holeStatusOf) [hg c "reason", judge c]

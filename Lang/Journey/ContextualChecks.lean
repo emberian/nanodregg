@@ -87,15 +87,15 @@ def gateRows : List (String × Bool) := Id.run do
       | .error (.bodyType _) => true | _ => false),
     ("hole-substitution-length", match ({ p with body := .record [("value", .hole 0 [.bool true])] }).checkContextual [] with
       | .error (.bodyType _) => true | _ => false),
-    ("selection-data-type", refusedAs (selectHole wrongData (3 : Sim.D) h) (.selectionType 0)),
-    ("selection-code-index", refusedAs (selectHole (view (some 99) (some 1)) (3 : Sim.D) h) (.selectionIndex 0)),
-    ("selection-support-version", refusedAs (selectHole (view (some 0) (some 1) (left := some 2)) (3 : Sim.D) h)
+    ("selection-data-type", refusedAs (selectHole Sim.digestOf noCells wrongData (3 : Sim.D) h) (.selectionType 0)),
+    ("selection-code-index", refusedAs (selectHole Sim.digestOf noCells (view (some 99) (some 1)) (3 : Sim.D) h) (.selectionIndex 0)),
+    ("selection-support-version", refusedAs (selectHole Sim.digestOf noCells (view (some 0) (some 1) (left := some 2)) (3 : Sim.D) h)
       (.derivationMoved 0)),
-    ("guard-budget", refusedAs (selectHole good (3 : Sim.D) { h with guard := longGuard }) (.guardFault 0)),
+    ("guard-budget", refusedAs (selectHole Sim.digestOf noCells good (3 : Sim.D) { h with guard := longGuard }) (.guardFault 0)),
     ("expansion-work-bound", refusedAs (Term.fillBounded 1 1 (fun _ => none) (.nat 1)) .work),
     ("expansion-size-bound", refusedAs (Term.fillBounded 64 3 (fun _ => some duplicate) nested) .size),
-    ("recheck-arm-reachable", refusedAs (instantiateHoles (view none (some 1)) (3 : Sim.D) [] wideP) .instanceRecheck &&
-      (instantiateHoles (view none (some 1)) (3 : Sim.D) [] p).isOk),
+    ("recheck-arm-reachable", refusedAs (instantiateHoles Sim.digestOf noCells (view none (some 1)) (3 : Sim.D) [] wideP) .instanceRecheck &&
+      (instantiateHoles Sim.digestOf noCells (view none (some 1)) (3 : Sim.D) [] p).isOk),
     ("contextual-print-mismatch", printMismatch),
     ("contextual-print-unreadable", named (Print.contextualText p "(") "contextualPrintRead"),
     ("rom-candidate-literals", match checkROMLits (fun _ => (none : Option Sim.D))

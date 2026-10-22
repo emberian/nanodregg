@@ -5763,3 +5763,159 @@ consumer list. The bias is trusting a list of consumers that was written for Lea
 name those files by path.
 
 Status: landed by CX-FOLD-3. The consolidation S1–S12 is complete; S13–S15 wait for Ember's rulings R1–R3.
+
+## LANG-75 The promotion program: the toy contextual theory is promoted into deployed nano, card by card (2026-10-22; CX-PROMO; plan `redregg/work/PROGRAM-20261022.md` approved by Ember; rulings R-0024 RELEASE, R-0025 GRANT)
+
+**Decision.** Ember (real 10-22): "PROMOTE the toy instances into actually deployed aspects of the exact nanodregg
+system … a more powerful repair-capable, contextual, open/still-analyzable system." The program's cards, each an
+IMPACT file → a cross-family read → a RELEASE row → one landing, one Lang worker at a time:
+- P1: E1 the cross-object read and C1 support pins on kernel cells (one `lang!`, LANG-75.1); C9 use-once grants as
+  revocable certificates; the charter's scope item 3 rewritten (the writer model).
+- P2: the live bridge at the kernel's World (C2, after its two-hour statement measurement), the CMTT core deleted
+  (R3, R-0022), repair over `resolveHole` (C5), provenance over live selections (C4a), the live label (C3), acyclicity
+  over the pin graph (C7, only with its plant), the boundary docstring (C6).
+- P3–P6: the protocol promotion (PROT-1..8 with E2–E4), the mini specs (M1, M2), receipts between Worlds (E5),
+  replicated agreement (E7, offered and priced; started on Ember's word). E8 (merging divergent histories) is refused.
+Each card says what nano object it promotes, which landed theorem gains a hypothesis (the premise price; a binder is
+not one), and the deployed mutation that makes each new theorem false.
+
+### LANG-75.1 E1 + C1 · a fact read is a live read: the kernel cell a fact names must be live, read through the caller's pins, in the same Turn (2026-10-22; CX-PROMO; IMPACT `redregg/work/promo/IMPACT-E1.md`; probes `redregg/work/promo/E1-support-probe.txt`; cross-family read `redregg/work/promo/READ-E1-grok.md`; GRANT R-0026 (cross-layer), RELEASE R-0027 under three conditions; cv 01a16171-d004, 01a1649d-d708, 01a1649e-7c2d, 01a16502-c55e item 1; LANG-21 01a14805-3d00 closed by name)
+
+**The defect, measured before the design** (`E1-support-probe.txt`, through the real `Receive.submit` and the installed
+Std.hole package at f8d04ac). (a) A fact naming a cell the kernel never had, at an arbitrary pin, was admitted by
+`post`; a candidate citing it was recorded `verified`; `select` admitted; P8's `commit` admitted and spent the one
+counted unit to it. (b) After provider 0's grant was revoked, a commit that pinned the grant at its TOMBSTONE was
+admitted and spent the unit (the S2 probe, re-measured). Revoke then unpost, as two calls, made the next commit refuse
+`support0 withdrawn`; revoke and unpost in ONE call is not constructible (`Unsigned` carries one `Body`; a method's
+calls are made as the object, and the grant's issuer is the member). So the poster-withdraws shape (REOR D.1, "A")
+leaves the gap reachable by any client that revokes without unposting; the plan's §8.3 refuter did not refute, and
+shape B stands: the reader checks the cell.
+
+**What lands.**
+- **One liveness.** `cellLive look g` (Lang/Rel): the caller pinned `g` and the World holds a live cell there
+  (`pinned` returns `World.live`, `none` at a tombstone or absence). Never "at a version": a grant's slots move on
+  every spend (KERNEL-60), and the authority's other tests stay `spendVia_ok`'s.
+- **The live column (E1; READ-E1 R3 replaces the plan's `Package.cites` + `cited` relation).** A method's read of a
+  relation keyed by exactly one digest (`RelDecl.cellKeyed`) may declare `live` (`RelRead.live`; surface
+  `(reads REL (points N) (live))`): each point's record is `{key, live, val}` (`pointRecTy`), and the runtime fills
+  `live` from `cellLive look g` for the cell its key names (`pointData`, after `readPoint`). An unpinned cell is the
+  kernel's own `unpinned` refusal. The column is not in `editTy`: no method can type an edit of it, and the runtime
+  passes the rows argument itself. A `(live)` read of a relation that is not cell-keyed is refused at install by its
+  own name, `liveNotCellKeyed` (READ-E1 condition 1). `readsData`/`relReads` take `look`; both the closed and the live
+  setup read rows the same way, so `runMeasuredLive_leaf_closed` keeps its statement.
+- **C1 in Std.hole.** `facts` (keyed by `cell : digest`) is read live by every generated method that judges
+  (accept, fill, propose, prune, rejudge, select; P8's commit through select). The probe reads absent 0, same pin at a
+  LIVE cell 1, moved 2, same pin at a dead cell 3; the verdicts gain `support0Dead`/`support1Dead`, recorded
+  `suspended "support0 dead"` and refused `support0 dead`. `holePosted` is unchanged: a fact stays the poster's claim
+  (`hole_postArg g pin`); every reader now checks the cell it names.
+- **The ROM grain.** `SupportPin` (`.row rel key ver | .cell id`) replaces `HolePin` in a `HoleROM`'s supports,
+  hypotheses and guard pin. A cell support must be pinned (`unpinned`) and live (`HoleRefusal.supportDead`, wire
+  `holeSupportDead N`); an unpinned ROW support stays `derivationMoved` (R1, today's behaviour). `selectHole`,
+  `changedHypotheses`, `runHoleGuard`, `resolveHole`, `instantiateHoles` take `digestOf look`; `loadLive` already held
+  `look` and passes it. `checkROMLits` checks every cell id a ROM names is a digest of the World.
+
+**Theorems** (each with the deployed mutation that makes it false; plants below):
+- `cellLive_iff` (Proofs/Rel) — mutation `cellLive := true` (plant a).
+- `cited_authenticated` (Proofs/Rel; sibling of `holeRow_authenticated`): on a live read, slot j is the caller's
+  j-th pinned point, its key read back from the pinned bytes, its `live` bit `cellLive look g` for the cell that key
+  names — mutation: `pointData` writes `live := true` without the `look` read (plant b; `pointData_ok` and this fail).
+- `selectHole_cell_support` (Proofs/LiveHoles) — mutation `supportLive (.cell _) := true` (plant a2; this fails while
+  `selectHole_origin`'s new conclusion still holds, which is why it is a separate theorem).
+- `revoked_support_refused` (ROM: a selection row picking a candidate that cites a cell pinned at its tombstone gives
+  no selection, a blocked resolution, no receipt) and `revoked_support_refused_hole` (Std.hole: such a fact probes 3
+  and the admission is `support0 dead` whatever the other support observes). Stated over the deployed read and the
+  deployed judge, not over `receive` (R2): the through-`submit` evidence is the journey row P8.2.
+- `posted_support_checked` (Proofs/StdHoleCells): a support the generated probe reads as current names a fact at the
+  support's cell and pin AND, with the runtime's bit, a cell the caller's pinned view holds live — mutation: the probe
+  ignores `live` (plant c).
+- teeth, named and decided: `hole_probe_dead`, `hole_probe_dead_moved`, `cell_support_live_selects`,
+  `cell_support_dead_refused`, `cell_support_unpinned_refused`, `live_read_not_cell_keyed_refused` and its control
+  `live_read_cell_keyed_admitted`; `readPoint_ok`, `pointData_ok`, `mapM_ok_getElem`, `holePointObservation_current`.
+- None is a disjunct; none has an unbounded `∃ a b, a ≠ b ∧ h a = h b`.
+
+**Premise price, MEASURED** (census digest diff under `promo/E1-renames.tsv`, `promo/diff-E1.txt`; top-level
+hypothesis count old vs new over every changed theorem, `promo/hyps-E1.txt`): no user theorem gains a hypothesis
+(127 same, the only "gained" are three generated `relReads.match_1.eq_3` matcher equations). The statement changes:
+- binders `digestOf look`: `selectHole_origin`, `resolveHole_refusal`, `instantiateHoles_typed`,
+  `instantiateHoles_sources`, `runHoleGuard_cost`, `selectHole_nodes`, `resolutionMax_committed`,
+  `instantiateHoles_cost` (the plan's `loadLive_libTy`/`loadLive_checked` were already over `look` and did not change);
+- binder `look`: `runSetup_spec`, `runSetupWith_spec`, `runMeasured_means`, `invoke_never_stuck`,
+  `invoke_live_never_stuck`, `readsData_conforms`, `relReads_conforms`, `readsData_digests`, `relReads_digests`,
+  `relReads_points` (its private `pinD` now carries the live column), `relReads_pins_past_slots`,
+  `relReads_points_witness`, and Ledger's private `setup_eq`/`hw0` (CROSS-LAYER: LEDGER, proof only);
+- MEANING: `selectHole_origin`'s conclusion `c.supports.all (supportLive …)` covers cells (on row supports it is the old
+  `holePinHolds`; its one consumer `resolutionMax_committed` uses only the body conjunct);
+- a weaker PREMISE, never a stronger one: `holeVerdictCheck_{application,meaning,admits_iff,evaluated_iff}`,
+  `holeStatusOf_{application,meaning}`, `holeCheckedAdmission_evaluated_iff` take `l` in a list of nine labels (was
+  seven); `HoleBridge.holeDecision_label`'s conclusion lists nine (forced: the function can now return the two);
+- data: the probe teeth's point data gains `live`; the Wire version theorems carry `lang/package-version/5`;
+  `DeployedContextual.*` (8) apply `selectHole` to `Kernel.Sim.digestOf noCells`.
+Renamed (`E1-renames.tsv`): `HolePin` → `SupportPin` (`.mk` → `.row`; its projections go), `holePinHolds` →
+`supportLive`, `Wire.holePin*`/`holeOptPin*` → `supportPin*`/`supportOptPin*` (and the four `Proofs/Wire` round-trip
+theorems), `Print.holePinSx`/`holeOptPinSx`, `Read.holePin`/`holeOptPin` likewise. Every other vanished or new constant
+is generated (matchers, `_sparseCasesOn`, equation lemmas, hygienic names): listed in `diff-E1.txt`.
+
+**Plants, each a temporary edit, the journey exe rebuilt under it, whole output read, then restored and GREEN again**
+(`promo/E1-plants/`):
+- (a) `cellLive := true`: RED `P8.2 re-pinned tombstone` (admitted), `LH14b` (recorded verified, select admitted),
+  `LP cell-support-dead`; `cellLive_iff` and `selectHole_cell_support` fail; `LH14a` stays green.
+- (a2) `supportLive (.cell _) := true` only: RED `LP cell-support-dead`; `selectHole_cell_support` fails; the journey
+  stays GREEN (the ROM grain is its own route).
+- (b) `pointData` writes `live := true`, no `look` read: RED `LH14a` (the unpinned ghost admitted), `LH14b`, `P8.2`;
+  `pointData_ok` fails.
+- (c) `holeProbePoint` ignores `live`: RED `LH14b`, `P8.2`; `LH14a` stays GREEN (the runtime still refuses the
+  unpinned cell); `hole_probe_dead` and `holeProbePoint_meaning` fail. (b) and (c) differ on LH14a.
+- (d) the generator emits the facts read without `live` (READ-E1's generator-level tooth): the generated hole no
+  longer typechecks (the judge's probe is typed at the live point), RED `LH0 generating the hole`, `LP generate`;
+  the positive rows `LH0f`/`P8 every method reading facts reads it live` list each judging method.
+
+**Rows** (`lang-journey` GREEN, 792 lines; `--contextual`, `--contextual-checks`, `--hole-omitted-blocker-pin-admits`
+GREEN; `--harness-control` RED by name). New: `P8.2 re-pinned tombstone: refused support0 dead` (the probe is the row;
+counted left 1), `LH14a` (unpinned: refused `unpinned`), `LH14b` (pinned absent: recorded `suspended "support0 dead"`,
+select refused `support0 dead`), `LH0f`, `P8 every method reading facts reads it live`, `LP cell-support-{live,dead,
+unpinned}`, `LP wire-cell-pin-reads`, `wire-cell-pin-children`, `wire-pin-unknown-tag`. Changed text:
+`P8.2 withdrawn instantiation` is now `refused … support0 dead` (the plan signed before the revoke reads the cell as
+it is; the kernel's stale stands behind it, as LH7b for a moved row; the row accepts either). Number-only changes:
+helper/package byte counts, LH7/LH8 steps/ticks, every package id printed in a refusal (the version byte moves every
+package id). LV1–LV3 print version 5 and `lang/package-version/5`. Fixtures re-pinned: the LH calls pin both fact
+cells (a, b); P8's propose pins its provider grant; the cycle's two groundings name the members' cells (a fact now
+asserts a live cell; the LP E4 rows are unchanged).
+
+**Wire (the `lang!`), every byte.** `Bounds.packageWireVersion` 4 → 5: a ROM pin's new tag `node 1 id []` (`.cell`)
+turns a refused boundary into a read; a `.row` pin is the version-4 `node 0 key [rel, ver]` byte for byte. Codec
+labels `lang/package/4` → `lang/package/5`, `lang/package-version/4` → `/5`. `gates/codec-vectors.tsv` re-drawn by
+`codec-vectors --write` (the sites' names moved), a second `--write` byte-identical, `--check` ok (263 vectors of 56
+sites); `promo/E1-vectors-diff.txt` row by row: the package site's 54 rows — 52 differ only in their first byte
+04 → 05; row 42 (the rich ROM) also carries the new `.cell` support arm and prints its pins as `SupportPin.row`; row
+50 (the previous-version probe) 03 → 04; row 53 (the LANG-59-era bytes, first byte 00) is unchanged, its refusal now
+names `lang/package-version/5`; the version site's 2 rows 05/04 (were 04/03). No other site moves. A version-4
+package refuses `lang/package-version/5` before its tree is read: never reinterpreted. RelRead is not a package-tree
+field: the live column reaches the wire only inside the method types that request it.
+
+**What breaks, what re-emits.** Every package id (the version byte); every journey World re-runs from genesis; the
+Std.hole bundles re-emit (their methods' types gain the column). No deployed Store holds a package. Nothing outside
+the journeys holds a package id (`deploy/`, `client/`, `rows/`: none).
+
+**The residual (READ-E1, named).** `(live)` is per read: a hand-written method that reads `facts` WITHOUT it can still
+treat a pin match as current — the probe's bug, still typeable. B1–B3 hold for Std.hole-generated packages, whose
+generator always reads live (rows `LH0f`, P8's; plant d). A stranger package is not covered.
+
+**Critique.** The column is opt-in, and the judge's guarantee rests on a generator invariant plus a row, not on a type
+that every reader of a cell-keyed relation must satisfy. And two pins now say different things about one cell id:
+the fact's stored `pin` (the poster's claim, compared to the candidate's) and the caller's kernel pin (whose
+liveness is read). They are deliberately two; a reader six weeks out will want the docstrings.
+
+**Meta-critique.** I built the candidate while the cross-family read was still out, and the read changed the plants
+and the byte list, not the design; the BIAS is momentum — treating "the design will survive the read" as a fact
+because I had already paid for it. The first plant run also read a stale journey binary (a failed module stopped
+lake before it relinked); the verdicts I had nearly recorded were from the previous plant. A plant's verdict needs
+proof the binary was rebuilt under it, which the runner now checks.
+
+**The charter (R-0025, in this landing, CROSS-LAYER: ROOT).** `CHARTER.md` Scope item 3 "Multi-node agreement.
+Nothing." becomes "Writers." in Ember's words (plan §2(d), verbatim): one writer per World; many parties, processes
+and Worlds in scope, Worlds speaking by receipts with no atomic cross-World commitment; replication of a World's
+writer a planned, priced phase keeping one decided log per World, liveness measured, never proved; merging divergent
+histories refused (a fork is a new World). The section's lead sentence and its "briefed against" list follow so they
+do not contradict item 3 ("replicate the writer" outside its planned phase; "merge two histories of a World").
+
+Status: landed by CX-PROMO (lang!). Next: C9 (LANG-75.2), then the C2 measurement (P2).

@@ -18,8 +18,10 @@ def holeObservation (clause : Term) (i : Nat) : Term :=
 def holeAdmission (l : Label) : Except Fault Val :=
   match l with
   | "verified" => .ok (.bool true)
+  | "support0Dead" => .error (.refused "support0 dead".toUTF8)
   | "support0Moved" => .error (.refused "support0 moved".toUTF8)
   | "support0Withdrawn" => .error (.refused "support0 withdrawn".toUTF8)
+  | "support1Dead" => .error (.refused "support1 dead".toUTF8)
   | "support1Moved" => .error (.refused "support1 moved".toUTF8)
   | "support1Withdrawn" => .error (.refused "support1 withdrawn".toUTF8)
   | _ => .error (.refused l.toUTF8)
@@ -28,16 +30,21 @@ def holeRecordedStatus (l : Label) (reason : ByteArray) : Data :=
   match l with
   | "conflict" => .inj "conflict" (.bytes "clause".toUTF8)
   | "pruned" => .inj "pruned" (.bytes reason)
+  | "support0Dead" => .inj "suspended" (.bytes "support0 dead".toUTF8)
   | "support0Moved" => .inj "suspended" (.bytes "support0 moved".toUTF8)
   | "support0Withdrawn" => .inj "suspended" (.bytes "support0 withdrawn".toUTF8)
+  | "support1Dead" => .inj "suspended" (.bytes "support1 dead".toUTF8)
   | "support1Moved" => .inj "suspended" (.bytes "support1 moved".toUTF8)
   | "support1Withdrawn" => .inj "suspended" (.bytes "support1 withdrawn".toUTF8)
   | _ => .inj "verified" (.record [])
 
+/-- One live point of the facts read: its cell, the fact's poster and pin (none: the row is
+absent), and whether the cell is live in the caller's pinned view (E1). -/
 structure HolePoint where
   cell : ByteArray
   author : ByteArray
   pin : Option ByteArray
+  live : Bool
 
 def holeSupportData (cell pin : ByteArray) : Data :=
   .record [("cell", .digest cell), ("pin", .digest pin)]
@@ -46,6 +53,7 @@ def holePointData : Option HolePoint → Data
   | none => .inj "none" (.record [])
   | some p => .inj "some" (.record [
       ("key", .record [("cell", .digest p.cell)]),
+      ("live", .bool p.live),
       ("val", match p.pin with
         | none => .inj "none" (.record [])
         | some pin => .inj "some" (.record [("by", .digest p.author), ("pin", .digest pin)]))])
@@ -53,7 +61,7 @@ def holePointData : Option HolePoint → Data
 def holePointObservation (cell pin : ByteArray) : Option HolePoint → Nat
   | none => 0
   | some p => if p.cell = cell then
-      match p.pin with | none => 0 | some v => if v = pin then 1 else 2
+      match p.pin with | none => 0 | some v => if v = pin then (if p.live then 1 else 3) else 2
     else 0
 
 /-- Bounded complete collection; the first omitted read refuses by its key.

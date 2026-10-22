@@ -359,17 +359,18 @@ def holeBytes : SExp → P ByteArray
     | none => .error (.badEntry p)
   | x => .error (.badEntry x.pos)
 
-def holePin : SExp → P HolePin
-  | .list _ [.atom _ "pin", r, k, v] => do pure ⟨← holeNat r, ← holeBytes k, ← holeNat v⟩
+def supportPin : SExp → P SupportPin
+  | .list _ [.atom _ "pin", r, k, v] => do pure (.row (← holeNat r) (← holeBytes k) (← holeNat v))
+  | .list _ [.atom _ "cell", k] => do pure (.cell (← holeBytes k))
   | x => .error (.badEntry x.pos)
 
-def holeOptPin : SExp → P (Option HolePin)
+def supportOptPin : SExp → P (Option SupportPin)
   | .list _ [.atom _ "structural"] => .ok none
-  | x => (holePin x).map some
+  | x => (supportPin x).map some
 
 def holeCode (ctx : List Ty) : SExp → P HoleCode
   | .list _ [.atom _ "candidate", b, .list _ (.atom _ "supports" :: ps)] => do
-    pure ⟨← term depthMax (holeScope ctx.length) b, ← ps.mapM holePin⟩
+    pure ⟨← term depthMax (holeScope ctx.length) b, ← ps.mapM supportPin⟩
   | x => .error (.badEntry x.pos)
 
 def holeROM : SExp → P HoleROM
@@ -382,8 +383,8 @@ def holeROM : SExp → P HoleROM
     let result ← ty depthMax t
     let selectionRel ← holeNat r
     let selectionKey ← holeBytes k
-    let hypotheses ← hs.mapM holeOptPin
-    let guardPin ← holeOptPin p
+    let hypotheses ← hs.mapM supportOptPin
+    let guardPin ← supportOptPin p
     let guard ← term depthMax (holeScope 1) g
     let code ← ks.mapM (holeCode ctx)
     pure { name, ctx, ty := result, selectionRel, selectionKey, hypotheses, guardPin, guard, code }

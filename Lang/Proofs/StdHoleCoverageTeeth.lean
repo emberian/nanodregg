@@ -7,7 +7,7 @@ private def absent : Data := .inj "none" (.record [])
 private def dep (name : String) : Data :=
   .inj "some" (.record [("cell", .digest name.toUTF8), ("pin", .digest "v".toUTF8)])
 private def point (name : String) (present : Bool) : Data :=
-  .inj "some" (.record [("key", .record [("cell", .digest name.toUTF8)]),
+  .inj "some" (.record [("key", .record [("cell", .digest name.toUTF8)]), ("live", .bool true),
     ("val", if present then .inj "some" (.record
       [("by", .digest "author".toUTF8), ("pin", .digest "v".toUTF8)]) else absent)])
 private def rows (a b c : Data) : Data :=

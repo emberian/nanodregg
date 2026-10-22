@@ -40,15 +40,17 @@ theorem holeDecision_verified_iff (allowed blocked : Bool) (s0 s1 : Nat) :
   cases allowed <;> cases blocked <;>
     by_cases h0 : s0 = 1 <;> by_cases h1 : s1 = 1 <;>
     by_cases h2 : s0 = 2 <;> by_cases h3 : s1 = 2 <;>
+    by_cases h4 : s0 = 3 <;> by_cases h5 : s1 = 3 <;>
     simp [holeVerdictLabel, *]
 
 theorem holeDecision_label (allowed blocked : Bool) (s0 s1 : Nat) :
     holeVerdictLabel allowed blocked s0 s1 ∈
-      ["conflict", "pruned", "support0Moved", "support0Withdrawn",
-        "support1Moved", "support1Withdrawn", "verified"] := by
+      ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+        "support1Dead", "support1Moved", "support1Withdrawn", "verified"] := by
   cases allowed <;> cases blocked <;>
     by_cases h0 : s0 = 1 <;> by_cases h1 : s1 = 1 <;>
     by_cases h2 : s0 = 2 <;> by_cases h3 : s1 = 2 <;>
+    by_cases h4 : s0 = 3 <;> by_cases h5 : s1 = 3 <;>
     simp [holeVerdictLabel, *]
 
 /-- Actual admission-code evaluation agrees with the existing Lang closure
