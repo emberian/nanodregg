@@ -6006,3 +6006,28 @@ counterpart" rather than "successor" — one (`withdraw_never_refutes`) is outri
 reads its pin's liveness.
 
 Status: landed by CX-PROMO-2 (lang:). Next: C3 + C4(a) docstrings (fast), then C5 (`promo/IMPACT-C5.md`).
+
+### LANG-75.4 C3 + C4(a) · the live label and the receipt monomial are docstrings (2026-10-22; CX-PROMO-2; ruling R-0038 per `redregg/work/promo/READ-C2-grok.md` §3; IMPACT `redregg/work/promo/IMPACT-C2.md` §6)
+
+**Decision (plan §8.2: a promotion with no reader lands as a docstring).** C4(a): no `HoleSelection.environment`
+field and no `selection_monomial_sound`. A ROM candidate's provenance is one positive product (its supports and the
+pins of the hypotheses its body uses), all live at a selection by `selectHole_origin` and the `supportMoved` refusal;
+a theorem of it is a rename of those, and nothing reads a receipt (`Lang.Program` keeps the body only; the kernel
+record holds no selection). The field would also have changed `selectHole_origin`, `selectHole_nodes` and
+`resolutionMax_committed` for no consumer. C3: no `live_label_iff`. The row machine's live label is
+`holeVerdictLabel`, read by `holeDecision_verified_iff` (moved into `Lang/Proofs/StdHole.lean` at LANG-75.3) and tied
+to the generated term by `holeDecision_meaning`; a ROM label has no reader (no tick reads a ROM hole's candidates).
+
+**What lands.** Two docstrings in `Lang/LiveHoles.lean`: on `HoleSelection` (the product, why it is not stored, its
+trigger: a first reader) and on `selectHole` (only the named index is judged; the ROM label's trigger).
+
+**Price.** 0: comments only; no statement, no definition, no wire.
+
+**Critique.** A docstring that names a trigger is only as good as the next reader's search: "a field lands with its
+first reader" will be found by someone adding an audit row only if they read `HoleSelection` first.
+
+**Meta-critique.** The plan priced C3 and C4(a) as theorems before anyone asked who reads them; I carried that
+framing into IMPACT-C2 §6 as "no new theorem" instead of asking it at the plan. The BIAS: treating a plan's card as a
+deliverable to be discharged rather than a question to be answered.
+
+Status: landed by CX-PROMO-2 (lang:). Next: C5 (`promo/IMPACT-C5.md`).

@@ -125,7 +125,14 @@ def supportPinned {D : Type} (digestOf : ByteArray → Option D) (look : Pinned 
   | p@(.cell _) => if supportObserved digestOf look p then .ok () else .error .unpinned
 
 /-- A successful invocation receipt retains the selected code index, exact
-selection version, and the hypothesis positions removed by strengthening. -/
+selection version, and the hypothesis positions removed by strengthening.
+
+Its provenance is one positive product (C4(a), LANG-75.4): the selected code's `supports` and the pins of the
+hypotheses its body uses, every one live at the caller's view (`selectHole_origin` for the supports; a used
+hypothesis whose pin does not hold refuses `supportMoved`). A ROM candidate has no blocker and no environment
+literal: the guard and the cost belong to the hole. Nothing reads a receipt beyond the instantiated body
+(`Lang.Program` keeps `instantiateHoles`'s `body`; the kernel record does not hold a selection), so the product is
+not stored here; a field for it lands with its first reader. -/
 structure HoleSelection where
   name : Nat
   index : Nat
@@ -176,7 +183,12 @@ def factorHole (h : HoleROM) (c : HoleCode) (removed : List Nat) :
 /-- Selection is fresh on each invocation. Its bytes contain a code index,
 never a filling supplied by the caller. All derivation supports and used
 contextual assumptions must still have the ROM-pinned versions; every cell support must be pinned
-(`unpinned`) and live (`supportDead`). -/
+(`unpinned`) and live (`supportDead`).
+
+Each invocation judges only the index its selection row names. The hole's LIVE LABEL, the indices that would select
+at this view, is not computed: nothing reads it (no resident's tick reads a ROM hole's candidates). The row
+machine's live label is `Std.holeVerdictLabel`, read by `Std.holeDecision_verified_iff`; a ROM label lands with its
+first reader (C3, LANG-75.4). -/
 def selectHole {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
     (self : D) (h : HoleROM) : Except HoleRefusal HoleSelection := do
   let leaf ← holeRow rv self h.selectionRel h.selectionKey
