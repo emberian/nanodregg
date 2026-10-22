@@ -1,6 +1,16 @@
-import Lang.Proofs.Contextual.LawMeaning
+/-
+# Lang.Proofs.LawReceiver — the contextual law receiver
+
+`judgeContextual_mem`, `judgeOneContextual_ok`, `judgeOneContextual_admits_relib`, `loadContextual_top`: consumed by
+`Kernel/Proofs/Logic/History` and `Ledger/Proofs/EscrowRun`.
+-/
+import Lang.Proofs.LawMeaning
 
 namespace Nanodregg.Lang
+
+/-! ## From `Lang.Proofs.Contextual.LawReceiver` -/
+section
+
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 section
@@ -171,6 +181,8 @@ theorem judgeOneContextual_admits_relib {look : Pinned D} {law : D}
   obtain ⟨result, hrun, hres⟩ := law_bigStep_back (lib := lib') hw'
     (.cons (LawVal.data _) (.cons (LawVal.data _) (.cons (LawVal.data _) .nil))) hbb
   cases hres with | ok hv => cases hv with | inj hv => exact ⟨[], _, hrun⟩
+
+end
 
 end
 

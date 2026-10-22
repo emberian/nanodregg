@@ -48,7 +48,7 @@ import Kernel.Proofs.Logic.Triple
 import Lang.Proofs.Chain
 import Lang.Proofs.Extract
 import Lang.Proofs.Invoke
-import Lang.Proofs.Contextual.LawReceiver
+import Lang.Proofs.LawReceiver
 
 namespace Nanodregg.Kernel.Receive
 

@@ -1,9 +1,20 @@
-/- Contextual strengthening and the five reachable resolutions in deployed Lang.
-The fixture is the ROM generator used by the signed receive journey, not ToyCalc. -/
+/-
+# Lang.Proofs.LiveJourney — the contextual ROM the signed journey installs
+
+Closed facts over `Std.contextualHole`, the ROM generator the signed receive journey installs (`generated_signature`,
+`linked_signature`, `selected_uses_context`, `used_hypothesis_suspends`), and the meanings of the cyclic-rule filling
+it installs (`deployed_cycle_*`). Leaf module.
+-/
+import Lang.Proofs.LiveHoles
 import Lang.Journey.Contextual
-import Lang.Proofs.Contextual.LiveHoles
+import Lang.Journey.ContextualCycle
+import Lang.Proofs.BigStep
 
 namespace Nanodregg.Lang
+
+/-! ## From `Lang.Proofs.Contextual.Deployed`: Contextual strengthening and the five reachable resolutions in deployed Lang. -/
+section
+
 namespace DeployedContextual
 open Journey.Contextual
 
@@ -86,4 +97,37 @@ theorem used_hypothesis_suspends :
   rfl
 
 end DeployedContextual
+
+end
+
+/-! ## From `Lang.Proofs.Contextual.DeployedCycle`: Meanings of the cyclic-rule filling actually installed by the signed journey. -/
+section
+
+open Journey
+
+/-- The least solution for p follows its external grounding, not its old value.
+With no grounding, mutual p/q support cannot make either one true. -/
+theorem deployed_cycle_p (lib : List Term) (a u : Bool) :
+    BigStep lib [.bool a, .bool u] (.get cycleTerm "p") (.ok (.bool a)) := by
+  apply BigStep.get BigStep.record
+  apply Sel.field (by rfl)
+  cases a
+  · exact .iteF (.var rfl) (.iteF (.var rfl) .bool)
+  · exact .iteT (.var rfl) .bool
+
+theorem deployed_cycle_q (lib : List Term) (a u : Bool) :
+    BigStep lib [.bool a, .bool u] (.get cycleTerm "q") (.ok (.bool a)) := by
+  apply BigStep.get BigStep.record
+  apply Sel.field (by rfl)
+  cases a
+  · exact .iteF (.var rfl) .bool
+  · exact .iteT (.var rfl) .bool
+
+/-- Withdrawing the p/q grounding leaves the independent branch's value intact. -/
+theorem deployed_cycle_independent (lib : List Term) (a u : Bool) :
+    BigStep lib [.bool a, .bool u] (.get cycleTerm "r") (.ok (.bool u)) := by
+  exact .get .record (.field rfl (.var rfl))
+
+end
+
 end Nanodregg.Lang

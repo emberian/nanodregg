@@ -56,8 +56,8 @@ constant: a deposit's grant-named transfer is not a payout).
 import Ledger.Proofs.Escrow
 import Lang.Proofs.Extract
 import Lang.Proofs.Invoke
-import Lang.Proofs.Contextual.ClosedLeaf
-import Lang.Proofs.Contextual.LawReceiver
+import Lang.Proofs.LiveClosed
+import Lang.Proofs.LawReceiver
 import Kernel.Proofs.RootedDeployed
 
 namespace Nanodregg.Ledger.Proofs

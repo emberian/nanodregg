@@ -1,7 +1,17 @@
-/- The live WASTE denominator and charged machine run share one authenticated setup. -/
+/-
+# Lang.Proofs.LiveNeed — the WASTE need of the live contextual run
+
+The live WASTE denominator and the charged machine run share one authenticated setup (`requiredOfLive_*`).
+It sits above `Lang.Proofs.NeedComplete`, which is above `Lang.Proofs.Provenance`, which uses `Lang.Proofs.LiveHoles`;
+so it is its own module.
+-/
 import Lang.Proofs.NeedComplete
 
 namespace Nanodregg.Lang
+
+/-! ## From `Lang.Proofs.Contextual.LiveNeed`: The live WASTE denominator and charged machine run share one authenticated setup. -/
+section
+
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
 
@@ -76,5 +86,7 @@ theorem requiredOfLive_total {look : Pinned D} {rv : RowView D} {pkg : D}
     simp [Need.requiredOfLive, bind, Except.bind, hs, need_complete hd budget (by omega),
       needExtract_complete hf budget (by omega), pure, Except.pure]
   exact ⟨_, hq, requiredLive_lt_ticks hm hq⟩
+
+end
 
 end Nanodregg.Lang

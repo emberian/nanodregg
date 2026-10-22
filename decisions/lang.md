@@ -5521,3 +5521,57 @@ the auxiliaries' statements. The bias is publishing the conclusion without the c
 diff will print the auxiliary-statement check itself.
 
 Status: landed by CX-FOLD-2; next LANG-74.8 (S8, CROSS-LAYER: the four Kernel/Ledger import lines).
+
+### LANG-74.8 S8 · the live, closed and law-receiver proofs leave `Contextual` (2026-10-22; CX-FOLD-2; IMPACT `redregg/work/fold/IMPACT-S8.md`; rename map `redregg/work/fold/S8-renames.tsv`; cross-family read `redregg/work/fold/READ-S8-grok.md`; RELEASE R-0013; CROSS-LAYER KERNEL, LEDGER: import lines only, GRANT R-0002)
+
+**Decision.** The proofs whose subject is the live loader, the closed specialization, the law receiver and the
+installed ROM move to `Lang/Proofs/` as eight modules. Each source keeps its own `section`, so its `open`s and
+`variable`s keep their scope.
+- `Lang/Proofs/LiveHoles.lean`: `P/LiveHoles` + `P/LiveCost`.
+- `Lang/Proofs/LiveInvoke.lean`: `P/LiveInvoke`.
+- `Lang/Proofs/LiveNeed.lean`: `P/LiveNeed`.
+- `Lang/Proofs/LiveClosed.lean`: `P/ClosedDeployment` + `P/ClosedLeaf`.
+- `Lang/Proofs/LawMeaning.lean`, `Lang/Proofs/LawReceiver.lean`.
+- `Lang/Proofs/LiveTeeth.lean`: `P/ContractTeeth` + `P/LawReceiverTeeth`. ContractTeeth now imports
+  `Lang.Proofs.Fill`, not the spine's `P/LangInstance`, and its 8 teeth leave namespace `Contextual`.
+- `Lang/Proofs/LiveJourney.lean`: `P/Deployed` + `P/DeployedCycle`.
+
+The 12 old files are deleted; this list is the deletion authorization.
+
+**Two deviations from the map's grouping, each measured:**
+- `LiveNeed` stays separate. Merged into `LiveHoles` it is an import cycle: LiveNeed → NeedComplete → Need → Extract
+  → Provenance → the live-hole facts.
+- `LiveInvoke` stays separate. Merged, it would put `Lang.Proofs.Invoke` and `Lang.Proofs.Read` into
+  `Kernel/Proofs/InvokeWitness`'s closure (94 → 95) for two theorems only `Lang.Proofs.Provenance` uses. Separate,
+  that closure goes 94 → 93.
+
+**CROSS-LAYER, the only edits outside Lang:**
+- `Kernel/Proofs/InvokeWitness.lean`:38: `import Lang.Proofs.LiveClosed`.
+- `Kernel/Proofs/Logic/History.lean`:51: `import Lang.Proofs.LawReceiver`.
+- `Ledger/Proofs/EscrowRun.lean`:59–60: `import Lang.Proofs.LiveClosed` and `import Lang.Proofs.LawReceiver`.
+
+The theorems those files use were already in `Nanodregg.Lang`, so their digests are unchanged. After S8 the Kernel
+and Ledger proof closures reach no `Contextual` module. `Lang/Proofs/Contextual/` holds only the spine, the CMTT
+core (R3) and the protocol modules (R1).
+
+**What breaks.** The old module paths no longer exist, and the Contextual-qualified names of ContractTeeth's 8 teeth
+no longer resolve. Nothing in the tree uses either.
+
+Census digest diff against 3944bbf under the rename map (`redregg/work/fold/diff-S8.txt`): 0 type changes, 0 new
+constants; 3 generated constants vanish. The one user value change is `foldMax_member`: its nil-case `simp`
+now cites the merged module's same-statement auxiliary `loadAllUsing_inv._simp_3` instead of emitting its own
+`_simp_1_1`. Its statement is unchanged. The rest is generated: the shared `selectHole` matcher splitters, and the
+doubly realized `Need.runBy` equation lemmas, whose recorded module follows import order.
+
+Whole tree with `host` and `lang-journey` GREEN (623 jobs); the journey GREEN. Re-emit: none. Nothing refuses to
+load.
+
+**Critique.** `Lang/Proofs/LiveHoles.lean` and `LiveClosed.lean` carry `section` wrappers whose only job is to keep
+two sources' scopes apart. The honest follow-up is to make the two halves share one `open`/`variable` header where
+they agree. That is a text tidy, not a move, and it is not in this step.
+
+**Meta-critique.** I executed the map's grouping as written and found two of its merges wrong only by building and
+by diffing closures. The map's groups were INFERRED and I treated them as a spec. The bias is reading a plan's
+labels as measurements; the closure diff now runs before I call a move done.
+
+Status: landed by CX-FOLD-2; next LANG-74.9 (S9, the `lang!` conformance card).

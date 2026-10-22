@@ -33,8 +33,8 @@ import Lang.Proofs.CallTeeth
 import Kernel.Proofs.Lawful
 import Codec.Deployed
 
-import Lang.Proofs.Contextual.LiveInvoke
-import Lang.Proofs.Contextual.ClosedDeployment
+import Lang.Proofs.LiveInvoke
+import Lang.Proofs.LiveClosed
 
 namespace Nanodregg.Lang
 

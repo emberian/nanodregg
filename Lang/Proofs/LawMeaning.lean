@@ -1,7 +1,16 @@
+/-
+# Lang.Proofs.LawMeaning — the relational meaning of contextual law bodies
+
+The `Law*` semantics of contextual law bodies (`law_bigStep_back`, `lawTerm_fill`), consumed by `Lang.Proofs.LawReceiver`.
+-/
 import Lang.Proofs.Extract
-import Lang.Proofs.Contextual.ClosedDeployment
+import Lang.Proofs.LiveClosed
 
 namespace Nanodregg.Lang
+
+/-! ## From `Lang.Proofs.Contextual.LawMeaning` -/
+section
+
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 /- Unresolved law preparation preserves reference-free meaning, including dormant holes. -/
@@ -414,5 +423,7 @@ theorem unresolvedBody_field {p : Package} {fs : List (Label × Term)} {b : Term
       simp only [Option.map_eq_some_iff] at hv
       obtain ⟨d, _, rfl⟩ := hv
       exact ⟨d.ty, rfl⟩
+
+end
 
 end Nanodregg.Lang

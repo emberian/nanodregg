@@ -35,7 +35,7 @@ import Lang.Program
 import Lang.Std
 import Lang.Proofs.Wire
 import Lang.Proofs.Receiver
-import Lang.Proofs.Contextual.ClosedLeaf
+import Lang.Proofs.LiveClosed
 
 namespace Nanodregg.Kernel.Receive
 

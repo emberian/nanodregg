@@ -1,7 +1,16 @@
-import Lang.Proofs.Contextual.LiveHoles
+/-
+# Lang.Proofs.LiveInvoke — the live invoke never sticks
+
+`method_live_run_sound`, `invoke_live_never_stuck`: consumed by `Lang.Proofs.Provenance`.
+-/
+import Lang.Proofs.LiveHoles
 import Lang.Proofs.Invoke
 
 namespace Nanodregg.Lang
+
+/-! ## From `Lang.Proofs.Contextual.LiveInvoke` -/
+section
+
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 theorem method_live_run_sound {D : Type} {rv : RowView D} {self : D} {digestOf : ByteArray → Option D} {look : Pinned D}
@@ -45,5 +54,6 @@ theorem invoke_live_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf
   exact method_live_run_sound hload hp hm hA (toVal_typed hs) (toVal_typed (decodeData_conforms hargs))
     (toVal_typed (reqOk_conforms hr)) (toVal_typed (readsData_conforms hrows))
 
+end
 
 end Nanodregg.Lang
