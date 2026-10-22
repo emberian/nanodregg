@@ -11,6 +11,7 @@ import rebase
 import refusals
 import runs
 import size
+import size_limit
 import tcb
 import tree
 import vectors
@@ -81,6 +82,7 @@ results = {
     "closure": closure.check(t),
     "refusals": refusals.check(t),
     "size": size.check(t, msg, tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
+    "size_limit": size_limit.check(t.root),
     "paths": case_collisions(t.root) + conflict_markers(t.root),
     "runs": runs.check(t),
     "rebase": rebase.check(t.root),

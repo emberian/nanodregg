@@ -1,0 +1,2 @@
+# 2026-10-21 (ROOT ruling A): path<TAB>bytes-ceiling<TAB>reason; a ceiling must exceed 1048576 and a reason is required; a row whose file is gone or at most 1048576 bytes is itself red.
+gates/certificate-grant.json.gz	11961094	review H3 (REVIEW-20261021.md); the certificate pins a 6,857-declaration closure; re-pin pending under cv task 01a15f18-25ce; this row goes RED by the stale-row check when the blob is re-pinned
