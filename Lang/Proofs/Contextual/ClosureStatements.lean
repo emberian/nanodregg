@@ -39,10 +39,6 @@ def Template.Typed (tpl : Template D E)
     (HasTy : List (HoleDecl D.Ctx D.Ty) → D.Ctx → D.Tm → D.Ty → Prop) : Prop :=
   HasTy (tpl.Ω.map Iface.decl) tpl.Γ tpl.P tpl.T
 
-/-- A monomial holds in a world: its positive literals live, its negative literals dead. -/
-def Monomial.holds (w : World E) (m : List Token × List Token) : Prop :=
-  (∀ t ∈ m.1, w.live t = true) ∧ (∀ b ∈ m.2, w.live b = false)
-
 /-- DERIVABILITY: the template with the selected fillings types at its closed type, under the
 meta-context of the holes still unfilled. -/
 def Derivable (HasTy : List (HoleDecl D.Ctx D.Ty) → D.Ctx → D.Tm → D.Ty → Prop) (cl : Closure D E) :

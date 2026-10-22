@@ -103,26 +103,6 @@ theorem judge_pruned {I : Iface D E} {w : World E} {c : Candidate D} {bs : List 
   cases h4 : ((effSupports I c).filter fun t => !w.live t).isEmpty <;>
   by_cases h5 : c.cost ≤ I.budget <;> simp [h5, eq_comm]
 
-/-- **The provenance bridge.** `provenance I env cs` is a polynomial over tokens computed from the
-environment alone (it reads no liveness): one monomial per candidate that passes the checker, the
-guard and the budget, its supports as positive literals and its blockers as negative literals. A
-hole has a verified candidate at `w` iff some monomial holds in `w` (sum = alternatives, product =
-joint requirements, negation = an exclusion reason). This is the bridge to `judge_verified_iff`: the
-token part of the judgment IS the evaluation of a world-independent polynomial. -/
-theorem provenance_iff {I : Iface D E} {w : World E} {cs : List (Candidate D)} :
-    (∃ c ∈ cs, judge I w c = .verified) ↔
-      ∃ m ∈ provenance I w.env cs, Monomial.holds w m := by
-  constructor
-  · rintro ⟨c, hc, hv⟩
-    obtain ⟨h1, h2, h3, h4, h5⟩ := judge_verified_iff.1 hv
-    refine ⟨(effSupports I c, c.blockers), ?_, h4, h3⟩
-    simp only [provenance, List.mem_map, List.mem_filter]
-    exact ⟨c, ⟨hc, by simp [h1, h2, h5]⟩, rfl⟩
-  · rintro ⟨m, hm, hl, hb⟩
-    simp only [provenance, List.mem_map, List.mem_filter, Bool.and_eq_true, decide_eq_true_eq] at hm
-    obtain ⟨c, ⟨hc, ⟨⟨h1, h2⟩, h5⟩⟩, rfl⟩ := hm
-    exact ⟨c, hc, judge_verified_iff.2 ⟨h1, h2, hb, hl, h5⟩⟩
-
 /-- **The obstruction is real.** For every token-backed hypothesis `(x, t)` of a hole, the bare
 variable `x` types at the type the context gives it and cites `t`: a filling that uses `x` depends on
 `t`, so `uses ≡ false` cannot hide the obstruction. -/

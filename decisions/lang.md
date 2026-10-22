@@ -5648,3 +5648,43 @@ witness in a bound nobody had joined to the hole name; the bias is trusting a ne
 claim it does not make.
 
 Status: landed by CX-FOLD-3; next LANG-74.10 (S10, the provenance twin).
+
+### LANG-74.10 S10 · the provenance twin: P9's all-environment `provenance` is THE provenance (2026-10-22; CX-FOLD-3; IMPACT `redregg/work/fold/IMPACT-S10.md`; rename map `redregg/work/fold/S10-renames.tsv`; cross-family read `redregg/work/fold/READ-S10-grok.md`; RELEASE R-0018, choice (a))
+
+**Decision.** The spine had two provenance polynomials. The env-specialized one (`Closure.provenance I env cs`,
+guard and budget evaluated at one environment) and its `provenance_iff` (`P/Judge`) are deleted, with the tooth that
+refuted it (`P/ProvenanceTeeth`, `provenance_env_specialized`). P9's polynomial, which keeps the guard and the budget as
+literals and answers at every world, is now `Contextual.provenance`: its definitions (`EnvLit`, `Monomial`,
+`monomial`, `provenance`, `Monomial.consistent`, `Monomial.subsumes`, `minimal`, `label`) move verbatim from
+`Lang/Contextual/Provenance.lean` (deleted) into `Lang/Contextual/Closure.lean` at the twin's place, and
+`Lang/Proofs/Contextual/Provenance.lean` leaves namespace `P9`. `P9.provenance_iff` is now `Contextual.provenance_iff`.
+`Monomial.holds` (only the twin's theorem used it) is deleted.
+
+Choice (a), ruled: `specialize`, `specialize_eq` and `provenance_update` (Prop15: specializing P9's polynomial
+recovers the twin) are deleted. Their statements named the deleted definition; restating them with the twin's body
+inline would keep the twin under no name.
+
+`tm_decEq_toy` drops its reflexive conjunct `Tm.mvar 3 [...] = Tm.mvar 3 [...]`; the inequality is unchanged.
+
+**Measured** (census digest diff against 6c31cab under the map, `redregg/work/fold/diff-S10.txt`): 10 declared
+constants vanish (plus the twin's 5 rows, listed in `fold/S10-twin-rows.txt`); 0 new; 72 module changes, all
+`Lang.Contextual.Provenance` → `Lang.Contextual.Closure`. Type changes: `tm_decEq_toy` (the conjunct), and 20 that are
+the implicit binder order `{D} {E}` → `{E} {D}`: each before/after type string has the same token multiset. The moved
+definitions now follow `Closure.lean`'s `variable {E}` … `variable {D}` order, the order of `judge` and `effSupports`.
+No binder is added. Nothing outside the provenance files and `Core.lean` changes. Whole tree with `host`,
+`lang-journey`, `codec-vectors` GREEN; journey byte-identical; theorems 6078 → 6074.
+
+**What breaks.** `Lang/Contextual/Provenance.lean`, `Lang/Proofs/Contextual/ProvenanceTeeth.lean` no longer exist;
+`Contextual.P9.*` no longer resolves; `Contextual.provenance`/`provenance_iff` now name the all-environment objects;
+`Monomial.holds`, `specialize`, `specialize_eq`, `provenance_update` are gone; the moved definitions take `{E} {D}`.
+Nothing in the tree uses the old shapes. Re-emit: none. Nothing refuses to load.
+
+**Critique.** The binder-order change is a side effect of where the definitions landed, not a decision about the
+API. It matches the file, but it is twenty digest lines a reader had to classify. Inserting the block under its own
+`variable {D} {E}` section would have kept the digest quiet; matching the host file's order is the better final shape.
+
+**Meta-critique.** I kept the twin's theorem names for the survivors because the map said so, and that makes
+`Contextual.provenance_iff` mean something different from yesterday under the same name. The bias is treating a name
+as owned by whoever holds it last; the decision text is the only place the change of meaning is findable.
+
+Status: landed by CX-FOLD-3; next LANG-74.11 (S11, the Trace split).

@@ -883,9 +883,8 @@ theorem bell_resume_toy :
 
 /-- The instance decides: two different terms, one `decide`. -/
 theorem tm_decEq_toy :
-    (Tm.letbox (.box [.base] (.var 0)) (.mvar 0 [.var 0]) ≠
-      .letbox (.box [.base] (.var 0)) (.mvar 0 [.var 1])) ∧
-    Tm.mvar 3 [.lam .base (.var 0)] = Tm.mvar 3 [.lam .base (.var 0)] := by decide
+    Tm.letbox (.box [.base] (.var 0)) (.mvar 0 [.var 0]) ≠
+      .letbox (.box [.base] (.var 0)) (.mvar 0 [.var 1]) := by decide
 
 /-! ## The checker is exact -/
 

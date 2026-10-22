@@ -1,8 +1,7 @@
-/- P9: all-environment bridge and the ATMS label discipline. -/
-import Lang.Contextual.Provenance
+/- Provenance: the all-environment bridge and the ATMS label discipline (P9). -/
 import Lang.Proofs.Contextual.Judge
 
-namespace Nanodregg.Lang.Contextual.P9
+namespace Nanodregg.Lang.Contextual
 
 variable {D : CalculusData} {E : Type}
 
@@ -13,8 +12,9 @@ theorem monomial_verified {I : Iface D E} {w : World E} {c : Candidate D} :
   simp [judge_verified_iff, Monomial.eval, Monomial.envOK, monomial,
     EnvLit.eval, List.all_eq_true, and_assoc, and_comm, and_left_comm]
 
-/-- Grädel–Tannen §6 pp19–20: the SAME retained polynomial works for EVERY world/environment.
-This new namespace preserves the landed fixed-environment theorem and its name. -/
+/-- **The provenance bridge** (Grädel–Tannen §6 pp19–20): a hole has a verified candidate at `w` iff some
+monomial of its ONE retained polynomial evaluates true at `w`, for EVERY world and environment. This is the
+bridge to `judge_verified_iff`. -/
 theorem provenance_iff {I : Iface D E} {w : World E} {cs : List (Candidate D)} :
     (∃ c ∈ cs, judge I w c = .verified) ↔
       ∃ m ∈ provenance I cs, m.eval I w = true := by
@@ -25,27 +25,6 @@ theorem provenance_iff {I : Iface D E} {w : World E} {cs : List (Candidate D)} :
     exact ⟨monomial I c, ⟨c, ⟨hc, ht⟩, rfl⟩, he⟩
   · rintro ⟨m, ⟨c, ⟨hc, ht⟩, rfl⟩, he⟩
     exact ⟨c, hc, monomial_verified.mpr ⟨ht, he⟩⟩
-
-/-- Grädel–Tannen Prop15 p20: specializing retained env literals recovers the old polynomial,
-including its order and multiplicity, not merely an implication of validity. -/
-theorem specialize_eq (I : Iface D E) (env : E) (cs : List (Candidate D)) :
-    specialize I env (provenance I cs) =
-      Nanodregg.Lang.Contextual.provenance I env cs := by
-  induction cs with
-  | nil => rfl
-  | cons c cs ih =>
-    cases ht : D.check I.ctx c.filling I.ty <;>
-    cases hg : I.guard env c.filling <;>
-    by_cases hb : c.cost ≤ I.budget <;>
-      simp [provenance, specialize, Nanodregg.Lang.Contextual.provenance,
-        monomial, Monomial.envOK, EnvLit.eval, ht, hg, hb] at ih ⊢ <;> exact ih
-
-/-- Grädel–Tannen Prop15 p20, over the actual Edit.apply: no recomputation of provenance is needed. -/
-theorem provenance_update (I : Iface D E) (w : World E) (e : Edit E)
-    (cs : List (Candidate D)) :
-    Nanodregg.Lang.Contextual.provenance I (e.apply w).env cs =
-      specialize I (e.apply w).env (provenance I cs) :=
-  (specialize_eq I (e.apply w).env cs).symm
 
 /-- Grädel–Tannen Def4 p9: complementary token literals cannot both evaluate to true. -/
 theorem monomial_complementary_dead {I : Iface D E} {w : World E} {m : Monomial D}
@@ -194,4 +173,4 @@ theorem label_iff {I : Iface D E} {w : World E} {cs : List (Candidate D)} :
   · rintro ⟨m, hm, he⟩
     exact ⟨m, (List.mem_filter.mp hm).1, he⟩
 
-end Nanodregg.Lang.Contextual.P9
+end Nanodregg.Lang.Contextual
