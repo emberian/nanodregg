@@ -6,7 +6,7 @@ of references complete; that obligation belongs at the Lean.Environment boundary
 -/
 import Std
 
-namespace Nanodregg.Lang.Contextual.Certificate
+namespace Census.CertificateReader
 
 /-- Checker and environment identity are part of the certificate, not producer annotations.
 Revision and imports must be artifact identities supplied by the checker invocation. -/
@@ -116,4 +116,4 @@ def read [DecidableEq Name] [DecidableEq Expr] [DecidableEq Body]
       | .error e => .error e
       | .ok () => .ok c
 
-end Nanodregg.Lang.Contextual.Certificate
+end Census.CertificateReader

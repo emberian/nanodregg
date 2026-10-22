@@ -5719,3 +5719,47 @@ Connecting the two is a small proof, not part of a move.
 plan as evidence; the evidence is the census VANISHED list and the empty consumer grep, which agree.
 
 Status: landed by CX-FOLD-3; next LANG-74.12 (S12, the certificate reader to Census).
+
+### LANG-74.12 S12 · the P6 certificate reader leaves Lang for Census (2026-10-22; CX-FOLD-3; IMPACT `redregg/work/fold/IMPACT-S12.md`; rename map `redregg/work/fold/S12-renames.tsv`; cross-family read `redregg/work/fold/READ-S12-grok.md`; GRANT R-0015 (Census/**, lakefile.lean; CROSS-LAYER: GATES), GRANT R-0017 (devtools/certificate_plants.py, two strings; CROSS-LAYER: CLIENT); RELEASE R-0020)
+
+**Decision.** The certificate reader is Census tooling ("a data/reader interface, not nano admission"), and every
+consumer is in Census. Four files move verbatim, namespace `Nanodregg.Lang.Contextual.Certificate` →
+`Census.CertificateReader`:
+- `Lang/Contextual/Certificate.lean` → `Census/CertificateReader.lean`;
+- `Lang/Proofs/Contextual/Certificate.lean` → `Census/Proofs/CertificateReader.lean`;
+- `Lang/Journey/Certificate.lean` → `Census/CertificateReaderTests.lean`;
+- `Lang/Journey/CertificateMain.lean` → `Census/CertificateReaderMain.lean` (the `certificate-tests` root; the lakefile
+  entry follows, the exe name and its `gates/runs.tsv` row are unchanged).
+
+The four Lang paths are deleted (this is the deletion authorization). `Census/{Certificate,CertificateData}` and
+`Census/Proofs/Certificate` change qualified names and imports only. `devtools/certificate_plants.py` changes the
+two strings that name the moved source and its build target; no plant logic changes.
+
+**Measured.** Census digest diff under the map (`redregg/work/fold/diff-S12.txt`): 0 type changes, 0 deletions; the
+value changes are structure projections (their `Expr.proj` carries the structure name), `Refusal.noConfusion`,
+`instReprRefusal.repr` and `Tests.run` (printed names); a derived private instance is renamed
+`instDecidableEqExcept_lang` → `_census` by Lean after the root namespace. `certificate-tests`: the same 15 PASS and
+GREEN; its harness control still fails on the same row, the message differing only in the constructor's qualified
+name. `gates/certificate.py` re-emits the certificate of `Nanodregg.Ledger.Proofs.grant_moves_le_cap` (6,857
+declarations) and matches the untouched pinned vector. The plant driver (`devtools/certificate_plants.py`) on the
+candidate, with its log directory pointed at scratch: the control goes RED by name, each of the 8 plants (7 guards
+replaced by `if False then`, plus the missing-target branch) builds and goes RED with `actual Except.ok ()`, and the
+restored source is GREEN. Whole tree with `certificate-tests` GREEN.
+
+**What breaks.** `Nanodregg.Lang.Contextual.Certificate.*` no longer resolves (`Census.CertificateReader.*`); the four
+Lang paths no longer exist. Re-emit: none (the 12 MB golden is untouched; its re-pin is cv 01a16131-5868). Nothing
+refuses to load.
+
+**Finding, not fixed here.** The plant driver writes `CX-P6-*.log` and `CX-P6-plants.pid` into the shared
+`/tank/dregg-build/nanodregg/logs/`, so a run overwrites the previous run's evidence. That is CLIENT's file and not in
+R-0017's two strings.
+
+**Critique.** `Census.Certificate` (the command and adapter) and `Census.CertificateReader` (the generic reader) are
+now two namespaces in one directory whose names differ by a suffix. They are different things, but a reader has to
+learn that from the files.
+
+**Meta-critique.** I priced the move by grep and found the CLIENT path only because I grepped beyond the map's
+consumer list. The bias is trusting a list of consumers that was written for Lean files to cover the scripts that
+name those files by path.
+
+Status: landed by CX-FOLD-3. The consolidation S1–S12 is complete; S13–S15 wait for Ember's rulings R1–R3.

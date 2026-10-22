@@ -13,7 +13,7 @@ import subprocess
 root = Path(__file__).resolve().parents[1]
 logs = Path("/tank/dregg-build/nanodregg/logs")
 (logs / "CX-P6-plants.pid").write_text(str(os.getpid()) + "\n")
-source = root / "Lang/Contextual/Certificate.lean"
+source = root / "Census/CertificateReader.lean"
 original = source.read_text()
 exe = root / ".lake/build/bin/certificate-tests"
 
@@ -66,6 +66,6 @@ try:
         raise RuntimeError("missing target plant did not expose an accepted absent declaration")
 finally:
     source.write_text(original)
-    run("plants-restored-build", ["lake", "build", "Lang.Proofs.Contextual.Certificate", "certificate-tests"], 0)
+    run("plants-restored-build", ["lake", "build", "Census.Proofs.CertificateReader", "certificate-tests"], 0)
     run("plants-restored", [str(exe)], 0)
 print("certificate-plants: GREEN", flush=True)

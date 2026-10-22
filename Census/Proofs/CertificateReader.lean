@@ -1,7 +1,7 @@
 /- Environment-relative certificate reading. The reader adapter remains an explicit boundary. -/
-import Lang.Contextual.Certificate
+import Census.CertificateReader
 
-namespace Nanodregg.Lang.Contextual.Certificate
+namespace Census.CertificateReader
 
 variable {Name Expr Body : Type} [DecidableEq Name] [DecidableEq Expr] [DecidableEq Body]
 
@@ -147,4 +147,4 @@ theorem checkers_distinguish {a b : Certificate Name Expr Body}
   intro h
   exact different (congrArg Certificate.checker h)
 
-end Nanodregg.Lang.Contextual.Certificate
+end Census.CertificateReader

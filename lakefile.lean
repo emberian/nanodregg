@@ -186,6 +186,6 @@ extern_lib «ndhost» pkg := do
 @[default_target] lean_exe «host-sock-probe» where
   root := `Host.Sim.SockMain
 
--- LANG: environment-relative certificate reader tests.
+-- CENSUS: environment-relative certificate reader tests.
 @[default_target] lean_exe «certificate-tests» where
-  root := `Lang.Journey.CertificateMain
+  root := `Census.CertificateReaderMain

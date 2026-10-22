@@ -2,7 +2,7 @@
 shared-node DAG: expanding proof sharing with Repr can require gigabytes. The exact trust
 boundary is stated in Census.Proofs.Certificate and decisions/lang.md. -/
 import Lean
-import Lang.Contextual.Certificate
+import Census.CertificateReader
 
 namespace Census.Certificate
 
@@ -107,12 +107,12 @@ def declaration (ci : ConstantInfo) : Declaration :=
 
 /-- Compiler identity is Lean's own githash; context content supplies theory identity.
 Imports are the actual direct imports of the environment, not producer-supplied labels. -/
-def checker (env : Environment) : Nanodregg.Lang.Contextual.Certificate.Checker :=
+def checker (env : Environment) : Census.CertificateReader.Checker :=
   ⟨"Lean kernel / Census.Certificate v1", Lean.versionString, Lean.githash,
     env.header.imports.toList.map (fun i => i.module.toString)⟩
 
 /-- Like collectAxioms, use the checked kernel environment, not pending elaborator data. -/
-def reader (env : Environment) : Nanodregg.Lang.Contextual.Certificate.Reader Name Expression Declaration where
+def reader (env : Environment) : Census.CertificateReader.Reader Name Expression Declaration where
   lookup := fun n => (env.checked.get.find? n).map declaration
   typeOf := Declaration.type
   references := Expression.constants
@@ -123,7 +123,7 @@ def reader (env : Environment) : Nanodregg.Lang.Contextual.Certificate.Reader Na
 
 def namesJson (ns : List Name) : Json := toJson (ns.map Name.toString)
 
-def certificateJson (c : Nanodregg.Lang.Contextual.Certificate.Certificate Name Expression Declaration)
+def certificateJson (c : Census.CertificateReader.Certificate Name Expression Declaration)
     (kernelAxioms : List Name) (prettyStatement : String) : Json :=
   Json.mkObj [
     ("target", toJson c.target.toString),

@@ -1,8 +1,8 @@
 /- Executed tests of the certificate reader, using a finite environment with a cycle.
 These are synthetic checks of the generic reader, not the requested nano theorem vector. -/
-import Lang.Contextual.Certificate
+import Census.CertificateReader
 
-namespace Nanodregg.Lang.Contextual.Certificate.Tests
+namespace Census.CertificateReader.Tests
 
 structure Body where
   type : List Nat
@@ -83,4 +83,4 @@ def run (args : List String) : IO UInt32 := do
   IO.println "certificate-tests: GREEN"
   return 0
 
-end Nanodregg.Lang.Contextual.Certificate.Tests
+end Census.CertificateReader.Tests

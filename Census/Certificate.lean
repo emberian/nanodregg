@@ -13,7 +13,7 @@ def elabCertificateCensus : CommandElab
   | `(#certificate_census $path:str $target:ident) => do
     let env ← getEnv
     let target := target.getId
-    let c ← match Nanodregg.Lang.Contextual.Certificate.read (reader env) 200000 target with
+    let c ← match Census.CertificateReader.read (reader env) 200000 target with
       | .ok c => pure c
       | .error e => throwError "CERTIFICATE RED: {reprStr e}"
     let axs := (← liftCoreM (collectAxioms target)).toList
