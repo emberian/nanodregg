@@ -22,7 +22,7 @@ def langData : CalculusData where
   Tm := Term
   tmEq := Term.decEq
   msubst := Term.fillRefs
-  check Ψ M A := decide (Lang.infer [] Ψ M = some A)
+  check Ψ M A := decide (Lang.infer [] Ψ M (Ω := []) = some A)
   uses M x := Term.usesVar x M
   drop Ψ x := Ψ.eraseIdx x
   strengthen x := Term.renameVar (lowerIdx x)

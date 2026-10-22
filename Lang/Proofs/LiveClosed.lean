@@ -26,7 +26,7 @@ theorem admitPackage_closed {D : Type} {digestOf : ByteArray → Option D}
   exact ⟨(checkWith_closed ‹_›).1, rfl⟩
 
 theorem admitContextual_closed {D : Type} (digestOf : ByteArray → Option D)
-    (prepare : List Ty → Package → Except String Term)
+    (prepare : List Ty → Package → Except HoleRefusal Term)
     (idb : ByteArray) (p : Package) (acc : Loaded) (gis : List Nat)
     (hc : p.holes = []) :
     admitContextual digestOf prepare idb p acc gis = admitPackage digestOf idb p acc gis := by
@@ -34,7 +34,7 @@ theorem admitContextual_closed {D : Type} (digestOf : ByteArray → Option D)
 
 section
 variable {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
-  (prepare : List Ty → Package → Except String Term)
+  (prepare : List Ty → Package → Except HoleRefusal Term)
 
 mutual
 /-- A successfully loaded closed closure is admitted identically by live loading.
@@ -108,7 +108,7 @@ theorem Loaded.preparationCost_closed (L : Loaded) (hc : ∀ p ∈ L.pkgs, p.hol
   have hm : L.pkgs.map Package.preparationCost = L.pkgs.map (fun _ => 0) := by
     apply List.map_congr_left
     intro p hp
-    simp [Package.preparationCost, hc p hp]
+    simp [Package.preparationCost, Package.holeCharge, hc p hp]
   rw [hm]
   have hz : ∀ (ps : List Package) (n : Nat),
       ((ps.map (fun _ => 0)).foldl (· + ·) n) = n := by
@@ -206,7 +206,7 @@ theorem loadUsing_leaf_closed {D : Type} {bytesOf : D → ByteArray}
     {digestOf : ByteArray → Option D} {look : Pinned D} {pkg : D} {p : Package}
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p)
     (hi : p.imports = []) (hc : p.holes = [])
-    (prepare : List Ty → Package → Except String Term) (fuel : Nat) :
+    (prepare : List Ty → Package → Except HoleRefusal Term) (fuel : Nat) :
     loadUsing digestOf (admitContextual digestOf prepare) look (fuel + 1)
       (bytesOf pkg) ⟨[], [], []⟩ =
     load digestOf look (fuel + 1) (bytesOf pkg) ⟨[], [], []⟩ := by

@@ -70,14 +70,14 @@ def contextualHole (A : Ty) (declaration : HoleROM) (σ : List Term) (clause : T
     iface := .record (Row.sort (ts ++ additions.map fun (n, t, _) => (n, t))),
     body := .record (Row.sort (fs ++ additions.map fun (n, _, t) => (n, t))),
     rels, holes := [h], methods := (p.methods ++ ["choose_code", "execute"]).mergeSort }
-  p.checkContextual (bundle.libraries.map (·.iface))
+  (p.checkContextual (bundle.libraries.map (·.iface))).mapError HoleRefusal.wire
   pure { bundle with layout := p }
 
 /-- Link live ROM to its ordinary checked helpers. No filling is staged here. -/
 def HoleBundle.linkContextual (b : HoleBundle) (ids : List ByteArray) : Except String Package := do
   unless ids.length = b.libraries.length do throw "holeImports"
   let p := { b.layout with imports := ids }
-  p.checkContextual (b.libraries.map (·.iface))
+  (p.checkContextual (b.libraries.map (·.iface))).mapError HoleRefusal.wire
   let some bytes := Wire.encodePackage p | throw "holeRootTooLarge"
   unless bytes.size ≤ Bounds.bytesMax do throw "holeRootTooLarge"
   pure p

@@ -187,7 +187,7 @@ end
 /-! ## Packages -/
 
 theorem checkWith_parts {ifaces : List Ty} {p : Package} (hc : p.checkWith ifaces = .ok ()) :
-    p.checkShape = .ok () ∧ ∃ T, inferE ifaces [] p.body = .ok T := by
+    p.checkShape = .ok () ∧ ∃ T, inferE ifaces [] p.body (Ω := []) = .ok T := by
   unfold Package.checkWith at hc
   split at hc
   · cases hc

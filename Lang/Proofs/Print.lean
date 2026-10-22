@@ -1572,7 +1572,7 @@ end
 
 /-- A closed term that checks reads back from its text. -/
 theorem readTerm_checked {Δ : List Ty} {t : Term} {T : Ty} {s : String} (hΔ : ∀ A ∈ Δ, A.wf = true)
-    (hc : inferE Δ [] t = .ok T) (h : term t = some s) : readTerm s = .ok t :=
+    (hc : inferE Δ [] t (Ω := []) = .ok T) (h : term t = some s) : readTerm s = .ok t :=
   readTerm_term (hasType_canon hΔ (by simp) (inferE_sound hc)) h
 
 theorem checkShape_wf {p : Package} (h : p.checkShape = .ok ()) : p.state.wf = true ∧ p.iface.wf = true := by

@@ -607,7 +607,7 @@ theorem admitPackage_lits {idb : ByteArray} {p : Package} {acc L : Loaded} {gis 
           exact checkLits_lits h3 b hb
 
 
-theorem admitContextual_lits {prepare : List Ty → Package → Except String Term}
+theorem admitContextual_lits {prepare : List Ty → Package → Except HoleRefusal Term}
     {idb : ByteArray} {p : Package} {acc L : Loaded} {gis : List Nat} {g : Nat}
     (hacc : ClosureLits digestOf acc)
     (h : admitContextual digestOf prepare idb p acc gis = .ok (L, g)) :

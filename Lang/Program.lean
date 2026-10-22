@@ -163,15 +163,17 @@ def checkROMLits (p : Package) : Except (Refusal D) Unit :=
 
 /-- A residual hole is a typed refusal when no row view is available (install
 and law checking). Ordinary fields still evaluate; no selected code is guessed. -/
-def unresolvedBody (p : Package) : Except String Term :=
+def unresolvedBody (p : Package) : Except HoleRefusal Term :=
   if p.holes.isEmpty then .ok p.body
-  else Term.fillBounded Wire.nodeMax 1
+  else match Term.fillBounded Wire.nodeMax 1
     (fun n => ((holeSignature p.holes).find? (fun d => d.name == n)).map
-      (fun d => .refuse d.ty "holeUnresolved".toUTF8)) p.body
+      (fun d => .refuse d.ty "holeUnresolved".toUTF8)) p.body with
+    | .error b => .error (.expansion b)
+    | .ok t => .ok t
 
 /-- Shared live admission. The package retained in Loaded is the original ROM;
 only the transient machine library receives an instantiated body. -/
-def admitContextual (prepare : List Ty → Package → Except String Term)
+def admitContextual (prepare : List Ty → Package → Except HoleRefusal Term)
     (idb : ByteArray) (p : Package) (acc : Loaded) (gis : List Nat) :
     Except (Refusal D) (Loaded × Nat) :=
   if p.holes.isEmpty then admitPackage digestOf idb p acc gis
@@ -179,13 +181,13 @@ def admitContextual (prepare : List Ty → Package → Except String Term)
   | none => .error (.program "closure")
   | some ifs =>
     match p.checkContextual ifs with
-    | .error e => .error (.program e)
+    | .error e => .error (.program e.wire)
     | .ok () =>
       match prepare ifs p with
-      | .error e => .error (.program e)
+      | .error e => .error (.program e.wire)
       | .ok body =>
-        match checkE ifs body p.iface with
-        | .error e => .error (.program s!"holeInstanceType {e.text}")
+        match checkE ifs body p.iface (Ω := []) with
+        | .error e => .error (.program (HoleRefusal.instanceType e).wire)
         | .ok () =>
           match checkROMLits digestOf p, checkLits digestOf { p with body } with
           | .ok (), .ok () =>
@@ -210,10 +212,7 @@ def loadLive (rv : RowView D) (self : D) (look : Pinned D) (fuel : Nat)
 /-- Conservative preparation charge derived entirely from the actual ROM syntax;
 the selected candidate cannot exceed the maximum over its committed candidates. -/
 def Package.preparationCost (p : Package) : Nat :=
-  if p.holes.isEmpty then 0
-  else Term.nodes p.body *
-    (1 + (p.holes.flatMap (fun h => h.code)).foldl
-      (fun n c => max n (Term.nodes c.body)) 1) + 256 * p.holes.length
+  p.holeCharge ((p.holes.flatMap (fun h => h.code)).foldl (fun n c => max n (Term.nodes c.body)) 1)
 
 
 def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := do
@@ -236,7 +235,7 @@ def checkInstallContextual (look : Pinned D) (b : ByteArray) : Except (Refusal D
   let (L, gis) ← loadAllContextual digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩
   let some ifaces := ifacesAt L.pkgs gis | throw (.program "closure")
   match p.checkContextual ifaces with
-  | .error e => throw (.program e)
+  | .error e => throw (.program e.wire)
   | .ok () => checkROMLits digestOf p
 
 /-- The state slots of a record row: field `i` at `stateBase + i`; `none` if a field has no bytes at

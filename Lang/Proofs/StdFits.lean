@@ -328,7 +328,7 @@ A state type nested at most `Read.depthMax - 2` deep leaves every capped law wit
 carries is that shallow (`Lang.Proofs.PrintWire.state_prints`). The `_reads` forms add the install
 check's premise (the law checks) and conclude the whole round trip, by `readTerm_checked`. -/
 
-theorem reads_of_text {t : Term} {T : Ty} (ht : (term t).isSome = true) (hc : inferE [] [] t = .ok T) :
+theorem reads_of_text {t : Term} {T : Ty} (ht : (term t).isSome = true) (hc : inferE [] [] t (Ω := []) = .ok T) :
     ∃ s, term t = some s ∧ Read.readTerm s = .ok t :=
   ⟨(term t).get ht, (Option.some_get ht).symm, readTerm_checked (by simp) hc (Option.some_get ht).symm⟩
 
@@ -338,7 +338,7 @@ theorem quorum_text {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {t : 
   exact term_isSome (quorumLaw_prints T ms k hS hg) (by simp only [membersMax] at hn; simp only [depthMax, Wire.depthMax]; omega)
 
 theorem quorum_reads {S T U : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {t : Term}
-    (h : quorum S T ms k g = .ok t) (hS : TyPrints (depthMax - 2) S) (hg : labelOk g = true) (hc : inferE [] [] t = .ok U) :
+    (h : quorum S T ms k g = .ok t) (hS : TyPrints (depthMax - 2) S) (hg : labelOk g = true) (hc : inferE [] [] t (Ω := []) = .ok U) :
     ∃ s, term t = some s ∧ Read.readTerm s = .ok t :=
   reads_of_text (quorum_text h hS hg) hc
 
@@ -348,7 +348,7 @@ theorem allowlist_text {S : Ty} {ids : List ByteArray} {t : Term} (h : allowlist
   exact term_isSome (allowlistLaw_prints ids hS) (by simp only [idsMax] at hn; simp only [depthMax, Wire.depthMax]; omega)
 
 theorem allowlist_reads {S U : Ty} {ids : List ByteArray} {t : Term} (h : allowlist S ids = .ok t)
-    (hS : TyPrints (depthMax - 2) S) (hc : inferE [] [] t = .ok U) : ∃ s, term t = some s ∧ Read.readTerm s = .ok t :=
+    (hS : TyPrints (depthMax - 2) S) (hc : inferE [] [] t (Ω := []) = .ok U) : ∃ s, term t = some s ∧ Read.readTerm s = .ok t :=
   reads_of_text (allowlist_text h hS) hc
 
 theorem machine_text {S : Ty} {f : Label} {states : List Label} {initial : Label} {methods : List Label}
@@ -361,7 +361,7 @@ theorem machine_text {S : Ty} {f : Label} {states : List Label} {initial : Label
 theorem machine_reads {S U : Ty} {f : Label} {states : List Label} {initial : Label} {methods : List Label}
     {edges : List (Label × Label × Label)} {t : Term} (h : machine S f states initial methods edges = .ok t)
     (hS : TyPrints (depthMax - 2) S) (hf : labelOk f = true) (hst : ∀ x ∈ states, labelOk x = true)
-    (hc : inferE [] [] t = .ok U) : ∃ s, term t = some s ∧ Read.readTerm s = .ok t :=
+    (hc : inferE [] [] t (Ω := []) = .ok U) : ∃ s, term t = some s ∧ Read.readTerm s = .ok t :=
   reads_of_text (machine_text h hS hf hst) hc
 
 /-! ## Teeth: the premises hold at every cap, and the caps carry the weight -/
@@ -401,13 +401,13 @@ theorem machine_at_cap_text {t : Term} (h : machine MS "phase" ["a", "b"] "a" ["
 
 /-- The `_reads` premise is met at the cap: the allowlist of `idsMax` ids checks, so its text reads
 back to exactly the law. -/
-theorem allowlist_at_cap_infers : (inferE [] [] (allowlistLaw QS (ids idsMax))).toOption = some (lawTy QS) := by
+theorem allowlist_at_cap_infers : (inferE [] [] (allowlistLaw QS (ids idsMax)) (Ω := [])).toOption = some (lawTy QS) := by
   decide +kernel
 
-theorem allowlist_at_cap_checks : inferE [] [] (allowlistLaw QS (ids idsMax)) = .ok (lawTy QS) := by
+theorem allowlist_at_cap_checks : inferE [] [] (allowlistLaw QS (ids idsMax)) (Ω := []) = .ok (lawTy QS) := by
   have h := allowlist_at_cap_infers
   revert h
-  cases inferE [] [] (allowlistLaw QS (ids idsMax)) <;> simp [Except.toOption]
+  cases inferE [] [] (allowlistLaw QS (ids idsMax)) (Ω := []) <;> simp [Except.toOption]
 
 theorem allowlist_at_cap_reads :
     ∃ s, term (allowlistLaw QS (ids idsMax)) = some s ∧ Read.readTerm s = .ok (allowlistLaw QS (ids idsMax)) :=

@@ -26,6 +26,17 @@ charged `⌈n / wordBytes⌉` ticks, at least one (`Lang.primTicks`), so a run w
 `wordBytes` primitive operand bytes per tick it is charged (`Lang.Proofs.Cost.walked_le`). -/
 def wordBytes : Nat := 32
 
+/-- A contextual hole's ROM lists at most this many candidate codes (`HoleROM.check`, LANG-P7). -/
+def holeCandidatesMax : Nat := 64
+
+/-- A package declares at most this many contextual holes (`Package.checkContextual`, LANG-P7). -/
+def holeSignatureMax : Nat := 16
+
+/-- The guard allowance of one contextual hole (LANG-P7): the ticks its selection guard may run
+(`runHoleGuard`'s fuel), and so the preparation charged per declared hole (`Package.holeCharge`). One
+allowance, two uses; not `reasonMax`/`docMax`, which are other facts that happen to be 256 too. -/
+def holeGuardFuel : Nat := 256
+
 /-- The machine's stack bound. A consensus constant, not part of a budget: two executors given
 different tick budgets agree on every final outcome (`Lang.Proofs.Run.run_agree`) only because
 they share this bound. -/

@@ -8,36 +8,86 @@ import Kernel.Receive.Call
 namespace Nanodregg.Lang
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
+/-- Why live contextual preparation refuses: one constructor per refusal (law 7). `wire` is the one printer;
+its text is what the kernel's `Refusal.program` and a blocked hole's `.refuse` carry. -/
+inductive HoleRefusal where
+  | type (hole : Nat)
+  | context (hole : Nat)
+  | candidates (hole : Nat)
+  | guardType (hole : Nat)
+  | candidateType (hole code : Nat)
+  | package (e : CheckError)
+  | signatureBound
+  | duplicate
+  | bodyType (e : TypeErr)
+  | unpinned
+  | supportMoved (hole position : Nat)
+  | guardBlocked (hole : Nat)
+  | guardFault (hole : Nat)
+  | selectionAbsent (hole : Nat)
+  | selectionType (hole : Nat)
+  | selectionIndex (hole : Nat)
+  | derivationMoved (hole : Nat)
+  | expansion (b : ExpansionBound)
+  | provenance
+  | instanceRecheck
+  | instanceType (e : TypeErr)
+  deriving DecidableEq
+
+def HoleRefusal.wire : HoleRefusal → String
+  | .type n => s!"holeType {n}"
+  | .context n => s!"holeContext {n}"
+  | .candidates n => s!"holeCandidates {n}"
+  | .guardType n => s!"holeGuardType {n}"
+  | .candidateType n i => s!"holeCandidateType {n} {i}"
+  | .package e => e.wire
+  | .signatureBound => "holeSignatureBound"
+  | .duplicate => "holeDuplicate"
+  | .bodyType e => s!"holeBodyType {e.text}"
+  | .unpinned => "holeUnpinned"
+  | .supportMoved n i => s!"holeSupportMoved {n} {i}"
+  | .guardBlocked n => s!"holeGuardBlocked {n}"
+  | .guardFault n => s!"holeGuardFault {n}"
+  | .selectionAbsent n => s!"holeSelectionAbsent {n}"
+  | .selectionType n => s!"holeSelectionType {n}"
+  | .selectionIndex n => s!"holeSelectionIndex {n}"
+  | .derivationMoved n => s!"holeDerivationMoved {n}"
+  | .expansion .work => "holeWorkBound"
+  | .expansion .size => "holeSizeBound"
+  | .provenance => "holeProvenance"
+  | .instanceRecheck => "holeInstanceType"
+  | .instanceType e => s!"holeInstanceType {e.text}"
+
 /-- Signature validation checks every candidate at exactly its declared context,
 including candidates not currently selected. A candidate cannot introduce another hole. -/
-def HoleROM.check (Δ : List Ty) (h : HoleROM) : Except String Unit := do
-  unless h.ctx.all Ty.wf && h.ty.wf do throw s!"holeType {h.name}"
-  unless h.hypotheses.length = h.ctx.length do throw s!"holeContext {h.name}"
-  unless h.code.length ≤ 64 do throw s!"holeCandidates {h.name}"
-  match inferE [] [.bool] h.guard with
+def HoleROM.check (Δ : List Ty) (h : HoleROM) : Except HoleRefusal Unit := do
+  unless h.ctx.all Ty.wf && h.ty.wf do throw (.type h.name)
+  unless h.hypotheses.length = h.ctx.length do throw (.context h.name)
+  unless h.code.length ≤ Bounds.holeCandidatesMax do throw (.candidates h.name)
+  match inferE [] [.bool] h.guard (Ω := []) with
   | .ok .bool => pure ()
-  | _ => throw s!"holeGuardType {h.name}"
+  | _ => throw (.guardType h.name)
   for (c, i) in h.code.zipIdx do
-    match inferE Δ h.ctx c.body with
-    | .ok T => unless T = h.ty do throw s!"holeCandidateType {h.name} {i}"
-    | .error _ => throw s!"holeCandidateType {h.name} {i}"
+    match inferE Δ h.ctx c.body (Ω := []) with
+    | .ok T => unless T = h.ty do throw (.candidateType h.name i)
+    | .error _ => throw (.candidateType h.name i)
 
-def Package.checkContextual (Δ : List Ty) (p : Package) : Except String Unit := do
-  match p.checkShape with | .error e => throw e.wire | .ok () => pure ()
-  match p.checkFields with | .error e => throw e.wire | .ok () => pure ()
-  unless p.holes.length ≤ 16 do throw "holeSignatureBound"
-  unless (p.holes.map (·.name)).eraseDups.length = p.holes.length do throw "holeDuplicate"
+def Package.checkContextual (Δ : List Ty) (p : Package) : Except HoleRefusal Unit := do
+  match p.checkShape with | .error e => throw (.package e) | .ok () => pure ()
+  match p.checkFields with | .error e => throw (.package e) | .ok () => pure ()
+  unless p.holes.length ≤ Bounds.holeSignatureMax do throw .signatureBound
+  unless (p.holes.map (·.name)).eraseDups.length = p.holes.length do throw .duplicate
   for h in p.holes do h.check Δ
   match checkE Δ p.body p.iface (Ω := holeSignature p.holes) with
-  | .error e => throw s!"holeBodyType {e.text}"
+  | .error e => throw (.bodyType e)
   | .ok () => pure ()
 
 /-- The row must occur in the authenticated point view; absent and unpinned differ.
 No ambient store is read by this module. -/
 def holeRow {D : Type} (rv : RowView D) (self : D) (rel : Nat) (key : ByteArray) :
-    Except String (Option RowLeaf) :=
+    Except HoleRefusal (Option RowLeaf) :=
   match (rv.points self rel).find? (fun p => decide (p.1 = key)) with
-  | none => .error "holeUnpinned"
+  | none => .error .unpinned
   | some (_, leaf) => .ok leaf
 
 def holePinHolds {D : Type} (rv : RowView D) (self : D) (p : HolePin) : Bool :=
@@ -63,26 +113,26 @@ structure HoleSelection where
 /-- Positions whose support moved. Only genuinely unused variables may be
 strengthened away; a moved support actually used by the candidate is refused. -/
 def changedHypotheses {D : Type} (rv : RowView D) (self : D) (h : HoleROM) (c : HoleCode) :
-    Except String (List Nat) :=
+    Except HoleRefusal (List Nat) :=
   h.hypotheses.zipIdx.foldlM (fun removed pi =>
     match pi.1 with
     | none => .ok removed
     | some pin => do
       let _ ← holeRow rv self pin.rel pin.key
       if holePinHolds rv self pin then .ok removed
-      else if Term.usesVar pi.2 c.body then .error s!"holeSupportMoved {h.name} {pi.2}"
+      else if Term.usesVar pi.2 c.body then .error (.supportMoved h.name pi.2)
       else .ok (removed ++ [pi.2])) []
 
 /-- Evaluate the signature guard on the current authenticated guard pin. -/
-def runHoleGuard {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : Except String Nat := do
+def runHoleGuard {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : Except HoleRefusal Nat := do
   if let some p := h.guardPin then
     let _ ← holeRow rv self p.rel p.key
     pure ()
   let present := h.guardPin.all (holePinHolds rv self)
-  match run [] Bounds.stackMax 256 0 (State.init h.guard [.bool present]) with
+  match run [] Bounds.stackMax Bounds.holeGuardFuel 0 (State.init h.guard [.bool present]) with
   | .value (.bool true) used => .ok used
-  | .value (.bool false) _ => .error s!"holeGuardBlocked {h.name}"
-  | _ => .error s!"holeGuardFault {h.name}"
+  | .value (.bool false) _ => .error (.guardBlocked h.name)
+  | _ => .error (.guardFault h.name)
 
 /-- Remove unused positions from right to left so every index still names its
 original assumption. The embedding records where each retained variable came
@@ -96,12 +146,12 @@ def factorHole (h : HoleROM) (c : HoleCode) (removed : List Nat) :
 /-- Selection is fresh on each invocation. Its bytes contain a code index,
 never a filling supplied by the caller. All derivation supports and used
 contextual assumptions must still have the ROM-pinned versions. -/
-def selectHole {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : Except String HoleSelection := do
+def selectHole {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : Except HoleRefusal HoleSelection := do
   let leaf ← holeRow rv self h.selectionRel h.selectionKey
-  let some (.row _ bytes version) := leaf | throw s!"holeSelectionAbsent {h.name}"
-  let .ok (.nat i) := Wire.decodeData .nat bytes | throw s!"holeSelectionType {h.name}"
-  let some c := h.code[i]? | throw s!"holeSelectionIndex {h.name}"
-  unless c.supports.all (holePinHolds rv self) do throw s!"holeDerivationMoved {h.name}"
+  let some (.row _ bytes version) := leaf | throw (.selectionAbsent h.name)
+  let .ok (.nat i) := Wire.decodeData .nat bytes | throw (.selectionType h.name)
+  let some c := h.code[i]? | throw (.selectionIndex h.name)
+  unless c.supports.all (holePinHolds rv self) do throw (.derivationMoved h.name)
   let removed ← changedHypotheses rv self h c
   let used ← runHoleGuard rv self h
   let (ctx, filling, embedding) := factorHole h c removed
@@ -112,7 +162,7 @@ def selectHole {D : Type} (rv : RowView D) (self : D) (h : HoleROM) : Except Str
 is retained in typed code and fires only when the machine demands that hole. -/
 inductive HoleResolution where
   | selected (receipt : HoleSelection)
-  | blocked (name : Nat) (ty : Ty) (reason : String)
+  | blocked (name : Nat) (ty : Ty) (reason : HoleRefusal)
 
 def HoleResolution.name : HoleResolution → Nat
   | .selected s => s.name
@@ -120,7 +170,7 @@ def HoleResolution.name : HoleResolution → Nat
 
 def HoleResolution.body : HoleResolution → Term
   | .selected s => s.body
-  | .blocked _ T why => .refuse T why.toUTF8
+  | .blocked _ T why => .refuse T why.wire.toUTF8
 
 def HoleResolution.receipt : HoleResolution → Option HoleSelection
   | .selected s => some s
@@ -137,6 +187,15 @@ def resolutionEnv (rs : List HoleResolution) (n : Nat) : Option Term :=
 def resolutionMax (rs : List HoleResolution) : Nat :=
   rs.foldl (fun n r => max n (Term.nodes r.body)) 1
 
+/-- THE preparation charge of a contextual package, at the largest candidate size `m` it may expand: the
+expansion bound of `Term.fillBounded` plus one guard allowance (`Bounds.holeGuardFuel`) per declared hole;
+the same formula at two different `m`s, not the same number. The invocation's
+actual cost is this at the resolved candidates (`instantiateHoles`); the static charge is this at the largest
+committed candidate (`Package.preparationCost`). -/
+def Package.holeCharge (p : Package) (m : Nat) : Nat :=
+  if p.holes.isEmpty then 0
+  else Term.nodes p.body * (m + 1) + Bounds.holeGuardFuel * p.holes.length
+
 /-- Actual syntax cost and guard steps are charged before evaluation. This is
 preparation for one invocation, never an installed replacement package. -/
 structure HoleInstance where
@@ -146,19 +205,19 @@ structure HoleInstance where
   cost : Nat
 
 def instantiateHoles {D : Type} (rv : RowView D) (self : D) (Δ : List Ty) (p : Package) :
-    Except String HoleInstance := do
+    Except HoleRefusal HoleInstance := do
   p.checkContextual Δ
   let rs := p.holes.map (resolveHole rv self)
   let ss := rs.filterMap HoleResolution.receipt
-  let body ← Term.fillBounded Wire.nodeMax (resolutionMax rs) (resolutionEnv rs) p.body
+  let body ← match Term.fillBounded Wire.nodeMax (resolutionMax rs) (resolutionEnv rs) p.body with
+    | .error b => throw (.expansion b)
+    | .ok t => pure t
   unless body.digestLits.all (fun b => (p.body.digestLits ++
-      ss.flatMap (fun s => s.original.digestLits)).any (fun a => decide (a = b))) do throw "holeProvenance"
+      ss.flatMap (fun s => s.original.digestLits)).any (fun a => decide (a = b))) do throw .provenance
   -- The closed checker is the invocation boundary too; proof connects this
   -- check to contextual substitution, rather than trusting a receipt.
-  match checkE Δ body p.iface with
-  | .error _ => throw "holeInstanceType"
-  | .ok () =>
-    pure ⟨body, ss, rs, if p.holes.isEmpty then 0 else
-      Term.nodes p.body * (resolutionMax rs + 1) + 256 * rs.length⟩
+  match checkE Δ body p.iface (Ω := []) with
+  | .error _ => throw .instanceRecheck
+  | .ok () => pure ⟨body, ss, rs, p.holeCharge (resolutionMax rs)⟩
 
 end Nanodregg.Lang

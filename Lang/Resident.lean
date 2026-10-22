@@ -142,7 +142,7 @@ def answer (src : String) : SExp → Answer
   | .list _ [.atom _ "type", tx] =>
     match term depthMax [] tx with
     | .error e => readRefused e
-    | .ok t => match inferE [] [] t with
+    | .ok t => match inferE [] [] t (Ω := []) with
       | .ok T => match Print.ty T with
         | some s => ok s
         | none => unprintable
@@ -152,7 +152,7 @@ def answer (src : String) : SExp → Answer
     | none, _ => readRefused (.notOfType p)
     | _, .error e => readRefused e
     | some ticks, .ok t =>
-      match inferE [] [] t with
+      match inferE [] [] t (Ω := []) with
       | .error e => no s!"illTyped {e.text}"
       | .ok T =>
         match eval [] ticks t with

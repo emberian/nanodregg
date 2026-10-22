@@ -142,7 +142,7 @@ def boundaryRows : List (String × Bool) := Id.run do
     ("omitted-context-pin", (invoke b p (view (some 0) none false) "execute" (.nat 7) .nat |> resultName) ==
       "execute: refused holeUnpinned"),
     ("wrong-context", (match wrong.checkContextual (b.libraries.map (·.iface)) with
-      | .error why => why == "holeCandidateType 0 0" | .ok () => false)),
+      | .error why => decide (why = .candidateType 0 0) | .ok () => false)),
     ("guard-blocked", (invoke b p (view (some 0) (some 1) (blocker := some 1))
       "execute" (.nat 7) .nat |> resultName) == "execute: refused holeGuardBlocked 0"),
     ("omitted-blocker-pin", (invoke b p (view (some 0) (some 1) (coverBlocker := false))

@@ -248,7 +248,7 @@ end
 
 /-- Under canonical package and local types, every type `infer` returns is canonical. -/
 theorem infer_wf {Γ : List Ty} {t : Term} {T : Ty} (hΔ : ∀ A ∈ Δ, A.wf = true)
-    (hΓ : ∀ A ∈ Γ, A.wf = true) (h : infer Δ Γ t = some T) : T.wf = true :=
+    (hΓ : ∀ A ∈ Γ, A.wf = true) (h : infer Δ Γ t (Ω := []) = some T) : T.wf = true :=
   hasType_wf hΔ hΓ (infer_sound h)
 
 /-- The tooth: `merge` puts a new field in its place and overrides in place (an appending or

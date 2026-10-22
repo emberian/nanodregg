@@ -39,20 +39,20 @@ theorem refuse_reads :
       .ok (.refuse .nat ⟨#[108, 97, 116, 101]⟩) :=
   readTerm_term (.refuse rfl) (Option.some_get _).symm
 
-theorem refuse_typed : infer [] [] (.refuse (.record []) ⟨#[108]⟩) = some (.record []) := by decide +kernel
+theorem refuse_typed : infer [] [] (.refuse (.record []) ⟨#[108]⟩) (Ω := []) = some (.record []) := by decide +kernel
 
 theorem refuse_unsorted_refused :
-    infer [] [] (.refuse (.record [("b", .nat), ("a", .nat)]) ⟨#[108]⟩) = none := by decide +kernel
+    infer [] [] (.refuse (.record [("b", .nat), ("a", .nat)]) ⟨#[108]⟩) (Ω := []) = none := by decide +kernel
 
 /-- A reason that is not a printable name is refused by the checker: a newline, and 257 bytes. -/
-theorem refuse_newline_refused : infer [] [] (.refuse .nat ⟨#[108, 10]⟩) = none := by decide +kernel
+theorem refuse_newline_refused : infer [] [] (.refuse .nat ⟨#[108, 10]⟩) (Ω := []) = none := by decide +kernel
 
-theorem refuse_long_refused : infer [] [] (.refuse .nat ⟨(List.replicate 257 (108 : UInt8)).toArray⟩) = none := by
+theorem refuse_long_refused : infer [] [] (.refuse .nat ⟨(List.replicate 257 (108 : UInt8)).toArray⟩) (Ω := []) = none := by
   decide +kernel
 
-theorem lenLe_typed : infer [] [] (.prim .lenLe (.bytes ⟨#[1]⟩) (.nat 3)) = some .bool := by decide +kernel
+theorem lenLe_typed : infer [] [] (.prim .lenLe (.bytes ⟨#[1]⟩) (.nat 3)) (Ω := []) = some .bool := by decide +kernel
 
-theorem lenLe_nat_refused : infer [] [] (.prim .lenLe (.nat 1) (.nat 3)) = none := by decide +kernel
+theorem lenLe_nat_refused : infer [] [] (.prim .lenLe (.nat 1) (.nat 3)) (Ω := []) = none := by decide +kernel
 
 /-- The empty package (WireTeeth's `tiny`): `readPackage_package`'s premises are met. -/
 theorem empty_package_prints : (package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [])).isSome = true := by

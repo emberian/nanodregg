@@ -87,7 +87,7 @@ def TypeErr.text (e : TypeErr) : String :=
 def typeErr (e : TypeError) : Except TypeErr Ty := .error ⟨[], e⟩
 
 mutual
-def inferE (Δ Γ : List Ty) : Term → (Ω : HoleSignature := []) → Except TypeErr Ty
+def inferE (Δ Γ : List Ty) : Term → (Ω : HoleSignature) → Except TypeErr Ty
   | .var i, _ =>
       match Γ[i]? with
       | some T => .ok T
@@ -178,12 +178,12 @@ def inferE (Δ Γ : List Ty) : Term → (Ω : HoleSignature := []) → Except Ty
       match Ω.find? (fun d => d.name == n) with
       | none => typeErr (.noHole n)
       | some d =>
-        match inferSubst Δ Γ σ d.ctx Ω with
+        match inferSubst Δ Γ σ d.ctx (Ω := Ω) with
         | .ok () => .ok d.ty
         | .error e => .error (e.at "substitution")
 
 /-- The row of a list of fields, label for label (an error is under its field's label). -/
-def inferFields (Δ Γ : List Ty) : List (Label × Term) → (Ω : HoleSignature := []) → Except TypeErr (List (Label × Ty))
+def inferFields (Δ Γ : List Ty) : List (Label × Term) → (Ω : HoleSignature) → Except TypeErr (List (Label × Ty))
   | [], _ => .ok []
   | (ℓ, t) :: fs, Ω =>
       match inferE (Ω := Ω) Δ Γ t, inferFields (Ω := Ω) Δ Γ fs with
@@ -193,7 +193,7 @@ def inferFields (Δ Γ : List Ty) : List (Label × Term) → (Ω : HoleSignature
 
 /-- The common type of the arms of a case over the sum row `r`: one arm per label, in order,
 each binding its payload; at least one arm (an error is under its arm's label). -/
-def inferArms (Δ Γ : List Ty) : List (Label × Term) → List (Label × Ty) → (Ω : HoleSignature := []) → Except TypeErr Ty
+def inferArms (Δ Γ : List Ty) : List (Label × Term) → List (Label × Ty) → (Ω : HoleSignature) → Except TypeErr Ty
   | [(ℓ, b)], [(ℓ', A)], Ω =>
       if ℓ = ℓ' then
         match inferE (Ω := Ω) Δ (A :: Γ) b with
@@ -209,32 +209,32 @@ def inferArms (Δ Γ : List Ty) : List (Label × Term) → List (Label × Ty) �
       else .error ⟨[], .arms⟩
   | _, _, _ => .error ⟨[], .arms⟩
 /-- Check the complete explicit substitution against the declared context. -/
-def inferSubst (Δ Γ : List Ty) : List Term → List Ty → (Ω : HoleSignature := []) → Except TypeErr Unit
+def inferSubst (Δ Γ : List Ty) : List Term → List Ty → (Ω : HoleSignature) → Except TypeErr Unit
   | [], [], _ => .ok ()
   | t :: ts, A :: As, Ω =>
-      match inferE Δ Γ t Ω with
+      match inferE Δ Γ t (Ω := Ω) with
       | .error e => .error e
       | .ok B =>
-        if A = B then inferSubst Δ Γ ts As Ω
+        if A = B then inferSubst Δ Γ ts As (Ω := Ω)
         else .error ⟨[], .argument A B⟩
   | _, _, _ => .error ⟨[], .holeSubstitution⟩
 
 end
 
 /-- The type of `t`, if it has one: `inferE` without the reason. -/
-def infer (Δ Γ : List Ty) (t : Term) (Ω : HoleSignature := []) : Option Ty := (inferE Δ Γ t Ω).toOption
+def infer (Δ Γ : List Ty) (t : Term) (Ω : HoleSignature) : Option Ty := (inferE Δ Γ t (Ω := Ω)).toOption
 
 /-- A closed term checked against its declared type, or why not. -/
-def checkE (Δ : List Ty) (t : Term) (T : Ty) (Ω : HoleSignature := []) : Except TypeErr Unit :=
-  match inferE Δ [] t Ω with
+def checkE (Δ : List Ty) (t : Term) (T : Ty) (Ω : HoleSignature) : Except TypeErr Unit :=
+  match inferE Δ [] t (Ω := Ω) with
   | .ok T' => if T' = T then .ok () else .error ⟨[], .declared T T'⟩
   | .error e => .error e
 
 /-- A closed term checked against its declared type. -/
-def check (Δ : List Ty) (t : Term) (T : Ty) (Ω : HoleSignature := []) : Bool := (checkE Δ t T Ω).toBool
+def check (Δ : List Ty) (t : Term) (T : Ty) (Ω : HoleSignature) : Bool := (checkE Δ t T (Ω := Ω)).toBool
 
 /-- The closure's bodies are closed and have the types `ref` gives them. -/
 def checkLib (Δ : List Ty) (lib : List Term) : Bool :=
-  lib.length == Δ.length && (lib.zip Δ).all fun p => check Δ p.1 p.2
+  lib.length == Δ.length && (lib.zip Δ).all fun p => check Δ p.1 p.2 (Ω := [])
 
 end Nanodregg.Lang

@@ -186,7 +186,7 @@ theorem inferArms_sound_live :
 
 theorem inferSubst_sound :
     ∀ {Γ : List Ty} {σ : List Term} {Ψ : List Ty},
-      inferSubst Δ Γ σ Ψ Ω = .ok () → SubstTy Δ Γ σ Ψ Ω
+      inferSubst Δ Γ σ Ψ (Ω := Ω) = .ok () → SubstTy Δ Γ σ Ψ Ω
   | _, [], [], _ => .nil
   | _, [], _ :: _, h | _, _ :: _, [], h => by simp [inferSubst] at h
   | Γ, t :: ts, A :: As, h => by
@@ -242,7 +242,7 @@ theorem inferArms_complete_live :
 
 theorem inferSubst_complete :
     ∀ {Γ : List Ty} {σ : List Term} {Ψ : List Ty},
-      SubstTy Δ Γ σ Ψ Ω → inferSubst Δ Γ σ Ψ Ω = .ok ()
+      SubstTy Δ Γ σ Ψ Ω → inferSubst Δ Γ σ Ψ (Ω := Ω) = .ok ()
   | _, _, _, .nil => by simp [inferSubst]
   | _, _, _, .cons ht hs => by
       simp [inferSubst, inferE_complete_live ht, inferSubst_complete hs]
@@ -310,52 +310,52 @@ theorem forIn_yield_ok {α ε : Type} (P : α → Prop) :
       · exact forIn_yield_ok P l f hf h b hb
 
 /- Closed theorem API: statements copied verbatim from landed main. -/
-theorem inferE_sound : ∀ {Γ : List Ty} {t : Term} {T : Ty}, inferE Δ Γ t = .ok T → HasType Δ Γ t T :=
+theorem inferE_sound : ∀ {Γ : List Ty} {t : Term} {T : Ty}, inferE Δ Γ t (Ω := []) = .ok T → HasType Δ Γ t T :=
   inferE_sound_live (Ω := [])
 
 theorem inferFields_sound :
     ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
-      inferFields Δ Γ fs = .ok r → FieldsTy Δ Γ fs r :=
+      inferFields Δ Γ fs (Ω := []) = .ok r → FieldsTy Δ Γ fs r :=
   inferFields_sound_live (Ω := [])
 
 theorem inferArms_sound :
     ∀ {Γ : List Ty} {arms : List (Label × Term)} {r : List (Label × Ty)} {B : Ty},
-      inferArms Δ Γ arms r = .ok B → ArmsTy Δ Γ arms r B :=
+      inferArms Δ Γ arms r (Ω := []) = .ok B → ArmsTy Δ Γ arms r B :=
   inferArms_sound_live (Ω := [])
 
-theorem inferE_complete : ∀ {Γ : List Ty} {t : Term} {T : Ty}, HasType Δ Γ t T → inferE Δ Γ t = .ok T :=
+theorem inferE_complete : ∀ {Γ : List Ty} {t : Term} {T : Ty}, HasType Δ Γ t T → inferE Δ Γ t (Ω := []) = .ok T :=
   inferE_complete_live (Ω := [])
 
 theorem inferFields_complete :
     ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
-      FieldsTy Δ Γ fs r → inferFields Δ Γ fs = .ok r :=
+      FieldsTy Δ Γ fs r → inferFields Δ Γ fs (Ω := []) = .ok r :=
   inferFields_complete_live (Ω := [])
 
 theorem inferArms_complete :
     ∀ {Γ : List Ty} {arms : List (Label × Term)} {r : List (Label × Ty)} {B : Ty},
-      ArmsTy Δ Γ arms r B → inferArms Δ Γ arms r = .ok B :=
+      ArmsTy Δ Γ arms r B → inferArms Δ Γ arms r (Ω := []) = .ok B :=
   inferArms_complete_live (Ω := [])
 
-theorem inferE_iff {Γ : List Ty} {t : Term} {T : Ty} : inferE Δ Γ t = .ok T ↔ HasType Δ Γ t T :=
+theorem inferE_iff {Γ : List Ty} {t : Term} {T : Ty} : inferE Δ Γ t (Ω := []) = .ok T ↔ HasType Δ Γ t T :=
   inferE_iff_live (Ω := [])
 
-theorem infer_sound {Γ : List Ty} {t : Term} {T : Ty} (h : infer Δ Γ t = some T) : HasType Δ Γ t T :=
+theorem infer_sound {Γ : List Ty} {t : Term} {T : Ty} (h : infer Δ Γ t (Ω := []) = some T) : HasType Δ Γ t T :=
   infer_sound_live (Ω := []) h
 
-theorem infer_complete {Γ : List Ty} {t : Term} {T : Ty} (h : HasType Δ Γ t T) : infer Δ Γ t = some T :=
+theorem infer_complete {Γ : List Ty} {t : Term} {T : Ty} (h : HasType Δ Γ t T) : infer Δ Γ t (Ω := []) = some T :=
   infer_complete_live (Ω := []) h
 
-theorem infer_iff {Γ : List Ty} {t : Term} {T : Ty} : infer Δ Γ t = some T ↔ HasType Δ Γ t T :=
+theorem infer_iff {Γ : List Ty} {t : Term} {T : Ty} : infer Δ Γ t (Ω := []) = some T ↔ HasType Δ Γ t T :=
   infer_iff_live (Ω := [])
 
 theorem hasType_unique {Γ : List Ty} {t : Term} {A B : Ty}
     (ha : HasType Δ Γ t A) (hb : HasType Δ Γ t B) : A = B :=
   hasType_unique_live (Ω := []) ha hb
 
-theorem checkE_ok_iff {t : Term} {T : Ty} : checkE Δ t T = .ok () ↔ HasType Δ [] t T :=
+theorem checkE_ok_iff {t : Term} {T : Ty} : checkE Δ t T (Ω := []) = .ok () ↔ HasType Δ [] t T :=
   checkE_ok_iff_live (Ω := [])
 
-theorem check_iff {t : Term} {T : Ty} : check Δ t T = true ↔ HasType Δ [] t T :=
+theorem check_iff {t : Term} {T : Ty} : check Δ t T (Ω := []) = true ↔ HasType Δ [] t T :=
   check_iff_live (Ω := [])
 
 end Nanodregg.Lang

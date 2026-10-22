@@ -550,7 +550,7 @@ theorem substList_nested_capture :
 
 /-- Distinct replacement types make capture observable to the real checker. -/
 theorem substList_ambient_checked :
-    Lang.infer [] [.nat] (Term.substList [.var 0] (.lam .bool (.var 1))) =
+    Lang.infer [] [.nat] (Term.substList [.var 0] (.lam .bool (.var 1))) (Ω := []) =
       some (.fn .bool .nat) := by
   rw [substList_lam_capture]
   exact Lang.infer_complete (.lam (by decide) (.var rfl))

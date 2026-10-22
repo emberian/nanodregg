@@ -77,12 +77,18 @@ def Term.fillArgNodes (σ : Nat → Option Term) : List Term → List Nat
   | t :: ts => Term.fillNodes σ t :: Term.fillArgNodes σ ts
 end
 
+/-- The two expansion bounds `fillBounded` refuses by name. -/
+inductive ExpansionBound where
+  | work
+  | size
+  deriving DecidableEq, Repr
+
 /-- Refuse oversized expansion before constructing it. The second input bounds
 the structural work (template nodes times the largest candidate), independently
 of whether the resulting term happens to be small. -/
-def Term.fillBounded (limit candidateMax : Nat) (σ : Nat → Option Term) (t : Term) : Except String Term :=
-  if Term.nodes t * (candidateMax + 1) > limit then .error "holeWorkBound"
-  else if Term.fillNodes σ t > limit then .error "holeSizeBound"
+def Term.fillBounded (limit candidateMax : Nat) (σ : Nat → Option Term) (t : Term) : Except ExpansionBound Term :=
+  if Term.nodes t * (candidateMax + 1) > limit then .error .work
+  else if Term.fillNodes σ t > limit then .error .size
   else .ok (Term.fillRefs σ t)
 
 end Nanodregg.Lang

@@ -62,21 +62,21 @@ theorem selectHole_origin {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {
   exact ⟨_, _, _, ‹_›, ‹_›, ‹_›, rfl, ‹_›⟩
 
 /-- Blocked code cannot be mistaken for an authenticated selection receipt. -/
-theorem blocked_has_no_receipt (n : Nat) (T : Ty) (why : String) :
+theorem blocked_has_no_receipt (n : Nat) (T : Ty) (why : HoleRefusal) :
     (HoleResolution.blocked n T why).receipt = none := rfl
 
 /-- Resolution preserves the exact refusal returned by fresh authentication.
 This equation names the transient term that fillRefs substitutes. -/
-theorem resolveHole_refusal {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {why : String}
+theorem resolveHole_refusal {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {why : HoleRefusal}
     (he : selectHole rv self h = .error why) :
-    (resolveHole rv self h).body = .refuse h.ty why.toUTF8 ∧
+    (resolveHole rv self h).body = .refuse h.ty why.wire.toUTF8 ∧
       (resolveHole rv self h).receipt = none := by
   simp [resolveHole, he, HoleResolution.body, HoleResolution.receipt]
 
 /-- Demanding the blocked term fires that same named refusal in one machine step. -/
-theorem blocked_step (n : Nat) (T : Ty) (why : String) (lib : List Term) (env : Env) :
+theorem blocked_step (n : Nat) (T : Ty) (why : HoleRefusal) (lib : List Term) (env : Env) :
     step lib (State.init (HoleResolution.blocked n T why).body env) =
-      .fault (.refused why.toUTF8) := rfl
+      .fault (.refused why.wire.toUTF8) := rfl
 
 /-- Successful bounded contextual preparation is closed and typed at the
 unchanged interface, and its actual allocated syntax is within the bound. -/
@@ -117,14 +117,14 @@ theorem instantiateHoles_sources {D : Type} {rv : RowView D} {self : D}
 
 /-- A guard cannot consume more ticks than its fixed invocation allowance. -/
 theorem runHoleGuard_cost {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {used : Nat}
-    (hr : runHoleGuard rv self h = .ok used) : used ≤ 256 := by
+    (hr : runHoleGuard rv self h = .ok used) : used ≤ Bounds.holeGuardFuel := by
   unfold runHoleGuard at hr
   simp only [bind, Except.bind, pure, Except.pure] at hr
   repeat' split at hr
   all_goals first | (simp at hr; done) | skip
   all_goals
     cases hr
-    have hb := run_used_le (lib := []) (cap := Bounds.stackMax) 256
+    have hb := run_used_le (lib := []) (cap := Bounds.stackMax) Bounds.holeGuardFuel
       (State.init h.guard [.bool (h.guardPin.all (holePinHolds rv self))])
     rw [‹run _ _ _ _ _ = _›] at hb
     exact hb
@@ -132,7 +132,7 @@ theorem runHoleGuard_cost {D : Type} {rv : RowView D} {self : D} {h : HoleROM} {
 
 
 theorem admitContextual_inv {D : Type} {digestOf : ByteArray → Option D}
-    {prepare : List Ty → Package → Except String Term}
+    {prepare : List Ty → Package → Except HoleRefusal Term}
     {idb : ByteArray} {p : Package} {acc L : Loaded} {gis : List Nat} {g : Nat}
     (hi : Inv acc) (hpw : Wire.packageWire p = true)
     (h : admitContextual digestOf prepare idb p acc gis = .ok (L, g)) :
@@ -363,9 +363,7 @@ theorem instantiateHoles_cost {D : Type} {rv : Kernel.Receive.RowView D} {self :
     {Δ : List Ty} {p : Package} {i : HoleInstance}
     (h : instantiateHoles rv self Δ p = .ok i) :
     i.cost ≤ p.preparationCost := by
-  have hc : i.cost = if p.holes.isEmpty then 0 else
-      Term.nodes p.body * (resolutionMax (p.holes.map (resolveHole rv self)) + 1) +
-        256 * p.holes.length := by
+  have hc : i.cost = p.holeCharge (resolutionMax (p.holes.map (resolveHole rv self))) := by
     unfold instantiateHoles at h
     simp only [bind, Except.bind, pure, Except.pure] at h
     repeat' split at h
@@ -374,12 +372,12 @@ theorem instantiateHoles_cost {D : Type} {rv : Kernel.Receive.RowView D} {self :
       simp only [Except.ok.injEq] at h
       subst i
       simp_all
-  rw [hc, Package.preparationCost]
+  rw [hc, Package.preparationCost, Package.holeCharge, Package.holeCharge]
   split
   · exact Nat.le_refl 0
   · have hm := resolutionMax_committed rv self p.holes
     have hmul := Nat.mul_le_mul_left (Term.nodes p.body) (Nat.add_le_add_right hm 1)
-    simpa only [Nat.add_comm] using Nat.add_le_add_right hmul (256 * p.holes.length)
+    exact Nat.add_le_add_right hmul _
 
 end
 

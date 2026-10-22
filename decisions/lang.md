@@ -5575,3 +5575,76 @@ by diffing closures. The map's groups were INFERRED and I treated them as a spec
 labels as measurements; the closure diff now runs before I call a move done.
 
 Status: landed by CX-FOLD-2; next LANG-74.9 (S9, the `lang!` conformance card).
+
+### LANG-74.9 S9 · the P7 conformance card: preparation refusals are constructors, the hole bounds are named, one preparation charge, the hole signature is always stated (2026-10-22; CX-FOLD-2 designed, CX-FOLD-3 built; IMPACT `redregg/work/fold/IMPACT-S9.md` (section BUILT); cross-family reads `redregg/work/fold/READ-S9-grok.md` and `redregg/work/fold/READ-S9-built-grok.md`; RELEASE R-0014 under five conditions, RELEASE R-0016 of the built diff)
+
+**Decision.** The live contextual preparation stops speaking `String`.
+- `Lang/LiveHoles.lean` gets `inductive HoleRefusal` (21 constructors) and one printer `HoleRefusal.wire`.
+  `HoleROM.check`, `Package.checkContextual`, `holeRow`, `changedHypotheses`, `runHoleGuard`, `selectHole`,
+  `instantiateHoles`, `unresolvedBody` and `admitContextual`'s `prepare` return `Except HoleRefusal`.
+  `HoleResolution.blocked` carries a `HoleRefusal`; its body is `.refuse T why.wire.toUTF8`.
+- `Lang/HoleBudget.lean` gets `inductive ExpansionBound | work | size`; `Term.fillBounded` returns
+  `Except ExpansionBound`, reaching `HoleRefusal.expansion` by an explicit `match` at its two callers.
+- `Lang.Bounds` gets `holeCandidatesMax = 64`, `holeSignatureMax = 16` and ONE `holeGuardFuel = 256`. That one field
+  is the guard's `run` fuel and the per-hole coefficient of the charge. It is not `reasonMax` or `docMax`, which are
+  other facts that are also 256.
+- `Package.holeCharge p m` is the one charge formula. The actual cost is it at `m = resolutionMax rs`; the static
+  `Package.preparationCost` is it at the fold over every committed candidate. Both folds keep their floor of 1. Same
+  formula, not the same number: `instantiateHoles_cost` is still `≤`.
+- The seven `(Ω : HoleSignature := [])` defaults are gone from `inferE`, `inferFields`, `inferArms`, `inferSubst`,
+  `infer`, `checkE`, `check`. Every caller names its signature; a closed call is written `(Ω := [])`. No second
+  checker name.
+
+**The reachable arm.** `instantiateHoles`' closed re-check keeps its own constructor `instanceRecheck`, whose wire is
+the bare `holeInstanceType` it printed before; `admitContextual`'s re-check is `instanceType e`
+(`holeInstanceType {e.text}`). The design (IMPACT §1) wanted to fold them, calling the first arm unreachable. It is
+reachable: a ROM hole name is an unbounded `Nat`, a blocked hole's refusal text carries it, and past
+`Bounds.reasonMax` that text makes the filled `.refuse` ill-typed. The plant `recheck-arm-reachable`
+(`--contextual-checks`) drives a hole named `10^300` there and expects `.instanceRecheck`, with name 0 as the
+control. With the arm mutated to `.instanceType e` the row is FAIL and the run RED.
+
+**What stays a string (no widening).** `Print.contextualText`'s refusals, `StdContextualHole`'s generator
+refusals (its two `checkContextual` calls map through `HoleRefusal.wire`), the machine's `holeUnresolved`, the
+budget's `holeTicks`, the journey's `resultName`/`refusedBy` rows (they read the wire, and are the gate that it did
+not move), and the `admission-prepared-type` prefix check on `Refusal.program`.
+
+**Statements re-spelled, measured.** Census digest diff ac34521 → candidate: 27 user theorems change type, all in
+IMPACT §3's list of 33. Each change is a token substitution (`redregg/work/fold/S9-typediff.txt`): `String` →
+`HoleRefusal` (`ExpansionBound` for `fillBounded_bounds`); `why` → `why.wire` in `blocked_step` and
+`resolveHole_refusal`; `"holeSupportMoved 0 1"` → `.supportMoved 0 1` in `used_hypothesis_suspends`; `256` →
+`Bounds.holeGuardFuel` in `runHoleGuard_cost`. **No landed theorem gains a hypothesis**: 0 binders added in any of
+the 27. Kernel, Ledger and Host: 0 type changes and no source edit; `object_history_start`'s proof term changes
+only because it instantiates `loadContextual_top`. The Ω edit changes no theorem type. The two vanished constants are
+`_simp` auxiliaries of re-proved theorems; the other type changes are the definitions above and their generated
+matchers, equation lemmas and splitters.
+
+The six of IMPACT §3's 33 that do not move: `resolutionMax_committed` (two `Nat`s; the blocked reason is not in
+its statement), `loadLive_checked`, `loadLive_libTy`, `loadLive_of_load`, `method_live_run_sound`,
+`invoke_live_never_stuck` (`loadLive`'s type is `Except (Refusal D)` and did not change). They were listed because
+the design's census followed `loadLive`/`resolveHole`; none of their statements mentions the refusal string or the
+literal. The first four change proof value only; the last two change neither.
+
+**Wire.** No byte moves. `lang-journey` and `--contextual` output byte-identical to ac34521's;
+`--contextual-checks` identical except the new plant row; `codec-vectors` check ok and write byte-identical.
+
+What locks the bytes is the executing journey rows that still compare strings (`holeSelectionAbsent 0`,
+`holeUnpinned`, `holeGuardBlocked 0`, `holeSupportMoved 0 1`, `holeDerivationMoved 0`, `holeTicks`), unchanged by
+this step. The constructor rows, the new plant among them, compare values, not `wire`; the codec vectors carry no
+refusal text and are only the control. The bare `holeInstanceType` of `instanceRecheck` has no exact byte row (the
+`admission-prepared-type` row is a prefix check of the with-text spelling): a printer edit that kept the constructor
+and changed that string would stay green. That is the gap named in the critique.
+
+**What breaks.** `Except String` → `Except HoleRefusal` on the nine preparation functions; `fillBounded` →
+`Except ExpansionBound`; the checker's `Ω` is required; a caller that matched refusal strings matches constructors.
+In-tree callers are all updated. Re-emit: none. Nothing refuses to load.
+
+**Critique.** `HoleRefusal.wire` reprints today's strings by construction, and the only check that it does is that
+the journey reads the same bytes. A theorem `wire` is injective, or at least that the 21 prefixes are distinct, would
+make the "constructor ⇔ bytes" claim a fact rather than an observation. Not in this step.
+
+**Meta-critique.** The design called the re-check arm unreachable because a theorem about the success direction
+existed nearby. I read the presence of a typing theorem as a proof of absence. The cross-family reader found the
+witness in a bound nobody had joined to the hole name; the bias is trusting a neighbouring theorem's name for the
+claim it does not make.
+
+Status: landed by CX-FOLD-3; next LANG-74.10 (S10, the provenance twin).

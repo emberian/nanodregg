@@ -217,7 +217,7 @@ def activity (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
   if 2 * plans.length + 1 > methodsMax then throw .tooManyPlans
   if !(plans.map (·.name)).Nodup then throw .duplicatePlan
   if cursor = log then throw .sameRelation
-  match checkE [] resumer (.fn S (.fn reqTy .bool)) with
+  match checkE [] resumer (.fn S (.fn reqTy .bool)) (Ω := []) with
   | .error why => throw (.package (.illTyped why))
   | .ok () => pure ()
   for p in plans do
@@ -225,7 +225,7 @@ def activity (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
       (p.precondition, Ty.fn S (.fn p.captured (.fn reqTy .bool))),
       (p.start, Ty.fn S (.fn p.captured (.fn reqTy S))),
       (p.resume, Ty.fn S (.fn p.captured (.fn p.response (.fn reqTy S))))] do
-      match checkE [] t T with
+      match checkE [] t T (Ω := []) with
       | .error why => throw (.package (.illTyped why))
       | .ok () => pure ()
   let pkg := activityPackage S cursor log cursorLimit logLimit resumer plans

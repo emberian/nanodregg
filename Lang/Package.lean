@@ -447,7 +447,7 @@ def Package.checkFields (p : Package) : Except CheckError Unit :=
 /-- The install check, given the interfaces of the imports in order: the shape, then the body
 checks at its interface (`checkE`, which names the failed rule), then the fields. -/
 def Package.checkWith (ifaces : List Ty) (p : Package) : Except CheckError Unit :=
-  match p.checkShape, checkE ifaces p.body p.iface with
+  match p.checkShape, checkE ifaces p.body p.iface (Ω := []) with
   | .error e, _ => .error e
   | .ok (), .error why => .error (.illTyped why)
   | .ok (), .ok () =>

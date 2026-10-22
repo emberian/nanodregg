@@ -53,9 +53,9 @@ embedding reconstructing the original open term. No closed witness is invented. 
 theorem strengthening_factor :
     (selectHole (view (some 0) none) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key }).map
-        (fun s => (s.context, s.filling, s.body, inferE [] s.context s.filling)) =
+        (fun s => (s.context, s.filling, s.body, inferE [] s.context s.filling (Ω := []))) =
       .ok ([.nat], .var 0, .var 1, .ok .nat) := by
-  change Except.ok (ε := String) ([Ty.nat], Term.var 0, Term.var 1, inferE [] [.nat] (.var 0)) = _
+  change Except.ok (ε := HoleRefusal) ([Ty.nat], Term.var 0, Term.var 1, inferE [] [.nat] (.var 0) (Ω := [])) = _
   rw [inferE_complete (HasType.var rfl)]
 
 /-- For every supplied nat, capture-avoiding contextual instantiation returns
@@ -93,7 +93,7 @@ It cannot be strengthened as though the variable were unused. -/
 theorem used_hypothesis_suspends :
     selectHole (view (some 0) (some 1) (used := none)) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key } =
-      .error "holeSupportMoved 0 1" := by
+      .error (.supportMoved 0 1) := by
   rfl
 
 end DeployedContextual

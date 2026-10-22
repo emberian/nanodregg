@@ -309,7 +309,7 @@ private def faultLaw : Term :=
 faults (`0 - 1` underflows), so `Receiver.fault_never_admits`' premise is met by a law an install
 check passes, and `runLaw_never_stuck` leaves this arm open by design. -/
 theorem fault_law :
-    check [] faultLaw (lawTy (.record [])) = true ∧
+    check [] faultLaw (lawTy (.record [])) (Ω := []) = true ∧
       (match runLaw [] faultLaw (.record []) (.record []) (rqOn (.inj "write" (.record []))) with
         | .error .underflow => true
         | _ => false) = true := by

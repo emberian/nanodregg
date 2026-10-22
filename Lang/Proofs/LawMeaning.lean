@@ -408,10 +408,14 @@ theorem unresolvedBody_field {p : Package} {fs : List (Label × Term)} {b : Term
   split at hp
   · cases hp
     exact ⟨fs, hb, fun l t hf ht => ⟨t, hf, LawTerm.same ht⟩⟩
-  · unfold Term.fillBounded at hp
-    repeat' split at hp
-    all_goals first | (cases hp; done) | skip
+  · split at hp
+    · cases hp
+    rename_i t ht
     cases hp
+    unfold Term.fillBounded at ht
+    repeat' split at ht
+    all_goals first | (cases ht; done) | skip
+    cases ht
     rw [hb]
     refine ⟨_, rfl, fun l t hf ht => ?_⟩
     refine ⟨Term.fillRefs (fun n =>

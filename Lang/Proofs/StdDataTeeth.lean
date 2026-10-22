@@ -18,7 +18,7 @@ private def equalityValue (label : Label) (n : Nat) : Term := .record [
   ("d", .inj (.sum [("left", .nat), ("right", .nat)]) label (.nat n))]
 
 theorem eqData_nested_checks :
-    infer [] [] (eqData equalityTy (equalityValue "left" 3) (equalityValue "left" 4)) = some .bool := by
+    infer [] [] (eqData equalityTy (equalityValue "left" 3) (equalityValue "left" 4)) (Ω := []) = some .bool := by
   decide +kernel
 
 theorem eqData_nested_equal :

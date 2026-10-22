@@ -22,7 +22,7 @@ characterise verified judgment. Historical row status contributes no premise. -/
 theorem holeModel_verified_iff (I : Iface langData E) (w : World E)
     (value : Term) (s0 s1 blocker : Option Token) (by_ : Party) (recorded : Status)
     (hctx : I.ctx = []) (hhyps : I.hyps = [])
-    (htyped : Lang.infer [] [] value = some I.ty) :
+    (htyped : Lang.infer [] [] value (Ω := []) = some I.ty) :
     judge I w (holeModelCandidate value s0 s1 blocker by_ recorded) = .verified ↔
       I.guard w.env value = true ∧ holeBlocked w blocker = false ∧
         holeLive w s0 = true ∧ holeLive w s1 = true := by
@@ -57,7 +57,7 @@ admission nor verified judgment is assumed. -/
 theorem holeAdmission_judge_iff (I : Iface langData E) (w : World E)
     (value : Term) (s0 s1 blocker : Option Token) (by_ : Party) (recorded : Status)
     (hctx : I.ctx = []) (hhyps : I.hyps = [])
-    (htyped : Lang.infer [] [] value = some I.ty)
+    (htyped : Lang.infer [] [] value (Ω := []) = some I.ty)
     (p0 p1 : Nat)
     (hp0 : p0 = 1 ↔ holeLive w s0 = true)
     (hp1 : p1 = 1 ↔ holeLive w s1 = true)
@@ -78,7 +78,7 @@ The deployed wrapper additionally requires complete declared observations. -/
 theorem holeJudge_fixed_observations (I : Iface langData E) (w : World E)
     (value : Term) (s0 s1 blocker : Option Token) (by_ : Party) (recorded : Status)
     (hctx : I.ctx = []) (hhyps : I.hyps = [])
-    (htyped : Lang.infer [] [] value = some I.ty)
+    (htyped : Lang.infer [] [] value (Ω := []) = some I.ty)
     (clause : Term) (lib : List Term) (env : Env)
     (state candidate rows : Val) (ts tc tr : Term)
     (hs : BigStep lib env ts (.ok state))
@@ -113,7 +113,7 @@ this segment, and kernel staleness/resource checks follow it. -/
 theorem hole_judgment_admission_bridge (I : Iface langData E) (w : World E)
     (value : Term) (s0 s1 blocker : Option Token) (by_ : Party) (recorded : Status)
     (hctx : I.ctx = []) (hhyps : I.hyps = [])
-    (htyped : Lang.infer [] [] value = some I.ty)
+    (htyped : Lang.infer [] [] value (Ω := []) = some I.ty)
     (clause : Term) (lib : List Term) (env : Env)
     (state candidate rows : Val) (ts tc tr : Term)
     (hs : BigStep lib env ts (.ok state))
@@ -163,7 +163,7 @@ caller precondition: the generated coverage expressions enforce it. -/
 theorem hole_judgment_admission_fixed_observations (I : Iface langData E) (w : World E)
     (value : Term) (s0 s1 blocker : Option Token) (by_ : Party) (recorded : Status)
     (hctx : I.ctx = []) (hhyps : I.hyps = [])
-    (htyped : Lang.infer [] [] value = some I.ty)
+    (htyped : Lang.infer [] [] value (Ω := []) = some I.ty)
     (clause : Term) (lib : List Term) (env : Env)
     (state candidate rows : Val) (ts tc tr : Term)
     (hs : BigStep lib env ts (.ok state))

@@ -312,7 +312,7 @@ theorem checkLib_sound {lib : List Term} (h : checkLib Δ lib = true) : LibTy Δ
 /-- End to end: a term the checker accepts, over a closure the checker accepts, run under any tick
 budget, ends with a value of its type or a named fault that is not `stuck`. -/
 theorem checked_never_stuck {lib : List Term} {t : Term} {T : Ty} {ticks : Nat}
-    (hlib : checkLib Δ lib = true) (ht : check Δ t T = true) :
+    (hlib : checkLib Δ lib = true) (ht : check Δ t T (Ω := []) = true) :
     RunOK Δ T (eval lib ticks t) :=
   eval_sound (checkLib_sound hlib) .nil (check_iff.mp ht)
 
