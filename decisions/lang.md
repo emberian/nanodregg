@@ -6031,3 +6031,50 @@ framing into IMPACT-C2 §6 as "no new theorem" instead of asking it at the plan.
 deliverable to be discharged rather than a question to be answered.
 
 Status: landed by CX-PROMO-2 (lang:). Next: C5 (`promo/IMPACT-C5.md`).
+
+### LANG-75.5 C5 (part 1) · which hypotheses a selection drops, and when a live candidate selects: two theorems over `selectHole` (2026-10-22; CX-PROMO-2; IMPACT `redregg/work/promo/IMPACT-C5.md`; cross-family read `redregg/work/promo/READ-C5-grok.md`; RULE/RELEASE R-0040)
+
+**Decision.** Two theorems land in `Lang/Proofs/LiveHoles.lean`, statements as judged:
+`selectHole_hypotheses` — a selection strengthens away EXACTLY the hypotheses whose pins do not hold, and the selected
+code uses none of them; `selectHole_live_selects` — when none of `selectHole`'s refusal arms fires (the row names
+`i`; code `i`'s supports observed and holding; every hypothesis pin observed and every used one holding; the guard
+pin observed and the guard RUN returning `true`), the hole selects `i` at the row's version. With
+`selectHole_origin` they are the deployed judgment of a hole, soundness and completeness, with no abstract judge
+(LANG-75.3). They succeed `strengthening_sound`, `suspended_sound`'s hypothesis arm, `hyp_var_cites`,
+`judge_verified_iff` (←) and `select_ok`.
+
+**The step is named.** `changedHypotheses` now folds `hypothesisStep` (`Lang/LiveHoles.lean`), one hypothesis
+position; behaviour identical (journey byte-identical, 793 lines). The proofs read that step, so a mutation of it reds
+the fold invariant that IS `selectHole_hypotheses`'s first conjunct, not a restatement's `rfl`.
+
+**Plants** (READ-C2 §3's mutations, the shapes no tooth runs; `redregg/work/promo/C5/plants-landed/`), each with the
+five teeth GREEN (elaborated from a copy of `Lang/Proofs/LiveJourney.lean` that does not import this module),
+`lang-journey` GREEN and byte-identical, the module RED by name, and a witness that flips:
+- a dead unused `.cell` hypothesis pin is not strengthened (`hypothesisStep`): `strengthened [0]` → `[]`; RED at
+  the dead-unused step of `selectHole_hypotheses`'s fold (`changed_fold`); `selectHole_live_selects` stays green (it
+  is still true: the hole still selects);
+- the guard pin refused while live, before the guard runs (`runHoleGuard`): `index 0` → `refused holeGuardBlocked
+  0`; RED in `selectHole_live_selects`'s guard step.
+
+**The five teeth stay standalone.** `kept_context`, `strengthening_factor`, `alternative_same_filling`,
+`replacement_filling`, `used_hypothesis_suspends` are closed instances over one ROM each and are NOT corollaries of
+these theorems (neither mentions the factor's context or filling); the plan's "they elaborate as corollaries" is not
+met, and this says so.
+
+**Measured.** Digest against LANG-75.3's: type-digest changed 0; value changed 1 (`changedHypotheses`, now a fold
+of the named step); vanished 1 (`changedHypotheses.match_1`, now `hypothesisStep.match_1`); new 25 (the two
+theorems, `hypothesisStep`, four private lemmas and generated equations). Premise price 0. Whole tree GREEN;
+`gates/check.py` ok. Theorems 5,866 → 5,872 (two public, four private).
+
+**Not in this landing.** `selectHole_factor` (T3): R-0040 keeps the factor (two journey rows decide its context and
+filling, and a wrong embedding keeps the node count `selectHole_nodes` checks); it is C5 part 2, with the
+mis-embedding plant (two kept variables, the second sent to 0).
+
+**Critique.** `selectHole_live_selects` restates `selectHole`'s refusal arms as premises; it is only as strong as
+the claim that those are all the arms, which the read checked by hand against the definition, not a theorem.
+
+**Meta-critique.** IMPACT-C5 recommended deleting the factor on "nothing reads it" and quoted two journey checks as
+they would read after my edit, not as they read: the read caught it. The BIAS: arguing from the shape I meant to
+make, cited as if it were the tree.
+
+Status: landed by CX-PROMO-2 (lang:). Next: C5 part 2 (`selectHole_factor`).

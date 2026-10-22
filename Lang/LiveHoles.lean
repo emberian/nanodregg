@@ -146,19 +146,27 @@ structure HoleSelection where
   original : Term
   deriving Inhabited
 
+/-- One hypothesis position `pi = (pin, x)` of `changedHypotheses`: a structural assumption (`none`) is skipped;
+a pin must be observed (`unpinned`); a live pin keeps `x`; a dead pin used by the code refuses `supportMoved`; a dead
+unused pin strengthens `x` away. Named so the theorems over `selectHole` (`selectHole_hypotheses`) read this step
+itself (C5, LANG-75.5). -/
+def hypothesisStep {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
+    (rv : RowView D) (self : D) (h : HoleROM) (c : HoleCode) (removed : List Nat)
+    (pi : Option SupportPin × Nat) : Except HoleRefusal (List Nat) :=
+  match pi.1 with
+  | none => .ok removed
+  | some pin => do
+    supportPinned digestOf look rv self pin
+    if supportLive digestOf look rv self pin then .ok removed
+    else if Term.usesVar pi.2 c.body then .error (.supportMoved h.name pi.2)
+    else .ok (removed ++ [pi.2])
+
 /-- Positions whose support moved. Only genuinely unused variables may be
 strengthened away; a moved support actually used by the candidate is refused. -/
 def changedHypotheses {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
     (rv : RowView D) (self : D) (h : HoleROM) (c : HoleCode) :
     Except HoleRefusal (List Nat) :=
-  h.hypotheses.zipIdx.foldlM (fun removed pi =>
-    match pi.1 with
-    | none => .ok removed
-    | some pin => do
-      supportPinned digestOf look rv self pin
-      if supportLive digestOf look rv self pin then .ok removed
-      else if Term.usesVar pi.2 c.body then .error (.supportMoved h.name pi.2)
-      else .ok (removed ++ [pi.2])) []
+  h.hypotheses.zipIdx.foldlM (hypothesisStep digestOf look rv self h c) []
 
 /-- Evaluate the signature guard on the current authenticated guard pin. -/
 def runHoleGuard {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
