@@ -3022,6 +3022,14 @@ Teeth (kernel-sim): cancel:recorded, cancel-final:refusedFinal, cancel-other:bad
 - My first cancel build had `judge` decline a program-named `cancelled`, so that the code alone would mean "signed". That put a premise on a landed theorem. The field, not the code, was always the right discriminator.
 - I also nearly shipped C1's "no new kernel check" without reading what the chain commits.
 
+**Addendum (LANG-75.2, CX-PROMO, 2026-10-22; GRANT R-0030; text only, no kernel source).** A method's live read
+of a cell (`Lang.cellLive` at `pinned`, LANG-75.1) and the calls that run returns (`spendVia` included) are the
+same Turn: `receive` takes one `pinned` view and `invoke` runs and derives under it. That is the pin check plus
+one Turn; it is not a certificate the kernel consumes. In P8 the checked cell is the provider grant and the spent
+cell is `cap` (two cells, one `look`). Across two Turns nothing is shared: a second Turn that spent without its
+own live read would admit; the journey row "P8.2s two-Turn split" records that the deployed second Turn re-reads
+and refuses `support0 dead`. (Morgenstern 2011, LPCFS p2, is the shape cited, not a claim this ledger implements.)
+
 ## KERNEL-61 AS BUILT · A counted right's cap provably falls: `LedgerContiguous`, the grant totality, and the read-back (KERNEL-30 lane, for LEDGER-7's `grant_moves_le_cap`, 2026-10-22)
 **The finding (LEDGER-7).** Nothing proved a spend is READ BACK. `ledgerLeft base g` reads the LAST entry of the slots `base … base + ledgerSpendsMax` and names the next index as their COUNT, so a spend appends at `base + count`. If a grant's ledger had a gap, that write would land below the last key, `getLast?` would keep reading the old entry, and the cap would never fall. No theorem said a reachable World has no gap.
 **Measured by the proof: the invariant HOLDS for every receiver.** No receiver writes a ledger slot out of order, so there is no kernel defect and no receiver change. Proof-only.

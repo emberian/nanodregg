@@ -5919,3 +5919,40 @@ histories refused (a fork is a new World). The section's lead sentence and its "
 do not contradict item 3 ("replicate the writer" outside its planned phase; "merge two histories of a World").
 
 Status: landed by CX-PROMO (lang!). Next: C9 (LANG-75.2), then the C2 measurement (P2).
+
+### LANG-75.2 C9 · use-once grants and the one Turn: a docstring and a row, no theorem (2026-10-22; CX-PROMO; IMPACT `redregg/work/promo/IMPACT-C9.md`; cross-family read `redregg/work/promo/READ-C9-grok.md`; RELEASE R-0031 as DOCSTRING; GRANT R-0030 (decisions/kernel.md, CROSS-LAYER: KERNEL))
+
+**Decision (plan §8.2 applied: a promotion that is a rename lands as a docstring).** The IMPACT proposed
+`commit_checks_justification_atomically` (an admitted `invoke` ran its method and derived every returned call under
+one `look`) and `cellLive_pinned` (`cellLive (pinned E w pins) g` ↔ pinned ∧ `w.live` is some). The read: the first is
+a rename of `invoke` — `receive` builds one view and `invoke` runs and derives under it by definition; no landed
+theorem or consumer is weaker without it, and no deployed mutation falsifies it that a conjunct's own tooth does not
+already catch (the plan's two-Turn split leaves it TRUE: each Turn threads its own view). The second has a real
+mutation (`pinned` answering a tombstone with a cell) but no landed consumer; it rides with C2's `kernelWorld`, its
+caller. Neither lands; the theorem count falls by the two the IMPACT proposed (both were built and proved in the
+candidate, then removed).
+
+**What lands.**
+- The docstring on `cellLive` (Lang/Rel) and an addendum to KERNEL-60 (decisions/kernel.md, R-0030), in the read's
+  words: a method's live read and the calls that run returns are the same Turn — the pin check plus one Turn, not a
+  certificate the kernel consumes; in P8 the checked cell is the provider grant and the spent cell is `cap`.
+- The plan's two-Turn split as a journey row, recording what it does: `P8.2s two-Turn split: Turn 1 select while
+  live admitted; revoke admitted; Turn 2 commit refused … support0 dead; counted left 1`. The second Turn re-reads the
+  cell through its own pins (the E1 path). The row states the boundary: across Turns nothing is shared, so a second
+  Turn that spent WITHOUT its own live read would admit — the kernel does not close that gap; the method's read does.
+  The read predicted that shape (a spend-only second Turn) admits; the deployed P8 package has no spend-only method,
+  and adding one to show a broken protocol admits is not this card (INFERRED, not run).
+- Not landed: the builder's plant "commit without its `select`" (it REDs P8.2, P8.4 and the moved-support row,
+  `promo/C9-plants/`): a weaker mutation than LANG-75.1's plant (c), already caught.
+
+**Price.** 0: no statement changes, no definition changes but a comment, no wire, no re-genesis.
+
+**Critique.** The row shows the deployed protocol re-checks; it does not exhibit the gap it names, because the
+gap-exhibiting protocol does not exist in nano. A reader has to trust the sentence "a spend-only second Turn would
+admit" from the read's reasoning, not from a run.
+
+**Meta-critique.** I built both theorems while the read was out and they compiled at once; that ease was the
+signal I ignored. The BIAS: equating "a statement Lean accepts about a deployed function" with "a fact the system
+did not already state". The plan's own refuter (§8.2) was the test, and the read ran it before I did.
+
+Status: landed by CX-PROMO (lang:). Next: C2 waits on the D.2 measurement's ruling (`promo/IMPACT-C2-MEASURE.md`).

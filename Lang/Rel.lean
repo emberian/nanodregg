@@ -94,7 +94,13 @@ def slotsD (c : String) (n : Nat) (xs : List Data) : List (Label × Data) :=
   (slotLabels c n).zipIdx.map fun p => (p.1, optD xs[p.2]?)
 
 /-- Kernel cell `g` is LIVE in the caller's pinned view (E1): pinned, and neither a tombstone nor
-absent (KERNEL-54's three pin domains). Never "at a version" (KERNEL-60). -/
+absent (KERNEL-54's three pin domains). Never "at a version" (KERNEL-60).
+
+C9 (LANG-75.2): a method's live read (`cellLive` at `pinned`) and the calls that run returns
+(`spendVia` included) are the same Turn: `receive` takes one `pinned` view and `invoke` runs and derives
+under it. That is the pin check plus one Turn; it is not a certificate the kernel consumes. In P8 the
+checked cell is the provider grant and the spent cell is `cap`. Across Turns nothing is shared: the
+journey row "P8.2s two-Turn split" records that the second Turn re-reads the cell and refuses. -/
 def cellLive {D : Type} (look : Kernel.Receive.Pinned D) (g : D) : Bool :=
   match look g with
   | .ok (some _) => true

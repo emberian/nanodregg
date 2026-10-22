@@ -2337,6 +2337,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   r := note r s!"P8.1 old signed plan after unrelated update: {usable}" (usable == "admitted")
   -- Withdraw one authority without discarding the conditional protocol or its alternatives.
   let oldPlan := commit r 0 a.id
+  let preRevoke := r
   let (r', vr, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, providers[0]!])
     (.revoke providers[0]!))
   r := note r' s!"P8.2 withdraw provider 0: {vr}" (vr == "admitted")
@@ -2357,6 +2358,21 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   r := note r s!"P8.2 re-pinned tombstone: {vt}; counted left {p8Left r.st.host cap}"
     (refusedBy vt "commit" "support0 dead" && p8Left r.st.host cap == some 1 &&
       (match r.st.host.entry Sim.env g0 with | some .tomb => true | _ => false))
+  -- C9 (LANG-75.2): the plan's two-Turn split, recorded. Turn 1 selects candidate 0 while its
+  -- provider is live; the provider is revoked; Turn 2 commits. The second Turn reads the cell again
+  -- through its own pins and refuses by the E1 path. The boundary: one Turn's pin check and its
+  -- derived calls share one pinned view (`receive`); across Turns nothing is shared, so a second
+  -- Turn that spent WITHOUT its own live read would admit — the kernel does not close that gap,
+  -- the method's read does.
+  let (s1, vs1, _) := go prog preRevoke (invoke preRevoke "select" (hole_selectArg (Sim.dc.bytes a.id))
+      (pinC preRevoke.st.host a.id ++ pinF preRevoke.st.host g0) (Sim.S.pinsFor preRevoke.st.host [g0]))
+  let (s2, vs2, _) := go prog s1 (Sim.signed s1.st a a.key (Sim.S.pinsFor s1.st.host [a.id, g0]) (.revoke g0))
+  let (_, vs3, _) := go prog s2 (invoke s2 "commit" (p8Arg asset a.id cap)
+      (pinC s2.st.host a.id ++ pinF s2.st.host g0)
+      (Sim.S.pinsFor s2.st.host [asset, accountId X a.id asset, cap, g0]))
+  r := note r s!"P8.2s two-Turn split: Turn 1 select while live {vs1}; revoke {vs2}; Turn 2 commit {vs3}; counted left {p8Left s2.st.host cap}"
+    (vs1 == "admitted" && vs2 == "admitted" && refusedBy vs3 "commit" "support0 dead" &&
+      p8Left s2.st.host cap == some 1)
   -- A commit that pins the live provider's authority at a version it never had is refused by
   -- the kernel's pin check.
   let (_, vw, _) := go prog r (invoke r "commit" (p8Arg asset b.id cap)
