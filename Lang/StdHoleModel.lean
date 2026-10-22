@@ -1,7 +1,6 @@
 /- Observable data and evaluator environments for the generated hole.
 Pure descriptions only; their semantics are proved in Lang.Proofs.StdHole*. -/
 import Lang.StdHole
-import Lang.Contextual.Trace
 
 namespace Nanodregg.Lang.Std
 
@@ -57,10 +56,22 @@ def holePointObservation (cell pin : ByteArray) : Option HolePoint → Nat
       match p.pin with | none => 0 | some v => if v = pin then 1 else 2
     else 0
 
+/-- Bounded complete collection; the first omitted read refuses by its key.
+Mokhov et al. 2018, §4.2.2 pp.79:14–15. -/
+def collect {A B R : Type} (missing : A → R) (read : A → Option B) :
+    List A → Except R (List B)
+  | [] => .ok []
+  | k :: ks =>
+    match read k with
+    | none => .error (missing k)
+    | some v => match collect missing read ks with
+      | .error e => .error e
+      | .ok vs => .ok (v :: vs)
+
 /-- P10's complete collector, specialized to the emitted finite dependency
 roles. These Booleans mean observed, not live; the payload may record absence. -/
 def holeCoverageOutcome (s0 s1 blocker : Bool) : Except Fault Val :=
-  (Contextual.Trace.collect
+  (collect
     (fun r : Bool × String => Fault.refused r.2.toUTF8)
     (fun r : Bool × String => if r.1 then some () else none)
     [(s0, "support0 withdrawn"), (s1, "support1 withdrawn"), (blocker, "pruned")]).map

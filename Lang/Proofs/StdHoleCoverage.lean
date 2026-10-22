@@ -1,8 +1,55 @@
 /- The emitted observation collector refines P10's complete finite collection. -/
 import Lang.Proofs.StdHoleLookup
-import Lang.Proofs.Contextual.Trace
 
 namespace Nanodregg.Lang.Std
+
+/-- Successful collection establishes coverage and exact values, assuming only that PROVIDED
+observations are authentic. Completeness is the conclusion. Mokhov et al. 2018, §4.2.2 p.79:14. -/
+theorem collect_sound {A B R : Type} (missing : A → R) (read : A → Option B)
+    (f : A → B) (agree : ∀ k v, read k = some v → v = f k)
+    (ks : List A) (vs : List B) (h : collect missing read ks = .ok vs) :
+    vs = ks.map f ∧ ∀ k ∈ ks, read k = some (f k) := by
+  induction ks generalizing vs with
+  | nil => simp [collect] at h; subst vs; simp
+  | cons k ks ih =>
+    cases hk : read k with
+    | none => simp [collect, hk] at h
+    | some v =>
+      cases hr : collect missing read ks with
+      | error e => simp [collect, hk, hr] at h
+      | ok rest =>
+        simp [collect, hk, hr] at h
+        subst vs
+        obtain ⟨rfl, hrest⟩ := ih _ hr
+        have hv := agree k v hk
+        subst v
+        exact ⟨rfl, by simpa [hk] using hrest⟩
+
+/-- Honest total observations always collect; this supplies the success-side inhabitant.
+Mokhov et al. 2018, §4.2.2 p.79:14. -/
+theorem collect_total {A B R : Type} (missing : A → R) (f : A → B) (ks : List A) :
+    collect missing (fun k => some (f k)) ks = .ok (ks.map f) := by
+  induction ks with
+  | nil => rfl
+  | cons k ks ih => simp [collect, ih]
+
+/-- An omitted declared key prevents success, including negative/blocker reads.
+Mokhov et al. 2018, §4.2.2 p.79:14. -/
+theorem collect_missing {A B R : Type} (missing : A → R) (read : A → Option B)
+    (ks : List A) (k : A) (hk : k ∈ ks) (hn : read k = none) :
+    ∀ vs, collect missing read ks ≠ .ok vs := by
+  induction ks with
+  | nil => cases hk
+  | cons a ks ih =>
+    intro vs h
+    cases ha : read a with
+    | none => simp [collect, ha] at h
+    | some v =>
+      rcases List.mem_cons.1 hk with rfl | hk
+      · rw [ha] at hn; cases hn
+      · cases hr : collect missing read ks with
+        | error e => simp [collect, ha, hr] at h
+        | ok rest => exact ih hk rest hr
 
 /-- The actual emitted check equals P10 collect on all eight coverage cases.
 In particular, missing a blocker cannot be interpreted as observed absence. -/
@@ -29,7 +76,7 @@ theorem holeCoverageOutcome_ok_iff (c0 c1 cb : Bool) :
     (∃ v, holeCoverageOutcome c0 c1 cb = .ok v) ↔
       c0 = true ∧ c1 = true ∧ cb = true := by
   cases c0 <;> cases c1 <;> cases cb <;> simp [holeCoverageOutcome,
-    Contextual.Trace.collect, Except.map]
+    collect, Except.map]
 
 /-- The actual self-row key comparison proves presence, independent of whether
 the observed value is absent or has a different version. -/

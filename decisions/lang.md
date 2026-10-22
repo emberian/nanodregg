@@ -5688,3 +5688,34 @@ API. It matches the file, but it is twenty digest lines a reader had to classify
 as owned by whoever holds it last; the decision text is the only place the change of meaning is findable.
 
 Status: landed by CX-FOLD-3; next LANG-74.11 (S11, the Trace split).
+
+### LANG-74.11 S11 · the Trace split: `collect` joins the generated hole's model; the rest of P10's trace is deleted (2026-10-22; CX-FOLD-3; IMPACT `redregg/work/fold/IMPACT-S11.md`; rename map `redregg/work/fold/S11-renames.tsv`; cross-family read `redregg/work/fold/READ-S11-grok.md`; RELEASE R-0019)
+
+**Decision.** `Contextual.Trace.collect`, the 8-line complete collector the generated hole's coverage check uses, moves
+verbatim to `Lang/StdHoleModel.lean` as `Nanodregg.Lang.Std.collect`, beside its one user `holeCoverageOutcome`. Its
+three lemmas (`collect_sound`, `collect_total`, `collect_missing`) move verbatim to `Lang/Proofs/StdHoleCoverage.lean`.
+`Lang/Contextual/Trace.lean` and `Lang/Proofs/Contextual/Trace.lean` are deleted (this is the deletion
+authorization): P10's guard/snapshot/cache/repair model of the abstract closure, whose consumers left in S1 and S2.
+
+The 17 deleted theorems: `seed_valid`, `refresh_valid`, `refresh_consistent`, `repair_entries`,
+`from_scratch_consistency`, `repair_minimal`, `repair_once`, `early_cutoff`, `repair_valid`, `capture_sound`,
+`checkedJudge_sound`, `checkedJudge_total`, `changed_iff`, `tagged_filter`, `evaluate_observe`, `guard_reads_only`,
+`observation_complete`. None is the only statement about the generated hole, the activity, the journey or the live
+path.
+
+**Measured** (census digest diff against 4f5f18b's tree under the map, `redregg/work/fold/diff-S11.txt`): 184 constants
+vanish, all declared; 0 type changes; one value change, `Std.collect.eq_def`, which cites the matcher of the module
+that realizes it; 9 generated private matcher lemmas of `collect` re-created under the new module's private prefix.
+No `lean_exe` import closure changes. Whole tree GREEN; the three journey modes byte-identical; theorems 6074 → 6057.
+
+**What breaks.** The two Trace modules no longer exist; `Contextual.Trace.*` no longer resolves; `collect` and its
+lemmas are `Nanodregg.Lang.Std.*`. Re-emit: none. Nothing refuses to load.
+
+**Critique.** The three lemmas now have no consumer: they are kept as the specification of a deployed function, and
+`holeCoverageOutcome_ok_iff` still proves its own fact by enumerating eight cases instead of citing them.
+Connecting the two is a small proof, not part of a move.
+
+**Meta-critique.** I measured the 17 against the map's list and stopped there. The bias is reading agreement with the
+plan as evidence; the evidence is the census VANISHED list and the empty consumer grep, which agree.
+
+Status: landed by CX-FOLD-3; next LANG-74.12 (S12, the certificate reader to Census).
