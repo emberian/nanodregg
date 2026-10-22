@@ -1,5 +1,5 @@
-/- The de Bruijn index maps of `Lang.Index` compose: the facts both the deployed renaming
-(`Lang.Proofs.Subst`) and the CMTT core (`Lang.Proofs.Contextual.Core`) rewrite with. -/
+/- The de Bruijn index maps of `Lang.Index` compose: the facts the deployed renaming
+(`Lang.Proofs.Subst`) rewrites with. -/
 import Lang.Index
 
 namespace Nanodregg.Lang

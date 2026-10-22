@@ -70,6 +70,30 @@ theorem holeDecision_meaning (allowed blocked : Bool) (s0 s1 : Nat)
   holeDecision_application allowed blocked s0 s1 lib _ _ _ _ _
     (.var rfl) (.var rfl) (.var rfl) (.var rfl)
 
+/-- **The live label of a generated hole** (C3 at the row grain, LANG-75.3): the generated decision's label is
+`verified` exactly when the clause allows, no blocker is live, and both supports probe live (code 1). Probe
+codes distinguish moved, dead and withdrawn for reporting; all three are non-live. -/
+theorem holeDecision_verified_iff (allowed blocked : Bool) (s0 s1 : Nat) :
+    holeVerdictLabel allowed blocked s0 s1 = "verified" ↔
+      allowed = true ∧ blocked = false ∧ s0 = 1 ∧ s1 = 1 := by
+  cases allowed <;> cases blocked <;>
+    by_cases h0 : s0 = 1 <;> by_cases h1 : s1 = 1 <;>
+    by_cases h2 : s0 = 2 <;> by_cases h3 : s1 = 2 <;>
+    by_cases h4 : s0 = 3 <;> by_cases h5 : s1 = 3 <;>
+    simp [holeVerdictLabel, *]
+
+/-- The label is one of the nine the generated verdict check and status printer read: the `hl` premise of
+`holeVerdictCheck_evaluated_iff` and `holeCheckedAdmission_evaluated_iff`, discharged. -/
+theorem holeDecision_label (allowed blocked : Bool) (s0 s1 : Nat) :
+    holeVerdictLabel allowed blocked s0 s1 ∈
+      ["conflict", "pruned", "support0Dead", "support0Moved", "support0Withdrawn",
+        "support1Dead", "support1Moved", "support1Withdrawn", "verified"] := by
+  cases allowed <;> cases blocked <;>
+    by_cases h0 : s0 = 1 <;> by_cases h1 : s1 = 1 <;>
+    by_cases h2 : s0 = 2 <;> by_cases h3 : s1 = 2 <;>
+    by_cases h4 : s0 = 3 <;> by_cases h5 : s1 = 3 <;>
+    simp [holeVerdictLabel, *]
+
 /-- Compose the actual clause and pinned probe evaluations through the generated
 judge. The four premises evaluate individual observations, never the judgment
 being proved; the candidate's recorded status is not an observation. -/

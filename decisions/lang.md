@@ -5956,3 +5956,53 @@ signal I ignored. The BIAS: equating "a statement Lean accepts about a deployed 
 did not already state". The plan's own refuter (§8.2) was the test, and the read ran it before I did.
 
 Status: landed by CX-PROMO (lang:). Next: C2 waits on the D.2 measurement's ruling (`promo/IMPACT-C2-MEASURE.md`).
+
+### LANG-75.3 C2 (other branch) + R3 · the abstract closure and the CMTT core leave Lang; the live judgment is `selectHole` (2026-10-22; CX-PROMO-2; IMPACT `redregg/work/promo/IMPACT-C2.md`; measurement `redregg/work/promo/IMPACT-C2-MEASURE.md` and its read `redregg/work/promo/READ-C2M-grok.md`; cross-family read `redregg/work/promo/READ-C2-grok.md`; RELEASE R-0032 (other branch), RULE R-0033 (shape), R-0022 (R3), RELEASE R-0038)
+
+**Decision.** The D.2 measurement fired both of the plan's triggers (§8.1). Of its seven (a)-binders, three are real
+premises a bridge `selectHole ↔ judge (kernelWorld …)` would have landed with — `hsel` (the selection row names `i`
+and `code[i] = c`: `judge` judges a GIVEN candidate), `hpinned` (an unused hypothesis or the guard pin unpinned throws
+`unpinned` while `judge` can say `verified`), `hchecked` (`judge` re-checks with `Lang.infer []`, the run never
+re-checks) — and four were how it was stated (`enc/dec` is a definable injection, the guard encoding is a
+definition, `hfuel` is needed for no clause of the iff, `hyps_real` is provable inside `romIface`). (c) = 2 (`pruned`,
+`uncovered`: no ROM blocker, no per-candidate cost) suffices alone. So the abstract judge is a second, coarser shape
+of four live answers plus two arms nothing produces: it leaves, with everything that fed it.
+
+**What is deleted** (15 modules; 209 theorems = 103 of the closure + 106 of the CMTT core; 4,284 lines in the
+deleted files = 2,504 + 1,780, and 62 more out of survivors — the hole-model fragment and four docstrings — for the
+diff's 4,346): `Lang/Contextual/{Closure, Core, CoreCalculus}`,
+`Lang/Proofs/Contextual/{ClosureStatements, Judge, Repair, Outcomes, Operations, Soundness, History, Provenance,
+HoleBridge, Core, CoreInstance, Typing}`, and the hole-model fragment of `Lang/Contextual/LangInstance`. Every
+statement is listed by name with its successor or its reason in the IMPACT (§1). R3 rides here, not next: the CMTT
+instance imported the closure. `drop_removes` goes rather than moves: its premise is false at `langData`.
+`Consumer`/`consumer_boundary` (C6's deletion half) go with Closure.
+
+**What moves** (statements identical, digest): `CalculusData` beside `langData` (def module, law 8); `CalculusLaws` and
+`weaken_never_var` beside `langLaws` (proof module); `holeDecision_verified_iff`/`holeDecision_label` into
+`Lang/Proofs/StdHole.lean` (they read no closure object; the first is C3's live label at the row grain).
+`Lang/Contextual` is LangInstance + Protocol + NanoBridge.
+
+**Measured.** Digest: vanished 1,834, all declared; new 0; type-digest changed 0; value-hash changed 0; 45 moved
+constants, all from the moved modules. Reverse deps: only the two LangInstance modules used the deleted modules.
+Premise price 0. Host closure 89 → 89. Whole tree GREEN; journey byte-identical; no wire, no vector, no re-genesis;
+nothing that loads changes shape.
+
+**What C5/C4a/C3 become** (R-0038): C3 and C4(a) are DOCSTRINGS, in the next fast landing — the row-grain label
+already exists (`holeVerdictLabel` + the moved `holeDecision_verified_iff`) and nothing reads a receipt monomial
+(`selectHole_origin` + C5's `selectHole_hypotheses` are that product). C5 is its own card: three theorems over
+`selectHole` (`selectHole_hypotheses`, `selectHole_factor`, `selectHole_live_selects`), landed only with the three
+plants the read names (a dead unused `.cell` hypothesis pin; two kept variables after a strengthening; a guard pin
+refused while live), the mutations no tooth runs. `cellLive_pinned` stays out (R-0031): there is no `kernelWorld`.
+
+**Critique.** `CalculusData`/`CalculusLaws` now have one inhabitant: an abstraction over a single instance, kept by
+R-0033 because `langLaws` states the CMTT laws of the deployed language by name. Real mathematics left the tree with
+the closure (provenance minimality, the de Kleer/Doyle label, repair-agrees-with-from-scratch); a planner or a label
+reader that arrives later restates it over `selectHole`, it is not resurrected.
+
+**Meta-critique.** A deletion's digest comes back 0/0/0 almost by construction, and I nearly let that stand as the
+argument. The BIAS: reading a clean digest as evidence the deletion is RIGHT. The digest proves nothing surviving
+changed; only the per-name table argues nothing lost was owed, and several of its rows say "no deployed
+counterpart" rather than "successor" — one (`withdraw_never_refutes`) is outright false of the deployed guard, which
+reads its pin's liveness.
+
+Status: landed by CX-PROMO-2 (lang:). Next: C3 + C4(a) docstrings (fast), then C5 (`promo/IMPACT-C5.md`).

@@ -7,7 +7,7 @@ local context; the selected open filling is instantiated at `σ` without capture
 imports), the occurrence tests `usesVar`/`usesRef`, decidable equality, and a hole's declared type `holeTy`.
 The Host runs these (through `Lang.HoleBudget`, `Lang.HoleROM`, `Lang.LiveHoles`); their typing facts are in
 `Lang.Proofs.Subst` and `Lang.Proofs.Fill`, and the deployed
-language as a closure calculus is `Lang.Contextual.LangInstance`.
+language as a contextual calculus is `Lang.Contextual.LangInstance`.
 
 Binders: `lam` binds one variable, every `case` arm binds its payload at index 0; record and
 extend fields bind nothing.

@@ -1,9 +1,48 @@
-/- The deployed language, including substituted contextual holes, is a lawful calculus. -/
+/- The laws of a contextual calculus (`CalculusLaws`), and the deployed language, including substituted contextual
+holes, as a lawful one (`langLaws`): the only instance (C2, R3: LANG-75.3). -/
 import Lang.Contextual.LangInstance
 import Lang.Proofs.Fill
-import Lang.Proofs.Contextual.ClosureStatements
 
 namespace Nanodregg.Lang.Contextual
+
+/-! ## The laws of a calculus -/
+
+/-- The LAWS of a contextual calculus over its data `D` and a typing relation `HasTy`
+(`HasTy Ω Ψ M A` is `Ω; Ψ ⊢ M : A`, meta-context `Ω`), each named after the CMTT fact it stands for. -/
+structure CalculusLaws (D : CalculusData)
+    (HasTy : List (HoleDecl D.Ctx D.Ty) → D.Ctx → D.Tm → D.Ty → Prop) : Prop where
+  /-- CMTT's meta-substitution lemma, partial form: the filled holes leave the meta-context. -/
+  msubst_lemma : ∀ {Ω : List (HoleDecl D.Ctx D.Ty)} {Γ : D.Ctx} {P : D.Tm} {T : D.Ty}
+    (σ : Nat → Option D.Tm), HasTy Ω Γ P T →
+    (∀ d ∈ Ω, ∀ M, σ d.name = some M → HasTy [] d.ctx M d.ty) →
+    HasTy (Ω.filter fun d => (σ d.name).isNone) Γ (D.msubst σ P) T
+  check_sound : ∀ {Ψ : D.Ctx} {M : D.Tm} {A : D.Ty}, D.check Ψ M A = true → HasTy [] Ψ M A
+  /-- The checker is complete: a `false` verdict is a refutation of typing, not an omission. -/
+  check_complete : ∀ {Ψ : D.Ctx} {M : D.Tm} {A : D.Ty}, HasTy [] Ψ M A → D.check Ψ M A = true
+  strengthen_lemma : ∀ {Ψ : D.Ctx} {M : D.Tm} {A : D.Ty} {x : Nat}, HasTy [] Ψ M A →
+    D.uses M x = false → HasTy [] (D.drop Ψ x) (D.strengthen x M) A
+  strengthen_factor : ∀ {M : D.Tm} {x : Nat}, D.uses M x = false → D.weaken x (D.strengthen x M) = M
+  /-- Non-degeneracy of `drop`/`weaken`: a term typed WITHOUT `x`, weakened back, does not use `x`.
+  With `hasTy_var`/`uses_var` it refutes `uses ≡ false` (`weaken_never_var`). -/
+  weaken_avoids : ∀ {Ψ : D.Ctx} {M : D.Tm} {A : D.Ty} {x : Nat}, HasTy [] (D.drop Ψ x) M A →
+    D.uses (D.weaken x M) x = false
+  /-- The variable rule. -/
+  hasTy_var : ∀ {Ψ : D.Ctx} {x : Nat} {A : D.Ty}, D.lookup Ψ x = some A → HasTy [] Ψ (D.var x) A
+  /-- A variable uses itself. -/
+  uses_var : ∀ {x : Nat}, D.uses (D.var x) x = true
+
+/-- **Weakening never produces the dropped variable.** No term typed in `drop Ψ x`, weakened back,
+is the variable `x`: the general form, which bites for every calculus (de Bruijn included). -/
+theorem weaken_never_var {D : CalculusData}
+    {HasTy : List (HoleDecl D.Ctx D.Ty) → D.Ctx → D.Tm → D.Ty → Prop} (L : CalculusLaws D HasTy)
+    {Ψ : D.Ctx} {M : D.Tm} {A : D.Ty} {x : Nat}
+    (h : HasTy [] (D.drop Ψ x) M A) : D.weaken x M ≠ D.var x := by
+  intro he
+  have := L.weaken_avoids h
+  rw [he, L.uses_var] at this
+  cases this
+
+/-! ## The deployed language -/
 
 /-- A closed term is typed under every library and ordinary ambient context. -/
 theorem hasType_closed_lift {M : Term} {A : Lang.Ty} (h : HasType [] [] M A)

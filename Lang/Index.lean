@@ -1,5 +1,4 @@
-/- De Bruijn index maps shared by the deployed term operations (`Lang.Subst`) and the CMTT core
-(`Lang.Contextual.Core`): one of each. -/
+/- De Bruijn index maps of the deployed term operations (`Lang.Subst`): one of each. -/
 
 namespace Nanodregg.Lang
 
