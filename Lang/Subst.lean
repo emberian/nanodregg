@@ -6,7 +6,7 @@ contextual-hole filling `fillRefs` (a substituted hole `hole n σ` carries expli
 local context; the selected open filling is instantiated at `σ` without capture; ordinary `ref` terms remain
 imports), the occurrence tests `usesVar`/`usesRef`, decidable equality, and a hole's declared type `holeTy`.
 The Host runs these (through `Lang.HoleBudget`, `Lang.HoleROM`, `Lang.LiveHoles`); their typing facts are in
-`Lang.Proofs.Contextual.LangRenaming`/`LangSubstitution`/`LangOccurrences`/`LangFilling`, and the deployed
+`Lang.Proofs.Subst` and `Lang.Proofs.Fill`, and the deployed
 language as a closure calculus is `Lang.Contextual.LangInstance`.
 
 Binders: `lam` binds one variable, every `case` arm binds its payload at index 0; record and

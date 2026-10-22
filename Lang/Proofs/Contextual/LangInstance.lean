@@ -1,6 +1,6 @@
 /- The deployed language, including substituted contextual holes, is a lawful calculus. -/
 import Lang.Contextual.LangInstance
-import Lang.Proofs.Contextual.LangOccurrences
+import Lang.Proofs.Fill
 import Lang.Proofs.Contextual.ClosureStatements
 
 namespace Nanodregg.Lang.Contextual

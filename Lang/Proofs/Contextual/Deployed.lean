@@ -4,7 +4,6 @@ import Lang.Journey.Contextual
 import Lang.Proofs.Contextual.LiveHoles
 
 namespace Nanodregg.Lang
-open Contextual
 namespace DeployedContextual
 open Journey.Contextual
 

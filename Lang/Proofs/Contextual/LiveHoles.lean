@@ -1,11 +1,10 @@
 /- The live runtime's typing, allocation and authenticated-source invariants. -/
 import Lang.Proofs.Load
-import Lang.Proofs.Contextual.HoleBudget
+import Lang.Proofs.HoleBudget
 import Lang.Proofs.Run
 
 namespace Nanodregg.Lang
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
-open Contextual
 
 theorem checkContextual_shape {Δ : List Ty} {p : Package}
     (h : p.checkContextual Δ = .ok ()) :

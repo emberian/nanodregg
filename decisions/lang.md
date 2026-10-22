@@ -5474,3 +5474,50 @@ proofs' path.
 over its semantics. Binder names are not statements; the tool now says so in its code.
 
 Status: landed by CX-FOLD-2; next LANG-74.7 (S7).
+
+### LANG-74.7 S7 · the deployed-subject substitution and filling proofs leave `Contextual`: `Lang/Proofs/{Index,Subst,Fill,HoleBudget}` (2026-10-22; CX-FOLD-2; IMPACT `redregg/work/fold/IMPACT-S7.md`; rename map `redregg/work/fold/S7-renames.tsv`; cross-family read `redregg/work/fold/READ-S7-grok.md`; RELEASE R-0012)
+
+**Decision.** The proofs whose subject is the deployed term operations move out of the theory directory and out of
+namespace `Contextual` (`Nanodregg.Lang.Contextual.X` → `Nanodregg.Lang.X`, 101 names):
+- `Lang/Proofs/Index.lean` (new): `upR_upR`, `upR_id`, out of `Lang/Proofs/Contextual/Core.lean`. These are the only
+  CMTT-core facts the deployed proofs used.
+- `Lang/Proofs/Subst.lean`: `Lang/Proofs/Contextual/LangRenaming.lean` + `LangSubstitution.lean`.
+- `Lang/Proofs/Fill.lean`: `Lang/Proofs/Contextual/LangFilling.lean` + `LangOccurrences.lean`.
+- `Lang/Proofs/HoleBudget.lean`: `Lang/Proofs/Contextual/HoleBudget.lean`.
+
+The five old files are deleted, their text moved byte-identical; this list is the deletion authorization. Consumers
+changed only imports: `P/LangInstance`, `P/LiveHoles`. `P/LiveHoles`, `P/LiveCost` and `P/Deployed` drop `open
+Contextual`, a namespace no longer declared in their closure. No declaration is deleted.
+
+**What breaks.** The old `Contextual.`-qualified names of the 101 no longer resolve; nothing in the tree uses them.
+The proof closures of `Kernel/Proofs/InvokeWitness` (97 → 94 modules), `Kernel/Proofs/Logic/History` (123 → 120) and
+`Ledger/Proofs/EscrowRun` (141 → 138) no longer contain the CMTT core (`C/Core`, `P/Core`, `P/Typing`). Only the
+spine reaches it now (`P/CoreInstance`, `C/CoreCalculus`, `P/ProvenanceTeeth`), pending S10/S15.
+
+**Census digest diff against d3e850d under the rename map** (`redregg/work/fold/diff-S7.txt`): no user statement
+changes; 0 declared deletions; 581 module changes, all out of the six edited modules. The residual has two named
+causes:
+- **Auxiliary-proof renumbering** in `Term.shiftAt_unshiftAt`, `hasType_unshiftAt_live` and `usesVar_shiftAt`. Their
+  abstracted sub-proofs `._proof_1_k` are renumbered: 4 vanish, 4 appear, and the reused name `._proof_1_2` makes 2
+  type-digest lines.
+  - Their proof values cite the new names: 5 value lines.
+  - The three statements are unchanged, and each theorem's multiset of auxiliary statements is equal before and
+    after.
+  - A `._proof_N` is a name for a sub-term of the proof, not a hypothesis.
+- **The S6 generated matcher class.** 22 private `renameVar`/`renameVarList` matcher lemmas `P/HoleBudget` no longer
+  re-realizes; 3 private `upR.match_1` lemmas; and `upR.eq_1/eq_2`, `liftIdx.eq_1`, `lowerIdx.eq_1` are now realized in
+  `Lang.Proofs.Subst`.
+
+Whole tree with `host` and `lang-journey` GREEN (627 jobs); the journey GREEN. Re-emit: none; no deployed module,
+wire byte or table changes.
+
+**Critique.** `Lang/Proofs/Subst.lean` is 560 lines: renaming then substitution. That is one concept by the map's
+rule, but over law 8's comfort; it is a candidate to split by responsibility (renaming/strengthening vs substitution)
+if it grows.
+
+**Meta-critique.** I treated the digest's TYPE list as the verdict and only afterwards asked what a `._proof_1_2`
+denotes. The reader had to confirm the renumbering account from the patch, because my artifact listed names, not
+the auxiliaries' statements. The bias is publishing the conclusion without the comparison that supports it. S8's
+diff will print the auxiliary-statement check itself.
+
+Status: landed by CX-FOLD-2; next LANG-74.8 (S8, CROSS-LAYER: the four Kernel/Ledger import lines).

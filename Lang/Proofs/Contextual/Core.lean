@@ -1,7 +1,7 @@
 /-
 # Lang.Proofs.Contextual.Core — the metatheory of `Lang.Contextual.Core` (lane CMTT-CORE)
 
-* equations: `rename_rename`, `mren_mren`, `mren_rename`, `substFn_rename`, `rename_substFn`,
+* equations (`upR_upR`/`upR_id` are `Lang.Proofs.Index`'s): `rename_rename`, `mren_mren`, `mren_rename`, `substFn_rename`, `rename_substFn`,
   `mren_substFn`, `substFn_substFn`, `substFn_var`, `substFn_congr`, and `subst_comp`
   (`subst τ (subst σ t) = subst (comp τ σ) t`, unconditionally);
 * typing: `hasTy_rename` (renaming restricted to USED variables), `hasTy_weaken`,
@@ -21,6 +21,7 @@
 * toy instances: `bell_resume_computes`, `bell_resume_toy`, `subst_lemma_toy`, `subst_comp_toy`, `msubst_lemma_toy`, `letbox_toy`,
   `strengthen_toy`, `weaken_toy`.
 -/
+import Lang.Proofs.Index
 import Lang.Proofs.Contextual.Typing
 
 namespace Nanodregg.Lang.Contextual
@@ -64,13 +65,6 @@ theorem usesL_true (k : Nat) :
       exact ⟨i + 1, s, by simpa using hi, hs⟩
 
 /-! ## Renamings compose -/
-
-theorem upR_upR (ρ ρ' : Nat → Nat) :
-    (fun i => upR ρ (upR ρ' i)) = upR (fun i => ρ (ρ' i)) := by
-  funext i; cases i <;> rfl
-
-theorem upR_id : upR (fun i => i) = (fun i => i) := by
-  funext i; cases i <;> rfl
 
 mutual
 theorem rename_rename (ρ ρ' : Nat → Nat) :

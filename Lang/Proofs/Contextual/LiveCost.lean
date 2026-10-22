@@ -2,7 +2,6 @@
 import Lang.Proofs.Contextual.LiveHoles
 
 namespace Nanodregg.Lang
-open Contextual
 
 theorem factor_fold_nodes (xs : List Nat) (Γ : List Ty) (t : Term) :
     Term.nodes ((xs.foldl (fun (a : List Ty × Term) x =>

@@ -1,8 +1,8 @@
 /- Exact expansion counts, checked before live contextual filling allocates syntax. -/
 import Lang.HoleBudget
-import Lang.Proofs.Contextual.LangFilling
+import Lang.Proofs.Fill
 
-namespace Nanodregg.Lang.Contextual
+namespace Nanodregg.Lang
 
 mutual
 theorem renameVar_nodes (ρ : Nat → Nat) : ∀ t : Term,
@@ -165,4 +165,4 @@ theorem fillBounded_bounds {limit candidateMax : Nat} {σ : Nat → Option Term}
       rw [fillRefs_nodes]
       exact ⟨Nat.le_of_not_gt hs, Nat.le_of_not_gt hw⟩
 
-end Nanodregg.Lang.Contextual
+end Nanodregg.Lang
