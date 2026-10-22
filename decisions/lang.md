@@ -5237,3 +5237,64 @@ two facts I had flagged; I did not re-ask whether the conjunction deserved the s
 complete list. The bias is treating a ruling's enumeration as exhaustive when it answered only what was asked.
 
 Status: landed by CX-FOLD; next LANG-74.2 (S2, the journey's p8 toy rows), after IMPACT-S2 and its RELEASE.
+
+### LANG-74.2 S2 · the journey's p8 toy calculus is dropped; the P8 rows read the live kernel and ROM (2026-10-22; CX-FOLD; IMPACT `redregg/work/fold/IMPACT-S2.md`; cross-family read `redregg/work/fold/READ-S2-grok.md`; RELEASE R-0007; cv task 01a16171-d004 "P8 WITHDRAWAL GAP")
+
+**Decision.** `Lang/Journey.lean` loses its fifth `CalculusData`, the identity calculus `p8Data` (`msubst _ t := t`,
+`uses _ _ := false`, `strengthen _ t := t`), and everything built on it: `p8Guard`, `p8Iface`, `p8Candidate`,
+`p8Swap`, `p8Correspondence`, `p8Registry`, `p8World`, `p8Available`, and the imports of `Lang.Contextual.Trace`,
+`Lang.Contextual.Provenance`, `Lang.Contextual.TransportKinds` (map §2.2 D-WRAP, F4). The P8 rows change:
+- `P8.1 old signed plan after unrelated update`: the "trace rejudged" half (`Trace.repair` on the toy) is gone; the
+  kernel half (the plan still submits) stays;
+- `P8.2 withdrawn instantiation`: "live provenance" (`P9.provenance` over the toy) becomes "live authority", the same
+  two booleans read from the kernel view by the new `p8Live` (live, and pinned at the recorded version);
+- `P8.2 re-pinned tombstone: conflict guardFails`: DELETED, a mirror (below);
+- `P8.2 mismatched live authority pin`: now the REAL commit with the live provider pinned at version 0, refused
+  `rejected stale` by the kernel's pin check (plant: the correct pin turns the journey RED (1), `FAIL … admitted`);
+- `P8.3 checked representation false -> true; unknownCertificate refused`: DELETED (`TransportKinds.recheck` over the
+  toy registry); the index it produced is now the live ROM's own selection, `chooseCode r 1`, row `P8.3 second
+  provider selects contextual ROM candidate`;
+- `P8 initial authority was live for both candidates`: same text, `p8Live` instead of `p8Available`.
+Every other P8 row is byte-identical in the output. The journey is GREEN, 787 lines (789 before).
+
+**The finding the toy rows hid.** Replacing the toy judge's tombstone verdict with the same call through the real
+kernel and package gives `admitted`: after provider 0's authority grant is revoked (`live` false), a fresh commit
+that pins the grant's tombstone is admitted, the artifact is accepted with provider 0 selected, and the counted unit
+is spent (left 0). The causes, read at source: the commit runs `select` over the hole's own fact rows and transfers
+via the cap, never reading the provider grant; `pinOf (some .tomb)` is its own digest (`Kernel/World.lean`:342–347),
+and `touchCheck` accepts a pin that matches the entry, tombstone included (:995–1003). `p8World`'s docstring ("a
+tombstoned grant or a changed pin cannot specialize to true") was true of the toy only. IMPACT-S2 §5, verbatim:
+
+> What is measured: a commit citing a revoked provider authority is admitted when the caller pins the tombstone. What
+> I infer [INFERRED]: the P8 composition's "provider authority" is enforced only through the pin set the caller
+> chooses to sign; the package's hole reads fact rows (posted supports), and nothing retracts a provider's fact row
+> when its grant is revoked. Three shapes for the fix, none of them S2's:
+> - (A) the support fact must be retracted (a `withdraw` edit) for the withdrawal to count, and the journey's P8.2
+>   should withdraw that way; the grant revoke then is not the withdrawal at all;
+> - (B) the package reads the provider's grant cell (a pinned read of a kernel cell by a program: the capability the
+>   LANG-P8 critique says fact rows do not have) and refuses a tombstone;
+> - (C) the kernel refuses a pin of a tombstone for an id the call also cites as authority (a KERNEL semantics change).
+>
+> S2 as proposed does not depend on the answer: it deletes the mirror row and asserts nothing about the gap. I will
+> open a `cv task` (LANG, P8 withdrawal) with the probe and this section before S2 lands, unless you RULE that the fix
+> is part of S2 (then S2 becomes a real row asserting refusal, after the fix). Default: S2 lands as above; the gap is a
+> task.
+
+Ruled (R-0007): S2 asserts nothing about the gap in the journey. A row expecting a refusal would be red on every run
+and couple the remaining fold steps to an open product choice; a row asserting `admitted` would read as the
+requirement. The gap is cv task 01a16171-d004, with the probe.
+
+**What breaks.** Nothing that survives. Census digest diff of the whole tree against 6eb92fe: 17 constants vanish
+(the `p8*` toy definitions and six compiler matchers of `p8Rows`), 3 new (`p8Live`, two renumbered matchers); the only
+type/value changes are `p8Rows` and its `match_*`/`_sparseCasesOn_*` auxiliaries; 0 theorems change. Whole-tree build
+GREEN (618 jobs with `lang-journey`). Re-emit: none; no gates row reads a P8 row text (`gates/runs.tsv`:22 judges the
+`lang-journey: GREEN` line).
+
+**Critique.** The P8 journey now says less about withdrawal than it did, and what it said before was false. A reader
+of the printed rows sees the withdraw admitted, the old plan stale, live authority `[false, true]`, a bad pin stale,
+and no fresh plan against the tombstone: silence that can be read as "withdrawal is the whole story". The task is
+where that is answered. **Meta-critique.** The map listed this row among those that vanish and I nearly deleted it as
+a toy without running its call for real; the admission appeared only because I replaced each toy row with its real
+call before deciding what to keep. The bias is reading "delete the toy" as "the toy's claim was true".
+
+Status: landed by CX-FOLD; next LANG-74.3 (S3).

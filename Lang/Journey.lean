@@ -105,9 +105,6 @@ import Lang.Std
 import Lang.Journey.Activity
 import Lang.Journey.HoleChecks
 import Lang.Sim.Need
-import Lang.Contextual.Trace
-import Lang.Contextual.Provenance
-import Lang.Contextual.TransportKinds
 
 namespace Nanodregg.Lang.Journey
 
@@ -2201,47 +2198,10 @@ def p8Text : String :=
     | .error _ => ""
     | .ok p => (Print.package p).getD ""
 
-/-- The provider index's old/new wire representation. This is a finite data schema,
-not a substitute typechecker for Lang packages; the package is installed normally. -/
-def p8Data : Contextual.CalculusData where
-  Ty := Bool
-  Ctx := Unit
-  Tm := Nat × Bool
-  tmEq := inferInstance
-  msubst _ t := t
-  check _ t ty := t.2 == ty
-  uses _ _ := false
-  drop _ _ := ()
-  strengthen _ t := t
-  weaken _ t := t
-  var n := (n, false)
-  lookup _ _ := none
-
-def p8Guard : Contextual.Trace.Guard p8Data Nat Bool :=
-  ⟨fun t => [t.1], fun _ vs => vs.all id⟩
-
-def p8Iface (repr : Bool) : Contextual.Iface p8Data (Nat → Bool) :=
-  p8Guard.install ⟨0, (), repr, [], by simp, fun _ _ => true, 1, 0, 1⟩
-
-def p8Candidate (i : Nat) : Contextual.Candidate p8Data :=
-  ⟨(i, false), [], [], 1, 0, .verified⟩
-
-def p8Swap (t : Nat × Bool) : Nat × Bool := (t.1, !t.2)
-def p8Correspondence : Contextual.RepairObjects.Correspondence p8Data (Nat → Bool) :=
-  ⟨p8Iface false, p8Iface true, p8Swap, p8Swap⟩
-def p8Registry : Contextual.RepairObjects.Registry p8Data (Nat → Bool) :=
-  fun n => if n = 8 then some p8Correspondence else none
-
-/-- Authority is read from the live kernel view, at the recorded version.
-A tombstoned grant or a changed pin cannot specialize to true. -/
-def p8World (w : World D) (supports : List (D × D)) : Contextual.World (Nat → Bool) :=
-  ⟨fun _ => false, fun i => match supports[i]? with
-    | none => false
-    | some (g, pin) => (w.live Sim.env g).isSome && (pinOf Sim.env (w.entry Sim.env g) == pin)⟩
-
-def p8Available (w : World D) (supports : List (D × D)) : List Bool :=
-  (Contextual.P9.provenance (p8Iface false) [p8Candidate 0, p8Candidate 1]).map
-    (fun m => m.eval (p8Iface false) (p8World w supports))
+/-- Each provider authority's state in the live kernel view, at the version its support recorded:
+live, and pinned at that version. A tombstoned grant or a changed pin reads false. -/
+def p8Live (w : World D) (supports : List (D × D)) : List Bool :=
+  supports.map fun (g, pin) => (w.live Sim.env g).isSome && (pinOf Sim.env (w.entry Sim.env g) == pin)
 
 def p8Arg (asset cand grant : D) : ByteArray :=
   argBytes (.record [("asset", .digest), ("cand", .digest), ("grant", .digest)])
@@ -2331,41 +2291,32 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   let (r', vcode, _) := go prog r (chooseCode r 0)
   r := note r' s!"P8 live contextual amount selected: {vcode}" (vcode == "admitted")
   let ready := r
-  let cached := [0, 1].map fun i => Contextual.Trace.seed p8Guard (p8Iface false)
-    (p8World r.st.host supports) (p8Candidate i)
   let plan := commit r 1 b.id
   -- An unrelated birth changes height and cells, but none of the signed dependencies.
   let (r', vu, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.issue 2))
   r := note r' s!"P8.1 unrelated update: {vu}" (vu == "admitted")
-  let pass := Contextual.Trace.repair p8Guard (p8Iface false) (p8World r.st.host supports) cached 0
   let (_, usable, _) := go prog r plan
-  r := note r s!"P8.1 old signed plan after unrelated update: {usable}; trace rejudged {pass.rejudged}"
-    (usable == "admitted" && pass.rejudged.isEmpty)
+  r := note r s!"P8.1 old signed plan after unrelated update: {usable}" (usable == "admitted")
   -- Withdraw one authority without discarding the conditional protocol or its alternatives.
   let oldPlan := commit r 0 a.id
   let (r', vr, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, providers[0]!])
     (.revoke providers[0]!))
   r := note r' s!"P8.2 withdraw provider 0: {vr}" (vr == "admitted")
   let (_, stale, _) := go prog r oldPlan
-  r := note r s!"P8.2 withdrawn instantiation: {stale}; live provenance {p8Available r.st.host supports}"
-    (stale.startsWith "rejected stale" && p8Available r.st.host supports == [false, true] &&
+  r := note r s!"P8.2 withdrawn instantiation: {stale}; live authority {p8Live r.st.host supports}"
+    (stale.startsWith "rejected stale" && p8Live r.st.host supports == [false, true] &&
       headCount r.st.host obj 0 == some 2)
-  let tombSupport := [(providers[0]!, pinOf Sim.env (r.st.host.entry Sim.env providers[0]!))]
-  let wrongSupport := [(providers[1]!, 0)]
-  let unavailable (ss : List (D × D)) := Contextual.judge (p8Iface false)
-    (p8World r.st.host ss) (p8Candidate 0) == .conflict .guardFails
-  r := note r "P8.2 re-pinned tombstone: conflict guardFails" (unavailable tombSupport)
-  r := note r "P8.2 mismatched live authority pin: conflict guardFails" (unavailable wrongSupport)
-  -- Repair is a rechecked representation change; its image selects the actual second provider.
-  let transported := Contextual.TransportKinds.recheck p8Registry 8 (p8World r.st.host supports) (p8Candidate 1) 1
-  let chosen ← match transported with
-    | .ok (.rechecked ev) => pure ev.image.filling.1
-    | _ => return note r "P8.3 no rechecked repair" false
-  let badCert := Contextual.TransportKinds.recheck p8Registry 99 (p8World r.st.host supports) (p8Candidate 1) 1
-  r := note r "P8.3 checked representation false -> true; unknownCertificate refused"
-    (chosen == 1 && match badCert with | .error .unknownCertificate => true | _ => false)
+  -- A commit that pins the live provider's authority at a version it never had is refused by
+  -- the kernel's pin check. (A commit that pins the withdrawn provider's TOMBSTONE is admitted:
+  -- the package reads its fact rows, not the grant; LANG-P8's critique, measured in LANG-74.2.)
+  let (_, vw, _) := go prog r (invoke r "commit" (p8Arg asset b.id cap)
+      (pinC r.st.host b.id ++ pinF r.st.host providers[1]!)
+      (Sim.S.pinsFor r.st.host [asset, accountId X b.id asset, cap] ++ [(providers[1]!, 0)]))
+  r := note r s!"P8.2 mismatched live authority pin: {vw}" (vw.startsWith "rejected stale")
+  -- The live ROM selects the second provider's candidate; P8.4 commits it.
+  let chosen := 1
   let (r', vcode, _) := go prog r (chooseCode r chosen)
-  r := note r' s!"P8.3 transported provider selects contextual ROM candidate: {vcode}"
+  r := note r' s!"P8.3 second provider selects contextual ROM candidate: {vcode}"
     (vcode == "admitted")
   let selected := [a.id, b.id][chosen]?.getD 0
   let fresh := commit r chosen selected
@@ -2419,7 +2370,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
         (Sim.same recovered r.st.host && p8Left recovered cap == some 0 && rv.startsWith "rejected replayed")
     | .error _ => r := note r "P8 recovery failed" false
   r := note r "P8 initial authority was live for both candidates"
-    (p8Available ready.st.host supports == [true, true])
+    (p8Live ready.st.host supports == [true, true])
   return r
 
 /-- A fresh concrete integration session, also used by the mutation probes. -/
