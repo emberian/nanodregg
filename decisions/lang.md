@@ -5212,3 +5212,28 @@ and defaulted to deleting the facts; the reader's ruling made it a grant. The bi
 I held as the edge of what the fold should preserve.
 
 Status: landed by CX-FOLD under R-0006; next S1c deletes Integration.lean.
+
+### LANG-74.1c S1c · `Integration.lean`, the fourteenth S1 module (2026-10-22; CX-FOLD; GRANT R-0006 "then S1c = delete Integration.lean")
+
+**Decision.** Delete `Lang/Proofs/Contextual/Integration.lean` (267 lines; 23 theorem constants: 15 `theorem`
+declarations and the eight fields of the Prop structures `ReadyWriter` and `Recovery.SpentCheckpoint`). Group D-WRAP
+(map §2.2): ten statements over the journey's identity calculus `p8Data`/`p8Iface`/`p8World`/`p8Registry` (whose
+rows S2 drops), three aliases of landed theorems (`reexecute_committed_effect := submit_replayed hj`;
+`one_use_consumption := grant_moves_le_cap …` with the same premises; `progress_under_ready_writer`, `simp [submit]`
+over a structure whose fields are `submit`'s branches), `commitment_binds_receipt` (a conjunction of `submit_ok`,
+`receiveWith_sealed`, `sealTurn_ok`, `admit_journaled`, each landed), and the recovery theorem with its private
+append lemma, whose statements now live in `Host/Proofs/SpentCheckpoint.lean` and `Kernel/Proofs/Audit.lean`
+(LANG-74.1b). This path is the explicit deletion authorization of this landing.
+
+**What breaks.** Nothing that survives. Census digest diff of the whole tree against 82ac944: 45 constants vanish,
+all of this module; 0 surviving statements or value hashes change; 0 new; the lazily realized
+`Closure.Iface.mk.congr_simp` is re-owned with an identical statement. No surviving module imports it (it had no
+importer; the whole-tree build is GREEN at 541 jobs). Re-emit: none. S1 is complete: the map's fourteen modules are
+gone, and its two deployed facts are on main in their owners' layers.
+
+**Critique.** `commitment_binds_receipt` goes without a re-home: each conjunct is landed, but the conjunction at the
+journey's program is stated nowhere else; nothing consumed it. **Meta-critique.** The reader's (b) ruling covered the
+two facts I had flagged; I did not re-ask whether the conjunction deserved the same, because the ruling read as a
+complete list. The bias is treating a ruling's enumeration as exhaustive when it answered only what was asked.
+
+Status: landed by CX-FOLD; next LANG-74.2 (S2, the journey's p8 toy rows), after IMPACT-S2 and its RELEASE.
