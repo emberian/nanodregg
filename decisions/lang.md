@@ -5329,3 +5329,38 @@ modules" for an eleven-module step, and the reader, not I, noticed. The bias is 
 numbers were right last time.
 
 Status: landed by CX-FOLD; next LANG-74.4 (S4).
+
+### LANG-74.4 S4 · the boundary, repair-object, transport, morphism, change and provenance-repair modules (2026-10-22; CX-FOLD; IMPACT `redregg/work/fold/IMPACT-S4.md`; cross-family read `redregg/work/fold/READ-S4-grok.md`; RELEASE R-0009)
+
+**Decision.** Delete these 14 modules (1,747 lines; 109 theorem constants: 102 `theorem` declarations and seven
+fields of Prop structures). Group D-PRIVATE (map §2.2): private languages and second shapes of spine concepts.
+- `Lang/Contextual/Boundary.lean` + `Lang/Proofs/Contextual/Boundary.lean`: P2's four-constructor search `Term`, "not
+  an encoding of deployed Lang terms" (with the review's H2 examples `dependent_inhabitants_change_types`,
+  `reuse_cost_bound`, `reuse_cached_observation`);
+- `Lang/Contextual/ModalBoundary.lean` + `Lang/Proofs/Contextual/ModalBoundary.lean`: a third syntax over the CMTT core;
+- `Lang/Contextual/RepairObjects.lean` + `Lang/Proofs/Contextual/RepairObjects.lean`: the second `Outcome` type, with
+  `Policy`, `Registry` and transport;
+- `Lang/Contextual/RepairChanges.lean` + `Lang/Proofs/Contextual/RepairChanges.lean`,
+  `Lang/Contextual/TransportKinds.lean` + `Lang/Proofs/Contextual/TransportKinds.lean`,
+  `Lang/Contextual/ContextMorphisms.lean` + `Lang/Proofs/Contextual/ContextMorphisms.lean`: P11b's paper structures
+  over the above;
+- `Lang/Contextual/ProvenanceRepairs.lean` + `Lang/Proofs/Contextual/ProvenanceRepairs.lean`: repair plans over
+  `RepairObjects`.
+The closure's own repair theory stays (`P/Repair`, `P/Outcomes` over the one `Closure.Outcome`, `P/Soundness`). One
+docstring sentence in `Lang/Contextual/Trace.lean`:125–126 that named a Boundary declaration is rewritten. This list
+is the explicit deletion authorization of this landing.
+
+**What breaks.** Nothing that survives. Census digest diff of the whole tree against e1ccc50: 886 constants vanish,
+all of the 14 modules; 0 surviving statement or value-hash changes; 0 new; `Closure.Iface.decl.eq_1` re-owned,
+statement identical; 0 surviving constants reference a deleted constant. Whole-tree build GREEN (593 jobs with
+`lang-journey`; the journey GREEN). `P/Stability` keeps `P/Worlds` as its only importer until S5. Re-emit: none.
+
+**Critique.** `RepairObjects` held the program's only first-class repair VALUES (composition, identity, a policy
+choosing among them); the spine keeps repair as a judge operation, not as data a consumer can carry. Nothing deployed
+carries a repair value today, so nothing is lost now; if activities come to need one, it is one `Repair` over the one
+`Outcome`, not this module back. **Meta-critique.** The pull at this step was momentum: three clean deletion steps
+made the fourth's statement appendix feel like paperwork, and I generated it rather than reading it. Reading
+`RepairObjects`' list is what surfaced the critique above. The bias is letting a repeated procedure stand in for the
+reading it was built to force.
+
+Status: landed by CX-FOLD; next LANG-74.5 (S5).

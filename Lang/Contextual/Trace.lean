@@ -122,8 +122,8 @@ def repair [DecidableEq V] (g : Guard D K V) (I : Iface D (K → V))
      if meets g I w c then n :: rest.rejudged else rest.rejudged,
      if c'.candidate.status ≠ c.candidate.status then n :: rest.changed else rest.changed⟩
 
-/-- Only holes reading a changed selection status are dirtied. Other behavior needs its
-own Boundary declaration. Mokhov et al. 2018, §2.3 p.79:5, §4.2.2 p.79:15. -/
+/-- Only holes reading a changed selection status are dirtied; no other dependency is
+tracked here. Mokhov et al. 2018, §2.3 p.79:5, §4.2.2 p.79:15. -/
 def dirtyReaders (p : Pass D V) (readers : List (Nat × Nat)) : List Nat :=
   (readers.filter fun r => decide (r.2 ∈ p.changed)).map Prod.fst
 
