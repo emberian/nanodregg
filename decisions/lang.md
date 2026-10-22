@@ -5298,3 +5298,34 @@ a toy without running its call for real; the admission appeared only because I r
 call before deciding what to keep. The bias is reading "delete the toy" as "the toy's claim was true".
 
 Status: landed by CX-FOLD; next LANG-74.3 (S3).
+
+### LANG-74.3 S3 · P5, the games, the nogoods, the material guards and C/P1 (2026-10-22; CX-FOLD; IMPACT `redregg/work/fold/IMPACT-S3.md`; cross-family read `redregg/work/fold/READ-S3-grok.md`; RELEASE R-0008)
+
+**Decision.** Delete these 11 modules (1,273 lines; 62 theorem constants: 60 `theorem` declarations and the two
+fields of the Prop structure `P5.AlternatingSimulation`). Group D-JUDGE (map §2.2, law 1): second, third and fourth
+judges with their own status types, beside the closure's `Contextual.judge`/`Status` and the deployed hole judgment.
+- `Lang/Contextual/P5.lean` + `Lang/Proofs/Contextual/P5.lean`: `P5.judge` over its own `Problem`/`Refutation`,
+  `LogicalStatus`, `Formula`/`Evaluation`, `Machine`/`Refines`/`AlternatingSimulation`, `priceReceiver`;
+- `Lang/Contextual/Games.lean` + `Lang/Proofs/Contextual/Games.lean`, `Lang/Contextual/NogoodGames.lean` +
+  `Lang/Proofs/Contextual/NogoodGames.lean`: game statuses and certificates over P5;
+- `Lang/Contextual/Nogoods.lean` + `Lang/Proofs/Contextual/Nogoods.lean`: `RecordedClosure`, `judgeRecorded`, a second
+  judgment beside `Closure.judge`;
+- `Lang/Contextual/Material.lean` + `Lang/Proofs/Contextual/Material.lean`, `Lang/Contextual/P1.lean`: the material
+  and P1 interaction guards with their own `Report`/`Verdict`.
+The eleven are a closed import cluster after S1. This list is the explicit deletion authorization of this landing.
+
+**What breaks.** Nothing that survives. Census digest diff of the whole tree against a9ab514: 1,027 constants vanish,
+all of the 11 modules; 0 surviving statement or value-hash changes; 0 new; the lazily realized
+`Closure.Iface.mk.congr_simp` is re-owned, statement identical; 0 surviving constants reference a deleted constant.
+Whole-tree build GREEN (530 jobs). The open-protocol calculus (R1) loses its importers C/P5 and P/P5 and stands
+alone; `ProvenanceRepairs` (def and proof) loses its importers and stays an unimported glob leaf until S4. Re-emit:
+none.
+
+**Critique.** `P/P5` held the tree's only alternating-simulation and refinement theory. Its subject is P5's own
+`Machine`, not `Protocol.Prot` and not a deployed program, so it is not the refinement notion R1's fork A would need;
+that notion, if wanted, is written over `Prot` then. **Meta-critique.** Three steps in, the deletions read as
+routine, and routine is when a step's own measurement goes unread: the diff tool still printed "the declared 14
+modules" for an eleven-module step, and the reader, not I, noticed. The bias is trusting a tool's label because its
+numbers were right last time.
+
+Status: landed by CX-FOLD; next LANG-74.4 (S4).
