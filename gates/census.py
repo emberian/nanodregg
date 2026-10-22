@@ -4,7 +4,9 @@ Writes .lake/gates/CensusRun.lean importing every module outside Census except t
 closure C7, and two `main`s cannot share one environment), then runs
 `#axiom_census "gates/axioms-allow.tsv" <every lib but Census>` and `#refine_census "gates/refines-allow.tsv" "gates/codec-vectors.tsv" …`
 (CODEC-28: every refinement carries its lawfulness theorem) and
-`#statement_census ".lake/gates/statements.tsv" …` over elaborated theorem conclusions under `lake env lean`.
+`#statement_census ".lake/gates/statements.tsv" …` over elaborated theorem conclusions under `lake env lean`
+(GATES-20s: a disjunct comparing two inputs the statement chooses is red, and its fixtures are judged first:
+a misread fixture prints `STATEMENT-CENSUS harness:`, never `STATEMENT-CENSUS ok`).
 Every module must already be built (scripts/pre-push builds first).
 """
 import os
@@ -14,11 +16,16 @@ import sys
 import tree
 
 
-def main(root: str) -> int:
-    t = tree.read(root)
+def modules(t: tree.Tree) -> tuple[list[str], list[str]]:
+    """Every module the census imports, and the libraries it censuses (gates/statement_plants.py reuses them)."""
     roots = set(t.exes.values())  # exe roots hold only `main` (closure C7); two would collide
     mods = sorted(m for m in t.modules if t.modules[m].lib != "Census" and m not in roots)
-    libs = sorted(set(t.modules[m].lib for m in mods))
+    return mods, sorted(set(t.modules[m].lib for m in mods))
+
+
+def main(root: str) -> int:
+    t = tree.read(root)
+    mods, libs = modules(t)
     if not mods:
         print("census: ok (no modules)")
         return 0

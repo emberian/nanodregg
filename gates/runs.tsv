@@ -55,3 +55,4 @@ standing:bench-worstcut-rows	{fresh}	BENCH-WORSTCUT rows PASS	{fresh} --harness-
 standing:bench-worstworld	{fresh} synthetic 200000	BENCH-WORSTWORLD PASS	{fresh} synthetic 200000 --harness-control
 certificate-tests	(none)	certificate-tests: GREEN	--harness-control
 script:gates/certificate.py	{fresh}	certificate-vector: GREEN	{fresh} --harness-control
+script:gates/statement_plants.py	{fresh}	STATEMENT PLANTS GREEN	{fresh} --harness-control
