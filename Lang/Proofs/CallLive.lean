@@ -21,7 +21,7 @@ namespace Nanodregg.Lang
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
-variable {D : Type} {digestOf : ByteArray → Option D} {d0 : Data}
+variable {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {d0 : Data}
 
 /-- Digest leaf `b` sits in data `d` at label path `p` (a `bytes` leaf never does: since LANG-38
 only a field typed `digest` can be refused as not a digest). Each record field on the way is named in
@@ -569,11 +569,11 @@ in order and one to one, a sublist of the resolved method's call slot types, eac
 its slot names. So a method makes at most as many calls as it declares slots, and never two from
 one slot (the run's result is typed by `invoke_never_stuck`, the calls row conforms by
 `extract_conforms`, and `callsOf_go_kinds` reads it). Exercised with calls by journey LC0–LC4 and LC6. -/
-theorem runMeasured_kinds {bytesOf : D → ByteArray}
+theorem runMeasured_kinds {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∃ (ℓ : Label) (sg : Sig) (L : Loaded) (g : Nat) (p : Package),
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
@@ -614,11 +614,11 @@ theorem runMeasured_kinds {bytesOf : D → ByteArray}
         exact ⟨arms, he, hmem⟩
 
 /-- A run makes at most as many calls as the resolved method declares slots. -/
-theorem runMeasured_calls_le {bytesOf : D → ByteArray}
+theorem runMeasured_calls_le {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∃ (ℓ : Label) (sg : Sig) (L : Loaded) (g : Nat) (p : Package),
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧ calls.length ≤ sg.calls.length := by

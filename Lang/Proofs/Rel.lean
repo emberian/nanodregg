@@ -193,8 +193,8 @@ theorem editsOf_conforms {rels : List (Label × RelDecl)} {self : D} {m : Nat} {
 
 /-- The datum a point slot holds for one pin, as `relReads` builds it (its digest checks aside):
 the pinned key read back, and the row's value if the pin holds a row. `none`: the pin is refused. -/
-private def pinD (digestOf : ByteArray → Option D) (look : Pinned D) (d : RelDecl) (live : Bool)
-    (p : ByteArray × Option RowLeaf) : Option Data :=
+private def pinD (digestOf : ByteArray → Option D) (rc : ReceiptCheck) (look : Pinned D) (d : RelDecl)
+    (live receipt : Bool) (args : Data) (p : ByteArray × Option RowLeaf) : Option Data :=
   match keyOf d d.key.length p.1 with
   | .error _ => none
   | .ok k =>
@@ -206,7 +206,21 @@ private def pinD (digestOf : ByteArray → Option D) (look : Pinned D) (d : RelD
         | .error _ => none
       | some (.head ..) => none
     val.bind fun val =>
-      if live then
+      if receipt then
+        match keyCell k with
+        | none => none
+        | some b => (digestOf b).bind fun g =>
+          match look g, args.field "receipt" with
+          | .ok (some c), some (.bytes rb) =>
+            match rc c rb with
+            | .ok s =>
+              if seenFits s && (seenData s).digests.all (fun b => (digestOf b).isSome) then
+                some (.record ([("key", k)] ++ (if live then [("live", .bool (cellLive look g))] else []) ++
+                  [("receipt", seenData s), ("val", val)]))
+              else none
+            | .error _ => none
+          | _, _ => none
+      else if live then
         match keyCell k with
         | none => none
         | some b => (digestOf b).bind fun g =>
@@ -268,11 +282,11 @@ under `(self, i)` fit the method's `x.points` slots, each pin reads (`pinD`: its
 pinned key bytes, its value decoded from the row's bytes, and on a live read (E1) its key's cell
 liveness `cellLive look g` read through the caller's pinned view), and slot `j` holds pin `j` in pin
 order and `none` past the last pin. -/
-theorem relReads_points {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D} {i : Nat}
-    {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
-    (h : relReads digestOf look rv self i ℓ d x = .ok v) :
+theorem relReads_points {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {self : D} {i : Nat}
+    {ℓ : Label} {d : RelDecl} {x : RelRead} {args : Data} {v : Data}
+    (h : relReads digestOf rc look rv self i ℓ d x args = .ok v) :
     (rv.points self i).length ≤ x.points ∧
-    ∃ ps, (rv.points self i).mapM (pinD digestOf look d x.live) = some ps ∧
+    ∃ ps, (rv.points self i).mapM (pinD digestOf rc look d x.live x.receipt args) = some ps ∧
       pointSlots x.points v = (List.range x.points).map fun j => optD ps[j]? := by
   unfold relReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -291,12 +305,18 @@ theorem relReads_points {digestOf : ByteArray → Option D} {look : Pinned D} {r
         have hkk := checked_eq h2
         subst hkk
         rcases hv with ⟨rfl, hp2⟩ | ⟨v', b', ver, w, hp2, hw, rfl⟩
-        · rcases pointData_ok hy with ⟨hl, rfl⟩ | ⟨hl, b, g, c, hb, hg, hc, rfl⟩
-          · simp [pinD, hk, hp2, hl]
-          · simp [pinD, hk, hp2, hl, hb, hg, hc]
-        · rcases pointData_ok hy with ⟨hl, rfl⟩ | ⟨hl, b, g, c, hb, hg, hc, rfl⟩
-          · simp [pinD, hk, hp2, hl, valOf_decodes hw]
-          · simp [pinD, hk, hp2, hl, hb, hg, hc, valOf_decodes hw]
+        · rcases pointData_ok hy with ⟨hr, hl, rfl⟩ | ⟨hr, hl, b, g, c, hb, hg, hc, rfl⟩ |
+              ⟨hr, b, g, c, rb, sn, hb, hg, hc, ha, hs, hok, rfl⟩
+          · simp [pinD, hk, hp2, hl, hr]
+          · simp [pinD, hk, hp2, hl, hr, hb, hg, hc]
+          · simp [pinD, hk, hp2, hr, hb, hg, hc, ha, hs, hok]
+            intro y hy hn; have := (List.all_eq_true.mp hok.2) y hy; rw [hn] at this; cases this
+        · rcases pointData_ok hy with ⟨hr, hl, rfl⟩ | ⟨hr, hl, b, g, c, hb, hg, hc, rfl⟩ |
+              ⟨hr, b, g, c, rb, sn, hb, hg, hc, ha, hs, hok, rfl⟩
+          · simp [pinD, hk, hp2, hl, hr, valOf_decodes hw]
+          · simp [pinD, hk, hp2, hl, hr, hb, hg, hc, valOf_decodes hw]
+          · simp [pinD, hk, hp2, hr, hb, hg, hc, ha, hs, hok, valOf_decodes hw]
+            intro y hy hn; have := (List.all_eq_true.mp hok.2) y hy; rw [hn] at this; cases this
     · simp only [pointSlots]
       rw [List.take_append_of_le_length (by simp [length_slotsD]), List.take_of_length_le (by simp [length_slotsD]),
         slotsD_snd]
@@ -337,15 +357,16 @@ theorem mapM_ok_getElem {α β ε : Type} {f : α → Except ε β} :
 live read, slot `j` of the rows argument is the caller's `j`-th pinned point, its key read back from
 the pinned key bytes, and its `live` bit is `cellLive look g` for the kernel cell `g` that key
 names — the caller's pinned view of THAT cell, never a field a method or a poster wrote. -/
-theorem cited_authenticated {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D}
-    {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
-    (h : relReads digestOf look rv self i ℓ d x = .ok v) (hl : x.live = true) :
+theorem cited_authenticated {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D}
+    {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {args : Data} {v : Data}
+    (h : relReads digestOf rc look rv self i ℓ d x args = .ok v) (hl : x.live = true) :
     ∃ ps rest, v = .record (slotsD "p" x.points ps ++ rest) ∧
       ∃ hlen : ps.length = (rv.points self i).length,
-      ∀ j (hj : j < ps.length), ∃ k b g val,
+      ∀ j (hj : j < ps.length), ∃ k b g val col,
         keyOf d d.key.length ((rv.points self i)[j]'(hlen ▸ hj)).1 = .ok k ∧
         keyCell k = some b ∧ digestOf b = some g ∧
-        ps[j] = .record [("key", k), ("live", .bool (cellLive look g)), ("val", val)] := by
+        ps[j] = .record ([("key", k), ("live", .bool (cellLive look g))] ++ col ++ [("val", val)]) ∧
+        (x.receipt = false → col = []) := by
   unfold relReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
@@ -363,9 +384,50 @@ theorem cited_authenticated {digestOf : ByteArray → Option D} {look : Pinned D
       have hk := liftS_eq h1
       have hkk := checked_eq h2
       subst hkk
-      rcases pointData_ok hq with ⟨hf, -⟩ | ⟨-, b, g, c, hb, hg, -, he⟩
+      rcases pointData_ok hq with ⟨-, hf, -⟩ | ⟨hr, -, b, g, c, hb, hg, -, he⟩ |
+          ⟨hr, b, g, c, rb, sn, hb, hg, -, -, -, -, he⟩
       · rw [hl] at hf; cases hf
-      · exact ⟨_, b, g, _, hk, hb, hg, he⟩
+      · exact ⟨_, b, g, _, [], hk, hb, hg, by simpa using he, fun _ => rfl⟩
+      · refine ⟨_, b, g, _, [("receipt", seenData sn)], hk, hb, hg, by simpa [hl] using he, ?_⟩
+        intro hx; rw [hx] at hr; cases hr
+
+/-- **The receipt column is authenticated** (E5, L1; sibling of `cited_authenticated`): on a receipt
+read, slot `j` of the rows argument is the caller's `j`-th pinned point, and its `receipt` field is
+what the run's `ReceiptCheck` showed for the head object THAT key names, read through the caller's
+pinned view (live: `look g = .ok (some c)`), and the method's own `receipt` argument: never the
+receipt's stated answer, never a field a method or a poster wrote. -/
+theorem receipt_column_authenticated {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {args : Data} {v : Data}
+    (h : relReads digestOf rc look rv self i ℓ d x args = .ok v) (hx : x.receipt = true) :
+    ∃ ps rest, v = .record (slotsD "p" x.points ps ++ rest) ∧
+      ∃ hlen : ps.length = (rv.points self i).length,
+      ∀ j (hj : j < ps.length), ∃ k b g c rb s val,
+        keyOf d d.key.length ((rv.points self i)[j]'(hlen ▸ hj)).1 = .ok k ∧
+        keyCell k = some b ∧ digestOf b = some g ∧ look g = .ok (some c) ∧
+        args.field "receipt" = some (.bytes rb) ∧ rc c rb = .ok s ∧
+        ps[j] = .record ([("key", k)] ++ (if x.live then [("live", .bool (cellLive look g))] else []) ++
+          [("receipt", seenData s), ("val", val)]) := by
+  unfold relReads at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  all_goals
+    cases h
+    obtain ⟨hlen, hget⟩ := mapM_ok_getElem ‹List.mapM _ (rv.points self i) = Except.ok _›
+    refine ⟨_, _, rfl, hlen, fun j hj => ?_⟩
+    have hq := hget j hj
+    split at hq
+    · cases hq
+    · rename_i kv hkv
+      obtain ⟨k, val⟩ := kv
+      obtain ⟨k0, h1, h2, -⟩ := readPoint_ok hkv
+      have hk := liftS_eq h1
+      have hkk := checked_eq h2
+      subst hkk
+      rcases pointData_ok hq with ⟨hr, -⟩ | ⟨hr, -⟩ | ⟨-, b, g, c, rb, sn, hb, hg, hc, ha, hs, -, he⟩
+      · rw [hx] at hr; cases hr
+      · rw [hx] at hr; cases hr
+      · exact ⟨_, b, g, c, rb, sn, _, hk, hb, hg, hc, ha, hs, he⟩
 
 /-! ## A key's bytes read back -/
 
@@ -632,11 +694,11 @@ for every edit `editsOf` reads from the run's edits row, paired with the old row
 found for it (every `guardOld` succeeded: `olds`), and every guard its relation declares, the
 `runLaw` `guardEdits` makes (over the run's state, its request and `guardIn` of the edit's data
 and its old row) is not `stuck`. -/
-theorem guardEdits_never_stuck {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem guardEdits_never_stuck {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {S : RunSetup} {budget used fuel left : Nat} {v : Val} {c e st : Data}
     {es : List (Edit D)} {olds : List Data}
-    (hS : runSetup bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S)
     (hrun : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (.record [("calls", c), ("edits", e), ("state", st)], left))
     (hes : editsOf S.rels r.self e = .ok es)
@@ -743,14 +805,14 @@ private def onePin : RowView Nat :=
 /-- The tooth of `relReads_points`' bound: a view with one more pin than the method's slots is
 refused. -/
 theorem relReads_pins_past_slots :
-    (match relReads (fun _ => none) (fun g => .error (.unpinned g)) twoPins 7 0 "t" tRel ⟨1, none, false⟩ with
+    (match relReads (fun _ => none) noReceipts (fun g => .error (.unpinned g)) twoPins 7 0 "t" tRel ⟨1, none, false, false⟩ (.record []) with
      | .error _ => true
      | .ok _ => false) = true := by decide
 
 /-- `relReads_points` is not about a refusal: one pin into two slots reads to the pinned key, then
 an empty slot. -/
 theorem relReads_points_witness :
-    (match relReads (fun _ => none) (fun g => .error (.unpinned g)) onePin 7 0 "t" tRel ⟨2, none, false⟩ with
+    (match relReads (fun _ => none) noReceipts (fun g => .error (.unpinned g)) onePin 7 0 "t" tRel ⟨2, none, false, false⟩ (.record []) with
      | .ok v =>
        (match pointSlots 2 v with
         | [.inj "some" (.record [("key", .record [("a", .nat 1)]), ("val", .inj "none" (.record []))]),
@@ -872,20 +934,20 @@ theorem runMeasuredWith_rows_under {D : Type} {bytesOf : D → ByteArray} {diges
   obtain ⟨-, -, rfl, -, -⟩ := h
   exact editsOf_under ‹editsOf _ _ _ = .ok _›
 
-theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∀ e ∈ rows, e.1.under.1 = r.self := by
-  exact runMeasuredWith_rows_under (setup := runSetup bytesOf digestOf) h
+  exact runMeasuredWith_rows_under (setup := runSetup bytesOf digestOf rc) h
 
 /-- **The rows `Lang.program` hands KERNEL**: every row act is under the run's own object. -/
-theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t : Nat}
-    (h : (program bytesOf digestOf).run look rv pkg state method args r budget = .ok (s, calls, rows, t)) :
+    (h : (program bytesOf digestOf rc).run look rv pkg state method args r budget = .ok (s, calls, rows, t)) :
     ∀ e ∈ rows, e.1.under.1 = r.self := by
   simp only [program, Except.map] at h
   split at h
@@ -893,7 +955,7 @@ theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteAr
   · rename_i x hx
     simp only [Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨-, -, rfl, -⟩ := h
-    exact runMeasuredWith_rows_under (setup := runSetupLive bytesOf digestOf) hx
+    exact runMeasuredWith_rows_under (setup := runSetupLive bytesOf digestOf rc) hx
 
 /-- **A prefix of every field is the key** (PROTOCOL-51): `preBytes` at the key's full length is
 `keyBytes`, so a range's prefix and an edit's key are one encoding. -/
@@ -912,7 +974,7 @@ private def liveReader (key : Ty) : Package :=
   { imports := [], state := .record [], body := .record [], methods := ["m"], laws := [],
     rels := [("r", liveRel key)],
     iface := .record [("m", methodTy (.record []) (.record []) []
-      (readsTy [("r", liveRel key)] [("r", ⟨1, none, true⟩)]) (editTy [("r", liveRel key)]) 0)] }
+      (readsTy [("r", liveRel key)] [("r", ⟨1, none, true, false⟩)]) (editTy [("r", liveRel key)]) 0)] }
 
 /-- A live read of a relation that is NOT cell-keyed is refused at install by its own name,
 `liveNotCellKeyed`, never as a generic `badMethod`. -/

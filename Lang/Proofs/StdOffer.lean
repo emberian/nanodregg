@@ -648,12 +648,12 @@ private theorem apply4_field {lib : List Term} {g : Nat} {f : Nat → Nat} {pb :
   exact .app (.app (.app (.app hget (.var rfl) .lam) (.var rfl) .lam) (.var rfl) .lam) (.var rfl) h
 
 /-- `runMeasured`'s do-block inverted, with the calls conjunct (`runMeasuredWith_ok` with `callsOf`). -/
-private theorem runMeasured_inv {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+private theorem runMeasured_inv {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
-    ∃ S v used c e ds left es, runSetup bytesOf digestOf look rv pkg state method args r = .ok S ∧
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∃ S v used c e ds left es, runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       run S.lib Bounds.stackMax (budget - S.preparation) 0 (State.init S.term S.env) = .value v used ∧
       (Machine.mk S.lib).extract S.ty (budget - S.preparation - used) v =
         .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) ∧
@@ -844,7 +844,7 @@ the run returns at F2, buyer `[5,10]` / seller `[11,12]` / θ = 11, where `Joint
 retract keyed by the peer's point (`.var 2`) instead of its own (`.var 4`): the first act's slot is
 then the peer key's bytes. P5 (the retract became an upsert) is refused earlier, by `offer_guard`'s
 `final`, so on P5 the run does not return and this theorem is not its tooth. -/
-theorem take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -852,11 +852,11 @@ theorem take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteAr
     (hR : (offerRoleTy roles).wf = true)
     (hid : digestOf (bytesOf pkg) = some pkg)
     (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
-    (h : (Lang.program bytesOf digestOf).run look rv pkg state offerTakeIx args r budget' =
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerTakeIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ pair th k o kq q kb sb vb,
       Wire.decodeData (offerTakeArg theta) args = .ok (.record [("pair", pair), ("theta", th)]) ∧
-      methodReads bytesOf digestOf look pkg (offerRels theta roles ol sl) rv r.self
+      methodReads bytesOf digestOf rc look pkg (offerRels theta roles ol sl) rv r.self
         (.record [("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
@@ -868,9 +868,9 @@ theorem take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteAr
         (.record [("answered", .inj "none" (.record [])),
           ("captured", .inj "settle" (.record [("pair", pair), ("theta", th)]))]) = some vb ∧
       rows = [(.row ⟨r.self, 0, kb⟩, .retract), (.row ⟨r.self, 1, sb⟩, .insert 0 vb)] := by
-  change (runMeasuredLive bytesOf digestOf look rv pkg state offerTakeIx args r budget').map _ = _ at h
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state offerTakeIx args r budget').map _ = _ at h
   rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
-  cases hm : runMeasured bytesOf digestOf look rv pkg state offerTakeIx args r budget' with
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state offerTakeIx args r budget' with
   | error e => rw [hm] at h; cases h
   | ok x =>
   rw [hm] at h
@@ -1036,23 +1036,23 @@ it), and edits no row. The matcher judges nothing: the honesty is each take's
 (`take_iff_compliant`); the one θ is this theorem's. Mutations: P3 (the second call dropped: the
 calls list has one element) and P4 (a second argument field `dealY` sent to `y`: the second call's
 bytes are not `deal`). -/
-theorem fuse_calls {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem fuse_calls {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hid : digestOf (bytesOf pkg) = some pkg)
     (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
-    (h : (Lang.program bytesOf digestOf).run look rv pkg state offerFuseIx args r budget' =
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerFuseIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ deal x y vx vy x' y' vx' vy',
       Wire.decodeData offerFuseArg args =
         .ok (.record [("deal", .bytes deal), ("viaX", vx), ("viaY", vy), ("x", .digest x), ("y", .digest y)]) ∧
       digestOf x = some x' ∧ digestOf y = some y' ∧ ViaReads digestOf vx vx' ∧ ViaReads digestOf vy vy' ∧
       calls = [.invoke x' offerTakeIx deal budget vx', .invoke y' offerTakeIx deal budget vy'] ∧ rows = [] := by
-  change (runMeasuredLive bytesOf digestOf look rv pkg state offerFuseIx args r budget').map _ = _ at h
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state offerFuseIx args r budget').map _ = _ at h
   rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
-  cases hm : runMeasured bytesOf digestOf look rv pkg state offerFuseIx args r budget' with
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state offerFuseIx args r budget' with
   | error e => rw [hm] at h; cases h
   | ok x =>
   rw [hm] at h

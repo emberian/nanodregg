@@ -22,6 +22,7 @@ def storeKey : Digest := Hash.digest "nanodregg/rows/store-key/v1" "rows".toUTF8
 def deployed : Params Digest :=
   { name := "deployed parameters (Digest, cSHAKE256, Ed25519, KMAC256 Store tags)"
     ctx := Host.Deployed.X
+    receipts := Protocol.Foreign.check Codec.Deployed.env Codec.Deployed.digestCodec
     dc := Deployed.digestCodec
     world := Host.Deployed.world
     pub := fun s => Ed25519.publicKey (Kernel.Sim.Deployed.seed s)

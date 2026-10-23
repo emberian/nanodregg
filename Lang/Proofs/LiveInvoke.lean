@@ -37,7 +37,7 @@ theorem method_live_run_sound {D : Type} {rv : RowView D} {self : D} {digestOf :
     .app (.app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)) (.var rfl)
   exact run_sound hlib _ _ _ (.eval (.cons hr (.cons ha (.cons hs (.cons hw .nil)))) ht .nil)
 
-theorem invoke_live_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem invoke_live_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package}
     {rv : RowView D} {ℓ : Label} {mty : Ty} {sg : Sig} {state : Slots} {args : ByteArray}
     {sd ad wd : Data} {r : Req D} {ticks : Nat}
@@ -46,7 +46,7 @@ theorem invoke_live_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
     (hstate : readState digestOf (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData sg.arg args = .ok ad)
-    {pkg : D} (hrows : methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd)
+    {pkg : D} (hrows : methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd)
     (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces (resultTy p.state sg.calls (editTy p.rels) sg.edits)
       (run L.lib Bounds.stackMax ticks 0

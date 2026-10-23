@@ -134,7 +134,7 @@ private def wCtx : Ctx UInt8 where
   decodeCall _ := none
   digestOf := wDigestOf
   verify _ _ _ := true
-  program := Lang.program wEnv.bytes wDigestOf
+  program := Lang.program wEnv.bytes wDigestOf noReceipts
 
 private def cS : Ty := .record [("n", .nat)]
 
@@ -237,7 +237,7 @@ private theorem c1_invokeRun :
 private theorem c1_run :
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 9 (stateOf objCell)
       0 (natBytes 4) req1 (min 1000 (poolOf c1.unsigned.body)) = .ok (s1, [], [], 41) := by
-  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  show (runMeasuredLive wEnv.bytes wDigestOf noReceipts _ _ _ _ _ _ _ _).map _ = _
   rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl)
     (readPackage_counter c1_pkg) rfl rfl]
   unfold runMeasured runMeasuredWith runSetup runSetupWith
@@ -297,7 +297,7 @@ private theorem c2_invokeRun :
 private theorem c2_run :
     wCtx.program.run (pinned wCtx.env w1 c2.unsigned.pins) (rowView wCtx.env w1 c2.unsigned) 9 (stateOf cell2)
       0 (natBytes 2) req2 (min 1000 (poolOf c2.unsigned.body)) = .ok (s2, [], [], 41) := by
-  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  show (runMeasuredLive wEnv.bytes wDigestOf noReceipts _ _ _ _ _ _ _ _).map _ = _
   rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl)
     (readPackage_counter c2_pkg) rfl rfl]
   unfold runMeasured runMeasuredWith runSetup runSetupWith
@@ -344,7 +344,7 @@ theorem invoke_next_slots_witnessed :
     ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (obj : UInt8) (method : Nat)
       (args : ByteArray) (budget : Nat) (via : Option UInt8) (cell : Cell) (p : UInt8) (r : Req UInt8)
       (s : Slots) (calls : List (Body UInt8)) (rows : List (RowSlot UInt8 × RowAct)) (used : Nat),
-      X.program = Lang.program X.env.bytes X.digestOf ∧
+      X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       c.unsigned.body = .invoke obj method args budget via ∧
       invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) ∧
@@ -367,7 +367,7 @@ theorem invoke_next_run_witnessed :
       (cell' : Cell) (p' : UInt8) (r' : Req UInt8)
       (args' : ByteArray) (budget' : Nat) (t' : Turn UInt8) (w'' : World UInt8)
       (s' : Slots) (calls' : List (Body UInt8)) (rows' : List (RowSlot UInt8 × RowAct)) (used' : Nat),
-      X.program = Lang.program X.env.bytes X.digestOf ∧
+      X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       c.unsigned.body = .invoke obj method args budget via ∧
       invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) ∧
@@ -395,7 +395,7 @@ theorem invoke_lift_witnessed :
       (args : ByteArray) (budget : Nat) (via : Option UInt8) (cell : Cell) (p : UInt8) (r : Req UInt8)
       (s : Slots) (calls : List (Body UInt8)) (rows : List (RowSlot UInt8 × RowAct)) (used : Nat)
       (pk : Package) (fs : List (Label × Term)) (ℓ : Label) (tl : Term),
-      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf ∧
+      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       c.unsigned.body = .invoke obj method args budget via ∧
       invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) ∧

@@ -13,6 +13,7 @@ import Host.Page
 import Host.Serve
 import Codec.Deployed
 import Lang.Program
+import Protocol.Foreign
 
 namespace Nanodregg.Host.Deployed
 
@@ -20,7 +21,10 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec
 
 abbrev D := Digest
 
-def X : Ctx D := Codec.Deployed.ctx (Lang.program Digest.bytes Digest.ofBytes?)
+/-- The deployed program: LANG over the deployed codec, its receipt reads checked by PROTOCOL's
+`Foreign.check` (E5) against the head objects they name. -/
+def X : Ctx D := Codec.Deployed.ctx
+  (Lang.program Digest.bytes Digest.ofBytes? (Protocol.Foreign.check Codec.Deployed.env Codec.Deployed.digestCodec))
 
 def c : Cadence := Cadence.deployed
 

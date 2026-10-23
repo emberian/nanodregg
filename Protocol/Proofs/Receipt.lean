@@ -6,9 +6,12 @@ the World's journal holds `(h, td)` at the id, or the hash collides. `check_abse
 `absent` shows the id absent from the journal, or a collision, and is never answered past
 `journalForgets`. With KERNEL's `head_roots` (a head link that hashes to a stepped World's chain opens
 to that World's roots) these are the phone read of KERNEL-41 (`head_journal_read`) through the
-roots a member holds. The refused answer's soundness about the World needs the refusals trie's
-inclusion soundness, which KERNEL has not stated (cv); `check_refused` states what the check does
-establish: the path verifies against the head's refusals root.
+roots a member holds. A refused receipt is the World's recorded refusal (`check_refused_sound`) and
+an absent one shows no refusal recorded (`check_absent_unrefused`), through KERNEL's refusals-trie
+soundness (`Kernel.Proofs.RefusalsHead`: `refusal_inclusion_sound`, `refusal_exclusion_sound`);
+`check_refused` is the weaker path-only reading. The round trip of the wire is
+`Proofs.ReceiptWire.ofBytes_bytes`; a receipt checked against a head another World holds is
+`Proofs.Foreign` (E5).
 -/
 import Protocol.Receipt
 import Kernel.Proofs.JournalHead

@@ -86,7 +86,7 @@ def seed (accepted : Bool := false) : Slots :=
 def invoke (b : Std.HoleBundle) (p : Package) (rv : RowView Sim.D) (method : Label)
     (args : Data) (A : Ty) (agent : Sim.D := 1) (accepted : Bool := false) (budget : Nat := 100000) (validUntil : Nat := 10) :
     Except (Refusal Sim.D) (Slots × List (Body Sim.D) × List (RowSlot Sim.D × RowAct) × Nat) :=
-  (program Sim.dc.bytes Sim.digestOf).run (look b p) rv 99 (seed accepted)
+  (program Sim.dc.bytes Sim.digestOf noReceipts).run (look b p) rv 99 (seed accepted)
     (p.methods.idxOf method) ((Wire.encodeData A args).getD .empty) { request agent with validUntil := validUntil } budget
 
 def resultName {α : Type} : Except (Refusal Sim.D) α → String

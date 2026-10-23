@@ -677,14 +677,14 @@ theorem runBy_step (cap : Nat) : ∀ (fuel used : Nat) (s : State),
 
 /-! ## The whole count, over the run the deployed machine makes -/
 
-variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck}
 
 /-- `requiredOf`'s count: the size of the method run's derivation, plus the forced suspensions'. -/
-theorem requiredOf_spec {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
+theorem requiredOf_spec {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget N : Nat}
-    (h : Need.requiredOf bytesOf digestOf look rv pkg state method args r budget = .ok N) :
+    (h : Need.requiredOf bytesOf digestOf rc look rv pkg state method args r budget = .ok N) :
     ∃ (S : RunSetup) (v : Val) (n m : Nat),
-      runSetup bytesOf digestOf look rv pkg state method args r = .ok S ∧
+      runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       Derives S.lib S.env S.term (.ok v) n ∧ Forces S.lib S.ty v m ∧ N = n + m := by
   unfold Need.requiredOf at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -701,12 +701,12 @@ theorem requiredOf_spec {look : Pinned D} {rv : RowView D} {pkg : D} {state : Sl
 
 /-- `runMeasured`'s front half is `runSetup`, and its tick count is the run of that term in that
 environment plus the extraction at that type. -/
-theorem runMeasured_setup {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
+theorem runMeasured_setup {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k)) :
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k)) :
     ∃ (S : RunSetup) (v : Val) (used : Nat) (d : Data) (left : Nat),
-      runSetup bytesOf digestOf look rv pkg state method args r = .ok S ∧
+      runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used ∧
       (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left) ∧ ticks = budget - left := by
   unfold runMeasured runMeasuredWith at h
@@ -730,13 +730,13 @@ is that term's machine run in that environment plus the extraction at that type,
 run left. The denominator `requiredOf` is the size of the derivation of the very value the
 machine computed (`derives_unique`), plus the size of what extraction must force at that type
 (`forces_unique`). -/
-theorem required_counts_the_run {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+theorem required_counts_the_run {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget N : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
-    (hm : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k))
-    (hq : Need.requiredOf bytesOf digestOf look rv pkg state method args r budget = .ok N) :
+    (hm : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k))
+    (hq : Need.requiredOf bytesOf digestOf rc look rv pkg state method args r budget = .ok N) :
     ∃ (S : RunSetup) (v : Val) (used : Nat) (d : Data) (left n m : Nat),
-      runSetup bytesOf digestOf look rv pkg state method args r = .ok S ∧
+      runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used ∧
       (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left) ∧ ticks = budget - left ∧
       Derives S.lib S.env S.term (.ok v) n ∧ Forces S.lib S.ty v m ∧ N = n + m := by
@@ -754,11 +754,11 @@ charged exceed what `requiredOf` counts. The method's run pays more ticks than i
 derivation has rule instances (`derives_lt_used`), and extraction pays at least the size of every
 suspension it must force (`forces_le`). So `ticks-per-required-step` cannot go below 1 for any
 admitted invoke, and a counter that over-counted the requirement would contradict it. -/
-theorem required_lt_ticks {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+theorem required_lt_ticks {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget N : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
-    (hm : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k))
-    (hq : Need.requiredOf bytesOf digestOf look rv pkg state method args r budget = .ok N) :
+    (hm : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k))
+    (hq : Need.requiredOf bytesOf digestOf rc look rv pkg state method args r budget = .ok N) :
     N < ticks := by
   obtain ⟨S, v, used, d, left, n, m, -, hr, he, rfl, hd, hf, rfl⟩ := required_counts_the_run hm hq
   obtain ⟨h1, h2⟩ := derives_lt_used hd hr

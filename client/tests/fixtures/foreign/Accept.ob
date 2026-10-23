@@ -1,0 +1,18 @@
+; E5 fixture (rows X1-X5): accept another World's committed call once, on a receipt checked against
+; a head object this World trusts. `heads` is keyed by the head object (cell-keyed: the trust
+; anchors the owner inserted; `distrust` retracts it (a revocation: the range then lists nothing, `untrusted`)). `accept` reads the trusted
+; head the caller's signed range names (prefix: the head object) with `(receipt)`: the run checks the `receipt` argument against that head
+; object (`Protocol.Foreign.check`) and shows what it committed; the acceptance is a row per
+; transaction id, so one receipt is accepted once.
+(package
+  (doc "E5 fixture: accepts another World's committed call once, on its receipt checked against a trusted head object.")
+  (state (rec))
+  (rel heads (key (cell digest)) (val (rec)) (limit 16) (retract))
+  (rel accepted (key (tx digest)) (val (rec (height nat))) (limit 4096))
+  (method distrust (arg (rec (cell digest))) (edits 1)
+    (done state (retract heads (record (cell arg.cell)))))
+  (method trust (arg (rec (cell digest))) (edits 1)
+    (done state (insert heads (record (cell arg.cell)) (record))))
+  (method accept (reads (heads (range 1 1) (receipt))) (arg (rec (receipt bytes))) (edits 1)
+    (case rows.heads.range.rows.r0 (none _ (refuse "untrusted"))
+      (some h (done state (insert accepted (record (tx h.receipt.tx)) (record (height h.receipt.height))))))))

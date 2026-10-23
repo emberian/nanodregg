@@ -271,24 +271,24 @@ required steps (`Lang.Need.requiredOf`, the size of the run's reference derivati
 suspensions extraction forces, `Lang.Proofs.Need.required_counts_the_run`), and the ticks under
 the plant: the method run on `Lang.Need.wasteStep` in place of the deployed step, which costs
 two needless transitions per application. A count that fails is an error by name. -/
-def measureInvoke (X : Ctx D) (w : World D) (c : Call D) : Option (Except String Invoked) :=
+def measureInvoke (rc : Lang.ReceiptCheck) (X : Ctx D) (w : World D) (c : Call D) : Option (Except String Invoked) :=
   match c.unsigned.body with
   | .invoke obj method args budget via =>
     let look := pinned X.env w c.unsigned.pins
     let rv := rowView X.env w c.unsigned
     match invokeRun X look c c.unsigned.member obj method via with
     | .ok (cell, p, r) =>
-      match Lang.runMeasured X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget with
+      match Lang.runMeasured X.env.bytes X.digestOf rc look rv p (stateOf cell) method args r budget with
       | .ok (_, _, _, ticks, pkgs) =>
         let text : Receive.Refusal D → String := fun | .program s => s | e => e.name
         let count := do
-          let required ← Lang.Need.requiredOf X.env.bytes X.digestOf look rv p (stateOf cell) method
+          let required ← Lang.Need.requiredOf X.env.bytes X.digestOf rc look rv p (stateOf cell) method
             args r budget
-          let honest ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.step look rv p (stateOf cell)
+          let honest ← Lang.Need.runTicksBy X.env.bytes X.digestOf rc Lang.step look rv p (stateOf cell)
             method args r budget
-          let wasted ← Lang.Need.runTicksBy X.env.bytes X.digestOf Lang.Need.wasteStep look rv p
+          let wasted ← Lang.Need.runTicksBy X.env.bytes X.digestOf rc Lang.Need.wasteStep look rv p
             (stateOf cell) method args r budget
-          let (once, twice) ← Lang.Need.extractTicksTwice X.env.bytes X.digestOf look rv p (stateOf cell)
+          let (once, twice) ← Lang.Need.extractTicksTwice X.env.bytes X.digestOf rc look rv p (stateOf cell)
             method args r budget
           if once ≠ ticks then throw (Receive.Refusal.program s!"extraction recount {once} is not the run's {ticks}")
           pure ({ ticks, required, planted := ticks - honest + wasted, extracted := twice, pkgs } : Invoked)
@@ -304,7 +304,7 @@ def sawCall (name : String) (call : ByteArray) : M D Unit := do
     | none => "undecodable"
   modify fun st => if st.kinds.contains k then st else { st with kinds := st.kinds ++ [k] }
   if let (some c, some a) := (decoded, (← get).actors.lookup name) then
-    if let some m := measureInvoke (← get).sys.writer.X a.follow.world c then
+    if let some m := measureInvoke (← get).sys.writer.R.receipts (← get).sys.writer.X a.follow.world c then
       modify fun st => { st with invokes := st.invokes.push m }
 
 def founderIndex (name : String) : Option Nat := founders.idxOf? name

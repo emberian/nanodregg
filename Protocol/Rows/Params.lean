@@ -33,6 +33,9 @@ structure Params (D : Type) [Ord D] where
   name : String
   /-- the kernel's parameters, with LANG's program -/
   ctx : Ctx D
+  /-- the receipt check `ctx`'s program was built with (E5): what a re-measured run uses, so a
+  measurement runs the very program the writer runs -/
+  receipts : Lang.ReceiptCheck
   /-- the digest's codec -/
   dc : Stream D
   /-- the World's codec (a base's World part, CODEC-14) -/
@@ -74,7 +77,8 @@ def nonce : ByteArray := "rows-nonce".toUTF8
 key, the Host Sim's FNV sealers. -/
 def toy : Params UInt64 :=
   { name := "toy parameters (UInt64 digest, FNV-1a, hash signatures, FNV Store tags)"
-    ctx := Kernel.Sim.ctxWith (Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf)
+    ctx := Kernel.Sim.ctxWith (Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf Lang.noReceipts)
+    receipts := Lang.noReceipts
     dc := Kernel.Sim.dc
     world := Codec.Kernel.world Kernel.Sim.env Kernel.Sim.dc
     pub := fun k => k

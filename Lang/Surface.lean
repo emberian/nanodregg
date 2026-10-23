@@ -470,7 +470,7 @@ def term (c : Ctx) : Nat → List String → SExp → P SExp
       let k ← match c.place with
         | .method _ _ _ reads =>
           match Row.find? rel reads with
-          | some ⟨_, some (_, k), _⟩ => pure k
+          | some ⟨_, some (_, k), _, _⟩ => pure k
           | _ => throw (.noRange s rel)
         | _ => throw (.noRange s rel)
       let T ← termTy c t
@@ -576,17 +576,24 @@ def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
       match xs.getLast? with
       | some (.list _ [.atom _ "live"]) => (xs.dropLast, true)
       | _ => (xs, false)
+    -- `(receipt)` after it: the points carry the `receipt` argument checked against the head
+    -- object each key names (E5; a cell-keyed relation, an argument with `receipt : bytes`)
+    let receiptOf : List SExp → List SExp × Bool := fun xs =>
+      match xs.getLast? with
+      | some (.list _ [.atom _ "receipt"]) => (xs.dropLast, true)
+      | _ => (xs, false)
     let reads ← rs.mapM fun
       | .list p xs =>
+        let (xs, receipt) := receiptOf xs
         let (xs, live) := liveOf xs
         match xs with
         | [.atom _ rel, .list _ [.atom _ "points", .atom q n]] =>
-          match n.toNat? with | some n => .ok (rel, ⟨n, none, live⟩) | none => .error (.badClause q)
+          match n.toNat? with | some n => .ok (rel, ⟨n, none, live, receipt⟩) | none => .error (.badClause q)
         | [.atom _ rel, .list _ [.atom _ "range", .atom q m, .atom _ k]] =>
-          match m.toNat?, k.toNat? with | some m, some k => .ok (rel, ⟨0, some (m, k), live⟩) | _, _ => .error (.badClause q)
+          match m.toNat?, k.toNat? with | some m, some k => .ok (rel, ⟨0, some (m, k), live, receipt⟩) | _, _ => .error (.badClause q)
         | [.atom _ rel, .list _ [.atom _ "points", .atom q n], .list _ [.atom _ "range", .atom _ m, .atom _ k]] =>
           match n.toNat?, m.toNat?, k.toNat? with
-          | some n, some m, some k => .ok (rel, ⟨n, some (m, k), live⟩)
+          | some n, some m, some k => .ok (rel, ⟨n, some (m, k), live, receipt⟩)
           | _, _, _ => .error (.badClause q)
         | _ => .error (.badClause p)
       | x => .error (.badClause x.pos)

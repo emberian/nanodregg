@@ -111,6 +111,30 @@ def keyCell : Data → Option ByteArray
   | .record [(_, .digest b)] => some b
   | _ => none
 
+/-- What a receipt read shows (E5, `seenTy`): a foreign World's committed call, its height, turn
+digest and transaction id. -/
+structure Seen where
+  height : Nat
+  turn : ByteArray
+  tx : ByteArray
+  deriving DecidableEq, Repr
+
+/-- What the check shows fits the language's data (`seenTy`): a natural height, two digests. -/
+def seenFits (s : Seen) : Bool :=
+  decide (s.height < Bounds.natLimit) && decide (s.turn.size ≤ Bounds.digestBytesMax) &&
+    decide (s.tx.size ≤ Bounds.digestBytesMax)
+
+def seenData (s : Seen) : Data :=
+  .record [("height", .nat s.height), ("turn", .digest s.turn), ("tx", .digest s.tx)]
+
+/-- How a run checks a receipt (E5): the head object's cell and the receipt's bytes, to what it
+shows, or the refusal's NAME. LANG declares it; PROTOCOL instantiates it (`Protocol.Foreign.check`,
+`Receipt.check` against the head), the deployed `Host.Deployed.X` passes it. -/
+abbrev ReceiptCheck := Kernel.Cell → ByteArray → Except String Seen
+
+/-- The check of a program that verifies no receipt: every receipt read refuses `noReceipts`. -/
+def noReceipts : ReceiptCheck := fun _ _ => .error "noReceipts"
+
 /-- The index of a relation by label. -/
 def relIndex (rels : List (Label × RelDecl)) (ℓ : Label) : Option Nat := rels.findIdx? (·.1 = ℓ)
 
@@ -154,12 +178,45 @@ def readPoint (ℓ : Label) (d : RelDecl) (p : ByteArray × Option RowLeaf) :
     | some (.head ..) => throw (.program s!"rows: {ℓ}: not a row")
   pure (key, val)
 
+/-- THE receipt check of one read key (E5): the head object the key names, read through the
+caller's pinned view (an unpinned cell is the kernel's `unpinned`; a retired one, `headDead`: how the
+owner revokes a trust anchor), the method's `receipt` argument checked against it by the run's
+`ReceiptCheck` (its refusal's name is the run's), and what it shows, entering only as the
+language's data (law 4: `seenFits`, its digests digests of the World, LANG-38). A point and a range
+row of a `(receipt)` read both take their column from here. -/
+def receiptSeen (rc : ReceiptCheck) (look : Pinned D) (ℓ : Label) (args : Data) (k : Data) :
+    Except (Refusal D) (D × Seen) :=
+  match keyCell k with
+  | none => .error (.program s!"rows: {ℓ}: not cell-keyed")
+  | some b =>
+    match digestOf b with
+    | none => .error (.program s!"rows: {ℓ}: key: not a digest")
+    | some g =>
+      match look g with
+      | .error e => .error e
+      | .ok none => .error (.program "headDead")
+      | .ok (some c) =>
+        match args.field "receipt" with
+        | some (.bytes rb) =>
+          match rc c rb with
+          | .ok s =>
+            if seenFits s && (seenData s).digests.all (fun b => (digestOf b).isSome) then .ok (g, s)
+            else .error (.program "receiptBounds")
+          | .error why => .error (.program why)
+        | _ => .error (.program "receiptRead")
+
 /-- A point's record: its key and value; on a live read (E1, LANG-75.1) also whether the kernel
 cell its key names is LIVE in the caller's pinned view. An unpinned cell is the kernel's own
-`unpinned` refusal, by name. -/
-def pointData (look : Pinned D) (ℓ : Label) (live : Bool) (kv : Data × Option Data) :
-    Except (Refusal D) Data :=
-  if live then
+`unpinned` refusal, by name. On a receipt read (E5) also the column `receiptSeen` shows. -/
+def pointData (rc : ReceiptCheck) (look : Pinned D) (ℓ : Label) (live receipt : Bool) (args : Data)
+    (kv : Data × Option Data) : Except (Refusal D) Data :=
+  if receipt then
+    match receiptSeen digestOf rc look ℓ args kv.1 with
+    | .error e => .error e
+    | .ok (g, s) =>
+      .ok (.record ([("key", kv.1)] ++ (if live then [("live", .bool (cellLive look g))] else []) ++
+        [("receipt", seenData s), ("val", optD kv.2)]))
+  else if live then
     match keyCell kv.1 with
     | none => .error (.program s!"rows: {ℓ}: not cell-keyed")
     | some b =>
@@ -171,14 +228,27 @@ def pointData (look : Pinned D) (ℓ : Label) (live : Bool) (kv : Data × Option
         | .ok _ => .ok (.record [("key", kv.1), ("live", .bool (cellLive look g)), ("val", optD kv.2)])
   else .ok (.record [("key", kv.1), ("val", optD kv.2)])
 
+/-- A listed row of a `(receipt)` range read: its key, its column (`receiptSeen`), its value. -/
+def receiptRow (rc : ReceiptCheck) (look : Pinned D) (ℓ : Label) (args : Data) : Data → Except (Refusal D) Data
+  | .record [("key", k), ("val", v)] =>
+    match receiptSeen digestOf rc look ℓ args k with
+    | .error e => .error e
+    | .ok (_, s) => .ok (.record [("key", k), ("receipt", seenData s), ("val", v)])
+  | _ => .error (.program s!"rows: {ℓ}: not a row")
+
+/-- A range read's rows, each with its column on a receipt read (E5), else as listed. -/
+def receiptRows (rc : ReceiptCheck) (look : Pinned D) (ℓ : Label) (args : Data) (receipt : Bool)
+    (rs : List Data) : Except (Refusal D) (List Data) :=
+  if receipt then rs.mapM (receiptRow digestOf rc look ℓ args) else .ok rs
+
 /-- One relation's reads: the caller's pins under it in pin order (at most `x.points`, else
 refused), and its one signed range, if the method declares one (its `most` at most the method's
 slots; exactly one signed range, else refused: none signed is `rangeUnpinned`, naming the relation). -/
-def relReads (look : Pinned D) (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl)
-    (x : RelRead) : Except (Refusal D) Data := do
+def relReads (rc : ReceiptCheck) (look : Pinned D) (rv : RowView D) (self : D) (i : Nat) (ℓ : Label) (d : RelDecl)
+    (x : RelRead) (args : Data) : Except (Refusal D) Data := do
   let pts := rv.points self i
   unless pts.length ≤ x.points do throw (.program s!"rows: {ℓ}: {pts.length} pins past {x.points} slots")
-  let ps ← pts.mapM fun p => do pointData digestOf look ℓ x.live (← readPoint digestOf ℓ d p)
+  let ps ← pts.mapM fun p => do pointData digestOf rc look ℓ x.live x.receipt args (← readPoint digestOf ℓ d p)
   let range ← match x.range with
     | none => pure []
     | some (m, k) => do
@@ -187,6 +257,7 @@ def relReads (look : Pinned D) (rv : RowView D) (self : D) (i : Nat) (ℓ : Labe
         unless most ≤ k do throw (.program s!"rows: {ℓ}: range of {most} past {k} slots")
         let p ← checked digestOf s!"rows: {ℓ}: prefix" (← liftS s!"rows: {ℓ}: prefix" (keyOf d m pre))
         let rs ← rangeRowData digestOf ℓ d rows
+        let rs ← receiptRows digestOf rc look ℓ args x.receipt rs
         pure [("range", Data.record [("pre", p), ("rows", .record (slotsD "r" k rs))])]
       -- no range signed: the structured refusal, naming the relation (LANG-22 agreed, item 4)
       | [] => throw (.rangeUnpinned self i)
@@ -194,13 +265,13 @@ def relReads (look : Pinned D) (rv : RowView D) (self : D) (i : Nat) (ℓ : Labe
   pure (.record (slotsD "p" x.points ps ++ range))
 
 /-- A method's rows argument: for each relation it reads, `relReads`. -/
-def readsData (look : Pinned D) (rels : List (Label × RelDecl)) (rv : RowView D) (self : D)
-    (rs : List (Label × RelRead)) :
+def readsData (rc : ReceiptCheck) (look : Pinned D) (rels : List (Label × RelDecl)) (rv : RowView D) (self : D)
+    (rs : List (Label × RelRead)) (args : Data) :
     Except (Refusal D) Data := do
   let fs ← rs.mapM fun r => do
     let some i := relIndex rels r.1 | throw (.program s!"rows: no relation {r.1}")
     let some d := Row.find? r.1 rels | throw (.program s!"rows: no relation {r.1}")
-    pure (r.1, ← relReads digestOf look rv self i r.1 d r.2)
+    pure (r.1, ← relReads digestOf rc look rv self i r.1 d r.2 args)
   pure (.record fs)
 
 end

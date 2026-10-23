@@ -363,28 +363,99 @@ theorem readPoint_ok {D : Type} {digestOf : ByteArray → Option D} {ℓ : Label
     obtain ⟨u, hu, hs⟩ := map_some_ok ‹(some <$> valOf digestOf d _ _) = Except.ok _›
     exact ⟨_, ‹_›, ‹_›, .inr ⟨_, _, _, u, ‹_›, hu, hs⟩⟩
 
+/-- What `receiptSeen` read (E5): the key's head object, pinned and live, the method's `receipt`
+argument, the check's answer, inside the language's data. -/
+theorem receiptSeen_ok {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {args k : Data} {g : D} {s : Seen}
+    (h : receiptSeen digestOf rc look ℓ args k = .ok (g, s)) :
+    ∃ b c rb, keyCell k = some b ∧ digestOf b = some g ∧ look g = .ok (some c) ∧
+      args.field "receipt" = some (.bytes rb) ∧ rc c rb = .ok s ∧
+      (seenFits s = true ∧ (seenData s).digests.all (fun b => (digestOf b).isSome) = true) := by
+  unfold receiptSeen at h
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  simp only [Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl⟩ := h
+  exact ⟨_, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, Bool.and_eq_true_iff.mp ‹_›⟩
+
 /-- What `pointData` makes of a point read back: its key and value, and on a live read (E1) the
 liveness of the cell its key names, read through the pinned view at a pinned cell. -/
-theorem pointData_ok {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {ℓ : Label}
-    {live : Bool} {kv : Data × Option Data} {y : Data}
-    (h : pointData digestOf look ℓ live kv = .ok y) :
-    (live = false ∧ y = .record [("key", kv.1), ("val", optD kv.2)]) ∨
-    (live = true ∧ ∃ b g c, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok c ∧
-      y = .record [("key", kv.1), ("live", .bool (cellLive look g)), ("val", optD kv.2)]) := by
+theorem pointData_ok {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {live receipt : Bool} {args : Data} {kv : Data × Option Data} {y : Data}
+    (h : pointData digestOf rc look ℓ live receipt args kv = .ok y) :
+    (receipt = false ∧ live = false ∧ y = .record [("key", kv.1), ("val", optD kv.2)]) ∨
+    (receipt = false ∧ live = true ∧ ∃ b g c, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok c ∧
+      y = .record [("key", kv.1), ("live", .bool (cellLive look g)), ("val", optD kv.2)]) ∨
+    (receipt = true ∧ ∃ b g c rb s, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok (some c) ∧
+      args.field "receipt" = some (.bytes rb) ∧ rc c rb = .ok s ∧
+      (seenFits s = true ∧ (seenData s).digests.all (fun b => (digestOf b).isSome) = true) ∧
+      y = .record ([("key", kv.1)] ++ (if live then [("live", .bool (cellLive look g))] else []) ++
+        [("receipt", seenData s), ("val", optD kv.2)])) := by
   unfold pointData at h
   split at h
-  · rename_i hl
-    repeat' split at h
-    all_goals first | (cases h; done) | skip
-    simp only [Except.ok.injEq] at h
-    exact .inr ⟨hl, _, _, _, ‹_›, ‹_›, ‹_›, h.symm⟩
-  · rename_i hl
-    simp only [Except.ok.injEq] at h
-    exact .inl ⟨by simpa using hl, h.symm⟩
+  · rename_i hr
+    split at h
+    · cases h
+    · rename_i g s hrs
+      obtain ⟨b, c, rb, hb, hg, hc, ha, hs, hok⟩ := receiptSeen_ok hrs
+      simp only [Except.ok.injEq] at h
+      exact .inr (.inr ⟨hr, b, g, c, rb, s, hb, hg, hc, ha, hs, hok, h.symm⟩)
+  · rename_i hr
+    split at h
+    · rename_i hl
+      repeat' split at h
+      all_goals first | (cases h; done) | skip
+      simp only [Except.ok.injEq] at h
+      exact .inr (.inl ⟨by simpa using hr, hl, _, _, _, ‹_›, ‹_›, ‹_›, h.symm⟩)
+    · rename_i hl
+      simp only [Except.ok.injEq] at h
+      exact .inl ⟨by simpa using hr, by simpa using hl, h.symm⟩
 
-theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rv : RowView D} {self : D}
-    {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {v : Data}
-    (h : relReads digestOf look rv self i ℓ d x = .ok v) : Conforms v (relReadTy d x) := by
+theorem seenData_conforms {s : Seen} (h : seenFits s = true) : Conforms (seenData s) seenTy := by
+  simp only [seenFits, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact .record (.cons (.nat h.1.1) (.cons (.digest h.1.2) (.cons (.digest h.2) .nil)))
+
+/-- A `(receipt)` range row conforms to `rangeRowTy d true`: its key and value as listed, its column
+inside the language's data. -/
+theorem receiptRow_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {args : Data} {d : RelDecl} {x y : Data} (hx : Conforms x (rowTy d))
+    (h : receiptRow digestOf rc look ℓ args x = .ok y) : Conforms y (rangeRowTy d true) := by
+  unfold receiptRow at h
+  split at h
+  · rename_i k v
+    split at h
+    · cases h
+    · rename_i g s hrs
+      obtain ⟨-, -, -, -, -, -, -, -, hok⟩ := receiptSeen_ok hrs
+      simp only [Except.ok.injEq] at h
+      subst h
+      cases hx with
+      | record hr =>
+        cases hr with
+        | cons hk hr' =>
+          cases hr' with
+          | cons hv hn =>
+            cases hn
+            exact .record (.cons hk (.cons (seenData_conforms hok.1) (.cons hv .nil)))
+  · cases h
+
+theorem receiptRows_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {args : Data} {d : RelDecl} {receipt : Bool} {rs ys : List Data}
+    (hx : ∀ y ∈ rs, Conforms y (rowTy d)) (h : receiptRows digestOf rc look ℓ args receipt rs = .ok ys) :
+    ∀ y ∈ ys, Conforms y (rangeRowTy d receipt) := by
+  unfold receiptRows at h
+  cases receipt
+  · simp only [Bool.false_eq_true, if_false, Except.ok.injEq] at h
+    subst h
+    simpa [rangeRowTy] using hx
+  · simp only [if_true] at h
+    intro y hy
+    obtain ⟨q, hq, hqy⟩ := mapM_ok_mem h y hy
+    exact receiptRow_conforms (hx q hq) hqy
+
+theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {args : Data} {v : Data}
+    (h : relReads digestOf rc look rv self i ℓ d x args = .ok v) : Conforms v (relReadTy d x) := by
   unfold relReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
@@ -404,17 +475,26 @@ theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {look :
           rcases hv with ⟨rfl, -⟩ | ⟨_, _, _, w', -, hw', rfl⟩
           · cases hw
           · cases hw; exact valOf_conforms hw')
-        rcases pointData_ok hq with ⟨hl, rfl⟩ | ⟨hl, -, -, -, -, -, -, rfl⟩
-        · simp only [pointRecTy, hl, Bool.false_eq_true, if_false, List.cons_append, List.nil_append]
+        rcases pointData_ok hq with ⟨hr, hl, rfl⟩ | ⟨hr, hl, -, -, -, -, -, -, rfl⟩ |
+            ⟨hr, b, g, c, rb, sn, -, -, -, -, -, hs, rfl⟩
+        · simp only [pointRecTy, hl, hr, Bool.false_eq_true, if_false, List.cons_append, List.nil_append]
           exact .record (.cons (key_conf h2 h1) (.cons hval .nil))
-        · simp only [pointRecTy, hl, if_true, List.cons_append, List.nil_append]
+        · simp only [pointRecTy, hl, hr, if_true, Bool.false_eq_true, if_false, List.cons_append,
+            List.nil_append]
           exact .record (.cons (key_conf h2 h1) (.cons .bool (.cons hval .nil)))
+        · have hsc := seenData_conforms hs.1
+          cases hl : x.live
+          · simp only [pointRecTy, hr, if_true, Bool.false_eq_true, if_false, List.cons_append,
+              List.nil_append]
+            exact .record (.cons (key_conf h2 h1) (.cons hsc (.cons hval .nil)))
+          · simp only [pointRecTy, hr, if_true, List.cons_append, List.nil_append]
+            exact .record (.cons (key_conf h2 h1) (.cons .bool (.cons hsc (.cons hval .nil))))
     case rng =>
       first
         | exact .nil
-        | rename_i rs hrows
-          exact .cons (.record (.cons (pre_conf ‹_› ‹_›)
-            (.cons (.record (slotsD_conforms (rangeRowData_conforms hrows) "r" _)) .nil))) .nil
+        | exact .cons (.record (.cons (pre_conf ‹_› ‹_›)
+            (.cons (.record (slotsD_conforms (receiptRows_conforms (rangeRowData_conforms ‹rangeRowData _ _ _ _ = .ok _›) ‹receiptRows _ _ _ _ _ _ _ = .ok _›) "r" _))
+              .nil))) .nil
 
 theorem mapM_rowConforms {α ε : Type} {f : α → Except ε (Label × Data)} {g : α → Option (Label × Ty)}
     (hf : ∀ a y, f a = .ok y → ∃ t, g a = some t ∧ y.1 = t.1 ∧ Conforms y.2 t.2) :
@@ -442,9 +522,9 @@ theorem mapM_rowConforms {α ε : Type} {f : α → Except ε (Label × Data)} {
 
 /-- **The rows a run reads are a value of the method's declared rows type** (LANG-49): what
 `readsData` builds from the caller's row view is data at `readsTy`, whatever the view holds. -/
-theorem readsData_conforms {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D} {rels : List (Label × RelDecl)}
-    {rv : RowView D} {self : D} {rs : List (Label × RelRead)} {v : Data}
-    (h : readsData digestOf look rels rv self rs = .ok v) : Conforms v (readsTy rels rs) := by
+theorem readsData_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {rs : List (Label × RelRead)} {args : Data} {v : Data}
+    (h : readsData digestOf rc look rels rv self rs args = .ok v) : Conforms v (readsTy rels rs) := by
   unfold readsData at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
@@ -475,10 +555,10 @@ theorem rowConforms_sort : ∀ {ds : List (Label × Data)} {r : List (Label × T
 
 /-- **The rows argument is a value of the declared rows type** (LANG-49, PROT-6): the own reads at
 `readsTy`, and the peer reads, when declared, at the `peer` field (`rowsTy`). -/
-theorem methodReads_conforms {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem methodReads_conforms {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {pkg : D} {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {args : Data}
     {rs ps : List (Label × RelRead)} {v : Data}
-    (h : methodReads bytesOf digestOf look pkg rels rv self args rs ps = .ok v) :
+    (h : methodReads bytesOf digestOf rc look pkg rels rv self args rs ps = .ok v) :
     Conforms v (rowsTy rels rs ps) := by
   unfold methodReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -502,7 +582,7 @@ theorem methodReads_conforms {D : Type} {bytesOf : D → ByteArray} {digestOf : 
           simp only at h
           by_cases hc : (cell.slots.get slotPackage == some (bytesOf pkg)) = true
           · simp only [hc, ↓reduceIte] at h
-            cases hpd : readsData digestOf look rels rv peer (q :: qs) with
+            cases hpd : readsData digestOf rc look rels rv peer (q :: qs) args with
             | error e => rw [hpd] at h; cases h
             | ok pd =>
               rw [hpd] at h
@@ -518,6 +598,7 @@ theorem methodReads_conforms {D : Type} {bytesOf : D → ByteArray} {digestOf : 
 /-- The run inside `Program.run`, on what it decoded, never reaches `stuck`: it ends with a value
 of the method's result type (its calls and its new state) or a named non-`stuck` fault. -/
 theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {rc : ReceiptCheck}
     {look : Pinned D} {fuel : Nat} {idb : ByteArray} {L : Loaded} {g : Nat} {p : Package}
     {rv : RowView D} {ℓ : Label} {mty : Ty} {sg : Sig} {state : Slots} {args : ByteArray}
     {sd ad wd : Data} {r : Req D} {ticks : Nat}
@@ -526,7 +607,7 @@ theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : By
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
     (hstate : readState digestOf (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData sg.arg args = .ok ad)
-    {pkg : D} (hrows : methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd)
+    {pkg : D} (hrows : methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd)
     (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces (resultTy p.state sg.calls (editTy p.rels) sg.edits)
       (run L.lib Bounds.stackMax ticks 0

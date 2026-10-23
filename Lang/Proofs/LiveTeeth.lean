@@ -169,7 +169,7 @@ theorem contextual_law_dormant_hole :
     ∃ (p : Package) (look : Pinned UInt8) (t : Term),
       p.holes ≠ [] ∧ readPackage look 7 = .ok p ∧
       p.body = .record [("law", t)] ∧ NoRef t ∧ Term.usesRef 0 t = true ∧
-      (program toothEncode toothDecode).judge look (some 7) [] [] [] toothReq = .ok () ∧
+      (program toothEncode toothDecode noReceipts).judge look (some 7) [] [] [] toothReq = .ok () ∧
       Std.Admits [] t (reqData toothEncode toothReq) (.record []) (.record []) := by
   have hj : judgeOneWith toothEncode toothDecode (loadContextual toothDecode)
       (toothLook false) 7 [] [] toothReq = .ok () := by
@@ -191,7 +191,7 @@ theorem contextual_law_dormant_hole :
 /-- The same package demands its hole: the deployed judge refuses by name,
 rather than manufacturing an admitted law from a blocked term. -/
 theorem contextual_law_demanded_hole :
-    (program toothEncode toothDecode).judge (toothLook true) (some 7) [] [] [] toothReq =
+    (program toothEncode toothDecode noReceipts).judge (toothLook true) (some 7) [] [] [] toothReq =
       .error (.lawDenied 7 "law: refused holeUnresolved") := by
   have hj : judgeOneWith toothEncode toothDecode (loadContextual toothDecode)
       (toothLook true) 7 [] [] toothReq = .error (.lawDenied 7 "law: refused holeUnresolved") := by

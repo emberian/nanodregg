@@ -80,7 +80,7 @@ private def wCtx : Ctx UInt8 where
   decodeCall _ := none
   digestOf := wDigestOf
   verify _ _ _ := true
-  program := Lang.program wEnv.bytes wDigestOf
+  program := Lang.program wEnv.bytes wDigestOf noReceipts
 
 private def natBytes (n : Nat) : ByteArray := (Wire.encodeData .nat (.nat n)).getD .empty
 
@@ -247,7 +247,7 @@ private theorem c1_invokeRunA :
 private theorem c1_runA :
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 10 (stateOf aCell)
       0 (natBytes 0) reqA (min 1000 wk0.pool) = .ok (sA, [bodyB], [], 59) := by
-  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  show (runMeasuredLive wEnv.bytes wDigestOf noReceipts _ _ _ _ _ _ _ _).map _ = _
   rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 10) = some 10 from rfl) c1_readR rfl rfl]
   unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_one c1_pkgR relay_decodes rfl]
@@ -275,7 +275,7 @@ private theorem c1_invokeRunB :
 private theorem c1_runB :
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 9 (stateOf bCell)
       0 (natBytes 4) reqB (min 1000 wkA.pool) = .ok (sB, [], [], 41) := by
-  show (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  show (runMeasuredLive wEnv.bytes wDigestOf noReceipts _ _ _ _ _ _ _ _).map _ = _
   rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl) c1_readC rfl rfl]
   unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_one c1_pkgC counter_decodes rfl]
@@ -364,7 +364,7 @@ private def sB5 : Slots := [(stateBase, natBytes 8)]
 private theorem c1_runB5 : ∃ cs rs u,
     wCtx.program.run (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) 9 (stateOf bCell)
       0 (natBytes 5) reqB (min 1000 wkA.pool) = .ok (sB5, cs, rs, u) := by
-  show ∃ cs rs u, (runMeasuredLive wEnv.bytes wDigestOf _ _ _ _ _ _ _ _).map _ = _
+  show ∃ cs rs u, (runMeasuredLive wEnv.bytes wDigestOf noReceipts _ _ _ _ _ _ _ _).map _ = _
   rw [runMeasuredLive_leaf_closed (show wDigestOf (wEnv.bytes 9) = some 9 from rfl) c1_readC rfl rfl]
   unfold runMeasured runMeasuredWith runSetup runSetupWith
   rw [load_one c1_pkgC counter_decodes rfl]
@@ -399,7 +399,7 @@ state other than the one it ran on, and B is live in the admitted World with exa
 theorem invoke_tree_slots_witnessed :
     ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (n : Nat) (wk : Walk UInt8)
       (actor obj : UInt8) (budget : Nat),
-      X.program = Lang.program X.env.bytes X.digestOf ∧
+      X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       Dispatched X w c n wk actor (.invoke obj 0 (natBytes 4) budget none) ∧
       (∀ o method args budget via, c.unsigned.body = .invoke o method args budget via → o ≠ obj) ∧
@@ -426,7 +426,7 @@ theorem invoke_tree_run_witnessed :
       (actor obj : UInt8) (budget : Nat)
       (pins' : List (UInt8 × UInt8)) (c' : Call UInt8) (actor' : UInt8) (method' : Nat) (via' : Option UInt8)
       (cell' : Cell) (p' : UInt8) (r' : Req UInt8),
-      X.program = Lang.program X.env.bytes X.digestOf ∧
+      X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       Dispatched X w c n wk actor (.invoke obj 0 (natBytes 4) budget none) ∧
       (∀ o method args budget via, c.unsigned.body = .invoke o method args budget via → o ≠ obj) ∧

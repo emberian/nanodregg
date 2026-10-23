@@ -56,7 +56,7 @@ def textPath : System.FilePath := "world" / "grain" / "Lifecycle"
 /-- The grain package's surface source (LANG-50): the core text is written from it. -/
 def sourcePath : System.FilePath := "world" / "grain" / "Lifecycle.ob"
 
-def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf
+def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
 
 def lifecycle : Option Package := Grain.lifecycle?.toOption

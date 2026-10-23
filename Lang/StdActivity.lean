@@ -170,7 +170,7 @@ def activityResumeMethod (S : Ty) (rels : List (Label × RelDecl)) (cursor log :
             (l, if l = p.name then resumeDone else fail "wrongPlan")))
           (fail "key"))])])
     (fail "notResumer")
-  activityMethod S A (readsTy rels [(log, ⟨1, none, false⟩)]) resumeBody
+  activityMethod S A (readsTy rels [(log, ⟨1, none, false, false⟩)]) resumeBody
 
 /-- Emit the activity as an ordinary checked package. Additional application
 methods/laws can be composed with its fields; the final package is checked by
@@ -185,7 +185,7 @@ def activityPackage (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
   let ld := activityLog plans logLimit lg
   let rels := Row.sort ([(cursor, cd), (log, ld)] ++ extraRels)
   let E := editTy rels
-  let reads := readsTy rels [(log, ⟨1, none, false⟩)]
+  let reads := readsTy rels [(log, ⟨1, none, false, false⟩)]
   let empty := Ty.record []
   let f (i : Nat) (l : Label) := Term.get (.var i) l
   let key (i : Nat) := activityKeyTerm (f i "agent") (f i "notBefore")

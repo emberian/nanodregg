@@ -27,7 +27,7 @@ variable {D : Type}
 /-! ## Read: every Body read is callable -/
 
 section
-variable {digestOf : ByteArray → Option D}
+variable {digestOf : ByteArray → Option D} {rc : ReceiptCheck}
 
 theorem bodyOf_callable {d : Data} {b : Body D} (h : bodyOf digestOf d = .ok b) : b.callable = true := by
   unfold bodyOf at h
@@ -149,7 +149,7 @@ theorem rightsOf_length : ∀ {rs : List (Label × Data)} {xs : List Right},
         cases r <;> simp <;> omega
 
 section
-variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck}
 
 /-- **Every callable Body is expressible**: its call data reads back as exactly it, given that a
 digest's bytes decode to the digest. -/
@@ -378,13 +378,13 @@ theorem resolveMethod_slots {p : Package} {method : Nat} {x : Label × Sig}
 
 /-- The calls `runMeasured` returns are `callsOf` of the calls half of the result extracted at
 the method's own result type: the package the run loaded, the method it resolved, its slots. -/
-theorem runMeasuredWith_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasuredWith_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
     {charge : Loaded → Nat}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasuredWith bytesOf digestOf (runSetupWith bytesOf digestOf loader charge) look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    (h : runMeasuredWith bytesOf digestOf (runSetupWith bytesOf digestOf rc loader charge) look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∃ (L : Loaded) (g : Nat) (p : Package) (x : Label × Sig) (m : Machine) (fuel : Nat)
       (v : Val) (c e st : Data) (left : Nat),
       loader look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧
@@ -407,13 +407,13 @@ theorem runMeasuredWith_calls {bytesOf : D → ByteArray} {digestOf : ByteArray 
 
 /-- **A method makes at most its declared calls**: the calls of a run are no more than the call
 slots of the method resolved in the package the run loaded. -/
-theorem runMeasuredWith_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasuredWith_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
     {charge : Loaded → Nat}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasuredWith bytesOf digestOf (runSetupWith bytesOf digestOf loader charge) look rv pkg state method args r budget = .ok (s, calls, rows, t, n))
+    (h : runMeasuredWith bytesOf digestOf (runSetupWith bytesOf digestOf rc loader charge) look rv pkg state method args r budget = .ok (s, calls, rows, t, n))
     {L : Loaded} {g : Nat} {p : Package} {x : Label × Sig}
     (hl : loader look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p) (hx : resolveMethod (D := D) p method = .ok x) :
@@ -429,11 +429,11 @@ theorem runMeasuredWith_calls_slots {bytesOf : D → ByteArray} {digestOf : Byte
   obtain ⟨cs, rfl, hcs⟩ := extract_result_calls he
   exact ⟨hcs ▸ callsOf_length hc, callsOf_callable hc⟩
 
-theorem runMeasured_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasured_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∃ (L : Loaded) (g : Nat) (p : Package) (x : Label × Sig) (m : Machine) (fuel : Nat)
       (v : Val) (c e st : Data) (left : Nat),
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧
@@ -445,11 +445,11 @@ theorem runMeasured_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → 
 
 /-- **A method makes at most its declared calls**: the calls of a run are no more than the call
 slots of the method resolved in the package the run loaded. -/
-theorem runMeasured_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasured_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n))
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n))
     {L : Loaded} {g : Nat} {p : Package} {x : Label × Sig}
     (hl : load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p) (hx : resolveMethod (D := D) p method = .ok x) :
@@ -457,11 +457,11 @@ theorem runMeasured_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArra
   exact runMeasuredWith_calls_slots (loader := load digestOf) (charge := fun _ => 0) h hl hp hx
 
 /-- A method with no call slots makes no calls (Hosting's `method_no_calls` is such a type). -/
-theorem runMeasured_no_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasured_no_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n))
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n))
     {L : Loaded} {g : Nat} {p : Package} {ℓ : Label} {A : Ty} {rs : List (Label × RelRead)} {es : Nat}
     (hl : load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g))
     (hp : L.pkgs[g]? = some p) (hx : resolveMethod (D := D) p method = .ok (ℓ, ⟨A, [], rs, es⟩)) :
@@ -493,13 +493,13 @@ theorem runMeasuredWith_extract {bytesOf : D → ByteArray} {digestOf : ByteArra
 /-- **The calls `Lang.program` hands KERNEL**: at most `callsMax` of them, each of a kind an object
 may exercise. So KERNEL's `tooManyCalls` and `notCallable` assertions never fire on a Lang method:
 they stay as KERNEL's own checks where calls enter, since `Program` is abstract to it (law 4). -/
-theorem run_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem run_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t : Nat}
-    (h : (program bytesOf digestOf).run look rv pkg state method args r budget = .ok (s, calls, rows, t)) :
+    (h : (program bytesOf digestOf rc).run look rv pkg state method args r budget = .ok (s, calls, rows, t)) :
     calls.length ≤ Kernel.Bounds.callsMax ∧ ∀ b ∈ calls, b.callable = true := by
-  change (runMeasuredLive bytesOf digestOf look rv pkg state method args r budget).map
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget).map
     (fun x => (x.1, x.2.1, x.2.2.1, x.2.2.2.1)) = .ok (s, calls, rows, t) at h
   simp only [Except.map] at h
   split at h
@@ -509,7 +509,7 @@ theorem run_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D
     obtain ⟨-, rfl, -, -⟩ := h
     obtain ⟨S, fuel, v, c, e, st, left, hS, he, hc⟩ :=
       runMeasuredWith_extract (bytesOf := bytesOf) (digestOf := digestOf)
-        (setup := runSetupLive bytesOf digestOf) hx
+        (setup := runSetupLive bytesOf digestOf rc) hx
     obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, hp, hres, -, -, -, -, hSdef⟩ :=
       runSetupWith_spec (loader := loadLive digestOf rv r.self)
         (charge := Loaded.preparationCost) hS

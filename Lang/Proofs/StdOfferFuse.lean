@@ -80,9 +80,9 @@ private theorem peerOf_spec {bytesOf : D → ByteArray} {digestOf : ByteArray �
 
 omit [Ord D] [DecidableEq D] in
 /-- A read of one offer point is a record with one field, `offer`. -/
-private theorem readsData_offer {digestOf : ByteArray → Option D} {look : Pinned D}
-    {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {R : Data}
-    (h : Nanodregg.Lang.readsData digestOf look rels rv self offerRead = .ok R) :
+private theorem readsData_offer {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D}
+    {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {args : Data} {R : Data}
+    (h : Nanodregg.Lang.readsData digestOf rc look rels rv self offerRead args = .ok R) :
     ∃ A, R = .record [("offer", A)] := by
   unfold Nanodregg.Lang.readsData offerRead at h
   simp only [List.mapM_cons, List.mapM_nil, except_bind_ok] at h
@@ -101,12 +101,12 @@ private theorem readsData_offer {digestOf : ByteArray → Option D} {look : Pinn
 omit [Ord D] [DecidableEq D] in
 /-- **The take's reads**: its own offer point under `self` and the same read under its peer, the
 `peerOf` of the arguments. -/
-private theorem methodReads_offer {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+private theorem methodReads_offer {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {pkg : D} {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {args R : Data}
-    (h : Nanodregg.Lang.methodReads bytesOf digestOf look pkg rels rv self args offerRead offerRead = .ok R) :
+    (h : Nanodregg.Lang.methodReads bytesOf digestOf rc look pkg rels rv self args offerRead offerRead = .ok R) :
     ∃ p A B, Nanodregg.Lang.peerOf bytesOf digestOf self args = .ok p ∧
-      Nanodregg.Lang.readsData digestOf look rels rv self offerRead = .ok (.record [("offer", A)]) ∧
-      Nanodregg.Lang.readsData digestOf look rels rv p offerRead = .ok (.record [("offer", B)]) ∧
+      Nanodregg.Lang.readsData digestOf rc look rels rv self offerRead args = .ok (.record [("offer", A)]) ∧
+      Nanodregg.Lang.readsData digestOf rc look rels rv p offerRead args = .ok (.record [("offer", B)]) ∧
       R = .record [("offer", A), ("peer", .record [("offer", B)])] := by
   unfold Nanodregg.Lang.methodReads at h
   simp only [except_bind_ok] at h
@@ -163,11 +163,11 @@ private theorem callStep_ok_ {sub : Receive.Sub D} {obj : D} {acc q : Draft D ×
 the matcher, ran the take of its party's package on the one `deal` with the party as `self`, made no
 calls, and its row acts are touches of the sealed Turn; the second party is not the first
 (`revisited`). -/
-private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {z : D} {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {deal : ByteArray} {vX vY : Data}
     {xb yb : ByteArray} {x' y' : D}
-    (hX : X.program = Lang.program bytesOf digestOf) (hc : receive X w c = .ok t)
+    (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
     (hb : c.unsigned.body = .invoke z offerFuseIx args b via)
     (hdec : Wire.decodeData offerFuseArg args =
       .ok (.record [("deal", .bytes deal), ("viaX", vX), ("viaY", vY), ("x", .digest xb), ("y", .digest yb)]))
@@ -181,12 +181,12 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
     x' ≠ y' ∧
     (∃ (st : Slots) (rq : Req D) (f : Nat) (s : Slots) (rows : List (RowSlot D × RowAct)) (used : Nat),
       rq.self = x' ∧
-      (Lang.program bytesOf digestOf).run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) pkg st
+      (Lang.program bytesOf digestOf rc).run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) pkg st
         offerTakeIx deal rq f = .ok (s, [], rows, used) ∧
       ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2) ∧
     (∃ (st : Slots) (rq : Req D) (f : Nat) (s : Slots) (rows : List (RowSlot D × RowAct)) (used : Nat),
       rq.self = y' ∧
-      (Lang.program bytesOf digestOf).run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) pkg st
+      (Lang.program bytesOf digestOf rc).run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) pkg st
         offerTakeIx deal rq f = .ok (s, [], rows, used) ∧
       ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2) := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
@@ -244,18 +244,18 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
 
 omit [Ord D] [DecidableEq D] in
 /-- One party's take, read off `take_run_sound` at `self = P`, its row acts located in the Turn. -/
-private theorem party {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+private theorem party {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat} {look : Pinned D} {rv : RowView D} {pkg : D}
     {t : Turn D} {deal : ByteArray} {P : D} {st : Slots} {rq : Req D} {f : Nat} {s : Slots}
     {rows : List (RowSlot D × RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
     (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
     (hself : rq.self = P)
-    (hrun : (Lang.program bytesOf digestOf).run look rv pkg st offerTakeIx deal rq f = .ok (s, [], rows, used))
+    (hrun : (Lang.program bytesOf digestOf rc).run look rv pkg st offerTakeIx deal rq f = .ok (s, [], rows, used))
     (hcov : ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2) :
     ∃ pair th k o kq q kb sb vb,
       Wire.decodeData (offerTakeArg theta) deal = .ok (.record [("pair", pair), ("theta", th)]) ∧
-      methodReads bytesOf digestOf look pkg (offerRels theta roles ol sl) rv P
+      methodReads bytesOf digestOf rc look pkg (offerRels theta roles ol sl) rv P
         (.record [("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
@@ -282,11 +282,11 @@ retract touch of `x'`'s offer row and the retract touch of `y'`'s (slot AND act)
 fuse dropping its second call: `receive` is still `.ok` and `y'`'s retract is absent. This is about
 the fuse call only: the owner can root-invoke `take` alone, and one session row is not a fuse. A fuse
 whose take refuses derives no Turn; that branch is true of every refusal and is not a conjunct. -/
-theorem fuse_atomic {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem fuse_atomic {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {z : D} {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {deal : ByteArray} {vX vY : Data}
     {xb yb : ByteArray} {x' y' : D}
-    (hX : X.program = Lang.program bytesOf digestOf) (hc : receive X w c = .ok t)
+    (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
     (hb : c.unsigned.body = .invoke z offerFuseIx args b via)
     (hdec : Wire.decodeData offerFuseArg args =
       .ok (.record [("deal", .bytes deal), ("viaX", vX), ("viaY", vY), ("x", .digest xb), ("y", .digest yb)]))
@@ -316,11 +316,11 @@ generated package): a caller of another package granted `take` could hand the tw
 bytes, and each take's own judgement (`take_iff_compliant`) does not depend on who called it.
 Mutations: P1 (`offerJoint := okT`: `JointOk` fails on F2's pair) and P4 (the fuse sends `y` a second
 deal: the one-θ, same-reads and equal-value conjuncts fail). -/
-theorem jointLaw_sound {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem jointLaw_sound {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {z : D} {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {deal : ByteArray} {vX vY : Data}
     {xb yb : ByteArray} {x' y' : D}
-    (hX : X.program = Lang.program bytesOf digestOf) (hc : receive X w c = .ok t)
+    (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
     (hb : c.unsigned.body = .invoke z offerFuseIx args b via)
     (hdec : Wire.decodeData offerFuseArg args =
       .ok (.record [("deal", .bytes deal), ("viaX", vX), ("viaY", vY), ("x", .digest xb), ("y", .digest yb)]))
@@ -334,11 +334,11 @@ theorem jointLaw_sound {bytesOf : D → ByteArray} {digestOf : ByteArray → Opt
     (hrx : digestOf (bytesOf x') = some x') (hry : digestOf (bytesOf y') = some y') :
     ∃ pair th kx ox kqx qx ky oy kqy qy vb sbx sby,
       Wire.decodeData (offerTakeArg theta) deal = .ok (.record [("pair", pair), ("theta", th)]) ∧
-      methodReads bytesOf digestOf (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
+      methodReads bytesOf digestOf rc (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
         (rowView X.env w c.unsigned) x' (.record [("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", kx), ("val", .inj "some" ox)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kqx), ("val", .inj "some" qx)]))])])]) ∧
-      methodReads bytesOf digestOf (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
+      methodReads bytesOf digestOf rc (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
         (rowView X.env w c.unsigned) y' (.record [("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", ky), ("val", .inj "some" oy)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kqy), ("val", .inj "some" qy)]))])])]) ∧
@@ -382,11 +382,11 @@ key afterwards is a new offer: this is not a spent-never-minted claim. A later t
 either slot refuses `noOffer`: that is `take_noOffer` at the term grain, with journey row LF5; this
 theorem's tooth is journey rows LF1/LF5. A retract turned into an upsert (P5) is refused `final` by
 `offer_guard`, so no such world admits. -/
-theorem invitation_once {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem invitation_once {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {z : D} {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {deal : ByteArray} {vX vY : Data}
     {xb yb : ByteArray} {x' y' : D}
-    (hX : X.program = Lang.program bytesOf digestOf) (hc : receive X w c = .ok t)
+    (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
     (hb : c.unsigned.body = .invoke z offerFuseIx args b via)
     (hdec : Wire.decodeData offerFuseArg args =
       .ok (.record [("deal", .bytes deal), ("viaX", vX), ("viaY", vY), ("x", .digest xb), ("y", .digest yb)]))
@@ -400,11 +400,11 @@ theorem invitation_once {bytesOf : D → ByteArray} {digestOf : ByteArray → Op
     {w' : World D} (ha : World.admit X.env w t = .ok w') (hcan : w.RowsCanon X.env) :
     ∃ pair th kx ox kqx qx kbx ky oy kqy qy kby,
       Wire.decodeData (offerTakeArg theta) deal = .ok (.record [("pair", pair), ("theta", th)]) ∧
-      methodReads bytesOf digestOf (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
+      methodReads bytesOf digestOf rc (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
         (rowView X.env w c.unsigned) x' (.record [("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", kx), ("val", .inj "some" ox)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kqx), ("val", .inj "some" qx)]))])])]) ∧
-      methodReads bytesOf digestOf (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
+      methodReads bytesOf digestOf rc (pinned X.env w c.unsigned.pins) pkg (offerRels theta roles ol sl)
         (rowView X.env w c.unsigned) y' (.record [("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", ky), ("val", .inj "some" oy)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kqy), ("val", .inj "some" qy)]))])])]) ∧

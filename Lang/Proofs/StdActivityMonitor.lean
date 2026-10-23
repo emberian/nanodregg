@@ -324,7 +324,7 @@ theorem noRef_activityWaiting (T : Ty) (plans : List ActivityPlan) (d : RelDecl)
 
 section
 open Nanodregg.Kernel.Receive
-variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck)
 
 /-- **The receiver is the monitor** (`activity_monitor_safe`, PROT-4): for a method run of a package
 the pinned cell holds whose relation `ℓ` is guarded by a field that is the generated waiting guard,
@@ -332,7 +332,7 @@ every edit at `ℓ` of a run that returned is a step of the log row's machine (`
 old row the kernel found at its key, under the run's request and the state before the run. Every
 method of such a package, generated or written by hand, is covered: the premises are on the
 package's guard, not on the method. -/
-theorem activity_monitor_safe {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
+theorem activity_monitor_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
     {p : Package} {fs : List (Label × Term)} {ℓ gl : Label} {d : RelDecl} {T : Ty}
@@ -341,8 +341,8 @@ theorem activity_monitor_safe {look : Pinned D} {rv : RowView D} {pkg : D} {stat
     (hb : p.body = .record fs) (hrel : Row.find? ℓ p.rels = some d) (hg : d.guard = some gl)
     (hf : Row.find? gl fs = some (activityWaiting T plans d resumer names)) (hnr : NoRef resumer)
     (hv : d.val = activityLogVal plans) (hw : (activityCaptured plans).wf = true)
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
-    ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf look rv pkg state method args r = .ok S ∧
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       rows = es.map (fun x => (x.slot, x.act)) ∧
       ∀ x ∈ es, x.label = ℓ → ∃ o, guardOld digestOf rv r.self x = .ok o ∧
         WaitingStep S.lib resumer (reqData bytesOf r) S.state x.data o := by
@@ -378,7 +378,7 @@ theorem activity_monitor_safe {look : Pinned D} {rv : RowView D} {pkg : D} {stat
 /-- **The monitor on the deployed run**: `activity_monitor_safe` for `Lang.program`'s `run`, the run
 the kernel's history records (`ObjectStep.invoke`), at a package with no imports and no holes, where
 the live setup is the closed one (`runMeasuredLive_leaf_closed`). -/
-theorem activity_program_safe {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
+theorem activity_program_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     {p : Package} {fs : List (Label × Term)} {ℓ gl : Label} {d : RelDecl} {T : Ty}
@@ -388,14 +388,14 @@ theorem activity_program_safe {look : Pinned D} {rv : RowView D} {pkg : D} {stat
     (hb : p.body = .record fs) (hrel : Row.find? ℓ p.rels = some d) (hg : d.guard = some gl)
     (hf : Row.find? gl fs = some (activityWaiting T plans d resumer names)) (hnr : NoRef resumer)
     (hv : d.val = activityLogVal plans) (hw : (activityCaptured plans).wf = true)
-    (h : (Lang.program bytesOf digestOf).run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
-    ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf look rv pkg state method args r = .ok S ∧
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
+    ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       rows = es.map (fun x => (x.slot, x.act)) ∧
       ∀ x ∈ es, x.label = ℓ → ∃ o, guardOld digestOf rv r.self x = .ok o ∧
         WaitingStep S.lib resumer (reqData bytesOf r) S.state x.data o := by
-  change (runMeasuredLive bytesOf digestOf look rv pkg state method args r budget).map _ = _ at h
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget).map _ = _ at h
   rw [runMeasuredLive_leaf_closed hid hp hi hc] at h
-  cases hm : runMeasured bytesOf digestOf look rv pkg state method args r budget with
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state method args r budget with
   | error e => rw [hm] at h; cases h
   | ok x =>
     rw [hm] at h

@@ -53,7 +53,7 @@ private def gX0 : Ctx UInt8 where
   decodeCall _ := none
   digestOf := digestOf
   verify _ _ _ := true
-  program := Nanodregg.Lang.program gEnv.bytes digestOf
+  program := Nanodregg.Lang.program gEnv.bytes digestOf Lang.noReceipts
 
 private def mem : UInt8 := 1
 private def own : UInt8 := 3

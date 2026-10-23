@@ -58,7 +58,7 @@ def faultText : Fault → String
 def decodeText (e : Codec.Refusal) : String := s!"decode {repr e}"
 
 section
-variable (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+variable (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck)
 
 /-- The package in a pinned package cell. -/
 def readPackage (look : Pinned D) (id : D) : Except (Refusal D) Package := do
@@ -390,12 +390,12 @@ kernel's own `unpinned`, by name; then its package slot), so its relations are t
 no foreign declaration is read. Every row of either part is a row the caller pinned (`RowView`). -/
 def methodReads (look : Pinned D) (pkg : D) (rels : List (Label × RelDecl)) (rv : RowView D) (self : D)
     (args : Data) (rs ps : List (Label × RelRead)) : Except (Refusal D) Data := do
-  let own ← readsData digestOf look rels rv self rs
+  let own ← readsData digestOf rc look rels rv self rs args
   if ps.isEmpty then return own
   let peer ← peerOf bytesOf digestOf self args
   let cell ← readKind look peer kindObject
   unless cell.slots.get slotPackage == some (bytesOf pkg) do throw (.program "peer: another package")
-  let pd ← readsData digestOf look rels rv peer ps
+  let pd ← readsData digestOf rc look rels rv peer ps args
   match own with
   | .record fs => pure (.record (Row.sort (fs ++ [(peerLabel, pd)])))
   | d => pure d
@@ -438,7 +438,7 @@ def runSetupWith (loader : Pinned D → Nat → ByteArray → Loaded → Except 
   let a ← match Wire.decodeData sg.arg args with
     | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
     | .error e => throw (.program s!"arguments: {decodeText e}")
-  let rows ← methodReads bytesOf digestOf look pkg p.rels rv r.self a sg.reads (p.peerReads ℓ)
+  let rows ← methodReads bytesOf digestOf rc look pkg p.rels rv r.self a sg.reads (p.peerReads ℓ)
   pure { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row,
          ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := s,
          args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal], preparation := charge L }
@@ -446,7 +446,7 @@ def runSetupWith (loader : Pinned D → Nat → ByteArray → Loaded → Except 
 /-- Closed specialization retained for its landed statements. -/
 def runSetup (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) : Except (Refusal D) RunSetup :=
-  runSetupWith bytesOf digestOf (load digestOf) (fun _ => 0) look rv pkg state method args r
+  runSetupWith bytesOf digestOf rc (load digestOf) (fun _ => 0) look rv pkg state method args r
 
 def Loaded.preparationCost (L : Loaded) : Nat :=
   (L.pkgs.map Package.preparationCost).foldl (· + ·) 0
@@ -454,7 +454,7 @@ def Loaded.preparationCost (L : Loaded) : Nat :=
 /-- The deployed setup reauthenticates every contextual selection for this invocation. -/
 def runSetupLive (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) : Except (Refusal D) RunSetup :=
-  runSetupWith bytesOf digestOf (loadLive digestOf rv r.self)
+  runSetupWith bytesOf digestOf rc (loadLive digestOf rv r.self)
     Loaded.preparationCost
     look rv pkg state method args r
 
@@ -504,16 +504,16 @@ def runMeasuredWith
 def runMeasured (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) :
     Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat × Nat) :=
-  runMeasuredWith bytesOf digestOf (runSetup bytesOf digestOf) look rv pkg state method args r budget
+  runMeasuredWith bytesOf digestOf (runSetup bytesOf digestOf rc) look rv pkg state method args r budget
 
 def runMeasuredLive (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) :
     Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct) × Nat × Nat) :=
-  runMeasuredWith bytesOf digestOf (runSetupLive bytesOf digestOf) look rv pkg state method args r budget
+  runMeasuredWith bytesOf digestOf (runSetupLive bytesOf digestOf rc) look rv pkg state method args r budget
 
 def runMethod (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) (Slots × List (Body D) × List (RowSlot D × RowAct)) :=
-  (runMeasured bytesOf digestOf look rv pkg state method args r budget).map fun x => (x.1, x.2.1, x.2.2.1)
+  (runMeasured bytesOf digestOf rc look rv pkg state method args r budget).map fun x => (x.1, x.2.1, x.2.2.1)
 
 /-- The `declare` acts of the relations of an object of package `pkg` born at `self`, in
 relation order: each key's width at the World's digest width (`self`'s). -/
@@ -552,12 +552,12 @@ def argsOf (look : Pinned D) (pkg : D) (method : Nat) (text : String) : Except (
 end
 
 /-- The language, as the kernel's receivers see it. -/
-def program (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) : Program D where
+def program (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck) : Program D where
   checkInstall := checkInstallContextual digestOf
   judge := judgeContextual bytesOf digestOf
   -- the slots, the calls the method makes as the object, and the ticks it used (LEDGER-8 (e))
   run := fun look rv pkg state method args r budget =>
-    (runMeasuredLive bytesOf digestOf look rv pkg state method args r budget).map fun x =>
+    (runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget).map fun x =>
       (x.1, x.2.1, x.2.2.1, x.2.2.2.1)
   rels := relsOf bytesOf
 

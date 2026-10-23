@@ -198,7 +198,7 @@ theorem admitPackage_inv {D : Type} {digestOf : ByteArray → Option D} {idb : B
         exact relocate_typed (fun i A hA => getElem?_append_of_some (ifacesAt_spec hifs i A hA)) hb
 
 section
-variable {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
+variable {D : Type} (digestOf : ByteArray → Option D) (rc : ReceiptCheck) (look : Pinned D)
 
 mutual
 theorem load_inv (fuel : Nat) (idb : ByteArray) (acc : Loaded) {L : Loaded} {g : Nat}
@@ -425,18 +425,19 @@ theorem method_run_sound {D : Type} {digestOf : ByteArray → Option D} {look : 
 the closure loads, the method resolves, the state reads at its row and the arguments decode at their
 type with every digest accepted; the setup is then those values. -/
 theorem runSetupWith_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {rc : ReceiptCheck}
     {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
     {charge : Loaded → Nat}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {S : RunSetup}
-    (h : runSetupWith bytesOf digestOf loader charge look rv pkg state method args r = .ok S) :
+    (h : runSetupWith bytesOf digestOf rc loader charge look rv pkg state method args r = .ok S) :
     ∃ (L : Loaded) (g : Nat) (p : Package) (ℓ : Label) (sg : Sig) (sd ad wd : Data),
       reqOk bytesOf r = true ∧
       loader look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
-      methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
+      methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
             reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal], preparation := charge L } := by
@@ -449,16 +450,17 @@ theorem runSetupWith_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : Byt
   exact ⟨_, _, _, _, _, _, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, rfl⟩
 
 theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {rc : ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {S : RunSetup}
-    (h : runSetup bytesOf digestOf look rv pkg state method args r = .ok S) :
+    (h : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S) :
     ∃ (L : Loaded) (g : Nat) (p : Package) (ℓ : Label) (sg : Sig) (sd ad wd : Data),
       reqOk bytesOf r = true ∧
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧ L.pkgs[g]? = some p ∧
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
-      methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
+      methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
             reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by

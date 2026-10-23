@@ -566,7 +566,7 @@ theorem relocateRow_digestLits (f : Nat → Nat) :
 end
 
 section
-variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck}
 
 theorem digestsOk_mem {ds : List ByteArray} (h : digestsOk digestOf ds = true) :
     ∀ b ∈ ds, (digestOf b).isSome = true := by
@@ -628,7 +628,7 @@ theorem admitContextual_lits {prepare : List Ty → Package → Except HoleRefus
       exact checkLits_lits ‹_› b hb
 
 section
-variable (digestOf : ByteArray → Option D) (look : Pinned D)
+variable (digestOf : ByteArray → Option D) (rc : ReceiptCheck) (look : Pinned D)
   (admit : ByteArray → Package → Loaded → List Nat → Except (Refusal D) (Loaded × Nat))
 
 mutual
@@ -681,7 +681,7 @@ end
 end
 
 section
-variable (digestOf : ByteArray → Option D) (look : Pinned D)
+variable (digestOf : ByteArray → Option D) (rc : ReceiptCheck) (look : Pinned D)
 
 mutual
 /-- Every closure `load` builds holds only id literals `digestOf` accepts: each package passed
@@ -830,8 +830,40 @@ theorem rangeRowData_digests {ℓ : Label} {dl : RelDecl} {rows : List (RowSlot 
     · exact checked_digests ‹_› z hz
     · exact valOf_digests ‹_› z hz
 
+/-- **A receipt read's range rows hold only accepted digests** (E5): the listed key and value as
+`rangeRowData` checked them, and the column's digests, which `receiptSeen` checked. -/
+theorem receiptRows_digests {rc : Lang.ReceiptCheck} {look : Pinned D} {ℓ : Label} {args : Data} {receipt : Bool}
+    {rs ys : List Data} (hx : ∀ y ∈ rs, ∀ b ∈ y.digests, (digestOf b).isSome = true)
+    (h : receiptRows digestOf rc look ℓ args receipt rs = .ok ys) :
+    ∀ y ∈ ys, ∀ b ∈ y.digests, (digestOf b).isSome = true := by
+  unfold receiptRows at h
+  cases receipt
+  · simp only [Bool.false_eq_true, if_false, Except.ok.injEq] at h
+    subst h; exact hx
+  · simp only [if_true] at h
+    intro y hy
+    obtain ⟨q, hq, hqy⟩ := mapM_ok_mem h y hy
+    unfold receiptRow at hqy
+    split at hqy
+    · rename_i k v
+      split at hqy
+      · cases hqy
+      · rename_i g sn hrs
+        obtain ⟨-, -, -, -, -, -, -, -, hok⟩ := receiptSeen_ok hrs
+        simp only [Except.ok.injEq] at hqy
+        subst hqy
+        have hq' := hx _ hq
+        have hall := List.all_eq_true.mp hok.2
+        simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append] at hq' ⊢
+        rintro z (hz | hz | hz)
+        · exact hq' z (.inl hz)
+        · exact hall z hz
+        · exact hq' z (.inr hz)
+    · cases hqy
+
 theorem relReads_digests {look : Pinned D} {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl : RelDecl} {x : RelRead}
-    {v : Data} (h : relReads digestOf look rv self i ℓ dl x = .ok v) :
+    {rc : Lang.ReceiptCheck} {args : Data}
+    {v : Data} (h : relReads digestOf rc look rv self i ℓ dl x args = .ok v) :
     ∀ b ∈ v.digests, (digestOf b).isSome = true := by
   unfold relReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -851,7 +883,8 @@ theorem relReads_digests {look : Pinned D} {rv : RowView D} {self : D} {i : Nat}
           rcases hv with ⟨rfl, -⟩ | ⟨_, _, _, w', -, hw', rfl⟩
           · cases hw
           · cases hw; exact valOf_digests hw')
-        rcases pointData_ok hq with ⟨-, rfl⟩ | ⟨-, -, -, -, -, -, -, rfl⟩
+        rcases pointData_ok hq with ⟨-, -, rfl⟩ | ⟨-, -, -, -, -, -, -, -, rfl⟩ |
+            ⟨-, b0, g0, c0, rb0, sn0, -, -, -, -, -, hs, rfl⟩
         · simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append]
           rintro z (hz | hz)
           · exact checked_digests h2 z hz
@@ -860,18 +893,27 @@ theorem relReads_digests {look : Pinned D} {rv : RowView D} {self : D} {i : Nat}
           rintro z (hz | hz)
           · exact checked_digests h2 z hz
           · exact hvd z hz
+        · have hall := List.all_eq_true.mp hs.2
+          intro z hz
+          cases hlv : x.live <;>
+            simp only [hlv, Data.digests, Data.rowDigests, List.append_nil, List.mem_append, if_true,
+              Bool.false_eq_true, if_false, List.nil_append, List.cons_append] at hz
+          all_goals
+            rcases hz with hz | hz | hz <;>
+              first | exact checked_digests h2 z hz | exact hvd z hz | exact hall z hz | (simp at hz)
     · first
         | (simp [Data.digests, Data.rowDigests] at hb; done)
-        | (rename_i rs hrows
-           simp only [Data.rowDigests, Data.digests, List.append_nil, List.mem_append] at hb
+        | (simp only [Data.rowDigests, Data.digests, List.append_nil, List.mem_append] at hb
            rcases hb with hb | hb
            · exact checked_digests ‹_› b hb
-           · exact slotsD_digests (fun y hy => rangeRowData_digests hrows y hy) "r" _ b hb)
+           · exact slotsD_digests (fun y hy => receiptRows_digests
+               (rangeRowData_digests ‹rangeRowData _ _ _ _ = .ok _›) ‹receiptRows _ _ _ _ _ _ _ = .ok _› y hy) "r" _ b hb)
 
 /-- **Every digest of the rows a run reads is one `digestOf` accepted** (LANG-49): what `readsData`
 builds from the caller's row view holds only keys, prefixes and values that passed `checked`. -/
 theorem readsData_digests {look : Pinned D} {rels : List (Label × RelDecl)} {rv : RowView D} {self : D}
-    {rs : List (Label × RelRead)} {wd : Data} (h : readsData digestOf look rels rv self rs = .ok wd) :
+    {rc : Lang.ReceiptCheck} {args : Data}
+    {rs : List (Label × RelRead)} {wd : Data} (h : readsData digestOf rc look rels rv self rs args = .ok wd) :
     ∀ b ∈ wd.digests, (digestOf b).isSome = true := by
   unfold readsData at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -916,10 +958,10 @@ theorem rowDigests_of_mem {b : ByteArray} : ∀ {fs : List (Label × Data)} {y :
 
 /-- **Every digest of a method's rows argument is one `digestOf` accepted** (LANG-49, PROT-6): its own
 reads' and its peer reads', both `readsData`'s. -/
-theorem methodReads_digests {bytesOf : D → ByteArray} {look : Pinned D} {pkg : D}
+theorem methodReads_digests {bytesOf : D → ByteArray} {rc : Lang.ReceiptCheck} {look : Pinned D} {pkg : D}
     {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {args : Data}
     {rs ps : List (Label × RelRead)} {wd : Data}
-    (h : methodReads bytesOf digestOf look pkg rels rv self args rs ps = .ok wd) :
+    (h : methodReads bytesOf digestOf rc look pkg rels rv self args rs ps = .ok wd) :
     ∀ b ∈ wd.digests, (digestOf b).isSome = true := by
   unfold methodReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -942,7 +984,7 @@ theorem methodReads_digests {bytesOf : D → ByteArray} {look : Pinned D} {pkg :
           simp only at h
           by_cases hc : (cell.slots.get slotPackage == some (bytesOf pkg)) = true
           · simp only [hc, ↓reduceIte] at h
-            cases hpd : readsData digestOf look rels rv peer (q :: qs) with
+            cases hpd : readsData digestOf rc look rels rv peer (q :: qs) args with
             | error e => rw [hpd] at h; cases h
             | ok pd =>
               rw [hpd] at h
@@ -987,9 +1029,9 @@ theorem env4_lits (P : ByteArray → Prop) {x y z w : Data} (hx : ∀ b ∈ x.di
 depth extraction reaches, is a member or object id of the request, a digest of the arguments, a
 digest of the state, a digest of the rows `readsData` built from the caller's view, or an id
 literal of the closure (`RunSource`). The run makes none. -/
-theorem runSetup_sources {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat}
+theorem runSetup_sources {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup} {budget used fuel left : Nat} {v : Val} {d : Data}
-    (hS : runSetup bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
     ∀ b ∈ d.digests, RunSource bytesOf r S S.reads b := by
@@ -1010,11 +1052,11 @@ theorem runSetup_sources {look : Pinned D} {rv : RowView D} {pkg : D} {state : K
 checks, the rows by `readsData`'s `checked` (`readsData_digests`), the closure's literals by
 `checkLits` at load, and the request's ids because they are the World's own (`hdig`, the World's
 codec reads its ids back). So every digest a method run returns is one `digestOf` accepts. -/
-theorem runSetup_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+theorem runSetup_accepted_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {rv : RowView D} {pkg : D}
     {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
     {budget used fuel left : Nat} {v : Val} {d : Data}
-    (hS : runSetup bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
     ∀ b ∈ d.digests, (digestOf b).isSome = true := by
@@ -1031,9 +1073,9 @@ theorem runSetup_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true
   · exact methodReads_digests hrows b h
   · exact hlits t ht b h
 
-theorem runSetupLive_sources {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat}
+theorem runSetupLive_sources {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup} {budget used fuel left : Nat} {v : Val} {d : Data}
-    (hS : runSetupLive bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetupLive bytesOf digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
     ∀ b ∈ d.digests, RunSource bytesOf r S S.reads b := by
@@ -1054,11 +1096,11 @@ theorem runSetupLive_sources {look : Pinned D} {rv : RowView D} {pkg : D} {state
 checks, the rows by `readsData`'s `checked` (`readsData_digests`), the closure's literals by
 `checkLits` at load, and the request's ids because they are the World's own (`hdig`, the World's
 codec reads its ids back). So every digest a method run returns is one `digestOf` accepts. -/
-theorem runSetupLive_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+theorem runSetupLive_accepted_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {rv : RowView D} {pkg : D}
     {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
     {budget used fuel left : Nat} {v : Val} {d : Data}
-    (hS : runSetupLive bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetupLive bytesOf digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
     ∀ b ∈ d.digests, (digestOf b).isSome = true := by
@@ -1101,15 +1143,15 @@ then the edits read into row acts (`editsOf`), then each edit judged by its rela
 digest of the calls is one the boundary or the World accepted (`runSetup_accepted`), and a calls
 row of its type is refused only for a digest `digestOf` refuses (`callsOf_live`). Tooth: journey
 LD5, where `hdig` fails for one member and `callsOf` refuses it. -/
-private theorem runMeasured_past_extraction_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+private theorem runMeasured_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D}
     {budget : Nat} {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
-    (hS : runSetup bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
       d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf digestOf c = .ok calls ∧
-      runMeasured bytesOf digestOf look rv pkg state method args r budget =
+      runMeasured bytesOf digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e
@@ -1151,15 +1193,15 @@ private theorem runMeasured_past_extraction_of (hdig : ∀ x, (digestOf (bytesOf
               simp only [bind, Except.bind, hS', Nat.not_lt_zero, if_false, Nat.sub_zero, hr, hx]
               cases stateSlots (recordRow p.state) ds 0 <;>
                 simp [hc, pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
-private theorem runMeasuredLive_past_extraction_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+private theorem runMeasuredLive_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D}
     {budget : Nat} {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
-    (hS : runSetupLive bytesOf digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetupLive bytesOf digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
       d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf digestOf c = .ok calls ∧
-      runMeasuredLive bytesOf digestOf look rv pkg state method args r (budget + S.preparation) =
+      runMeasuredLive bytesOf digestOf rc look rv pkg state method args r (budget + S.preparation) =
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e
@@ -1209,10 +1251,10 @@ end
 /-- **Every id a run holds is accepted, from the law** (cv 01a14b28-7029): for a lawful `Ctx`
 (`Receive.Ctx.Lawful`: its decoder reads every id back), every digest of a method run's extracted
 result is one `X.digestOf` accepts. The request's ids need nothing more than the law. -/
-theorem runSetup_accepted {D : Type} {X : Ctx D} (hX : X.Lawful) {look : Pinned D} {rv : RowView D} {pkg : D}
+theorem runSetup_accepted {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful) {look : Pinned D} {rv : RowView D} {pkg : D}
     {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {S : RunSetup}
     {budget used fuel left : Nat} {v : Val} {d : Data}
-    (hS : runSetup X.env.bytes X.digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup X.env.bytes X.digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty fuel v = .ok (d, left)) :
     ∀ b ∈ d.digests, (X.digestOf b).isSome = true :=
@@ -1223,15 +1265,15 @@ lawful `Ctx`, past extraction the deployed run reads its calls, and what it does
 state's slots (refused only for state without bytes), `editsOf`, then `guardEdits`. The law can fail
 (`sim_drop_not_lawful`); that the law reaches the decoder the program actually runs with is
 `program_run_past_extraction`'s second premise. -/
-theorem runMeasured_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful) {look : Pinned D}
+theorem runMeasured_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful) {look : Pinned D}
     {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D}
     {budget : Nat} {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
-    (hS : runSetup X.env.bytes X.digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup X.env.bytes X.digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
       d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf c = .ok calls ∧
-      runMeasured X.env.bytes X.digestOf look rv pkg state method args r budget =
+      runMeasured X.env.bytes X.digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e
@@ -1248,11 +1290,11 @@ next is exactly the state's slots (refused only for state without bytes), `edits
 premise is shown to bite by a run: journey LD5 (PLANT unlawful-codec), a program whose decoder refuses
 a member's id inside a lawful Sim `Ctx`, where `callsOf` refuses by name. The deployed `Ctx` meets both
 (`Receive.deployed_ctx_lawful`, `deployed_program_own_codec`). -/
-theorem program_run_past_extraction_live {D : Type} {X : Ctx D} (hX : X.Lawful)
-    (hp : X.program = Lang.program X.env.bytes X.digestOf) {look : Pinned D} {rv : RowView D}
+theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful)
+    (hp : X.program = Lang.program X.env.bytes X.digestOf rc) {look : Pinned D} {rv : RowView D}
     {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
     {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
-    (hS : runSetupLive X.env.bytes X.digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetupLive X.env.bytes X.digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
@@ -1267,7 +1309,7 @@ theorem program_run_past_extraction_live {D : Type} {X : Ctx D} (hX : X.Lawful)
   obtain ⟨c, e, ds, calls, hd, hc, hm⟩ := runMeasuredLive_past_extraction_of (fun x => by simp [hX.digestOf_bytes x]) hS hr hx
   refine ⟨c, e, ds, calls, hd, hc, ?_⟩
   rw [hp]
-  show (runMeasuredLive X.env.bytes X.digestOf look rv pkg state method args r (budget + S.preparation)).map _ = _
+  show (runMeasuredLive X.env.bytes X.digestOf rc look rv pkg state method args r (budget + S.preparation)).map _ = _
   rw [hm]
   cases stateSlots S.row ds 0 with
   | none => rfl
@@ -1278,11 +1320,11 @@ theorem program_run_past_extraction_live {D : Type} {X : Ctx D} (hX : X.Lawful)
     | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
 
 /- Landed closed statement preserved through the proved deployment bridge. -/
-theorem program_run_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful)
-    (hp : X.program = Lang.program X.env.bytes X.digestOf) {look : Pinned D} {rv : RowView D}
+theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful)
+    (hp : X.program = Lang.program X.env.bytes X.digestOf rc) {look : Pinned D} {rv : RowView D}
     {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
     {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
-    (hS : runSetup X.env.bytes X.digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup X.env.bytes X.digestOf rc look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
@@ -1307,10 +1349,10 @@ theorem program_run_past_extraction {D : Type} {X : Ctx D} (hX : X.Lawful)
 
 /-- The deployed `Ctx`'s program is the language over the deployed codec itself: the second
 premise of `program_run_past_extraction` holds there by construction. -/
-theorem deployed_program_own_codec :
-    (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).program =
-      Lang.program (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).env.bytes
-        (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)).digestOf := rfl
+theorem deployed_program_own_codec {rc : Lang.ReceiptCheck} :
+    (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes? rc)).program =
+      Lang.program (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes? rc)).env.bytes
+        (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes? rc)).digestOf rc := rfl
 
 /-- **The Sim's `Ctx` is lawful**, whatever its program: its decoder reads every toy id back
 (`sim_digest_roundtrip`). So `runMeasured_past_extraction` holds at the Sim with no premise. -/
@@ -1337,13 +1379,13 @@ theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {rv : RowVi
     {pkg : Kernel.Sim.D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Req Kernel.Sim.D} {budget : Nat} {S : RunSetup} {used left : Nat}
     {v : Val} {d : Data}
-    (hS : runSetup Kernel.Sim.dc.bytes Kernel.Sim.digestOf look rv pkg state method args r = .ok S)
+    (hS : runSetup Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts look rv pkg state method args r = .ok S)
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body Kernel.Sim.D)),
       d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧
       callsOf Kernel.Sim.digestOf c = .ok calls ∧
-      runMeasured Kernel.Sim.dc.bytes Kernel.Sim.digestOf look rv pkg state method args r budget =
+      runMeasured Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
             let es ← editsOf S.rels r.self e

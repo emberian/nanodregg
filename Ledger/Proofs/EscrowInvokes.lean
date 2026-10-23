@@ -67,8 +67,8 @@ private theorem pair_steps {digestOf : ByteArray → Option D} {bytesOf : D → 
 and recorded refusal) whose every judged step was judged by the package `pkg`, read as `escrow` in
 that step's view, at most one call the invokes return is a payout, at a lawful `Ctx` whose program
 is the language over its own codec. -/
-theorem escrow_invokes_one_payout {X : Ctx D} (hX : X.Lawful)
-    (hprog : X.program = Lang.program X.env.bytes X.digestOf) {obj pkg : D} {w w' : World D}
+theorem escrow_invokes_one_payout {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful)
+    (hprog : X.program = Lang.program X.env.bytes X.digestOf rc) {obj pkg : D} {w w' : World D}
     {tr : List (Pinned D × Option D × List D × Req D × Slots × Slots × List (Body D))}
     (h : ObjectHistory X obj w w' tr)
     (hpkg : ∀ e ∈ tr, e.2.1 = some pkg ∧ readPackage e.1 pkg = .ok escrow) :
@@ -98,10 +98,10 @@ end
 /-- **Deployed**: along any history the node (`Host.Deployed.X`) admits around one object whose
 every judged step was judged by a package read as `escrow`, at most one returned call is a payout;
 premises: the history and that package reading, the `Ctx` discharged (`deployed_ctx_lawful`, `rfl`). -/
-theorem escrow_invokes_deployed {obj pkg : Codec.Digest} {w w' : World Codec.Digest}
+theorem escrow_invokes_deployed {rc : Lang.ReceiptCheck} {obj pkg : Codec.Digest} {w w' : World Codec.Digest}
     {tr : List (Pinned Codec.Digest × Option Codec.Digest × List Codec.Digest × Req Codec.Digest × Slots × Slots ×
       List (Body Codec.Digest))}
-    (h : ObjectHistory (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes?)) obj w w' tr)
+    (h : ObjectHistory (Codec.Deployed.ctx (Lang.program Codec.Digest.bytes Codec.Digest.ofBytes? rc)) obj w w' tr)
     (hpkg : ∀ e ∈ tr, e.2.1 = some pkg ∧ readPackage e.1 pkg = .ok escrow) :
     payoutCalls (tr.map fun e => e.2.2.2.2.2.2) ≤ 1 :=
   escrow_invokes_one_payout (deployed_ctx_lawful _) rfl h hpkg

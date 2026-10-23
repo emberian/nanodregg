@@ -324,6 +324,37 @@ theorem fold_retains {E : Env D} {k : D} {e : Nat × D} :
       have hc₁ : w₁.JournalCanon E := by unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hc
       exact fold_retains hc₁ h₂ ((refuse_journalAt h₁ k).trans hk) hlt
 
+/-- **Every journal entry a log reaches is one of its admitted turns** (E5: what a committed
+receipt is about). An entry of the World `fold` reaches from `w` was `w`'s own, or is the entry of a
+Turn `t` of the log: the prefix before it folds from `w` to `v`, `t` is admitted at `v`, its
+transaction id is the key, and the entry is `(v.height + 1, turnDigest t)`. Stated over the folded
+World's journal, never a claim. -/
+theorem fold_journal_turn {E : Env D} {k : D} {e : Nat × D} :
+    ∀ {w w' : World D} {l : List (Step D)}, w.JournalCanon E → World.fold E w l = .ok w' →
+      w'.journalAt E k = some e →
+      w.journalAt E k = some e ∨
+        ∃ l₁ t l₂ v v', l = l₁ ++ Step.turn t :: l₂ ∧ World.fold E w l₁ = .ok v ∧
+          World.admit E v t = .ok v' ∧ t.txId = k ∧ e = (v.height + 1, turnDigest E t)
+  | w, w', [], _, h, hk => by simp [World.fold] at h; subst h; exact .inl hk
+  | w, w', .turn t :: rest, hc, h, hk => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have hc₁ := admit_journalCanon hc h₁
+      rcases fold_journal_turn hc₁ h₂ hk with h1 | ⟨l₁, u, l₂, v, v', hl, hv, hu, hk', he⟩
+      · obtain ⟨posts, _, hw₁⟩ := admit_ok h₁
+        rw [hw₁] at h1
+        rcases commit_journal_mem hc h1 with ⟨hkt, het⟩ | ⟨_, hw, _⟩
+        · exact .inr ⟨[], t, rest, w, w₁, rfl, rfl, h₁, hkt.symm, het⟩
+        · exact .inl hw
+      · refine .inr ⟨.turn t :: l₁, u, l₂, v, v', by simp [hl], ?_, hu, hk', he⟩
+        exact fold_cons_ok.mpr ⟨w₁, h₁, hv⟩
+  | w, w', .refusal r :: rest, hc, h, hk => by
+      obtain ⟨w₁, h₁, h₂⟩ := fold_cons_ok.mp h
+      have hc₁ : w₁.JournalCanon E := by unfold World.JournalCanon; rw [(refuse_frame h₁).2.1]; exact hc
+      rcases fold_journal_turn hc₁ h₂ hk with h1 | ⟨l₁, u, l₂, v, v', hl, hv, hu, hk', he⟩
+      · exact .inl ((refuse_journalAt h₁ k).symm.trans h1)
+      · refine .inr ⟨.refusal r :: l₁, u, l₂, v, v', by simp [hl], ?_, hu, hk', he⟩
+        exact fold_cons_ok.mpr ⟨w₁, h₁, hv⟩
+
 /-- **Absence is an answer below `journalForgets`.** A turn admitted from `w₀` is still journaled
 in every later World of the log whose height is below its `notBefore + 2 * windowMax`. So an
 un-journaled transaction id at a height where `journalForgets` is false was never admitted by

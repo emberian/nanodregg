@@ -25,11 +25,11 @@ private instance : LawfulBEq ByteArray where
     rw [eq_of_beq this]
 
 section
-variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : ReceiptCheck}
 
 private theorem readsData_record {look : Pinned D} {rels : List (Label × RelDecl)} {rv : RowView D}
-    {self : D} {rs : List (Label × RelRead)} {d : Data}
-    (h : readsData digestOf look rels rv self rs = .ok d) : ∃ fs, d = .record fs := by
+    {self : D} {rs : List (Label × RelRead)} {args : Data} {d : Data}
+    (h : readsData digestOf rc look rels rv self rs args = .ok d) : ∃ fs, d = .record fs := by
   unfold readsData at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
@@ -72,10 +72,10 @@ theorem peerOf_party {self q : D} {args : Data}
 under `self` (P6). -/
 theorem peerReads_parent {look : Pinned D} {pkg : D} {rels : List (Label × RelDecl)}
     {rv : RowView D} {self : D} {args : Data} {rs ps : List (Label × RelRead)} {wd : Data}
-    (h : methodReads bytesOf digestOf look pkg rels rv self args rs ps = .ok wd) (hps : ps ≠ []) :
+    (h : methodReads bytesOf digestOf rc look pkg rels rv self args rs ps = .ok wd) (hps : ps ≠ []) :
     ∃ peer fs pd, peerOf bytesOf digestOf self args = .ok peer ∧
-      readsData digestOf look rels rv self rs = .ok (.record fs) ∧
-      readsData digestOf look rels rv peer ps = .ok pd ∧
+      readsData digestOf rc look rels rv self rs args = .ok (.record fs) ∧
+      readsData digestOf rc look rels rv peer ps args = .ok pd ∧
       wd = .record (Row.sort (fs ++ [(peerLabel, pd)])) := by
   unfold methodReads at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -97,7 +97,7 @@ theorem peerReads_parent {look : Pinned D} {pkg : D} {rels : List (Label × RelD
         simp only at h
         by_cases hc : (cell.slots.get slotPackage == some (bytesOf pkg)) = true
         · simp only [hc, ↓reduceIte] at h
-          cases hpd : readsData digestOf look rels rv peer ps with
+          cases hpd : readsData digestOf rc look rels rv peer ps args with
           | error e => rw [hpd] at h; cases h
           | ok pd =>
             rw [hpd] at h
@@ -109,7 +109,7 @@ theorem peerReads_parent {look : Pinned D} {pkg : D} {rels : List (Label × RelD
 package slot holds `bytesOf pkg`. Falsified by dropping the package check (P7). -/
 theorem peerReads_package {look : Pinned D} {pkg : D} {rels : List (Label × RelDecl)}
     {rv : RowView D} {self : D} {args : Data} {rs ps : List (Label × RelRead)} {wd : Data}
-    (h : methodReads bytesOf digestOf look pkg rels rv self args rs ps = .ok wd) (hps : ps ≠ []) :
+    (h : methodReads bytesOf digestOf rc look pkg rels rv self args rs ps = .ok wd) (hps : ps ≠ []) :
     ∃ peer cell, peerOf bytesOf digestOf self args = .ok peer ∧
       readKind look peer kindObject = .ok cell ∧ cell.slots.get slotPackage = some (bytesOf pkg) := by
   unfold methodReads at h
@@ -137,9 +137,9 @@ an absent peer. Falsified by reading a refused peer as absent. -/
 theorem peerReads_unpinned {look : Pinned D} {pkg : D} {rels : List (Label × RelDecl)}
     {rv : RowView D} {self q : D} {args : Data} {rs ps : List (Label × RelRead)} {own : Data}
     {e : Refusal D}
-    (hown : readsData digestOf look rels rv self rs = .ok own) (hps : ps ≠ [])
+    (hown : readsData digestOf rc look rels rv self rs args = .ok own) (hps : ps ≠ [])
     (hq : peerOf bytesOf digestOf self args = .ok q) (hl : look q = .error e) :
-    methodReads bytesOf digestOf look pkg rels rv self args rs ps = .error e := by
+    methodReads bytesOf digestOf rc look pkg rels rv self args rs ps = .error e := by
   have he : ps.isEmpty = false := by cases ps <;> simp_all
   have hk : readKind look q kindObject = .error e := by unfold readKind; rw [hl]
   unfold methodReads
@@ -148,8 +148,8 @@ theorem peerReads_unpinned {look : Pinned D} {pkg : D} {rels : List (Label × Re
 /-- Control: with no peer reads the rows are exactly the reader's own. -/
 theorem methodReads_no_peer {look : Pinned D} {pkg : D} {rels : List (Label × RelDecl)}
     {rv : RowView D} {self : D} {args : Data} {rs : List (Label × RelRead)} :
-    methodReads bytesOf digestOf look pkg rels rv self args rs [] =
-      readsData digestOf look rels rv self rs := by
+    methodReads bytesOf digestOf rc look pkg rels rv self args rs [] =
+      readsData digestOf rc look rels rv self rs args := by
   unfold methodReads
   simp only [bind, Except.bind, pure, Except.pure, List.isEmpty_nil, ↓reduceIte]
   split <;> simp_all

@@ -24,7 +24,7 @@ open Nanodregg.Hosting Nanodregg.Hosting.Grain
 
 private abbrev D := Kernel.Sim.D
 
-private def prog : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf
+private def prog : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts
 
 /-- The installed package cell, its id, and the pinned view that holds exactly it. -/
 private def pkgCell : Option Cell := (Grain.lifecycle?.toOption.bind Wire.encodePackage).map Controller.packageCell

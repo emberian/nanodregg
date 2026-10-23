@@ -33,7 +33,7 @@ theorem admitContextual_closed {D : Type} (digestOf : ByteArray → Option D)
   simp only [admitContextual, hc, List.isEmpty_nil, if_true]
 
 section
-variable {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
+variable {D : Type} (digestOf : ByteArray → Option D) (rc : ReceiptCheck) (look : Pinned D)
   (prepare : List Ty → Package → Except HoleRefusal Term)
 
 mutual
@@ -131,11 +131,11 @@ theorem loadLive_of_load {D : Type} {digestOf : ByteArray → Option D}
 
 /-- Every successful closed setup is byte-for-byte the setup used by live deployment. -/
 theorem runSetupLive_of_runSetup {D : Type}
-    {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup}
-    (h : runSetup bytesOf digestOf look rv pkg state method args r = .ok S) :
-    runSetupLive bytesOf digestOf look rv pkg state method args r = .ok S := by
+    (h : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S) :
+    runSetupLive bytesOf digestOf rc look rv pkg state method args r = .ok S := by
   unfold runSetup runSetupWith at h
   unfold runSetupLive runSetupWith
   simp only [bind, Except.bind, pure, Except.pure] at h ⊢
@@ -153,25 +153,25 @@ theorem runSetupLive_of_runSetup {D : Type}
 
 /-- Same result, refusal, calls, edits and ticks for every budget after a closed setup. -/
 theorem runMeasuredLive_closed {D : Type}
-    {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup}
-    (h : runSetup bytesOf digestOf look rv pkg state method args r = .ok S) (budget : Nat) :
-    runMeasuredLive bytesOf digestOf look rv pkg state method args r budget =
-      runMeasured bytesOf digestOf look rv pkg state method args r budget := by
+    (h : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S) (budget : Nat) :
+    runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget =
+      runMeasured bytesOf digestOf rc look rv pkg state method args r budget := by
   simp only [runMeasuredLive, runMeasured, runMeasuredWith,
     runSetupLive_of_runSetup h, h, bind, Except.bind]
 
 /-- The actual deployed Program.run preserves the entire closed result, including ticks. -/
 theorem program_run_closed {D : Type}
-    {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup}
-    (h : runSetup bytesOf digestOf look rv pkg state method args r = .ok S) (budget : Nat) :
-    (program bytesOf digestOf).run look rv pkg state method args r budget =
-      (runMeasured bytesOf digestOf look rv pkg state method args r budget).map
+    (h : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S) (budget : Nat) :
+    (program bytesOf digestOf rc).run look rv pkg state method args r budget =
+      (runMeasured bytesOf digestOf rc look rv pkg state method args r budget).map
         (fun x => (x.1, x.2.1, x.2.2.1, x.2.2.2.1)) := by
-  change (runMeasuredLive bytesOf digestOf look rv pkg state method args r budget).map _ = _
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget).map _ = _
   rw [runMeasuredLive_closed h]
 
 /-- Empty-signature install uses the closed check exactly, including refusals. -/
@@ -219,12 +219,12 @@ theorem loadUsing_leaf_closed {D : Type} {bytesOf : D → ByteArray}
 /-- Empty-signature, no-import packages have identical setups on the live path.
 No success or closure assumption is imposed on their callers. -/
 theorem runSetupLive_leaf_closed {D : Type} {bytesOf : D → ByteArray}
-    {digestOf : ByteArray → Option D} {look : Pinned D} {pkg : D} {p : Package}
+    {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D} {pkg : D} {p : Package}
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p)
     (hi : p.imports = []) (hc : p.holes = [])
     (rv : RowView D) (state : Slots) (method : Nat) (args : ByteArray) (r : Req D) :
-    runSetupLive bytesOf digestOf look rv pkg state method args r =
-      runSetup bytesOf digestOf look rv pkg state method args r := by
+    runSetupLive bytesOf digestOf rc look rv pkg state method args r =
+      runSetup bytesOf digestOf rc look rv pkg state method args r := by
   have hl := loadUsing_leaf_closed hid hp hi hc
     (fun Δ p => (instantiateHoles digestOf look rv r.self Δ p).map (·.body)) (closureDepthMax - 1)
   change loadLive digestOf rv r.self look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ =
@@ -241,12 +241,12 @@ theorem runSetupLive_leaf_closed {D : Type} {bytesOf : D → ByteArray}
 
 /-- The full measured result, including failures and charged ticks, is unchanged. -/
 theorem runMeasuredLive_leaf_closed {D : Type} {bytesOf : D → ByteArray}
-    {digestOf : ByteArray → Option D} {look : Pinned D} {pkg : D} {p : Package}
+    {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D} {pkg : D} {p : Package}
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p)
     (hi : p.imports = []) (hc : p.holes = [])
     (rv : RowView D) (state : Slots) (method : Nat) (args : ByteArray) (r : Req D) (budget : Nat) :
-    runMeasuredLive bytesOf digestOf look rv pkg state method args r budget =
-      runMeasured bytesOf digestOf look rv pkg state method args r budget := by
+    runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget =
+      runMeasured bytesOf digestOf rc look rv pkg state method args r budget := by
   unfold runMeasuredLive runMeasured runMeasuredWith
   rw [runSetupLive_leaf_closed hid hp hi hc]
 

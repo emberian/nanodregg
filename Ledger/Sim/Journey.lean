@@ -67,7 +67,7 @@ def sourceLine : IO (String × Bool) := do
   let core ← try IO.FS.readFile textPath catch _ => pure ""
   return Surface.shippedRow "E0s" src core escrow ("\"notOpen\")", "\"notHeld\")")
 
-def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf
+def langProgram : Program D := Lang.program Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
 def dropCalls : Program D :=
   { langProgram with run := fun look rv p s m a r b => (langProgram.run look rv p s m a r b).map fun x => (x.1, [], x.2.2) }

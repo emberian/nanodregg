@@ -360,18 +360,18 @@ are what `stateSlots` writes of `ds` there, and under a codec that reads its own
 BACK, at that row, to `ds` (`readState_go_stateSlots`; every digest of the result is accepted:
 `runSetup_accepted_of`, Lang.Proofs.Provenance), so the next run of the object reads the state this
 one wrote. -/
-theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
-    (h : runMeasured bytesOf digestOf look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∃ (L : Loaded) (g : Nat) (p : Package) (x : Label × Sig) (sd ad wd : Data) (v : Val) (c e : Data)
       (ds : List (Label × Data)),
       load digestOf look closureDepthMax (bytesOf pkg) ⟨[], [], []⟩ = .ok (L, g) ∧
       L.pkgs[g]? = some p ∧ resolveMethod (D := D) p method = .ok x ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData x.2.arg args = .ok ad ∧
-      methodReads bytesOf digestOf look pkg p.rels rv r.self ad x.2.reads (p.peerReads x.1) = .ok wd ∧
+      methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad x.2.reads (p.peerReads x.1) = .ok wd ∧
       BigStep L.lib [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] (apply4 g x.1) (.ok v) ∧
       Means L.lib (resultTy p.state x.2.calls (editTy p.rels) x.2.edits) v
         (.record [("calls", c), ("edits", e), ("state", .record ds)]) ∧
@@ -784,7 +784,7 @@ theorem extract_knot_ok : ∃ f, (Machine.mk []).extract (.record [("a", .nat), 
   ⟨_, rfl⟩
 
 section
-variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck)
 
 /-- The receiver's run of a package field: a law field `λ λ λ b` of the record body at `lib[g]`
 is evaluated by `ref` in the EMPTY environment, so its body runs with request, new and old above

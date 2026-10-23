@@ -105,7 +105,7 @@ private def tX : Ctx UInt8 where
   decodeCall _ := none
   digestOf := tDigestOf
   verify _ _ _ := true
-  program := Lang.program tEnv.bytes tDigestOf
+  program := Lang.program tEnv.bytes tDigestOf noReceipts
 
 private def dep : UInt8 := 1
 private def ben : UInt8 := 2
@@ -224,7 +224,7 @@ private theorem c1_invokeRun : invokeRun tX look1 c1 dep obj deposit none = .ok 
 private theorem c1_run :
     tX.program.run look1 rv1 pkg (stateOf objCell) deposit a1 req1 (min 1000 (poolOf c1.unsigned.body)) =
       .ok (slotsAt "held", calls1, [], 119) := by
-  show (runMeasuredLive tEnv.bytes tDigestOf _ _ _ _ _ _ _ _).map _ = _
+  show (runMeasuredLive tEnv.bytes tDigestOf noReceipts _ _ _ _ _ _ _ _).map _ = _
   rw [runMeasuredLive_leaf_closed (show tDigestOf (tEnv.bytes pkg) = some pkg from rfl)
     (readPackage_esc c1_pkg) rfl rfl]
   unfold runMeasured runMeasuredWith runSetup runSetupWith
@@ -287,7 +287,7 @@ private theorem c2_state : stateOf cell2 = slotsAt "held" := by decide +kernel
 private theorem c2_run :
     tX.program.run look2 rv2 pkg (stateOf cell2) release a2 req2 (min 1000 (poolOf c2.unsigned.body)) =
       .ok (slotsAt "released", calls2, [], 113) := by
-  show (runMeasuredLive tEnv.bytes tDigestOf _ _ _ _ _ _ _ _).map _ = _
+  show (runMeasuredLive tEnv.bytes tDigestOf noReceipts _ _ _ _ _ _ _ _).map _ = _
   rw [runMeasuredLive_leaf_closed (show tDigestOf (tEnv.bytes pkg) = some pkg from rfl)
     (readPackage_esc c2_pkg) rfl rfl]
   unfold runMeasured runMeasuredWith runSetup runSetupWith
@@ -342,7 +342,7 @@ premises of `escrow_invokes_one_payout` hold together, and its `≤ 1` is reache
 theorem escrow_history_witnessed :
     ∃ (X : Ctx UInt8) (o p : UInt8) (w w' : World UInt8)
       (tr : List (Pinned UInt8 × Option UInt8 × List UInt8 × Req UInt8 × Slots × Slots × List (Body UInt8))),
-      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf ∧ ObjectHistory X o w w' tr ∧
+      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧ ObjectHistory X o w w' tr ∧
       (∀ e ∈ tr, e.2.1 = some p ∧ readPackage e.1 p = .ok escrow) ∧
       payoutCalls (tr.map fun e => e.2.2.2.2.2.2) = 1 := by
   refine ⟨tX, obj, pkg, w0, w2, [e1, e2], ⟨fun _ => rfl⟩, rfl, hist, ?_, by decide⟩
@@ -363,7 +363,7 @@ theorem escrow_deposit_spends_cap :
     ∃ (X : Ctx UInt8) (o p g : UInt8) (w w' : World UInt8)
       (e : Pinned UInt8 × Option UInt8 × List UInt8 × Req UInt8 × Slots × Slots × List (Body UInt8))
       (src dst : AcctRef UInt8) (amt : Nat) (nk : ByteArray) (gc gc' : Cell) (ps : List (UInt8 × UInt8)),
-      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf ∧
+      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       ObjectStep X o w w' (some e) ∧ e.2.1 = some p ∧ readPackage e.1 p = .ok escrow ∧
       e.2.2.2.2.2.2 = [.transfer src dst amt (some g) (some nk)] ∧ amountOf e.2.2.2.2.1 = some amt ∧
       w.live X.env g = some gc ∧ ledgerLeft transferBase g gc = .ok (1, amt) ∧

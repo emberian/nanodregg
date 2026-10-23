@@ -354,7 +354,7 @@ non-judged step changes nothing the chain sees (`object_step_none`); a judged st
 the live one and its new state the next live one, key by key (`object_step_some`), so the steps
 link. No premise but the history and the law in force: no typing (`judgeOne_admits_relib` takes none),
 no canonicity (a write step carries its cell's), no order law (a nested step carries it). -/
-theorem object_history_chain {X : Ctx D} (hX : X.Lawful) (hprog : X.program = Lang.program X.env.bytes X.digestOf)
+theorem object_history_chain {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful) (hprog : X.program = Lang.program X.env.bytes X.digestOf rc)
     {obj law : D} {p : Lang.Package} {fs : List (Lang.Label × Lang.Term)} {ℓ : Lang.Label} {t : Lang.Term}
     (hb : p.body = .record fs) (hℓ : ℓ ∈ p.laws) (hf : Lang.Row.find? ℓ fs = some t) (hlaw : Lang.IsLaw t)
     (hnr : Lang.NoRef t) :
@@ -424,7 +424,7 @@ theorem object_history_runs {X : Ctx D} {obj : D} :
 /-- **A history with a judged step starts from a state the law reads.** Under the lift's premises,
 an `ObjectHistory` with a judged step starts at a World holding the object live, with a state that
 reads, at the package's state type, as data. -/
-theorem object_history_start {X : Ctx D} (hX : X.Lawful) (hprog : X.program = Lang.program X.env.bytes X.digestOf)
+theorem object_history_start {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful) (hprog : X.program = Lang.program X.env.bytes X.digestOf rc)
     {obj law : D} {p : Lang.Package} :
     ∀ {w w' : World D} {tr : List (Pinned D × Option D × List D × Req D × Slots × Slots × List (Body D))},
       ObjectHistory X obj w w' tr →

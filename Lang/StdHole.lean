@@ -26,7 +26,7 @@ def holeFacts : RelDecl := ⟨[("cell", .digest)],
 /-- A read of at most three fact rows: two positive supports and one blocker, each with its cell's
 liveness in the caller's pinned view (E1: `facts` is keyed by `cell : digest`, so the read is a live
 read). Matching is by cell identity, never by the order in which the pins arrived. -/
-def holeFactsView : Ty := readsTy [("facts", holeFacts)] [("facts", ⟨3, none, true⟩)]
+def holeFactsView : Ty := readsTy [("facts", holeFacts)] [("facts", ⟨3, none, true, false⟩)]
 
 /-- Internal judgment preserves each refusal name until it is rendered either
 as a retained row status or a method refusal. -/
@@ -261,8 +261,8 @@ def holePackage (V : Ty) (clause : Term) (extraRels : List (Label × RelDecl) :=
     ("s1", optTy holeSupport), ("value", V)]
   let pruneArg := Ty.record [("blocker", holeSupport), ("cand", .digest), ("why", .bytes)]
   let factArg := Ty.record [("cell", .digest), ("pin", .digest)]
-  let readFacts := readsTy rels [("facts", ⟨3, none, true⟩)]
-  let readBoth := readsTy rels [("candidates", ⟨1, none, false⟩), ("facts", ⟨3, none, true⟩)]
+  let readFacts := readsTy rels [("facts", ⟨3, none, true, false⟩)]
+  let readBoth := readsTy rels [("candidates", ⟨1, none, false, false⟩), ("facts", ⟨3, none, true, false⟩)]
   let facts := hr [("facts", hg (hv "rows") "facts")]
   let judge (c : H) := ha (hv "holeJudge") [hv "state", c, facts]
   let status (c : H) := ha (hc holeStatusOf) [hg c "reason", judge c]

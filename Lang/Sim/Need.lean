@@ -248,13 +248,13 @@ def runBy (st : State → Step) (stackMax : Nat) : (fuel used : Nat) → State �
 variable {D : Type} [DecidableEq D]
 
 section
-variable (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+variable (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck)
 
 /-- The steps an invoke requires: the size of the method run's derivation plus those of the
 suspensions extraction forces, with `budget` as the fuel of each count. -/
 def requiredOf (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) Nat := do
-  let S ← runSetup bytesOf digestOf look rv pkg state method args r
+  let S ← runSetup bytesOf digestOf rc look rv pkg state method args r
   match need S.lib budget S.env S.term with
   | some (.ok v, n) =>
     match needExtract S.lib budget S.ty v with
@@ -267,7 +267,7 @@ def requiredOf (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (met
 This uses the same authenticated setup as the deployed invocation. -/
 def requiredOfLive (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) Nat := do
-  let S ← runSetupLive bytesOf digestOf look rv pkg state method args r
+  let S ← runSetupLive bytesOf digestOf rc look rv pkg state method args r
   match need S.lib budget S.env S.term with
   | some (.ok v, n) =>
     match needExtract S.lib budget S.ty v with
@@ -280,7 +280,7 @@ def requiredOfLive (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) 
 run, `Lang.Proofs.Need.runBy_step`). -/
 def runTicksBy (stp : List Term → State → Step) (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots)
     (method : Nat) (args : ByteArray) (r : Req D) (budget : Nat) : Except (Refusal D) Nat := do
-  let S ← runSetup bytesOf digestOf look rv pkg state method args r
+  let S ← runSetup bytesOf digestOf rc look rv pkg state method args r
   match runBy (stp S.lib) Bounds.stackMax budget 0 (State.init S.term S.env) with
   | .value _ used => pure used
   | .fault f _ => throw (.program s!"run: {faultText f}")
@@ -292,7 +292,7 @@ returns the ticks of the run with one extraction (what `runMeasured` charges, re
 deployed functions) and with two. No knob: admission never calls it. -/
 def extractTicksTwice (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
     (r : Req D) (budget : Nat) : Except (Refusal D) (Nat × Nat) := do
-  let S ← runSetup bytesOf digestOf look rv pkg state method args r
+  let S ← runSetup bytesOf digestOf rc look rv pkg state method args r
   match run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) with
   | .fault f _ => throw (.program s!"run: {faultText f}")
   | .value v used =>

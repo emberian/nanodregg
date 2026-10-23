@@ -32,7 +32,7 @@ def cycleBundle (c1 c5 : Sim.D) : Except String Std.HoleBundle :=
       code := [⟨cycleTerm, []⟩], selectionRel := 0, selectionKey := .empty,
       hypotheses := [none, none], guardPin := none, guard := .var 0 }
     [observedFact c1, observedFact c5] (.lam Std.holeState (.lam cycleTy (.bool true)))
-    [("facts", ⟨3, none, true⟩)]
+    [("facts", ⟨3, none, true, false⟩)]
 
 def cycleRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let mut r := r0

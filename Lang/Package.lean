@@ -148,8 +148,17 @@ def keyTy (d : RelDecl) : Ty := .record (Row.sort d.key)
 /-- A range's prefix as a method sees it: the key's first `m` declared fields. -/
 def preTy (d : RelDecl) (m : Nat) : Ty := .record (Row.sort (d.key.take m))
 
+/-- What a receipt read shows of a foreign World's committed call (E5): the height it committed at,
+its turn digest and its transaction id, as `Protocol.Foreign.check` verified them against the head
+object the point's key names. -/
+def seenTy : Ty := .record [("height", .nat), ("turn", .digest), ("tx", .digest)]
+
 /-- A row: its key and its value. -/
 def rowTy (d : RelDecl) : Ty := .record [("key", keyTy d), ("val", d.val)]
+
+/-- A listed row of a range read: its key, on a receipt read (E5) its column, and its value. -/
+def rangeRowTy (d : RelDecl) (receipt : Bool) : Ty :=
+  if receipt then .record [("key", keyTy d), ("receipt", seenTy), ("val", d.val)] else rowTy d
 
 /-- A point read: the key the caller pinned, and the row's value if the row is there. -/
 def pointTy (d : RelDecl) : Ty := optTy (.record [("key", keyTy d), ("val", optTy d.val)])
@@ -167,10 +176,12 @@ def editTy (rels : List (Label × RelDecl)) : Ty := .sum (rels.map fun r => (r.1
 def editsTy (rels : List (Label × RelDecl)) (m : Nat) : Ty :=
   .record ((slotLabels "e" m).map fun l => (l, optTy (editTy rels)))
 
+
 /-- A read point's record: its key, its key's cell liveness on a live read (E1), and the row's
 value if the row is there. `optTy (pointRecTy d false)` is `pointTy d`. -/
-def pointRecTy (d : RelDecl) (live : Bool) : Ty :=
-  .record ([("key", keyTy d)] ++ (if live then [("live", .bool)] else []) ++ [("val", optTy d.val)])
+def pointRecTy (d : RelDecl) (live : Bool) (receipt : Bool := false) : Ty :=
+  .record ([("key", keyTy d)] ++ (if live then [("live", .bool)] else []) ++
+    (if receipt then [("receipt", seenTy)] else []) ++ [("val", optTy d.val)])
 
 /-- A relation whose key is exactly one digest field: its rows are keyed by a kernel cell id, so a
 method may read each point with the cell's liveness (`livePointTy`, E1). -/
@@ -192,15 +203,18 @@ structure RelRead where
   points : Nat
   range : Option (Nat × Nat)
   live : Bool
+  /-- E5: each point carries the method argument `receipt` checked against the head object its key
+  names (`seenTy`); a cell-keyed relation only, and the argument type has `receipt : bytes` -/
+  receipt : Bool := false
   deriving DecidableEq, Repr
 
 /-- The rows a method reads of relation `d`, as the record it receives. -/
 def relReadTy (d : RelDecl) (x : RelRead) : Ty :=
-  .record ((slotLabels "p" x.points).map (fun l => (l, optTy (pointRecTy d x.live))) ++
+  .record ((slotLabels "p" x.points).map (fun l => (l, optTy (pointRecTy d x.live x.receipt))) ++
     match x.range with
     | none => []
     | some (m, k) => [("range", .record [("pre", preTy d m),
-        ("rows", .record ((slotLabels "r" k).map fun l => (l, optTy (rowTy d))))])])
+        ("rows", .record ((slotLabels "r" k).map fun l => (l, optTy (rangeRowTy d x.receipt))))])])
 
 /-- A method's rows argument: the relations it reads (by label, ascending). -/
 def readsTy (rels : List (Label × RelDecl)) (rs : List (Label × RelRead)) : Ty :=
@@ -273,6 +287,9 @@ inductive CheckError
   | liveNotCellKeyed (label : Label)
   /-- a method reads a peer's rows (PROT-6) and its argument names no `pair : rec {a, b : digest}` -/
   | peerNotNamed (label : Label)
+  /-- a method reads a receipt column of a relation that is not cell-keyed, or has no
+  `receipt : bytes` argument (E5) -/
+  | receiptRead (label : Label)
   deriving DecidableEq, Repr
 
 /-- The refusal's name (law 7): its constructor's. -/
@@ -285,13 +302,13 @@ def CheckError.name : CheckError → String
   | .noLaw _ => "noLaw" | .badLaw _ => "badLaw"
   | .tooManyRels => "tooManyRels" | .relKey _ => "relKey" | .badRel _ => "badRel"
   | .liveNotCellKeyed _ => "liveNotCellKeyed"
-  | .peerNotNamed _ => "peerNotNamed"
+  | .peerNotNamed _ => "peerNotNamed" | .receiptRead _ => "receiptRead"
 
 /-- What goes on the wire inside `Refusal.program`: the name, then the label it is about (for
 `illTyped`, the failed rule and its path: `illTyped noField @body.f`). -/
 def CheckError.wire : CheckError → String
   | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) | e@(.relKey ℓ) | e@(.badRel ℓ)
-  | e@(.liveNotCellKeyed ℓ) | e@(.peerNotNamed ℓ) =>
+  | e@(.liveNotCellKeyed ℓ) | e@(.peerNotNamed ℓ) | e@(.receiptRead ℓ) =>
       s!"{e.name} {ℓ}"
   | e@(.illTyped why) => s!"{e.name} {why.text}"
   | e => e.name
@@ -309,6 +326,7 @@ def CheckError.text : CheckError → String
   | .badRel ℓ => s!"relation {ℓ} is malformed"
   | .liveNotCellKeyed ℓ => s!"method {ℓ} reads a relation that is not cell-keyed (live)"
   | .peerNotNamed ℓ => s!"method {ℓ} reads a peer's rows and its argument names no pair"
+  | .receiptRead ℓ => s!"method {ℓ} reads a receipt column without a cell-keyed relation and a receipt argument"
 
 def isRecordData : Ty → Bool
   | t@(.record _) => t.wf && t.isData
@@ -344,15 +362,17 @@ def relReadShape (d : RelDecl) : Ty → Option RelRead
     | none => none
     | some r =>
       let ok (x : RelRead) := n ≤ pointsMax ∧ (r.all fun mk => 1 ≤ mk.2 ∧ mk.2 ≤ rangeRowsMax) ∧ relReadTy d x = T
-      if ok ⟨n, r, false⟩ then some ⟨n, r, false⟩
-      else if ok ⟨n, r, true⟩ then some ⟨n, r, true⟩
+      if ok ⟨n, r, false, false⟩ then some ⟨n, r, false, false⟩
+      else if ok ⟨n, r, true, false⟩ then some ⟨n, r, true, false⟩
+      else if ok ⟨n, r, false, true⟩ then some ⟨n, r, false, true⟩
+      else if ok ⟨n, r, true, true⟩ then some ⟨n, r, true, true⟩
       else none
   | _ => none
 
 /-- What one relation's read record declares; a `live` read only of a cell-keyed relation (E1). -/
 def relReadOf (d : RelDecl) (T : Ty) : Option RelRead :=
   match relReadShape d T with
-  | some x => if x.live && !d.cellKeyed then none else some x
+  | some x => if (x.live || x.receipt) && !d.cellKeyed then none else some x
   | none => none
 
 /-- A method type whose rows argument asks a relation that is not cell-keyed for its keys' cell
@@ -361,6 +381,20 @@ def liveNotCellKeyed (rels : List (Label × RelDecl)) : Ty → Bool
   | .fn (.record row) _ =>
     row.any fun e => match Row.find? e.1 rels with
       | some d => !d.cellKeyed && (relReadShape d e.2).any (·.live)
+      | none => false
+  | _ => false
+
+/-- The argument type a receipt read needs: a record with `receipt : bytes` (E5). -/
+def receiptArg : Ty → Bool
+  | .record r => Row.find? "receipt" r = some .bytes
+  | _ => false
+
+/-- A method type whose rows argument reads a receipt column of a relation that is not cell-keyed,
+or whose argument has no `receipt : bytes`: refused `receiptRead` by name at install (E5, law 7). -/
+def receiptReadBad (rels : List (Label × RelDecl)) : Ty → Bool
+  | .fn (.record row) (.fn _ (.fn A _)) =>
+    row.any fun e => match Row.find? e.1 rels with
+      | some d => (relReadShape d e.2).any (fun x => x.receipt && (!d.cellKeyed || !receiptArg A))
       | none => false
   | _ => false
 
@@ -428,7 +462,8 @@ def methodSig (S : Ty) (rels : List (Label × RelDecl)) : Ty → Option Sig
   | .fn R (.fn S' (.fn A (.fn Q (.record [("calls", .record row), ("edits", .record erow), ("state", S'')])))) =>
       if S' = S ∧ Q = reqTy ∧ S'' = S ∧ A.isData then
         match callSlotsOf row, editSlotsOf rels erow, rowsOf rels R with
-        | some ks, some es, some (rs, ps) => if pairNamed A ps then some ⟨A, ks, rs, es⟩ else none
+        | some ks, some es, some (rs, ps) =>
+          if pairNamed A ps && (!(rs ++ ps).any (·.2.receipt) || receiptArg A) then some ⟨A, ks, rs, es⟩ else none
         | _, _, _ => none
       else none
   | _ => none
@@ -446,6 +481,7 @@ def checkMethods (S : Ty) (rels : List (Label × RelDecl)) (row : List (Label ×
         if (methodArg S rels t).isSome then checkMethods S rels row ms
         else if liveNotCellKeyed rels t then .error (.liveNotCellKeyed ℓ)
         else if peerUnnamed rels t then .error (.peerNotNamed ℓ)
+        else if receiptReadBad rels t then .error (.receiptRead ℓ)
         else .error (.badMethod ℓ)
 
 mutual

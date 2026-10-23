@@ -138,7 +138,7 @@ def offerResumer : Term := .lam offerStateTy (.lam reqTy (.bool false))
 
 def offerTakeArg (theta : List Label) : Ty := .record [("pair", pairTy), ("theta", offerThetaTy theta)]
 
-def offerRead : List (Label × RelRead) := [("offer", ⟨1, none, false⟩)]
+def offerRead : List (Label × RelRead) := [("offer", ⟨1, none, false, false⟩)]
 
 /-- `take`'s rows argument: its own offer point and its peer's. -/
 def offerTakeRows (rels : List (Label × RelDecl)) : Ty := rowsTy rels offerRead offerRead

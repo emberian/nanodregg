@@ -28,7 +28,7 @@ theorem object_history_chain_witnessed :
     ∃ (X : Ctx UInt8) (obj p : UInt8) (w w' : World UInt8)
       (tr : List (Pinned UInt8 × Option UInt8 × List UInt8 × Req UInt8 × Slots × Slots × List (Body UInt8)))
       (pk : Lang.Package) (tl : Lang.Term) (cell : Cell) (o : Lang.Data) (steps : List (Lang.Data × Lang.Data)),
-      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf ∧ ObjectHistory X obj w w' tr ∧
+      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧ ObjectHistory X obj w w' tr ∧
       (∀ e ∈ tr, p ∈ e.2.1.toList ++ e.2.2.1 ∧ Lang.readPackage e.1 p = .ok pk) ∧ Lang.NoRef tl ∧
       w.live X.env obj = some cell ∧ Lang.readState X.digestOf (Lang.recordRow pk.state) (stateOf cell) = .ok o ∧
       Lang.Std.Chain (Lang.Std.Step [] tl) o steps ∧ steps.length = 1 := by
@@ -66,7 +66,7 @@ private def hCtx : Ctx UInt8 where
   decodeCall _ := none
   digestOf := hDigestOf
   verify _ _ _ := true
-  program := Lang.program hEnv.bytes hDigestOf
+  program := Lang.program hEnv.bytes hDigestOf Lang.noReceipts
 
 private def hMember : Cell := { kind := kindMember, discipline := .ram, slots := [(slotKey, ⟨#[42]⟩)] }
 
@@ -121,7 +121,7 @@ the language, is a one-step `ObjectHistory` whose judged step moves the state. -
 theorem write_history_witnessed :
     ∃ (X : Ctx UInt8) (obj : UInt8) (w w' : World UInt8)
       (tr : List (Pinned UInt8 × Option UInt8 × List UInt8 × Req UInt8 × Slots × Slots × List (Body UInt8))),
-      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf ∧ ObjectHistory X obj w w' tr ∧
+      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧ ObjectHistory X obj w w' tr ∧
       ∃ e ∈ tr, e.2.2.2.2.2.1 ≠ e.2.2.2.2.1 :=
   ⟨hCtx, 5, hW, hAfter, _, ⟨fun _ => rfl⟩, rfl, h_history, _, List.mem_singleton_self _, by decide⟩
 
@@ -133,7 +133,7 @@ theorem object_history_needs_inForce :
     ∃ (X : Ctx UInt8) (obj : UInt8) (w w' : World UInt8)
       (tr : List (Pinned UInt8 × Option UInt8 × List UInt8 × Req UInt8 × Slots × Slots × List (Body UInt8)))
       (cell : Cell) (tl : Lang.Term),
-      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf ∧ ObjectHistory X obj w w' tr ∧
+      X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧ ObjectHistory X obj w w' tr ∧
       w.live X.env obj = some cell ∧ tr ≠ [] ∧ Lang.NoRef tl ∧ Lang.IsLaw tl ∧
       ∀ o, ¬ ∃ steps, Lang.Std.Chain (Lang.Std.Step [] tl) o steps ∧ steps.length = tr.length := by
   refine ⟨hCtx, 5, hW, hAfter, _, hObj,

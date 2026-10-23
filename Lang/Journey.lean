@@ -358,7 +358,7 @@ def nat64 (n : Nat) : Option ByteArray := Wire.encodeData .nat (.nat n)
 
 def ctxWith (prog : Program D) : Ctx D := Sim.ctxWith prog
 
-def langProgram : Program D := Lang.program Sim.dc.bytes Sim.digestOf
+def langProgram : Program D := Lang.program Sim.dc.bytes Sim.digestOf noReceipts
 
 /-- Plant 1: a program whose judge admits every write. -/
 def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok () }
@@ -444,7 +444,7 @@ def totalDigestOf (b : ByteArray) : Option D := some ((Sim.digestOf b).getD 0)
 /-- Plant 8: run and judge ask a `digestOf` that accepts any bytes, so the boundary's digest check
 (`readState`, the arguments, LANG-38) never refuses; install is the deployed one. -/
 def totalDigest : Program D :=
-  let t := Lang.program Sim.dc.bytes totalDigestOf
+  let t := Lang.program Sim.dc.bytes totalDigestOf noReceipts
   { langProgram with run := t.run, judge := t.judge }
 
 /-- A digest decoder that refuses exactly member `x`'s own id: a World whose codec does not read
@@ -455,7 +455,7 @@ def refusing (x : D) (b : ByteArray) : Option D := if b = Sim.dc.bytes x then no
 the one source no boundary check reads (they are the World's own), so a call naming `x` is the
 first place the refusal can land: `callsOf`. Install and judge are the deployed ones. -/
 def unlawfulCodec (x : D) : Program D :=
-  { langProgram with run := (Lang.program Sim.dc.bytes (refusing x)).run }
+  { langProgram with run := (Lang.program Sim.dc.bytes (refusing x) noReceipts).run }
 
 /-- Plant 10: the run is handed each signed range without its last row (LS9). -/
 def dropLastRow (rv : RowView D) : RowView D :=
@@ -676,8 +676,8 @@ def measure (w : World D) (c : Call D) : Except String (Nat × Nat) :=
     let text : Receive.Refusal D → String := fun | .program s => s | e => e.name
     (do
       let (cell, p, r) ← invokeRun X look c c.unsigned.member obj method via
-      let (_, _, _, ticks, _) ← Lang.runMeasuredLive X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget
-      let req ← Lang.Need.requiredOfLive X.env.bytes X.digestOf look rv p (stateOf cell) method args r budget
+      let (_, _, _, ticks, _) ← Lang.runMeasuredLive X.env.bytes X.digestOf noReceipts look rv p (stateOf cell) method args r budget
+      let req ← Lang.Need.requiredOfLive X.env.bytes X.digestOf noReceipts look rv p (stateOf cell) method args r budget
       pure (req, ticks)).mapError text
   | _ => .error "not an invoke"
 
