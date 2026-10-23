@@ -378,20 +378,20 @@ theorem receiptSeen_ok {D : Type} {digestOf : ByteArray → Option D} {rc : Rece
   obtain ⟨rfl, rfl⟩ := h
   exact ⟨_, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, Bool.and_eq_true_iff.mp ‹_›⟩
 
-/-- What `pointData` makes of a point read back: its key and value, and on a live read (E1) the
-liveness of the cell its key names, read through the pinned view at a pinned cell. -/
-theorem pointData_ok {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
-    {ℓ : Label} {live receipt : Bool} {args : Data} {kv : Data × Option Data} {y : Data}
-    (h : pointData digestOf rc look ℓ live receipt args kv = .ok y) :
-    (receipt = false ∧ live = false ∧ y = .record [("key", kv.1), ("val", optD kv.2)]) ∨
-    (receipt = false ∧ live = true ∧ ∃ b g c, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok c ∧
-      y = .record [("key", kv.1), ("live", .bool (cellLive look g)), ("val", optD kv.2)]) ∨
-    (receipt = true ∧ ∃ b g c rb s, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok (some c) ∧
+/-- What `keyColumns` makes of a read key (CLIENT-35, the core a point and a range row share): no
+column; on a live read (E1) the liveness of the cell its key names, read through the pinned view at
+a pinned cell; on a receipt read (E5) what `receiptSeen` read, with `live` beside it on a live one. -/
+theorem keyColumns_ok {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {live receipt : Bool} {args k : Data} {cs : List (Label × Data)}
+    (h : keyColumns digestOf rc look ℓ live receipt args k = .ok cs) :
+    (receipt = false ∧ live = false ∧ cs = []) ∨
+    (receipt = false ∧ live = true ∧ ∃ b g c, keyCell k = some b ∧ digestOf b = some g ∧ look g = .ok c ∧
+      cs = [("live", .bool (cellLive look g))]) ∨
+    (receipt = true ∧ ∃ b g c rb s, keyCell k = some b ∧ digestOf b = some g ∧ look g = .ok (some c) ∧
       args.field "receipt" = some (.bytes rb) ∧ rc c rb = .ok s ∧
       (seenFits s = true ∧ (seenData s).digests.all (fun b => (digestOf b).isSome) = true) ∧
-      y = .record ([("key", kv.1)] ++ (if live then [("live", .bool (cellLive look g))] else []) ++
-        [("receipt", seenData s), ("val", optD kv.2)])) := by
-  unfold pointData at h
+      cs = (if live then [("live", .bool (cellLive look g))] else []) ++ [("receipt", seenData s)]) := by
+  unfold keyColumns at h
   split at h
   · rename_i hr
     split at h
@@ -411,22 +411,46 @@ theorem pointData_ok {D : Type} {digestOf : ByteArray → Option D} {rc : Receip
       simp only [Except.ok.injEq] at h
       exact .inl ⟨by simpa using hr, by simpa using hl, h.symm⟩
 
+/-- What `pointData` makes of a point read back: its key and value, and on a live read (E1) the
+liveness of the cell its key names, read through the pinned view at a pinned cell. -/
+theorem pointData_ok {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {live receipt : Bool} {args : Data} {kv : Data × Option Data} {y : Data}
+    (h : pointData digestOf rc look ℓ live receipt args kv = .ok y) :
+    (receipt = false ∧ live = false ∧ y = .record [("key", kv.1), ("val", optD kv.2)]) ∨
+    (receipt = false ∧ live = true ∧ ∃ b g c, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok c ∧
+      y = .record [("key", kv.1), ("live", .bool (cellLive look g)), ("val", optD kv.2)]) ∨
+    (receipt = true ∧ ∃ b g c rb s, keyCell kv.1 = some b ∧ digestOf b = some g ∧ look g = .ok (some c) ∧
+      args.field "receipt" = some (.bytes rb) ∧ rc c rb = .ok s ∧
+      (seenFits s = true ∧ (seenData s).digests.all (fun b => (digestOf b).isSome) = true) ∧
+      y = .record ([("key", kv.1)] ++ (if live then [("live", .bool (cellLive look g))] else []) ++
+        [("receipt", seenData s), ("val", optD kv.2)])) := by
+  unfold pointData at h
+  split at h
+  · cases h
+  · rename_i cs hcs
+    simp only [Except.ok.injEq] at h
+    subst h
+    rcases keyColumns_ok hcs with ⟨hr, hl, rfl⟩ | ⟨hr, hl, b, g, c, hb, hg, hc, rfl⟩ |
+        ⟨hr, b, g, c, rb, s, hb, hg, hc, ha, hs, hok, rfl⟩
+    · exact .inl ⟨hr, hl, by simp⟩
+    · exact .inr (.inl ⟨hr, hl, b, g, c, hb, hg, hc, by simp⟩)
+    · exact .inr (.inr ⟨hr, b, g, c, rb, s, hb, hg, hc, ha, hs, hok, by simp [List.append_assoc]⟩)
+
 theorem seenData_conforms {s : Seen} (h : seenFits s = true) : Conforms (seenData s) seenTy := by
   simp only [seenFits, Bool.and_eq_true, decide_eq_true_eq] at h
   exact .record (.cons (.nat h.1.1) (.cons (.digest h.1.2) (.cons (.digest h.2) .nil)))
 
-/-- A `(receipt)` range row conforms to `rangeRowTy d true`: its key and value as listed, its column
-inside the language's data. -/
-theorem receiptRow_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
-    {ℓ : Label} {args : Data} {d : RelDecl} {x y : Data} (hx : Conforms x (rowTy d))
-    (h : receiptRow digestOf rc look ℓ args x = .ok y) : Conforms y (rangeRowTy d true) := by
-  unfold receiptRow at h
+/-- A range row with columns conforms to `rangeRowTy d live receipt`: its key and value as listed,
+its columns (`keyColumns`, the point's core) inside the language's data. -/
+theorem columnRow_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {live receipt : Bool} {args : Data} {d : RelDecl} {x y : Data} (hx : Conforms x (rowTy d))
+    (h : columnRow digestOf rc look ℓ live receipt args x = .ok y) : Conforms y (rangeRowTy d live receipt) := by
+  unfold columnRow at h
   split at h
   · rename_i k v
     split at h
     · cases h
-    · rename_i g s hrs
-      obtain ⟨-, -, -, -, -, -, -, -, hok⟩ := receiptSeen_ok hrs
+    · rename_i cs hcs
       simp only [Except.ok.injEq] at h
       subst h
       cases hx with
@@ -436,22 +460,31 @@ theorem receiptRow_conforms {D : Type} {digestOf : ByteArray → Option D} {rc :
           cases hr' with
           | cons hv hn =>
             cases hn
-            exact .record (.cons hk (.cons (seenData_conforms hok.1) (.cons hv .nil)))
+            rcases keyColumns_ok hcs with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, -, g, -, -, -, -, rfl⟩ |
+                ⟨rfl, -, g, -, -, s, -, -, -, -, -, hok, rfl⟩
+            · exact .record (.cons hk (.cons hv .nil))
+            · exact .record (.cons hk (.cons .bool (.cons hv .nil)))
+            · cases live
+              · exact .record (.cons hk (.cons (seenData_conforms hok.1) (.cons hv .nil)))
+              · exact .record (.cons hk (.cons .bool (.cons (seenData_conforms hok.1) (.cons hv .nil))))
   · cases h
 
-theorem receiptRows_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
-    {ℓ : Label} {args : Data} {d : RelDecl} {receipt : Bool} {rs ys : List Data}
-    (hx : ∀ y ∈ rs, Conforms y (rowTy d)) (h : receiptRows digestOf rc look ℓ args receipt rs = .ok ys) :
-    ∀ y ∈ ys, Conforms y (rangeRowTy d receipt) := by
-  unfold receiptRows at h
-  cases receipt
-  · simp only [Bool.false_eq_true, if_false, Except.ok.injEq] at h
-    subst h
-    simpa [rangeRowTy] using hx
-  · simp only [if_true] at h
+theorem columnRows_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {ℓ : Label} {live receipt : Bool} {args : Data} {d : RelDecl} {rs ys : List Data}
+    (hx : ∀ y ∈ rs, Conforms y (rowTy d)) (h : columnRows digestOf rc look ℓ live receipt args rs = .ok ys) :
+    ∀ y ∈ ys, Conforms y (rangeRowTy d live receipt) := by
+  unfold columnRows at h
+  by_cases hc : (live || receipt) = true
+  · rw [if_pos hc] at h
     intro y hy
     obtain ⟨q, hq, hqy⟩ := mapM_ok_mem h y hy
-    exact receiptRow_conforms (hx q hq) hqy
+    exact columnRow_conforms (hx q hq) hqy
+  · rw [if_neg hc] at h
+    simp only [Except.ok.injEq] at h
+    subst h
+    obtain ⟨rfl, rfl⟩ : live = false ∧ receipt = false := by simpa using hc
+    intro y hy
+    simpa [rangeRowTy, rowTy] using hx y hy
 
 theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
     {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {args : Data} {v : Data}
@@ -493,7 +526,7 @@ theorem relReads_conforms {D : Type} {digestOf : ByteArray → Option D} {rc : R
       first
         | exact .nil
         | exact .cons (.record (.cons (pre_conf ‹_› ‹_›)
-            (.cons (.record (slotsD_conforms (receiptRows_conforms (rangeRowData_conforms ‹rangeRowData _ _ _ _ = .ok _›) ‹receiptRows _ _ _ _ _ _ _ = .ok _›) "r" _))
+            (.cons (.record (slotsD_conforms (columnRows_conforms (rangeRowData_conforms ‹rangeRowData _ _ _ _ = .ok _›) ‹columnRows _ _ _ _ _ _ _ _ = .ok _›) "r" _))
               .nil))) .nil
 
 theorem mapM_rowConforms {α ε : Type} {f : α → Except ε (Label × Data)} {g : α → Option (Label × Ty)}

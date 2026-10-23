@@ -830,36 +830,54 @@ theorem rangeRowData_digests {ℓ : Label} {dl : RelDecl} {rows : List (RowSlot 
     · exact checked_digests ‹_› z hz
     · exact valOf_digests ‹_› z hz
 
-/-- **A receipt read's range rows hold only accepted digests** (E5): the listed key and value as
-`rangeRowData` checked them, and the column's digests, which `receiptSeen` checked. -/
-theorem receiptRows_digests {rc : Lang.ReceiptCheck} {look : Pinned D} {ℓ : Label} {args : Data} {receipt : Bool}
-    {rs ys : List Data} (hx : ∀ y ∈ rs, ∀ b ∈ y.digests, (digestOf b).isSome = true)
-    (h : receiptRows digestOf rc look ℓ args receipt rs = .ok ys) :
+/-- A read key's columns hold only accepted digests (CLIENT-35): `live` holds none, and the receipt
+column's digests are those `receiptSeen` checked (E5). -/
+theorem keyColumns_digests {rc : Lang.ReceiptCheck} {look : Pinned D} {ℓ : Label} {live receipt : Bool}
+    {args k : Data} {cs : List (Label × Data)} (h : keyColumns digestOf rc look ℓ live receipt args k = .ok cs) :
+    ∀ b ∈ Data.rowDigests cs, (digestOf b).isSome = true := by
+  rcases keyColumns_ok h with ⟨-, -, rfl⟩ | ⟨-, -, -, g, -, -, -, -, rfl⟩ |
+      ⟨-, -, g, -, -, s, -, -, -, -, -, hok, rfl⟩
+  · simp [Data.rowDigests]
+  · simp [Data.rowDigests, Data.digests]
+  · have hall := List.all_eq_true.mp hok.2
+    intro b hb
+    rw [rowDigests_append] at hb
+    cases live <;> simp only [Data.rowDigests, Data.digests, Bool.false_eq_true, if_false, if_true,
+      List.nil_append, List.append_nil] at hb <;>
+      exact hall b hb
+
+/-- **A range read's rows with columns hold only accepted digests** (E5, CLIENT-35): the listed key
+and value as `rangeRowData` checked them, and the columns' (`keyColumns_digests`). -/
+theorem columnRows_digests {rc : Lang.ReceiptCheck} {look : Pinned D} {ℓ : Label} {live receipt : Bool}
+    {args : Data} {rs ys : List Data} (hx : ∀ y ∈ rs, ∀ b ∈ y.digests, (digestOf b).isSome = true)
+    (h : columnRows digestOf rc look ℓ live receipt args rs = .ok ys) :
     ∀ y ∈ ys, ∀ b ∈ y.digests, (digestOf b).isSome = true := by
-  unfold receiptRows at h
-  cases receipt
-  · simp only [Bool.false_eq_true, if_false, Except.ok.injEq] at h
-    subst h; exact hx
-  · simp only [if_true] at h
+  unfold columnRows at h
+  by_cases hc : (live || receipt) = true
+  · rw [if_pos hc] at h
     intro y hy
     obtain ⟨q, hq, hqy⟩ := mapM_ok_mem h y hy
-    unfold receiptRow at hqy
+    unfold columnRow at hqy
     split at hqy
     · rename_i k v
       split at hqy
       · cases hqy
-      · rename_i g sn hrs
-        obtain ⟨-, -, -, -, -, -, -, -, hok⟩ := receiptSeen_ok hrs
+      · rename_i cs hcs
         simp only [Except.ok.injEq] at hqy
         subst hqy
         have hq' := hx _ hq
-        have hall := List.all_eq_true.mp hok.2
-        simp only [Data.digests, Data.rowDigests, List.append_nil, List.mem_append] at hq' ⊢
-        rintro z (hz | hz | hz)
+        intro z hz
+        simp only [Data.digests] at hz hq'
+        rw [rowDigests_append, rowDigests_append] at hz
+        simp only [Data.rowDigests, List.append_nil, List.mem_append] at hz hq'
+        rcases hz with (hz | hz) | hz
         · exact hq' z (.inl hz)
-        · exact hall z hz
+        · exact keyColumns_digests hcs z hz
         · exact hq' z (.inr hz)
     · cases hqy
+  · rw [if_neg hc] at h
+    simp only [Except.ok.injEq] at h
+    subst h; exact hx
 
 theorem relReads_digests {look : Pinned D} {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {dl : RelDecl} {x : RelRead}
     {rc : Lang.ReceiptCheck} {args : Data}
@@ -906,8 +924,8 @@ theorem relReads_digests {look : Pinned D} {rv : RowView D} {self : D} {i : Nat}
         | (simp only [Data.rowDigests, Data.digests, List.append_nil, List.mem_append] at hb
            rcases hb with hb | hb
            · exact checked_digests ‹_› b hb
-           · exact slotsD_digests (fun y hy => receiptRows_digests
-               (rangeRowData_digests ‹rangeRowData _ _ _ _ = .ok _›) ‹receiptRows _ _ _ _ _ _ _ = .ok _› y hy) "r" _ b hb)
+           · exact slotsD_digests (fun y hy => columnRows_digests
+               (rangeRowData_digests ‹rangeRowData _ _ _ _ = .ok _›) ‹columnRows _ _ _ _ _ _ _ _ = .ok _› y hy) "r" _ b hb)
 
 /-- **Every digest of the rows a run reads is one `digestOf` accepted** (LANG-49): what `readsData`
 builds from the caller's row view holds only keys, prefixes and values that passed `checked`. -/

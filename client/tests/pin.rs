@@ -5,8 +5,10 @@
 //! without `--pin` the point slot is empty and the method refuses `unread`; with `--pin` it commits
 //! while the fact's cell (a grant) is live; after `revoke` the same command is refused
 //! `grantDead` by the method's own name, in the Turn that reads it (P8.2's revoked-grant tooth,
-//! from nd). A KEY that does not read at the key type is `badKey`; an unknown relation is
-//! `unknownRelation`. Every verdict here is Lean's; nd only moves bytes and signs.
+//! from nd). The same column on a RANGE read (`scan`, `--range facts 4`): a listed row carries its
+//! key's cell liveness as a point does (one core, `Lang.keyColumns`), so the revoked grant refuses
+//! `grantDead` there too. A KEY that does not read at the key type is `badKey`; an unknown relation
+//! is `unknownRelation`. Every verdict here is Lean's; nd only moves bytes and signs.
 #![allow(clippy::unwrap_used, clippy::panic)] // a plant that cannot set up is a failed plant
 use std::path::Path;
 use std::process::{Command, Output};
@@ -26,9 +28,12 @@ fn supervise(sock: &Path, ws: &Path, store: &Path, args: &[&str]) -> Supervisor 
 
 /// The fixture's core text (`fixtures/pin/Live`, what `nd install` reads): `facts` is keyed by one
 /// digest, so a method may read it `(live)`. Method 0 `post {cell}` inserts the row of a cell;
-/// method 1 `use` reads ONE point of `facts` with its cell's liveness and refuses by name when the
+/// method 1 `scan` reads `facts` by a live range (`(range 0 4) (live)`) and refuses `empty` or
+/// `grantDead` on its first row; method 2 `use` reads ONE point of `facts` with its cell's liveness and refuses by name when the
 /// point is not pinned (`unread`), holds no row (`unposted`) or names a cell that is not live
 /// (`grantDead`). It was printed by LANG's printer from the surface text
+/// `(method scan (reads (facts (range 0 4) (live))) (case rows.facts.range.rows.r0
+/// (none _ (refuse "empty")) (some r (if r.live (done state) (refuse "grantDead")))))` and
 /// `(method use (reads (facts (points 1) (live))) (case rows.facts.p0 (none _ (refuse "unread"))
 /// (some p (case p.val (none _ (refuse "unposted")) (some _ (if p.live (done state)
 /// (refuse "grantDead")))))))`; the core text is the one copy.
@@ -118,7 +123,9 @@ fn pinned_live_point_read_refuses_a_revoked_grant() {
     let obj = line(&ok(&["create", "--pkg", &pkg, "(record)"]), "id ").to_owned();
     let desc = ok(&["read", &obj, "?"]);
     assert!(
-        desc.contains("method 0 post") && desc.contains("method 1 use"),
+        desc.contains("method 0 post")
+            && desc.contains("method 1 scan")
+            && desc.contains("method 2 use"),
         "{desc}"
     );
     // The fact's cell: a grant the member holds over the object, revocable by the member.
@@ -132,32 +139,37 @@ fn pinned_live_point_read_refuses_a_revoked_grant() {
     );
 
     // No `--pin`: the plan pins no point, so the method's one point slot is empty.
-    let (e, o) = refused(&["invoke", &obj, "1", "(record)"]);
+    let (e, o) = refused(&["invoke", &obj, "2", "(record)"]);
     assert_eq!(e, "refused program\n");
     assert!(o.contains("unread"), "{o}");
     // Pinned while the grant is live: the live read sees it live, and the call commits.
-    ok(&["invoke", &obj, "1", "(record)", "--pin", "facts", &cell]);
+    ok(&["invoke", &obj, "2", "(record)", "--pin", "facts", &cell]);
+    // The live RANGE read: its listed row carries the same column, from the same core.
+    ok(&["invoke", &obj, "1", "(record)", "--range", "facts", "4"]);
     // The grant revoked (its cell a tombstone): the SAME command, re-planned at follow's World,
     // pins the row and the method's live read sees the cell dead and refuses by its own name.
     ok(&["revoke", &gr]);
-    let (e, o) = refused(&["invoke", &obj, "1", "(record)", "--pin", "facts", &cell]);
+    let (e, o) = refused(&["invoke", &obj, "2", "(record)", "--pin", "facts", &cell]);
     assert_eq!(e, "refused program\n");
     assert!(o.contains("grantDead"), "{o}");
+    let (e, o) = refused(&["invoke", &obj, "1", "(record)", "--range", "facts", "4"]);
+    assert_eq!(e, "refused program\n");
+    assert!(o.contains("scan: refused grantDead"), "{o}");
     // A pinned key that is not of the relation's key type, and a relation the package lacks.
     let (e, _) = refused(&[
         "invoke",
         &obj,
-        "1",
+        "2",
         "(record)",
         "--pin",
         "facts",
         "(record (cell 7))",
     ]);
     assert_eq!(e, "refused badKey\n");
-    let (e, _) = refused(&["invoke", &obj, "1", "(record)", "--pin", "nope", &cell]);
+    let (e, _) = refused(&["invoke", &obj, "2", "(record)", "--pin", "nope", &cell]);
     assert_eq!(e, "refused unknownRelation\n");
     // A dangling `--pin` is the parser's usage refusal.
-    let (e, _) = refused(&["invoke", &obj, "1", "(record)", "--pin", "facts"]);
+    let (e, _) = refused(&["invoke", &obj, "2", "(record)", "--pin", "facts"]);
     assert!(e.starts_with("refused usage"), "{e}");
     drop((_h, _f));
     std::fs::remove_dir_all(&root).unwrap();

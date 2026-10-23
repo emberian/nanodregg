@@ -987,6 +987,37 @@ theorem live_read_not_cell_keyed_refused :
 theorem live_read_cell_keyed_admitted :
     (match (liveReader .digest).checkFields with | .ok _ => true | .error _ => false) = true := by decide
 
+/-- A one-method package reading relation `r` (keyed by `key`) by a RANGE only, live (CLIENT-35). -/
+private def liveRangeReader (key : Ty) : Package :=
+  { imports := [], state := .record [], body := .record [], methods := ["m"], laws := [],
+    rels := [("r", liveRel key)],
+    iface := .record [("m", methodTy (.record []) (.record []) []
+      (readsTy [("r", liveRel key)] [("r", ⟨0, some (1, 2), true, false⟩)]) (editTy [("r", liveRel key)]) 0)] }
+
+/-- **A live RANGE read keeps its `(live)` when its type is read back** (CLIENT-35): its rows carry the
+`live` column (`rangeRowTy`), so a range-only live read's type is not the plain one and `relReadOf`
+returns the live read. Before, the two types were equal and the read came back non-live: `(live)` on
+a range was dropped without a refusal. -/
+theorem live_range_read_kept :
+    relReadOf (liveRel .digest) (relReadTy (liveRel .digest) ⟨0, some (1, 2), true, false⟩) =
+      some ⟨0, some (1, 2), true, false⟩ := by decide
+
+/-- The control: the live range read's type is not the plain range read's. -/
+theorem live_range_read_typed :
+    relReadTy (liveRel .digest) ⟨0, some (1, 2), true, false⟩ ≠
+      relReadTy (liveRel .digest) ⟨0, some (1, 2), false, false⟩ := by decide
+
+/-- A live range read of a relation that is not cell-keyed is refused at install by name,
+`liveNotCellKeyed` (before CLIENT-35 it installed as a plain range read). -/
+theorem live_range_not_cell_keyed_refused :
+    (match (liveRangeReader .nat).checkFields with
+     | .error e => decide (e = .liveNotCellKeyed "m")
+     | .ok _ => false) = true := by decide
+
+/-- The control: the live range read of a relation keyed by one digest installs. -/
+theorem live_range_cell_keyed_admitted :
+    (match (liveRangeReader .digest).checkFields with | .ok _ => true | .error _ => false) = true := by decide
+
 /-! ## An admitted run's edits passed their guards (PROT-4, LANG-75.9)
 
 `runMeasured_past_extraction` and `program_run_past_extraction` (`Lang.Proofs.Provenance`) rewrite a run

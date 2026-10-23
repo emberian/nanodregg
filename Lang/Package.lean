@@ -156,9 +156,12 @@ def seenTy : Ty := .record [("height", .nat), ("turn", .digest), ("tx", .digest)
 /-- A row: its key and its value. -/
 def rowTy (d : RelDecl) : Ty := .record [("key", keyTy d), ("val", d.val)]
 
-/-- A listed row of a range read: its key, on a receipt read (E5) its column, and its value. -/
-def rangeRowTy (d : RelDecl) (receipt : Bool) : Ty :=
-  if receipt then .record [("key", keyTy d), ("receipt", seenTy), ("val", d.val)] else rowTy d
+/-- A listed row of a range read: its key, its columns, and its value. The columns are a point's
+(`pointRecTy`): on a live read (E1) its key's cell liveness, on a receipt read (E5) the receipt's
+column, in label order (CLIENT-35: a range row of a live read carries `live` as a point does). -/
+def rangeRowTy (d : RelDecl) (live receipt : Bool) : Ty :=
+  .record ([("key", keyTy d)] ++ (if live then [("live", .bool)] else []) ++
+    (if receipt then [("receipt", seenTy)] else []) ++ [("val", d.val)])
 
 /-- A point read: the key the caller pinned, and the row's value if the row is there. -/
 def pointTy (d : RelDecl) : Ty := optTy (.record [("key", keyTy d), ("val", optTy d.val)])
@@ -214,7 +217,7 @@ def relReadTy (d : RelDecl) (x : RelRead) : Ty :=
     match x.range with
     | none => []
     | some (m, k) => [("range", .record [("pre", preTy d m),
-        ("rows", .record ((slotLabels "r" k).map fun l => (l, optTy (rangeRowTy d x.receipt))))])])
+        ("rows", .record ((slotLabels "r" k).map fun l => (l, optTy (rangeRowTy d x.live x.receipt))))])])
 
 /-- A method's rows argument: the relations it reads (by label, ascending). -/
 def readsTy (rels : List (Label × RelDecl)) (rs : List (Label × RelRead)) : Ty :=

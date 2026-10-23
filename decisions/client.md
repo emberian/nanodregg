@@ -1063,4 +1063,40 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 
 **Flag day.** None persisted. The argv grammar only widens: every argv that parsed before parses to the same call. `Cmd.invoke`'s fourth field is `InvokeReads`, a Lean-side shape with no wire form.
 
-**Status.** landed (this commit). The LANG half of the card (the live column on RANGE rows, one core with E5's receipt column) is built on E5 once it lands.
+**Status.** landed eb77b78. The LANG half of the card (the live column on RANGE rows, one core with E5's receipt column) is CLIENT-36.
+
+## CLIENT-36 · the live column on RANGE rows: a listed row of a `(live)` read carries its key's cell liveness, from the one core a point uses (`Lang.keyColumns`) (2026-10-23, CX-CLIENT; cv 01a166e9-a543's LANG half, on E5's receipt column)
+
+**The defect (READ, then decided).** A method's `(live)` applied to points only. `rangeRowTy` had no `live` column. So the type of a range-only live read, `(rel (range m k) (live))`, was the plain range read's type, and `relReadShape` read it back as `live = false`. The `(live)` was dropped without a refusal:
+- a body that never read `.live` installed as a plain range read;
+- one that did was refused for an ill-typed body, never by the declaration's own name;
+- a live range read of a relation that is not cell-keyed installed instead of being refused `liveNotCellKeyed`.
+
+E5 had just given range rows its `receipt` column (`receiptRow`, `receiptSeen`). So the point and the row computed their columns in two places, and a range row of a read that was both live and receipt dropped `live`.
+
+**Decision.**
+- `Lang.keyColumns` is THE columns of one read key: `live` (E1's `cellLive` through `look`; an unpinned cell is the kernel's `unpinned`), `receipt` (E5's `receiptSeen`), both, or none.
+- `pointData` = key ++ `keyColumns` ++ val. `columnRow` (was `receiptRow`) = key ++ `keyColumns` ++ val. `columnRows` (was `receiptRows`) applies it on a live or receipt read.
+- `rangeRowTy d live receipt` mirrors `pointRecTy`'s columns. `relReadTy` passes `x.live`.
+- `pointData_ok`'s statement is unchanged (proved from `keyColumns_ok`). `columnRow_conforms`, `columnRows_conforms` and `columnRows_digests` restate E5's three range theorems over both columns. `keyColumns_digests` is new.
+
+**Teeth.**
+- `live_range_read_kept`: a live range read's type reads back live.
+- `live_range_read_typed` (control): its type is not the plain one.
+- `live_range_not_cell_keyed_refused`: refused by name.
+- `live_range_cell_keyed_admitted` (control).
+- Plant: `client/tests/pin.rs` gains `scan` (`(facts (range 0 4) (live))`), driven by nd `--range facts 4`. It commits while the grant is live, and after `revoke` it is refused `scan: refused grantDead`.
+- Mutation M2: `columnRows` adds columns only on a receipt read (the E5 shape). The host is rebuilt and the plant is RED (`hint program: scan: stuck`); `columnRows_conforms` no longer holds. Restored, then GREEN.
+- E5's `client/tests/foreign.rs` (receipt range rows) is green on the shared core.
+
+**Premise price.** None. No theorem gains a hypothesis. The three restated theorems take `live` beside `receipt`, and at `live = false` they are E5's.
+
+**Flag day.** No package version byte. A package's types state which columns its reads carry. The live-range type did not exist before (it was the plain one), so nothing installed reinterprets: every package installed before keeps its exact type and read. A text that declared `(live)` on a range-only read now gets the column it declared. Fixture `client/tests/fixtures/pin/Live` re-printed.
+
+**Critique.**
+- `pointRecTy` and `rangeRowTy` still spell the column list twice (value `optTy val` vs `val`). They are one in meaning, not in code, because the many landed proofs that `simp only [pointRecTy, …]` would all move. That is a refactor with no behaviour, deferred to whoever next touches those proofs.
+- M2 is the only range-specific behavioural plant. A mutation of `keyColumns`' live arm is E1's plant (a) and reds both columns at once.
+
+**Meta-critique.** "Make range reads live" was in the card as parity. The finding that matters is that `(live)` on a range was SILENTLY DROPPED by the type round trip: a declaration the reader accepted and the checker forgot. The teeth are aimed at that: the round-trip theorem, not only the runtime column.
+
+**Status.** landed (this commit).
