@@ -6,6 +6,11 @@ instance of `Lang.Contextual.Protocol.Prot` with a trivial index (`Unit`) and no
 `ofProg` embeds a program, `toEv` reads a performed interaction as nano's trace event, `oracleH` is
 nano's oracle as a deterministic environment. Definitions only; the theorems (`nano_runs_iff`,
 `nano_interp_agrees`, `nano_interp_runs`) are in `Lang.Proofs.Contextual.Protocol`.
+
+The resident's two peers and their reliability (PROT-5, Barwell et al.'s reliable roles): `Peer`,
+one Boolean per peer (`Peer.reliable`), the ring an effect asks a peer about (`Peer.req`) and
+whether its reply was lost (`lostReply`). The theorem reading the Boolean is
+`Lang.Proofs.Contextual.Failures` (`Failures.lost_reply_policy`).
 -/
 import Lang.Contextual.Protocol
 import Hosting.Resident.Trace
@@ -62,5 +67,34 @@ def oracleH (o : Oracle) : Handler sig (fun _ => Nat) where
     | .forget => ⟨o.forget n, n + 1⟩
     | .ask _ _ => ⟨o.ask n, n + 1⟩
     | .say _ => ⟨(), n + 1⟩
+
+/-- The resident's two peers: the member's kernel (every `cmd` goes to it through the member socket)
+and keybroker (every `ask`). The volume and stderr are the resident's own, not peers. -/
+inductive Peer
+  | kernel
+  | broker
+deriving DecidableEq, Repr
+
+/-- One Boolean per peer: may a request whose reply was lost be sent again? The kernel is RELIABLE:
+an exact retry of a signed call is `replayed` from the journal at the height it committed
+(`Failures.submit_at_most_once`), and the resident's re-delivery is a fresh call the bell's
+`answered` guard refuses after the first landed. Keybroker is UNRELIABLE: it charges the meter per
+ask and deduplicates nothing, so a spent ask is never sent again. -/
+def Peer.reliable : Peer → Bool
+  | .kernel => true
+  | .broker => false
+
+/-- The ring an effect asks peer `p` about: an invoke of an answer (the kernel), an ask (keybroker). -/
+def Peer.req : Peer → Ev → Option Ring
+  | .kernel, .cmd (.invoke _ r _) _ => some r
+  | .broker, .ask r _ _ => some r
+  | _, _ => none
+
+/-- The effect's reply was lost: a command whose reply never came back, an ask that ended `lost`
+(it left in full, so it is spent). -/
+def lostReply : Ev → Bool
+  | .cmd _ (.error _) => true
+  | .ask _ _ (.lost _) => true
+  | _ => false
 
 end Nanodregg.Lang.Contextual.Protocol.Nano

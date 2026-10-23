@@ -17,7 +17,9 @@ keeps; the calculus does not enforce it. Its resources are tokens a `call` of a 
 spends. The discipline is AFFINE: a token is spent at most once, and a token left unspent at `ret`
 is allowed. Its executed prefix is a history (`Hist`), possibly ending in a call
 whose reply was lost (`inflight`), and a re-substitution must leave every hole the history has
-already entered alone (`Dispatched`).
+already entered alone (`Dispatched`). The deployed lost reply is the resident's `AskEnd.lost` and
+the kernel's journal-first retry; what each does with it is `Lang.Proofs.Contextual.Failures`
+(PROT-5: one Boolean per peer, `Nano.Peer.reliable`).
 
 The shape generalises minidregg's `Theory/IndexedProgram.lean` (restated in Lean core, law 11): its
 `IxSignature`/`Program` gain a third constructor `hole`, its `Algebra` a hole case, its interpreter
@@ -31,7 +33,8 @@ The judgment `Ω;Γ;Δ ⊢ P : Protocol(i, A) ⊣ Φ` is `HasProt sp Ω Γ Q Φ 
 bound). Substitution is SINGLE-PASS: `subst σ` replaces each hole by its filling and does not
 substitute into the filling, so a filling's own holes stay open under the same `σ`. Definitions only. The statements (`HasProt`, `Runs`, `Reach`, `Started`, `Dispatched`, `SubBag`,
 `Fills`, `SubstOK`, ...) are in `Lang.Proofs.Contextual.ProtocolTyping`; the theorems are in
-`Lang.Proofs.Contextual.Protocol` and `Lang.Proofs.Contextual.Negotiation`.
+`Lang.Proofs.Contextual.Protocol`, `Lang.Proofs.Contextual.Negotiation` and
+`Lang.Proofs.Contextual.Failures`.
 -/
 
 namespace Nanodregg.Lang.Contextual.Protocol
@@ -218,7 +221,10 @@ abbrev Entry (S : Sig Ix) := Σ i, Σ op : S.Op i, S.Resp op
 abbrev Trace (S : Sig Ix) := List (Entry S)
 
 /-- An accepted history: the answered interactions and, possibly, ONE dispatched call whose reply
-has not arrived (lost or late: `uncertain`, a state, never a license to re-plan). -/
+has not arrived (lost or late: `uncertain`, a state, never a license to re-plan). Deployed, the
+in-flight call is an ask that ended `AskEnd.lost` (kept as `(unanswered WHY)`, never re-asked:
+`Failures.lost_ask_keeps_obligation`) or a signed call whose reply was lost (retried, recognised
+`replayed`: `Failures.submit_at_most_once`). -/
 structure Hist (S : Sig Ix) where
   answered : Trace S
   inflight : Option (Σ i, S.Op i)
@@ -605,42 +611,6 @@ def env (deliver : Bool) : Handler sig (fun _ => Nat) where
     | .reserve => ⟨(), n + 1⟩
     | .commit _ => ⟨deliver, n + 1⟩
     | .cancel => ⟨(), n + 1⟩
-
-/-! ### Internal once versus external once -/
-
-/-- The external side of one commitment: how many times the network delivered the dispatched
-request, whether the provider deduplicates by the request identity, and so how many times the
-service was performed. -/
-structure External where
-  deliveries : Nat
-  dedupe : Bool
-
-def External.executions (e : External) : Nat :=
-  if e.dedupe then min e.deliveries 1 else e.deliveries
-
-/-- What the internal model records about one commitment: the nullifier spent and the reply
-(`none`: lost). -/
-structure Internal where
-  capSpent : Bool
-  reply : Option Bool
-
-/-- The reply an answered entry carries, if it is a commitment. -/
-def entryReply : Entry sig → Option Bool
-  | ⟨_, op, r⟩ => match op, r with
-    | .commit _, b => some b
-    | .reserve, _ => none
-    | .cancel, _ => none
-
-/-- Is an in-flight call a commitment? -/
-def inflightSpends : Option (Σ i, sig.Op i) → Bool
-  | some ⟨_, .commit _⟩ => true
-  | _ => false
-
-/-- The internal record, READ OFF a history: the nullifier is spent when an answered or in-flight
-call spent the capability; the reply is the answered commitment's. -/
-def Internal.ofHist (H : Hist sig) : Internal where
-  capSpent := (consumed spec H.answered).contains .cap || inflightSpends H.inflight
-  reply := H.answered.findSome? entryReply
 
 /-- Reserved, then the commitment to `p` answered with `b`. -/
 def answeredH (p : Provider) (b : Bool) : Hist sig :=

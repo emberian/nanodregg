@@ -6,29 +6,22 @@ with ALTERNATIVE providers, a DEADLINE and a CANCELLATION path. The open protoco
 (`Negotiation.template`: reserve the deposit, then a provider hole the buyer (`.me`) chooses) is judged once, under
 hypotheses (`Γ₀`: both providers' authority, the deadline); each candidate (`plan p1`, `plan p2`,
 `cancelPlan`) is a filling checked against the hole's interface.
-What stays here: the open protocol judged and filled, the gap between internal at-most-once and
-external exactly-once (`internal_once_not_external_once`, `exactly_once_needs_reply_and_dedupe`,
-over the internal record READ OFF the histories `lost p`, `H₀`, `answeredH p b` by
-`Internal.ofHist`), the cancellation path (`cancel_path_refunds_obligation`), the lost reply and
-the answered call (`lost_reply_keeps_obligation`, `lost_reply_blocks_replan`,
+What stays here: the open protocol judged and filled, the cancellation path
+(`cancel_path_refunds_obligation`), the re-plan guard's teeth on a lost reply and an answered call
+(`lost_reply_blocks_replan`,
 `answered_blocks_replan`, `guard_stricter_than_wf`, `guarded_replan_after_dispatch_is_noop`)
 against the free re-plan before dispatch (`replan_before_dispatch`). The scalar matchers and the
 private Negotiation `World` (with its update, revocation, representation, replay, deadline and
 shared-parameter theorems) went with PROT-6, replaced by Std.offer's deployed fuse
-(`Lang/StdOffer.lean`).
+(`Lang/StdOffer.lean`). The private delivery model (`External`, `Internal`, `Consistent`,
+`internal_once_not_external_once`, `exactly_once_needs_reply_and_dedupe`) and
+`lost_reply_keeps_obligation` went with PROT-5: the deployed objects state the failures
+(`Lang.Proofs.Contextual.Failures`: `submit_at_most_once`, `lost_ask_keeps_obligation`,
+`lost_reply_policy`).
 -/
 import Lang.Proofs.Contextual.Protocol
 
 namespace Nanodregg.Lang.Contextual.Protocol.Negotiation
-
-/-- THE DELIVERY MODEL (an assumption of this experiment; the proposal supplies none): an external
-run CONSISTENT with an internal record. A spent nullifier means one dispatch, which the network may
-deliver any number of times (including zero, if the reply is lost); an answered reply means at
-least one delivery; an unspent nullifier means none. Under a lost reply this constrains NOTHING:
-every external run is consistent with it, which is the point. -/
-def Consistent (i : Internal) (e : External) : Prop :=
-  (i.capSpent = false → e.deliveries = 0) ∧ (i.reply.isSome = true → 1 ≤ e.deliveries) ∧
-    (i.reply.isSome = true → i.capSpent = true)
 
 /-! ## The open protocol is judged; every candidate fills the hole -/
 
@@ -88,54 +81,6 @@ theorem holes_instance :
     fun p => ?_, rfl⟩
   cases p <;> rfl
 
-/-! ## Internal once versus external once -/
-
-/-- The internal records the histories leave. -/
-theorem internal_of_histories (p : Provider) (b : Bool) :
-    Internal.ofHist (lost p) = ⟨true, none⟩ ∧ Internal.ofHist H₀ = ⟨false, none⟩ ∧
-      Internal.ofHist (answeredH p b) = ⟨true, some b⟩ := by
-  cases p <;> cases b <;> exact ⟨rfl, rfl, rfl⟩
-
-/-- **Internal once is not external once**: the history with the commitment to `p` in flight
-(nullifier spent, reply lost) is consistent, under the delivery model, with the service performed
-ZERO times and ONE time even by a deduplicating provider; the history with the reply answered is
-consistent, without deduplication, with TWO executions. The internal at-most-once consumption alone
-concludes neither exactly-once nor at-most-once outside. -/
-theorem internal_once_not_external_once (p : Provider) :
-    Consistent (Internal.ofHist (lost p)) ⟨0, true⟩ ∧ External.executions ⟨0, true⟩ = 0 ∧
-      Consistent (Internal.ofHist (lost p)) ⟨1, true⟩ ∧ External.executions ⟨1, true⟩ = 1 ∧
-      Consistent (Internal.ofHist (answeredH p true)) ⟨2, false⟩ ∧
-        External.executions ⟨2, false⟩ = 2 ∧
-      ¬ ∀ e, Consistent (Internal.ofHist (lost p)) e → e.dedupe = true → e.executions = 1 := by
-  obtain ⟨hl, _, ha⟩ := internal_of_histories p true
-  rw [hl, ha]
-  refine ⟨by simp [Consistent], rfl, by simp [Consistent], rfl, by simp [Consistent], rfl, ?_⟩
-  intro h
-  have := h ⟨0, true⟩ (by simp [Consistent]) rfl
-  simp [External.executions] at this
-
-/-- **What the model CAN conclude, per history**: before dispatch (`H₀`) the service was not
-performed; after an ANSWERED commitment, a deduplicating provider performed it exactly once. The
-remaining fact (a deduplicating provider performs at most once, whatever the history) is the
-provider's, not the history's: it needs no `Consistent` premise. -/
-theorem exactly_once_needs_reply_and_dedupe (p : Provider) :
-    (∀ e, Consistent (Internal.ofHist H₀) e → e.executions = 0) ∧
-      (∀ b e, Consistent (Internal.ofHist (answeredH p b)) e → e.dedupe = true →
-        e.executions = 1) ∧
-      (∀ e : External, e.dedupe = true → e.executions ≤ 1) := by
-  refine ⟨?_, ?_, ?_⟩
-  · intro e h
-    have := h.1 rfl
-    simp [External.executions, this]
-  · intro b e h hd
-    rw [(internal_of_histories p b).2.2] at h
-    have := h.2.1 rfl
-    simp [External.executions, hd]
-    omega
-  · intro e hd
-    simp only [External.executions, hd, if_true]
-    exact Nat.min_le_right _ _
-
 /-! ## The cancellation path -/
 
 /-- **The cancellation path refunds**: every complete run of the plan with the cancellation
@@ -179,16 +124,6 @@ theorem started_lost (p : Provider) : Started (fill Ω (choose (plan p)) templat
 
 theorem dispatched_lost (p : Provider) : Dispatched template (lost p) .reserved () :=
   ⟨[reserved], [], rfl, reach_hole, .inr rfl⟩
-
-/-- **A lost reply keeps the dispatched call's obligation**: the history with the commitment to
-`p` in flight is a history of the plan; it has established `p`'s payment (from dispatch); and the
-provider hole counts as entered. -/
-theorem lost_reply_keeps_obligation (p : Provider) :
-    Started (fill Ω (choose (plan p)) template) (lost p) ∧
-      (lost p).established spec = [.holdDeposit, .pay p] ∧
-      Dispatched template (lost p) .reserved () ∧ (obj (plan p) (lost p)).WF spec :=
-  ⟨started_lost p, rfl, dispatched_lost p,
-    ⟨template_hasProt, choose_ok (plan_fills p), started_lost p⟩⟩
 
 /-- With the commitment to `p1` in flight, neither the other provider's plan nor the cancellation
 has that history. -/
