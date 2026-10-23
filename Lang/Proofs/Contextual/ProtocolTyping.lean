@@ -31,7 +31,15 @@ def SubBag {Tok : Type} [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : Prop :=
 and, if it spends a token, takes it from `Δ`: every continuation is judged with that token gone
 (LINEAR: a token is spent by at most one call on any path, `Proofs.hasProt_reach`). A hole is
 judged by its declared interface: its chooser must be `.me`, its context and tokens available here, its
-results within `Q`, its obligations within `Φ`. -/
+results within `Q`, its obligations within `Φ`.
+
+The hole rule's four premises are the check that the declared interface is AT LEAST AS STRONG as the
+weakest one this occurrence admits, `(Γ, Δ, Q, Φ)` (Benveniste's quotient, PROT-7): `I.ctx ⊆ Γ`,
+`SubBag I.need Δ`, `I.post → Q`, `I.owes ⊆ Φ`. The converse, completeness (a filling under which the
+filled template is judged is judged at every occurrence's `(Γ, Δ, Q, Φ)`, so an over-strong `I` is
+refuted by such a filling), is NOT proved: nothing reads it. Its reader would be a candidate check
+that judges fillings by `HasProt`; the deployed candidate check is the fuse's `offerJoint`
+(LANG-75.11), which judges two offer boxes and one θ by one term and reads no `Iface` (LANG-75.17). -/
 inductive HasProt {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
     (Ω : Ctx S Hole A Tok Fact Ob) (Γ : List Fact) (Q : (j : Ix) → A j → Prop) (Φ : List Ob) :
     List Tok → {i : Ix} → Prot S Hole A i → Prop
