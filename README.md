@@ -1,5 +1,15 @@
 # nanodregg
 
+> **The Dragon's Egg repositories.**
+>
+> - [`dregg`](https://github.com/emberian/dregg) — the whole system built first (working name *breadstuffs*), waiting to be resumed or composted.
+> - [`minidregg`](https://github.com/emberian/minidregg) — the production demoland and the spec/battleground the rebuild measures itself against.
+> - [`nanodregg`](https://github.com/emberian/nanodregg) — the single-writer rebuild: twelve laws, a judge that refuses, meaningful theorems.
+> - [`zkml-research`](https://github.com/emberian/zkml-research) — the zero-knowledge / machine-learning research line.
+> - [`degg-research`](https://github.com/emberian/degg-research) — dark coordination: MPC/FHE swarm coordination research.
+> - [`delvetalk`](https://github.com/emberian/delvetalk) — the conversations and design talks behind all of it.
+
+
 nanodregg is a small shared-state system with a verified kernel. A group of members holds one
 *World*: a finite map of typed cells. The World advances only by *Turns*, and a Turn is admitted
 only by one function, `World.admit`, whose properties are theorems. A resident host process keeps
