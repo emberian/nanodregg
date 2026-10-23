@@ -10,6 +10,10 @@
   bytes; `editOf_retract_allowed`: a retract comes only from a relation declared `retract`.
 * `relReads_points`: the point slots of a relation's reads hold exactly the caller's pins under
   `(self, i)`, in pin order, and `none` after them.
+* `receipt_column_authenticated`, `receipt_row_authenticated` (E5): on a `(receipt)` read, a pinned
+  point's and a signed range row's `receipt` field is what the run's `ReceiptCheck` showed for the
+  head object that slot's key names, through the caller's pinned view, and the method's own
+  `receipt` argument.
 * `keyOf_keyBytes`: a key's bytes read back to the key (`keyOf_keyBytes_fields` without premises:
   to the key's declared fields, sorted).
 * `guard_never_stuck`, `guardEdits_never_stuck`: the guard `guardEdits` runs on each edit never
@@ -428,6 +432,91 @@ theorem receipt_column_authenticated {digestOf : ByteArray → Option D} {rc : R
       · rw [hx] at hr; cases hr
       · rw [hx] at hr; cases hr
       · exact ⟨_, b, g, c, rb, sn, _, hk, hb, hg, hc, ha, hs, he⟩
+
+/-- What a range read's listed row becomes (`rangeRowData`, row by row): the `j`-th datum is the
+`j`-th listed row, its key read back at the key and its value at the value type. -/
+theorem rangeRowData_getElem {digestOf : ByteArray → Option D} {ℓ : Label} {d : RelDecl}
+    {rows : List (RowSlot D × RowLeaf)} {ds : List Data} (h : rangeRowData digestOf ℓ d rows = .ok ds) :
+    ∃ hl : ds.length = rows.length, ∀ j (hj : j < ds.length), ∃ key amt vb ver k val,
+      rows[j]'(hl ▸ hj) = (.row key, .row amt vb ver) ∧ keyOf d d.key.length key.k = .ok k ∧
+      valOf digestOf d s!"rows: {ℓ}" vb = .ok val ∧ ds[j] = .record [("key", k), ("val", val)] := by
+  unfold rangeRowData at h
+  obtain ⟨hl, hget⟩ := mapM_ok_getElem h
+  refine ⟨hl, fun j hj => ?_⟩
+  have hq := hget j hj
+  generalize rows[j] = r at hq ⊢
+  obtain ⟨sl, lf⟩ := r
+  cases sl with
+  | head => cases lf <;> cases hq
+  | row key =>
+    cases lf with
+    | head => cases hq
+    | row amt vb ver =>
+      simp only [bind, Except.bind, pure, Except.pure] at hq
+      split at hq
+      · cases hq
+      rename_i k0 hk0
+      split at hq
+      · cases hq
+      rename_i k hk
+      split at hq
+      · cases hq
+      rename_i val hv
+      simp only [Except.ok.injEq] at hq
+      exact ⟨key, amt, vb, ver, k, val, rfl, by rw [checked_eq hk]; exact liftS_eq hk0, hv, hq.symm⟩
+
+
+/-- **A range row's receipt column is authenticated** (E5, CX-PROMO-8; the range twin of
+`receipt_column_authenticated`, the arm the deployed acceptor reads, `(heads (range 1 1) (receipt))`):
+on a receipt read with a range, the rows argument's `range` is built from the caller's ONE signed
+listing of that relation, and its row `j` is the listing's `j`-th row (its key read back at the key,
+its value at the value type) whose `receipt` field is what the run's `ReceiptCheck` showed for the
+head object THAT row's key names, read through the caller's pinned view (live:
+`look g = .ok (some c)`), and the method's own `receipt` argument. -/
+theorem receipt_row_authenticated {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {args : Data} {v : Data}
+    {m n : Nat} (h : relReads digestOf rc look rv self i ℓ d x args = .ok v) (hx : x.receipt = true)
+    (hr : x.range = some (m, n)) :
+    ∃ ps pre most rows p rs, rv.ranges self i = .ok [(pre, most, rows)] ∧
+      v = .record (slotsD "p" x.points ps ++ [("range", .record [("pre", p), ("rows", .record (slotsD "r" n rs))])]) ∧
+      ∃ hlen : rs.length = rows.length,
+      ∀ j (hj : j < rs.length), ∃ key amt vb ver k val b g c rb s,
+        rows[j]'(hlen ▸ hj) = (.row key, .row amt vb ver) ∧
+        keyOf d d.key.length key.k = .ok k ∧ valOf digestOf d s!"rows: {ℓ}" vb = .ok val ∧
+        keyCell k = some b ∧ digestOf b = some g ∧ look g = .ok (some c) ∧
+        args.field "receipt" = some (.bytes rb) ∧ rc c rb = .ok s ∧
+        rs[j] = .record ([("key", k)] ++ (if x.live then [("live", .bool (cellLive look g))] else []) ++
+          [("receipt", seenData s), ("val", val)]) := by
+  unfold relReads at h
+  rw [hr] at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  all_goals
+    simp only [Except.ok.injEq] at h
+    subst h
+    have hrange := ‹rv.ranges self i = Except.ok _›
+    have hrd := ‹rangeRowData digestOf ℓ d _ = Except.ok _›
+    have hcr := ‹columnRows digestOf rc look ℓ x.live x.receipt args _ = Except.ok _›
+    rw [hx] at hcr
+    unfold columnRows at hcr
+    rw [if_pos (by simp)] at hcr
+    obtain ⟨hl1, hg1⟩ := rangeRowData_getElem hrd
+    obtain ⟨hl2, hg2⟩ := mapM_ok_getElem hcr
+    refine ⟨_, _, _, _, _, _, hrange, rfl, hl2.trans hl1, fun j hj => ?_⟩
+    obtain ⟨key, amt, vb, ver, k, val, hrow, hk, hv, hd⟩ := hg1 j (hl2 ▸ hj)
+    have hq := hg2 j hj
+    rw [hd] at hq
+    unfold columnRow at hq
+    cases hcs : keyColumns digestOf rc look ℓ x.live true args k with
+    | error e => simp [hcs] at hq
+    | ok cs =>
+      simp only [hcs, Except.ok.injEq] at hq
+      rcases keyColumns_ok hcs with ⟨hr, -⟩ | ⟨hr, -⟩ | ⟨-, b, g, c, rb, s, hb, hg, hc, ha, hs, -, rfl⟩
+      · cases hr
+      · cases hr
+      · exact ⟨key, amt, vb, ver, k, val, b, g, c, rb, s, hrow, hk, hv, hb, hg, hc, ha, hs,
+          by rw [← hq]; simp [List.append_assoc]⟩
 
 /-! ## A key's bytes read back -/
 
