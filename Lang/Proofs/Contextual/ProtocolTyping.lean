@@ -26,41 +26,41 @@ inductive Occurs : {i : Ix} → Prot S Hole A i → (j : Ix) → Hole j → Prop
 def SubBag {Tok : Type} [DecidableEq Tok] (Δ₁ Δ₂ : List Tok) : Prop :=
   ∀ t, Δ₁.count t ≤ Δ₂.count t
 
-/-- `HasProt sp Ω Γ Q Φ Δ P`. A `call` requires its facts from `Γ`, records its obligations in `Φ`,
+/-- `HasProt sp me Ω Γ Q Φ Δ P`: the protocol judged as role `me`. A `call` requires its facts from `Γ`, records its obligations in `Φ`,
 and, if it spends a token, takes it from `Δ`: every continuation is judged with that token gone
 (LINEAR: a token is spent by at most one call on any path, `Proofs.hasProt_reach`). A hole is
-judged by its declared interface: it must be ours, its context and tokens available here, its
+judged by its declared interface: `me` must be its chooser, its context and tokens available here, its
 results within `Q`, its obligations within `Φ`. -/
-inductive HasProt {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
-    (Ω : Ctx S Hole A Tok Fact Ob) (Γ : List Fact) (Q : (j : Ix) → A j → Prop) (Φ : List Ob) :
+inductive HasProt {Role Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob) (me : Role)
+    (Ω : Ctx S Hole A Role Tok Fact Ob) (Γ : List Fact) (Q : (j : Ix) → A j → Prop) (Φ : List Ob) :
     List Tok → {i : Ix} → Prot S Hole A i → Prop
-  | ret {Δ : List Tok} {i : Ix} (a : A i) : Q i a → HasProt sp Ω Γ Q Φ Δ (.ret a)
+  | ret {Δ : List Tok} {i : Ix} (a : A i) : Q i a → HasProt sp me Ω Γ Q Φ Δ (.ret a)
   | call {Δ : List Tok} {i : Ix} (op : S.Op i)
       (k : (r : S.Resp op) → Prot S Hole A (S.next op r)) :
       sp.consumes op = none → (∀ f ∈ sp.requires op, f ∈ Γ) →
       (∀ o ∈ sp.establishes op, o ∈ Φ) →
-      (∀ r, HasProt sp Ω Γ Q Φ Δ (k r)) → HasProt sp Ω Γ Q Φ Δ (.call op k)
+      (∀ r, HasProt sp me Ω Γ Q Φ Δ (k r)) → HasProt sp me Ω Γ Q Φ Δ (.call op k)
   | spend {Δ : List Tok} {i : Ix} (op : S.Op i)
       (k : (r : S.Resp op) → Prot S Hole A (S.next op r)) (t : Tok) :
       sp.consumes op = some t → t ∈ Δ → (∀ f ∈ sp.requires op, f ∈ Γ) →
       (∀ o ∈ sp.establishes op, o ∈ Φ) →
-      (∀ r, HasProt sp Ω Γ Q Φ (Δ.erase t) (k r)) → HasProt sp Ω Γ Q Φ Δ (.call op k)
-  | hole {Δ : List Tok} {i : Ix} (h : Hole i) (I : Iface S Hole A Tok Fact Ob i) :
-      Ω i h = some I → I.pol = .ours → (∀ f ∈ I.ctx, f ∈ Γ) → SubBag I.need Δ →
-      (∀ j a, I.post j a → Q j a) → (∀ o ∈ I.owes, o ∈ Φ) → HasProt sp Ω Γ Q Φ Δ (.hole h)
+      (∀ r, HasProt sp me Ω Γ Q Φ (Δ.erase t) (k r)) → HasProt sp me Ω Γ Q Φ Δ (.call op k)
+  | hole {Δ : List Tok} {i : Ix} (h : Hole i) (I : Iface S Hole A Role Tok Fact Ob i) :
+      Ω i h = some I → I.chooser = me → (∀ f ∈ I.ctx, f ∈ Γ) → SubBag I.need Δ →
+      (∀ j a, I.post j a → Q j a) → (∀ o ∈ I.owes, o ∈ Φ) → HasProt sp me Ω Γ Q Φ Δ (.hole h)
 
-/-- A filling satisfies a hole's interface: judged in the hole's own context, tokens, result and
-obligations, and passing the hole's acceptance contract. -/
-def Fills {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
-    (Ω : Ctx S Hole A Tok Fact Ob) {i : Ix} (I : Iface S Hole A Tok Fact Ob i)
+/-- A filling satisfies a hole's interface: judged as `me` in the hole's own context, tokens, result
+and obligations, and passing the hole's acceptance contract. -/
+def Fills {Role Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob) (me : Role)
+    (Ω : Ctx S Hole A Role Tok Fact Ob) {i : Ix} (I : Iface S Hole A Role Tok Fact Ob i)
     (f : Prot S Hole A i) : Prop :=
-  HasProt sp Ω I.ctx I.post I.owes I.need f ∧ I.accepts f
+  HasProt sp me Ω I.ctx I.post I.owes I.need f ∧ I.accepts f
 
-/-- A substitution respects `Ω`: it fills only declared `ours` holes, each with a filling that
-satisfies the hole's interface. -/
-def SubstOK {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob)
-    (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A) : Prop :=
-  ∀ i h f, σ i h = some f → ∃ I, Ω i h = some I ∧ I.pol = .ours ∧ Fills sp Ω I f
+/-- A substitution respects `Ω` for role `me`: it fills only declared holes `me` chooses, each with
+a filling that satisfies the hole's interface. -/
+def SubstOK {Role Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob) (me : Role)
+    (Ω : Ctx S Hole A Role Tok Fact Ob) (σ : Subst S Hole A) : Prop :=
+  ∀ i h f, σ i h = some f → ∃ I, Ω i h = some I ∧ I.chooser = me ∧ Fills sp me Ω I f
 
 /-- `φ` is an algebra morphism `src → dst` (carriers may differ). -/
 structure AlgebraHom {C D : Ix → Type} (src : Algebra S Hole A C) (dst : Algebra S Hole A D)
@@ -100,16 +100,17 @@ def Dispatched {i : Ix} (P : Prot S Hole A i) (H : Hist S) (j : Ix) (h : Hole j)
 
 /-- A well-formed open object: the template is judged, the substitution respects `Ω`, the
 history is a history of the current protocol. -/
-structure Open.WF {Tok Fact Ob : Type} [DecidableEq Tok] (sp : Spec S Tok Fact Ob) {i : Ix}
-    (O : Open S Hole A Tok Fact Ob i) : Prop where
-  typed : HasProt sp O.Ω O.Γ O.Q O.Φ O.Δ O.template
-  substOK : SubstOK sp O.Ω O.σ
+structure Open.WF {Role Tok Fact Ob : Type} [DecidableEq Role] [DecidableEq Tok]
+    (sp : Spec S Tok Fact Ob) {i : Ix} (O : Open S Hole A Role Tok Fact Ob i) : Prop where
+  typed : HasProt sp O.me O.Ω O.Γ O.Q O.Φ O.Δ O.template
+  substOK : SubstOK sp O.me O.Ω O.σ
   started : Started O.current O.hist
 
 /-- The guard on a re-plan: the new substitution agrees with the old one on every hole the history
 has entered (there is no unguarded re-plan in any theorem: each takes this as a hypothesis). -/
-def Open.Replan {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) (σ' : Subst S Hole A) : Prop :=
-  ∀ j h, Dispatched O.template O.hist j h → σ'.ours O.Ω j h = O.σ.ours O.Ω j h
+def Open.Replan {Role Tok Fact Ob : Type} [DecidableEq Role] {i : Ix} (O : Open S Hole A Role Tok Fact Ob i)
+    (σ' : Subst S Hole A) : Prop :=
+  ∀ j h, Dispatched O.template O.hist j h → σ'.mine O.me O.Ω j h = O.σ.mine O.me O.Ω j h
 
 end
 

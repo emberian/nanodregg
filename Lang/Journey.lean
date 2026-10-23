@@ -1424,6 +1424,17 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
   let (r11, v11, _) := go prog r (call r a 4 (bellArg "one more") r.st.host.height)
   r := note { r11 with log := r.log, bad := r.bad } s!"LB11 pending holds {headCount r.st.host obj 0}; A rings once more: {v11}"
     (headCount r.st.host obj 0 == some 64 && v11.startsWith "rejected relationFull")
+  -- LB12n-LB12q who may open, close and retire: the object's owner, or a member whose grant names
+  -- the method (KERNEL-25 `invoke_authorized`). B, the resident, holds a grant for answer and ring
+  -- only, so its close, open and retire are refused by the kernel before the Bell runs.
+  let (r12n, v12n, _) := go prog r (call r b 1 (argBytes (.record []) (.record [])) r.st.host.height)
+  r := note r s!"LB12n B (the resident, granted answer and ring) closes A's bell: {v12n}"
+    (v12n.startsWith "refused grantRight" && asBool (bellField p r12n.st.host obj "open") == some true)
+  let (_, v12o, _) := go prog r (call r b 2 (argBytes (.record []) (.record [])) r.st.host.height)
+  r := note r s!"LB12o B opens A's bell: {v12o}" (v12o.startsWith "refused grantRight")
+  let (r12q, v12q, _) := go prog r (call r b 3 (retireArg h1 a) r.st.host.height (pinRow r.st.host 1 dR k1))
+  r := note r s!"LB12q B retires A's answered ring at {h1}: {v12q}"
+    (v12q.startsWith "refused grantRight" && present r12q.st.host 1 dR k1)
   -- LB12 closed
   let (r12, v12, _) := go prog r (call r a 1 (argBytes (.record []) (.record [])) r.st.host.height)
   r := note r12 s!"LB12 A closes the bell: {v12}" (v12 == "admitted" && asBool (bellField p r12.st.host obj "open") == some false)

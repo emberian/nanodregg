@@ -6246,3 +6246,50 @@ universe the claim quantifies over. A plant's "nothing else reds" is a whole-tre
 
 Status: landed by CX-PROMO-4 (lang:). PROT-1 closed into this card (R-0046). Next: PROT-2 (roles replace `Polarity`;
 the Bell's open/close/retire refuse by role).
+
+### LANG-75.10 PROT-2 · `Polarity` becomes a role index: a rename on a wider type, not yet roles; the Bell's open/close/retire are the kernel's per-method grant (2026-10-23; CX-PROMO-4; IMPACT `redregg/work/promo/IMPACT-PROT-2.md`; plants and journey `redregg/work/promo/PROT2/`; cross-family read `redregg/work/promo/READ-PROT-2-grok.md`; RELEASE R-0048 as docstring-plus-rename under the read's four conditions)
+
+**Decision.** `Polarity` (`ours | theirs`) is deleted. The protocol calculus takes a type `Role`:
+`Iface.chooser : Role`, `Open.me : Role`, `Subst.mine me`, `fill me`, `HasProt sp me`, `Fills sp me`, `SubstOK sp me`.
+The four polarity rules keep their content under new names: `fill_skips_others`, `others_hole_untypable`,
+`SubstOK.mine`, `Coin.peer_hole_never_planned`. The examples name their parties (Coin: player/peer; Negotiation:
+buyer/provider).
+
+**What this is not.** The plan said "roles replace Polarity", and that claim is not earned yet. Every rule tests
+`chooser = me` or `chooser ≠ me`, and no theorem tells two roles other than `me` apart. Under `ours ↦ chooser = me`,
+`theirs ↦ chooser ≠ me`, each old theorem is the new one. This is not a projection (HYC's `G ↾ p`, Scalas–Yoshida).
+The calculus has no `responder` and no `acceptor` field, because nothing reads either. Where the claim would be earned:
+PROT-6, whose two offer rows name two chooser roles on this `Iface` and judge `HasProt sp r1` / `HasProt sp r2` without
+a further index on `HasProt`, and PROT-3's `proj`, the first reader of a call's responder.
+
+**The 34 RESTATES-MEANING lines.** GATES-20t accepts that verb only: an extra binder is a different elaborated term.
+They do not change meaning in the price's sense. `me` is an index (a binder), no hypothesis was gained, and the
+restatement reaches every statement that mentions `HasProt`, `fill`, `SubstOK` or `Open.WF`. The plan's "~12" counted
+the statements that mention `.ours`.
+
+**The Bell (cv 01a165f1-a212, closed as MIS-MEASURED).** The Bell's `close`, `open` and `retire` bodies check no
+signer. That is true, and the owner passes them (LB10, LB12). But a member never reaches them. The kernel gives invoke
+authority per method (`invoke_authorized`, KERNEL-25): the owner, or a grant chain naming `invoke method`. The deployed
+Bell grants the resident `invoke:0` and a ringer `invoke:4`, and nobody `invoke:1|2|3`. New journey rows LB12n, LB12o
+and LB12q: B (granted answer and ring) closes, opens and retires. Each is refused `grantRight`. LB12n and LB12q read the
+run the call returned (the bell still open, the ring still present). They are controls of KERNEL-25, not a new tooth.
+A resident check on `close` would refuse the operator (LB12). A ringer-scoped `retire` is a delegation choice the
+operator makes with grants, not a defect.
+
+**Plants.** R2 (`Subst.mine` fills every hole) reds `fill_skips_others` and `Coin.peer_hole_never_planned`. R3 (the
+negotiation's hole chosen by `.provider`) reds the Negotiation module from `template_hasProt` on. A definitional
+plant that drops the hole rule's premise breaks proof scripts by arity, so it identifies no false statement and is
+not a tooth.
+
+**Price.** 34 RESTATES-MEANING (an index), 4 renamed rules, 5 DELETES; 0 hypotheses; no deployed consumer (nothing
+outside these four modules imports them); no wire, fixture, package or re-genesis; three journey rows added.
+
+**Critique.** The 34 lines pay for a parameter whose second use is a card away. If PROT-6 ends up judging both offers
+as one role, the index will have bought nothing over `Polarity` but a name.
+
+**Meta-critique.** The plan's "roles replace Polarity" and the filed Bell defect were both read off the surface of a
+definition: a type with two constructors, and a method body with no check. Neither reading looked at what consumes
+it, which here is a judgment that only ever compares to `me`, and a kernel gate that runs before the body. The BIAS:
+taking the local definition as the whole of the semantics when an enclosing layer decides first.
+
+Status: landed by CX-PROMO-4 (lang:). Next: E3 + PROT-6 (the fuse), R-0044.

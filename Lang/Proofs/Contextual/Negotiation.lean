@@ -3,7 +3,7 @@
 
 The proposal's document 3 first integration experiment: two parties negotiate a ONE-USE capability
 with ALTERNATIVE providers, a DEADLINE and a CANCELLATION path. The open protocol
-(`Negotiation.template`: reserve the deposit, then an `ours` provider hole) is judged once, under
+(`Negotiation.template`: reserve the deposit, then a provider hole the buyer chooses) is judged once, under
 hypotheses (`Γ₀`: both providers' authority, the deadline); each candidate (`plan p1`, `plan p2`,
 `cancelPlan`) is a filling checked against the hole's interface; admission asks the CURRENT world.
 The four changes, each forced to say which operation it is:
@@ -42,25 +42,25 @@ def Consistent (i : Internal) (e : External) : Prop :=
 /-! ## The open protocol is judged; every candidate fills the hole -/
 
 /-- The template is judged: `Ω; Γ₀; [cap] ⊢ template : Protocol(idle, True) ⊣ Φ₀`. -/
-theorem template_hasProt : HasProt spec Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ template :=
+theorem template_hasProt : HasProt spec .buyer Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ template :=
   .call (S := sig) Op.reserve _ rfl (by simp [spec]) (by simp [spec, Φ₀])
     fun _ => .hole () iface rfl rfl (by simp [iface, Γ₀]) (SubBag.refl _) (fun _ _ _ => trivial)
       (by simp [iface, Φ₀])
 
 /-- Each provider's plan satisfies the hole's interface (spends the capability once, uses that
 provider's authority and the deadline, owes that provider's payment). -/
-theorem plan_fills (p : Provider) : Fills spec Ω iface (plan p) := by
+theorem plan_fills (p : Provider) : Fills spec .buyer Ω iface (plan p) := by
   refine ⟨.spend (S := sig) (Op.commit p) _ .cap rfl (by simp [iface]) ?_ ?_
     fun _ => .ret _ trivial, trivial⟩
   · cases p <;> simp [spec, iface]
   · cases p <;> simp [spec, iface]
 
 /-- The cancellation path satisfies the hole's interface. -/
-theorem cancel_fills : Fills spec Ω iface cancelPlan :=
+theorem cancel_fills : Fills spec .buyer Ω iface cancelPlan :=
   ⟨.call (S := sig) Op.cancel _ rfl (by simp [spec]) (by simp [spec, iface])
     fun _ => .ret _ trivial, trivial⟩
 
-theorem choose_ok {f : P .reserved} (hf : Fills spec Ω iface f) : SubstOK spec Ω (choose f) := by
+theorem choose_ok {f : P .reserved} (hf : Fills spec .buyer Ω iface f) : SubstOK spec .buyer Ω (choose f) := by
   intro i h g hs
   cases i with
   | idle => exact nomatch h
@@ -72,8 +72,8 @@ theorem choose_ok {f : P .reserved} (hf : Fills spec Ω iface f) : SubstOK spec 
 
 /-- Family 1, instance: every candidate's instantiation is judged at the template's judgment. -/
 theorem instantiations_hasProt :
-    (∀ p, HasProt spec Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ (fill Ω (choose (plan p)) template)) ∧
-      HasProt spec Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ (fill Ω (choose cancelPlan) template) :=
+    (∀ p, HasProt spec .buyer Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ (fill .buyer Ω (choose (plan p)) template)) ∧
+      HasProt spec .buyer Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ (fill .buyer Ω (choose cancelPlan) template) :=
   ⟨fun p => fill_preserves_hasProt (choose_ok (plan_fills p)) template_hasProt,
     fill_preserves_hasProt (choose_ok cancel_fills) template_hasProt⟩
 
@@ -90,8 +90,8 @@ theorem interpret_instance :
 /-- The open protocol has exactly one hole, the provider; every instantiation has none. -/
 theorem holes_instance :
     (holes finite template).length = 1 ∧ Occurs template .reserved () ∧
-      (∀ p, holes finite (fill Ω (choose (plan p)) template) = []) ∧
-      holes finite (fill Ω (choose cancelPlan) template) = [] := by
+      (∀ p, holes finite (fill .buyer Ω (choose (plan p)) template) = []) ∧
+      holes finite (fill .buyer Ω (choose cancelPlan) template) = [] := by
   refine ⟨rfl, (mem_holes_iff finite template .reserved ()).mp
       (by simp [holes, template, finite]; exact ⟨rfl, HEq.rfl⟩),
     fun p => ?_, rfl⟩
@@ -135,8 +135,8 @@ theorem unrelated_update_repair_reuses :
 now; the open protocol stays judged and the other candidates stay available. -/
 theorem provider_revoked_unavailable :
     available w0 = [1, 2, 3] ∧ available (w0.revoke .p1) = [2, 3] ∧
-      Fills spec Ω iface (plan .p1) ∧ admits spec (w0.revoke .p1).view (plan .p1) = false ∧
-      HasProt spec Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ template ∧
+      Fills spec .buyer Ω iface (plan .p1) ∧ admits spec (w0.revoke .p1).view (plan .p1) = false ∧
+      HasProt spec .buyer Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ template ∧
       admits spec (w0.revoke .p1).view (plan .p2) = true :=
   ⟨rfl, rfl, plan_fills .p1, rfl, template_hasProt, rfl⟩
 
@@ -166,7 +166,7 @@ partial correspondence: only epoch-`E` openings name the token) carries the open
 judgment over, and every effect is admissible against the world's epoch-`E` view exactly when it
 was against the old view. -/
 theorem representation_change_transports (E : Nat) :
-    HasProt (spec.mapTok (Tok.at E)) (Ω.mapTok (Tok.at E)) Γ₀ (fun _ _ => True) Φ₀
+    HasProt (spec.mapTok (Tok.at E)) .buyer (Ω.mapTok (Tok.at E)) Γ₀ (fun _ _ => True) Φ₀
         (Δ₀.map (Tok.at E)) template ∧
       ∀ (w : World) {i : Phase} (op : Op i),
         admitOp (spec.mapTok (Tok.at E)) (w.viewAt E) (S := sig) op =
@@ -264,7 +264,7 @@ theorem deadline_expires (w : World) (hd : w.deadline ≤ w.now) :
 /-- **The cancellation path refunds**: every complete run of the plan with the cancellation
 chosen establishes exactly the deposit and its refund, and no payment. -/
 theorem cancel_path_refunds_obligation {t : Trace sig} {j : Phase} {a : Res j}
-    (h : Runs (fill Ω (choose cancelPlan) template) t j a) :
+    (h : Runs (fill .buyer Ω (choose cancelPlan) template) t j a) :
     established spec t = [.holdDeposit, .refund] := by
   change Runs (Prot.call (S := sig) Op.reserve fun _ => cancelPlan) t j a at h
   cases h with
@@ -277,7 +277,7 @@ theorem cancel_path_refunds_obligation {t : Trace sig} {j : Phase} {a : Res j}
 /-- The contrast: every complete run with `p` chosen establishes the deposit and `p`'s payment,
 and no refund. -/
 theorem commit_path_pays (p : Provider) {t : Trace sig} {j : Phase} {a : Res j}
-    (h : Runs (fill Ω (choose (plan p)) template) t j a) :
+    (h : Runs (fill .buyer Ω (choose (plan p)) template) t j a) :
     established spec t = [.holdDeposit, .pay p] := by
   change Runs (Prot.call (S := sig) Op.reserve fun _ => plan p) t j a at h
   cases h with
@@ -290,14 +290,14 @@ theorem commit_path_pays (p : Provider) {t : Trace sig} {j : Phase} {a : Res j}
 /-! ## The lost reply -/
 
 theorem reach_reserved (f : P .reserved) :
-    Reach (fill Ω (choose f) template) [reserved] ⟨Phase.reserved, f⟩ :=
+    Reach (fill .buyer Ω (choose f) template) [reserved] ⟨Phase.reserved, f⟩ :=
   Reach.call (S := sig) (op := Op.reserve) (k := fun _ => f) () (Reach.here _)
 
 theorem reach_hole : Reach template [reserved] ⟨Phase.reserved, .hole ()⟩ :=
   Reach.call (S := sig) (op := Op.reserve)
     (k := fun _ => Prot.hole (S := sig) (Hole := HoleN) (A := Res) (i := Phase.reserved) ()) () (Reach.here _)
 
-theorem started_lost (p : Provider) : Started (fill Ω (choose (plan p)) template) (lost p) :=
+theorem started_lost (p : Provider) : Started (fill .buyer Ω (choose (plan p)) template) (lost p) :=
   Started.uncertain (S := sig) (k := fun ok => .ret ok) (reach_reserved (plan p))
 
 theorem dispatched_lost (p : Provider) : Dispatched template (lost p) .reserved () :=
@@ -307,7 +307,7 @@ theorem dispatched_lost (p : Provider) : Dispatched template (lost p) .reserved 
 `p` in flight is a history of the plan; it has established `p`'s payment (from dispatch); and the
 provider hole counts as entered. -/
 theorem lost_reply_keeps_obligation (p : Provider) :
-    Started (fill Ω (choose (plan p)) template) (lost p) ∧
+    Started (fill .buyer Ω (choose (plan p)) template) (lost p) ∧
       (lost p).established spec = [.holdDeposit, .pay p] ∧
       Dispatched template (lost p) .reserved () ∧ (obj (plan p) (lost p)).WF spec :=
   ⟨started_lost p, rfl, dispatched_lost p,
@@ -316,8 +316,8 @@ theorem lost_reply_keeps_obligation (p : Provider) :
 /-- With the commitment to `p1` in flight, neither the other provider's plan nor the cancellation
 has that history. -/
 theorem lost_reply_not_started :
-    ¬ Started (fill Ω (choose (plan .p2)) template) (lost .p1) ∧
-      ¬ Started (fill Ω (choose cancelPlan) template) (lost .p1) := by
+    ¬ Started (fill .buyer Ω (choose (plan .p2)) template) (lost .p1) ∧
+      ¬ Started (fill .buyer Ω (choose cancelPlan) template) (lost .p1) := by
   constructor
   · intro h
     obtain ⟨R, hr, hc⟩ := started_some_iff.mp h
@@ -347,12 +347,12 @@ theorem lost_reply_blocks_replan :
   refine ⟨fun g => ?_, fun hw => lost_reply_not_started.1 hw.started,
     fun g => ?_, fun hw => lost_reply_not_started.2 hw.started⟩
   · have := g .reserved () (dispatched_lost .p1)
-    simp [obj, Subst.ours, Ω, iface, choose, plan] at this
+    simp [obj, Subst.mine, Ω, iface, choose, plan] at this
     obtain ⟨h, _⟩ := this
     injection h with h
     cases h
   · have := g .reserved () (dispatched_lost .p1)
-    simp [obj, Subst.ours, Ω, iface, choose, plan, cancelPlan] at this
+    simp [obj, Subst.mine, Ω, iface, choose, plan, cancelPlan] at this
 
 /-- The provider hole counts as entered once the commitment is ANSWERED too. -/
 theorem dispatched_answered (p : Provider) (b : Bool) :
@@ -372,7 +372,7 @@ theorem answered_blocks_replan (b : Bool) :
         (A := Res) (i := Phase.done) ok) b (Reach.here _)
     exact Started.settled (reach_append (reach_reserved (plan .p1)) h2)
   · have := g .reserved () (dispatched_answered .p1 b)
-    simp [obj, Subst.ours, Ω, iface, choose, plan] at this
+    simp [obj, Subst.mine, Ω, iface, choose, plan] at this
     obtain ⟨h, _⟩ := this
     injection h with h
     cases h
@@ -383,7 +383,7 @@ theorem answered_blocks_replan (b : Bool) :
       cases hr with
       | call r hr => cases hr
 
-theorem planFlip_fills (p : Provider) : Fills spec Ω iface (planFlip p) := by
+theorem planFlip_fills (p : Provider) : Fills spec .buyer Ω iface (planFlip p) := by
   refine ⟨.spend (S := sig) (Op.commit p) _ .cap rfl (by simp [iface]) ?_ ?_
     fun _ => .ret _ trivial, trivial⟩
   · cases p <;> simp [spec, iface]
@@ -400,7 +400,7 @@ theorem guard_stricter_than_wf :
     Started.uncertain (S := sig) (k := fun ok => .ret (!ok)) (reach_reserved (planFlip .p1))⟩,
     fun g => ?_⟩
   have := g .reserved () (dispatched_lost .p1)
-  simp [obj, Subst.ours, Ω, iface, choose, plan, planFlip] at this
+  simp [obj, Subst.mine, Ω, iface, choose, plan, planFlip] at this
   have := congrFun this true
   simp at this
 
@@ -408,21 +408,21 @@ theorem guard_stricter_than_wf :
 theorem guarded_replan_after_dispatch_is_noop (p : Provider) (σ' : Subst sig HoleN Res)
     (g : (obj (plan p) (lost p)).Replan σ') :
     ((obj (plan p) (lost p)).replan σ').current = (obj (plan p) (lost p)).current := by
-  have e : σ'.ours Ω Phase.reserved () = (choose (plan p)).ours Ω Phase.reserved () :=
+  have e : σ'.mine .buyer Ω Phase.reserved () = (choose (plan p)).mine .buyer Ω Phase.reserved () :=
     g .reserved () (dispatched_lost p)
-  show Prot.call (S := sig) Op.reserve (fun _ => subst (σ'.ours Ω) (.hole (i := Phase.reserved) ())) =
-    Prot.call (S := sig) Op.reserve (fun _ => subst ((choose (plan p)).ours Ω) (.hole (i := Phase.reserved) ()))
+  show Prot.call (S := sig) Op.reserve (fun _ => subst (σ'.mine .buyer Ω) (.hole (i := Phase.reserved) ())) =
+    Prot.call (S := sig) Op.reserve (fun _ => subst ((choose (plan p)).mine .buyer Ω) (.hole (i := Phase.reserved) ()))
   congr 1
   funext x
-  have e' : σ'.ours Ω (sig.next Op.reserve x) () =
-      (choose (plan p)).ours Ω (sig.next Op.reserve x) () := e
+  have e' : σ'.mine .buyer Ω (sig.next Op.reserve x) () =
+      (choose (plan p)).mine .buyer Ω (sig.next Op.reserve x) () := e
   simp only [subst]
   rw [e']
 
 /-- **Before dispatch, re-planning is a free substitution**: reserved but nothing dispatched, the
 provider hole is not entered; the object re-planned from `p1` to `p2` (or to the cancellation) is
 well-formed with the same history. -/
-theorem replan_before_dispatch (f : P .reserved) (hf : Fills spec Ω iface f) :
+theorem replan_before_dispatch (f : P .reserved) (hf : Fills spec .buyer Ω iface f) :
     ¬ Dispatched template H₀ .reserved () ∧
       (obj (plan .p1) H₀).Replan (choose f) ∧ ((obj (plan .p1) H₀).replan (choose f)).WF spec ∧
         ((obj (plan .p1) H₀).replan (choose f)).hist = H₀ := by
@@ -459,9 +459,9 @@ authority is withdrawn, a typed completion satisfies the buyer's guard (`plan p1
 completion is admitted (`plan p2`), but the completion space, ONE `θ` for typing, the guard,
 authority and resources, is empty. -/
 theorem separate_witnesses_over_substitutions :
-    (∃ θ, SubstOK spec Ω θ ∧ BuyerGuard θ) ∧ (∃ θ, SubstOK spec Ω θ ∧ AdmittedIn (w0.revoke .p1) θ) ∧
-      ¬ ∃ θ, Conds.space ⟨SubstOK spec Ω, BuyerGuard, AdmittedIn (w0.revoke .p1),
-        fun θ => ∀ f, θ .reserved () = some f → Fills spec Ω iface f⟩ θ := by
+    (∃ θ, SubstOK spec .buyer Ω θ ∧ BuyerGuard θ) ∧ (∃ θ, SubstOK spec .buyer Ω θ ∧ AdmittedIn (w0.revoke .p1) θ) ∧
+      ¬ ∃ θ, Conds.space ⟨SubstOK spec .buyer Ω, BuyerGuard, AdmittedIn (w0.revoke .p1),
+        fun θ => ∀ f, θ .reserved () = some f → Fills spec .buyer Ω iface f⟩ θ := by
   refine ⟨⟨choose (plan .p1), choose_ok (plan_fills .p1), rfl⟩,
     ⟨choose (plan .p2), choose_ok (plan_fills .p2), plan .p2, rfl, rfl⟩, ?_⟩
   rintro ⟨θ, _, hg, ⟨f, hf, ha⟩, _⟩
