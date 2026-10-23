@@ -30,6 +30,20 @@ private def actBuildName : String := match actBuild with
 
 theorem activity_fixture_generated : actBuildName = "ok" := by decide +kernel
 
+/-- The fixture meets `activity_monitor_safe`'s package premises (`Lang.Proofs.StdActivityMonitor`):
+its `waits` log is guarded by the field the relation names, that field is the generated waiting
+guard over the log's own declaration, the log's value is `activityLogVal`, and the capture type is
+well formed. -/
+theorem activity_fixture_monitored :
+    (match actPkg.body, Row.find? "waits" actPkg.rels with
+      | .record fs, some d =>
+        d.guard == some "waits_waiting" &&
+        Row.find? "waits_waiting" fs ==
+          some (activityWaiting actS [actPlan, { actPlan with name := "other" }] d actResumer) &&
+        d.val == activityLogVal [actPlan, { actPlan with name := "other" }] &&
+        (activityCaptured [actPlan, { actPlan with name := "other" }]).wf
+      | _, _ => false) = true := by decide +kernel
+
 private def actB (s : String) : ByteArray := s.toUTF8
 private def actState : Data := .record [("resident", .digest (actB "r")), ("total", .nat 5)]
 private def actReq (agent : String) : Data := .record [

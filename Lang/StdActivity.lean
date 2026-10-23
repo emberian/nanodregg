@@ -43,9 +43,12 @@ def activityResponses (plans : List ActivityPlan) : Ty :=
 def activityCursor (plans : List ActivityPlan) (limit : Nat) (g : Label) : RelDecl :=
   ⟨activityKey, .record [("captured", activityCaptured plans)], limit, none, 0, true, some g⟩
 
+/-- The value type of an activity's log row: the answer, if any, and the capture. -/
+def activityLogVal (plans : List ActivityPlan) : Ty :=
+  .record [("answered", optTy (activityResponses plans)), ("captured", activityCaptured plans)]
+
 def activityLog (plans : List ActivityPlan) (limit : Nat) (g : Label) : RelDecl :=
-  ⟨activityKey, .record [("answered", optTy (activityResponses plans)),
-    ("captured", activityCaptured plans)], limit, none, 0, true, some g⟩
+  ⟨activityKey, activityLogVal plans, limit, none, 0, true, some g⟩
 
 def activityApply (f : Term) (args : List Term) : Term := args.foldl Term.app f
 

@@ -925,4 +925,114 @@ theorem live_read_not_cell_keyed_refused :
 theorem live_read_cell_keyed_admitted :
     (match (liveReader .digest).checkFields with | .ok _ => true | .error _ => false) = true := by decide
 
+/-! ## An admitted run's edits passed their guards (PROT-4, LANG-75.9)
+
+`runMeasured_past_extraction` and `program_run_past_extraction` (`Lang.Proofs.Provenance`) rewrite a run
+that got past extraction to the do-block whose last bind is `guardEdits`: they connect a run to the
+guard CALL. The converse below inverts that do-block under `= .ok`: a run that RETURNED had every one
+of its edits' old rows found and every guard its relation declares said `ok`. Nothing landed before
+said so (`guardEdits_never_stuck` is "not stuck", `guardEdits_unpinned` a refusal). A plant that
+accepts a guard's refusal inside `guardEdits` reds `guardEdits_ok` and no landed theorem (LANG-75.9). -/
+
+private theorem mapM_zip_forM_ok {α β ε : Type} {f : α → Except ε β} {g : α × β → Except ε Unit} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = .ok ys → (xs.zip ys).forM g = .ok () →
+      ∀ x ∈ xs, ∃ y, f x = .ok y ∧ g (x, y) = .ok ()
+  | [], _, _, _ => by simp
+  | x :: xs, ys, h, hg => by
+    rw [List.mapM_cons] at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i y hy
+      split at h
+      · cases h
+      · rename_i ys' hys
+        simp only [pure, Except.pure, Except.ok.injEq] at h
+        subst h
+        rw [List.zip_cons_cons] at hg
+        unfold List.forM at hg
+        simp only [bind, Except.bind] at hg
+        split at hg
+        · cases hg
+        · rename_i u hu
+          intro z hz
+          rcases List.mem_cons.mp hz with rfl | hz
+          · exact ⟨y, hy, by cases u; exact hu⟩
+          · exact mapM_zip_forM_ok hys hg z hz
+
+/-- **`guardEdits` accepting means every edit's guard accepted**: each edit's old row was found
+(`guardOld`), and every guard its relation declares, run as `guardEdits` runs it (`runLaw` on field
+`gl` of the closure body, over the state before the run, the request and the edit with its old row),
+returned `ok`. -/
+theorem guardEdits_ok {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {S : RunSetup} {rv : Kernel.Receive.RowView D} {pkg : D} {r : Kernel.Receive.Req D} {es : List (Edit D)}
+    (h : guardEdits bytesOf digestOf S rv pkg r es = .ok ()) :
+    ∀ x ∈ es, ∃ o, guardOld digestOf rv r.self x = .ok o ∧ ∀ gl, x.decl.guard = some gl →
+      runLaw S.lib (.get (.ref S.g) gl) S.state (reqData bytesOf r) (guardIn x.data o) = .ok (.ok ()) := by
+  unfold guardEdits at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  rename_i olds hol
+  intro x hx
+  obtain ⟨o, ho, hg⟩ := mapM_zip_forM_ok hol h x hx
+  refine ⟨o, ho, fun gl hgl => ?_⟩
+  simp only [hgl] at hg
+  split at hg
+  · assumption
+  · cases hg
+  · cases hg
+
+/-- **The do-block of a run, inverted** (the converse of `runMeasured_past_extraction`): a run that
+returned had its setup, a machine run within the budget left after preparation, an extraction at the
+result type, its edits read from the edits row, and `guardEdits` accepting them; its rows are those
+edits' slots and acts. -/
+theorem runMeasuredWith_ok {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {setup : Kernel.Receive.Pinned D → Kernel.Receive.RowView D → D → Kernel.Slots → Nat → ByteArray → Kernel.Receive.Req D → Except (Kernel.Receive.Refusal D) RunSetup}
+    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
+    {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
+    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
+    (h : runMeasuredWith bytesOf digestOf setup look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∃ S v used c e ds left es, setup look rv pkg state method args r = .ok S ∧
+      run S.lib Bounds.stackMax (budget - S.preparation) 0 (State.init S.term S.env) = .value v used ∧
+      (Machine.mk S.lib).extract S.ty (budget - S.preparation - used) v =
+        .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) ∧
+      editsOf S.rels r.self e = .ok es ∧ guardEdits bytesOf digestOf S rv pkg r es = .ok () ∧
+      rows = es.map (fun x => (x.slot, x.act)) := by
+  unfold runMeasuredWith at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  rename_i S hS
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  rename_i v used hrun
+  split at h
+  all_goals first | (simp at h; done) | skip
+  rename_i c e ds left hx
+  repeat' split at h
+  all_goals first | (simp at h; done) | skip
+  simp only [Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨-, -, rfl, -, -⟩ := h
+  exact ⟨S, v, used, c, e, ds, left, _, hS, hrun, hx, ‹editsOf _ _ _ = .ok _›, ‹guardEdits _ _ _ _ _ _ _ = .ok _›, rfl⟩
+
+/-- **An admitted run's edits passed their guards** (`run_edits_guarded`, PROT-4's first half): when a
+method run returns, its rows are the slots and acts of the edits it returned, each edit's old row
+was found, and every guard the edit's relation declares accepted the edit over that old row, the
+state before the run and the run's request. For every setup (`runMeasured`, `runMeasuredLive`, and
+so `Lang.program`'s `run`). -/
+theorem run_edits_guarded {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {setup : Kernel.Receive.Pinned D → Kernel.Receive.RowView D → D → Kernel.Slots → Nat → ByteArray → Kernel.Receive.Req D → Except (Kernel.Receive.Refusal D) RunSetup}
+    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
+    {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
+    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
+    (h : runMeasuredWith bytesOf digestOf setup look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∃ S, ∃ es : List (Edit D), setup look rv pkg state method args r = .ok S ∧ rows = es.map (fun x => (x.slot, x.act)) ∧
+      ∀ x ∈ es, ∃ o, guardOld digestOf rv r.self x = .ok o ∧ ∀ gl, x.decl.guard = some gl →
+        runLaw S.lib (.get (.ref S.g) gl) S.state (reqData bytesOf r) (guardIn x.data o) = .ok (.ok ()) := by
+  obtain ⟨S, -, -, -, -, -, -, es, hS, -, -, -, hg, rfl⟩ := runMeasuredWith_ok h
+  exact ⟨S, es, hS, rfl, guardEdits_ok hg⟩
+
 end Nanodregg.Lang

@@ -6172,3 +6172,77 @@ card was done by a deletion two landings earlier. The BIAS: keeping a card's ori
 shrank it has already landed.
 
 Status: landed by CX-PROMO-3 (lang:). P2 complete. Next: PROT-1 (`promo/IMPACT-PROT-1.md`, R-0044).
+
+### LANG-75.9 PROT-1 → PROT-4 (first half) · the receiver is the monitor: an admitted run's edits passed their guards, and every admitted edit at an activity log is a step of the log row's machine (2026-10-22; CX-PROMO-4; IMPACT `redregg/work/promo/IMPACT-PROT-1.md` and `redregg/work/promo/IMPACT-PROT-4a.md`; plants `redregg/work/promo/PROT4a/`; cross-family read `redregg/work/promo/READ-PROT-1-grok.md`; RULE R-0046 (fork B, PROT-1 folds into PROT-4), RELEASE R-0047 under `redregg/work/promo/READ-PROT-4a-grok.md`)
+
+**Why PROT-1's composition had no object.** The plan wrote `activity_history_runs` via `object_history_chain` +
+`machine_reached`. Three facts, measured, kept it from being written:
+1. An activity has no machine LAW. `machine_reached` is a chain of a state law over a phase field. `Std.activity` writes
+   no phase into state. Its protocol is a machine per KEY of its log relation (absent → waiting → answered → absent),
+   and the log's ROW GUARD enforces it (`activityWaiting`).
+2. The kernel's history drops the rows. `ObjectStep.invoke`/`.nested` bind the run's `rows` and leave them out of
+   the trace.
+3. Nothing landed said an admitted run's edits passed their guards. The past-extraction theorems connect a run to the
+   `guardEdits` CALL, and `guardEdits_never_stuck` says "not stuck".
+Widening the trace (fork A) would have restated 18 statements in Kernel and Ledger and given the ledger nothing it can
+use (Grok's read §2, §5). The per-key "Reach" is the step relation read per step. Threading it across Turns is
+`rowsRun_eq`, a kernel fact about every turn, so no mutation reds a history theorem without first redding a landed one.
+So PROT-1 is this card's step fact (R-0046) and lands no history theorem.
+
+**Decision.** Three facts, all new, no landed statement changed:
+- `run_edits_guarded` (`Lang/Proofs/Rel.lean`), with `runMeasuredWith_ok` (the run's do-block inverted, the converse of
+  `runMeasured_past_extraction`) and `guardEdits_ok`. When a run returns, its rows are its edits' slots and acts. Each
+  edit's old row was found, and every guard its relation declares returned `ok` over that row, the state before the
+  run and the run's request. This holds for every setup.
+- `WaitingStep` (`Lang/Proofs/StdActivityMonitor.lean`), the log row's machine as data, with three actions. `start`:
+  an insert by the key's own agent of an unanswered row. `answer`: an upsert by the resumer of a waiting row, keeping
+  its capture and answering its own plan. `retire`: a retraction of an answered row. `waiting_body_step`: what the
+  generated waiting guard admits, run as the receiver runs a package field (`Admits`, any closure environment), is a
+  `WaitingStep`.
+- `activity_monitor_safe` (over `runMeasured`) and `activity_program_safe` (over `Lang.program`'s `run`, the run
+  `ObjectStep.invoke` binds, at a package with no imports and no holes). For a package whose relation's guard field is
+  the generated waiting guard, every edit at that relation of a run that returned is a `WaitingStep` over the old row
+  the kernel found. The premises are on the package's guard, so every method of such a package is covered,
+  generated or hand-written. The one package decided to meet them is the generated fixture:
+  `activity_fixture_monitored` (StdActivityTeeth). The compiled Bell (`rung` as the waiting guard) is the next
+  witness, not decided here. `Std.hole`'s installed root is outside the premises: its body is an application and it
+  has imports.
+  `activityLog`'s value is now the named `activityLogVal`: the same term, no byte moves.
+
+**Why not a corollary of `waiting_*_iff`.** They are stated at `activityApply W [var 2, var 1, var 0]` evaluated in
+the inputs' own environment, which runs the body under a doubled environment. The receiver runs the guard as a loaded
+record field, under closure environment `[]`. No instantiation makes the two equal, and the iffs cover one input
+shape each. They stay as they are: they are the transparency half (PROT-4b), and that card restates them at the deployed
+shape.
+
+**Plants** (whole-tree `lake build` under each). P1b: `guardEdits` accepts a guard's refusal. It reds `guardEdits_ok`
+and nothing landed. P3: the generated log is unguarded. It reds only the fixture witness `activity_fixture_monitored`.
+`StdActivityMonitor` builds under it: the theorem is an implication whose package premise P3 makes false at that one
+package, so P3 is the witness's tooth, not the monitor's.
+P2 (the waiting guard accepts a second answer) is already `waiting_no_replay` + `activity_answer_no_replay`, so it is
+not duplicated. **Correction:** CX-PROMO-3's P1 (`let _ := guardEdits …` in `runMeasuredWith`) is not this theorem's
+tooth. On the whole tree it also reds the landed `runMeasured_past_extraction_of` and
+`runMeasuredLive_past_extraction_of`. The earlier "no landed theorem reds" came from building `Lang.Proofs.Rel`'s
+closure only, which does not contain `Provenance`. Lake leaves a failed module's importers unbuilt, so each
+"nothing landed" covers the tree outside that cone.
+
+**Consumers.** A follower re-runs the monitor operationally: `rederive` → `receive` → `program.run` → `guardEdits`.
+It calls neither `guardEdits` nor these theorems, and the theorem it can cite is `activity_program_safe` for a package
+meeting the premises. PROT-3's `answered_row_is_kept_answer` is the later consumer, and it needs the Bell witness. The StdActivityTeeth admitting rows are
+closed instances of the three actions and stay as rows.
+
+**Price.** Landed theorems gaining a hypothesis: 0. Restated: 0. Deleted: 0. `decls` map: 0 lines. No wire, fixture,
+package id or journey row moves.
+
+**Critique.** `WaitingStep.answer`'s resumer clause is "the resumer term, applied to this state and request in the
+guard's environment, said true" (`Resumes`). For a closed resumer that is its meaning. The statement does not
+abstract it further, and a reader who wants "the signer is the resident" must still read the Bell's resumer term. The
+premise `hv : d.val = activityLogVal plans` ties the theorem to logs whose value is exactly the generated one. A
+package that extends the log's value record is outside it.
+
+**Meta-critique.** The PROT-1 IMPACT and the card brief both carried P1 as "measured: reds only the new theorem". The
+measurement was a module-closure build, and the claim was a whole-tree one. The BIAS: treating the build I ran as the
+universe the claim quantifies over. A plant's "nothing else reds" is a whole-tree statement or it is not made.
+
+Status: landed by CX-PROMO-4 (lang:). PROT-1 closed into this card (R-0046). Next: PROT-2 (roles replace `Polarity`;
+the Bell's open/close/retire refuse by role).
