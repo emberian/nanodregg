@@ -129,7 +129,7 @@ private theorem tooth_encodes (demand : Bool) :
 
 private theorem tooth_read (demand : Bool) :
     readPackage (toothLook demand) 7 = .ok (toothPackage demand) :=
-  readPackage_installed (by rfl) (by rfl) (tooth_encodes demand)
+  readPackage_installed (by rfl) (by rfl) (tooth_encodes demand) rfl
 
 private theorem tooth_load (demand : Bool) :
     loadContextual toothDecode (toothLook demand) closureDepthMax (toothEncode 7) ⟨[], [], []⟩ =

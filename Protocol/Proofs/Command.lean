@@ -153,9 +153,8 @@ theorem refusedAt_ne_submit {X : Ctx D} {r : Refusal D} {call k : ByteArray} :
 theorem describe_ne_submit {X : Ctx D} {w : World D} {obj : D} {call k : ByteArray} :
     describe X w obj ≠ .submit call k := by
   unfold describe
-  split
-  · simp [refused]
-  · split <;> simp [refused, printed]
+  repeat' split
+  all_goals simp [refused, printed]
 
 /-- A range read is printed or refused, never a step that asks for anything (PROTOCOL-51). -/
 theorem rangeRender_ne_submit {X : Ctx D} {w : World D} {obj : D} {rel : String} {most : Nat}
@@ -1277,9 +1276,8 @@ theorem refusedAt_ne_host {X : Ctx D} {r : Refusal D} {op : Op} {p k : ByteArray
 theorem describe_ne_host {X : Ctx D} {w : World D} {obj : D} {op : Op} {p k : ByteArray} :
     describe X w obj ≠ .host op p k := by
   unfold describe
-  split
-  · simp [refused]
-  · split <;> simp [refused, printed]
+  repeat' split
+  all_goals simp [refused, printed]
 
 theorem rangeRender_ne_host {X : Ctx D} {w : World D} {obj : D} {rel : String} {most : Nat}
     {pre : Option String} {op : Op} {p k : ByteArray} : rangeRender X w obj rel most pre ≠ .host op p k := by

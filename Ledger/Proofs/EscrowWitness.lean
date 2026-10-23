@@ -94,7 +94,7 @@ private theorem pkgB_eq : Wire.encodePackage escrow = some pkgB := by
   | some b => rfl
 
 private theorem hread : readPackage look pid = .ok escrow := by
-  refine readPackage_installed (cell := pcell) (b := pkgB) ?_ (by simp [pcell, Slots.get]) pkgB_eq
+  refine readPackage_installed (cell := pcell) (b := pkgB) ?_ (by simp [pcell, Slots.get]) pkgB_eq rfl
   simp [readKind, look, pcell]
 
 private theorem hchecks : escrow.checkWith [] = .ok () := by

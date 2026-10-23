@@ -130,23 +130,32 @@ theorem getElem?_append_of_some {α : Type} {l m : List α} {k : Nat} {a : α}
     (h : l[k]? = some a) : (l ++ m)[k]? = some a := by
   rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp h).1]; exact h
 
+/-- **What a package read is**: the cell at the id is a package cell, ROM, and its slot 0 decodes to
+the package. -/
+theorem readPackage_ok {D : Type} {look : Pinned D} {id : D} {p : Package} :
+    readPackage look id = .ok p ↔ ∃ cell b, readKind look id kindPackage = .ok cell ∧
+      cell.discipline = .rom ∧ cell.slots.get 0 = some b ∧ Wire.decodePackage b = .ok p := by
+  unfold readPackage
+  cases hk : readKind look id kindPackage with
+  | error e => simp [bind, Except.bind]
+  | ok cell =>
+    by_cases hr : cell.discipline = .rom
+    · cases hs : cell.slots.get 0 with
+      | none => simp [bind, Except.bind, hr, hs, pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
+      | some b =>
+        cases hd : Wire.decodePackage b <;>
+          simp [bind, Except.bind, hr, hs, hd, pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
+    · simp [bind, Except.bind, hr]
+
 /-- A package read from a cell is one the wire carries. -/
 theorem readPackage_wire {D : Type} {look : Pinned D} {id : D} {p : Package}
     (h : readPackage look id = .ok p) : Wire.packageWire p = true := by
-  unfold readPackage at h
-  simp only [bind, Except.bind] at h
-  split at h
-  · simp at h
-  · split at h
-    · simp at h
-    · split at h
-      · rename_i hd; cases h
-        obtain ⟨b, hb⟩ : ∃ b, Wire.encodePackage p = some b := ⟨_, Wire.decodePackage_eq_ok_iff.mp hd⟩
-        unfold Wire.encodePackage at hb
-        split at hb
-        · assumption
-        · simp at hb
-      · simp at h
+  obtain ⟨-, b, -, -, -, hd⟩ := readPackage_ok.mp h
+  obtain ⟨b', hb⟩ : ∃ b', Wire.encodePackage p = some b' := ⟨_, Wire.decodePackage_eq_ok_iff.mp hd⟩
+  unfold Wire.encodePackage at hb
+  split at hb
+  · assumption
+  · simp at hb
 
 theorem admitPackage_inv {D : Type} {digestOf : ByteArray → Option D} {idb : ByteArray} {p : Package} {acc L : Loaded}
     {gis : List Nat} {g : Nat} (hi : Inv acc) (hpw : Wire.packageWire p = true)
@@ -473,13 +482,14 @@ theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArr
   exact ⟨_, _, _, _, _, _, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, rfl⟩
 
 /-- **An installed package loads** (LANG-35): if the install check admits bytes `b` and the cell
-named by `idb` holds `b` as a package, a run's `load` of `idb` succeeds under the same pinned view,
+named by `idb` holds `b` as a package, in ROM (install's birth; HOSTING-43), a run's `load` of `idb`
+succeeds under the same pinned view,
 and the package at the index it returns is `b`'s. The install check and the loader agree: no package
 installs only to fail its own load at every invoke. -/
 theorem install_loads {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
     {b idb : ByteArray} {id : D} {cell : Kernel.Cell}
     (h : checkInstall digestOf look b = .ok ()) (hid : digestOf idb = some id)
-    (hk : readKind look id kindPackage = .ok cell) (hb : cell.slots.get 0 = some b) :
+    (hk : readKind look id kindPackage = .ok cell) (hr : cell.discipline = .rom) (hb : cell.slots.get 0 = some b) :
     ∃ L g p, load digestOf look closureDepthMax idb ⟨[], [], []⟩ = .ok (L, g) ∧
       Wire.decodePackage b = .ok p ∧ L.pkgs[g]? = some p := by
   unfold checkInstall at h
@@ -490,7 +500,7 @@ theorem install_loads {D : Type} {digestOf : ByteArray → Option D} {look : Pin
     rename_i p hd _ L hl _ ifaces hif _ hc
     obtain ⟨L, gis⟩ := L
     have hp : readPackage look id = .ok p := by
-      unfold readPackage; simp only [bind, Except.bind, hk, hb, hd]; rfl
+      exact readPackage_ok.mpr ⟨cell, b, hk, hr, hb, hd⟩
     have hinv := (loadAll_inv digestOf look _ _ _ Inv.empty hl).1
     refine ⟨{ ids := L.ids ++ [idb], lib := L.lib ++ [p.body.relocate fun i => gis.getD i 0],
                pkgs := L.pkgs ++ [p] }, L.ids.length, p, ?_, ?_, ?_⟩

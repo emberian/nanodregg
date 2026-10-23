@@ -612,15 +612,23 @@ def describeLines (X : Ctx D) (w : World D) (obj : D) (cell : Cell) : Except (Re
     pure (s!"law {hex X l}" ++ String.join (lp.laws.map (" " ++ ·)))
   pure (ps ++ ls)
 
-/-- `read OBJ ?`: the object's self-description (`Command.Describe`), on follow's caught-up World. -/
+/-- The lines of `read OBJ ?` (`Command.Describe`) for a live cell: its head, then `describeLines`. -/
+def describeText (X : Ctx D) (w : World D) (obj : D) (cell : Cell) : Except (Refusal D) (List String) := do
+  let ls ← describeLines X w obj cell
+  pure (s!"object {hex X obj}" :: ((cell.slots.get slotOwner).map fun o => [s!"owner {Text.toHex o}"]).getD [] ++ ls)
+
+/-- `read OBJ ?`: the object's self-description (`Command.Describe`), on follow's caught-up World.
+Only an object describes itself (`wrongKind` otherwise: `invoke` runs only an object, KERNEL's
+`invoke_ok`). Each line is printed with one line break after it, and the description is refused
+`noText` unless no line holds a break of its own (`noBreak`), so a reader that splits it at breaks
+reads back exactly the lines (HOSTING-43). -/
 def describe (X : Ctx D) (w : World D) (obj : D) : Reply :=
   match w.live X.env obj with
   | none => refused (D := D) (.missingCell obj)
   | some cell =>
-    let head := s!"object {hex X obj}\n" ++
-      ((cell.slots.get slotOwner).map fun o => s!"owner {Text.toHex o}\n").getD ""
-    match describeLines X w obj cell with
-    | .ok ls => printed (head ++ String.join (ls.map (· ++ "\n")))
+    if cell.kind ≠ kindObject then refused (D := D) (.receive (.wrongKind obj kindObject)) else
+    match describeText X w obj cell with
+    | .ok ls => if ls.all noBreak then printed (String.join (ls.map (· ++ "\n"))) else refused (D := D) .noText
     | .error r => refused (D := D) r
 
 /-! ## `read OBJ REL K [PREFIX]` — a range read over a relation (PROTOCOL-51)
@@ -1060,6 +1068,13 @@ def settled (X : Ctx D) (me : Self D) (w : World D) (out cb result : ByteArray) 
     | _ => refused (D := D) .badResult
   else refused (D := D) .badResult
 
+/-- Follow's World holds nothing yet: no step folded and no cell. An adopt replaces follow's World only
+then (`notAtGenesis`), checked at `start` and again at the step that adopts. -/
+def atGenesis (w : World D) : Bool :=
+  w.steps == 0 && match w.trie with
+    | .empty => true
+    | _ => false
+
 def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Reply :=
   let w := f.world
   match parse X.digestOf argv with
@@ -1070,7 +1085,7 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
       | .error r => refused (D := D) r
       | .ok i =>
       let pin := i.pin
-      if w.steps ≠ 0 then refused (D := D) (.thin (.notAtGenesis w.steps)) else
+      if !atGenesis w then refused (D := D) (.thin (.notAtGenesis w.steps)) else
       if pin.steps ≤ w.steps then refused (D := D) (.thin (.notBehind w.steps)) else
       let off := Thin.offset pin f.download
       -- the pin names a log position, not a height, and follow is at genesis: sign one window
@@ -1313,6 +1328,10 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                     match Thin.accept B pin f.download page with
                     | .error r => drop r
                     | .ok (.done w') =>
+                        -- adopt replaces follow's World: only one that still holds nothing. `start`
+                        -- checked it, but other commands' pages may have moved it since, and a
+                        -- continuation is no witness of what `start` saw (HOSTING-43)
+                        if !atGenesis w then drop (.notAtGenesis w.steps) else
                         -- the pin binds the World's bytes, origin included; this says so by name
                         if w'.origin ≠ me.world then drop .wrongWorld else
                         ({ world := w', download := none, verified := none }, .adopt w',

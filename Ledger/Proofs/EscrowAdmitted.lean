@@ -189,7 +189,7 @@ private theorem hchecks : escrow.checkWith [] = .ok () := by
 
 private theorem readPackage_esc {look : Pinned UInt8} (h : readKind look pkg kindPackage = .ok pkgCell) :
     readPackage look pkg = .ok escrow :=
-  readPackage_installed h (by simp [pkgCell, Slots.get]) pkgB_eq
+  readPackage_installed h (by simp [pkgCell, Slots.get]) pkgB_eq rfl
 
 private def L0 : Loaded := ⟨[tEnv.bytes pkg], [escrow.body.relocate fun i => ([] : List Nat).getD i 0], [escrow]⟩
 

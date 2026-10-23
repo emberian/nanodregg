@@ -6,15 +6,20 @@ The resident (`Hosting.Resident.Run`) reaches its member's follower through ONE 
 command's `done`. Every theorem over `ResidentRun.Runs` already covers every reply that socket could give.
 This module states what an `ok` one MEANS on the member's side, under ONE premise about bytes:
 
+- `Moves`/`Reach`: follow's World moves only by the frames follow answers (`Command.step` on any
+  continuation, any result, any connection's: the deployed `Host.Follow.loop`), HOSTING-43.
 - `FollowRun`: one command of follow's machine as the leg drives it: `start` on the argv, `step` on each
   continuation follow handed out with SOME result (the attempt store's, custody's, the Host's: chosen,
-  never trusted), follow's World free to fold on between frames, ending in a `done`.
-- `SocketRel` / `StdioLeg` (the `gates/tcb.tsv` row `stdio-leg`): an `ok`-exit reply is the `done` of a
-  follower run of exactly that command's argv; every other reply and every failure claims nothing.
-  Rust is trusted to MOVE three byte fields (the argv in, each continuation back, the `done` out) and
-  for nothing else: after T0 (PROTOCOL-64) follow's only `ok` for a submitted call is its own World's
-  settlement, so nd's attempt loop, custody and the Host's status choose the RESULT a step is handed,
-  which `FollowRun` quantifies over, never the exit. Satisfiable: `stdioLeg_errors`.
+  never trusted), follow's World `Reach`ed between frames (other commands' frames), ending in a `done`
+  handed out at a follow state the run names.
+- `LegFrom` / `StdioLeg` (the `gates/tcb.tsv` row `stdio-leg`): read along the resident's effects in the
+  order it performed them, each `ok`-exit reply is the `done` of a follower run of exactly that command's
+  argv, from a World follow reached from where the last such run ended: ONE follower serves the resident.
+  Every other reply and every failure claims nothing. Rust is trusted to MOVE three byte fields (the
+  argv in, each continuation back, the `done` out) to that one follower and for nothing else: after T0
+  (PROTOCOL-64) follow's only `ok` for a submitted call is its own World's settlement, so nd's attempt
+  loop, custody and the Host's status choose the RESULT a step is handed, which `FollowRun` quantifies
+  over, never the exit. Satisfiable: `stdioLeg_errors`.
 - The machine facts the join reads (follow's, no premise): `step_cont` (every continuation a step hands
   on carries the step's argv; a phase-4 one is step 3's submit of a call `plan` produced on that step's
   World), `start_cont`/`start_ne_ok`, `step_invoke_ok` (an invoke ends `ok` only at the settlement),
@@ -26,20 +31,19 @@ This module states what an `ok` one MEANS on the member's side, under ONE premis
 - `delivered_answer_committed`: an `ok` invoke of `answer` for `(r, t)` was the kept answer (or this
   tick's), and follow's World at its `ok` journals a call that invokes the bell at `sh.answer` with the
   bytes read from the text `answerArg r t` at the bell's own method. `answer_args_at_answerArgTy`: at a
-  method of type `answerArgTy` those bytes are `answerDatum r t`'s.
+  method of type `answerArgTy` those bytes are `answerDatum r t`'s. The strong form, that the method's
+  type IS `answerArgTy` on the World the call was planned on, is `SocketStrong`'s
+  `delivered_answer_committed_strong` (HOSTING-43).
 
-NOT claimed here (each with its trigger). The strong form `callArg = answerDatum r t`: the resident
-checked the method's type only in `Shape.read`, maybe ticks and Worlds earlier; it needs (i) `Mem.shape`'s
-provenance across `Ticks`, (ii) a live object's package slot fixed under the follower's fold (KERNEL),
-(iii) `Shape.read ∘ describe` reading back the argument type (R-0065). The bell's ROW: no landed theorem
-states the compiled Bell's `answer` method; `answered_row_is_kept_answer` waits for that witness (a LANG
-card), and LITP's "the join stays a journey row" stands. A commit whose reply is LOST (follow appends, then
-dies before `port.send`; the resident sees `.error` or exit `client`) is PROT-5's at-most-once and out of
-this card: nothing here claims the converse of ok ⇒ journaled. Nor: that an ok reply's stdout is the
-receipt, who else holds the resident's key, restarts, liveness, or that nd's attempt loop implements
-`Attempt.next`.
+NOT claimed here. The bell's ROW: no landed theorem states the compiled Bell's `answer` method;
+`answered_row_is_kept_answer` waits for that witness (HOSTING-43 names the Lang change), and LITP's "the
+join stays a journey row" stands. A commit whose reply is LOST (follow appends, then dies before
+`port.send`; the resident sees `.error` or exit `client`) is PROT-5's at-most-once and out of this card:
+nothing here claims the converse of ok ⇒ journaled. Nor: that an ok reply's stdout is the receipt, who
+else holds the resident's key, liveness, or that nd's attempt loop implements `Attempt.next`.
 -/
 import Hosting.Proofs.ResidentRun
+import Hosting.Proofs.Lifetime
 import Protocol.Proofs.Command
 import Protocol.Proofs.Incoming
 import Protocol.Proofs.Settle
@@ -192,7 +196,7 @@ theorem step_invoke_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D
 
 /-! ## The resident's invoke argv, as follow parses it -/
 
-private theorem fromUTF8_toUTF8' (s : String) : String.fromUTF8? s.toUTF8 = some s := by
+theorem fromUTF8_toUTF8' (s : String) : String.fromUTF8? s.toUTF8 = some s := by
   simp [String.fromUTF8?]; exact ⟨s.isValidUTF8, rfl⟩
 
 private theorem hexVal_digit : ∀ n, n < 16 → Text.hexVal (Lang.Print.hexDigit n) = some n.toUInt8 := by
@@ -265,61 +269,117 @@ theorem body_invoke {X : Ctx D} {me : Self D} {w : World D} {s : Signed} {o : D}
 
 /-! ## Follow's run of one command, as the stdio leg drives it -/
 
+/-- **Follow's World moves by its own frames.** `Moves w w'`: one frame follow answers, from a state
+whose World is `w` to one whose World is `w'`: `Command.step` on ANY continuation with ANY result,
+any connection's (the deployed loop, `Host.Follow.loop`: `answer`'s `Command.step`; `start` moves
+nothing). A process restart reopens the World follow's steps persisted (HOST-22). -/
+def Moves (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) (w w' : World D) : Prop :=
+  ∃ (f f' : Follow D) (kb res : ByteArray) (p : Persist D) (r : Command.Reply),
+    f.world = w ∧ Command.step X dc B me f kb res = (f', p, r) ∧ f'.world = w'
+
+/-- Follow's World, after any number of frames. -/
+inductive Reach (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) :
+    World D → World D → Prop
+  | refl (w : World D) : Reach X dc B me w w
+  | tail {w w₁ w₂ : World D} : Reach X dc B me w w₁ → Moves X dc B me w₁ w₂ → Reach X dc B me w w₂
+
+theorem Reach.trans {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {w₁ w₂ : World D} (h₁ : Reach X dc B me w₁ w₂) : ∀ {w₃}, Reach X dc B me w₂ w₃ → Reach X dc B me w₁ w₃
+  | _, .refl _ => h₁
+  | _, .tail h hm => .tail (h₁.trans h) hm
+
+theorem Reach.step {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {w : World D} {f f' : Follow D} {kb res : ByteArray} {p : Persist D} {r : Command.Reply}
+    (h : Reach X dc B me w f.world) (hs : Command.step X dc B me f kb res = (f', p, r)) :
+    Reach X dc B me w f'.world :=
+  .tail h ⟨f, f', kb, res, p, r, rfl, hs, rfl⟩
+
 /-- **One command of follow's machine as the leg drives it**: `start` on the argv, then `step` on each
 continuation follow handed out, with SOME result (the attempt store's, custody's, the Host's: chosen,
-never trusted), follow's World free to fold on between frames (one `Follow.loop`: other commands
-absorb steps), ending in a `done` whose exit and bytes are the run's end. `FollowRun X dc B me f r fin`:
-follow, at `f`, has just handed out `r`, and the command ends `fin`. -/
+never trusted), follow's World moved between frames only by follow's own frames (`Reach`: other
+commands' steps), ending in a `done` whose exit and bytes are the run's end. `FollowRun X dc B me f r
+fe fin`: follow, at `f`, has just handed out `r`; the command ends `fin`, handed out at `fe`. -/
 inductive FollowRun (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) :
-    Follow D → Command.Reply → UInt8 × ByteArray × ByteArray → Prop
-  | done {f : Follow D} {e : UInt8} {o r : ByteArray} : FollowRun X dc B me f (.done e o r) (e, o, r)
-  | step {f g f' : Follow D} {r r' : Command.Reply} {k res : ByteArray} {p : Persist D}
-      {fin : UInt8 × ByteArray × ByteArray} (l : List (Kernel.Step D))
-      (hk : r.cont = some k) (hg : World.fold X.env f.world l = .ok g.world)
-      (hs : Command.step X dc B me g k res = (f', p, r')) (rest : FollowRun X dc B me f' r' fin) :
-      FollowRun X dc B me f r fin
+    Follow D → Command.Reply → Follow D → UInt8 × ByteArray × ByteArray → Prop
+  | done {f : Follow D} {e : UInt8} {o r : ByteArray} : FollowRun X dc B me f (.done e o r) f (e, o, r)
+  | step {f g f' fe : Follow D} {r r' : Command.Reply} {k res : ByteArray} {p : Persist D}
+      {fin : UInt8 × ByteArray × ByteArray}
+      (hk : r.cont = some k) (hg : Reach X dc B me f.world g.world)
+      (hs : Command.step X dc B me g k res = (f', p, r')) (rest : FollowRun X dc B me f' r' fe fin) :
+      FollowRun X dc B me f r fe fin
 
-/-- What a phase-4 continuation's call bytes are: step 3's submit of a call `plan` produced, on some
-World follow held, for the command `argv` parses to. -/
-def Planned (X : Ctx D) (me : Self D) (argv : List ByteArray) (acc : List ByteArray) : Prop :=
-  ∃ (w : World D), ∃ cmd s rs b u sig, Command.parse X.digestOf argv = .ok cmd ∧
+/-- A run moves follow's World only by its own frames. -/
+theorem run_reach {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f fe : Follow D} {r : Command.Reply} {fin : UInt8 × ByteArray × ByteArray}
+    (h : FollowRun X dc B me f r fe fin) : Reach X dc B me f.world fe.world := by
+  induction h with
+  | done => exact .refl _
+  | step _ hg hs _ ih => exact (hg.step hs).trans ih
+
+/-- What a phase-4 continuation's call bytes are: step 3's submit of a call `plan` produced, on a
+World follow reached from `w₀`, for the command `argv` parses to. -/
+def Planned (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) (w₀ : World D)
+    (argv : List ByteArray) (acc : List ByteArray) : Prop :=
+  ∃ (w : World D), Reach X dc B me w₀ w ∧ ∃ cmd s rs b u sig, Command.parse X.digestOf argv = .ok cmd ∧
     Command.body X me w s cmd = .ok b ∧ Command.signedReads X w cmd = .ok rs ∧
     Command.plan X me w s.key rs b = .ok u ∧ acc.getLast? = some (X.callBytes ⟨u, sig⟩)
 
 /-- Every continuation a reply carries is a state of `argv`, and a phase-4 one is `Planned`. -/
-def ContOf (X : Ctx D) (me : Self D) (argv : List ByteArray) (r : Command.Reply) : Prop :=
+def ContOf (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) (w₀ : World D)
+    (argv : List ByteArray) (r : Command.Reply) : Prop :=
   ∀ k st, r.cont = some k → State.ofBytes k = some st →
-    st.argv = argv ∧ (st.phase = 4 → Planned X me argv st.acc)
+    st.argv = argv ∧ (st.phase = 4 → Planned X dc B me w₀ argv st.acc)
+
+/-- A continuation that does not decode is refused `badState`: no `ok`, no continuation. -/
+theorem step_bad {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f f' : Follow D} {p : Persist D} {k res : ByteArray} {r' : Command.Reply}
+    (hs : Command.step X dc B me f k res = (f', p, r')) (hn : State.ofBytes k = none) :
+    r' = refused (D := D) .badState := by
+  unfold Command.step at hs
+  simp only [hn, Prod.mk.injEq] at hs
+  exact hs.2.2.symm
+
+/-- The continuation a step hands on keeps `ContOf`, from the World the step ran at. -/
+theorem contOf_step {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {w₀ : World D} {argv : List ByteArray} {r r' : Command.Reply} {g f' : Follow D} {p : Persist D}
+    {k res : ByteArray} (hc : ContOf X dc B me w₀ argv r) (hk : r.cont = some k)
+    (hg : Reach X dc B me w₀ g.world) (hs : Command.step X dc B me g k res = (f', p, r')) :
+    ContOf X dc B me w₀ argv r' := by
+  intro k' st' hk' hs'
+  cases hst : State.ofBytes k with
+  | none => rw [step_bad hs hst] at hk'; simp [refused, Reply.cont] at hk'
+  | some st =>
+    obtain ⟨harg, -⟩ := hc k st hk hst
+    obtain ⟨ha, h4⟩ := step_cont hst hs hk' hs'
+    refine ⟨ha.trans harg, fun hp => ?_⟩
+    obtain ⟨cmd, s, rs, b, u, sig, h1, h2, h3, h4', h5⟩ := h4 hp
+    exact ⟨g.world, hg, cmd, s, rs, b, u, sig, harg ▸ h1, h2, h3, h4', h5⟩
 
 /-- **A run of an invoke that ends `ok` settled a planned call committed on follow's own World**: the
 `done ok` is the settlement step (`step_invoke_ok`), its continuation came from step 3's submit
-(`step_cont`, through `ContOf`), so its call bytes are a call `plan` produced from that command's body,
-and follow's World at the settlement settles the decoded call committed (`step_settled_ok`, T0). -/
+(`step_cont`, through `ContOf`), so its call bytes are a call `plan` produced from that command's body
+on a World follow reached, and follow's World at the settlement settles the decoded call committed
+(`step_settled_ok`, T0). -/
 theorem run_invoke_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
-    {argv : List ByteArray}
+    {w₀ : World D} {argv : List ByteArray}
     (hinv : ∀ cmd, Command.parse X.digestOf argv = .ok cmd → ∃ obj m a rg via, cmd = .invoke obj m a rg via) :
-    ∀ {f : Follow D} {r : Command.Reply} {fin : UInt8 × ByteArray × ByteArray},
-      FollowRun X dc B me f r fin → ContOf X me argv r → (∀ o e, r ≠ .done CommandExit.ok.code.toUInt8 o e) →
-      fin.1 = CommandExit.ok.code.toUInt8 →
-      ∃ (g : Follow D), ∃ acc, Planned X me argv acc ∧ ∃ cb c hh td, acc.getLast? = some cb ∧
+    ∀ {f : Follow D} {r : Command.Reply} {fe : Follow D} {fin : UInt8 × ByteArray × ByteArray},
+      FollowRun X dc B me f r fe fin → Reach X dc B me w₀ f.world → ContOf X dc B me w₀ argv r →
+      (∀ o e, r ≠ .done CommandExit.ok.code.toUInt8 o e) → fin.1 = CommandExit.ok.code.toUInt8 →
+      ∃ (g : Follow D), ∃ acc, Planned X dc B me w₀ argv acc ∧ ∃ cb c hh td, acc.getLast? = some cb ∧
         X.decodeCall cb = some c ∧ settleOf X me g.world c = .committed hh td := by
-  intro f r fin hrun
+  intro f r fe fin hrun
   induction hrun with
   | done =>
-    intro _ hnd he
+    intro _ _ hnd he
     exact absurd (by simp only at he; rw [he]) (hnd _ _)
-  | @step f g f' r r' k res p fin l hk hg hs rest ih =>
-    intro hc hnd he
-    -- a continuation that does not decode is refused `badState`: no `ok`, no continuation
-    have hbad : State.ofBytes k = none → r' = refused (D := D) .badState := by
-      intro hn
-      unfold Command.step at hs
-      simp only [hn, Prod.mk.injEq] at hs
-      exact hs.2.2.symm
+  | @step f g f' fe r r' k res p fin hk hg hs rest ih =>
+    intro hw hc hnd he
+    have hwg := hw.trans hg
     by_cases hd : ∃ o e, r' = .done CommandExit.ok.code.toUInt8 o e
     · obtain ⟨o, e, rfl⟩ := hd
       cases hst : State.ofBytes k with
-      | none => have := hbad hst; simp [refused, CommandExit.code] at this
+      | none => have := step_bad hs hst; simp [refused, CommandExit.code] at this
       | some st =>
         obtain ⟨harg, hpl⟩ := hc k st hk hst
         have h4 : st.phase = 4 := step_invoke_ok hst (harg ▸ hinv) hs
@@ -328,49 +388,106 @@ theorem run_invoke_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)
         subst h4
         obtain ⟨cb, c, hh, td, hcb, hdc, hv⟩ := step_settled_ok hst hs
         exact ⟨g, acc, hpl rfl, cb, c, hh, td, hcb, hdc, hv⟩
-    · refine ih ?_ (fun o e h => hd ⟨o, e, h⟩) he
-      intro k' st' hk' hs'
-      cases hst : State.ofBytes k with
-      | none => rw [hbad hst] at hk'; simp [refused, Reply.cont] at hk'
-      | some st =>
-        obtain ⟨harg, -⟩ := hc k st hk hst
-        obtain ⟨ha, h4⟩ := step_cont hst hs hk' hs'
-        refine ⟨ha.trans harg, fun hp => ?_⟩
-        obtain ⟨cmd, s, rs, b, u, sig, h1, h2, h3, h4', h5⟩ := h4 hp
-        exact ⟨g.world, cmd, s, rs, b, u, sig, harg ▸ h1, h2, h3, h4', h5⟩
+    · exact ih (hwg.step hs) (contOf_step hc hk hwg hs) (fun o e h => hd ⟨o, e, h⟩) he
 
-theorem start_contOf {X : Ctx D} {me : Self D} {f : Follow D} {argv : List ByteArray} :
-    ContOf X me argv (Command.start X me f argv) := by
+theorem start_contOf {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {w₀ : World D} {f : Follow D} {argv : List ByteArray} :
+    ContOf X dc B me w₀ argv (Command.start X me f argv) := by
   intro k st hk hs
   obtain ⟨ha, h4⟩ := start_cont hk hs
   exact ⟨ha, fun h => absurd h h4⟩
 
 /-! ## The member socket: what the resident's leg is trusted for -/
 
-/-- **The resident's `.cmd c x` and the member's follower** (the transport premise, one relation per
-event): an `ok`-exit reply is the `done` of a follower run of exactly `c`'s argv; every other reply
-and every failure claims nothing. The `ok` bit is Lean's: after T0 (PROTOCOL-64) follow's only `ok`
-for a submitted call is its own World's settlement, so nd's attempt loop, custody, and the Host's
-status choose the RESULT a step is handed, which `FollowRun` quantifies over, and never the exit. -/
-def SocketRel (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D)
-    (conf : Resident.Conf) (c : Resident.Cmd) : Except String Resident.Reply → Prop
-  | .ok rr => rr.exit = CommandExit.ok.code →
-      ∃ f₀, FollowRun X dc B me f₀ (Command.start X me f₀ (c.argv conf)) (rr.exit.toUInt8, rr.stdout, rr.stderr)
-  | .error _ => True
+/-- **The resident's member commands against ONE follower** (the transport premise, the `stdio-leg`
+row). Read along the resident's effects in the order it performed them, from follow's World `w`:
+an `ok`-exit reply to `.cmd c` is the `done` of a follower run of exactly `c`'s argv, started at a
+World follow reached from `w` (follow answers other frames in between), and the reading goes on
+from the World that `done` was handed out at; every other reply and every failure claims nothing
+(follow's World may have moved meanwhile: the next run starts at a World `Reach`ed). The `ok` bit is
+Lean's: after T0 (PROTOCOL-64) follow's only `ok` for a submitted call is its own World's settlement. -/
+def LegFrom (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D)
+    (conf : Resident.Conf) : World D → List Resident.Ev → Prop
+  | _, [] => True
+  | w, .cmd c (.ok rr) :: es =>
+    if rr.exit = CommandExit.ok.code then
+      ∃ f₀ fe, Reach X dc B me w f₀.world ∧
+        FollowRun X dc B me f₀ (Command.start X me f₀ (c.argv conf)) fe (rr.exit.toUInt8, rr.stdout, rr.stderr) ∧
+        LegFrom X dc B me conf fe.world es
+    else LegFrom X dc B me conf w es
+  | w, _ :: es => LegFrom X dc B me conf w es
 
-/-- **The transport premise, named** (`gates/tcb.tsv` row `stdio-leg`): every member-socket event of a
-trace is `SocketRel`. A hypothesis of the theorems below only; no landed theorem gains it. -/
+/-- **The transport premise, named** (`gates/tcb.tsv` row `stdio-leg`): the resident's member
+effects `es` are `LegFrom` some World of follow's. A hypothesis of the theorems below only. -/
 def StdioLeg (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D)
     (conf : Resident.Conf) (es : List Resident.Ev) : Prop :=
-  ∀ c x, Resident.Ev.cmd c x ∈ es → SocketRel X dc B me conf c x
+  ∃ w, LegFrom X dc B me conf w es
 
-/-- The premise is satisfiable: a trace whose member commands all failed (crash-stop) meets it. -/
+/-- The premise is satisfiable: a trace whose member commands all failed (crash-stop) meets it, from
+any World. -/
+theorem legFrom_errors {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {conf : Resident.Conf} (w : World D) :
+    ∀ {es : List Resident.Ev}, (∀ c x, Resident.Ev.cmd c x ∈ es → ∃ e, x = .error e) →
+      LegFrom X dc B me conf w es
+  | [], _ => trivial
+  | e :: es, h => by
+    have h' : ∀ c x, Resident.Ev.cmd c x ∈ es → ∃ e, x = .error e :=
+      fun c x hx => h c x (List.mem_cons_of_mem _ hx)
+    match e with
+    | .cmd c (.ok rr) => obtain ⟨e, he⟩ := h c (.ok rr) (List.mem_cons_self ..); cases he
+    | .cmd c (.error _) => exact legFrom_errors (es := es) w h'
+    | .keep _ _ _ => exact legFrom_errors (es := es) w h'
+    | .forget _ => exact legFrom_errors (es := es) w h'
+    | .ask _ _ _ => exact legFrom_errors (es := es) w h'
+    | .say _ => exact legFrom_errors (es := es) w h'
+
 theorem stdioLeg_errors {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
-    {conf : Resident.Conf} {es : List Resident.Ev}
-    (h : ∀ c x, Resident.Ev.cmd c x ∈ es → ∃ e, x = .error e) : StdioLeg X dc B me conf es := by
-  intro c x hx
-  obtain ⟨e, rfl⟩ := h c x hx
-  trivial
+    {conf : Resident.Conf} {es : List Resident.Ev} (w : World D)
+    (h : ∀ c x, Resident.Ev.cmd c x ∈ es → ∃ e, x = .error e) : StdioLeg X dc B me conf es :=
+  ⟨w, legFrom_errors w h⟩
+
+/-- Reading on past effects moves only forward: a suffix is read from a World follow reached. -/
+theorem legFrom_suffix {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {conf : Resident.Conf} :
+    ∀ (pre : List Resident.Ev) {w : World D} {es : List Resident.Ev}, LegFrom X dc B me conf w (pre ++ es) →
+      ∃ w', Reach X dc B me w w' ∧ LegFrom X dc B me conf w' es
+  | [], w, es, h => ⟨w, .refl w, h⟩
+  | e :: pre, w, es, h => by
+    match e with
+    | .cmd c (.ok rr) =>
+      simp only [List.cons_append, LegFrom] at h
+      split at h
+      · obtain ⟨f₀, fe, hr, hrun, hl⟩ := h
+        obtain ⟨w', hr', hl'⟩ := legFrom_suffix pre hl
+        exact ⟨w', (hr.trans (run_reach hrun)).trans hr', hl'⟩
+      · exact legFrom_suffix pre h
+    | .cmd c (.error _) => exact legFrom_suffix pre (by simpa [LegFrom] using h)
+    | .keep _ _ _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
+    | .forget _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
+    | .ask _ _ _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
+    | .say _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
+
+/-- An `ok` reply at the head of what is read is a follower run of its argv. -/
+theorem legFrom_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {conf : Resident.Conf} {w : World D} {c : Resident.Cmd} {rr : Resident.Reply} {es : List Resident.Ev}
+    (h : LegFrom X dc B me conf w (.cmd c (.ok rr) :: es)) (hok : rr.exit = CommandExit.ok.code) :
+    ∃ f₀ fe, Reach X dc B me w f₀.world ∧
+      FollowRun X dc B me f₀ (Command.start X me f₀ (c.argv conf)) fe (rr.exit.toUInt8, rr.stdout, rr.stderr) ∧
+      LegFrom X dc B me conf fe.world es := by
+  simp only [LegFrom, if_pos hok] at h
+  exact h
+
+/-- **Every `ok` reply of a trace is a follower run of its argv** (the per-event reading the
+text-grain theorem takes). -/
+theorem stdioLeg_event {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {conf : Resident.Conf} {es : List Resident.Ev} {c : Resident.Cmd} {rr : Resident.Reply}
+    (hs : StdioLeg X dc B me conf es) (hi : Resident.Ev.cmd c (.ok rr) ∈ es) (hok : rr.exit = CommandExit.ok.code) :
+    ∃ f₀ fe, FollowRun X dc B me f₀ (Command.start X me f₀ (c.argv conf)) fe (rr.exit.toUInt8, rr.stdout, rr.stderr) := by
+  obtain ⟨w, hl⟩ := hs
+  obtain ⟨pre, post, rfl⟩ := List.append_of_mem hi
+  obtain ⟨w', -, hl'⟩ := legFrom_suffix pre hl
+  obtain ⟨f₀, fe, -, hrun, -⟩ := legFrom_ok hl' hok
+  exact ⟨f₀, fe, hrun⟩
 
 /-! ## R1-R3 on the resident's side (no premise) -/
 
@@ -402,13 +519,6 @@ theorem deliverAfter_unsettled {sh : Resident.Shape} {r : Resident.Ring} {rr : R
 
 /-! ## The delivered answer -/
 
-omit [Ord D] [DecidableEq D] in
-private theorem decideTick_answer {p : List Resident.Ring} {k : Option (Resident.Ring × ByteArray)}
-    {r : Resident.Ring} {t : ByteArray} (h : Resident.decideTick p k = .answer r t) : k = some (r, t) := by
-  unfold Resident.decideTick at h
-  repeat' split at h
-  all_goals first | (cases h; rfl) | cases h
-
 private theorem invoke_mem_invokes {sh : Resident.Shape} {r : Resident.Ring} {t : ByteArray}
     {x : Except String Resident.Reply} {es : List Resident.Ev} (h : Resident.Ev.cmd (.invoke sh r t) x ∈ es) :
     (r, t) ∈ Resident.invokes es := by
@@ -428,21 +538,14 @@ for `(r, t)` whose reply came back `ok`:
   at the moment it said `ok` journals that call's transaction id (T0's `step_settled_ok`, then
   `settle_committed`: the journal entry itself, no collision disjunct).
 
-NOT claimed. That those argument bytes are `answerDatum r t` at `answerArgTy` (the strong form): the
-resident checked the method's type only when it read the description (`Shape.read`), maybe in an
-earlier tick and at an earlier World. The join needs three facts no landed theorem states, each the
-trigger for stating it (R-0065): (i) `Mem.shape`'s provenance across `Ticks`; (ii) a live object's
-package slot is fixed under the follower's fold (a receivers-wide fact over every `Body`, KERNEL);
-(iii) `Shape.read` of `describe` reads back the method's argument type. At a method whose type IS
-`answerArgTy`, `answer_args_at_answerArgTy` gives the strong form. The bell's ROW
-(`rings[(notBefore, ringer)].answered = some (ask t)`): that is the Bell's `answer` method, which no
-landed theorem states over the compiled Bell; `answered_row_is_kept_answer` waits for that witness (a
-LANG card: the Bell as a witness of `activity_monitor_safe`, plus the `answer` method's edit). A commit
-whose reply is LOST (follow appends, then dies before `port.send`; the resident sees `.error` or exit
-`client`) is PROT-5's at-most-once, outside this card: nothing here claims the converse of
-ok ⇒ journaled. Also not claimed: that an ok reply's stdout is the receipt (`settled` returns step 3's
-pre-submit `out`), who else holds the resident's key, restarts, liveness, and that nd's attempt loop
-implements `Attempt.next`.
+NOT claimed here: that those argument bytes are `answerDatum r t` at `answerArgTy` (the strong form):
+the resident checked the method's type only when it read the description (`Shape.read`), maybe in an
+earlier tick and at an earlier World; `SocketStrong.delivered_answer_committed_strong` makes that join.
+The bell's ROW (`rings[(notBefore, ringer)].answered = some (ask t)`): that is the Bell's `answer`
+method, which no landed theorem states over the compiled Bell (HOSTING-43). A commit whose reply is
+LOST is PROT-5's at-most-once: nothing here claims the converse of ok ⇒ journaled. Also not claimed:
+that an ok reply's stdout is the receipt (`settled` returns step 3's pre-submit `out`), who else holds
+the resident's key, liveness, and that nd's attempt loop implements `Attempt.next`.
 
 Tooth (this theorem's, not T0's): `Cmd.argv`'s invoke arm printing `answerArg r r.text` (the ring's
 own text as the answer). The event still names `(r, t)`, so `tick_counts`, `bell_resident_conforms` and
@@ -472,7 +575,7 @@ theorem delivered_answer_committed {X : Ctx D} {dc : Codec.Stream D} {B : Thin.B
     · rw [hrt, List.mem_singleton] at hmem
       obtain ⟨rfl, rfl⟩ := Prod.mk.inj hmem
       rcases hc with ⟨_, _, _, _, hd, _⟩ | ⟨_, _, _, _, _, pre, post, _, _, _, hc⟩
-      · exact .inl (decideTick_answer hd)
+      · exact .inl (Lifetime.decideTick_answer_kept hd)
       · exact .inr (by rw [hc]; simp)
   · -- the member's side: the premise names a follower run of exactly this argv
     obtain ⟨txt, htxt⟩ := Option.isSome_iff_exists.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some r t)
@@ -480,15 +583,15 @@ theorem delivered_answer_committed {X : Ctx D} {dc : Codec.Stream D} {B : Thin.B
       unfold Resident.Cmd.argv
       dsimp only
       rw [htxt]
-    obtain ⟨f₀, hrun⟩ := hs _ _ hi hok
+    obtain ⟨f₀, fe, hrun⟩ := stdioLeg_event hs hi hok
     rw [hv] at hrun
     have hinv : ∀ cmd, Command.parse X.digestOf (Resident.invokeArgv w.conf sh txt) = .ok cmd →
         ∃ obj m a rg via, cmd = .invoke obj m a rg via := by
       intro cmd hp
       obtain ⟨o, g, -, -, rfl⟩ := invokeArgv_parse hp
       exact ⟨_, _, _, _, _, rfl⟩
-    obtain ⟨gf, acc, ⟨wp, cmd, s, rs, b, u, sig, hp, hb, hr, hpl, hacc⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
-      run_invoke_ok hinv hrun start_contOf (fun _ _ => start_ne_ok) (by simp [hok])
+    obtain ⟨gf, acc, ⟨wp, -, cmd, s, rs, b, u, sig, hp, hb, hr, hpl, hacc⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
+      run_invoke_ok (w₀ := f₀.world) hinv hrun (.refl _) start_contOf (fun _ _ => start_ne_ok) (by simp [hok])
     rw [hacc] at hcb
     cases hcb
     obtain ⟨o, g, ho, hg, rfl⟩ := invokeArgv_parse hp

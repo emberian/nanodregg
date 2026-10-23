@@ -39,14 +39,22 @@ variable {D : Type} [Ord D] [DecidableEq D]
 def callLines (i : Nat) (ks : List Lang.Ty) : Option (List String) :=
   ks.zipIdx.mapM fun (k, j) => (Lang.Print.ty k).map fun t => s!"call {i} {j} {t}"
 
-/-- Method `i` of `p` as text: its line and its call-slot lines, or `none` if it has no text. -/
+/-- A line holds no line break: what `describe` requires of every line it prints. -/
+def noBreak (s : String) : Bool := !s.toList.contains '\n'
+
+/-- Method `i` of `p` as text: its line and its call-slot lines, or `none` if it has no text. The
+label must be one atom (`Lang.labelAtom`: no space, so the line's words are its index, its label and
+its type) and the argument type well formed (`Lang.Ty.wf`: what `Lang.Read.readTy` reads back,
+`Lang.Print.readTy_ty`), so the line says the method's argument type exactly (HOSTING-43). -/
 def methodLine (p : Lang.Package) (i : Nat) : Option (List String) :=
   match Lang.resolveMethod (D := D) p i with
   | .error _ => none
   | .ok (ℓ, sg) =>
-    match Lang.Print.ty sg.arg, callLines i sg.calls with
-    | some a, some cs => some (s!"method {i} {ℓ} {a}" :: cs)
-    | _, _ => none
+    if Lang.labelAtom ℓ && sg.arg.wf then
+      match Lang.Print.ty sg.arg, callLines i sg.calls with
+      | some a, some cs => some (s!"method {i} {ℓ} {a}" :: cs)
+      | _, _ => none
+    else none
 
 /-- A relation as text: LANG's own printer's (`Lang.Print.relSx`, the form `Lang.Read` reads). -/
 def relLine (r : Lang.Label × Lang.RelDecl) : Option String :=

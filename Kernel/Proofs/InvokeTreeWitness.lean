@@ -235,10 +235,10 @@ private theorem c1_pkgR : readKind (pinned wCtx.env w0 c1.unsigned.pins) 10 kind
   rfl
 
 private theorem c1_readC : readPackage (pinned wCtx.env w0 c1.unsigned.pins) 9 = .ok counter :=
-  readPackage_installed c1_pkgC (by rfl) counter_encodes
+  readPackage_installed c1_pkgC (by rfl) counter_encodes rfl
 
 private theorem c1_readR : readPackage (pinned wCtx.env w0 c1.unsigned.pins) 10 = .ok relay :=
-  readPackage_installed c1_pkgR (by rfl) relay_encodes
+  readPackage_installed c1_pkgR (by rfl) relay_encodes rfl
 
 private theorem c1_invokeRunA :
     invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 7 6 0 none = .ok (aCell, 10, reqA) :=

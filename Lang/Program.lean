@@ -60,9 +60,14 @@ def decodeText (e : Codec.Refusal) : String := s!"decode {repr e}"
 section
 variable (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck)
 
-/-- The package in a pinned package cell. -/
+/-- The package in a pinned package cell. The cell must be ROM (install's birth, `Receive.install`):
+what a package id reads is then what it read at install, at every World a fold reaches
+(`Kernel.Proofs.Frame.fold_rom`), so a description read at one World and an invoke planned at a
+later one read the same package (HOSTING-43). A package cell of another discipline is
+`malformedCell`. -/
 def readPackage (look : Pinned D) (id : D) : Except (Refusal D) Package := do
   let cell ← readKind look id kindPackage
+  if cell.discipline ≠ .rom then throw (.malformedCell id 0)
   match cell.slots.get 0 with
   | none => throw (.malformedCell id 0)
   | some b =>

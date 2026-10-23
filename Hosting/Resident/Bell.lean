@@ -87,20 +87,52 @@ structure Shape where
   key : pending.key = pendingKey
   val : pending.val = pendingVal
 
+/-- A text's lines: the pieces between its line breaks, in order (after a final break, the empty
+piece). A description's lines hold no break (`Protocol.Command.noBreak`), so this reads back exactly
+the lines `describe` printed (`Proofs.Socket.splitLines_join`). -/
+def splitLines : List Char → List (List Char)
+  | [] => [[]]
+  | c :: cs =>
+    if c = '\n' then [] :: splitLines cs else
+    match splitLines cs with
+    | [] => [[c]]
+    | l :: ls => (c :: l) :: ls
+
+/-- A line's text before its first space, and what follows that space (`none`: no space). -/
+def word : List Char → Option (List Char × List Char)
+  | [] => none
+  | c :: rest => if c = ' ' then some ([], rest) else (word rest).map fun (w, r) => (c :: w, r)
+
+/-- The words of a description's `method I LABEL TYPE` line: the index text, the label (one atom:
+no space, `Lang.labelAtom`) and the type text (the rest of the line). -/
+def methodWords (l : List Char) : Option (String × String × String) :=
+  match l with
+  | 'm' :: 'e' :: 't' :: 'h' :: 'o' :: 'd' :: ' ' :: rest =>
+    match word rest with
+    | some (i, r) =>
+      match word r with
+      | some (lab, ty) => some (String.ofList i, String.ofList lab, String.ofList ty)
+      | none => none
+    | none => none
+  | _ => none
+
+/-- The index text and type text of the first `method I answer TYPE` line. -/
+def answerWords (ls : List (List Char)) : Option (String × String) :=
+  ls.findSome? fun l => match methodWords l with
+    | some (i, "answer", ty) => some (i, ty)
+    | _ => none
+
 /-- The shape from `read OBJ ?`'s lines, or why not. The `method I answer TYPE` line's type is read
-by `Lang.Read.readTy`, the `rel (pending …)` line by `Lang.Read.rel`. -/
+by `Lang.Read.readTy` (HOSTING-43: `Proofs.Socket.describe_shape` reads it back as the method's
+declared argument type), the `rel (pending …)` line by `Lang.Read.rel`. -/
 def Shape.read (out : String) : Except String Shape := do
-  let lines := out.splitOn "\n"
-  let methods := lines.filterMap fun l => (l.dropPrefix? "method ").map (·.toString.splitOn " ")
-  let some (i, ty) := methods.findSome? (fun
-      | i :: "answer" :: ty => some (i, " ".intercalate ty)
-      | _ => none)
-    | throw "noAnswer"
+  let ls := splitLines out.toList
+  let some (i, ty) := answerWords ls | throw "noAnswer"
   let some i := i.toNat? | throw "answerIndex"
   match Read.readTy ty with
   | .ok T => unless T = answerArgTy do throw "answerType"
   | .error _ => throw "answerType"
-  let rels := lines.filterMap fun l => (l.dropPrefix? "rel ").map (·.toString)
+  let rels := (ls.map String.ofList).filterMap fun l => (l.dropPrefix? "rel ").map (·.toString)
   let some d := rels.findSome? (fun t => match Read.parse t >>= Read.rel with
       | .ok ("pending", d) => some d
       | _ => none)

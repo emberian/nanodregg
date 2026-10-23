@@ -17,16 +17,21 @@ variable {D : Type} [Ord D] [DecidableEq D]
 omit [Ord D] [DecidableEq D] in
 theorem methodLine_resolves {p : Lang.Package} {i : Nat} {ls : List String}
     (h : methodLine (D := D) p i = some ls) :
-    ∃ ℓ sg a, Lang.resolveMethod (D := D) p i = .ok (ℓ, sg) ∧ Lang.Print.ty sg.arg = some a ∧
-      ls.head? = some s!"method {i} {ℓ} {a}" := by
+    ∃ ℓ sg a cs, Lang.resolveMethod (D := D) p i = .ok (ℓ, sg) ∧ Lang.labelAtom ℓ = true ∧
+      sg.arg.wf = true ∧ Lang.Print.ty sg.arg = some a ∧ callLines i sg.calls = some cs ∧
+      ls = s!"method {i} {ℓ} {a}" :: cs := by
   unfold methodLine at h
   split at h
   · cases h
   · rename_i ℓ sg hr
     split at h
-    · rename_i a cs ha _
-      cases h
-      exact ⟨ℓ, sg, a, hr, ha, rfl⟩
+    · rename_i hok
+      simp only [Bool.and_eq_true] at hok
+      split at h
+      · rename_i a cs ha hc
+        cases h
+        exact ⟨ℓ, sg, a, cs, hr, hok.1, hok.2, ha, hc, rfl⟩
+      · cases h
     · cases h
 
 omit [Ord D] [DecidableEq D] in

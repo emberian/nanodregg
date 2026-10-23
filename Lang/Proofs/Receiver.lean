@@ -433,14 +433,11 @@ section
 variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
 
 /-- **A package cell reads as the package whose bytes it holds** (`install` writes
-`encodePackage p` to slot 0 of a package cell). -/
+`encodePackage p` to slot 0 of a package cell, in ROM). -/
 theorem readPackage_installed {look : Pinned D} {law : D} {cell : Kernel.Cell} {b : ByteArray} {p : Package}
     (hc : readKind look law kindPackage = .ok cell) (hs : cell.slots.get 0 = some b)
-    (he : Wire.encodePackage p = some b) : readPackage look law = .ok p := by
-  unfold readPackage
-  rw [hc]
-  simp only [bind, Except.bind, hs, Wire.decodePackage_eq_ok_iff.2 he]
-  rfl
+    (he : Wire.encodePackage p = some b) (hr : cell.discipline = .rom) : readPackage look law = .ok p :=
+  readPackage_ok.mpr ⟨cell, b, hc, hr, hs, Wire.decodePackage_eq_ok_iff.2 he⟩
 
 /-- **The receiver's verdict is the laws' meaning, for any package.** If `judgeOne` admits
 `old → new` under `r` for the package `p` the pinned cell holds (with imports or not), then the

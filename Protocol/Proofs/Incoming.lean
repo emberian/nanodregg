@@ -152,9 +152,8 @@ theorem custodyEnd_cont {X : Ctx D} {cmd : Cmd D} {st : State} {r : Refusal D} :
 
 theorem describe_cont {X : Ctx D} {w : World D} {obj : D} : (describe X w obj).cont = none := by
   unfold describe
-  split
-  · simp [refused, Reply.cont]
-  · split <;> simp [refused, printed, Reply.cont]
+  repeat' split
+  all_goals simp [refused, printed, Reply.cont]
 
 theorem rangeRender_cont {X : Ctx D} {w : World D} {obj : D} {rel : String} {most : Nat}
     {pre : Option String} : (rangeRender X w obj rel most pre).cont = none := by
