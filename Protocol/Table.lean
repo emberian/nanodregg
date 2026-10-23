@@ -414,8 +414,12 @@ namespace Bounds
 
 /-- One frame body (op or status byte and payload), either socket, either direction. -/
 def frameBytesMax : Nat := 262144
-/-- A `command` payload: the argv, `4 + Σ (4 + len)`. -/
-def argvBytesMax : Nat := 65536
+/-- A `command` payload: the argv, `4 + Σ (4 + len)`. DERIVED from the kernel's call bound: it holds
+`receipt CALL`, the call in hex, for every call the kernel admits (`eventBytesMax` bytes;
+`Command.receipt_argv_fits`). At 65536 a call past 32,760 bytes was committed and never confirmed:
+follow refused the confirm's argv `argvPastBound`, which the attempt reads as `uncertain` (LANG-76,
+the Bell's install at 36,379 call bytes). -/
+def argvBytesMax : Nat := 2 * Kernel.Bounds.eventBytesMax + 1024
 /-- Steps one command may take before follow ends it with a refusal. -/
 def stepsPerCommandMax : Nat := 64
 /-- Sends of one frozen call: the first submit and the resends after `absent`. -/

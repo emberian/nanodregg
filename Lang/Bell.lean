@@ -88,8 +88,12 @@ def answerBounds : List Surface.Bound := [⟨["ringText"], true, 1, 2000⟩, ⟨
 def answer : Term :=
   .lam (.record []) (.lam S (.lam answerArg (.lam reqTy (Surface.boundCheck answerRes answerBounds answerBody))))
 
-/-- The `rung` guard: the generated waiting guard over the Bell's log. -/
-def rung : Term := activityWaiting S plans rings resumer names
+/-- The Bell's declared patience (`(patience 2048)`, LANG-76): an unanswered ring may be retired by
+anyone from its key's `notBefore` + 2048 on. -/
+def patience : Nat := 2048
+
+/-- The `rung` guard: the generated waiting guard over the Bell's log, at its patience. -/
+def rung : Term := activityWaiting S plans rings resumer names (some patience)
 
 /-- The two body fields the witness reads. -/
 def bodyOk : Term → Bool

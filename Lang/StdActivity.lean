@@ -21,6 +21,7 @@ inductive ActivityRefusal
   | tooManyPlans
   | duplicatePlan
   | sameRelation
+  | zeroPatience
   | package (why : CheckError)
 
 def ActivityRefusal.name : ActivityRefusal → String
@@ -28,6 +29,7 @@ def ActivityRefusal.name : ActivityRefusal → String
   | .tooManyPlans => "tooManyPlans"
   | .duplicatePlan => "duplicatePlan"
   | .sameRelation => "sameRelation"
+  | .zeroPatience => "zeroPatience"
   | .package why => why.text
 
 /-- The continuation key keeps time first in the declared order, as the Bell's
@@ -67,9 +69,29 @@ structure ActivityVocabulary where
   unstarted : String := "unstarted"
   captured : String := "captured"
 
+/-- An activity's deadline has come (LANG-76): the call's signed `notBefore` is at least the row's
+own key `notBefore` plus the declared `patience`, in heights. A Turn lands at a height in its signed
+window `[notBefore, validUntil]` (KERNEL-10, `World.admit`), so a call that meets this lands at or
+after the deadline; as `windowed`, no clock holder is read. A key's `notBefore` is the starter's
+signed one, at most the kernel's window below the height its start landed at, so the deadline falls
+between `patience - window` and `patience` heights after the start landed. The sum faults past
+`natLimit`, and a fault is a refusal. -/
+def activityDue (patience : Nat) (key req : Term) : Term :=
+  .prim .le (.prim .add (.get key "notBefore") (natT patience)) (.get req "notBefore")
+
+/-- What the log guard does with a retraction of an UNANSWERED row (LANG-76). With no declared
+patience it refuses `unanswered`, always: the row waits for its resumer. With `some p` it refuses
+`unanswered` before the deadline and admits at or after it, whoever retracts (the abandon of an
+activity whose resumer was silent, or whose resume ran out of ticks). -/
+def activityLate : Option Nat → Term → Term → Term
+  | none, _, _ => refusedT "unanswered"
+  | some p, key, req => guard (activityDue p key req) "unanswered" okT
+
 /-- Row guard for an activity log. Its old row is read by the kernel at the
-edited key; capture and plan cannot change when the row is answered. -/
-def activityWaiting (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (names : ActivityVocabulary := {}) : Term :=
+edited key; capture and plan cannot change when the row is answered. An
+unanswered row is retracted only past its deadline (`activityLate`). -/
+def activityWaiting (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (names : ActivityVocabulary := {})
+    (patience : Option Nat := none) : Term :=
   let f (i : Nat) (l : Label) := Term.get (.var i) l
   let key (i : Nat) := Term.get (f i "key") "agent"
   let val (i : Nat) (l : Label) := Term.get (f i "val") l
@@ -79,7 +101,8 @@ def activityWaiting (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer 
         (.case (val 0 "answered") [("none", okT), ("some", refusedT "answered")])),
       ("retract", .case (f 1 "old") [
         ("none", refusedT names.unstarted),
-        ("some", .case (f 0 "answered") [("none", refusedT "unanswered"), ("some", okT)])]),
+        -- under the old row's and its `none` answer's binders: payload=2, request=4
+        ("some", .case (f 0 "answered") [("none", activityLate patience (f 2 "key") (.var 4)), ("some", okT)])]),
       ("upsert", guard (activityApply resumer [.var 3, .var 2]) names.notResumer
         (.case (f 1 "old") [
           ("none", refusedT names.unstarted),
@@ -90,13 +113,23 @@ def activityWaiting (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer 
                 ("some", guard (activitySamePlan plans (val 3 "captured") (.var 0)) "plan" okT)])),
             ("some", refusedT "answered")])]))])))
 
+/-- Who may retract a cursor row: the resumer; with a declared patience, also anyone at or after
+the row's deadline (LANG-76: `timeout` retracts the cursor row beside the log row). Under the
+retract arm's binder: payload=0, request=2, state=3. -/
+def activityDequeue (patience : Option Nat) (resumer : Term) (names : ActivityVocabulary) : Term :=
+  let byResumer := guard (activityApply resumer [.var 3, .var 2]) names.notResumer okT
+  match patience with
+  | none => byResumer
+  | some p => .ite (activityDue p (.get (.var 0) "key") (.var 2)) okT byResumer
+
 /-- The cursor is insert/retract only: insertion is by the key's signer,
-retraction by the resumer. No phase field is written into object state. -/
+retraction by the resumer (or, past a declared deadline, by anyone).
+No phase field is written into object state. -/
 def activityQueued (S : Ty) (d : RelDecl) (resumer : Term)
-    (names : ActivityVocabulary := {}) : Term :=
+    (names : ActivityVocabulary := {}) (patience : Option Nat := none) : Term :=
   .lam S (.lam reqTy (.lam (guardInTy d) (.case (.get (.var 0) "edit") [
     ("insert", guard (.prim .deq (.get (.get (.var 0) "key") "agent") (.get (.var 2) "agent")) "notYours" okT),
-    ("retract", guard (activityApply resumer [.var 3, .var 2]) names.notResumer okT),
+    ("retract", activityDequeue patience resumer names),
     ("upsert", refusedT "final")])))
 
 def activityKeyTerm (agent notBefore : Term) : Term :=
@@ -172,13 +205,44 @@ def activityResumeMethod (S : Ty) (rels : List (Label × RelDecl)) (cursor log :
     (fail "notResumer")
   activityMethod S A (readsTy rels [(log, ⟨1, none, false, false⟩)]) resumeBody
 
+/-- The generated `retire` of an activity with a declared patience (LANG-76). It reads the log row
+at its key (the caller's pin, as `resume` does). An answered row leaves the log alone: its cursor row
+left with the answer. An unanswered row leaves the log AND the cursor in one Turn, which the log
+guard admits only at or past the row's deadline (`activityLate`, anyone) and the cursor guard admits
+there too (`activityDequeue`). So the activity's own methods keep exactly one cursor row for each
+unanswered log row across an abandon: a log-only retraction of an unanswered row would leave a cursor
+row its resumer can no longer answer. -/
+def activityRetireMethod (S : Ty) (rels : List (Label × RelDecl)) (cursor log : Label)
+    (cd ld : RelDecl) : Term :=
+  let E := editTy rels
+  let f (i : Nat) (l : Label) := Term.get (.var i) l
+  let key (i : Nat) := activityKeyTerm (f i "agent") (f i "notBefore")
+  let fail (why : String) := Term.refuse (resultTy S [] E 2) why.toUTF8
+  -- Under the answered case's binder: payload=0, row=1, point=2, request=3, argument=4, state=5.
+  let leave (cursorToo : Bool) : Term := resultT (.record []) (.var 5) (.record [
+    ("e0", someCallT E (activityEdit rels log ld "retract" (key 4))),
+    ("e1", if cursorToo then someCallT E (activityEdit rels cursor cd "retract" (key 4)) else noCallT E)])
+  -- Binders: request=0, argument=1, state=2, rows=3; under the point's case, point=0 and the rest
+  -- shift by one; under the value's case, row=0, point=1, argument=3.
+  activityMethod S (keyTy ld) (readsTy rels [(log, ⟨1, none, false, false⟩)])
+    (.case (.get (.get (.var 3) log) "p0") [
+      ("none", fail "unknown"),
+      ("some", .case (f 0 "val") [
+        ("none", fail "unknown"),
+        ("some", .ite (eqData (keyTy ld) (f 1 "key") (key 3))
+          (.case (f 0 "answered") [("none", leave true), ("some", leave false)])
+          (fail "key"))])])
+
 /-- Emit the activity as an ordinary checked package. Additional application
 methods/laws can be composed with its fields; the final package is checked by
-the same install checker. Limits are the relation's normal kernel bounds. -/
+the same install checker. Limits are the relation's normal kernel bounds.
+With a declared `patience`, `retire` is `activityRetireMethod` (LANG-76): it also
+abandons an unanswered activity at or past its deadline, by anyone. -/
 def activityPackage (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
     (resumer : Term) (plans : List ActivityPlan)
     (extraRels : List (Label × RelDecl) := [])
-    (guardNames : Option (Label × Label) := none) (names : ActivityVocabulary := {}) : Package := Id.run do
+    (guardNames : Option (Label × Label) := none) (names : ActivityVocabulary := {})
+    (patience : Option Nat := none) : Package := Id.run do
   let cg := (guardNames.map (·.1)).getD (cursor ++ "_queued")
   let lg := (guardNames.map (·.2)).getD (log ++ "_waiting")
   let cd := activityCursor plans cursorLimit cg
@@ -190,8 +254,8 @@ def activityPackage (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
   let f (i : Nat) (l : Label) := Term.get (.var i) l
   let key (i : Nat) := activityKeyTerm (f i "agent") (f i "notBefore")
   let mut fields : List (Label × Ty × Term) := [
-    (cg, guardTy S cd, activityQueued S cd resumer names),
-    (lg, guardTy S ld, activityWaiting S plans ld resumer names)]
+    (cg, guardTy S cd, activityQueued S cd resumer names patience),
+    (lg, guardTy S ld, activityWaiting S plans ld resumer names patience)]
   let mut methods : List Label := []
   for p in plans do
     let startName := "start_" ++ p.name
@@ -203,8 +267,10 @@ def activityPackage (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
         activityResumeMethod S rels cursor log cd ld resumer plans p)]
     methods := methods ++ [startName, resumeName]
   let K := keyTy ld
-  fields := fields ++ [("retire", methodTy S K [] empty E 1,
-    activityMethod S K empty (activityResult rels (.var 2) [activityEdit rels log ld "retract" (key 1)]))]
+  fields := fields ++ [match patience with
+    | none => ("retire", methodTy S K [] empty E 1,
+        activityMethod S K empty (activityResult rels (.var 2) [activityEdit rels log ld "retract" (key 1)]))
+    | some _ => ("retire", methodTy S K [] reads E 2, activityRetireMethod S rels cursor log cd ld)]
   methods := methods ++ ["retire"]
   let sortedFields := Row.sort fields
   let pkg : Package := {
@@ -215,9 +281,11 @@ def activityPackage (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
   return pkg
 
 def activity (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
-    (resumer : Term) (plans : List ActivityPlan) : Except ActivityRefusal Package := do
+    (resumer : Term) (plans : List ActivityPlan) (patience : Option Nat := none) :
+    Except ActivityRefusal Package := do
   if plans.isEmpty then throw .noPlans
   if 2 * plans.length + 1 > methodsMax then throw .tooManyPlans
+  if patience = some 0 then throw .zeroPatience
   if !(plans.map (·.name)).Nodup then throw .duplicatePlan
   if cursor = log then throw .sameRelation
   match checkE [] resumer (.fn S (.fn reqTy .bool)) (Ω := []) with
@@ -231,7 +299,7 @@ def activity (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
       match checkE [] t T (Ω := []) with
       | .error why => throw (.package (.illTyped why))
       | .ok () => pure ()
-  let pkg := activityPackage S cursor log cursorLimit logLimit resumer plans
+  let pkg := activityPackage S cursor log cursorLimit logLimit resumer plans (patience := patience)
   match pkg.checkWith [] with
   | .error why => throw (.package why)
   | .ok () => pure pkg

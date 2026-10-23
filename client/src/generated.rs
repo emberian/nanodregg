@@ -3,7 +3,7 @@
 // Check:      lake exe emit-rust --check client/src/generated.rs
 
 pub const FRAME_BYTES_MAX: u32 = 262144;
-pub const ARGV_BYTES_MAX: u32 = 65536;
+pub const ARGV_BYTES_MAX: u32 = 132096;
 pub const STEPS_PER_COMMAND_MAX: u32 = 64;
 pub const SENDS_MAX: u32 = 8;
 pub const CONNECTIONS_MAX: u32 = 64;
@@ -433,11 +433,11 @@ pub mod layout {
     impl Command {
         pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
             let mut c = Cursor { b, i: 0 };
-            let argv = c.list(65536)?;
-            if c.i > 65536 {
+            let argv = c.list(132096)?;
+            if c.i > 132096 {
                 return Err(Refusal::PastBound {
                     offset: 0,
-                    limit: 65536,
+                    limit: 132096,
                     got: c.i,
                 });
             }
@@ -448,11 +448,11 @@ pub mod layout {
         pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
             let mut out = Vec::new();
             let Command { argv } = self;
-            put_list(&mut out, argv, 65536)?;
-            if out.len() > 65536 {
+            put_list(&mut out, argv, 132096)?;
+            if out.len() > 132096 {
                 return Err(Refusal::PastBound {
                     offset: 0,
-                    limit: 65536,
+                    limit: 132096,
                     got: out.len(),
                 });
             }

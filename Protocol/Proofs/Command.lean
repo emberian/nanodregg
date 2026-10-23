@@ -39,6 +39,47 @@ theorem parse_past_bound {D : Type} (digestOf : ByteArray → Option D) (argv : 
     parse digestOf argv = .error (.argvPastBound (argvSize argv)) := by
   simp [parse, h]; rfl
 
+theorem hexDigit_utf8Size_fin : ∀ k : Fin 16, (Text.hexDigit (UInt8.ofNat k.val)).utf8Size = 1 := by
+  decide
+
+theorem hexDigit_utf8Size {n : UInt8} (h : n.toNat < 16) : (Text.hexDigit n).utf8Size = 1 := by
+  simpa using hexDigit_utf8Size_fin ⟨n.toNat, h⟩
+
+/-- Hex is two ASCII digits a byte. -/
+theorem toHex_utf8ByteSize (b : ByteArray) : (Text.toHex b).utf8ByteSize = 2 * b.size := by
+  have hi (x : UInt8) : (Text.hexDigit (x >>> 4)).utf8Size = 1 :=
+    hexDigit_utf8Size (by have := x.toNat_lt; simp [UInt8.toNat_shiftRight]; omega)
+  have lo (x : UInt8) : (Text.hexDigit (x &&& 15)).utf8Size = 1 :=
+    hexDigit_utf8Size (by simp [UInt8.toNat_and]; exact Nat.lt_of_le_of_lt Nat.and_le_right (by decide))
+  unfold Text.toHex
+  rw [← Array.foldl_toList]
+  have h : ∀ (l : List UInt8) (s : String),
+      (l.foldl (fun (s : String) (x : UInt8) =>
+        (s.push (Text.hexDigit (x >>> 4))).push (Text.hexDigit (x &&& 15))) s).utf8ByteSize =
+        s.utf8ByteSize + 2 * l.length := by
+    intro l
+    induction l with
+    | nil => intro s; simp
+    | cons x xs ih =>
+      intro s
+      simp only [List.foldl, ih, String.utf8ByteSize_push, hi, lo, List.length_cons]
+      omega
+  rw [h, Array.length_toList]
+  show ("" : String).utf8ByteSize + 2 * b.data.size = 2 * b.data.size
+  rw [String.utf8ByteSize_empty, Nat.zero_add]
+
+/-- **A confirm's argv fits** (LANG-76): `receipt CALL`, the call in hex, is within `argvBytesMax`
+for every call the kernel admits (`World.admit` bounds a call by `eventBytesMax`), so no committed
+call's confirm is refused `argvPastBound`. -/
+theorem receipt_argv_fits (call : ByteArray) (h : call.size ≤ Kernel.Bounds.eventBytesMax) :
+    argvSize ["receipt".toUTF8, (Text.toHex call).toUTF8] ≤ Bounds.argvBytesMax := by
+  have hs : (Text.toHex call).toUTF8.size = 2 * call.size := by
+    rw [String.toUTF8_eq_toByteArray, String.size_toByteArray, toHex_utf8ByteSize]
+  have h7 : "receipt".toUTF8.size = 7 := by decide
+  simp only [argvSize, List.map, List.sum_cons, List.sum_nil, hs, h7]
+  simp only [Bounds.argvBytesMax, Kernel.Bounds.eventBytesMax] at h ⊢
+  omega
+
 variable {D : Type} [Ord D] [DecidableEq D]
 
 

@@ -15,7 +15,8 @@ text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_
               | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] body)
               | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))
               | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))
-              | (activity cursor log [(limits cursorLimit logLimit)] (resumer e) plan…)
+              | (activity cursor log [(limits cursorLimit logLimit)] [(patience n)] [(expose m…)]
+                  [(guards q w)] [(refusals "r" "u" "c")] (resumer e) plan…)
               | (machine f initial (methods m…) (from m to)…) | (guard g body)
     plan    ::= (plan name (arg T) (resp U) [(pre e)] (start e) (resume e))
     type    ::= the core's types | N | Req | Verdict | Occasion | AcctRef | Right
@@ -30,6 +31,8 @@ text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_
 An activity precondition/start binds state, arg, req; resume binds state, captured, response,
 req. Its cursor and continuation are rows under self. The generated start_name/resume_name
 methods and retire method use the same row guards and install checker as handwritten methods.
+`(patience n)` (LANG-76, n > 0 heights) adds a `timeout` method: an unanswered row may be retracted
+by anyone at or past its key's `notBefore` + n; without it an unanswered row waits for its resumer.
 
 Every annotation the lowering writes comes from a declaration; nothing is inferred, so the
 surface never decides a type (the checker does). A method binds `rows state arg req`, a law
@@ -754,6 +757,12 @@ def activityDecl (c : Ctx) (p : Nat) (cursor log : Label) (xs : List SExp)
       | some a, some b => pure (a, b, rest)
       | _, _ => throw (.badClause q)
     | _ => pure (64, 1024, xs)
+  let (patience, rest) ← match rest with
+    | .list q [.atom _ "patience", .atom _ n] :: rest =>
+      match n.toNat? with
+      | some n => pure (some n, rest)
+      | none => throw (.badClause q)
+    | _ => pure (none, rest)
   let (expose, rest) ← match rest with
     | .list _ (.atom _ "expose" :: names) :: rest =>
       pure (some (← labelsOf names), rest)
@@ -789,10 +798,10 @@ def activityDecl (c : Ctx) (p : Nat) (cursor log : Label) (xs : List SExp)
             [("state", c.state), ("captured", K), ("response", R), ("req", reqTy)] resume } : Std.ActivityPlan)
       | _ => throw (.badClause q)
     | _ => throw (.badClause x.pos)
-  match Std.activity c.state cursor log cursorLimit logLimit resumer plans with
+  match Std.activity c.state cursor log cursorLimit logLimit resumer plans patience with
   | .ok _ =>
     let pkg := Std.activityPackage c.state cursor log cursorLimit logLimit resumer plans
-      extraRels guardNames vocabulary
+      extraRels guardNames vocabulary patience
     match expose with
     | none => pure pkg
     | some ns =>

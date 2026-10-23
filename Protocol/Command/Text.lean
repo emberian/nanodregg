@@ -13,8 +13,10 @@ open Nanodregg.Codec
 def hexDigit (n : UInt8) : Char :=
   if n < 10 then Char.ofNat (48 + n.toNat) else Char.ofNat (87 + n.toNat)
 
+/-- Lowercase hex, two digits a byte (`Command.toHex_utf8ByteSize`). A fold over the bytes' array, so
+its size is a fact about a list fold. -/
 def toHex (b : ByteArray) : String :=
-  b.foldl (fun s x => (s.push (hexDigit (x >>> 4))).push (hexDigit (x &&& 15))) ""
+  b.data.foldl (fun (s : String) (x : UInt8) => (s.push (hexDigit (x >>> 4))).push (hexDigit (x &&& 15))) ""
 
 def hexVal (c : Char) : Option UInt8 :=
   if '0' ≤ c ∧ c ≤ '9' then some (c.toNat - 48).toUInt8

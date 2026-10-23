@@ -1185,7 +1185,8 @@ resident installs). A ring inserts `pending` and `rings` at `(notBefore, ringer)
 the resident reads `pending` (the unanswered rings, in ring order) and answers one: it upserts
 `rings[k]` with the answer, sending back the ring's text, and `pending` loses the row. The guard
 `rung` sees the row the upsert or retract replaces: an answer is the resident's, once, over the
-ring's own text; a retire takes only an answered ring. Relations by index: pending 0, rings 1. -/
+ring's own text; a retire takes an answered ring, or an unanswered one (with its pending row) from its
+deadline on (LANG-76). Relations by index: pending 0, rings 1. -/
 
 /-- Where the Bell's surface source and its emitted core live. -/
 def bellSourcePath : System.FilePath := "world" / "resident" / "Bell.ob"
@@ -1413,9 +1414,22 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
   let (r10, v10, _) := go prog r (call r a 3 (retireArg h0 a) r.st.host.height (pinRow r.st.host 1 dR k0))
   r := note r10 s!"LB10 A retires the answered ring at {h0}: {v10}"
     (v10 == "admitted" && !present r10.st.host 1 dR k0 && headCount r10.st.host obj 1 == some 2)
-  let (r10b, v10b, _) := go prog r (call r a 3 (retireArg h1 b) r.st.host.height (pinRow r.st.host 1 dR kb))
-  r := note { r10b with log := r.log, bad := r.bad } s!"LB10b A retires B's ring, still pending: {v10b}"
-    (deniedWith v10b "rung: unanswered" && present r.st.host 1 dR kb)
+  -- LB10b-LB10d (LANG-76) an unanswered ring has a deadline, its notBefore + 2048 (`(patience 2048)`):
+  -- before it `rung` refuses retiring it; from it on, anyone the kernel lets invoke `retire` abandons
+  -- it, its rings row and its pending row in one Turn (the heights are set, as LT's expiry row does)
+  let (r10b, v10b, _) := go prog r (call r a 3 (retireArg h1 b) r.st.host.height (pinBoth r.st.host kb))
+  r := note { r10b with log := r.log, bad := r.bad } s!"LB10b A retires B's ring, still pending, before its deadline {h1 + 2048}: {v10b}"
+    (deniedWith v10b "rung: unanswered" && present r.st.host 1 dR kb && present r.st.host 0 dP kb)
+  let atHeight (H : Nat) : Run := { r with st := { r.st with host := { r.st.host with height := H } } }
+  let early := atHeight (h1 + 2047)
+  let (_, v10c, _) := go prog early (call early a 3 (retireArg h1 b) (h1 + 2047) (pinBoth early.st.host kb))
+  r := note r s!"LB10c A retires it one height before its deadline (signed notBefore {h1 + 2047}): {v10c}"
+    (deniedWith v10c "rung: unanswered")
+  let late := atHeight (h1 + 2048)
+  let (r10d, v10d, _) := go prog late (call late a 3 (retireArg h1 b) (h1 + 2048) (pinBoth late.st.host kb))
+  r := note r s!"LB10d A retires it at its deadline (signed notBefore {h1 + 2048}): {v10d}; its rings row and its pending row both leave"
+    (v10d == "admitted" && !present r10d.st.host 1 dR kb && !present r10d.st.host 0 dP kb &&
+      headCount r10d.st.host obj 0 == some 0 && headCount r10d.st.host obj 1 == some 1)
   -- LB11 the queue's bound: A fills pending to its limit, 64, one ring per height; the 65th is relationFull
   let mut fills := 0
   while headCount r.st.host obj 0 != some 64 && fills < 64 do

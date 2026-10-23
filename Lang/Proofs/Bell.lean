@@ -46,7 +46,7 @@ guarded by the field `rung`, and that field is `activityWaiting` over the Bell's
 resumer and refusal names; the premises `activity_program_safe` takes of the guard hold. -/
 theorem rung_is_waiting {p : Package} (h : shapeOk p = true) :
     ∃ fs, p.body = .record fs ∧ Row.find? "rings" p.rels = some rings ∧ rings.guard = some "rung" ∧
-      Row.find? "rung" fs = some (activityWaiting S plans rings resumer names) ∧
+      Row.find? "rung" fs = some (activityWaiting S plans rings resumer names (some patience)) ∧
       rings.val = activityLogVal plans ∧ NoRef resumer ∧ (activityCaptured plans).wf = true := by
   obtain ⟨-, -, -, hr, -, fs, hb, -, hg⟩ := shape_parts h
   refine ⟨fs, hb, by rw [hr]; rfl, rfl, hg, rfl, ?_, by decide⟩
@@ -67,7 +67,7 @@ theorem bell_monitored {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D}
     ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       rows = es.map (fun x => (x.slot, x.act)) ∧
       ∀ x ∈ es, x.label = "rings" → ∃ o, guardOld digestOf rv r.self x = .ok o ∧
-        WaitingStep S.lib resumer (reqData bytesOf r) S.state x.data o := by
+        WaitingStep S.lib resumer (some patience) (reqData bytesOf r) S.state x.data o := by
   obtain ⟨hi, hh, -⟩ := shape_parts hs
   obtain ⟨fs, hb, hrel, hg, hf, hv, hnr, hw⟩ := rung_is_waiting hs
   exact activity_program_safe bytesOf digestOf hid hp hi hh hb hrel hg hf hnr hv hw h

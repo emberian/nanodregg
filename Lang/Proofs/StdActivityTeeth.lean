@@ -26,6 +26,7 @@ private def actBuildName : String := match actBuild with
   | .error .tooManyPlans => "tooManyPlans"
   | .error .duplicatePlan => "duplicatePlan"
   | .error .sameRelation => "sameRelation"
+  | .error .zeroPatience => "zeroPatience"
 
 
 theorem activity_fixture_generated : actBuildName = "ok" := by decide +kernel
@@ -188,5 +189,107 @@ theorem activity_resume_requires_matching_key :
 theorem activity_resume_requires_matching_plan :
     actResumeVerdict "r" (actRowsAt actKey (actSome (.record [
       ("answered", actNone), ("captured", .inj "other" (.nat 3))]))) = "wrongPlan" := by decide +kernel
+
+
+/-! ## The deadline arm (LANG-76): the same fixture with `patience 10` -/
+
+private def lateBuild := activity actS "pending" "waits" 64 1024 actResumer [actPlan, { actPlan with name := "other" }] (some 10)
+private def latePkg : Package := match lateBuild with | .ok p => p | .error _ => default
+
+theorem activity_late_fixture_generated :
+    (match lateBuild with | .ok p => p.methods == ["resume_other", "resume_step", "retire", "start_other", "start_step"] | .error _ => false) = true := by
+  decide +kernel
+
+/-- A declared patience of 0 (anyone may abandon at once) is refused by name. -/
+theorem activity_zero_patience_refused :
+    (match activity actS "pending" "waits" 64 1024 actResumer [actPlan] (some 0) with
+      | .error .zeroPatience => true | _ => false) = true := by decide +kernel
+
+/-- The patience fixture meets `activity_monitor_safe`'s premises at `some 10`. -/
+theorem activity_late_fixture_monitored :
+    (match latePkg.body, Row.find? "waits" latePkg.rels with
+      | .record fs, some d =>
+        Row.find? "waits_waiting" fs ==
+          some (activityWaiting actS [actPlan, { actPlan with name := "other" }] d actResumer {} (some 10)) &&
+        d.val == activityLogVal [actPlan, { actPlan with name := "other" }]
+      | _, _ => false) = true := by decide +kernel
+
+private def actReqAt (agent : String) (nb : Nat) : Data := .record [
+  ("agent", .digest (actB agent)), ("notBefore", .nat nb),
+  ("occasion", .inj "invoke" (.nat 0)), ("principal", .digest (actB agent)),
+  ("self", .digest (actB "self")), ("validUntil", .nat (nb + 1))]
+
+private def lateField (name : Label) : Term :=
+  match latePkg.body with
+  | .record fs => (Row.find? name fs).getD (.nat 0)
+  | _ => .nat 0
+
+private def lateGuard (field agent : String) (nb : Nat) (input : Data) : Option String :=
+  match run [] Bounds.stackMax 3000 0 (State.init
+    (activityApply (lateField field) [.var 2, .var 1, .var 0])
+    [input.toVal, (actReqAt agent nb).toVal, actState.toVal]) with
+  | .value (.inj "ok" _) _ => some "ok"
+  | .value (.inj "refused" (.bytes b)) _ => some (String.fromUTF8! b)
+  | _ => none
+
+-- actKey's notBefore is 1, so the deadline is 11.
+theorem activity_late_retire_before_deadline :
+    lateGuard "waits_waiting" "a" 10 (actInput "retract" (actSome (actVal 3 actNone)) (actVal 3 actNone)) =
+      some "unanswered" := by decide +kernel
+
+theorem activity_late_retire_at_deadline :
+    lateGuard "waits_waiting" "a" 11 (actInput "retract" (actSome (actVal 3 actNone)) (actVal 3 actNone)) =
+      some "ok" := by decide +kernel
+
+theorem activity_late_answered_retire_any_time :
+    lateGuard "waits_waiting" "a" 1 (actInput "retract" (actSome (actVal 3 actAnswer)) (actVal 3 actNone)) =
+      some "ok" := by decide +kernel
+
+theorem activity_late_answer_still_resumer_only :
+    lateGuard "waits_waiting" "a" 50 (actInput "upsert" (actSome (actVal 3 actNone)) (actVal 3 actAnswer)) =
+      some "notResumer" := by decide +kernel
+
+theorem activity_late_cursor_before_deadline :
+    lateGuard "pending_queued" "a" 10 (actInput "retract" actNone (actVal 3 actNone)) = some "notResumer" := by
+  decide +kernel
+
+theorem activity_late_cursor_at_deadline :
+    lateGuard "pending_queued" "a" 11 (actInput "retract" actNone (actVal 3 actNone)) = some "ok" := by
+  decide +kernel
+
+theorem activity_late_cursor_resumer_any_time :
+    lateGuard "pending_queued" "r" 1 (actInput "retract" actNone (actVal 3 actNone)) = some "ok" := by
+  decide +kernel
+
+/-- The patience fixture's `retire` over a read log row: its verdict, or the edit slots it fills
+(`log` = the log retraction alone, `log+cursor` = both). -/
+private def lateRetire (rows : Data) (arg : Data) : String :=
+  let t := activityApply (lateField "retire") [.var 3, .var 2, .var 1, .var 0]
+  let m : Machine := ⟨[]⟩
+  match m.force 3000 t [(actReqAt "a" 1).toVal, arg.toVal, actState.toVal, rows.toVal] with
+  | .error (.refused why) => String.fromUTF8! why
+  | .error _ => "fault"
+  | .ok (v, _) =>
+    match m.extract (resultTy actS [] (editTy latePkg.rels) 2) 3000 v with
+    | .error _ => "extract"
+    | .ok (d, _) =>
+      match d.field "edits" >>= (·.field "e0"), d.field "edits" >>= (·.field "e1") with
+      | some (.inj "some" (.inj "waits" (.inj "retract" _))), some (.inj "none" _) => "log"
+      | some (.inj "some" (.inj "waits" (.inj "retract" _))),
+        some (.inj "some" (.inj "pending" (.inj "retract" _))) => "log+cursor"
+      | _, _ => "other"
+
+theorem activity_late_retire_answered_leaves_log :
+    lateRetire (actRowsAt actKey (actSome (actVal 3 actAnswer))) actKey = "log" := by decide +kernel
+
+theorem activity_late_retire_unanswered_leaves_both :
+    lateRetire (actRowsAt actKey (actSome (actVal 3 actNone))) actKey = "log+cursor" := by decide +kernel
+
+theorem activity_late_retire_reads_its_key :
+    lateRetire (actRowsAt actKey (actSome (actVal 3 actNone)))
+      (.record [("agent", .digest (actB "a")), ("notBefore", .nat 2)]) = "key" := by decide +kernel
+
+theorem activity_late_retire_needs_row :
+    lateRetire (actRowsAt actKey actNone) actKey = "unknown" := by decide +kernel
 
 end Nanodregg.Lang.Std

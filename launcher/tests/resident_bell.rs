@@ -475,7 +475,8 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     });
     assert_eq!(asks(), 3, "Q4: three rings, three asks:\n{}", log());
 
-    // Q5: the owner retires the lowest answered ring
+    // Q5: the owner retires the lowest answered ring; `retire` reads its `rings` row (LANG-76: an
+    // unanswered ring past its deadline leaves with its `pending` row), so the call pins it
     w.run(&[
         "invoke",
         &b,
@@ -483,6 +484,12 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         &format!(
             "(record (notBefore {}) (ringer #{}))",
             pending[0].not_before, pending[0].ringer
+        ),
+        "--pin",
+        "rings",
+        &format!(
+            "(record (agent #{}) (notBefore {}))",
+            pending[0].ringer, pending[0].not_before
         ),
     ]);
     w.run(&["sync"]);
