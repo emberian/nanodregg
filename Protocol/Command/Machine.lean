@@ -116,6 +116,8 @@ inductive Refusal (D : Type)
   | rangePastLimit (most : Nat)
   /-- `read OBJ REL K PREFIX`: PREFIX reads at none of the relation's prefix types -/
   | badPrefix
+  /-- `invoke … --pin REL KEY`: KEY does not read at the relation's key type (CLIENT-35) -/
+  | badKey
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -162,6 +164,7 @@ def Refusal.name : Refusal D → String
   | .unknownRelation _ => "unknownRelation"
   | .rangePastLimit _ => "rangePastLimit"
   | .badPrefix => "badPrefix"
+  | .badKey => "badKey"
 
 def refused (r : Refusal D) : Reply :=
   .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
@@ -353,6 +356,12 @@ at its relation's floor, read from the rows trie it holds. -/
 def rowPinAt (E : Env D) (w : World D) (key : RowKey D) : RowSlot D × D :=
   (.row key, rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)))
 
+/-- What a command's plan signs beside what the derivation asks for: its range reads and the row
+keys it pins (`signedReads`). Every other command signs none. -/
+structure SignedReads (D : Type) where
+  ranges : List (RangeRead D) := []
+  points : List (RowKey D) := []
+
 /-- Derive with the signature not yet known, pinning each cell, and each row (KERNEL-54: the
 receiver's `rowUnpinned` names the row's key), the derivation asks for. A row already pinned and
 asked for again is the receiver's own refusal (a pinned act on a slot no row pin can name), never a
@@ -375,7 +384,7 @@ def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusa
 /-- The call a member's body derives to on follow's World, with every pin it read and its price the
 derived charge plus headroom, and the Turn it derives: `plan` before follow's own admission. A
 client that skips that admission (a hostile one: the rows' `forge` act) signs exactly this. -/
-def planUnchecked (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rs : List (RangeRead D))
+def planUnchecked (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rd : SignedReads D)
     (b : Body D) : Except (Refusal D) (Unsigned D × Turn D) := do
   let u0 : Unsigned D :=
     -- the invitation's World (KERNEL-24): follow's own `receive` below refuses `wrongWorld` if
@@ -386,9 +395,12 @@ def planUnchecked (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rs 
       notBefore := w.height
       validUntil := w.height + me.window
       pins := []
-      -- the range reads the command names (`rangesOf`: follow's own listing at `w`); a method's
+      -- the rows the command pins (`signedReads`, `--pin REL KEY`), each at follow's own World;
+      -- the rows the derivation asks for (`rowUnpinned`) are added by `derivePins`
+      rowPins := rd.points.map (rowPinAt X.env w)
+      -- the range reads the command names (`signedReads`: follow's own listing at `w`); a method's
       -- range read with none signed is the receiver's `rangeUnpinned`, never derived here
-      ranges := rs
+      ranges := rd.ranges
       -- a ceiling no Turn exceeds (`admit_weight`), so the derivation reports the charge rather
       -- than refusing `overPrice`; the signed price is set from that charge below
       maxCharge := Kernel.Bounds.weightMax
@@ -401,9 +413,9 @@ def planUnchecked (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rs 
 
 /-- The call follow asks custody to sign: `planUnchecked`, and only if follow's World admits the
 Turn it derives. -/
-def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rs : List (RangeRead D)) (b : Body D) :
+def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rd : SignedReads D) (b : Body D) :
     Except (Refusal D) (Unsigned D) :=
-  match planUnchecked X me w key rs b with
+  match planUnchecked X me w key rd b with
   | .error r => .error r
   | .ok (u, t) => match World.admit X.env w t with
     | .error r => .error (.reject r)
@@ -647,7 +659,7 @@ def prefixBytes (d : Lang.RelDecl) : Option String → Option ByteArray
 
 /-- THE listing of relation `i` (declared `d`) under `obj` at most K, the K bound aside: the prefix's
 bytes, the relation's key width and the rows, through `Kernel.rangeOf`. What `read OBJ REL K [PREFIX]`
-prints (`rowLines`) and what `invoke … --range REL K [PREFIX]` signs (`rangesOf`) are this one
+prints (`rowLines`) and what `invoke … --range REL K [PREFIX]` signs (`invokeRange`) are this one
 listing, never a second derivation. -/
 def rangeListing (X : Ctx D) (w : World D) (obj : D) (i : Nat) (d : Lang.RelDecl) (most : Nat)
     (pre : Option String) : Except (Refusal D) (ByteArray × Nat × List (RowSlot D × RowLeaf)) :=
@@ -688,27 +700,55 @@ def rangeLines (X : Ctx D) (w : World D) (obj : D) (cell : Cell) (rel : String) 
   | .error r => .error r
   | .ok (i, d) => if most ≤ d.limit then rowLines X w obj i d rel most pre else .error (.rangePastLimit most)
 
-/-- The range reads a command signs (item 4, ROOT ruled): `invoke … --range REL K [PREFIX]`'s one
-range, relation REL of the object's package under the object, K within the relation's declared
-`limit` as `read OBJ REL K` (`rangePastLimit`), pinned at `rangeListing`'s rows on follow's World
-`w` by THE pin admission recomputes (`Kernel.rangePin` at the relation's floor). Every other command
-signs none. -/
-def rangesOf (X : Ctx D) (w : World D) : Cmd D → Except (Refusal D) (List (RangeRead D))
-  | .invoke o _ _ (some (rel, most, pre)) _ =>
-    match w.live X.env o with
-    | none => .error (.missingCell o)
-    | some cell =>
-      match relationOf X w o cell rel with
-      | .error r => .error r
-      | .ok (i, d) =>
-        if most ≤ d.limit then
-          match rangeListing X w o i d most pre with
-          | .error r => .error r
-          | .ok (pb, width, l) =>
-            .ok [{ parent := o, rel := i, pre := pb, most,
-                   seen := rangePin X.env o i width pb (headFloor X.env w.rows o i) l }]
-        else .error (.rangePastLimit most)
-  | _ => .ok []
+/-- The range read an invoke signs (item 4, ROOT ruled): `--range REL K [PREFIX]`'s one range,
+relation REL of the object's package under the object, K within the relation's declared `limit` as
+`read OBJ REL K` (`rangePastLimit`), pinned at `rangeListing`'s rows on follow's World `w` by THE
+pin admission recomputes (`Kernel.rangePin` at the relation's floor). -/
+def invokeRange (X : Ctx D) (w : World D) (o : D) (rel : String) (most : Nat) (pre : Option String) :
+    Except (Refusal D) (RangeRead D) :=
+  match w.live X.env o with
+  | none => .error (.missingCell o)
+  | some cell =>
+    match relationOf X w o cell rel with
+    | .error r => .error r
+    | .ok (i, d) =>
+      if most ≤ d.limit then
+        match rangeListing X w o i d most pre with
+        | .error r => .error r
+        | .ok (pb, width, l) =>
+          .ok { parent := o, rel := i, pre := pb, most,
+                seen := rangePin X.env o i width pb (headFloor X.env w.rows o i) l }
+      else .error (.rangePastLimit most)
+
+/-- The row an invoke's `--pin REL KEY` pins (CLIENT-35): relation REL of the object's package
+under the object, at KEY's bytes (KEY read at the relation's key type by LANG's reader, its bytes
+LANG's key wire, `Lang.keyBytes`: the bytes a method's edit of that key writes). The plan pins it at
+follow's World (`rowPinAt`), so a method's point read is handed that row, present or absent. -/
+def invokePoint (X : Ctx D) (w : World D) (o : D) (p : String × String) : Except (Refusal D) (RowKey D) :=
+  match w.live X.env o with
+  | none => .error (.missingCell o)
+  | some cell =>
+    match relationOf X w o cell p.1 with
+    | .error r => .error r
+    | .ok (i, d) =>
+      match Lang.Read.readData (Lang.keyTy d) p.2 with
+      | .error _ => .error .badKey
+      | .ok v =>
+        match Lang.keyBytes d v with
+        | some k => .ok ⟨o, i, k⟩
+        | none => .error .badKey
+
+/-- What a command's plan signs beside the derivation's asks (`SignedReads`): an invoke's
+`--range` (`invokeRange`) and its `--pin`s (`invokePoint`), in order. Every other command signs
+none. -/
+def signedReads (X : Ctx D) (w : World D) : Cmd D → Except (Refusal D) (SignedReads D)
+  | .invoke o _ _ rd _ => do
+    let ranges ← match rd.range with
+      | none => pure []
+      | some (rel, most, pre) => do pure [← invokeRange X w o rel most pre]
+    let points ← rd.points.mapM (invokePoint X w o)
+    pure { ranges, points }
+  | _ => .ok {}
 
 /-- `read OBJ REL K [PREFIX]` on follow's caught-up World: one line per row. -/
 def rangeRender (X : Ctx D) (w : World D) (obj : D) (rel : String) (most : Nat) (pre : Option String) :
@@ -932,7 +972,7 @@ instead (`hintNames`). Arguments are placeholders; a name drops them. -/
 def hintReps : List (Refusal Nat) :=
   [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
    .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
-   .rangePastLimit 0, .badPrefix] ++
+   .rangePastLimit 0, .badPrefix, .badKey] ++
   ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
     .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :
     List ParseRefusal).map Refusal.parse ++
@@ -1198,7 +1238,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                             match Invite.unsignedBytes X input pin me.member s.key with
                             | none => moved w' ts (refused (D := D) .badState)
                             | some u => moved w' ts (again 8 [signedB, u] fun k => .sign (Invite.message u) k)
-                      | _, some s => match body X me w' s cmd, rangesOf X w' cmd with
+                      | _, some s => match body X me w' s cmd, signedReads X w' cmd with
                         | .error r, _ => moved w' ts (refusedAt X r)
                         | _, .error r => moved w' ts (refusedAt X r)
                         | .ok b, .ok rs =>
@@ -1212,7 +1252,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
       -- the call's signature: re-plan, compare with what was signed, submit
       | _, 3, [startB, signedB, ub] =>
           match Signed.ofBytes signedB, Signed.ofBytes result with
-          | some s, some s2 => match body X me w s cmd, rangesOf X w cmd with
+          | some s, some s2 => match body X me w s cmd, signedReads X w cmd with
             | .error r, _ => same (refused (D := D) r)
             | _, .error r => same (refused (D := D) r)
             | .ok b, .ok rs =>
@@ -1235,7 +1275,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
               let s : Signed := ⟨nk, pk, ByteArray.empty⟩
               match s.bytes, body X me w s .rotate with
               | some sb, .ok b =>
-                  match plan X me w s.key [] b with
+                  match plan X me w s.key {} b with
                   | .error r => same (refused (D := D) r)
                   | .ok u => same (again 3 [startB, sb, X.callMessage u] fun k =>
                       .signNext (X.callMessage u) k)

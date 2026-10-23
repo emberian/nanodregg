@@ -85,7 +85,7 @@ theorem derivePins_rowPins {X : Ctx D} {w : World D} :
 
 /-- `planUnchecked` derives `t` from `u` on follow's World, and `u` is the member's own call. -/
 theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray}
-    {rs : List (RangeRead D)} {b : Body D}
+    {rs : SignedReads D} {b : Body D}
     {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key rs b = .ok (u, t)) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
       deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ = .ok t := by
@@ -106,7 +106,7 @@ theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : Byt
 plan side of PROTOCOL-16's gap 4; `plan` returns the same call): every row pin of it is `rowPinAt`
 of follow's World at its key. -/
 theorem planUnchecked_rowPins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray}
-    {rs : List (RangeRead D)} {b : Body D}
+    {rs : SignedReads D} {b : Body D}
     {u : Unsigned D} {t : Turn D} (h : planUnchecked X me w key rs b = .ok (u, t)) :
     ∀ p ∈ u.rowPins, ∃ k, p = rowPinAt X.env w k := by
   simp only [planUnchecked, bind, Except.bind] at h
@@ -120,12 +120,15 @@ theorem planUnchecked_rowPins {X : Ctx D} {me : Self D} {w : World D} {key : Byt
     · cases h
       intro q hq
       rcases derivePins_rowPins _ _ _ _ hp q hq with hm | hk
-      · simp at hm
+      · -- a row the command pinned (`signedReads`' points), at follow's World
+        simp only [List.mem_map] at hm
+        obtain ⟨k, -, rfl⟩ := hm
+        exact ⟨k, rfl⟩
       · exact hk
 
 /-- `plan` offers `u` only if follow's World derives a Turn from it and admits that Turn. -/
 theorem plan_admits {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray}
-    {rs : List (RangeRead D)} {b : Body D}
+    {rs : SignedReads D} {b : Body D}
     {u : Unsigned D} (h : plan X me w key rs b = .ok u) :
     u.member = me.member ∧ u.key = key ∧ u.body = b ∧
     ∃ t w', deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ = .ok t ∧
@@ -352,12 +355,12 @@ theorem step_custody_own_word {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (
 
 /-- Consent at the wire: the only call `step` hands the client to submit is a call over a `u`
 that `plan` produced on follow's own World (hence derived and admitted there, `plan_admits`), from
-the body and the range reads ONE command gives on that World (`body`, `rangesOf`). -/
+the body and the range reads ONE command gives on that World (`body`, `signedReads`). -/
 theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     {f f' : Follow D} {p : Persist D}
     {kb result call k : ByteArray} (h : step X dc B me f kb result = (f', p, .submit call k)) :
     f' = f ∧ p = .steps [] ∧ ∃ cmd sg rs b u sig, body X me f.world sg cmd = .ok b ∧
-      rangesOf X f.world cmd = .ok rs ∧ plan X me f.world sg.key rs b = .ok u ∧
+      signedReads X f.world cmd = .ok rs ∧ plan X me f.world sg.key rs b = .ok u ∧
       call = X.callBytes ⟨u, sig⟩ := by
   unfold step next at h
   repeat' split at h
@@ -378,7 +381,7 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact sendCancel_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelAnswer_ne_submit h))
   all_goals (try (obtain ⟨h1, h0, h2⟩ := h; injection h2 with h3 h4; subst h1 h0 h3
-                  exact ⟨rfl, rfl, _, _, _, _, _, _, ‹body _ _ _ _ _ = _›, ‹rangesOf _ _ _ = _›,
+                  exact ⟨rfl, rfl, _, _, _, _, _, _, ‹body _ _ _ _ _ = _›, ‹signedReads _ _ _ = _›,
                     ‹plan _ _ _ _ _ _ = _›, rfl⟩))
   done
 

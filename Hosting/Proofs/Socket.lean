@@ -70,7 +70,7 @@ theorem step_cont {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {m
     (hst : State.ofBytes kb = some st) (h : Command.step X dc B me f kb result = (f', p, r))
     (hk : r.cont = some k) (hs' : State.ofBytes k = some st') :
     st'.argv = st.argv ∧ (st'.phase = 4 → ∃ cmd s rs b u sig, Command.parse X.digestOf st.argv = .ok cmd ∧
-      Command.body X me f.world s cmd = .ok b ∧ Command.rangesOf X f.world cmd = .ok rs ∧
+      Command.body X me f.world s cmd = .ok b ∧ Command.signedReads X f.world cmd = .ok rs ∧
       Command.plan X me f.world s.key rs b = .ok u ∧ st'.acc.getLast? = some (X.callBytes ⟨u, sig⟩)) := by
   obtain ⟨argv, phase, acc⟩ := st
   unfold Command.step at h
@@ -101,7 +101,7 @@ theorem step_cont {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {m
   obtain ⟨-, hs0⟩ := next_spec (fun _ => rfl) hk
   rw [hs0] at hs'
   cases hs'
-  exact ⟨rfl, fun _ => ⟨_, _, _, _, _, _, hp, ‹body _ _ _ _ _ = _›, ‹rangesOf _ _ _ = _›,
+  exact ⟨rfl, fun _ => ⟨_, _, _, _, _, _, hp, ‹body _ _ _ _ _ = _›, ‹signedReads _ _ _ = _›,
     ‹Command.plan _ _ _ _ _ _ = _›, rfl⟩⟩
 
 /-- `start` hands on only an envelope (phase 1) or an adopt (phase 6) state, over the argv it was given. -/
@@ -232,7 +232,7 @@ through the grant the config names. -/
 theorem invokeArgv_parse {X : Ctx D} {c : Resident.Conf} {sh : Resident.Shape} {a : String}
     {cmd : Command.Cmd D} (h : Command.parse X.digestOf (Resident.invokeArgv c sh a) = .ok cmd) :
     ∃ o g, X.digestOf c.bell = some o ∧ X.digestOf c.grant = some g ∧
-      cmd = .invoke o sh.answer a none (some g) := by
+      cmd = .invoke o sh.answer a {} (some g) := by
   unfold Command.parse Resident.invokeArgv Resident.hexOf at h
   split at h
   · cases h
@@ -241,7 +241,7 @@ theorem invokeArgv_parse {X : Ctx D} {c : Resident.Conf} {sh : Resident.Shape} {
     simp [splitVia]
   simp only [List.zipIdx, mapEx, fromUTF8_toUTF8', hv, bind, Except.bind, pure, Except.pure] at h
   have hn : (toString sh.answer).toNat? = some sh.answer := Nat.toNat?_repr _
-  simp only [parseVerb, hsv, rangeArg, viaArg, digestArg, numArg, ofHex_hex, hn] at h
+  simp only [parseVerb, hsv, readsArg, pinsArg, viaArg, digestArg, numArg, ofHex_hex, hn] at h
   cases hb : X.digestOf c.bell <;> cases hg : X.digestOf c.grant <;>
     simp [hb, hg, Option.bind, bind, Except.bind, pure, Except.pure, Except.map] at h
   exact ⟨_, _, rfl, rfl, h.symm⟩
@@ -249,7 +249,7 @@ theorem invokeArgv_parse {X : Ctx D} {c : Resident.Conf} {sh : Resident.Shape} {
 /-- An invoke's call body on follow's World: the object's package, and the argument TEXT read at that
 package's method by `Lang.argsOf`. -/
 theorem body_invoke {X : Ctx D} {me : Self D} {w : World D} {s : Signed} {o : D} {m : Nat} {a : String}
-    {rg : Option (String × Nat × Option String)} {via : Option D} {b : Body D}
+    {rg : InvokeReads} {via : Option D} {b : Body D}
     (h : Command.body X me w s (.invoke o m a rg via) = .ok b) :
     ∃ p args, invokedPackage X w o = .ok p ∧ Lang.argsOf X.digestOf (worldLook X.env w) p m a = .ok args ∧
       b = .invoke o m args invokeBudget via := by
@@ -283,7 +283,7 @@ inductive FollowRun (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) 
 World follow held, for the command `argv` parses to. -/
 def Planned (X : Ctx D) (me : Self D) (argv : List ByteArray) (acc : List ByteArray) : Prop :=
   ∃ (w : World D), ∃ cmd s rs b u sig, Command.parse X.digestOf argv = .ok cmd ∧
-    Command.body X me w s cmd = .ok b ∧ Command.rangesOf X w cmd = .ok rs ∧
+    Command.body X me w s cmd = .ok b ∧ Command.signedReads X w cmd = .ok rs ∧
     Command.plan X me w s.key rs b = .ok u ∧ acc.getLast? = some (X.callBytes ⟨u, sig⟩)
 
 /-- Every continuation a reply carries is a state of `argv`, and a phase-4 one is `Planned`. -/

@@ -6,7 +6,7 @@ own call, as `plan` signed it at a World `w₀` of follow's fold, that follow's 
 `w₀` refuses `stale`, is admitted by no `submit` at any World the fold reaches from `w`, or the
 deployed hash collides among the call's pin inputs at `w₀` and there (`behindPres`, an explicit
 list). The pieces: `plan_pins` (the W0 premise: every pin `plan` signs is the planning World's, and
-the ranges it signs are the command's), `rangesOf_pins` (each such range is pinned at the planning
+the ranges it signs are the command's), `signedReads_ranges` (each such range is pinned at the planning
 World's listing), `receive_pins` (a derived Turn checks every pin its call carries, at any World),
 `Kernel.admit_stale_pin` (a `stale` refusal names a pin that disagrees), and
 `Kernel.stale_behind_forever` / `row_stale_behind_forever` / `range_stale_behind_forever` (a pin
@@ -64,12 +64,12 @@ theorem derivePins_ranges {X : Ctx D} {w : World D} :
 
 /-- **The pins `plan` signs are the planning World's** (KERNEL-54, the W0 premise of the BEHIND
 finality): every cell pin is `pinOf` of `w`'s entry, every row pin is `rowPinAt` of `w`, and the
-call's range reads are exactly the ones it was handed (`rangesOf`, whose pins `rangesOf_pins`
+call's range reads are exactly the ones it was handed (`signedReads`, whose pins `signedReads_ranges`
 states). -/
-theorem plan_pins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {rs : List (RangeRead D)}
+theorem plan_pins {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray} {rs : SignedReads D}
     {b : Body D} {u : Unsigned D} (h : plan X me w key rs b = .ok u) :
     (∀ p ∈ u.pins, p.2 = Kernel.pinOf X.env (w.entry X.env p.1)) ∧
-      (∀ p ∈ u.rowPins, ∃ k, p = rowPinAt X.env w k) ∧ u.ranges = rs := by
+      (∀ p ∈ u.rowPins, ∃ k, p = rowPinAt X.env w k) ∧ u.ranges = rs.ranges := by
   unfold plan at h
   split at h
   · cases h
@@ -117,46 +117,76 @@ theorem rangeOf_some {E : Env D} {r : Rows D} {parent : D} {rel : Nat} {pre : By
     obtain ⟨rfl, h2⟩ := h
     exact ⟨c, s, lim, cap, rt, rfl, h2⟩
 
-/-- **Every range `rangesOf` lists is pinned at the planning World's listing** (item 4, the W0
-premise's range half): its parent is live at `w`, its prefix is no wider than the relation's keys,
-and its `seen` is THE pin admission recomputes (`Kernel.rangePin` at the relation's width and floor
-over `rangeRows` at `w`), so the signer's range pin is `w`'s own. -/
-theorem rangesOf_pins {X : Ctx D} {w : World D} {cmd : Cmd D} {rs : List (RangeRead D)}
-    (h : rangesOf X w cmd = .ok rs) :
-    ∀ q ∈ rs, (∃ cell, w.live X.env q.parent = some cell) ∧ ∃ c s lim cap width rt l,
+/-- The range `invokeRange` signs is pinned at the planning World's listing: its parent is live at
+`w`, its prefix is no wider than the relation's keys, and its `seen` is THE pin admission recomputes
+(`Kernel.rangePin` at the relation's width and floor over `rangeRows` at `w`). -/
+theorem invokeRange_pins {X : Ctx D} {w : World D} {o : D} {rel : String} {most : Nat}
+    {pre : Option String} {q : RangeRead D} (h : invokeRange X w o rel most pre = .ok q) :
+    (∃ cell, w.live X.env q.parent = some cell) ∧ ∃ c s lim cap width rt l,
       headOf X.env w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧ q.pre.size ≤ width ∧
       rangeRows X.env w.rows q.parent q.rel width q.pre q.most = some l ∧
       q.seen = rangePin X.env q.parent q.rel width q.pre (headFloor X.env w.rows q.parent q.rel) l := by
-  unfold rangesOf at h
-  split at h
-  · rename_i o _ _ rel most pre _
-    cases hl : w.live X.env o with
-    | none => rw [hl] at h; cases h
-    | some cell =>
-      rw [hl] at h
+  unfold invokeRange at h
+  cases hl : w.live X.env o with
+  | none => rw [hl] at h; cases h
+  | some cell =>
+    rw [hl] at h
+    simp only at h
+    cases hr : relationOf X w o cell rel with
+    | error r => rw [hr] at h; cases h
+    | ok p =>
+      obtain ⟨i, d⟩ := p
+      rw [hr] at h
       simp only at h
-      cases hr : relationOf X w o cell rel with
-      | error r => rw [hr] at h; cases h
-      | ok p =>
-        obtain ⟨i, d⟩ := p
-        rw [hr] at h
-        simp only at h
-        by_cases hlim : most ≤ d.limit
-        · rw [if_pos hlim] at h
-          cases hL : rangeListing X w o i d most pre with
-          | error r => rw [hL] at h; cases h
-          | ok v =>
-            obtain ⟨pb, width, l⟩ := v
-            rw [hL] at h
-            simp only [Except.ok.injEq] at h
-            subst h
-            obtain ⟨-, hro, hw⟩ := rangeListing_ok hL
-            obtain ⟨c, s, lim, cap, rt, hh, hrr⟩ := rangeOf_some hro
-            intro q hq
-            simp only [List.mem_singleton] at hq
-            subst hq
-            exact ⟨⟨cell, hl⟩, c, s, lim, cap, width, rt, l, hh, hw, hrr, rfl⟩
-        · rw [if_neg hlim] at h; cases h
+      by_cases hlim : most ≤ d.limit
+      · rw [if_pos hlim] at h
+        cases hL : rangeListing X w o i d most pre with
+        | error r => rw [hL] at h; cases h
+        | ok v =>
+          obtain ⟨pb, width, l⟩ := v
+          rw [hL] at h
+          simp only [Except.ok.injEq] at h
+          subst h
+          obtain ⟨-, hro, hw⟩ := rangeListing_ok hL
+          obtain ⟨c, s, lim, cap, rt, hh, hrr⟩ := rangeOf_some hro
+          exact ⟨⟨cell, hl⟩, c, s, lim, cap, width, rt, l, hh, hw, hrr, rfl⟩
+      · rw [if_neg hlim] at h; cases h
+
+/-- **Every range `signedReads` lists is pinned at the planning World's listing** (item 4, the W0
+premise's range half): `invokeRange_pins` for each, so the signer's range pin is `w`'s own. -/
+theorem signedReads_ranges {X : Ctx D} {w : World D} {cmd : Cmd D} {rs : SignedReads D}
+    (h : signedReads X w cmd = .ok rs) :
+    ∀ q ∈ rs.ranges, (∃ cell, w.live X.env q.parent = some cell) ∧ ∃ c s lim cap width rt l,
+      headOf X.env w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧ q.pre.size ≤ width ∧
+      rangeRows X.env w.rows q.parent q.rel width q.pre q.most = some l ∧
+      q.seen = rangePin X.env q.parent q.rel width q.pre (headFloor X.env w.rows q.parent q.rel) l := by
+  unfold signedReads at h
+  split at h
+  · rename_i o _ _ rd _
+    intro q hq
+    cases hp : rd.points.mapM (invokePoint X w o) with
+    | error e =>
+      cases hr : rd.range with
+      | none => simp [hr, hp, bind, Except.bind, pure, Except.pure] at h
+      | some x =>
+        obtain ⟨rel, most, pre⟩ := x
+        cases hq' : invokeRange X w o rel most pre <;>
+          simp [hr, hp, hq', bind, Except.bind, pure, Except.pure] at h
+    | ok ps =>
+      cases hr : rd.range with
+      | none =>
+        simp only [hr, hp, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+        subst h; cases hq
+      | some x =>
+        obtain ⟨rel, most, pre⟩ := x
+        cases hq' : invokeRange X w o rel most pre with
+        | error e => simp [hr, hq', bind, Except.bind] at h
+        | ok q' =>
+          simp only [hr, hp, hq', bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+          subst h
+          simp only [List.mem_singleton] at hq
+          subst hq
+          exact invokeRange_pins hq'
   · cases h
     intro q hq
     cases hq
@@ -213,14 +243,14 @@ theorem receive_pins {X : Ctx D} {v : World D} {c : Call D} {t : Turn D} (h : re
 /-- **A call refused stale BEHIND on follow's fold is never admitted later** (cv 01a15187; the
 settlement's `refused staleCode` arm, PROTOCOL-52's "final by fold structure" now by theorem). The
 member's own call, as `plan` signed it at a World `w₀` of follow's fold (the W0 premise: its pins
-are `w₀`'s, `plan_pins`, and its range reads are `rangesOf`'s at `w₀`, `rangesOf_pins`), that follow's World `w` reached from `w₀` refuses `stale`
+are `w₀`'s, `plan_pins`, and its range reads are `signedReads`' at `w₀`, `signedReads_ranges`), that follow's World `w` reached from `w₀` refuses `stale`
 (`staleBehind`), is admitted by no `submit` at any World `w'` the fold reaches from `w`, unless the
 deployed hash collides among the call's pin inputs at `w₀` and `w'` (`behindPres`). -/
 theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : Nat}
     (hE : X.env.Lawful n) {me : Self D} {w₀ w w' : World D} {l₁ l₂ : List (Kernel.Step D)}
-    {key : ByteArray} {cmd : Cmd D} {rs : List (RangeRead D)} {b : Body D} {u : Unsigned D} {c : Call D}
+    {key : ByteArray} {cmd : Cmd D} {rs : SignedReads D} {b : Body D} {u : Unsigned D} {c : Call D}
     (hf : w₀.CellsFit Cell.Fits X.env) (hr : w₀.RowsCanon X.env) (hok : w₀.RowsOk X.env)
-    (hrs : rangesOf X w₀ cmd = .ok rs) (hplan : plan X me w₀ key rs b = .ok u) (hc : c.unsigned = u)
+    (hrs : signedReads X w₀ cmd = .ok rs) (hplan : plan X me w₀ key rs b = .ok u) (hc : c.unsigned = u)
     (h₁ : World.fold X.env w₀ l₁ = .ok w) (h₂ : World.fold X.env w l₂ = .ok w')
     (hs : staleBehind X me w c = true) :
     (∀ r, submit X w' c ≠ .ok r) ∨ CollidesAmong X.env.hash (behindPres X.env w₀ w' u) := by
@@ -271,12 +301,12 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
       intro z hz
       refine List.mem_append_left _ (List.mem_append_right _ (List.mem_flatMap.mpr ⟨_, hm, ?_⟩))
       simpa [hxs] using hz
-  · -- a range pin: `plan` signed it at `w₀`'s listing (`rangesOf_pins`)
-    have hq0 : q ∈ rs := by rw [htq, hc, hpq] at hq; exact hq
+  · -- a range pin: `plan` signed it at `w₀`'s listing (`signedReads_ranges`)
+    have hq0 : q ∈ rs.ranges := by rw [htq, hc, hpq] at hq; exact hq
     have hqu : q ∈ u.ranges := by rw [hpq]; exact hq0
     have hq' : q ∈ t'.ranges := by rw [htq', hc]; exact hqu
     obtain ⟨⟨cell₀, hlive₀⟩, c₀, s₀, lim₀, cap₀, width₀, rt₀, l₀, hh₀, hwd, hl₀, hseen₀⟩ :=
-      rangesOf_pins hrs q hq0
+      signedReads_ranges hrs q hq0
     obtain ⟨c₂, s₂, lim₂, cap₂, width₂, rt₂, l', hh₂, hl', hpin'⟩ := admit_range_pins hat' q hq'
     -- a relation's key width is its declaration's, along the fold
     have hw₁ : width₁ = width₀ := headOf_width_fold hr h₁ hh₀ hh₁
@@ -335,9 +365,9 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
 a call refused stale BEHIND is admitted by no later World of the fold. -/
 theorem staleBehind_final_sep [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : Nat}
     (hE : X.env.Lawful n) {me : Self D} {w₀ w w' : World D} {l₁ l₂ : List (Kernel.Step D)}
-    {key : ByteArray} {cmd : Cmd D} {rs : List (RangeRead D)} {b : Body D} {u : Unsigned D} {c : Call D}
+    {key : ByteArray} {cmd : Cmd D} {rs : SignedReads D} {b : Body D} {u : Unsigned D} {c : Call D}
     (hf : w₀.CellsFit Cell.Fits X.env) (hr : w₀.RowsCanon X.env) (hok : w₀.RowsOk X.env)
-    (hrs : rangesOf X w₀ cmd = .ok rs) (hplan : plan X me w₀ key rs b = .ok u) (hc : c.unsigned = u)
+    (hrs : signedReads X w₀ cmd = .ok rs) (hplan : plan X me w₀ key rs b = .ok u) (hc : c.unsigned = u)
     (h₁ : World.fold X.env w₀ l₁ = .ok w) (h₂ : World.fold X.env w l₂ = .ok w')
     (hsep : Separates X.env.hash (behindPres X.env w₀ w' u))
     (hs : staleBehind X me w c = true) : ∀ r, submit X w' c ≠ .ok r :=

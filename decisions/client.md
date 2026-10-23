@@ -1037,3 +1037,30 @@ Mutations, each red: kept-file read unchecked; key-file read unchecked; the exis
 **Critique.** `unwrap()` gives less site-specific panic text than `expect()`. The source line and Rust backtrace still identify the failed setup; keeping the whole-workspace Clippy gate green is worth that diagnostic reduction.
 
 **Meta-critique.** The fast landing judge reached the CLIENT package but did not run the standing Clippy lane. Future test-only changes should run the narrow Clippy target before landing when the crate has stricter workspace lints.
+
+## CLIENT-35 · `nd invoke … --pin REL KEY`: a member pins a POINT read, so a `(live)` read (E1) is drivable from the deployed client (2026-10-23, CX-CLIENT; cv 01a166e9-a543, measured by CX-P5)
+
+**The gap.** `nd invoke` could sign a range (`--range`, PROTOCOL-59) but no point. `derivePins` pins a cell only when the kernel asks (`unpinned`) and a row only when an edit asks (`rowUnpinned`). A method's POINT read asks for neither: an unpinned point is just an empty slot (`relReads` reads `rv.points self i`, the caller's row pins). So the method saw `none` and the E1 live column (4916f3a, `pointData`'s `live`) was never filled from nd. B1/B2 ("a revoked grant refuses", P8.2) were deployed in the kernel and the journey only.
+
+**Decision.**
+- Grammar: `invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--pin REL KEY]... [--via GRANT]`. KEY is LANG text at the relation's key type, read on follow's World when the call is planned, exactly as `--range`'s PREFIX. `Cmd.invoke`'s fourth field becomes `InvokeReads` (`range`, `points`): the TEXT the member named.
+- `Command.signedReads` replaces `rangesOf`. It returns `SignedReads` (`ranges`, `points : List RowKey`): `invokeRange` (the old range body, unchanged) and `invokePoint`. `invokePoint` is relation REL of the object's package under the object, at `Lang.keyBytes` of KEY: the bytes an edit of that key writes. It refuses `missingCell`, `unknownRelation`, and the new `badKey` (KEY does not read at the key type) by name.
+- `plan`/`planUnchecked` take `SignedReads`. The unsigned call starts with `rowPins := points.map (rowPinAt X.env w)`, the same `rowPinAt` the derivation uses for `rowUnpinned`. So the pin is follow's own World's, present or absent, and `planUnchecked_rowPins` / `plan_pins` keep their conclusions with no new premise. The cell the key names is pinned by the existing loop: `pointData`'s `look` on an unpinned cell is the kernel's `unpinned`, and `derivePins` answers it.
+- No cell form of `--pin`. A cell pin is already derived on demand at follow's World, so an explicit one would be the same pin (a no-op flag).
+
+**Plant.** `client/tests/pin.rs pinned_live_point_read_refuses_a_revoked_grant`, on two real Stores (`host serve` / `host follow`, as `real.rs`). The package's `use` reads its cell-keyed `facts` `(live)` with one point. Without `--pin` it refuses `unread`. With `--pin facts (record (cell #G))` it commits while grant G is live. After `revoke G` the same argv is refused `program` with the hint `grantDead`: the method's own name, read in the same Turn (P8.2 from nd). Also checked: `badKey`, `unknownRelation`, and a dangling `--pin` (`usage`). The fixture is `client/tests/fixtures/pin/Live`, core text printed by LANG's printer from the surface quoted in the test (`nd install` reads core text).
+
+**Mutation.** M1: `planUnchecked` drops the command's points (`rowPins := []`). The `host` exe rebuilt, the plant is RED at the live commit (`hint program: use: refused unread`). Restored GREEN.
+
+**Critique.**
+- KEY is read at the full key type, so a point names exactly one row; a prefix point has no meaning.
+- The flag order is fixed (range, then pins). A PREFIX is "the word after K unless it is `--pin`". That rule leans on no LANG text being the word `--pin`, which is true of the reader today and is not stated as a theorem.
+- The pins are bounded only by the argv bound (`argvBytesMax`) and the receiver's `x.points` slot count (more pins than slots are refused by LANG, by name). `Kernel.Bounds.touchesMax` bounds the derived pins, not these.
+
+**Meta-critique.** The obvious fix was to make `derivePins` "pin what the method reads". That is impossible without the member saying WHICH key: a point read does not refuse, it reads an empty slot. That is exactly why the gap was silent. The pin is the member's statement, as a range is, so it belongs beside `--range` in the plan's signed reads, not in the derivation loop.
+
+**Premise price.** No landed theorem gains a hypothesis. `plan_pins`, `planUnchecked_*`, `plan_admits`, `step_submit_planned`, `staleBehind_final(_sep)` and the Socket statements take `SignedReads` where they took `List RangeRead`, and `plan_pins` concludes `u.ranges = rs.ranges`. `rangesOf_pins` becomes `signedReads_ranges` (the ranges half) over `invokeRange_pins`.
+
+**Flag day.** None persisted. The argv grammar only widens: every argv that parsed before parses to the same call. `Cmd.invoke`'s fourth field is `InvokeReads`, a Lean-side shape with no wire form.
+
+**Status.** landed (this commit). The LANG half of the card (the live column on RANGE rows, one core with E5's receipt column) is built on E5 once it lands.

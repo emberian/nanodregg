@@ -907,7 +907,7 @@ def dropRangeFlag : List String → List String
 
 /-- The actor's command planned on its follow's World as it stands (no catching up: the World of its
 last command), signed and submitted WITHOUT follow's own admission (`planUnchecked`, with the range
-reads `rangesOf` lists there). The outcome is the writer's answer. -/
+reads `signedReads` lists there). The outcome is the writer's answer. -/
 def forged (who : String) (av : List String) : M D (Expect × String) := do
   let a ← actor who
   let X ← X
@@ -918,7 +918,7 @@ def forged (who : String) (av : List String) : M D (Expect × String) := do
   | .error r => pure (.refused r.name, "")
   | .ok cmd =>
     match body X a.self w ⟨key, R.pub (a.next who), ByteArray.empty⟩ cmd >>= fun b =>
-        rangesOf X w cmd >>= fun rs => planUnchecked X a.self w key rs b with
+        signedReads X w cmd >>= fun rs => planUnchecked X a.self w key rs b with
     | .error r => pure (.refused r.name, "")
     | .ok (u, _) =>
       let call := X.callBytes ⟨u, R.sign (a.key who) (X.callMessage u)⟩

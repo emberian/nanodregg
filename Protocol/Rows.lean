@@ -1380,7 +1380,7 @@ def tally : String :=
 
 /-- Item 4 (ROOT ruled): a method that reads a relation by range is invoked through nd with
 `--range REL K [PREFIX]`, `read OBJ REL K [PREFIX]`'s arguments, and the plan signs that range at
-follow's listing (`Command.rangesOf`, the read verb's `rangeListing`). The sponsor and the newcomer
+follow's listing (`Command.signedReads`, the read verb's `rangeListing`). The sponsor and the newcomer
 ring round 1; without `--range` the sponsor's take is refused `rangeUnpinned` (LANG's structured
 refusal, with the hint naming the flag); the newcomer rings round 1 (so the sponsor's follow is one
 ring behind); with `--range` the take commits, its range signed at the two-ring listing the
