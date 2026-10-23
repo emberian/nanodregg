@@ -1068,12 +1068,19 @@ def settled (X : Ctx D) (me : Self D) (w : World D) (out cb result : ByteArray) 
     | _ => refused (D := D) .badResult
   else refused (D := D) .badResult
 
-/-- Follow's World holds nothing yet: no step folded and no cell. An adopt replaces follow's World only
-then (`notAtGenesis`), checked at `start` and again at the step that adopts. -/
+/-- What a genesis builds, and nothing else: a founder's member cell or its root World grant
+(`Receive.founderEntries`). -/
+def genesisLeaf : Leaf → Bool
+  | .entry (.live cell _) => cell.kind == kindMember || cell.kind == kindGrant
+  | _ => false
+
+/-- Follow's World is still one a genesis builds: no step folded, and every cell a founder's member
+cell or root World grant. A joiner's World is exactly that before its adopt (`genesisWorld_atGenesis`:
+the founders' cells are there at step 0, so "no cell" refused every honest adopt). It holds no object
+(`atGenesis_object`), so no package fact is about it. An adopt replaces follow's World only then
+(`notAtGenesis`), checked at `start` and again at the step that adopts (PROTOCOL-67). -/
 def atGenesis (w : World D) : Bool :=
-  w.steps == 0 && match w.trie with
-    | .empty => true
-    | _ => false
+  w.steps == 0 && w.trie.toList.all fun p => genesisLeaf p.2
 
 def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Reply :=
   let w := f.world

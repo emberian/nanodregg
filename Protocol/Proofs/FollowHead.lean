@@ -4,14 +4,17 @@
 Follow's World moves only by the steps its own machine takes (`Command.step`, on ANY frame: any
 connection's continuation, any result): a step keeps follow's World, or absorbs a log page (each
 event re-derived on follow's World, `absorbStep`: a Turn by `Receive.submit`, a refusal by
-`Receive.judge` or `Receive.cancel`), or adopts a base, which it does only while follow's World holds
-nothing (`atGenesis`, checked at the step that adopts, HOSTING-43).
+`Receive.judge` or `Receive.cancel`), or adopts a base, which it does only while follow's World is one
+a genesis builds (`atGenesis`, checked at the step that adopts, HOSTING-43, PROTOCOL-67).
+
+- `genesisWorld_atGenesis`: every genesis World is one adopt may replace (the honest joiner's,
+  before its adopt); `atGenesis_object`: such a World holds no live object.
 
 - `absorbStep_object_head`: one re-derived event keeps a live object live, an object, with its
   `packageOf` (KERNEL-64's `submit_object_head`; a refusal changes no cell, `refuse_live`).
 - `absorbStep_rom`: one re-derived event keeps a live ROM cell, identical (`Frame.admit_rom`).
-- `step_keeps`: any property of follow's World that every re-derived event keeps, and that holding
-  nothing refutes, is kept by every step of follow's machine.
+- `step_keeps`: any property of follow's World that every re-derived event keeps, and that
+  `atGenesis` refutes, is kept by every step of follow's machine.
 - `PackageAt`/`step_packageAt`: the instance HOSTING's member socket reads (HOSTING-42 trigger (ii)):
   a live object with package `P`, whose package cell is live and ROM, stays so, the same cell, across
   every step follow takes.
@@ -23,6 +26,7 @@ World it persisted, which these steps produced).
 import Protocol.Proofs.Command
 import Kernel.Proofs.ObjectHead
 import Kernel.Proofs.Frame
+import Kernel.Proofs.Rooted
 
 namespace Nanodregg.Protocol.Command
 
@@ -30,16 +34,56 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
-/-- A World that holds nothing (`atGenesis`) has no live cell. -/
-theorem atGenesis_live {E : Env D} {w : World D} (h : atGenesis w = true) (c : D) : w.live E c = none := by
+/-- A World adopt may replace (`atGenesis`) holds no live object: each of its cells is a founder's
+member cell or root grant. -/
+theorem atGenesis_object {E : Env D} {w : World D} (h : atGenesis w = true) {c : D} {cell : Cell}
+    (hl : w.live E c = some cell) : cell.kind ≠ kindObject := by
   unfold atGenesis at h
-  simp only [Bool.and_eq_true, beq_iff_eq] at h
-  obtain ⟨-, ht⟩ := h
-  unfold World.live World.entry
-  split at ht
-  · rename_i he
-    simp [he, Trie.T.get, Trie.getAt]
-  · cases ht
+  simp only [Bool.and_eq_true, List.all_eq_true] at h
+  obtain ⟨-, hall⟩ := h
+  unfold World.live World.entry at hl
+  cases hg : w.trie.get (trieSpec E) (.cell c) with
+  | none => simp [hg] at hl
+  | some l =>
+    cases l with
+    | spent => simp [hg] at hl
+    | entry e =>
+      cases e with
+      | tomb => simp [hg] at hl
+      | live cell' v =>
+        simp only [hg, Option.some.injEq] at hl
+        subst hl
+        have hk := hall _ (Trie.mem_of_getAt (trieSpec E) 0 w.trie _ _ hg)
+        simp only [genesisLeaf, Bool.or_eq_true, beq_iff_eq] at hk
+        rcases hk with hk | hk <;> rw [hk] <;> decide
+
+omit [Ord D] in
+/-- What `insertAll` lists is what the map listed or one of the inserted entries. -/
+theorem insertAll_toList {E : Env D} {Q : Slot D × Leaf → Prop} :
+    ∀ {m : Cells D} (ps : List (D × Entry)), (∀ p ∈ ps, Q (.cell p.1, .entry p.2)) →
+      (∀ q ∈ m.toList, Q q) → ∀ q ∈ (insertAll E m ps).toList, Q q
+  | _, [], _, h => h
+  | m, p :: rest, hp, h => by
+      unfold insertAll
+      exact insertAll_toList (m := m.insert (trieSpec E) (.cell p.1) (.entry p.2)) rest
+        (fun q hq => hp q (List.mem_cons_of_mem _ hq))
+        (fun q hq => by
+          rcases Trie.keys_insAt (trieSpec E) _ _ 0 m q hq with hq | rfl
+          · exact h q hq
+          · exact hp p List.mem_cons_self)
+
+/-- **A genesis World is one adopt may replace** (the floor `atGenesis` is satisfiable): no step, and
+only the founders' member cells and root grants. A joiner's follow holds exactly this World until it
+adopts (`nd --join`, then `nd adopt`). -/
+theorem genesisWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
+    (founders : List (ByteArray × D)) :
+    atGenesis (Receive.genesisWorld X name nonce allowance founders) = true := by
+  unfold atGenesis Receive.genesisWorld
+  simp only [World.genesis, Bool.and_eq_true, beq_self_eq_true, true_and, List.all_eq_true]
+  refine insertAll_toList (Q := fun q => genesisLeaf q.2 = true) _ ?_ (by simp [Trie.T.toList])
+  rintro ⟨id, e⟩ hq
+  obtain ⟨p, -, ⟨-, he⟩ | ⟨-, he⟩⟩ := Receive.mem_founderEntries hq <;> subst he <;>
+    simp [genesisLeaf, Receive.founderMember, Receive.founderRoot]
 
 /-- **One re-derived event keeps a live object's package** (KERNEL-64 at follow's step). -/
 theorem absorbStep_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}
@@ -91,7 +135,7 @@ theorem absorbPage_keeps (hA : ∀ {w w' e s}, P w → absorbStep X w e = .ok (s
 /-- **Every step of follow's machine keeps what re-derivation keeps and holding nothing refutes.**
 Any frame, any continuation, any result: the step leaves follow's World as it was, or moves it to
 a World `absorbPage` reached (every event re-derived), or adopts a base, which it does only from a
-World that holds nothing (`atGenesis`). -/
+World a genesis builds (`atGenesis`). -/
 theorem step_keeps {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D} {f f' : Follow D}
     {p : Persist D} {kb result : ByteArray} {r : Reply}
     (hA : ∀ {w w' e s}, P w → absorbStep X w e = .ok (s, w') → P w')
@@ -127,9 +171,9 @@ theorem step_packageAt [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {dc : Co
   · rintro w w' e s ⟨⟨cell, hl, hk, hpk⟩, hpl, hrom⟩ hs
     obtain ⟨cell', hl', hk', hpk'⟩ := absorbStep_object_head hs hl hk
     exact ⟨⟨cell', hl', hk', hpk'.trans hpk⟩, absorbStep_rom hs hpl hrom, hrom⟩
-  · rintro w ⟨⟨cell, hl, -, -⟩, -, -⟩
+  · rintro w ⟨⟨cell, hl, hk, -⟩, -, -⟩
     cases hg : atGenesis w
     · rfl
-    · rw [atGenesis_live hg] at hl; cases hl
+    · exact absurd hk (atGenesis_object hg hl)
 
 end Nanodregg.Protocol.Command
