@@ -106,7 +106,7 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
       (r', v)
   let pinOffer (w : World D) (obj : D) (n : Nat) := hole_pinAt obj w 0 od (lfOfferKey n)
   let cells := [oz, ox, oy, gX, gY, α, β, acct ox α, acct b.id α, acct oy β, acct a.id β]
-  let arg1 := lfFuseArg (lfDeal ox oy 9) ox oy (some gX) (some gY)
+  let arg1 := lfFuseArg (lfDeal ox oy 9 0 0) ox oy (some gX) (some gY)
   -- LE1 the fuse moves both legs: X's 5 α to B, Y's 7 β to A; both offers gone
   let (rf1, vf1) := fuse r0' cells (pinOffer w0 ox 0 ++ pinOffer w0 oy 0) arg1
   let w1 := rf1.st.host
@@ -115,8 +115,9 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
       bal w1 ox α == 0 && bal w1 b.id α == 5 && bal w1 oy β == 1 && bal w1 a.id β == 7 &&
       bal w1 a.id α + bal w1 ox α + bal w1 b.id α == 20)
   -- LE2 not compliant: nothing moves
-  let (rf2, vf2) := fuse r0' cells (pinOffer w0 ox 0 ++ pinOffer w0 oy 1) arg1
-  r := note r s!"LE2 the same fuse pinning Y's offer 1 (seller [11,12], price 9 outside it): {vf2}; X still holds {bal rf2.st.host ox α} α, Y {bal rf2.st.host oy β} β"
+  let (rf2, vf2) := fuse r0' cells (pinOffer w0 ox 0 ++ pinOffer w0 oy 1)
+    (lfFuseArg (lfDeal ox oy 9 0 1) ox oy (some gX) (some gY))
+  r := note r s!"LE2 the same fuse naming and pinning Y's offer 1 (seller [11,12], price 9 outside it): {vf2}; X still holds {bal rf2.st.host ox α} α, Y {bal rf2.st.host oy β} β"
     (refusedBy vf2 "take" "notCompliant" && bal rf2.st.host ox α == 5 && bal rf2.st.host oy β == 8 &&
       present rf2.st.host ox 0 && present rf2.st.host oy 1)
   -- LE3 withdraw credits the leg back to payTo

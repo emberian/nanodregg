@@ -6,7 +6,7 @@ B's object Y, all of `P`. Each owner invites Z by granting it `[.invoke take]` o
 `Z.fuse` returns two invokes of `take` carrying ONE deal byte string, one to X through A's grant
 and one to Y through B's. Every row is a call through `Receive.submit` (`receive` then
 `World.admit`) with `Lang.program` as the kernel's `Program`, and passes only when its verdict is
-the expected one. LF2–LF4 and LF6 are judged on the World before LF1 (refused calls leave it as it
+the expected one. LF2–LF4, LF6 and LF8 are judged on the World before LF1 (refused calls leave it as it
 was); LF5 and LF7 on the World after LF1. LF6a–c and LF7 are controls of the kernel (KERNEL-25's
 authority, the tree's `revisited`), not teeth of the package.
 -/
@@ -17,9 +17,15 @@ namespace Nanodregg.Lang.Journey
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
-/-- The deal `take` decodes: the pair `{a, b}` and the terms `{price}`. -/
-def lfDeal (a b : D) (price : Nat) : Data :=
+/-- What a session row captures: the pair `{a, b}` and the terms `{price}`. -/
+def lfCapture (a b : D) (price : Nat) : Data :=
   .record [("pair", .record [("a", .digest (Sim.dc.bytes a)), ("b", .digest (Sim.dc.bytes b))]),
+    ("theta", .record [("price", .nat price)])]
+
+/-- The deal `take` decodes: the offer key it names for `a` and for `b`, the pair, the terms. -/
+def lfDeal (a b : D) (price ka kb : Nat) : Data :=
+  .record [("keys", .record [("a", .nat ka), ("b", .nat kb)]),
+    ("pair", .record [("a", .digest (Sim.dc.bytes a)), ("b", .digest (Sim.dc.bytes b))]),
     ("theta", .record [("price", .nat price)])]
 
 def lfOpt : Option D → Data
@@ -108,23 +114,28 @@ def lfRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
       (r', v)
   let allCells := [Z, X, Y, gX, gY]
   let rowsAt (w : World D) (ny : Nat) := pinOffer w X 0 ++ pinOffer w Y ny
-  let arg1 := lfFuseArg (lfDeal X Y 9) X Y (some gX) (some gY)
+  let arg1 := lfFuseArg (lfDeal X Y 9 0 0) X Y (some gX) (some gY)
   -- LF1 the fuse: both takes judge the one deal; each retracts its own offer and logs a session
   let (rf1, vf1) := fuse w0 allCells (rowsAt w0.st.host 0) arg1
   let w1 := rf1.st.host
   let cX := captured w1 X
   let cY := captured w1 Y
-  let want : Option ByteArray := Wire.encodeData capTy (.inj "settle" (lfDeal X Y 9))
-  r := note rf1 s!"LF1 A invokes Z.fuse \{deal = the bytes of \{pair \{a X, b Y}, theta \{price 9}}, x X, y Y, viaX (A's grant), viaY (B's grant)} pinning Z, X, Y, both grants and both offer rows: {vf1}; read back: X's offer 0 present {present w1 X 0}, Y's offer 0 present {present w1 Y 0}; session rows under X and Y {cX.isSome && cY.isSome}, their captured values equal {cX == cY} (and the forwarded deal {cX == want})"
+  let want : Option ByteArray := Wire.encodeData capTy (.inj "settle" (lfCapture X Y 9))
+  r := note rf1 s!"LF1 A invokes Z.fuse \{deal = the bytes of \{keys \{a 0, b 0}, pair \{a X, b Y}, theta \{price 9}}, x X, y Y, viaX (A's grant), viaY (B's grant)} pinning Z, X, Y, both grants and both offer rows: {vf1}; read back: X's offer 0 present {present w1 X 0}, Y's offer 0 present {present w1 Y 0}; session rows under X and Y {cX.isSome && cY.isSome}, their captured values equal {cX == cY} (and the forwarded deal {cX == want})"
     (vf1 == "admitted" && !present w1 X 0 && !present w1 Y 0 && present w1 Y 1 && present w1 Y 2 &&
       cX.isSome && cX == cY && cX == want && want.isSome)
   -- LF2 / LF2r the judge, on the World before LF1
-  let (_, vf2) := fuse w0 allCells (rowsAt w0.st.host 1) arg1
-  r := note r s!"LF2 the same call with Y's pinned offer seller [11,12] (price 9 outside it): {vf2}; read back on the unchanged World: X's offer 0 and Y's offer 1 stand {present w0.st.host X 0 && present w0.st.host Y 1}"
+  let (_, vf2) := fuse w0 allCells (rowsAt w0.st.host 1) (lfFuseArg (lfDeal X Y 9 0 1) X Y (some gX) (some gY))
+  r := note r s!"LF2 the same call naming and pinning Y's offer 1, seller [11,12] (price 9 outside it): {vf2}; read back on the unchanged World: X's offer 0 and Y's offer 1 stand {present w0.st.host X 0 && present w0.st.host Y 1}"
     (refusedBy vf2 "take" "notCompliant" && present w0.st.host X 0 && present w0.st.host Y 1)
-  let (_, vf2r) := fuse w0 allCells (rowsAt w0.st.host 2) arg1
-  r := note r s!"LF2r the same call with Y's pinned offer buyer [8,12] (both buyer): {vf2r}"
+  let (_, vf2r) := fuse w0 allCells (rowsAt w0.st.host 2) (lfFuseArg (lfDeal X Y 9 0 2) X Y (some gX) (some gY))
+  r := note r s!"LF2r the same call naming and pinning Y's offer 2, buyer [8,12] (both buyer): {vf2r}"
     (refusedBy vf2r "take" "sameRole")
+  -- LF8 the deal names the offer: the matcher pins Y's offer 0 where the deal names Y's offer 1
+  let (_, vf8) := fuse w0 allCells (rowsAt w0.st.host 0) (lfFuseArg (lfDeal X Y 9 0 1) X Y (some gX) (some gY))
+  r := note r s!"LF8 the deal names Y's offer 1 and the call pins Y's offer 0 (compliant with X's at price 9): {vf8}; read back on the unchanged World: X's offer 0 and Y's offers 0 and 1 stand {present w0.st.host X 0 && present w0.st.host Y 0 && present w0.st.host Y 1}"
+    (refusedBy vf8 "take" "offerNotNamed" && present w0.st.host X 0 && present w0.st.host Y 0 &&
+      present w0.st.host Y 1)
   -- LF3 / LF3r the peer read: the peer's CELL unpinned is the kernel's `unpinned`; its ROW unpinned is the take's
   let (_, vf3) := fuse w0 [Z, X, gX, gY] (rowsAt w0.st.host 0) arg1
   r := note r s!"LF3 LF1's call without pinning Y's cell: {vf3}"
@@ -143,7 +154,7 @@ def lfRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let some W := W? | return note r s!"LF4 B creates W of P': {vq2}" false
   let (rq3, vq3) := post rq2 b pkg' W (lfPostArg 0 "seller" 8 12)
   let (_, vf4) := fuse rq3 (allCells ++ [W]) (pinOffer rq3.st.host X 0 ++ pinOffer rq3.st.host W 0)
-    (lfFuseArg (lfDeal X W 9) X Y (some gX) (some gY))
+    (lfFuseArg (lfDeal X W 9 0 0) X Y (some gX) (some gY))
   r := note r s!"LF4 B installs P' = offerPackage [price] [buyer, seller] 63 ({vq1}), creates W of P' ({vq2}) and posts W's offer 0 seller [8,12] ({vq3}); LF1's call with pair \{a X, b W}: {vf4}"
     (vq1 == "admitted" && vq2 == "admitted" && vq3 == "admitted" && pkg' != pkg &&
       vf4.startsWith "refused program" && (vf4.splitOn "peer: another package").length > 1)
@@ -152,16 +163,16 @@ def lfRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r s!"LF5 LF1's call again on the World after LF1, pinning the now-absent offer rows: {vf5}; A's grant gX and B's grant gY still live {(w1.live Sim.env gX).isSome && (w1.live Sim.env gY).isSome}"
     (refusedBy vf5 "take" "noOffer" && (w1.live Sim.env gX).isSome && (w1.live Sim.env gY).isSome)
   -- LF6 controls of KERNEL-25: the name follows `viaY`
-  let (_, vf6a) := fuse w0 allCells (rowsAt w0.st.host 0) (lfFuseArg (lfDeal X Y 9) X Y (some gX) none)
+  let (_, vf6a) := fuse w0 allCells (rowsAt w0.st.host 0) (lfFuseArg (lfDeal X Y 9 0 0) X Y (some gX) none)
   r := note r s!"LF6a control: LF1's call with viaY none: {vf6a}" (vf6a.startsWith "refused noGrant")
-  let (_, vf6b) := fuse w0 (allCells ++ [gP]) (rowsAt w0.st.host 0) (lfFuseArg (lfDeal X Y 9) X Y (some gX) (some gP))
+  let (_, vf6b) := fuse w0 (allCells ++ [gP]) (rowsAt w0.st.host 0) (lfFuseArg (lfDeal X Y 9 0 0) X Y (some gX) (some gP))
   r := note r s!"LF6b control: LF1's call with viaY B's live grant to Z of [invoke post] only: {vf6b}"
     (vf6b.startsWith "refused grantRight" && (vf6b.splitOn s!"grantRight {reprStr gP}").length > 1)
   let (_, vf6c) := fuse w0 [Z, X, Y, gX] (rowsAt w0.st.host 0) arg1
   r := note r s!"LF6c control: LF1's call with B's take grant not pinned: {vf6c}"
     (vf6c.startsWith "refused unpinned" && (vf6c.splitOn s!"unpinned {reprStr gY}").length > 1)
   -- LF7 control: the matcher cannot be a party (the tree visits an object once)
-  let (_, vf7) := fuse rf1 allCells (rowsAt w1 0) (lfFuseArg (lfDeal Z Y 9) Z Y (some gX) (some gY))
+  let (_, vf7) := fuse rf1 allCells (rowsAt w1 0) (lfFuseArg (lfDeal Z Y 9 0 0) Z Y (some gX) (some gY))
   r := note r s!"LF7 control: Z.fuse naming Z itself as x: {vf7}"
     (vf7.startsWith "refused revisited" && (vf7.splitOn s!"revisited {reprStr Z}").length > 1)
   return r

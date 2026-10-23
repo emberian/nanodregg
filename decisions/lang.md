@@ -6517,3 +6517,35 @@ A standing offer's leg leaves the object only with its row, and only to the peer
 **Critique.** The escrow duplicates `Std.offer`'s take body (35 lines) instead of parametrising one generator by a leg. A parameter would have restated every PROT-6 theorem (each mentions `offerPackageOf theta roles ol sl b`) to buy one shape. Two shapes that agree today can drift later. If the PROT-6 offer without value finds no user, it should be deleted in favour of this one. The legs are fixed per offer and do not depend on θ (a real DvP would pay `θ.price`). That is a limit of the instance, not of the shape.
 
 **Meta-critique.** The BIAS was reading the card's two clauses as one plan. "Split `Tok`" and "never by a second count" contradict each other once the calculus is measured to have no reader. Following the first would have repeated LANG-75.10's mistake (an index generalised ahead of its theorem).
+
+### LANG-75.20 PROT-6 follow-up · the fuse deal names its offer: one key per side, checked by each take (`offerNotNamed`); the matcher's run moves beside the fuse theorems so each plant reds its own module (2026-10-23; CX-PROMO-8/promo8-escrow; cv 01a166fa-5091; method R-0069)
+
+**Decision.** LANG-75.11 recorded (finding JR) that a take consumed whichever of its own standing offers the CALL pinned: the deal named no offer, so a matcher chose which of a party's offers a fuse consumed, limited only by `offerJoint`. The deal now names one offer per side. `offerTakeArg theta` is `{keys {a, b : nat}, pair, theta}`, shared by `Std.offer` and its escrow instance. Each take, after both offer slots are read present and before the judge, checks that its own pinned point's key `n` is the one the deal names for `self` (`keys.a` when `self` is `pair.a`, else `keys.b`; `offerNamedT`, `offerNamedOkT`). Otherwise it refuses `offerNotNamed`. The session row's capture stays `{pair, theta}`.
+- `NamedKey self keys pair k` (Lang/Proofs/StdOffer.lean) is what the term computes. `offerNamedOk_eval` is its evaluation lemma.
+- `take_iff_compliant`: the take returns iff `NamedKey ∧ JointOk`. `take_offerNotNamed` is the new refusal by name. `take_sameRole`, `take_notCompliant` and `fuse_refused_disjoint` gain the `NamedKey` premise.
+- `take_run_sound`: a returned take decoded `{keys, pair, theta}`, and its own pinned key `k` is the one the deal names for `self`. Its row acts are exactly the retract of THAT row and its session insert.
+- `fuse_atomic` is restated. The forwarded deal decodes to `{keys, pair, theta}`, and the two retracts sealed in the Turn are at the keys the deal names for `x'` and for `y'`. Whichever rows the matcher pinned, the rows consumed are the named ones. `jointLaw_sound`, `invitation_once` and the private `party` carry `keys` in the decoded argument.
+- Journey LF8: the deal names Y's offer 1, the call pins Y's offer 0 (compliant with X's at price 9). It is refused `take: refused offerNotNamed`, and all three offers stand. LF2/LF2r/LE2 now name the offer they pin.
+
+**Plants per module (the task's second half).** Before, P1–P5 all redded `Lang.Proofs.StdOffer`, so `Lang.Proofs.StdOfferFuse` never elaborated. The matcher's run (`fuse_calls`, `ViaReads` and their helpers) now sits in `Lang.Proofs.StdOfferFuse`. `Lang.Proofs.StdOffer` no longer unfolds `offerFuseBody` or `offerFuseArg`. The helpers both modules use are public: `get_data`, `find_suspend_of`, `apply4_field`, `runMeasured_inv`, `conforms_empty`, `conforms_opt`, `means_toVal`, `rowMeans_toVal`.
+
+**Plants** (whole tree, hbox `logs/promo/p8/promo8-escrow/plants/`, each reverted byte-identical):
+- P3, the fuse drops its second call. Reds `fuse_calls` (and `noRef_fuse`) in `Lang.Proofs.StdOfferFuse`. `Lang.Proofs.StdOffer` builds (738/740). Journey LF1 and LE1 are red.
+- P4, a second deal for y. Reds `fuse_calls` (and `fuseArg_cases`) in `Lang.Proofs.StdOfferFuse`. `Lang.Proofs.StdOffer` builds. Every LF/LE fuse row is red ("no bytes").
+- P9 (new), `Lang.peerOf` answers `b` for `b` (the b-side's peer is itself). Reds `peerOf_spec` in `Lang.Proofs.StdOfferFuse` (the route of `jointLaw_sound`'s `peerOf` conjuncts) and `peerOf_party` in `Lang.Proofs.PeerRead`. `Lang.Proofs.StdOffer` builds. LF1, LF5 and LE1 are refused `sameRole` (Y's take judges its own offer against itself).
+- PA (new), the name check skipped. Reds `body_ok`, `body_notNamed` and `body_refused` in `Lang.Proofs.StdOffer` (the route of `take_iff_compliant`, `take_offerNotNamed` and `take_run_sound`). LF8 is admitted.
+- P1, `offerJoint := ok`. Reds `joint_eval`, `noRef_offerJoint` and `noRef_take` in `Lang.Proofs.StdOffer`. LF2, LF2r and LE2 are admitted.
+- P2, the take skips the judge. Reds `body_ok`, `body_refused` and `noRef_take`. LF2 and LF2r are admitted.
+- P5, retract → upsert. Reds `body_ok`. LF1, LF8 and LF5 are refused `offer_guard: final`.
+
+Under P1/P2/P5/PA the generator's take is unfolded by `Lang.Proofs.StdOffer`, so the fuse module is the unchecked cone. Their theorems are that module's. Under P3/P4/P9 the take module is observed GREEN and the fuse module red. `fuse_atomic` does not red under P3: error recovery admits `fuse_calls` with its statement unchanged. P3's tooth for `fuse_atomic` is `fuse_calls`, by name.
+
+**Price** (MEASURED, `gates/decls.py judge` against d23091d):
+- RESTATES-MEANING: 8 public theorems (`take_iff_compliant`, `take_sameRole`, `take_notCompliant`, `take_run_sound`, `fuse_refused_disjoint`, `fuse_atomic`, `jointLaw_sound`, `invitation_once`).
+- Each gains `NamedKey` as a premise or a conclusion, and `keys` in the decoded argument. 0 hypotheses gained on any theorem outside the offer modules.
+- 7 RENAMES (private helpers made public, statements unchanged), `apply4_field` made public and restated (its environment written as a list: a proof module exports no `Env`-valued `abbrev`, gate C3), and 7 private restatements (`party`, `arg_cases`, `body_ok`, `body_refused`, `editsT_means`, `judge_in_take`, and `callsFuse_means` moved with `fuse_calls`): 23 map lines, `decls: ok`.
+- Bytes move: `Std.offer`'s and the escrow's take argument type, so both packages' bytes and ids change. Journey ids for the LF/LE rows change; every other row is byte-identical.
+
+**Critique.** The check reads `self` against `pair.a` with `deq`. A deal whose pair does not name `self` was already refused by the peer read (`peer: notParty`), so the `else` arm (`keys.b`) is reached only by `pair.b`. The keys are naturals, because `offerKey` is `{n}`. A package with a wider offer key would need `keys` at the key type and `eqData`.
+
+**Meta-critique.** The BIAS was believing an observed red is a whole-tree property. Moving `fuse_calls` made P3's red observable, and it showed that a downstream theorem built on a red lemma does not red. Error recovery admits the lemma. So "observed" is per declaration whose proof unfolds the planted site. A theorem that only cites one has no tooth of its own.

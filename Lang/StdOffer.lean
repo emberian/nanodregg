@@ -8,11 +8,13 @@ fired by a third object (fork M, R-0050):
 
 * `fuse {deal, x, y, viaX, viaY}`, the MATCHER, returns two invokes of `take` carrying the SAME
   `deal` bytes, one to `x` and one to `y`. It reads no row and judges nothing.
-* `take {pair, theta}`, run once by each party as itself, reads its own offer and its PEER's (the
-  member of `pair` that is not itself: `Lang.peerOf`, the declared peer read), evaluates
-  `offerJoint` on the two pinned offers and θ, and only on `ok` retracts its OWN offer and inserts
-  its own `session` row capturing `{pair, theta}`. A run edits only its own object's rows (kernel
-  law 4, `rowParent`), so each party consumes its own offer.
+* `take {keys, pair, theta}`, run once by each party as itself, reads its own offer and its PEER's
+  (the member of `pair` that is not itself: `Lang.peerOf`, the declared peer read), refuses unless
+  its own pinned offer is the one the deal NAMES for it (`keys.a` for `pair.a`, `keys.b` for
+  `pair.b`: `offerNotNamed`), evaluates `offerJoint` on the two pinned offers and θ, and only on
+  `ok` retracts its OWN offer and inserts its own `session` row capturing `{pair, theta}`. A run
+  edits only its own object's rows (kernel law 4, `rowParent`), so each party consumes its own
+  offer, and the deal, not the caller's pins, says which of its standing offers that is.
 
 Both takes run inside one call tree, so the Turn seals both retracts or neither (KERNEL-45: the tree
 commits or fails whole). The two judges see one θ because they decode one byte string; that is the
@@ -136,7 +138,22 @@ def offerResumer : Term := .lam offerStateTy (.lam reqTy (.bool false))
 
 /-! ## Methods -/
 
-def offerTakeArg (theta : List Label) : Ty := .record [("pair", pairTy), ("theta", offerThetaTy theta)]
+/-- The offer each party's take consumes, by its key `n`: `a` names `pair.a`'s, `b` names `pair.b`'s. -/
+def offerKeysTy : Ty := .record [("a", .nat), ("b", .nat)]
+
+/-- The deal: the offer each side consumes (`keys`), the pair, and the terms. -/
+def offerTakeArg (theta : List Label) : Ty :=
+  .record [("keys", offerKeysTy), ("pair", pairTy), ("theta", offerThetaTy theta)]
+
+/-- The key `n` the deal `arg` names for the object `req.self`: `keys.a` when `self` is `pair.a`,
+else `keys.b` (the run's peer read already refused a `self` that is neither: `peer: notParty`). -/
+def offerNamedT (req arg : Term) : Term :=
+  .ite (.prim .deq (.get req "self") (.get (.get arg "pair") "a"))
+    (.get (.get arg "keys") "a") (.get (.get arg "keys") "b")
+
+/-- The own pinned point's key is the one the deal names for `self`. -/
+def offerNamedOkT (point req arg : Term) : Term :=
+  .prim .eq (.get (.get point "key") "n") (offerNamedT req arg)
 
 def offerRead : List (Label × RelRead) := [("offer", ⟨1, none, false, false⟩)]
 
@@ -168,7 +185,8 @@ def offerFuseBody (budget : Nat) : Term :=
 
 /-- **The take** (var 0 req, var 1 arg, var 2 state, var 3 rows). Refusals, in order: its own
 offer slot unpinned (`offerUnpinned`) or pinned absent (`noOffer`); the peer's offer slot unpinned
-(`peerRowUnpinned`) or pinned absent (`noPeerOffer`); the judge's `sameRole` / `notCompliant`. -/
+(`peerRowUnpinned`) or pinned absent (`noPeerOffer`); its own pinned offer is not the one the deal
+names for it (`offerNotNamed`); the judge's `sameRole` / `notCompliant`. -/
 def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
   let E := editTy rels
   let fail (why : String) := Term.refuse (resultTy offerStateTy [] E 2) why.toUTF8
@@ -190,10 +208,13 @@ def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (o
         ("none", fail "peerRowUnpinned"),
         ("some", .case (.get (.var 0) "val") [
           ("none", fail "noPeerOffer"),
-          ("some", .case (activityApply (offerJoint theta roles) [.var 2, .var 0, .get (.var 5) "theta"]) [
-            ("ok", done),
-            ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
-              (fail "sameRole") (fail "notCompliant"))])])])])]
+          -- peerVal 0, peerPoint 1, ownVal 2, ownPoint 3, req 4, arg 5
+          ("some", .ite (offerNamedOkT (.var 3) (.var 4) (.var 5))
+            (.case (activityApply (offerJoint theta roles) [.var 2, .var 0, .get (.var 5) "theta"]) [
+              ("ok", done),
+              ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
+                (fail "sameRole") (fail "notCompliant"))])
+            (fail "offerNotNamed"))])])])]
 
 def offerPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
   activityResult rels (.var 2) [activityEdit rels "offer" od "insert"

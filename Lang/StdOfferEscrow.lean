@@ -9,8 +9,9 @@ needs its value to be LINEAR: it may not vanish with the row. Here an offer HOLD
   give.amount (via := some grant)`. `grant` is the poster's grant to the object of `transfer` on its
   own account (KERNEL-60): the kernel spends it from the grant's cap. The row stands exactly when the
   leg moved in.
-* `take {pair, theta}` judges exactly as `Std.offer`'s take (`offerJoint` on the two pinned offers'
-  `{role, terms}` and θ) and, on `ok`, retracts its own offer, inserts its session row and makes ONE
+* `take {keys, pair, theta}` judges exactly as `Std.offer`'s take (its own pinned offer the one the
+  deal names for it, `offerNotNamed`; `offerJoint` on the two pinned offers' `{role, terms}` and θ)
+  and, on `ok`, retracts its own offer, inserts its session row and makes ONE
   call: `transfer (of self give.asset) (of peer.payTo give.asset) give.amount`, its own leg to the
   peer's `payTo`. Both takes run in the matcher's one tree, so both legs move or neither (KERNEL-45).
 * `withdraw {}` reads its own pinned offer and retracts it, crediting its leg back: `transfer (of
@@ -92,7 +93,7 @@ def escrowPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
 
 /-- **The take** (var 0 req, var 1 arg, var 2 state, var 3 rows): `Std.offer`'s take with the leg
 paid to the peer. Refusals, in order: `offerUnpinned`, `noOffer`, `peerRowUnpinned`,
-`noPeerOffer`, `sameRole`, `notCompliant`. -/
+`noPeerOffer`, `offerNotNamed`, `sameRole`, `notCompliant`. -/
 def escrowTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
   let E := editTy rels
   let fail (why : String) := Term.refuse (resultTy offerStateTy [escrowCallTy] E 2) why.toUTF8
@@ -115,11 +116,14 @@ def escrowTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (
         ("none", fail "peerRowUnpinned"),
         ("some", .case (.get (.var 0) "val") [
           ("none", fail "noPeerOffer"),
-          ("some", .case (activityApply (offerJoint theta roles)
-              [escrowJudged (.var 2), escrowJudged (.var 0), .get (.var 5) "theta"]) [
-            ("ok", done),
-            ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
-              (fail "sameRole") (fail "notCompliant"))])])])])]
+          -- peerVal 0, peerPoint 1, ownVal 2, ownPoint 3, req 4, arg 5
+          ("some", .ite (offerNamedOkT (.var 3) (.var 4) (.var 5))
+            (.case (activityApply (offerJoint theta roles)
+                [escrowJudged (.var 2), escrowJudged (.var 0), .get (.var 5) "theta"]) [
+              ("ok", done),
+              ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
+                (fail "sameRole") (fail "notCompliant"))])
+            (fail "offerNotNamed"))])])])]
 
 /-- **The withdraw** (var 0 req, var 1 arg, var 2 state, var 3 rows): retract the pinned own offer
 and credit its leg back to its `payTo`. Refusals: `offerUnpinned`, `noOffer`. -/
