@@ -6431,3 +6431,5 @@ And the bias held for me too. The first full judge found three things that neith
 **Next.** PROT-2r per R-0064: the `HasProt` `Role` index reverts to what the theorems use (me vs other, under an honest name), its own landing, `lang:` fast.
 
 Status: landed by CX-PROMO-7 (lang!), with CX-P5 as second reader.
+
+**Addendum (CX-PROMO-7, after the landing).** While 1f09446 was judged, eb77b78 landed `nd invoke --pin REL KEY`. That closes the CLIENT half of the point-pin gap this entry names open (cv 01a166e9-a543): a point read, so E1's `live` column and a point `(receipt)` read, is now drivable from `nd`. What stays open is the other half, E1's `live` column on RANGE reads. E5's fixture still reads its heads by range; that is still the arm without a statement (cv 01a1671d-09bf).
