@@ -16,10 +16,11 @@ the guard's grain:
 
 Operationally a follower re-runs the monitor without citing it: `rederive` calls `receive`, which runs
 `program.run`, which runs `guardEdits`. The theorem it can cite is `activity_program_safe`, for a
-package that meets the premises. The one package this module decides is the generated fixture:
-`activity_fixture_monitored` (StdActivityTeeth) discharges the package premises there. That the
-compiled Bell's `rung` field is the waiting guard is the next witness, not decided here; `Std.hole`'s
-installed root is outside the premises (its body is an application, its root has imports). The
+package that meets the premises. This module decides the generated fixture
+(`activity_fixture_monitored`, StdActivityTeeth). The deployed Bell meets them as installed (no
+imports, no holes, a record body, `rung` the waiting guard): `Lang.Proofs.Bell.bell_monitored`, with
+`Lang.Journey`'s LBw deciding the shipped core is that package (HOSTING-44). A package built on
+`Std.hole` is outside the premises (its root's body is an application and it has imports). The
 `StdActivityTeeth` admitting rows (`activity_start_unanswered`, `activity_answer_once`,
 `activity_retire_after_answer`) are closed instances of `start`, `answer` and `retire`. The `waiting_*` statements in `Lang.Proofs.StdActivity` stay: they are the iff (the guard
 also ADMITS each step), which is the monitor's transparency half, not its safety half.
@@ -126,7 +127,7 @@ private theorem case_at {lib : List Term} {env : Env} {t : Term} {arms : List (L
   cases he
   exact ⟨b, hf', hb⟩
 
-private theorem deq_true {u v : Data} (h : primEval .deq u.toVal v.toVal = .ok (.bool true)) :
+theorem deq_true {u v : Data} (h : primEval .deq u.toVal v.toVal = .ok (.bool true)) :
     ∃ a, u = .digest a ∧ v = .digest a := by
   cases u <;> cases v <;> simp [Data.toVal, primEval] at h
   subst h

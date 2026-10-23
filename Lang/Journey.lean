@@ -105,6 +105,7 @@ import Lang.Std
 import Lang.Journey.Activity
 import Lang.Journey.HoleChecks
 import Lang.Sim.Need
+import Lang.Bell
 
 namespace Nanodregg.Lang.Journey
 
@@ -2810,6 +2811,20 @@ def runAll (args : List String) (extra : List Run := []) : IO UInt32 := do
         !p.doc.isEmpty && back && oneLine && says && refused && long != bell)
     | .error e => (s!"LB0d read {bellSourcePath}: {e.text bell}", false)
   IO.println s!"{if okd then "ok  " else "FAIL"} {ld}"
+  -- LBw (HOSTING-44) the shipped core is the package the Bell witness names (`Lang.Bell.shapeOk`:
+  -- no imports, no holes, its state and relations, `answer`'s type and body, `rung` the waiting
+  -- guard), so `Lang.Proofs.Bell` speaks of what the sponsor installs; the core with `answer`
+  -- planted to write the ring's text as the answer reads, and is not the witness's
+  let (lw, okw) := match Read.readPackage bellCore with
+    | .ok p =>
+      let planted := bellCore.replace "ask (. x2 text))" "ask (. x2 ringText))"
+      let caught := planted != bellCore && (match Read.readPackage planted with
+        | .ok q => !Bell.shapeOk q
+        | .error _ => false)
+      (s!"LBw the shipped core ({bellCorePath}) is the Bell witness's package (Lang.Bell.shapeOk): {Bell.shapeOk p}; its answer planted to write the ring's text read and caught: {caught}",
+        Bell.shapeOk p && caught)
+    | .error e => (s!"LBw read {bellCorePath}: {e.text}", false)
+  IO.println s!"{if okw then "ok  " else "FAIL"} {lw}"
   let activityVerdict := Std.activitySurfaceVerdict
   let activityOk := activityVerdict == "ok"
   IO.println s!"{if activityOk then "ok  " else "FAIL"} LA0 activity with its own facts relation reads and checks: {activityVerdict}"
@@ -2820,7 +2835,7 @@ def runAll (args : List String) (extra : List Run := []) : IO UInt32 := do
     | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
     | _, rs => rs
   for r in runs do for l in r.log do IO.println l
-  let bad := (runs.map (·.bad)).foldl (· + ·) ((if ok0 then 0 else 1) + (if okd then 0 else 1) + (if activityOk then 0 else 1))
+  let bad := (runs.map (·.bad)).foldl (· + ·) ((if ok0 then 0 else 1) + (if okd then 0 else 1) + (if okw then 0 else 1) + (if activityOk then 0 else 1))
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
   return if bad = 0 then 0 else 1
 

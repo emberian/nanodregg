@@ -2343,3 +2343,63 @@ The probe runs outside the residents tick, using the client's existing reply bou
 **Critique.** The strong theorem rests on three printer guards that are new refusals; on an installed package each is unreachable, but the proof of that is install's checks plus `decodePackage`, and I did not prove it: a package cell some fold produced outside install (none does under `absorbStep`) would now describe as `noText` rather than print. `Lifetime` is one process: across a resident restart the shape is described again (`run` starts with none), which the theorem uses rather than proves. `LegFrom` reads `Reach` forward; a follower whose Store lost an acknowledged append would move BACK, which HOST-22's durability (append before reply) excludes, and that is outside Lean.
 
 **Meta-critique.** The bias to watch: taking the card's three triggers as the whole join because the card named three. Building it found two more the card did not name: the package CELL (not only the slot) had to be fixed, and adopt could replace follow's World mid-run. Both were found only because the proof would not close, not by review; a fourth (bounds on the ring and answer) was a premise of an existing lemma. The plants show each named trigger is load-bearing; they do not show there is no sixth.
+
+## HOSTING-44 · The answered row is the kept answer: the deployed Bell as a witness, joined to the strong socket (2026-10-23, CX-BELL; R-0069; HOSTING-43 (e), cv 01a167fe-5e84)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Restated (RESTATES-MEANING): `Hosting.Proofs.Socket.delivered_answer_committed_strong`, whose conclusion gains one conjunct (the World `wp` follow planned the call on holds the bell's package `P` in a ROM cell, `P` reads as `pk`, and `pk`'s method at `sh.answer` is labelled `answer`; same premises, the facts were already inside its proof). `Lang.Std.deq_true` (StdActivityMonitor) is no longer private. New: Lang/Bell.lean, Lang/Proofs/MethodRun.lean, Lang/Proofs/Bell.lean, Hosting/Proofs/BellRow.lean, and the lang-journey row LBw. Re-genesis / re-emit: none; no wire, state or package shape changes.
+
+**Finding: the blocker HOSTING-43 (e) named was false.** (e) said "the installed Bell is `Std.hole`'s instance: its root has imports and its body is an application", so `activity_program_safe` could not apply and a loaded-closure monitor was needed first. MEASURED (the reader on the shipped core, `world/resident/Bell`, at d23091d): `imports 0 holes 0`, the body a record of `answer bell close open queued retire ring rung`, `rels [pending, rings]`. The core text starts `(package (imports) …`; `Bell.ob` has no `import`. The claim came from StdActivityMonitor's own note, which put "the compiled Bell's `rung` is the next witness" beside "`Std.hole`'s installed root is outside the premises"; those are two different packages. So the card's part (1), the monitor over a loaded closure, is not on the Bell's path, and it is not done here: no deployed consumer needs it. It stays the right theorem for a package built on `Std.hole`, the day one is installed.
+
+**Decision.**
+1. **The witness names the Bell** (Lang/Bell.lean). The parts the theorems read are built by the generators and lowering pieces the surface uses: the state `S`, the plan `ask`, the resumer `deq req.agent state.resident`, the refusal names, `pending := activityCursor plans 64 "queued"`, `rings := activityLog plans 1024 "rung"`, `answer` (`Surface.boundCheck` over the two `(bytes 1 2000)` bounds, then the resident check, then the two edits) and `rung := activityWaiting S plans rings resumer names`. `shapeOk p` (a Boolean: statements live in Proofs modules, closure C3) says a package is the Bell at each of them: no imports, no holes, that state and those relations, `answer`'s declared type, and the body fields `answer` and `rung`; `shape_parts` reads it as statements. **LBw** (lang-journey, beside LB0 and LB0d) computes `shapeOk` of the shipped core, and reads a planted core in which `answer` writes the ring's text; the plant must differ from the core and still read, so a plant that stopped applying reads RED.
+2. **The guard is the waiting guard, as installed** (Lang/Proofs/Bell.lean). `rung_is_waiting`: at a Bell, `rings` is guarded by `rung` and `rung` is `activityWaiting …`; every premise `activity_program_safe` takes of the guard holds. `bell_monitored`: `activity_program_safe` at the Bell through `Lang.program`'s `run`. Every `rings` edit of a returning run of ANY Bell method is a `WaitingStep` over the row the kernel found at its key. `resumes_resident`: the resumer admits exactly a request whose signer is the state's `resident`.
+3. **What `answer` writes** (`answer_run`, the deployed run). A run of the method labelled `answer` that returned:
+   - decoded `answerData nb x k y`, with `x` and `y` inside 1..2000;
+   - was signed by the state's resident;
+   - makes no calls;
+   - and its row acts are exactly the upsert of `rings` (relation 1) at `keyBytes (k, nb)` to the bytes of `answeredVal x y` (`answered (some (ask y))`, captured `ask {text := x}`), and the retract of `pending` (relation 0) at the same key.
+
+   The proof is forward: it evaluates the method body by `BigStep` in the run's environment. Each refusing branch (a bound out, a stranger) is a derivation to `.error`, which `bigStep_deterministic` against the run's `.ok` excludes. `Means` and `means_deterministic` then fix the extracted edits, and `editsOf` fixes the row acts. Its helpers (`runMeasured_inv`, `apply4_method`, `get_data`, `means_toVal`) are in Lang/Proofs/MethodRun.lean. `Lang.Proofs.StdOffer` (another lane's file) carries public copies of four of them in `Lang.Std`; folding them onto MethodRun is filed (cv 01a16821-581a).
+4. **The join** (Hosting/Proofs/BellRow.lean). `answered_row_is_kept_answer` takes the strong theorem's premises and an `ok` invoke of `answer` for `(r, t)`. It concludes three things:
+   - **`t` is a kept answer of `r`** (`lifetime_invoke_kept`): the one the process started with (`m.kept`, read back from the volume), or one it kept in the same lifetime with `keep r t true`.
+   - **The call was journaled.** Follow's World at its `ok` journals the member's call invoking the bell `o` at `sh.answer` with bytes `args`. The bell's package `P` reads as `pk`, and `pk` labels `sh.answer` `answer`.
+   - **What every returning run of that invoke writes, when `pk` is the Bell (`shapeOk pk`).** On any view that reads `P` as `pk`, with any state and any request, the run is the resident's and makes no calls. Its row acts are exactly `rings[(r.ringer, r.notBefore)] := answered (some (ask t))` with capture `ask {text := r.text}`, plus the retract of `pending` there. That upsert is the `answer` step of the log row's machine.
+
+   The join decodes the strong theorem's `encodeData answerArgTy (answerDatum r t) = some args` by `decodeData_eq_ok_iff` and equates it with the argument `answer_run` decoded.
+
+**What the model claims, and what it does not.**
+- Claimed: the forward direction of B8 at the run grain. The answer a resident's `ok` delivered, under the `stdio-leg` row, is exactly what any run of its journaled call writes into the ring's `rings` row, and it is a kept answer. Every `rings` edit of every Bell run is a step of the machine.
+- Not claimed: that the World which committed the call HOLDS that row afterwards. The kernel has no read-back lemma for a written row slot after `rowsRun`, so LITP's "the join stays a journey row" stands for the World's rows (cv 01a16821-5828).
+- Not claimed: that the journal entry at `txIdOf ⟨u, sig⟩` was put by a commit of this call. `journalAt` is read; the step that wrote it is not reconstructed, and doing so would carry a collision disjunct on `txIdOf` (cv 01a16821-5835).
+- Not claimed: the converse, "every `answered` row came from the resident's socket". `bell_monitored` gives every answered row's writer as the resident's member through the resumer. Who else holds that key is custody (HOSTING-32), and is not here.
+- Not claimed: that the configured `bell` IS a Bell. `shapeOk pk` is a premise of the inner implication. LBw shows the shipped file meets it; the resident's `Shape.read` checks only `answer`'s type and `pending`'s layout, never the package id.
+
+**Plants (MEASURED, hbox wt/bell; logs /tank/dregg-build/nanodregg/logs/bell/).**
+- P1, the generated edit: Lang/Bell.lean's `answer` writes `arg.ringText` as the answer (plant-P1.diff). Results (plant-P1.log):
+  - `Hosting.Proofs.SocketStrong` builds GREEN;
+  - `Lang.Proofs.Bell` is RED at `answer_run` (:289; re-measured after the `shapeOk` split at :290, plant-P1b.log: the extracted edits are not the answer's);
+  - `Hosting.Proofs.BellRow` does not build;
+  - LBw FAIL, `lang-journey: RED (1)`.
+- P2, the deployed Bell: `Bell.ob` and its core both write `arg.ringText` (plant-P2.diff). Results (plant-P2.log, plant-P2-journey.log):
+  - LB0 stays ok (the pair is consistent);
+  - LBw FAIL (`shapeOk` false);
+  - LB7/LB8/LB8b FAIL, `lang-journey: RED (7)`;
+  - every Lean module GREEN (the theorems are over `shapeOk`);
+  - resident_bell RED at "Q2: each ring's answer, at its key".
+
+  A first P2 journey read `shapeOk` true from a lang-journey binary still built with P1's witness. Rebuilt on the restored witness, it read as above.
+- Restored: LBw ok, `lang-journey: GREEN` (restore-journey.log). Lean modules GREEN.
+
+**(4) of the card, resident_bell at d23091d (HOSTING-43's describe refusals and splitter).** MEASURED GREEN, unmodified tree, `cargo test -p nanodregg-launcher --test resident_bell`: `1 passed … finished in 72.24s` (resident_bell-d23091d.log). Nothing to fix forward.
+
+**Vacuity read (author).**
+- `shapeOk` holds of the shipped core (LBw) and fails of a planted one (LBw's own plant, P2).
+- `answer_run`'s premise, a returning run of `answer`, is met on the deployed path: journey LB7 admits B's answer through `Lang.program`, and resident_bell Q2 reads the answers back.
+- `lifetime_invoke_kept`'s two disjuncts are each unprovable from the premises: a fresh lifetime keeps before it invokes; a restarted one answers from the volume's seed (resident_bell Q6). This is INFERRED from the event grammar; no tooth instantiates each.
+
+**Critique.**
+- **The name reads as a universal.** "every answered row is a kept answer" is not what is proved. What is proved is the ok-delivered direction at the run grain, plus the monitor over all runs. The docstring says so; the name does not.
+- **`shapeOk` is checked of a FILE by a runtime row, not of the object the config names.** A config pointing `bell` at a non-Bell object gets the strong theorem and nothing from this one. The real fix is the resident checking the bell's package id against the shipped Bell's, a HOSTING change named here and not made (cv 01a16821-5842).
+- **MethodRun duplicates StdOffer's public helpers until they are folded.**
+
+**Meta-critique.** The bias to watch is carrying a predecessor's blocker as a premise. HOSTING-43 (e) wrote "the installed Bell is `Std.hole`'s instance" from a docstring. The card was cut from it as a three-part Lang change, and it reached this lane as a requirement: "(1) generalise the monitor to a loaded closure". Measuring the installed package took one reader call and refuted it. Had the lane started with (1), it would have built a loaded-closure monitor for a package nobody installs, then found the Bell needed none of it. A blocker named in a decision is a claim to re-measure, not a fact. The same bias runs the other way in this decision's own "Not claimed" lines, and the next lane should re-measure those before building on them.

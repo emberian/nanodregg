@@ -35,9 +35,10 @@ This module states what an `ok` one MEANS on the member's side, under ONE premis
   type IS `answerArgTy` on the World the call was planned on, is `SocketStrong`'s
   `delivered_answer_committed_strong` (HOSTING-43).
 
-NOT claimed here. The bell's ROW: no landed theorem states the compiled Bell's `answer` method;
-`answered_row_is_kept_answer` waits for that witness (HOSTING-43 names the Lang change), and LITP's "the
-join stays a journey row" stands. A commit whose reply is LOST (follow appends, then dies before
+NOT claimed here. The bell's ROW: what the compiled Bell's `answer` writes is
+`Lang.Proofs.Bell.answer_run`, joined to the strong form in `BellRow.answered_row_is_kept_answer`
+(HOSTING-44) at the run grain; that the committing World then HOLDS that row is not stated anywhere, so
+LITP's "the join stays a journey row" stands for it. A commit whose reply is LOST (follow appends, then dies before
 `port.send`; the resident sees `.error` or exit `client`) is PROT-5's at-most-once and out of this card:
 nothing here claims the converse of ok ⇒ journaled. Nor: that an ok reply's stdout is the receipt, who
 else holds the resident's key, liveness, or that nd's attempt loop implements `Attempt.next`.
@@ -542,7 +543,7 @@ NOT claimed here: that those argument bytes are `answerDatum r t` at `answerArgT
 the resident checked the method's type only when it read the description (`Shape.read`), maybe in an
 earlier tick and at an earlier World; `SocketStrong.delivered_answer_committed_strong` makes that join.
 The bell's ROW (`rings[(notBefore, ringer)].answered = some (ask t)`): that is the Bell's `answer`
-method, which no landed theorem states over the compiled Bell (HOSTING-43). A commit whose reply is
+method (`Lang.Proofs.Bell.answer_run`), joined in `BellRow.answered_row_is_kept_answer` (HOSTING-44). A commit whose reply is
 LOST is PROT-5's at-most-once: nothing here claims the converse of ok ⇒ journaled. Also not claimed:
 that an ok reply's stdout is the receipt (`settled` returns step 3's pre-submit `out`), who else holds
 the resident's key, liveness, and that nd's attempt loop implements `Attempt.next`.
