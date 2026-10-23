@@ -53,7 +53,7 @@ standing:bench-worstcut-births	{fresh}	BENCH-WORSTCUT births PASS	{fresh} --harn
 standing:bench-worstcut-retires	{fresh}	BENCH-WORSTCUT retires PASS	{fresh} --harness-control
 standing:bench-worstcut-rows	{fresh}	BENCH-WORSTCUT rows PASS	{fresh} --harness-control
 standing:bench-worstworld	{fresh} synthetic 200000	BENCH-WORSTWORLD PASS	{fresh} synthetic 200000 --harness-control
-certificate-tests	(none)	certificate-tests: GREEN	--harness-control
-script:gates/certificate.py	{fresh}	certificate-vector: GREEN	{fresh} --harness-control
+script:gates/certificate.py	{fresh}	certificate-pin: GREEN	{fresh} --harness-control
+script:gates/certificate_plants.py	{fresh}	CERTIFICATE PLANTS GREEN	{fresh} --harness-control
 script:gates/statement_plants.py	{fresh}	STATEMENT PLANTS GREEN	{fresh} --harness-control
 script:gates/decls_plants.py	--synthetic {fresh}	decls-synthetic: GREEN	--synthetic {fresh} --harness-control

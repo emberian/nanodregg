@@ -978,3 +978,69 @@ Text cannot tell a moved, re-proved or deliberately restated declaration from a 
 - (f) The map lines can be long. They are the price, printed for pasting.
 
 **Meta-critique.** The bias is shaping the rule to pass the cases at hand. GATES-20p did it: the regex was cut to P7's theorem, and it then refused E1 and the 10-20 trio. I did it too. My first map had an unchecked `RESTATES: OLD → NEW` so that a historical landing's map would be short, and a free pass for a removed module so that the fold's deletions would not need lines. Both were exactly the lies the guard exists to catch, and the cross-family read (R-0034) caught both. My plant set also kept S9 among the "false positives" after my own replay showed it never bit. The read made me label it for what it is.
+
+## GATES-20u · The certificate pins what `grant_moves_le_cap` says and rests on, one level, and the closure reader goes (2026-10-23, ROOT review H3 + H2, program card G2; R-0053, R-0056, R-0057 under promo/READ-G2-grok.md; IMPACT promo/IMPACT-G2.md; cv 01a16131-5868, 01a15f18-25f7)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none. Ten theorems are deleted, none of them nano admission: `contexts_distinguish` and `checkers_distinguish` (REVIEW H2: `congrArg` on a structure field, "this field differs, so the structure differs"), and the eight whose subject is the closure walk: `any_target`, `accept_faithful`, `read_faithful`, `accepted_reachable_definition`, `missing_reachable_refused`, `changed_definition_refused`, `read_environment`, `accepted_environment_reachable`.
+
+**Finding.** gates/certificate.py ran `read (reader env) 200000` over `grant_moves_le_cap` and compared all 6,857 declaration payloads of the closure (proofs included), their order and the checker identity with an 11,961,094-byte gzip (REVIEW H3). Any edit anywhere in that cone reddened the row. Two more measured facts (IMPACT-G2 §1, on f8d04ac oleans):
+- The walk popped 162,250 names against its fuel of 200,000. A cone 23% larger would have read `fuelExhausted`, which is the same red-in-waiting.
+- One run took 119 s and 1.9 GB.
+
+**Decision.** `gates/certificate-grant.json` (10,875 bytes, plain sorted JSON) pins four sections of `Nanodregg.Ledger.Proofs.grant_moves_le_cap`. Each is a SHA-256, taken in Python, over an encoding Lean emits:
+1. **statement**: the theorem's type (the exact DAG encoding of `Census.Certificate.expression`);
+2. **axioms**: the `collectAxioms` set. This is a whole-cone fact, so an axiom used anywhere under the proof is in it;
+3. **supports** (67): each constant the proof term references, one level (the `dependencies` of the theorem's declaration), with its statement;
+4. **vocabulary** (48): each constant the statement names, with its declaration PAYLOAD (a definition's body, an inductive's shape and its constructors' payloads). This is the body, not a second copy of the type.
+
+`#certificate_pin` (Census/Certificate.lean) reads them from the built environment through `Census.Certificate.lookup` (`env.checked` projected by `declaration`). It does no closure walk: 1.3 s, 1.5 GB. `gates/certificate.py` compares section by section, and a difference is RED by section and name (`statement (live: …)`, `axioms added […] removed […]`, `supports changed/added/removed […]`, `vocabulary …`). `--harness-control` adds an impossible axiom. `--emit-pin` is the only writer. Checker identity is not pinned: nothing compared it.
+
+**Why four (R-0057 (1)).** Plant P3 edits `MovesThrough`'s body to `… ∧ False` and `move_weight`'s proof to an elimination. After that, every amount is forced to 0, and the theorem bounds nothing. Its statement, its axioms and all 67 supports are equal. Only the vocabulary changes, at exactly `MovesThrough`. GATES-20t does not see that edit either: on a forward edit it compares only theorem and axiom statements.
+
+**The cut.** One level is where the statement's own words end:
+- An edit of `Dispatched` (named in `MovesThrough`'s body, not in the statement) is GREEN. So is any proof below the theorem's direct supports (P2).
+- The statement's meaning cone (theorems read by type only) is 2,444 declarations, 1,269 of them in this repo (MEASURED). Pinning it would be H3 again.
+- Theorems about `Dispatched` own `Dispatched`.
+- `grant_credits_le_cap`, the twin, is not pinned.
+
+**Deleted (R-0057 (2), (3)).** Nothing reads a closure out of a real environment any more, so these go:
+- Census/CertificateReader.lean (`Reader`, `Certificate`, `Entry`, `Refusal`, `accept`, `gather`, `read`), Census/Proofs/CertificateReader.lean, Census/Proofs/Certificate.lean;
+- Census/CertificateReaderTests.lean, Census/CertificateReaderMain.lean, the `certificate-tests` exe and its gates/runs.tsv row;
+- `#certificate_census`, `certificateJson`, `namesJson`, `checker`, `reader`, `Declaration.axiomKind`, and the unused derived `DecidableEq`/`Repr` instances of `Expression` and `Declaration`;
+- devtools/certificate_plants.py (its subject was `accept`) and devtools/certificate_environment_plants.py (CROSS-LAYER: CLIENT, R-0056).
+
+LANG-P6's exchange object (LANG-74.12 moved it to Census) no longer exists. Its families are accounted for:
+- extra axiom → P4, which puts the axiom in the real cone rather than in a twin;
+- unfolded constant → P3 with the vocabulary mutant;
+- disabled comparator → one mutant per section.
+
+**The collectAxioms-versus-closure coverage guard is RETIRED, not replaced.** No second inventory of the axiom set remains, and P4 checks that an added axiom reds the pin, not that two readers agree. `collectAxioms` was already a named trusted read-off in LANG-P6. It is now the only one.
+
+**Plants.** `gates/certificate_plants.py` is a `script:` row: every judge runs it after the build, 9.5 s. Each plant is a scratch copy of the REAL Ledger/Proofs/GrantCap.lean, read at run time. It has `import Census.Certificate` added and is elaborated by `lean -R` so its module and private names are the real ones. It imports the built oleans below GrantCap. Each mutation site is asserted to occur the stated number of times, or the row reads `site moved`. On wt/g2 at 1fc905f (whole logs `/tank/dregg-build/nanodregg/logs/g2/plants2.log`, `plants2h.log`):
+- C0, no mutation: equal to the real environment's pin in all four sections.
+- P1, `leftAt_of`'s statement flipped: `supports changed […leftAt_of]; added ['Eq.symm']`, nothing else.
+- P2, a proof two levels down (`left_falls`, a dependency of the direct support `spends_le_left`): GREEN. The probe confirms that `left_falls`'s declaration changed, so the old whole-closure vector would have refused it. That is the over-pinning removed, measured.
+- P3, `MovesThrough … ∧ False`: `vocabulary changed ['…MovesThrough']` only.
+- P4, an axiom used in `left_falls`: `axioms added ['…g2_plant_axiom']` only.
+- P5, `≤ left` → `≤ left + 0`: statement RED, plus `HAdd.hAdd`/`instHAdd` added to supports and vocabulary.
+- M: gates/certificate.py without the supports section reads P1 GREEN, and without the vocabulary section reads P3 GREEN.
+- `--harness-control` additionally requires P2 RED, and the row reads `CERTIFICATE PLANTS RED (1)` naming harness-control.
+- The gate itself (`logs/g2/gate1.log`) reads `certificate-pin: GREEN`, and its control (`gate1h.log`) reads RED, naming `CX_G2_harness_control`.
+
+**Size.** gates/size-allow.tsv keeps its header and has no rows; `size_limit: ok`. Correction, fixed forward: 71db964's message said the table was "seeded empty" and that main was "RED on main by design until the certificate is re-pinned". It landed with the one dated row, and main was green. It is empty from this landing on.
+
+**What breaks.**
+- gates/certificate-grant.json.gz is gone, and nothing reads a `.json.gz`.
+- `#certificate_census`, the `Census.CertificateReader.*` names and the `certificate-tests` exe no longer resolve.
+- Re-emit: the pin, once, by `gates/certificate.py SCRATCH --emit-pin gates/certificate-grant.json` from the built tree. That is the only step when one of the four sections changes on purpose.
+- Nothing re-genesises.
+
+**Critique.**
+- (a) One level is a cut, not a closure: a vacuity planted in `Dispatched` is GREEN.
+- (b) The encodings are exact. A binder rename in the statement or in a support's statement reds, which is stricter than GATES-20t's binder-erased digest.
+- (c) The coverage guard is retired (above).
+- (d) The plants are tied to six text sites of GrantCap.lean. An edit at a site reds the plant row by name until the site is updated. A fixture copy would rot against the Kernel instead.
+- (e) Core constants (`Eq.mp`, `List.zip`, …) are among the supports and the vocabulary. A toolchain bump that moves one reds the row, naming it.
+- (f) One theorem is pinned. The pin is a freeze of `grant_moves_le_cap`'s claim, not a property of the tree.
+
+**Meta-critique.** The bias was executing the brief's letter. The card listed three pins and my first draft had three. The plant that refuted it (P3) was one I added to test the harness, not the card. The opposite pull was also mine: I proposed keeping the closure reader as a "demonstration" and cv-tasking the question. A component whose only consumer is its own tests fails the consumer test this program applies, and the cross-family read named that as the deferral it was.

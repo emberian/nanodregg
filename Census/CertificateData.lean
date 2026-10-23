@@ -1,8 +1,8 @@
-/- Checked-Environment projection for certificates. Encoding and reference collection use a
-shared-node DAG: expanding proof sharing with Repr can require gigabytes. The exact trust
-boundary is stated in Census.Proofs.Certificate and decisions/lang.md. -/
+/- Checked-Environment projection for the certificate pin (Census/Certificate.lean, decisions/gates.md GATES-20u).
+Encoding and reference collection use a shared-node DAG: expanding proof sharing with Repr can require gigabytes.
+Trusted read-offs, none proved: encodeExpr/expression/declaration (field coverage, reference extraction and
+encoding injectivity), Lean.Environment.checked/find?, ExprStructEq, core Repr/JSON. -/
 import Lean
-import Census.CertificateReader
 
 namespace Census.Certificate
 
@@ -13,7 +13,6 @@ deriving instance Repr for ReducibilityHints, QuotKind
 structure Expression where
   encoded : String
   constants : List Name
-  deriving DecidableEq, Repr
 
 structure Encoding where
   seen : Std.HashMap ExprStructEq Nat := {}
@@ -68,12 +67,11 @@ structure Declaration where
   type : Expression
   payload : String
   dependencies : List Name
-  axiomKind : Bool
   theoremKind : Bool
-  deriving DecidableEq, Repr
 
-/-- Every ConstantInfo variant retains its constructor fields. Type and values are encoded
-DAGs; constructor/inductive/recursor shape edges close the context conservatively. -/
+/-- Every ConstantInfo variant retains its constructor fields. Type and values are encoded DAGs.
+`dependencies` are the values' constants and the shape edges (an inductive's mutual block and constructors, a
+constructor's inductive, a recursor's rules); for a theorem, exactly the constants its proof term references. -/
 def declaration (ci : ConstantInfo) : Declaration :=
   let ty := expression ci.type
   let values := (ci.value? true).toList.map expression
@@ -102,43 +100,11 @@ def declaration (ci : ConstantInfo) : Declaration :=
   let payload := (Json.mkObj [("kind", toJson tag), ("name", toJson (reprStr ci.name)),
     ("levels", toJson (reprStr ci.levelParams)), ("type", toJson ty.encoded),
     ("values", toJson (values.map Expression.encoded)), ("shape", shape)]).compress
-  ⟨ty, payload, (values.flatMap Expression.constants ++ edges).eraseDups,
-    ci.isAxiom, ci.isTheorem⟩
+  ⟨ty, payload, (values.flatMap Expression.constants ++ edges).eraseDups, ci.isTheorem⟩
 
-/-- Compiler identity is Lean's own githash; context content supplies theory identity.
-Imports are the actual direct imports of the environment, not producer-supplied labels. -/
-def checker (env : Environment) : Census.CertificateReader.Checker :=
-  ⟨"Lean kernel / Census.Certificate v1", Lean.versionString, Lean.githash,
-    env.header.imports.toList.map (fun i => i.module.toString)⟩
-
-/-- Like collectAxioms, use the checked kernel environment, not pending elaborator data. -/
-def reader (env : Environment) : Census.CertificateReader.Reader Name Expression Declaration where
-  lookup := fun n => (env.checked.get.find? n).map declaration
-  typeOf := Declaration.type
-  references := Expression.constants
-  dependencies := Declaration.dependencies
-  isAxiom := Declaration.axiomKind
-  isTheorem := Declaration.theoremKind
-  checker := checker env
-
-def namesJson (ns : List Name) : Json := toJson (ns.map Name.toString)
-
-def certificateJson (c : Census.CertificateReader.Certificate Name Expression Declaration)
-    (kernelAxioms : List Name) (prettyStatement : String) : Json :=
-  Json.mkObj [
-    ("target", toJson c.target.toString),
-    ("statement", toJson c.statement.encoded),
-    ("statementPretty", toJson prettyStatement),
-    ("statementConstants", namesJson c.statement.constants),
-    ("checker", Json.mkObj [("name", toJson c.checker.logic),
-      ("toolchain", toJson c.checker.toolchain), ("revision", toJson c.checker.revision),
-      ("imports", toJson c.checker.imports)]),
-    ("axioms", namesJson kernelAxioms),
-    ("contextAxioms", namesJson c.assumptions),
-    ("context", toJson (c.context.map fun e => Json.mkObj [
-      ("name", toJson e.name.toString), ("declaration", toJson e.body.payload),
-      ("type", toJson e.body.type.encoded),
-      ("reads", namesJson (e.body.type.constants ++ e.body.dependencies)),
-      ("axiom", toJson e.body.axiomKind), ("theorem", toJson e.body.theoremKind)]))]
+/-- The reader: a constant's projected declaration in the checked kernel environment (what `collectAxioms`
+reads), not pending elaborator data. -/
+def lookup (env : Environment) (n : Name) : Option Declaration :=
+  (env.checked.get.find? n).map declaration
 
 end Census.Certificate
