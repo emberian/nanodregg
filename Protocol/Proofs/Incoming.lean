@@ -178,11 +178,14 @@ theorem receiptLines_cont {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w : W
 theorem envelopeSign_cont {t : Nat} {m k : ByteArray} : (envelopeSign t m k).cont = some k := by
   unfold envelopeSign; split <;> rfl
 
-omit [Ord D] [DecidableEq D] in
-theorem settled_cont {X : Ctx D} {out result : ByteArray} : (settled X out result).cont = none := by
-  unfold settled
-  repeat' split
-  all_goals first | exact refusedAt_cont | simp [refused, declined, Reply.cont]
+theorem settled_cont {X : Ctx D} {me : Self D} {w : World D} {out cb result : ByteArray} :
+    (settled X me w out cb result).cont = none := by
+  have : ∃ e o r, settled X me w out cb result = .done e o r := by
+    unfold settled attemptContradicted refusedAt refused declined
+    repeat' split
+    all_goals exact ⟨_, _, _, rfl⟩
+  obtain ⟨e, o, r, h⟩ := this
+  rw [h]; rfl
 
 /-- `cancel CALL`'s phase 9 hands on only phase 10's state (the call's bytes), or nothing. -/
 theorem sendCancel_cont {X : Ctx D} {w : World D} {argv : List ByteArray} {cb result k : ByteArray}

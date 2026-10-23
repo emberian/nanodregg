@@ -2003,3 +2003,67 @@ CX-HOST-join-control.log). The ONE Rust join test still reaches the independent
 thin-adopt defect: nd follow status 2 at adopt (CX-HOST-join-current.log), ROOT's
 item 1. No check is bypassed to make it pass; the full judge retains parent
 attribution. The filtered protocol rows are green at both parameter sets.
+
+## PROTOCOL-64 · Follow settles step 4 on its own World: `done ok` for a submitted call only when follow's World journals it (2026-10-23, CX-E2; E2's T0, R-0054/R-0058/R-0060/R-0061; promo/IMPACT-E2.md §1, §4; promo/READ-E2-grok.md, promo/READ-E2b-grok.md)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Restated (a binder each, no hypothesis; the
+`omit [Ord D] [DecidableEq D]` dropped because `settled` now reads `settleOf`): `settled_ne_submit`,
+`settled_ne_host`, `settled_uncertain`, `settled_cont`. New: `settled_ok`, `step_settled_ok`.
+
+**Finding: a deployed trust gap, independent of the card that measured it.** A member's write ends in step 4:
+the client hands follow the attempt's end, `u8 Action.code ‖ payload`, and `settled` rendered it. Its committed
+arm was `result[0] = Action.committed ⇒ done ok`, with no World read; the docstring said committed and refused
+are "only as the member's follow settled them", and the function did not look. The end is the attempt store's:
+nd's loop over `Attempt.next` (`client/src/attempt.rs`, `client/src/run.rs:292-314`), which follow does not run.
+So the `ok` of every write a member's nd reported was Rust's reading of the attempt, relayed, not a check follow
+made when it said ok. PROTOCOL-46's nested `receipt CALL` does check the World; step 4 trusted Rust to relay that
+word. Measured as R7 of nine Rust decisions on the resident's stdio leg (IMPACT-E2 PART 1): the only one of the
+nine that can make a reply say ok.
+
+**Decision.** Step 3's continuation carries the call bytes it hands out to submit
+(`again 4 [startB, signedB, ub, out, X.callBytes c]`; one more element of `stateLayout`'s `.list acc`, the layout
+unchanged). At step 4, `ownSettle X me w cb := (X.decodeCall cb).map (settleOf X me w)` on follow's CURRENT World,
+the one `Follow.loop` threads and the attempt's confirm or probe just caught up. A `committed` end is `done ok` only
+when `ownSettle` is `committed`; a `refused` end prints follow's OWN verdict only when `ownSettle` is `refused` or
+`expired`; any other own verdict is `hostContradicted CLAIM FOLLOWSAID`, the attempt left open; call bytes that do
+not decode are `refused badResult`. Theorems: `settled_ok` (a `done ok` from `settled` is a decodable call that
+`settleOf` on that World settles committed) and `step_settled_ok` (the same at `step`, for a phase-4 continuation:
+its last item). With `Settle.settle_committed`, ok means follow's World journals the call.
+
+**What changes meaning.** PROTOCOL-46's confirm is now PROGRESS, not safety: an attempt store that skips the
+confirm, or that takes the Host's word or a `declined` as final, no longer gets a wrong verdict past follow;
+follow, not caught up, says `hostContradicted committed open` (or `refused open`) and the member retries. The
+attempt loop (R4–R6, R8 of IMPACT-E2) stays in Rust and is not a decision on the ok path any more: it chooses
+which `result` a step is handed. It is not moved into Lean and not in any trust premise.
+
+**The rows' model drifted from the deployed path, until this.** `Protocol/Rows/Loopback.lean`'s `.rerun` called
+`Command.settled` on the rows' own attempt drive with no World; it now passes the actor's `Self`, its follow World
+and the frozen call, as follow's step 4 does. Two rows' plants were R7 already modelled in Lean, and were caught
+by the WRONG verdict reaching the member (`refused stale`): `settleDecline` (row `refused`) and `trustLookup` (row
+`settle`, the shape before PROTOCOL-46). Under this decision follow refuses to echo them, so the plants are caught
+by name instead: `.caught .settleDecline 13 (.contradicted "refused open")`, `.caught .trustLookup 1
+(.contradicted "committed open")`.
+
+**Plants (measured in hbox wt/e2; promo/E2/).** P-T0c, the committed arm back to `done ok` on `result[0]`:
+`settled_ok` RED (`Protocol/Proofs/Command.lean:238`, `:243`: the arms where follow's own settlement is not
+committed), `settled_cont` GREEN; `rows`: the `settle` row FAIL (`trustLookup` BLIND at line 1), every other row
+PASS. P-T0r, the refused arm back to printing the store's text: `rows`: the `refused` row FAIL (`settleDecline`
+BLIND at line 13). No theorem states the refused arm (the resident consumes only ok); its tooth is that row.
+After both, restored: whole tree GREEN (727 jobs), `rows` ALL PASS, `rows --deployed` ALL PASS,
+`rows --harness-control` RED (FAIL 44 of 45).
+
+**Breaks.** A phase-4 continuation now has five items. A `k` minted by an older follow (four items) reaches the
+catch-all and is refused `badState`: an attempt in flight across the upgrade ends there and the next run looks it
+up again (its frozen call is unchanged). No wire layout, codec vector, table or Store format moves; no re-genesis.
+
+**Critique.** The continuation is unauthenticated, as before ("`k` cannot steer what is signed"); at step 4 it now
+names WHICH call is checked. Returning `k` verbatim is byte relay, the same trust the argv needs; a relay that
+swaps in another committed call's bytes is outside it. `settled` still returns `out`, the receipt step 3 printed
+from the pre-submit `receive`, not from the committed journal: an ok reply's stdout is not the journal entry, and
+nothing here says it is. A follower that commits and dies before its reply gives the member no `ok` at all; that
+window is PROT-5's at-most-once, not this decision's.
+
+**Meta-critique (bias named: trusting the docstring over the function).** The gap sat under a docstring that
+stated the property, and two plants that modelled it in Lean passed because they checked the visible verdict, not
+who decided it. The measurement found it by counting decisions per branch on the deployed path, not by reading
+the prose; the rows' teeth only became T0's teeth once the plant expectations named the refusal follow now says.

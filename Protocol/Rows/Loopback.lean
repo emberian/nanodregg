@@ -1149,7 +1149,9 @@ def runAct (l : Line) : M D (Expect × String) := do
           match ← drive l.actor call .none 4 attemptFuel 0 (some (.submit, .lost)) none none "" with
           | .error e => pure (.refused e, "")
           | .ok res =>
-              match Command.settled (← X) ByteArray.empty res with
+              -- step 4 is follow's: it settles the frozen call on the actor's own World (R7)
+              let self ← selfOf l.actor .none
+              match Command.settled (← X) self (← actor l.actor).follow.world ByteArray.empty call res with
               | .done exit out err => pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
               | _ => pure (.refused "badFrame", "")
   | .resubmit => do

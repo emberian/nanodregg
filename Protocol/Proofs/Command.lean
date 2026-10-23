@@ -213,13 +213,66 @@ theorem cancelAnswer_ne_submit {X : Ctx D} {cb result call k : ByteArray} :
   repeat' split at h
   all_goals first | exact refusedAt_ne_submit h | simp [refused, printed, declined] at h
 
-omit [Ord D] [DecidableEq D] in
-theorem settled_ne_submit {X : Ctx D} {out result call k : ByteArray} :
-    settled X out result ≠ .submit call k := by
+theorem settled_ne_submit {X : Ctx D} {me : Self D} {w : World D} {out cb result call k : ByteArray} :
+    settled X me w out cb result ≠ .submit call k := by
   intro h
   unfold settled at h
   repeat' split at h
   all_goals first | exact refusedAt_ne_submit h | simp [refused, declined] at h
+  all_goals (unfold attemptContradicted at h; split at h <;> simp [refused] at h)
+
+/-- **Follow answers `ok` to a submitted call only on its own World's word** (R7, E2's T0): whatever
+end the attempt store hands step 4 (nd's loop over `Attempt.next`, which follow does not run),
+`settled` is `done ok` only when the call bytes step 3 put in the continuation decode, and follow's
+own settlement of that call on its current World is committed. -/
+theorem settled_ok {X : Ctx D} {me : Self D} {w : World D} {out cb result o e : ByteArray}
+    (h : settled X me w out cb result = .done CommandExit.ok.code.toUInt8 o e) :
+    ∃ c hh td, X.decodeCall cb = some c ∧ settleOf X me w c = .committed hh td := by
+  cases hv : ownSettle X me w cb with
+  | some v =>
+    cases v with
+    | committed hh td =>
+      unfold ownSettle at hv
+      obtain ⟨c, hc, he⟩ := Option.map_eq_some_iff.mp hv
+      exact ⟨c, hh, td, hc, he⟩
+    | _ =>
+      unfold settled attemptContradicted refusedAt refused declined at h
+      simp only [hv] at h
+      repeat' split at h
+      all_goals simp [CommandExit.code] at h
+  | none =>
+    unfold settled attemptContradicted refusedAt refused declined at h
+    simp only [hv] at h
+    repeat' split at h
+    all_goals simp [CommandExit.code] at h
+
+/-- **`step`'s settlement**: a step on a phase-4 continuation that answers `done ok` is `settled`'s
+`ok`, so the continuation's last item (the call bytes step 3 handed out to submit) decodes as a call
+that follow's own World, the World this step runs on, settles committed (`settled_ok`). -/
+theorem step_settled_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f f' : Follow D} {p : Persist D} {kb result o e : ByteArray} {argv acc : List ByteArray}
+    (hst : State.ofBytes kb = some ⟨argv, 4, acc⟩)
+    (h : step X dc B me f kb result = (f', p, .done CommandExit.ok.code.toUInt8 o e)) :
+    ∃ cb c hh td, acc.getLast? = some cb ∧ X.decodeCall cb = some c ∧
+      settleOf X me f.world c = .committed hh td := by
+  unfold step at h
+  simp only [hst, Option.map_some, Option.getD_some] at h
+  split at h
+  · rename_i hs; cases hs
+  · simp [refused, CommandExit.code] at h
+  · rename_i st cmd hs _
+    simp only [Option.some.injEq] at hs
+    subst hs
+    have h4 : ∀ b, stepResult (D := D) b 4 result = .ok result := by intro b; cases b <;> rfl
+    simp only [h4] at h
+    split at h
+    all_goals first
+      | (simp [refused, CommandExit.code] at h; done)
+      | (exfalso; revert ‹(4 : UInt8) = _›; decide)
+      | (simp only [Prod.mk.injEq] at h
+         obtain ⟨-, -, h⟩ := h
+         obtain ⟨c, hh, td, hc, hv⟩ := settled_ok h
+         exact ⟨_, c, hh, td, rfl, hc, hv⟩)
 
 /-- The writer's `unknownKey` states no height, so it is never read as `expired`. -/
 theorem expiredHeight_unknownKey : expiredHeight? ReadRefusal.unknownKey.payload = none := by decide
@@ -1124,11 +1177,10 @@ theorem confirmHint_foreign {p : ByteArray} {n : String} (h : n ∉ hintNames) :
 theorem confirmHint_badResult : confirmHint "refused badResult\n".toUTF8 = some "badResult" := by
   decide +kernel
 
-omit [Ord D] [DecidableEq D] in
 /-- **`settled`'s `uncertain` arm**: exit `uncertain`, `uncertain` on stderr, and on stdout the hint
 `confirmHint` reads from the attempt's payload, or nothing. -/
-theorem settled_uncertain (X : Ctx D) (out p : ByteArray) :
-    settled X out (ByteArray.mk #[Attempt.Action.uncertain.code] ++ p) =
+theorem settled_uncertain (X : Ctx D) (me : Self D) (w : World D) (out cb p : ByteArray) :
+    settled X me w out cb (ByteArray.mk #[Attempt.Action.uncertain.code] ++ p) =
       .done CommandExit.uncertain.code.toUInt8 (uncertainOut p) "uncertain\n".toUTF8 := by
   have hsz : (ByteArray.mk #[Attempt.Action.uncertain.code] ++ p).size = 1 + p.size := by
     simp [ByteArray.size_append]
@@ -1277,13 +1329,13 @@ theorem cancelAnswer_ne_host {X : Ctx D} {cb result : ByteArray} {op : Op} {p k 
   repeat' split at h
   all_goals first | exact refusedAt_ne_host h | simp [refused, printed, declined] at h
 
-omit [Ord D] [DecidableEq D] in
-theorem settled_ne_host {X : Ctx D} {out result : ByteArray} {op : Op} {p k : ByteArray} :
-    settled X out result ≠ .host op p k := by
+theorem settled_ne_host {X : Ctx D} {me : Self D} {w : World D} {out cb result : ByteArray} {op : Op}
+    {p k : ByteArray} : settled X me w out cb result ≠ .host op p k := by
   intro h
   unfold settled at h
   repeat' split at h
   all_goals first | exact refusedAt_ne_host h | simp [refused, declined] at h
+  all_goals (unfold attemptContradicted at h; split at h <;> simp [refused] at h)
 
 /-- **Every `cancel` op follow ever relays is a cancel its own World records** (PROTOCOL-63; the
 whole machine, not one phase): if `step` hands the client a `host` step for the `cancel` op, follow's

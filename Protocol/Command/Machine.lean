@@ -975,15 +975,41 @@ def uncertainOut (p : ByteArray) : ByteArray :=
   | some n => s!"hint confirm: refused {n}\n".toUTF8
   | none => ByteArray.empty
 
-/-- Step 4's result is the attempt's end, `u8 Action.code ‖ payload` (PROTOCOL-46): committed and
-refused only as the member's follow settled them; `open` and `hostContradicted` restart; an
-`uncertain` end prints the refusal that caused it when its payload names one (`uncertainOut`). -/
-def settled (X : Ctx D) (out result : ByteArray) : Reply :=
+/-- Follow's own settlement, on its CURRENT World `w`, of the call it handed out to submit at step 3
+(the bytes step 3 put in the continuation): `none` when they do not decode as a call. -/
+def ownSettle (X : Ctx D) (me : Self D) (w : World D) (cb : ByteArray) : Option (Settle.Verdict D) :=
+  (X.decodeCall cb).map (settleOf X me w)
+
+/-- An end the attempt store claims final (`claim`: committed or refused) that follow's own World
+does not hold: `hostContradicted CLAIM FOLLOWSAID`, the attempt left open, as when the Host's word is
+contradicted (PROTOCOL-46); call bytes that do not decode are not a result of step 3. -/
+def attemptContradicted (X : Ctx D) (claim : String) : Option (Settle.Verdict D) → Reply
+  | some v => .done CommandExit.hostContradicted.code.toUInt8 ByteArray.empty
+      s!"hostContradicted {claim} {v.text X.env.bytes}\n".toUTF8
+  | none => refused (D := D) .badResult
+
+/-- Step 4's result is the attempt's end, `u8 Action.code ‖ payload` (PROTOCOL-46). Committed and
+refused are FOLLOW's to say: the end is the attempt store's (nd's loop over `Attempt.next`, which
+follow does not run), so a final it claims is checked against `ownSettle` on follow's own World, the
+World the attempt's confirm or probe just caught up: `committed` is answered `ok` only when that
+World's settlement of the submitted call is committed, `refused` only when it is refused or expired
+(printed by follow's own verdict), anything else is `hostContradicted`. `open` and
+`hostContradicted` restart; an `uncertain` end prints the refusal that caused it when its payload
+names one (`uncertainOut`). -/
+def settled (X : Ctx D) (me : Self D) (w : World D) (out cb result : ByteArray) : Reply :=
   if h : 0 < result.size then
     let txt := (String.fromUTF8? (result.extract 1 result.size)).getD ""
     match Attempt.Action.all.find? (·.code == result[0]) with
-    | some .committed => .done CommandExit.ok.code.toUInt8 out ByteArray.empty
-    | some .refused => refusedAt X (.host (settledName txt))
+    | some .committed =>
+        match ownSettle X me w cb with
+        | some (.committed _ _) => .done CommandExit.ok.code.toUInt8 out ByteArray.empty
+        | v => attemptContradicted X "committed" v
+    | some .refused =>
+        match ownSettle X me w cb with
+        | some (.refused code) =>
+            refusedAt X (.host (settledName ((Settle.Verdict.refused code : Settle.Verdict D).text X.env.bytes)))
+        | some .expired => refusedAt X (.host "expired")
+        | v => attemptContradicted X "refused" v
     | some .declined => declined txt
     | some .open => .done CommandExit.open.code.toUInt8 ByteArray.empty "open\n".toUTF8
     | some .contradicted =>
@@ -1198,7 +1224,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                   let c : Call D := ⟨u, s2.signature⟩
                   match receive X w c with
                   | .error r => same (refusedAt X (.receive r))
-                  | .ok t => same (again 4 [startB, signedB, ub, (receipt X t).toUTF8] fun k =>
+                  | .ok t => same (again 4 [startB, signedB, ub, (receipt X t).toUTF8, X.callBytes c] fun k =>
                       .submit (X.callBytes c) k)
           | _, _ => same (refused (D := D) .badResult)
       -- rotate: custody's next and pending keys; plan the rotation to `next`, signed by `next`
@@ -1215,7 +1241,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       .signNext (X.callMessage u) k)
               | _, _ => same (refused (D := D) .badState)
       -- the settlement
-      | _, 4, [_, _, _, out] => same (settled X out result)
+      | _, 4, [_, _, _, out, cb] => same (settled X me w out cb result)
       -- cancel: custody's signature, decided on follow's own World before it is sent
       | .cancel _, 9, [cb] => same (sendCancel X w st.argv cb result)
       -- cancel: the writer's answer

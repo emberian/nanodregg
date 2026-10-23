@@ -903,7 +903,9 @@ def refusedRow : Row where
     okBind "operator" ["create", "@permit"] "own",
     { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 3100 },
     { actor := "newcomer", act := .retry, expect := .unsettled "forgotten" }])
-  plant := .caught .settleDecline 13 (.refused "stale")
+  -- the store's `refused` is checked by follow's own World at step 4 (R7): the decline it settled
+  -- is no refusal there, so follow says `hostContradicted refused open`, never `refused stale`
+  plant := .caught .settleDecline 13 (.contradicted "refused open")
 
 /-- KERNEL-44's admit-after-refusal tooth on the arm KERNEL-54 leaves live (ROOT's ruling on
 PROTOCOL-52): an unpinned row birth is judged on the CURRENT World, so its refusal can stop being
@@ -1350,7 +1352,10 @@ def settleRow : Row where
     { actor := "newcomer", act := .cmd ["rotate"], expect := .ok, fault := .dropReply },
     ok "newcomer" ["write", "@shared", "2", "6", "--via", "@g"],
     ok "operator" ["read", "@shared", "2=6"]])
-  plant := .caught .trustLookup 6 (.refused "stale")
+  -- the store's `committed` on the Host's word is checked by follow's own World at step 4 (R7):
+  -- with no confirm, follow has not caught up the call, so the first write says
+  -- `hostContradicted committed open`, never ok
+  plant := .caught .trustLookup 1 (.contradicted "committed open")
 
 /-- A tally of rings by round whose `take` reads a round's rings as ONE signed range (item 4): `ring`
 inserts its text at key `(round, ringer)` and leaves the state alone (it writes no cell: two rings
