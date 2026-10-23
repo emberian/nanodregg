@@ -2771,7 +2771,9 @@ def holeObservationJourney (contextual : Bool := false) : Run := Id.run do
   let b := members.getD 1 ⟨0, .empty, .empty⟩
   return holeRows mode r a b contextual
 
-def runAll (args : List String) : IO UInt32 := do
+/-- Every row of the journey; `extra` are sessions run after P8 (sections in their own modules,
+which import this one: `Lang.Journey.Offer`). -/
+def runAll (args : List String) (extra : List Run := []) : IO UInt32 := do
   if args == ["--hole-omitted-blocker-pin-admits"] then
     let r := holeObservationJourney
     for l in r.log do IO.println l
@@ -2813,7 +2815,7 @@ def runAll (args : List String) : IO UInt32 := do
   IO.println s!"{if activityOk then "ok  " else "FAIL"} LA0 activity with its own facts relation reads and checks: {activityVerdict}"
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
     .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow, .foreignRow].map (journey bell)
-  let runs := runs ++ [p8Session]
+  let runs := runs ++ [p8Session] ++ extra
   let runs := match control, runs with
     | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
     | _, rs => rs

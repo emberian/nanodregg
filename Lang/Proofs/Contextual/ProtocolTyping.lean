@@ -6,8 +6,9 @@ The Prop-valued relations over `Lang.Contextual.Protocol`'s data: the judgment
 satisfies an interface (`Fills`), an interface-respecting substitution (`SubstOK`), algebra
 morphisms, complete paths (`Runs`), prefixes (`Reach`), histories (`Started`), entered holes
 (`Dispatched`), the guard on a re-plan (`Open.Replan`), the well-formed open object (`Open.WF`),
-sufficient supports (`Frag.ReadsOnly`), the completion space (`Conds.space`) and explicit matcher
-assignments (`Assigns`). Theorems in `Lang.Proofs.Contextual.Protocol`.
+and sufficient supports (`Frag.ReadsOnly`). Theorems in `Lang.Proofs.Contextual.Protocol`.
+The completion space `Conds.space`, the matcher assignments `Assigns`, the scalar matchers and the
+private `World` went with PROT-6, replaced by Std.offer's deployed fuse (`Lang/StdOffer.lean`).
 -/
 import Lang.Contextual.Protocol
 
@@ -119,15 +120,5 @@ sufficient, not minimal). -/
 def Frag.ReadsOnly {Name Key V : Type} (f : Frag Name Key V) : Prop :=
   ∀ w₁ w₂ : Key → V, (∀ k ∈ f.support, w₁ k = w₂ k) → f.check w₁ = f.check w₂
 
-/-- `C_w(P) = {θ | Typed θ ∧ Guards θ ∧ Authority θ ∧ Resources θ}`: the SAME `θ` for all four. -/
-def Conds.space {Θ : Type} (c : Conds Θ) (θ : Θ) : Prop :=
-  c.typed θ ∧ c.guards θ ∧ c.authority θ ∧ c.resources θ
-
-/-- An explicit assignment: the `k`-th want takes the offer at index `picks[k]` of the original
-offers; indices distinct and in range; each offer covers its want. -/
-def Assigns (offers wants picks : List Nat) : Prop :=
-  picks.length = wants.length ∧ picks.Nodup ∧
-    ∀ k < wants.length, picks.getD k 0 < offers.length ∧
-      wants.getD k 0 ≤ offers.getD (picks.getD k 0) 0
 
 end Nanodregg.Lang.Contextual.Protocol

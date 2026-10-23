@@ -895,6 +895,73 @@ theorem readsData_digests {look : Pinned D} {rels : List (Label × RelDecl)} {rv
     repeat' split at ha
     all_goals first | (cases ha; done) | (cases ha; exact relReads_digests ‹_›)
 
+theorem rowDigests_mem {b : ByteArray} : ∀ {fs : List (Label × Data)},
+    b ∈ Data.rowDigests fs → ∃ y ∈ fs, b ∈ y.2.digests
+  | [], h => by simp [Data.rowDigests] at h
+  | y :: fs, h => by
+    simp only [Data.rowDigests, List.mem_append] at h
+    rcases h with h | h
+    · exact ⟨y, by simp, h⟩
+    · obtain ⟨z, hz, hb⟩ := rowDigests_mem h
+      exact ⟨z, by simp [hz], hb⟩
+
+theorem rowDigests_of_mem {b : ByteArray} : ∀ {fs : List (Label × Data)} {y : Label × Data},
+    y ∈ fs → b ∈ y.2.digests → b ∈ Data.rowDigests fs
+  | [], _, h, _ => by simp at h
+  | z :: fs, y, h, hb => by
+    simp only [Data.rowDigests, List.mem_append]
+    rcases List.mem_cons.mp h with rfl | h
+    · exact .inl hb
+    · exact .inr (rowDigests_of_mem h hb)
+
+/-- **Every digest of a method's rows argument is one `digestOf` accepted** (LANG-49, PROT-6): its own
+reads' and its peer reads', both `readsData`'s. -/
+theorem methodReads_digests {bytesOf : D → ByteArray} {look : Pinned D} {pkg : D}
+    {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {args : Data}
+    {rs ps : List (Label × RelRead)} {wd : Data}
+    (h : methodReads bytesOf digestOf look pkg rels rv self args rs ps = .ok wd) :
+    ∀ b ∈ wd.digests, (digestOf b).isSome = true := by
+  unfold methodReads at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  · rename_i own hown
+    cases ps with
+    | nil => cases h; exact readsData_digests hown
+    | cons q qs =>
+      simp only [List.isEmpty_cons, Bool.false_eq_true, ↓reduceIte] at h
+      cases hpo : peerOf bytesOf digestOf self args with
+      | error e => rw [hpo] at h; cases h
+      | ok peer =>
+        rw [hpo] at h
+        simp only at h
+        cases hk : readKind look peer kindObject with
+        | error e => rw [hk] at h; cases h
+        | ok cell =>
+          rw [hk] at h
+          simp only at h
+          by_cases hc : (cell.slots.get slotPackage == some (bytesOf pkg)) = true
+          · simp only [hc, ↓reduceIte] at h
+            cases hpd : readsData digestOf look rels rv peer (q :: qs) with
+            | error e => rw [hpd] at h; cases h
+            | ok pd =>
+              rw [hpd] at h
+              simp only at h
+              split at h
+              · rename_i fs
+                cases h
+                intro b hb
+                simp only [Data.digests] at hb
+                obtain ⟨y, hy, hb⟩ := rowDigests_mem hb
+                rw [(Row.sort_perm _).mem_iff] at hy
+                rcases List.mem_append.mp hy with hy | hy
+                · exact readsData_digests hown b (by simp only [Data.digests]; exact rowDigests_of_mem hy hb)
+                · simp only [List.mem_singleton] at hy
+                  subst hy
+                  exact readsData_digests hpd b hb
+              · cases h; exact readsData_digests hown
+          · simp [hc] at h
+
 /-- Where a digest of a method run may come from: a member or object id of the request, a digest
 of the arguments, a digest of the state the World held, a digest of the rows `rows` the caller's
 view gave (LANG-49), or an id literal of the loaded closure. -/
@@ -961,7 +1028,7 @@ theorem runSetup_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true
   · exact hdig _
   · exact digestsOk_mem hda b h
   · exact readState_digests hst b h
-  · exact readsData_digests hrows b h
+  · exact methodReads_digests hrows b h
   · exact hlits t ht b h
 
 theorem runSetupLive_sources {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat}
@@ -1005,7 +1072,7 @@ theorem runSetupLive_accepted_of (hdig : ∀ x, (digestOf (bytesOf x)).isSome = 
   · exact hdig _
   · exact digestsOk_mem hda b h
   · exact readState_digests hst b h
-  · exact readsData_digests hrows b h
+  · exact methodReads_digests hrows b h
   · exact hlits t ht b h
 
 theorem mem_rowDigests {b : ByteArray} {ℓ : Label} {d : Data} :

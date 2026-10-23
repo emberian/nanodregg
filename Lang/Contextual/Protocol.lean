@@ -366,42 +366,6 @@ def admitFrag {Ix : Type} {S : Sig Ix} {Name Tok Fact Ob : Type} (sp : Spec S To
   support := opSupport sp op
   check := fun w => admitOp sp (View.ofStore w) op
 
-/-! ## Shared parameters: the completion space (doc 2 section 4) -/
-
-/-- The four conditions on ONE completion `θ`. -/
-structure Conds (Θ : Type) where
-  typed : Θ → Prop
-  guards : Θ → Prop
-  authority : Θ → Prop
-  resources : Θ → Prop
-
-/-! ## Search state versus logical status (the matcher, doc 2 section 4) -/
-
-/-- Greedy first-fit: each want in order takes the FIRST remaining offer that covers it; the count
-of wants satisfied. -/
-def firstFit : List Nat → List Nat → Nat
-  | _, [] => 0
-  | offers, w :: ws =>
-    match offers.findIdx? (fun o => decide (w ≤ o)) with
-    | some n => firstFit (offers.eraseIdx n) ws + 1
-    | none => firstFit offers ws
-
-/-- Complete search: is there an assignment of distinct offers covering every want? -/
-def coverAll : List Nat → List Nat → Bool
-  | _, [] => true
-  | offers, w :: ws =>
-    (List.range offers.length).any fun n =>
-      decide (w ≤ offers.getD n 0) && coverAll (offers.eraseIdx n) ws
-
-/-- A SCALAR ILLUSTRATION of shared parameters (the price alone is `θ`): the buyer accepts a price
-at most 5, the seller at least 7. The same separation over `Subst` of the negotiation template is
-`Proofs.Contextual.Negotiation.separate_witnesses_over_substitutions`. -/
-def priceConds : Conds Nat where
-  typed := fun _ => True
-  guards := fun x => x ≤ 5
-  authority := fun x => 7 ≤ x
-  resources := fun _ => True
-
 /-! ## Example: the committed bit (doc 2 section 5) -/
 
 namespace Coin
@@ -485,7 +449,9 @@ def ctxOf (c : Party) : Ctx sig HoleN Res Party Unit Unit Unit := fun
 end Coin
 
 /-! ## The integration experiment: a one-use capability, two providers, a deadline, a cancel
-(doc 3). Definitions here; the theorems in `Lang.Proofs.Contextual.Negotiation`. -/
+(doc 3). Definitions here; the theorems in `Lang.Proofs.Contextual.Negotiation`.
+The scalar matchers and the private Negotiation `World` went with PROT-6, replaced by Std.offer's
+deployed fuse (`Lang/StdOffer.lean`). -/
 
 namespace Negotiation
 
@@ -649,77 +615,6 @@ def env (deliver : Bool) : Handler sig (fun _ => Nat) where
     | .reserve => ⟨(), n + 1⟩
     | .commit _ => ⟨deliver, n + 1⟩
     | .cancel => ⟨(), n + 1⟩
-
-/-- The world: a clock and a deadline, provider authority, the capability's nullifier (spent or
-not), and an unrelated store. -/
-structure World where
-  now : Nat
-  deadline : Nat
-  auth : Provider → Bool
-  capSpent : Bool
-  other : Nat → Nat
-
-/-- What the world says to admission. -/
-def World.view (w : World) : View Tok Fact where
-  holds := fun
-    | .auth p => w.auth p
-    | .beforeDeadline => decide (w.now < w.deadline)
-  live := fun .cap => !w.capSpent
-
-/-- The candidates, numbered, in the order the plan lists them. -/
-def candidates : List (Nat × P .reserved) := [(1, plan .p1), (2, plan .p2), (3, cancelPlan)]
-
-/-- The numbers of the candidates admissible in `w` now. -/
-def available (w : World) : List Nat :=
-  (candidates.filter fun c => admits spec w.view c.2).map Prod.fst
-
-/-- The world on day 0: both providers authorised, deadline 10, capability unspent. -/
-def w0 : World := ⟨0, 10, fun _ => true, false, fun _ => 0⟩
-
-/-- Revoke a provider's authority. -/
-def World.revoke (w : World) (p : Provider) : World :=
-  { w with auth := fun q => if q = p then false else w.auth q }
-
-/-- A commitment against the world: refused unless admissible, then the nullifier is spent. -/
-def World.commit (w : World) {i : Phase} (op : Op i) : Option World :=
-  if admitOp spec w.view (S := sig) op then
-    some (match spec.consumes (S := sig) op with
-      | some .cap => { w with capSpent := true }
-      | none => w)
-  else none
-
-/-- The candidate fragments for selective repair: each candidate's admission, over the keys of
-its first effect. -/
-def frags : List (Frag Nat (Fact ⊕ Tok) Bool) :=
-  [admitFrag spec 1 (S := sig) (Op.commit .p1), admitFrag spec 2 (S := sig) (Op.commit .p2),
-    admitFrag spec 3 (S := sig) Op.cancel]
-
-/-- A second representation of the capability token: its opening under the root of an epoch.
-Openings from different epochs are different representations of the same capability. -/
-inductive Tok'
-  | capAt (epoch : Nat)
-deriving DecidableEq, Repr
-
-/-- The representation under epoch `E`. -/
-def Tok.at (E : Nat) : Tok → Tok'
-  | .cap => .capAt E
-
-/-- The PARTIAL correspondence back: only an opening from the current epoch `E` names the token. -/
-def Tok'.current (E : Nat) : Tok' → Option Tok
-  | .capAt e => if e = E then some .cap else none
-
-/-- The world's admission view over the new representation at current epoch `E`: an opening is
-live only when it is from epoch `E` and the token it names is unspent. A stale opening is not. -/
-def World.viewAt (w : World) (E : Nat) : View Tok' Fact where
-  holds := w.view.holds
-  live := fun t => match t.current E with
-    | some t₀ => w.view.live t₀
-    | none => false
-
-/-- The world as a store of keys. -/
-def World.store (w : World) : Fact ⊕ Tok → Bool
-  | .inl f => w.view.holds f
-  | .inr t => w.view.live t
 
 /-! ### Internal once versus external once -/
 

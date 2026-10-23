@@ -271,6 +271,8 @@ inductive CheckError
   | badRel (label : Label)
   /-- a method reads a relation that is not cell-keyed with its keys' cell liveness (E1) -/
   | liveNotCellKeyed (label : Label)
+  /-- a method reads a peer's rows (PROT-6) and its argument names no `pair : rec {a, b : digest}` -/
+  | peerNotNamed (label : Label)
   deriving DecidableEq, Repr
 
 /-- The refusal's name (law 7): its constructor's. -/
@@ -283,12 +285,13 @@ def CheckError.name : CheckError → String
   | .noLaw _ => "noLaw" | .badLaw _ => "badLaw"
   | .tooManyRels => "tooManyRels" | .relKey _ => "relKey" | .badRel _ => "badRel"
   | .liveNotCellKeyed _ => "liveNotCellKeyed"
+  | .peerNotNamed _ => "peerNotNamed"
 
 /-- What goes on the wire inside `Refusal.program`: the name, then the label it is about (for
 `illTyped`, the failed rule and its path: `illTyped noField @body.f`). -/
 def CheckError.wire : CheckError → String
   | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) | e@(.relKey ℓ) | e@(.badRel ℓ)
-  | e@(.liveNotCellKeyed ℓ) =>
+  | e@(.liveNotCellKeyed ℓ) | e@(.peerNotNamed ℓ) =>
       s!"{e.name} {ℓ}"
   | e@(.illTyped why) => s!"{e.name} {why.text}"
   | e => e.name
@@ -305,6 +308,7 @@ def CheckError.text : CheckError → String
   | .tooManyRels => "relations" | .relKey ℓ => s!"relation {ℓ} has no fixed-width key"
   | .badRel ℓ => s!"relation {ℓ} is malformed"
   | .liveNotCellKeyed ℓ => s!"method {ℓ} reads a relation that is not cell-keyed (live)"
+  | .peerNotNamed ℓ => s!"method {ℓ} reads a peer's rows and its argument names no pair"
 
 def isRecordData : Ty → Bool
   | t@(.record _) => t.wf && t.isData
@@ -368,13 +372,63 @@ def readsOf (rels : List (Label × RelDecl)) : Ty → Option (List (Label × Rel
     | none => none
   | _ => none
 
+/-- The reserved field of a method's rows record that holds a PEER read (PROT-6): reads of the
+package's own relations under the other object of the argument's `pair`. No relation is labelled
+`peer` (`checkRel`), so the field never shadows one. -/
+def peerLabel : Label := "peer"
+
+/-- The argument field a peer-reading method names its pair by: the reader is one of `a`, `b`, and
+its peer is the other (`Lang.peerOf`). -/
+def pairTy : Ty := .record [("a", .digest), ("b", .digest)]
+
+/-- A method's rows argument: its own reads (`readsTy`), and when it declares peer reads `ps`, the
+field `peer` holding them, in sorted position. -/
+def rowsTy (rels : List (Label × RelDecl)) (rs ps : List (Label × RelRead)) : Ty :=
+  match ps, readsTy rels rs with
+  | [], R => R
+  | _, .record fs => .record (Row.sort (fs ++ [(peerLabel, readsTy rels ps)]))
+  | _, R => R
+
+/-- A rows record read back as its own reads and its peer reads, exactly (`rowsTy rels rs ps = R`);
+a record without a `peer` field is `readsOf`'s, with no peer reads. -/
+def rowsOf (rels : List (Label × RelDecl)) : Ty → Option (List (Label × RelRead) × List (Label × RelRead))
+  | R@(.record row) =>
+    match Row.find? peerLabel row with
+    | none => (readsOf rels R).map (·, [])
+    | some P =>
+      match readsOf rels (.record (row.filter (·.1 ≠ peerLabel))), readsOf rels P with
+      | some rs, some ps => if !ps.isEmpty && rowsTy rels rs ps == R then some (rs, ps) else none
+      | _, _ => none
+  | _ => none
+
+/-- The peer reads a method type declares (`[]`: none). -/
+def methodPeer (rels : List (Label × RelDecl)) : Ty → List (Label × RelRead)
+  | .fn R _ => ((rowsOf rels R).map (·.2)).getD []
+  | _ => []
+
+/-- A method type that reads a peer's rows names the pair in its argument record. -/
+def pairNamed (A : Ty) (ps : List (Label × RelRead)) : Bool :=
+  ps.isEmpty ||
+    match A with
+    | .record row => Row.find? "pair" row == some pairTy
+    | _ => false
+
+/-- A method type whose rows argument reads a peer while its argument names no pair: refused
+`peerNotNamed` by name at install (law 7), not as a bad method. -/
+def peerUnnamed (rels : List (Label × RelDecl)) : Ty → Bool
+  | .fn R (.fn _ (.fn A _)) =>
+    match rowsOf rels R with
+    | some (_, ps) => !pairNamed A ps
+    | none => false
+  | _ => false
+
 /-- The signature of a method field, if it has a method's shape over state `S` and relations
 `rels`: `fn R (fn S (fn A (fn reqTy (rec {calls, edits, state})))))`. -/
 def methodSig (S : Ty) (rels : List (Label × RelDecl)) : Ty → Option Sig
   | .fn R (.fn S' (.fn A (.fn Q (.record [("calls", .record row), ("edits", .record erow), ("state", S'')])))) =>
       if S' = S ∧ Q = reqTy ∧ S'' = S ∧ A.isData then
-        match callSlotsOf row, editSlotsOf rels erow, readsOf rels R with
-        | some ks, some es, some rs => some ⟨A, ks, rs, es⟩
+        match callSlotsOf row, editSlotsOf rels erow, rowsOf rels R with
+        | some ks, some es, some (rs, ps) => if pairNamed A ps then some ⟨A, ks, rs, es⟩ else none
         | _, _, _ => none
       else none
   | _ => none
@@ -391,6 +445,7 @@ def checkMethods (S : Ty) (rels : List (Label × RelDecl)) (row : List (Label ×
       | some t =>
         if (methodArg S rels t).isSome then checkMethods S rels row ms
         else if liveNotCellKeyed rels t then .error (.liveNotCellKeyed ℓ)
+        else if peerUnnamed rels t then .error (.peerNotNamed ℓ)
         else .error (.badMethod ℓ)
 
 mutual
@@ -457,6 +512,8 @@ def checkRel (S : Ty) (row : List (Label × Ty)) (r : Label × RelDecl) : Except
       (match d.guard with
        | none => true
        | some g => Row.find? g row == some (guardTy S d)) do throw (.badRel ℓ)
+  -- the label a method's rows record holds a peer read at (PROT-6) is never a relation's
+  if ℓ = peerLabel then throw (.badRel ℓ)
 
 def checkRels (S : Ty) (row : List (Label × Ty)) (rels : List (Label × RelDecl)) : Except CheckError Unit := do
   if rels.length > relsMax then throw .tooManyRels

@@ -53,7 +53,7 @@ private theorem setup_eq {look : Pinned D} {rv : RowView D} {pkg : D} {state : S
     (hp : L.pkgs[g]? = some p) (hm : resolveMethod (D := D) p method = .ok (ℓ, sg))
     (hs : readState digestOf (recordRow p.state) state = .ok sd)
     (ha : Wire.decodeData sg.arg args = .ok ad) (had : digestsOk digestOf ad.digests = true)
-    (hw : readsData digestOf look p.rels rv r.self sg.reads = .ok wd) :
+    (hw : methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd) :
     runSetup bytesOf digestOf look rv pkg state method args r = .ok
       { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
         ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
@@ -128,12 +128,11 @@ private def r1 : Req DD := { agent := dg 4, principal := dg 4, self := dg 9, not
 private theorem hq1 : reqOk bo r1 = true := by decide +kernel
 private theorem hs0 : readState dO (recordRow escrow.state) s0 = .ok (stateD terms "open") := by rfl
 private theorem ha1 : Wire.decodeData depositArg a1 = .ok (.record [("grant", .digest (bo gr))]) := by rfl
-private theorem hw0 : readsData dO look escrow.rels noRows (dg 9) [] = .ok (.record []) := by rfl
 
 private theorem run1 : (match runMeasured bo dO look noRows pid s0 0 a1 r1 100000 with
     | .ok (s, _, _, _, _) => decide (s = slotsAt "held") | .error _ => false) = true := by
   have hS1 := setup_eq (bytesOf := bo) (digestOf := dO) (look := look) (rv := noRows) (pkg := pid)
-    (method := 0) hq1 hload rfl rfl hs0 ha1 (by decide +kernel) hw0
+    (method := 0) hq1 hload rfl rfl hs0 ha1 (by decide +kernel) (by rfl)
   unfold runMeasured runMeasuredWith
   rw [hS1]
   decide +kernel
@@ -149,7 +148,7 @@ private theorem ha2 : Wire.decodeData unit a2 = .ok (.record []) := by rfl
 private theorem run2 : (match runMeasured bo dO look noRows pid (slotsAt "held") 2 a2 r2 100000 with
     | .ok (s, _, _, _, _) => decide (s = slotsAt "released") | .error _ => false) = true := by
   have hS := setup_eq (bytesOf := bo) (digestOf := dO) (look := look) (rv := noRows) (pkg := pid)
-    (method := 2) hq2 hload rfl rfl hs1 ha2 (by decide +kernel) hw0
+    (method := 2) hq2 hload rfl rfl hs1 ha2 (by decide +kernel) (by rfl)
   unfold runMeasured runMeasuredWith
   rw [hS]
   decide +kernel
@@ -208,7 +207,7 @@ theorem escrow_runs_witness : ∃ (pkg : Codec.Digest) (state : Slots) (runs : L
 private theorem run3 : (match runMeasured bo dO look noRows pid (slotsAt "released") 2 a2 r2 100000 with
     | .ok (s, _, _, _, _) => decide (s = slotsAt "released") | .error _ => false) = true := by
   have hS := setup_eq (bytesOf := bo) (digestOf := dO) (look := look) (rv := noRows) (pkg := pid)
-    (method := 2) hq2 hload rfl rfl hs2 ha2 (by decide +kernel) hw0
+    (method := 2) hq2 hload rfl rfl hs2 ha2 (by decide +kernel) (by rfl)
   unfold runMeasured runMeasuredWith
   rw [hS]
   decide +kernel

@@ -1,0 +1,389 @@
+/-
+# Lang.Proofs.DispatchRows — the row acts of a dispatched invoke are touches of the sealed Turn
+
+Facts about the kernel's definitions, proved from outside it (PROT-6's `fuse_atomic` rests on them):
+
+* `dispatched_ok_rows`: the ROWS analogue of `Kernel.Receive.dispatched_ok`: every receiver the walk
+  dispatched succeeded, and its Draft's rows sit inside the signed derivation's Draft rows
+  (`callStep` concatenates them by `Draft.append`).
+* `rowTouchesOf_covers`: every row effect `rowTouchesOf` seals is a row touch carrying its act: a
+  pinned slot's touch carries `rowActFor`, which is the effect's act because `dupBy` found no second
+  effect at the slot; an unpinned effect is carried as it is.
+* `dispatched_invoke_rows`: so every row act a dispatched invoke's run returned is a touch of the
+  Turn `receive` sealed, and each is under the invoked object.
+* `dispatched_invoke_children`: each call the run of a dispatched invoke at level `m + 1` returned
+  was dispatched, as the invoked object, at level `m`; `dispatched_signed_children`: the signed
+  invoke's children live at `Bounds.callDepthMax - 1`.
+* `invokeRun_ok`, `invokeRun_req`: what `invokeRun` hands the run: the cell it read as an object,
+  the package its package slot names, and a request whose `self` is the invoked object.
+* `admit_retract_absent`: an admitted turn's retract touch at a row slot leaves the slot absent.
+-/
+import Kernel.Proofs.InvokeTree
+import Kernel.Proofs.Rows
+
+namespace Nanodregg.Lang
+
+open Nanodregg.Kernel Nanodregg.Kernel.Receive
+
+variable {D : Type} [Ord D] [DecidableEq D]
+
+-- as in `Kernel.Proofs.Rows`: whnf of a statement about `rowPath` would build its whole list
+attribute [local irreducible] rowPath
+
+/-! ## The calls' fold concatenates rows -/
+
+omit [Ord D] [DecidableEq D] in
+private theorem foldCalls_rows {sub : Receive.Sub D} {obj : D} :
+    ∀ (calls : List (Body D)) (acc : Draft D × Walk D) {r : Draft D × Walk D},
+      calls.foldlM (callStep sub obj) acc = .ok r → ∃ l, r.1.rows = acc.1.rows ++ l
+  | [], acc, r, h => by
+      simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h
+      subst h; exact ⟨[], by simp⟩
+  | b :: rest, acc, r, h => by
+      rw [List.foldlM_cons] at h
+      simp only [except_bind_ok] at h
+      obtain ⟨s, hs1, h⟩ := h
+      unfold callStep at hs1
+      simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at hs1
+      obtain ⟨q, -, rfl⟩ := hs1
+      obtain ⟨l, hl⟩ := foldCalls_rows rest _ h
+      exact ⟨q.1.rows ++ l, by rw [hl]; simp [Draft.append]⟩
+
+omit [Ord D] [DecidableEq D] in
+private theorem callStep_ok' {sub : Receive.Sub D} {obj : D} {acc q : Draft D × Walk D} {b : Body D}
+    (h : callStep sub obj acc b = .ok q) : ∃ q', sub acc.2 obj b = .ok q' ∧ q = (acc.1.append q'.1, q'.2) := by
+  unfold callStep at h
+  simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
+  obtain ⟨q', h1, rfl⟩ := h
+  exact ⟨q', h1, rfl⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- The whole fold, split at the `i`-th call: its derivation succeeded, and its rows sit inside. -/
+private theorem foldCalls_split_rows {sub : Receive.Sub D} {obj : D} {calls : List (Body D)} {i : Nat}
+    (hi : i < calls.length) {a0 acc r : Draft D × Walk D}
+    (hall : calls.foldlM (callStep sub obj) a0 = .ok r)
+    (hpre : (calls.take i).foldlM (callStep sub obj) a0 = .ok acc) :
+    ∃ q, sub acc.2 obj calls[i] = .ok q ∧ ∃ l, r.1.rows = acc.1.rows ++ q.1.rows ++ l := by
+  have hsplit : calls = calls.take i ++ calls[i] :: calls.drop (i + 1) := by
+    rw [List.getElem_cons_drop, List.take_append_drop]
+  rw [hsplit, List.foldlM_append, hpre] at hall
+  simp only [bind, Except.bind, List.foldlM_cons] at hall
+  cases hq' : callStep sub obj acc calls[i] with
+  | error e => rw [hq'] at hall; cases hall
+  | ok q' =>
+      rw [hq'] at hall
+      obtain ⟨q, hq, rfl⟩ := callStep_ok' hq'
+      obtain ⟨l, hl⟩ := foldCalls_rows _ _ hall
+      exact ⟨q, hq, l, by rw [hl]; simp [Draft.append]⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- A fold that succeeded succeeded on every prefix. -/
+private theorem foldCalls_take_ok {sub : Receive.Sub D} {obj : D} {calls : List (Body D)} (i : Nat)
+    {a0 r : Draft D × Walk D} (h : calls.foldlM (callStep sub obj) a0 = .ok r) :
+    ∃ acc, (calls.take i).foldlM (callStep sub obj) a0 = .ok acc := by
+  rw [← List.take_append_drop i calls, List.foldlM_append] at h
+  obtain ⟨acc, ha, -⟩ := except_bind_ok.mp h
+  exact ⟨acc, ha⟩
+
+/-! ## A dispatched receiver's rows sit inside the signed call's -/
+
+/-- **The rows analogue of `dispatched_ok`.** Every receiver the walk dispatched succeeded, and its
+Draft's rows sit inside the signed call's Draft's rows. -/
+theorem dispatched_ok_rows {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
+    (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+      (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R)
+    {n : Nat} {wk : Walk D} {a : D} {b : Body D} (hd : Dispatched X w c n wk a b) :
+    ∃ r, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r ∧
+      ∃ l₁ l₂, R.1.rows = l₁ ++ r.1.rows ++ l₂ := by
+  induction hd with
+  | root => exact ⟨R, hR, [], [], by simp⟩
+  | @call m wk actor obj method args budget via r cell p rq new calls rows used acc i hi _ hok hir hrun hpre ih =>
+      obtain ⟨rp, hp, l₁, l₂, hl⟩ := ih
+      have hp' := hp
+      simp only [dispatch] at hp'
+      rw [hok] at hp'
+      cases hp'
+      obtain ⟨-, cell', p', rq', new', calls', rows', used', hir', hrun', -, -, -, -, -, hd'⟩ := invoke_ok hok
+      rw [hir] at hir'
+      simp only [Except.ok.injEq, Prod.mk.injEq] at hir'
+      obtain ⟨rfl, rfl, rfl⟩ := hir'
+      rw [hrun] at hrun'
+      simp only [Except.ok.injEq, Prod.mk.injEq] at hrun'
+      obtain ⟨rfl, rfl, rfl, rfl⟩ := hrun'
+      unfold deriveCalls at hd'
+      obtain ⟨q, hq, l, hl'⟩ := foldCalls_split_rows hi hd' hpre
+      obtain ⟨m', hm, -, hq'⟩ := effect_as_signed hq
+      obtain rfl := Nat.succ.inj hm.symm
+      refine ⟨q, hq', l₁ ++ acc.1.rows, l ++ l₂, ?_⟩
+      rw [hl, hl']
+      simp
+
+/-! ## The seal carries every row effect -/
+
+/-- The sealed Turn's rows are `rowTouchesOf` the caller's row pins and the Draft's rows. -/
+theorem sealTurn_rows {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
+    rowTouchesOf c.unsigned.rowPins rs = .ok t.rows := by
+  unfold sealTurn at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, rts, hr, h⟩ := h
+  split at h
+  · simp only [Except.ok.injEq] at h
+    subst h
+    exact hr
+  · simp at h
+
+omit [Ord D] [DecidableEq D] in
+/-- `dupBy` finding nothing means no element occurs twice. -/
+theorem dupBy_none {α : Type} [DecidableEq α] : ∀ {l : List α}, dupBy l = none → l.Nodup
+  | [], _ => List.nodup_nil
+  | x :: xs, h => by
+      unfold dupBy at h
+      split at h
+      · cases h
+      · rename_i hx
+        exact List.nodup_cons.mpr ⟨fun hm => hx (by simpa using hm), dupBy_none h⟩
+
+omit [Ord D] in
+/-- Over row effects at distinct slots, the act `rowActFor` finds at a slot is the one effect there. -/
+theorem rowActFor_of_nodup {s : RowSlot D} {a : RowAct} :
+    ∀ {l : List (RowSlot D × RowAct)}, (l.map Prod.fst).Nodup → (s, a) ∈ l → rowActFor l s = a
+  | [], _, h => by simp at h
+  | q :: rest, hn, h => by
+      rw [List.map_cons, List.nodup_cons] at hn
+      rcases List.mem_cons.mp h with rfl | h
+      · simp [rowActFor, List.find?]
+      · have hne : ¬ q.1 = s := fun he => hn.1 (by rw [he]; exact List.mem_map_of_mem h)
+        have hf : (q :: rest).find? (fun e => decide (e.1 = s)) = rest.find? (fun e => decide (e.1 = s)) :=
+          List.find?_cons_of_neg (by simpa using hne)
+        have ih := rowActFor_of_nodup hn.2 h
+        unfold rowActFor at ih ⊢
+        rw [hf]
+        exact ih
+
+/-- **Every row effect is a row touch with its act.** A pinned slot's touch carries `rowActFor`,
+the effect's own act since `dupBy` found no second effect at the slot; an unpinned effect is
+carried as it is. -/
+theorem rowTouchesOf_covers {pins : List (RowSlot D × D)} {rows : List (RowSlot D × RowAct)}
+    {rts : List (RowTouch D)} (h : rowTouchesOf pins rows = .ok rts) :
+    ∀ e ∈ rows, ∃ τ ∈ rts, τ.slot = e.1 ∧ τ.act = e.2 := by
+  unfold rowTouchesOf at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, h⟩ := h
+  cases hd : dupBy (rows.map Prod.fst) with
+  | some s => rw [hd] at h; cases h
+  | none =>
+  have hnd := dupBy_none hd
+  rw [hd] at h
+  simp only [pure, Except.pure, bind, Except.bind, Except.ok.injEq] at h
+  subst h
+  rintro ⟨s, a⟩ he
+  by_cases hp : (pins.any fun p => decide (p.1 = s)) = true
+  · obtain ⟨p, hpm, hpe⟩ := List.any_eq_true.mp hp
+    have hps : p.1 = s := of_decide_eq_true hpe
+    refine ⟨{ slot := p.1, seen := some p.2, act := rowActFor rows p.1 },
+      List.mem_append_left _ (List.mem_map.mpr ⟨p, hpm, rfl⟩), hps, ?_⟩
+    show rowActFor rows p.1 = a
+    rw [hps]
+    exact rowActFor_of_nodup hnd he
+  · refine ⟨{ slot := s, seen := none, act := a }, List.mem_append_right _ (List.mem_map.mpr ⟨(s, a),
+      List.mem_filter.mpr ⟨he, ?_⟩, rfl⟩), rfl, rfl⟩
+    show (!(pins.any fun p => decide (p.1 = s))) = true
+    cases hb : pins.any (fun p => decide (p.1 = s)) with
+    | false => rfl
+    | true => exact absurd hb hp
+
+/-! ## The theorems -/
+
+/-- **The row acts of a dispatched invoke are touches of the sealed Turn.** A signed call `receive`
+turned into `t`, and an invoke of `obj` its walk dispatched (at any level; the signed invoke itself
+is `dispatched_of_signed`): that invoke's `invokeRun`, its run at the fuel the walk gave it, every
+row effect the run returned is a touch of `t.rows` with the same slot and act, and is under `obj`. -/
+theorem dispatched_invoke_rows {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {n : Nat}
+    {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    (hc : receive X w c = .ok t) (hd : Dispatched X w c n wk actor (.invoke obj method args budget via)) :
+    ∃ (cell : Cell) (p : D) (rq : Req D) (new : Slots) (calls : List (Body D))
+      (rows : List (RowSlot D × RowAct)) (used : Nat),
+      invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, rq) ∧
+      X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
+        method args rq (min budget wk.pool) = .ok (new, calls, rows, used) ∧
+      (∀ e ∈ rows, e.1.under.1 = obj) ∧
+      ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2 := by
+  obtain ⟨-, hw⟩ := receive_ok_with hc
+  obtain ⟨-, d, hd', hs⟩ := receiveWith_sealed hw
+  rw [derive_eq] at hd'
+  cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+      (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+  | error e => rw [hR] at hd'; cases hd'
+  | ok R =>
+  rw [hR] at hd'
+  simp only [Except.map, Except.ok.injEq] at hd'
+  subst hd'
+  obtain ⟨r', hr', l₁, l₂, hl⟩ := dispatched_ok_rows hR hd
+  simp only [dispatch] at hr'
+  obtain ⟨-, cell, p, rq, new, calls, rows, used, hir, hrun, -, hunder, -, -, -, hdc⟩ := invoke_ok hr'
+  unfold deriveCalls at hdc
+  obtain ⟨l, hl'⟩ := foldCalls_rows calls (⟨[], writeOf obj (diffOps (stateOf cell) new), [], rows⟩,
+    { wk with visited := obj :: wk.visited, pool := wk.pool - used }) hdc
+  refine ⟨cell, p, rq, new, calls, rows, used, hir, hrun, hunder,
+    fun e he => rowTouchesOf_covers (sealTurn_rows hs) e ?_⟩
+  rw [hl, hl']
+  simp [he]
+
+/-- **Each call a dispatched invoke's run returned was dispatched**, as the invoked object, one
+level down. The invoke at level `m + 1` (at level 0 its deriver refuses every call, `callTooDeep`). -/
+theorem dispatched_invoke_children {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {m : Nat}
+    {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    (hc : receive X w c = .ok t)
+    (hd : Dispatched X w c (m + 1) wk actor (.invoke obj method args budget via))
+    {cell : Cell} {p : D} {rq : Req D} {new : Slots} {calls : List (Body D)}
+    {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (hir : invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, rq))
+    (hrun : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
+        method args rq (min budget wk.pool) = .ok (new, calls, rows, used)) :
+    ∀ i (hi : i < calls.length), ∃ wk', Dispatched X w c m wk' obj calls[i] := by
+  intro i hi
+  obtain ⟨-, hw⟩ := receive_ok_with hc
+  obtain ⟨-, d, hd', -⟩ := receiveWith_sealed hw
+  rw [derive_eq] at hd'
+  cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+      (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+  | error e => rw [hR] at hd'; cases hd'
+  | ok R =>
+  obtain ⟨r, hr, -⟩ := dispatched_ok_rows hR hd
+  simp only [dispatch] at hr
+  obtain ⟨-, cell', p', rq', new', calls', rows', used', hir', hrun', -, -, -, -, -, hdc⟩ := invoke_ok hr
+  rw [hir] at hir'
+  simp only [Except.ok.injEq, Prod.mk.injEq] at hir'
+  obtain ⟨rfl, rfl, rfl⟩ := hir'
+  rw [hrun] at hrun'
+  simp only [Except.ok.injEq, Prod.mk.injEq] at hrun'
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := hrun'
+  unfold deriveCalls at hdc
+  obtain ⟨acc, hpre⟩ := foldCalls_take_ok i hdc
+  exact ⟨acc.2, Dispatched.call i hi hd hr hir hrun hpre⟩
+
+/-- **The signed invoke's children** live at `Bounds.callDepthMax - 1`: each call its run returned
+was dispatched there, as the signed invoke's object. -/
+theorem dispatched_signed_children {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {obj : D}
+    {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    (hc : receive X w c = .ok t) (hb : c.unsigned.body = .invoke obj method args budget via)
+    {cell : Cell} {p : D} {rq : Req D} {new : Slots} {calls : List (Body D)}
+    {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (hir : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, rq))
+    (hrun : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
+        method args rq (min budget (poolOf c.unsigned.body)) = .ok (new, calls, rows, used)) :
+    ∀ i (hi : i < calls.length), ∃ wk', Dispatched X w c (Bounds.callDepthMax - 1) wk' obj calls[i] :=
+  dispatched_invoke_children (m := Bounds.callDepthMax - 1) hc (dispatched_of_signed hb) hir hrun
+
+omit [Ord D] in
+/-- **What `invokeRun` hands the run**: the cell it read as an object, the package its package
+slot names, and the request of the owner authority's principal, with the invoked object as `self`
+and the invoke of `method` as its occasion. -/
+theorem invokeRun_ok {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
+    {via : Option D} {cell : Cell} {p : D} {rq : Req D}
+    (h : invokeRun X look c actor obj method via = .ok (cell, p, rq)) :
+    readKind look obj kindObject = .ok cell ∧ packageOf X obj cell = .ok (some p) ∧
+      ∃ principal, ownerAuthority X look actor obj cell (.invoke method) via = .ok principal ∧
+        rq = reqOf c.unsigned obj principal (.invoke method) := by
+  unfold invokeRun at h
+  simp only [except_bind_ok] at h
+  obtain ⟨cell', hk, pkg, hpk, p', hp, pr, hpr, h⟩ := h
+  simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl, rfl⟩ := h
+  cases pkg with
+  | none => simp [requireMethods] at hp
+  | some q =>
+      simp only [requireMethods, Except.ok.injEq] at hp
+      subst hp
+      exact ⟨hk, hpk, pr, hpr, rfl⟩
+
+omit [Ord D] in
+/-- **The run's `self` is the invoked object**, its occasion the invoke of `method`, its agent the
+signer. -/
+theorem invokeRun_req {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
+    {via : Option D} {cell : Cell} {p : D} {rq : Req D}
+    (h : invokeRun X look c actor obj method via = .ok (cell, p, rq)) :
+    rq.self = obj ∧ rq.occasion = .invoke method ∧ rq.agent = c.unsigned.member := by
+  obtain ⟨-, -, pr, -, rfl⟩ := invokeRun_ok h
+  exact ⟨rfl, rfl, rfl⟩
+
+/-! ## A retract removes its row -/
+
+/-- One retract touch at a row slot that passes leaves the slot absent. -/
+theorem rowStep_retract_absent {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
+    {key : RowKey D} (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r')
+    (hs : x.slot = .row key) (hact : x.act = .retract) : r'.get (rowSpec E) (.row key) = none := by
+  obtain ⟨slot, seen, act⟩ := x
+  simp only at hs hact
+  subst hs hact
+  unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+  split at h
+  · simp at h
+  · simp only [except_bind_ok] at h
+    obtain ⟨⟨⟩, -, h⟩ := h
+    obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
+    split at h
+    · rename_i a val u hc
+      simp only [except_bind_ok] at h
+      obtain ⟨⟨⟩, -, h⟩ := h
+      simp only [pure, Except.pure, Except.ok.injEq] at h
+      subst h
+      have hc' : r.get (rowSpec E) (.row key) = some (.row a val u) := hc
+      obtain ⟨-, -, hget⟩ := rowsWeight_retain hr hc' (rowPath E (.row key)) (under_rowPath E (.row key))
+      unfold setHead
+      rw [Trie.get_insert_ne (rowSpec E) _ _ (fun e => by cases e), hget, if_pos rfl]
+    · simp at h
+
+/-- Every row touch of a turn, in order: a retract at a row slot among them (slots distinct) leaves
+the slot absent at the end. -/
+theorem foldRows_retract_absent {E : Env D} {w : World D} {t : Turn D} {τ : RowTouch D} {key : RowKey D}
+    (hs : τ.slot = .row key) (hact : τ.act = .retract) :
+    ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
+      (l.map RowTouch.slot).Nodup → l.foldlM (rowStepFreed E w t) acc = .ok rr → τ ∈ l →
+      rr.1.get (rowSpec E) (.row key) = none
+  | [], _, _, _, _, _, hm => by simp at hm
+  | y :: rest, acc, rr, hc, hn, h, hm => by
+      rw [List.foldlM_cons, except_bind_ok] at h
+      obtain ⟨acc', h1, h2⟩ := h
+      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
+      rw [except_bind_ok] at h1
+      obtain ⟨r1, hstep, he⟩ := h1
+      simp only [pure, Except.pure, Except.ok.injEq] at he
+      subst he
+      have hc1 := (rowStep_weight hc hstep).2
+      simp only [List.map_cons, List.nodup_cons] at hn
+      rcases List.mem_cons.mp hm with rfl | hm'
+      · rw [foldRows_get_out rest _ rr hc1 h2 fun x hx _ =>
+          ⟨fun e => hn.1 (by rw [hs, e]; exact List.mem_map_of_mem hx), fun _ _ e => by cases e⟩]
+        exact rowStep_retract_absent hc hstep hs hact
+      · exact foldRows_retract_absent hs hact rest _ rr hc1 hn.2 h2 hm'
+
+/-- **An admitted retract removes its row.** A turn admitted to `w'` from canonical rows, and a row
+touch of it that retracts at a row slot: `w'` holds no row there. -/
+theorem admit_retract_absent {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
+    (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} (hτ : τ ∈ t.rows)
+    (hs : τ.slot = .row key) (hact : τ.act = .retract) : rowAt E w'.rows (.row key) = none := by
+  obtain ⟨_, hk, hw'⟩ := admit_rows ha
+  have hrun := hk.rows
+  rw [rowsRun_eq] at hrun
+  simp only [except_bind_ok] at hrun
+  obtain ⟨⟨⟩, -, ⟨⟩, -, hrun⟩ := hrun
+  split at hrun
+  · simp at hrun
+  · rename_i hfind
+    rw [except_bind_ok] at hrun
+    obtain ⟨acc, hf, he⟩ := hrun
+    simp only [pure, Except.pure, Except.ok.injEq] at he
+    unfold rowAt
+    rw [hw', ← he, dropHeads_get_out t (fun _ _ _ _ e => by cases e) acc
+      (foldRows_weight t.rows (w.rows, 0) acc hr hf).2]
+    exact foldRows_retract_absent hs hact t.rows (w.rows, 0) acc hr (nodup_of_find_none hfind) hf hτ
+
+end Nanodregg.Lang

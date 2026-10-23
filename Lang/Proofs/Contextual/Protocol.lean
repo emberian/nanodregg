@@ -20,8 +20,9 @@ The four theorem families of the proposal's document 2 section 9, over `Lang.Con
 And document 2 sections 4 and 5: `Coin.foresight_iff_names_separate` (a hole separates from an
 interaction exactly when its NAME does not depend on the response: a naming discipline, not a fact
 of the calculus), `Coin.no_foresight`, `Coin.response_indexed_names_have_foresight`,
-`Coin.response_dependent_succeeds`; the scalar illustrations `separate_witnesses_insufficient`,
-`greedy_vs_logical` (the substitution-level form is `Negotiation.separate_witnesses_over_substitutions`). The relation to nano's own
+`Coin.response_dependent_succeeds`; the scalar illustration `separate_witnesses_bounded`. The scalar
+matchers and the private Negotiation `World` went with PROT-6, replaced by Std.offer's deployed fuse
+(`Lang/StdOffer.lean`). The relation to nano's own
 free program over effects: `nano_runs_iff`, `nano_interp_agrees`, `nano_interp_runs`.
 -/
 import Lang.Proofs.Contextual.ProtocolTyping
@@ -684,50 +685,11 @@ end
 
 /-! ## Shared parameters -/
 
-/-- **Separate witnesses are insufficient** (doc 2 section 4), a SCALAR ILLUSTRATION with `θ` a
-price: each party's condition has a witness, and the completion space is empty:
-`(∃x B x) ∧ (∃x S x) ⇏ ∃x (B x ∧ S x)`. The form over substitutions of an open protocol is
-`Negotiation.separate_witnesses_over_substitutions`. -/
-theorem separate_witnesses_insufficient :
-    (∃ x, priceConds.guards x) ∧ (∃ x, priceConds.authority x) ∧ ¬ ∃ x, priceConds.space x := by
-  refine ⟨⟨5, Nat.le_refl 5⟩, ⟨7, Nat.le_refl 7⟩, ?_⟩
-  rintro ⟨x, _, hb, hs, _⟩
-  have hb' : x ≤ 5 := hb
-  have hs' : 7 ≤ x := hs
-  omega
-
-/-- The general form: per-condition witnesses never compose into a completion. -/
-theorem witnesses_do_not_compose :
-    ¬ ∀ (B S : Nat → Prop), (∃ x, B x) → (∃ x, S x) → ∃ x, B x ∧ S x := by
-  intro h
-  obtain ⟨x, hb, hs⟩ := h priceConds.guards priceConds.authority
-    separate_witnesses_insufficient.1 separate_witnesses_insufficient.2.1
-  exact separate_witnesses_insufficient.2.2 ⟨x, trivial, hb, hs, trivial⟩
-
-/-- The same instance, decided over a bounded price range. -/
+/-- **Separate witnesses are insufficient** (doc 2 section 4), a SCALAR ILLUSTRATION over a bounded
+price range: each party's condition has a witness, and no price meets both. -/
 theorem separate_witnesses_bounded :
     (∃ x : Fin 20, x.val ≤ 5) ∧ (∃ x : Fin 20, 7 ≤ x.val) ∧ ¬ ∃ x : Fin 20, x.val ≤ 5 ∧ 7 ≤ x.val := by
   decide
-
-/-! ## Search state versus logical status -/
-
-/-- **Greedy versus logical** (doc 2 section 4, the matcher), an ILLUSTRATION over number lists,
-not over protocols: offers `[100, 50]`, wants `[50, 100]`:
-first-fit satisfies one want of two, while a complete assignment (want 0 ← offer 1, want 1 ← offer
-0) exists and complete search finds it. -/
-theorem greedy_vs_logical :
-    firstFit [100, 50] [50, 100] = 1 ∧ coverAll [100, 50] [50, 100] = true ∧
-      Assigns [100, 50] [50, 100] [1, 0] := by
-  refine ⟨by decide, by decide, ?_⟩
-  unfold Assigns
-  decide
-
-/-- **Search state is not logical status**: a greedy shortfall does not refute the intent. -/
-theorem search_state_ne_logical_status :
-    ¬ ∀ offers wants : List Nat, firstFit offers wants < wants.length →
-      ¬ ∃ picks, Assigns offers wants picks := by
-  intro h
-  exact h [100, 50] [50, 100] (by decide) ⟨[1, 0], greedy_vs_logical.2.2⟩
 
 /-! ## A hole is not an interaction (doc 2 section 5) -/
 

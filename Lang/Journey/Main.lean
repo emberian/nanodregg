@@ -1,5 +1,6 @@
 import Lang.Journey.ContextualCycle
 import Lang.Journey.ContextualWire
+import Lang.Journey.Offer
 
 open Nanodregg.Lang.Journey
 
@@ -17,4 +18,4 @@ def main (args : List String) : IO UInt32 := do
     let bad := runs.foldl (fun n r => n + r.bad) 0
     IO.println s!"contextual-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
     return if bad = 0 then 0 else 1
-  runAll args
+  runAll args [offerSession]

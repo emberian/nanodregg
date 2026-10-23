@@ -530,12 +530,14 @@ theorem methodSig_slots {S t : Ty} {rels : List (Label × RelDecl)} {sg : Sig}
   split at h
   · split at h
     · split at h
-      · rename_i ks es rs hks hes hrs
-        cases h
-        unfold callSlotsOf at hks
-        split at hks
-        · exact callSlotsOf_ok hks
-        · cases hks
+      · rename_i ks es rs ps hks hes hrs
+        split at h
+        · cases h
+          unfold callSlotsOf at hks
+          split at hks
+          · exact callSlotsOf_ok hks
+          · cases hks
+        · cases h
       · cases h
     · cases h
   · cases h

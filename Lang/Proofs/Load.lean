@@ -329,11 +329,32 @@ theorem readsOf_spec {rels : List (Label × RelDecl)} {R : Ty} {rs : List (Label
     · cases h
   · cases h
 
-/-- **The type IS the declaration** (LANG-49): a method field's signature reads back exactly the
-type it was read from, its rows argument, call slots and edit slots included. -/
+/-- A rows record reads back exactly (PROT-6): its own reads and its peer reads are the ones it spells. -/
+theorem rowsOf_spec {rels : List (Label × RelDecl)} {R : Ty} {rs ps : List (Label × RelRead)}
+    (h : rowsOf rels R = some (rs, ps)) : rowsTy rels rs ps = R := by
+  unfold rowsOf at h
+  split at h
+  · rename_i row
+    split at h
+    · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at h
+      obtain ⟨rs', hr, rfl, rfl⟩ := h
+      simpa [rowsTy] using readsOf_spec hr
+    · split at h
+      · split at h
+        · rename_i hc
+          cases h
+          simp only [Bool.and_eq_true, beq_iff_eq] at hc
+          exact hc.2
+        · cases h
+      · cases h
+  · cases h
+
+/-- **The type IS the declaration** (LANG-49, PROT-6): a method field's signature reads back exactly
+the type it was read from, its rows argument (its own reads, and its peer reads `methodPeer`), call
+slots and edit slots included. -/
 theorem methodSig_spec {S : Ty} {rels : List (Label × RelDecl)} {t : Ty} {sg : Sig}
     (h : methodSig S rels t = some sg) :
-    t = methodTy S sg.arg sg.calls (readsTy rels sg.reads) (editTy rels) sg.edits ∧
+    t = methodTy S sg.arg sg.calls (rowsTy rels sg.reads (methodPeer rels t)) (editTy rels) sg.edits ∧
       sg.calls.length ≤ Kernel.Bounds.callsMax ∧ sg.edits ≤ editsMax := by
   unfold methodSig at h
   split at h
@@ -341,23 +362,32 @@ theorem methodSig_spec {S : Ty} {rels : List (Label × RelDecl)} {t : Ty} {sg : 
     · rename_i hc
       obtain ⟨rfl, rfl, rfl, _⟩ := hc
       split at h
-      · rename_i ks es rs hks hes hrs
-        cases h
-        obtain ⟨hrow, hlen⟩ := callSlotsOf_spec hks
-        obtain ⟨herow, hes'⟩ := editSlotsOf_spec hes
-        have hR := readsOf_spec hrs
-        subst hrow herow hR
-        exact ⟨rfl, hlen, hes'⟩
+      · rename_i ks es rs ps hks hes hrs
+        split at h
+        · cases h
+          obtain ⟨hrow, hlen⟩ := callSlotsOf_spec hks
+          obtain ⟨herow, hes'⟩ := editSlotsOf_spec hes
+          have hR := rowsOf_spec hrs
+          refine ⟨?_, hlen, hes'⟩
+          subst hrow herow hR
+          simp only [methodPeer, hrs, Option.map_some, Option.getD_some]
+          rfl
+        · cases h
       · cases h
     · cases h
   · cases h
 
 theorem methodArg_spec {S : Ty} {rels : List (Label × RelDecl)} {t A : Ty} (h : methodArg S rels t = some A) :
-    ∃ ks rs es, t = methodTy S A ks (readsTy rels rs) (editTy rels) es := by
+    ∃ ks rs ps es, t = methodTy S A ks (rowsTy rels rs ps) (editTy rels) es := by
   unfold methodArg at h
   simp only [Option.map_eq_some_iff] at h
   obtain ⟨sg, hs, rfl⟩ := h
-  exact ⟨sg.calls, sg.reads, sg.edits, (methodSig_spec hs).1⟩
+  exact ⟨sg.calls, sg.reads, _, sg.edits, (methodSig_spec hs).1⟩
+
+/-- The peer reads a resolved method declares are its type's (`methodPeer`). -/
+theorem Package.peerReads_of {p : Package} {ℓ : Label} {mty : Ty}
+    (hm : Row.find? ℓ (recordRow p.iface) = some mty) : p.peerReads ℓ = methodPeer p.rels mty := by
+  simp [Package.peerReads, hm]
 
 theorem recordRow_find {T : Ty} {ℓ : Label} {t : Ty} (h : Row.find? ℓ (recordRow T) = some t) :
     ∃ row, T = .record row ∧ Row.find? ℓ row = some t := by
@@ -374,17 +404,19 @@ theorem method_run_sound {D : Type} {digestOf : ByteArray → Option D} {look : 
     (hp : L.pkgs[g]? = some p)
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
     (hs : ValTy (Loaded.ifaces L) sv p.state) (ha : ValTy (Loaded.ifaces L) av sg.arg)
-    (hr : ValTy (Loaded.ifaces L) rv reqTy) (hw : ValTy (Loaded.ifaces L) wv (readsTy p.rels sg.reads)) :
+    (hr : ValTy (Loaded.ifaces L) rv reqTy)
+    (hw : ValTy (Loaded.ifaces L) wv (rowsTy p.rels sg.reads (methodPeer p.rels mty))) :
     RunOK (Loaded.ifaces L) (resultTy p.state sg.calls (editTy p.rels) sg.edits)
       (run L.lib Bounds.stackMax ticks 0 (State.init (apply4 g ℓ) [rv, av, sv, wv])) := by
   obtain ⟨hlib, _⟩ := load_libTy hload
   obtain ⟨row, hrow, hfind⟩ := recordRow_find hm
   have hmt := (methodSig_spec hA).1
+  generalize methodPeer p.rels mty = ps at hw hmt
   subst hmt
-  have href : HasType (Loaded.ifaces L) [reqTy, sg.arg, p.state, readsTy p.rels sg.reads] (.ref g)
+  have href : HasType (Loaded.ifaces L) [reqTy, sg.arg, p.state, rowsTy p.rels sg.reads ps] (.ref g)
       (.record row) :=
     .ref (by rw [← hrow]; simp [Loaded.ifaces, hp])
-  have ht : HasType (Loaded.ifaces L) [reqTy, sg.arg, p.state, readsTy p.rels sg.reads] (apply4 g ℓ)
+  have ht : HasType (Loaded.ifaces L) [reqTy, sg.arg, p.state, rowsTy p.rels sg.reads ps] (apply4 g ℓ)
       (resultTy p.state sg.calls (editTy p.rels) sg.edits) :=
     .app (.app (.app (.app (.get href hfind) (.var rfl)) (.var rfl)) (.var rfl)) (.var rfl)
   exact run_sound hlib _ _ _ (.eval (.cons hr (.cons ha (.cons hs (.cons hw .nil)))) ht .nil)
@@ -404,7 +436,7 @@ theorem runSetupWith_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : Byt
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
-      readsData digestOf look p.rels rv r.self sg.reads = .ok wd ∧
+      methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
             reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal], preparation := charge L } := by
@@ -426,7 +458,7 @@ theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArr
       resolveMethod (D := D) p method = .ok (ℓ, sg) ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData sg.arg args = .ok ad ∧ digestsOk digestOf ad.digests = true ∧
-      readsData digestOf look p.rels rv r.self sg.reads = .ok wd ∧
+      methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
             reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by

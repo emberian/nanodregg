@@ -363,6 +363,43 @@ def resolveMethod (p : Package) (method : Nat) : Except (Refusal D) (Label × Si
   let some sg := methodSig p.state p.rels mty | throw (.program s!"method {ℓ}")
   pure (ℓ, sg)
 
+/-- The peer reads method `ℓ` of `p` declares (PROT-6; `[]`: none). -/
+def Package.peerReads (p : Package) (ℓ : Label) : List (Label × RelRead) :=
+  match Row.find? ℓ (recordRow p.iface) with
+  | some t => methodPeer p.rels t
+  | none => []
+
+/-- The object a peer read is under (PROT-6): the member of the argument's `pair` that is not the
+reader, each a digest of the World (`digestOf`); a pair that does not name the reader is
+`notParty`, one that names it twice `samePeer`. -/
+def peerOf (self : D) (args : Data) : Except (Refusal D) D := do
+  let some (.record [("a", .digest a), ("b", .digest b)]) := args.field "pair"
+    | throw (.program "peer: no pair")
+  if a == b then throw (.program "peer: samePeer")
+  let other ← if a == bytesOf self then pure b
+    else if b == bytesOf self then pure a
+    else throw (.program "peer: notParty")
+  match digestOf other with
+  | some p => pure p
+  | none => throw (.program "peer: not a digest")
+
+/-- A method's rows argument (LANG-49, PROT-6): its own reads (`readsData` under `self`), and, when
+it declares peer reads `ps`, the SAME reads under its peer (`readsData` under `peerOf`), at the field
+`peer`. The peer is a live object of THIS package (`readKind` first: an unpinned peer is the
+kernel's own `unpinned`, by name; then its package slot), so its relations are this package's and
+no foreign declaration is read. Every row of either part is a row the caller pinned (`RowView`). -/
+def methodReads (look : Pinned D) (pkg : D) (rels : List (Label × RelDecl)) (rv : RowView D) (self : D)
+    (args : Data) (rs ps : List (Label × RelRead)) : Except (Refusal D) Data := do
+  let own ← readsData digestOf look rels rv self rs
+  if ps.isEmpty then return own
+  let peer ← peerOf bytesOf digestOf self args
+  let cell ← readKind look peer kindObject
+  unless cell.slots.get slotPackage == some (bytesOf pkg) do throw (.program "peer: another package")
+  let pd ← readsData digestOf look rels rv peer ps
+  match own with
+  | .record fs => pure (.record (Row.sort (fs ++ [(peerLabel, pd)])))
+  | d => pure d
+
 /-- What a method run starts from once every boundary check has passed (LANG-41): the closure's
 bodies and size, the method's label, the state's record row, the type the result is extracted at,
 the state and the arguments as data, and the term the machine evaluates in its environment
@@ -401,7 +438,7 @@ def runSetupWith (loader : Pinned D → Nat → ByteArray → Loaded → Except 
   let a ← match Wire.decodeData sg.arg args with
     | .ok d => if digestsOk digestOf d.digests then pure d else throw (.program "arguments: not a digest")
     | .error e => throw (.program s!"arguments: {decodeText e}")
-  let rows ← readsData digestOf look p.rels rv r.self sg.reads
+  let rows ← methodReads bytesOf digestOf look pkg p.rels rv r.self a sg.reads (p.peerReads ℓ)
   pure { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row,
          ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := s,
          args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal], preparation := charge L }

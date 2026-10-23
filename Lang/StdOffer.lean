@@ -1,0 +1,257 @@
+/-
+# Lang.StdOffer — an object's latent contract as an offer row, and the matcher that fuses two (PROT-6)
+
+An OFFER is a row of the object that makes it: a chooser role and an acceptance box over the deal's
+terms θ (a record of naturals; each field a closed interval `lo ≤ θ.f ≤ hi`). Two offers FUSE when
+their roles differ and θ is inside both boxes (`offerJoint`). The fuse is Bartoletti's [Fuse] rule
+fired by a third object (fork M, R-0050):
+
+* `fuse {deal, x, y, viaX, viaY}`, the MATCHER, returns two invokes of `take` carrying the SAME
+  `deal` bytes, one to `x` and one to `y`. It reads no row and judges nothing.
+* `take {pair, theta}`, run once by each party as itself, reads its own offer and its PEER's (the
+  member of `pair` that is not itself: `Lang.peerOf`, the declared peer read), evaluates
+  `offerJoint` on the two pinned offers and θ, and only on `ok` retracts its OWN offer and inserts
+  its own `session` row capturing `{pair, theta}`. A run edits only its own object's rows (kernel
+  law 4, `rowParent`), so each party consumes its own offer.
+
+Both takes run inside one call tree, so the Turn seals both retracts or neither (KERNEL-45: the tree
+commits or fails whole). The two judges see one θ because they decode one byte string; that is the
+MATCHER's guarantee (`fuse` forwards one `deal` to both), not the takes': a package other than this
+one, granted `take`, could hand the two takes different bytes, and an owner may root-invoke its own
+`take` with no matcher at all. Each take's honesty (it retracts only after judging the pair itself)
+does not depend on who called it.
+
+An owner invites a matcher by granting it `[.invoke take]` on the offering object; the grant is not
+spent (KERNEL-25's `.invoke` is not a counted right), so an offer is consumed once per STANDING ROW:
+its retract is what stops a second fuse, and a `post` at the same key afterwards is a new offer.
+The session row is an activity log row (`Lang.Std.activityLog`, guarded by `activityWaiting`); this
+package has no method that answers it (settlement moves value: PROT-8).
+-/
+import Lang.StdActivity
+
+namespace Nanodregg.Lang.Std
+
+/-! ## Types -/
+
+/-- The deal's terms: one natural per label, labels ascending. -/
+def offerThetaTy (theta : List Label) : Ty := .record (Row.sort (theta.map (·, Ty.nat)))
+
+/-- The terms' labels, ascending (the order the judge and the guard walk them). -/
+def offerLabels (theta : List Label) : List Label := (Row.sort (theta.map (·, ()))).map (·.1)
+
+/-- One field's acceptance interval. -/
+def offerBoxTy : Ty := .record [("hi", .nat), ("lo", .nat)]
+
+/-- An offer's acceptance box: an interval per term. -/
+def offerTermsTy (theta : List Label) : Ty := .record (Row.sort (theta.map (·, offerBoxTy)))
+
+/-- The chooser roles, an enumeration. -/
+def offerRoleTy (roles : List Label) : Ty := .sum (Row.sort (roles.map (·, Ty.record [])))
+
+/-- An offer row's value: its chooser role and its box. -/
+def offerValTy (theta roles : List Label) : Ty :=
+  .record [("role", offerRoleTy roles), ("terms", offerTermsTy theta)]
+
+/-- What a session row captures: the pair the deal names and its terms. -/
+def offerCaptureTy (theta : List Label) : Ty := .record [("pair", pairTy), ("theta", offerThetaTy theta)]
+
+/-- The session log's one plan. Its code is never run by this package (no method starts or resumes
+it here: the take inserts the row itself); only its capture and response types are read. -/
+def offerSettlePlan (theta : List Label) : ActivityPlan where
+  name := "settle"
+  captured := offerCaptureTy theta
+  response := .record []
+  precondition := .lam (.record []) (.lam (offerCaptureTy theta) (.lam reqTy (.bool false)))
+  start := .lam (.record []) (.lam (offerCaptureTy theta) (.lam reqTy (.var 2)))
+  resume := .lam (.record []) (.lam (offerCaptureTy theta) (.lam (.record []) (.lam reqTy (.var 3))))
+
+/-- The object state: none; an object of this package holds its offers and sessions as rows. -/
+def offerStateTy : Ty := .record []
+
+/-- The method labels, ascending; a method's index is its position (`Package.methods`). -/
+def offerMethods : List Label := ["fuse", "post", "take", "withdraw"]
+
+def offerFuseIx : Nat := 0
+def offerPostIx : Nat := 1
+def offerTakeIx : Nat := 2
+def offerWithdrawIx : Nat := 3
+
+/-! ## The judge: one generated term -/
+
+/-- `θ` is inside box `terms`, field by field (`fs` the labels). -/
+def offerInBox : List Label → Term → Term → Term
+  | [], _, _ => .bool true
+  | f :: fs, terms, th =>
+      andT (andT (.prim .le (.get (.get terms f) "lo") (.get th f))
+          (.prim .le (.get th f) (.get (.get terms f) "hi")))
+        (offerInBox fs terms th)
+
+/-- Every interval of `terms` is non-empty (`lo ≤ hi`). -/
+def offerTermsOk : List Label → Term → Term
+  | [], _ => .bool true
+  | f :: fs, terms => andT (.prim .le (.get (.get terms f) "lo") (.get (.get terms f) "hi")) (offerTermsOk fs terms)
+
+/-- **The joint judge** `λ o q θ`: `refused "sameRole"` when the two chooser roles are equal,
+`refused "notCompliant"` unless θ is inside both boxes, else `ok`. Each `take` evaluates it on its
+own offer, its peer's, and the θ it decoded. -/
+def offerJoint (theta roles : List Label) : Term :=
+  let fs := offerLabels theta
+  let V := offerValTy theta roles
+  .lam V (.lam V (.lam (offerThetaTy theta)
+    (.ite (eqData (offerRoleTy roles) (.get (.var 2) "role") (.get (.var 1) "role"))
+      (refusedT "sameRole")
+      (.ite (andT (offerInBox fs (.get (.var 2) "terms") (.var 0)) (offerInBox fs (.get (.var 1) "terms") (.var 0)))
+        okT (refusedT "notCompliant")))))
+
+/-! ## Relations and guards -/
+
+def offerKey : List (Label × Ty) := [("n", .nat)]
+
+def offerDecl (theta roles : List Label) (limit : Nat) : RelDecl :=
+  ⟨offerKey, offerValTy theta roles, limit, none, 0, true, some "offer_guard"⟩
+
+def offerSessionDecl (theta : List Label) (limit : Nat) : RelDecl :=
+  activityLog [offerSettlePlan theta] limit "session_waiting"
+
+def offerRels (theta roles : List Label) (offerLimit sessionLimit : Nat) : List (Label × RelDecl) :=
+  [("offer", offerDecl theta roles offerLimit), ("session", offerSessionDecl theta sessionLimit)]
+
+/-- The offer row's guard: an insert's box is well formed (`badTerms`); a retract is the run of
+`take` or `withdraw` (`notConsumer`); an offer is never rewritten in place (`final`). -/
+def offerGuard (theta : List Label) (d : RelDecl) : Term :=
+  let fs := offerLabels theta
+  -- inside the retract arm: var 0 the retracted key, var 1 the input, var 2 the request
+  let consumer : Term := .case (.get (.var 2) "occasion") [
+    ("adopt", refusedT "notConsumer"), ("birth", refusedT "notConsumer"),
+    ("invoke", .ite (.prim .eq (.var 0) (.nat offerTakeIx)) okT
+      (.ite (.prim .eq (.var 0) (.nat offerWithdrawIx)) okT (refusedT "notConsumer"))),
+    ("relaw", refusedT "notConsumer"), ("write", refusedT "notConsumer")]
+  .lam offerStateTy (.lam reqTy (.lam (guardInTy d) (.case (.get (.var 0) "edit") [
+    ("insert", guard (offerTermsOk fs (.get (.get (.var 0) "val") "terms")) "badTerms" okT),
+    ("retract", consumer),
+    ("upsert", refusedT "final")])))
+
+/-- The session log's resumer: nobody, in this package (no method answers a session row here). -/
+def offerResumer : Term := .lam offerStateTy (.lam reqTy (.bool false))
+
+/-! ## Methods -/
+
+def offerTakeArg (theta : List Label) : Ty := .record [("pair", pairTy), ("theta", offerThetaTy theta)]
+
+def offerRead : List (Label × RelRead) := [("offer", ⟨1, none, false⟩)]
+
+/-- `take`'s rows argument: its own offer point and its peer's. -/
+def offerTakeRows (rels : List (Label × RelDecl)) : Ty := rowsTy rels offerRead offerRead
+
+def offerFuseArg : Ty :=
+  .record [("deal", .bytes), ("viaX", optTy .digest), ("viaY", optTy .digest), ("x", .digest), ("y", .digest)]
+
+def offerPostArg (theta roles : List Label) : Ty :=
+  .record [("n", .nat), ("role", offerRoleTy roles), ("terms", offerTermsTy theta)]
+
+def offerWithdrawArg : Ty := .record [("n", .nat)]
+
+/-- A fuse's one call kind. -/
+def offerCallTy : Ty := callOf ["invoke"]
+
+/-- `invoke obj take deal budget via`. -/
+def offerTakeCall (budget : Nat) (obj via deal : Term) : Term :=
+  .inj offerCallTy "invoke" (.record [("args", deal), ("budget", .nat budget),
+    ("method", .nat offerTakeIx), ("obj", obj), ("via", via)])
+
+/-- **The matcher** (var 0 req, var 1 arg, var 2 state): both takes, the same `deal`. -/
+def offerFuseBody (budget : Nat) : Term :=
+  let a (l : Label) := Term.get (.var 1) l
+  resultT (callsT [someCallT offerCallTy (offerTakeCall budget (a "x") (a "viaX") (a "deal")),
+      someCallT offerCallTy (offerTakeCall budget (a "y") (a "viaY") (a "deal"))])
+    (.var 2) (.record [])
+
+/-- **The take** (var 0 req, var 1 arg, var 2 state, var 3 rows). Refusals, in order: its own
+offer slot unpinned (`offerUnpinned`) or pinned absent (`noOffer`); the peer's offer slot unpinned
+(`peerRowUnpinned`) or pinned absent (`noPeerOffer`); the judge's `sameRole` / `notCompliant`. -/
+def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
+  let E := editTy rels
+  let fail (why : String) := Term.refuse (resultTy offerStateTy [] E 2) why.toUTF8
+  let C := activityCaptured [offerSettlePlan theta]
+  let R := activityResponses [offerSettlePlan theta]
+  -- inside the verdict's `ok` arm: its payload 0, peerVal 1, peerPoint 2, ownVal 3, ownPoint 4,
+  -- req 5, arg 6, state 7, rows 8 (the judge itself sits one binder out: ownVal 2, peerVal 0, arg 5).
+  let done : Term := activityResult rels (.var 7) [
+    activityEdit rels "offer" od "retract" (.get (.var 4) "key"),
+    activityEdit rels "session" sd "insert"
+      (activityKeyTerm (.get (.var 5) "agent") (.get (.var 5) "notBefore"))
+      (.record [("answered", noCallT R),
+        ("captured", .inj C "settle" (.record [("pair", .get (.var 6) "pair"), ("theta", .get (.var 6) "theta")]))])]
+  .case (.get (.get (.var 3) "offer") "p0") [
+    ("none", fail "offerUnpinned"),
+    ("some", .case (.get (.var 0) "val") [
+      ("none", fail "noOffer"),
+      ("some", .case (.get (.get (.get (.var 5) "peer") "offer") "p0") [
+        ("none", fail "peerRowUnpinned"),
+        ("some", .case (.get (.var 0) "val") [
+          ("none", fail "noPeerOffer"),
+          ("some", .case (activityApply (offerJoint theta roles) [.var 2, .var 0, .get (.var 5) "theta"]) [
+            ("ok", done),
+            ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
+              (fail "sameRole") (fail "notCompliant"))])])])])]
+
+def offerPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
+  activityResult rels (.var 2) [activityEdit rels "offer" od "insert"
+    (.record [("n", .get (.var 1) "n")])
+    (.record [("role", .get (.var 1) "role"), ("terms", .get (.var 1) "terms")])]
+
+def offerWithdrawBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
+  activityResult rels (.var 2) [activityEdit rels "offer" od "retract" (.record [("n", .get (.var 1) "n")])]
+
+/-- The package, emitted directly (no `activityPackage`: it would add `start_settle`, a method that
+inserts a session row without a take). -/
+def offerPackageOf (theta roles : List Label) (offerLimit sessionLimit budget : Nat) : Package :=
+  let rels := offerRels theta roles offerLimit sessionLimit
+  let S := offerStateTy
+  let E := editTy rels
+  let od := offerDecl theta roles offerLimit
+  let sd := offerSessionDecl theta sessionLimit
+  let fields : List (Label × Ty × Term) := [
+    ("fuse", methodTy S offerFuseArg [offerCallTy, offerCallTy] (.record []) E 0,
+      activityMethod S offerFuseArg (.record []) (offerFuseBody budget)),
+    ("offer_guard", guardTy S od, offerGuard theta od),
+    ("post", methodTy S (offerPostArg theta roles) [] (.record []) E 1,
+      activityMethod S (offerPostArg theta roles) (.record []) (offerPostBody rels od)),
+    ("session_waiting", guardTy S sd, activityWaiting S [offerSettlePlan theta] sd offerResumer),
+    ("take", methodTy S (offerTakeArg theta) [] (offerTakeRows rels) E 2,
+      activityMethod S (offerTakeArg theta) (offerTakeRows rels) (offerTakeBody theta roles rels od sd)),
+    ("withdraw", methodTy S offerWithdrawArg [] (.record []) E 1,
+      activityMethod S offerWithdrawArg (.record []) (offerWithdrawBody rels od))]
+  { imports := [], state := S,
+    iface := .record (fields.map fun (l, T, _) => (l, T)),
+    body := .record (fields.map fun (l, _, t) => (l, t)),
+    methods := offerMethods, laws := [], rels }
+
+/-- Why the generator refuses its parameters (law 7). -/
+inductive OfferRefusal
+  /-- fewer than two chooser roles: no two offers could fuse -/
+  | tooFewRoles
+  | duplicateRole
+  /-- no terms: every pair of boxes would agree on the one empty θ -/
+  | noTerms
+  | duplicateTerm
+  | package (why : CheckError)
+
+def OfferRefusal.name : OfferRefusal → String
+  | .tooFewRoles => "tooFewRoles" | .duplicateRole => "duplicateRole"
+  | .noTerms => "noTerms" | .duplicateTerm => "duplicateTerm"
+  | .package why => why.text
+
+/-- **`Std.offer`**: the checked package over terms `theta` and chooser roles `roles`. -/
+def offerPackage (theta roles : List Label) (offerLimit : Nat := 64) (sessionLimit : Nat := 1024)
+    (budget : Nat := 100000) : Except OfferRefusal Package := do
+  if roles.length < 2 then throw .tooFewRoles
+  if !roles.Nodup then throw .duplicateRole
+  if theta.isEmpty then throw .noTerms
+  if !theta.Nodup then throw .duplicateTerm
+  let pkg := offerPackageOf theta roles offerLimit sessionLimit budget
+  match pkg.checkWith [] with
+  | .error why => throw (.package why)
+  | .ok () => pure pkg
+
+end Nanodregg.Lang.Std

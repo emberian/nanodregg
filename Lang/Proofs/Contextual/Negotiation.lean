@@ -5,26 +5,17 @@ The proposal's document 3 first integration experiment: two parties negotiate a 
 with ALTERNATIVE providers, a DEADLINE and a CANCELLATION path. The open protocol
 (`Negotiation.template`: reserve the deposit, then a provider hole the buyer chooses) is judged once, under
 hypotheses (`Γ₀`: both providers' authority, the deadline); each candidate (`plan p1`, `plan p2`,
-`cancelPlan`) is a filling checked against the hole's interface; admission asks the CURRENT world.
-The four changes, each forced to say which operation it is:
-
-* an unrelated update: a reused derivation (`unrelated_update_keeps_plan`, by `admits_local`;
-  `unrelated_update_repair_reuses`);
-* a provider's authority withdrawn: that instantiation unavailable, the open protocol and the
-  other candidates intact, the residual obligation explicit (`provider_revoked_unavailable`,
-  `revocation_repair`);
-* a representation change: transport along a checked (partial) correspondence, and a STALE
-  representation refused (`representation_change_transports`, `stale_opening_refused`);
-* a replayed or competing commitment: refused by durable consumption (`replay_refused`,
-  `competing_commitments`), and the gap between internal at-most-once and external exactly-once
-  (`internal_once_not_external_once`, `exactly_once_needs_reply_and_dedupe`, over the internal
-  record READ OFF the histories `lost p`, `H₀`, `answeredH p b` by `Internal.ofHist`).
-
-And the deadline (`deadline_expires`), the cancellation path (`cancel_path_refunds_obligation`),
-the lost reply and the answered call (`lost_reply_keeps_obligation`, `lost_reply_blocks_replan`,
+`cancelPlan`) is a filling checked against the hole's interface.
+What stays here: the open protocol judged and filled, the gap between internal at-most-once and
+external exactly-once (`internal_once_not_external_once`, `exactly_once_needs_reply_and_dedupe`,
+over the internal record READ OFF the histories `lost p`, `H₀`, `answeredH p b` by
+`Internal.ofHist`), the cancellation path (`cancel_path_refunds_obligation`), the lost reply and
+the answered call (`lost_reply_keeps_obligation`, `lost_reply_blocks_replan`,
 `answered_blocks_replan`, `guard_stricter_than_wf`, `guarded_replan_after_dispatch_is_noop`)
-against the free re-plan before dispatch
-(`replan_before_dispatch`).
+against the free re-plan before dispatch (`replan_before_dispatch`). The scalar matchers and the
+private Negotiation `World` (with its update, revocation, representation, replay, deadline and
+shared-parameter theorems) went with PROT-6, replaced by Std.offer's deployed fuse
+(`Lang/StdOffer.lean`).
 -/
 import Lang.Proofs.Contextual.Protocol
 
@@ -97,113 +88,7 @@ theorem holes_instance :
     fun p => ?_, rfl⟩
   cases p <;> rfl
 
-/-! ## Change 1: an unrelated state update -/
-
-/-- **An unrelated update keeps the plan**: an update to the unrelated store, or to the OTHER
-provider's authority, leaves the plan's admission as it was: the keys its admission reads
-(`opSupport`) are untouched, so `admits_local` reuses the verdict. -/
-theorem unrelated_update_keeps_plan (w : World) (g : Nat → Nat) :
-    admits spec ({ w with other := g }).view (plan .p1) = admits spec w.view (plan .p1) ∧
-      admits spec (w.revoke .p2).view (plan .p1) = admits spec w.view (plan .p1) := by
-  refine ⟨rfl, ?_⟩
-  show admitOp spec (View.ofStore (w.revoke .p2).store) (S := sig) (Op.commit .p1) =
-    admitOp spec (View.ofStore w.store) (S := sig) (Op.commit .p1)
-  apply admits_local
-  intro k hk
-  simp [opSupport, spec] at hk
-  rcases hk with rfl | rfl | rfl <;> rfl
-
-/-- The same as selective repair: after a change to `auth p2` only `plan p2`'s fragment is
-re-checked (the affected list), and the repaired verdicts are those of a full re-check. -/
-theorem unrelated_update_repair_reuses :
-    repair frags (fromScratch frags w0.store) [.inl (.auth .p2)] (w0.revoke .p2).store =
-        fromScratch frags (w0.revoke .p2).store ∧
-      repair frags (fromScratch frags w0.store) [.inl (.auth .p2)] (w0.revoke .p2).store =
-        [true, false, true] ∧
-      (frags.map fun f => f.affected [.inl (.auth .p2)]) = [false, true, false] := by
-  refine ⟨repair_agrees_from_scratch frags ?_ ?_, rfl, rfl⟩
-  · intro f hf
-    simp only [frags, List.mem_cons, List.not_mem_nil, or_false] at hf
-    rcases hf with rfl | rfl | rfl <;> exact admitFrag_readsOnly _ _ _
-  · intro k hk
-    rcases k with (⟨p⟩ | _) | ⟨⟩ <;> (try cases p) <;> simp_all [World.store, World.view, World.revoke, w0]
-
-/-! ## Change 2: a provider's authority withdrawn -/
-
-/-- **Provider revoked → that instantiation unavailable**: with `p1`'s authority withdrawn,
-`plan p1` is still DERIVABLE (it fills the hole, its instantiation is judged) but not ADMISSIBLE
-now; the open protocol stays judged and the other candidates stay available. -/
-theorem provider_revoked_unavailable :
-    available w0 = [1, 2, 3] ∧ available (w0.revoke .p1) = [2, 3] ∧
-      Fills spec .buyer Ω iface (plan .p1) ∧ admits spec (w0.revoke .p1).view (plan .p1) = false ∧
-      HasProt spec .buyer Ω Γ₀ (fun _ _ => True) Φ₀ Δ₀ template ∧
-      admits spec (w0.revoke .p1).view (plan .p2) = true :=
-  ⟨rfl, rfl, plan_fills .p1, rfl, template_hasProt, rfl⟩
-
-/-- The revocation as selective repair: only `plan p1`'s fragment is affected; the repair agrees
-with a full re-check; the explicit residual obligation names exactly that fragment. -/
-theorem revocation_repair :
-    repair frags (fromScratch frags w0.store) [.inl (.auth .p1)] (w0.revoke .p1).store =
-        fromScratch frags (w0.revoke .p1).store ∧
-      residual frags (repair frags (fromScratch frags w0.store) [.inl (.auth .p1)]
-        (w0.revoke .p1).store) = [1] ∧
-      (frags.map fun f => f.affected [.inl (.auth .p1)]) = [true, false, false] := by
-  refine ⟨repair_agrees_from_scratch frags ?_ ?_, rfl, rfl⟩
-  · intro f hf
-    simp only [frags, List.mem_cons, List.not_mem_nil, or_false] at hf
-    rcases hf with rfl | rfl | rfl <;> exact admitFrag_readsOnly _ _ _
-  · intro k hk
-    rcases k with (⟨p⟩ | _) | ⟨⟩ <;> (try cases p) <;> simp_all [World.store, World.view, World.revoke, w0]
-
-/-! ## Change 3: a change of representation -/
-
-/-- The correspondence back is a left inverse of the representation at the current epoch. -/
-theorem current_at (E : Nat) (t : Tok) : ((t.at E).current E).getD .cap = t := by
-  cases t; simp [Tok.at, Tok'.current]
-
-/-- **Representation change transports**: re-issuing the capability's opening under epoch `E` (a
-partial correspondence: only epoch-`E` openings name the token) carries the open protocol's
-judgment over, and every effect is admissible against the world's epoch-`E` view exactly when it
-was against the old view. -/
-theorem representation_change_transports (E : Nat) :
-    HasProt (spec.mapTok (Tok.at E)) .buyer (Ω.mapTok (Tok.at E)) Γ₀ (fun _ _ => True) Φ₀
-        (Δ₀.map (Tok.at E)) template ∧
-      ∀ (w : World) {i : Phase} (op : Op i),
-        admitOp (spec.mapTok (Tok.at E)) (w.viewAt E) (S := sig) op =
-          admitOp spec w.view (S := sig) op := by
-  refine ⟨hasProt_mapTok (e' := fun t => (t.current E).getD .cap) (current_at E) template_hasProt, fun w _ op => ?_⟩
-  cases op <;> simp [admitOp, Spec.mapTok, spec, World.viewAt, Tok.at, Tok'.current]
-
-/-- **A stale opening is refused**: a commitment that presents the capability under an epoch other
-than the current one is not admissible, whatever the providers' authority and the nullifier. -/
-theorem stale_opening_refused (w : World) {E E' : Nat} (h : E' ≠ E) (p : Provider) :
-    admitOp (spec.mapTok (Tok.at E')) (w.viewAt E) (S := sig) (Op.commit p) = false := by
-  simp [admitOp, Spec.mapTok, spec, World.viewAt, Tok.at, Tok'.current, h]
-
-/-! ## Change 4: replayed and competing commitments -/
-
-/-- **Competing commitments**: after any successful commitment, no commitment (to either
-provider) is admitted: the nullifier is durable. -/
-theorem competing_commitments (w w' : World) (p q : Provider)
-    (h : w.commit (Op.commit p) = some w') : w'.commit (Op.commit q) = none := by
-  unfold World.commit at h
-  split at h
-  · simp only [spec, Option.some.injEq] at h
-    subst h
-    simp [World.commit, admitOp, World.view, spec]
-  · cases h
-
-/-- **Replay refused**: from day 0 the commitment to `p1` succeeds; replaying it, or committing to
-`p2` instead, is refused; the cancellation (which spends nothing) is still admitted. -/
-theorem replay_refused :
-    (w0.commit (Op.commit .p1)).isSome = true ∧
-      (∀ w', w0.commit (Op.commit .p1) = some w' →
-        w'.commit (Op.commit .p1) = none ∧ w'.commit (Op.commit .p2) = none ∧
-          (w'.commit Op.cancel).isSome = true) := by
-  refine ⟨rfl, fun w' h => ⟨competing_commitments _ _ _ _ h, competing_commitments _ _ _ _ h, ?_⟩⟩
-  simp only [World.commit] at h
-  cases h
-  rfl
+/-! ## Internal once versus external once -/
 
 /-- The internal records the histories leave. -/
 theorem internal_of_histories (p : Provider) (b : Bool) :
@@ -251,15 +136,7 @@ theorem exactly_once_needs_reply_and_dedupe (p : Provider) :
     simp only [External.executions, hd, if_true]
     exact Nat.min_le_right _ _
 
-/-! ## The deadline and the cancellation path -/
-
-/-- **The deadline expires**: once the clock reaches the deadline no commitment is admissible,
-to either provider, whatever their authority; the cancellation path stays admissible. -/
-theorem deadline_expires (w : World) (hd : w.deadline ≤ w.now) :
-    (∀ p, admits spec w.view (plan p) = false) ∧ admits spec w.view cancelPlan = true ∧
-      available { w0 with now := 10 } = [3] := by
-  refine ⟨fun p => ?_, rfl, rfl⟩
-  simp [admits, plan, admitOp, spec, World.view, Nat.not_lt.mpr hd]
+/-! ## The cancellation path -/
 
 /-- **The cancellation path refunds**: every complete run of the plan with the cancellation
 chosen establishes exactly the deposit and its refund, and no payment. -/
@@ -444,31 +321,5 @@ theorem replan_before_dispatch (f : P .reserved) (hf : Fills spec .buyer Ω ifac
   refine ⟨hnd _ _, fun j h hd => (hnd j h hd).elim, ?_⟩
   obtain ⟨hw, hh, _⟩ := Open.resubst_wf hwf (choose_ok hf) (fun j h hd => (hnd j h hd).elim)
   exact ⟨hw, hh⟩
-
-/-! ## Shared parameters over substitutions (doc 2 section 4) -/
-
-/-- The buyer's guard on a completion: the provider hole is filled with `p1`'s plan. -/
-def BuyerGuard (θ : Subst sig HoleN Res) : Prop := θ .reserved () = some (plan .p1)
-
-/-- The authority condition in world `w`: the filling of the provider hole is admissible now. -/
-def AdmittedIn (w : World) (θ : Subst sig HoleN Res) : Prop :=
-  ∃ f, θ .reserved () = some f ∧ admits spec w.view f = true
-
-/-- **Separate witnesses are insufficient, over substitutions**: in the world where `p1`'s
-authority is withdrawn, a typed completion satisfies the buyer's guard (`plan p1`) and a typed
-completion is admitted (`plan p2`), but the completion space, ONE `θ` for typing, the guard,
-authority and resources, is empty. -/
-theorem separate_witnesses_over_substitutions :
-    (∃ θ, SubstOK spec .buyer Ω θ ∧ BuyerGuard θ) ∧ (∃ θ, SubstOK spec .buyer Ω θ ∧ AdmittedIn (w0.revoke .p1) θ) ∧
-      ¬ ∃ θ, Conds.space ⟨SubstOK spec .buyer Ω, BuyerGuard, AdmittedIn (w0.revoke .p1),
-        fun θ => ∀ f, θ .reserved () = some f → Fills spec .buyer Ω iface f⟩ θ := by
-  refine ⟨⟨choose (plan .p1), choose_ok (plan_fills .p1), rfl⟩,
-    ⟨choose (plan .p2), choose_ok (plan_fills .p2), plan .p2, rfl, rfl⟩, ?_⟩
-  rintro ⟨θ, _, hg, ⟨f, hf, ha⟩, _⟩
-  rw [show θ .reserved () = some (plan .p1) from hg] at hf
-  cases hf
-  have hfalse : admits spec (w0.revoke .p1).view (plan .p1) = false := rfl
-  rw [hfalse] at ha
-  cases ha
 
 end Nanodregg.Lang.Contextual.Protocol.Negotiation

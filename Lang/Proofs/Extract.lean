@@ -371,7 +371,7 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       L.pkgs[g]? = some p ∧ resolveMethod (D := D) p method = .ok x ∧
       readState digestOf (recordRow p.state) state = .ok sd ∧
       Wire.decodeData x.2.arg args = .ok ad ∧
-      readsData digestOf look p.rels rv r.self x.2.reads = .ok wd ∧
+      methodReads bytesOf digestOf look pkg p.rels rv r.self ad x.2.reads (p.peerReads x.1) = .ok wd ∧
       BigStep L.lib [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] (apply4 g x.1) (.ok v) ∧
       Means L.lib (resultTy p.state x.2.calls (editTy p.rels) x.2.edits) v
         (.record [("calls", c), ("edits", e), ("state", .record ds)]) ∧

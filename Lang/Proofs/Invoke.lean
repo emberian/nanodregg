@@ -104,7 +104,7 @@ theorem methodArg_wf {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkShape 
   rw [hrow] at hw
   simp only [Ty.wf, Bool.and_eq_true] at hw
   have := rowWf_find hw.2 hf
-  obtain ⟨ks, rs, es, hks⟩ := methodArg_spec hA
+  obtain ⟨ks, rs, ps, es, hks⟩ := methodArg_spec hA
   rw [hks] at this
   simp only [methodTy, Ty.wf, Bool.and_eq_true] at this
   exact this.2.2.1
@@ -154,7 +154,7 @@ theorem methodArg_dataTy {p : Package} {ℓ : Label} {mty A : Ty} (h : p.checkSh
   rw [hrow] at hwi
   simp only [Wire.tyWire, Bool.and_eq_true] at hwi
   have ht := tyRowWire_find hwi.2 hf
-  obtain ⟨ks, rs, es, hks⟩ := methodArg_spec hA
+  obtain ⟨ks, rs, ps, es, hks⟩ := methodArg_spec hA
   rw [hks] at ht
   simp only [methodTy, Wire.tyWire, Bool.and_eq_true] at ht
   simp only [Wire.dataTy, Bool.and_eq_true]
@@ -456,6 +456,65 @@ theorem readsData_conforms {D : Type} {digestOf : ByteArray → Option D} {look 
     all_goals first | cases hy | skip
     exact ⟨_, by rw [‹Row.find? _ rels = some _›]; rfl, rfl, relReads_conforms ‹_›⟩
 
+theorem rowConforms_insert {ℓ : Label} {d : Data} {T : Ty} (hd : Conforms d T) :
+    ∀ {ds : List (Label × Data)} {r : List (Label × Ty)}, RowConforms ds r →
+      RowConforms (Row.insert (ℓ, d) ds) (Row.insert (ℓ, T) r)
+  | _, _, .nil => .cons hd .nil
+  | _, _, .cons (ℓ := k) h hr => by
+    by_cases hc : ℓ ≤ k
+    · simp only [Row.insert, if_pos hc]; exact .cons hd (.cons h hr)
+    · simp only [Row.insert, if_neg hc]; exact .cons h (rowConforms_insert hd hr)
+
+/-- Sorting two rows of the same labels keeps them conforming (`Row.sort` compares labels only). -/
+theorem rowConforms_sort : ∀ {ds : List (Label × Data)} {r : List (Label × Ty)}, RowConforms ds r →
+    RowConforms (Row.sort ds) (Row.sort r)
+  | _, _, .nil => .nil
+  | _, _, .cons h hr => by
+    simp only [Row.sort, List.foldr_cons]
+    exact rowConforms_insert h (rowConforms_sort hr)
+
+/-- **The rows argument is a value of the declared rows type** (LANG-49, PROT-6): the own reads at
+`readsTy`, and the peer reads, when declared, at the `peer` field (`rowsTy`). -/
+theorem methodReads_conforms {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+    {look : Pinned D} {pkg : D} {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} {args : Data}
+    {rs ps : List (Label × RelRead)} {v : Data}
+    (h : methodReads bytesOf digestOf look pkg rels rv self args rs ps = .ok v) :
+    Conforms v (rowsTy rels rs ps) := by
+  unfold methodReads at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  · rename_i own hown
+    have ho := readsData_conforms hown
+    cases ps with
+    | nil => cases h; exact ho
+    | cons q qs =>
+      simp only [List.isEmpty_cons, Bool.false_eq_true, ↓reduceIte] at h
+      cases hpo : peerOf bytesOf digestOf self args with
+      | error e => rw [hpo] at h; cases h
+      | ok peer =>
+        rw [hpo] at h
+        simp only at h
+        cases hk : readKind look peer kindObject with
+        | error e => rw [hk] at h; cases h
+        | ok cell =>
+          rw [hk] at h
+          simp only at h
+          by_cases hc : (cell.slots.get slotPackage == some (bytesOf pkg)) = true
+          · simp only [hc, ↓reduceIte] at h
+            cases hpd : readsData digestOf look rels rv peer (q :: qs) with
+            | error e => rw [hpd] at h; cases h
+            | ok pd =>
+              rw [hpd] at h
+              simp only at h
+              have hp := readsData_conforms hpd
+              simp only [readsTy] at ho
+              cases ho with
+              | record hr =>
+                cases h
+                exact .record (rowConforms_sort (rowConforms_append hr (.cons hp .nil)))
+          · simp [hc] at h
+
 /-- The run inside `Program.run`, on what it decoded, never reaches `stuck`: it ends with a value
 of the method's result type (its calls and its new state) or a named non-`stuck` fault. -/
 theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
@@ -467,15 +526,16 @@ theorem invoke_never_stuck {D : Type} {bytesOf : D → ByteArray} {digestOf : By
     (hm : Row.find? ℓ (recordRow p.iface) = some mty) (hA : methodSig p.state p.rels mty = some sg)
     (hstate : readState digestOf (recordRow p.state) state = .ok sd)
     (hargs : Wire.decodeData sg.arg args = .ok ad)
-    (hrows : readsData digestOf look p.rels rv r.self sg.reads = .ok wd)
+    {pkg : D} (hrows : methodReads bytesOf digestOf look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd)
     (hr : reqOk bytesOf r = true) :
     RunOK L.ifaces (resultTy p.state sg.calls (editTy p.rels) sg.edits)
       (run L.lib Bounds.stackMax ticks 0
         (State.init (apply4 g ℓ) [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal])) := by
   have hs := readState_conforms hstate
   rw [← checkShape_state ((load_checked hload g p hp).1)] at hs
+  rw [Package.peerReads_of hm] at hrows
   exact method_run_sound hload hp hm hA (toVal_typed hs) (toVal_typed (decodeData_conforms hargs))
-    (toVal_typed (reqOk_conforms hr)) (toVal_typed (readsData_conforms hrows))
+    (toVal_typed (reqOk_conforms hr)) (toVal_typed (methodReads_conforms hrows))
 
 /-- The twin for laws: every law of a loaded package, run in `Program.judge` on the old and new states
 it decoded from the slots and the request, never reaches `stuck`: it ends with a value of
