@@ -4,10 +4,9 @@
 The four theorem families of the proposal's document 2 section 9, over `Lang.Contextual.Protocol`:
 
 * CONTEXTUAL COMPLETION: `fill_preserves_hasProt` (a filling satisfying the hole's interface:
-  index, context, tokens, result, obligations, chooser role, acceptance; preserves the judgment);
+  index, context, tokens, result, obligations, chooser, acceptance; preserves the judgment);
   `fill_skips_others`, `others_hole_untypable` (DESIGN RULES, stated as theorems so they are
-  checked: `fill me` restricts to the holes `me` chooses by definition, and the hole rule requires
-  `me` as chooser).
+  checked: `fill` restricts to `.me` holes by definition and the hole rule requires `.me`).
 * INTERPRETATION OF SUBSTITUTION: `fold_fusion`, `fold_subst`, `interpret_fill` (interpreting
   `P[σ]` IS interpreting the template with `σ` in the environment), via fusion.
 * SELECTIVE REPAIR: `locality`, `repair_agrees_from_scratch`, `repair_residual`, `repair_reuses`.
@@ -33,7 +32,6 @@ namespace Nanodregg.Lang.Contextual.Protocol
 
 section
 variable {Ix : Type} {S : Sig Ix} {Hole : Ix → Type} {A : Ix → Type}
-variable {Role : Type} {me : Role}
 variable {Tok Fact Ob : Type}
 
 /-! ## Bags -/
@@ -57,10 +55,10 @@ theorem SubBag.erase [DecidableEq Tok] {Δ₁ Δ₂ : List Tok} (h : SubBag Δ�
 
 /-- Weakening: more facts, a weaker postcondition, more permitted obligations, more tokens. -/
 theorem HasProt.weaken [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
-    {Ω : Ctx S Hole A Role Tok Fact Ob} {Γ Γ' : List Fact} {Q Q' : (j : Ix) → A j → Prop}
+    {Ω : Ctx S Hole A Tok Fact Ob} {Γ Γ' : List Fact} {Q Q' : (j : Ix) → A j → Prop}
     {Φ Φ' : List Ob} (hΓ : ∀ f ∈ Γ, f ∈ Γ') (hQ : ∀ j a, Q j a → Q' j a)
     (hΦ : ∀ o ∈ Φ, o ∈ Φ') {Δ Δ' : List Tok} {i : Ix} {P : Prot S Hole A i}
-    (h : HasProt sp me Ω Γ Q Φ Δ P) (hΔ : SubBag Δ Δ') : HasProt sp me Ω Γ' Q' Φ' Δ' P := by
+    (h : HasProt sp Ω Γ Q Φ Δ P) (hΔ : SubBag Δ Δ') : HasProt sp Ω Γ' Q' Φ' Δ' P := by
   induction h generalizing Δ' with
   | ret a hq => exact .ret a (hQ _ _ hq)
   | call op k hc hr he _ ih =>
@@ -75,15 +73,15 @@ theorem HasProt.weaken [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
 
 /-- Substituting an interface-respecting substitution preserves the judgment. -/
 theorem subst_preserves_hasProt [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
-    {Ω : Ctx S Hole A Role Tok Fact Ob} {σ : Subst S Hole A} (hσ : SubstOK sp me Ω σ)
+    {Ω : Ctx S Hole A Tok Fact Ob} {σ : Subst S Hole A} (hσ : SubstOK sp Ω σ)
     {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob} {Δ : List Tok} {i : Ix}
-    {P : Prot S Hole A i} (h : HasProt sp me Ω Γ Q Φ Δ P) : HasProt sp me Ω Γ Q Φ Δ (subst σ P) := by
+    {P : Prot S Hole A i} (h : HasProt sp Ω Γ Q Φ Δ P) : HasProt sp Ω Γ Q Φ Δ (subst σ P) := by
   induction h with
   | ret a hq => exact .ret a hq
   | call op k hc hr he _ ih => exact .call op _ hc hr he ih
   | spend op k t hc ht hr he _ ih => exact .spend op _ t hc ht hr he ih
   | @hole Δ i h I hI hp hctx hneed hpost howes =>
-    show HasProt sp me Ω Γ Q Φ Δ (match σ i h with | some f => f | none => .hole h)
+    show HasProt sp Ω Γ Q Φ Δ (match σ i h with | some f => f | none => .hole h)
     cases hs : σ i h with
     | none => exact .hole h I hI hp hctx hneed hpost howes
     | some f =>
@@ -92,9 +90,9 @@ theorem subst_preserves_hasProt [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
       cases hI'
       exact hf.weaken hctx hpost howes hneed
 
-/-- Restricting to the holes `me` chooses keeps a substitution interface-respecting. -/
-theorem SubstOK.mine [DecidableEq Role] [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Role Tok Fact Ob}
-    {σ : Subst S Hole A} (hσ : SubstOK sp me Ω σ) : SubstOK sp me Ω (σ.mine me Ω) := by
+/-- Restricting to the `.me` holes keeps a substitution interface-respecting. -/
+theorem SubstOK.mine [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Tok Fact Ob}
+    {σ : Subst S Hole A} (hσ : SubstOK sp Ω σ) : SubstOK sp Ω (σ.mine Ω) := by
   intro i h f hs
   unfold Subst.mine at hs
   split at hs
@@ -106,40 +104,39 @@ theorem SubstOK.mine [DecidableEq Role] [DecidableEq Tok] {sp : Spec S Tok Fact 
 /-- **Contextual completion** (family 1): filling the holes of a judged protocol with fillings that
 satisfy their interfaces preserves the protocol's judgment, at the same facts, tokens, result
 contract and obligation bound. -/
-theorem fill_preserves_hasProt [DecidableEq Role] [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
-    {Ω : Ctx S Hole A Role Tok Fact Ob} {σ : Subst S Hole A} (hσ : SubstOK sp me Ω σ)
+theorem fill_preserves_hasProt [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
+    {Ω : Ctx S Hole A Tok Fact Ob} {σ : Subst S Hole A} (hσ : SubstOK sp Ω σ)
     {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob} {Δ : List Tok} {i : Ix}
-    {P : Prot S Hole A i} (h : HasProt sp me Ω Γ Q Φ Δ P) :
-    HasProt sp me Ω Γ Q Φ Δ (fill me Ω σ P) :=
+    {P : Prot S Hole A i} (h : HasProt sp Ω Γ Q Φ Δ P) :
+    HasProt sp Ω Γ Q Φ Δ (fill Ω σ P) :=
   subst_preserves_hasProt hσ.mine h
 
-/-- **Roles, a design rule**: `fill me` never fills a hole `Ω` declares chosen by another role,
-whatever `σ` offers. True by the definition of `Subst.mine`; stated so the rule is checked, not as
-a finding. -/
-theorem fill_skips_others [DecidableEq Role] {Ω : Ctx S Hole A Role Tok Fact Ob} (σ : Subst S Hole A) {i : Ix}
-    {h : Hole i} {I : Iface S Hole A Role Tok Fact Ob i} (hI : Ω i h = some I)
-    (hp : I.chooser ≠ me) : fill me Ω σ (.hole h) = .hole h := by
+/-- **Chooser, a design rule**: `fill` never fills a hole `Ω` declares chosen by `.other`, whatever `σ`
+offers. True by the definition of `Subst.mine`; stated so the rule is checked, not as a finding. -/
+theorem fill_skips_others {Ω : Ctx S Hole A Tok Fact Ob} (σ : Subst S Hole A) {i : Ix}
+    {h : Hole i} {I : Iface S Hole A Tok Fact Ob i} (hI : Ω i h = some I)
+    (hp : I.chooser = .other) : fill Ω σ (.hole h) = .hole h := by
   simp [fill, subst, Subst.mine, hI, hp]
 
-/-- **Roles, a design rule**: a hole another role chooses is not a protocol judged as `me`, because
-the `hole` rule of `HasProt` requires `me` as its chooser. Stated so the rule is checked, not as a
-finding. -/
+/-- **Chooser, a design rule**: an `.other` hole is not a judged protocol, because the `hole` rule
+of `HasProt` requires `.me`. Stated so the rule is checked, not as a finding. -/
 theorem others_hole_untypable [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
-    {Ω : Ctx S Hole A Role Tok Fact Ob} {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob}
-    {Δ : List Tok} {i : Ix} {h : Hole i} {I : Iface S Hole A Role Tok Fact Ob i}
-    (hI : Ω i h = some I) (hp : I.chooser ≠ me) : ¬ HasProt sp me Ω Γ Q Φ Δ (.hole h) := by
+    {Ω : Ctx S Hole A Tok Fact Ob} {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob}
+    {Δ : List Tok} {i : Ix} {h : Hole i} {I : Iface S Hole A Tok Fact Ob i}
+    (hI : Ω i h = some I) (hp : I.chooser = .other) : ¬ HasProt sp Ω Γ Q Φ Δ (.hole h) := by
   intro hh
   cases hh with
   | hole _ I' hI' hp' =>
     rw [hI] at hI'
     cases hI'
-    exact hp hp'
+    rw [hp] at hp'
+    cases hp'
 
 /-- On interface-respecting substitutions `fill` is plain substitution. -/
-theorem fill_eq_subst [DecidableEq Role] [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Role Tok Fact Ob}
-    {σ : Subst S Hole A} (hσ : SubstOK sp me Ω σ) {i : Ix} (P : Prot S Hole A i) :
-    fill me Ω σ P = subst σ P := by
-  have : σ.mine me Ω = σ := by
+theorem fill_eq_subst [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Tok Fact Ob}
+    {σ : Subst S Hole A} (hσ : SubstOK sp Ω σ) {i : Ix} (P : Prot S Hole A i) :
+    fill Ω σ P = subst σ P := by
+  have : σ.mine Ω = σ := by
     funext j h
     unfold Subst.mine
     cases hs : σ j h with
@@ -317,11 +314,11 @@ theorem consumed_cons (sp : Spec S Tok Fact Ob) (e : Entry S) (t : Trace S) :
 `Δ` (as a bag: each token at most as often as `Δ` holds it, together with what the residual still
 holds), establishes only obligations within `Φ`, and leaves a residual judged at the remaining
 tokens. -/
-theorem hasProt_reach [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Role Tok Fact Ob}
+theorem hasProt_reach [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Tok Fact Ob}
     {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob} {Δ : List Tok} {i : Ix}
     {P : Prot S Hole A i} {t : Trace S} {R : Σ j, Prot S Hole A j}
-    (h : HasProt sp me Ω Γ Q Φ Δ P) (hr : Reach P t R) :
-    ∃ Δ', HasProt sp me Ω Γ Q Φ Δ' R.2 ∧
+    (h : HasProt sp Ω Γ Q Φ Δ P) (hr : Reach P t R) :
+    ∃ Δ', HasProt sp Ω Γ Q Φ Δ' R.2 ∧
       (∀ x, (consumed sp t).count x + Δ'.count x ≤ Δ.count x) ∧
       ∀ o ∈ established sp t, o ∈ Φ := by
   induction hr generalizing Δ with
@@ -364,20 +361,20 @@ theorem hasProt_reach [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Ho
 
 /-- **At most once** (the discipline is AFFINE: `ret` accepts any leftover `Δ`, so a token may also
 go unspent): a token `Δ` holds once is spent at most once on any path of a judged protocol. -/
-theorem at_most_once [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Role Tok Fact Ob}
+theorem at_most_once [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Tok Fact Ob}
     {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob} {Δ : List Tok} {i : Ix}
     {P : Prot S Hole A i} {t : Trace S} {R : Σ j, Prot S Hole A j} {x : Tok}
-    (h : HasProt sp me Ω Γ Q Φ Δ P) (hr : Reach P t R) (hx : Δ.count x ≤ 1) :
+    (h : HasProt sp Ω Γ Q Φ Δ P) (hr : Reach P t R) (hx : Δ.count x ≤ 1) :
     (consumed sp t).count x ≤ 1 := by
   obtain ⟨Δ', _, hc, _⟩ := hasProt_reach h hr
   have := hc x
   omega
 
 /-- A complete path of a judged protocol ends in a result within `Q`. -/
-theorem hasProt_runs [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Role Tok Fact Ob}
+theorem hasProt_runs [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Tok Fact Ob}
     {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob} {Δ : List Tok} {i : Ix}
     {P : Prot S Hole A i} {t : Trace S} {j : Ix} {a : A j}
-    (h : HasProt sp me Ω Γ Q Φ Δ P) (hr : Runs P t j a) : Q j a := by
+    (h : HasProt sp Ω Γ Q Φ Δ P) (hr : Runs P t j a) : Q j a := by
   obtain ⟨Δ', h', _, _⟩ := hasProt_reach h (runs_reach hr)
   cases h' with
   | ret _ hq => exact hq
@@ -439,9 +436,9 @@ theorem resubst_preserves_started {σ σ' : Subst S Hole A} {i : Ix} {P : Prot S
 /-- The obligations a history of a judged protocol established, the in-flight call's included,
 are within `Φ`. -/
 theorem started_obligations [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
-    {Ω : Ctx S Hole A Role Tok Fact Ob} {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob}
+    {Ω : Ctx S Hole A Tok Fact Ob} {Γ : List Fact} {Q : (j : Ix) → A j → Prop} {Φ : List Ob}
     {Δ : List Tok} {i : Ix} {P : Prot S Hole A i} {H : Hist S}
-    (h : HasProt sp me Ω Γ Q Φ Δ P) (hs : Started P H) : ∀ o ∈ H.established sp, o ∈ Φ := by
+    (h : HasProt sp Ω Γ Q Φ Δ P) (hs : Started P H) : ∀ o ∈ H.established sp, o ∈ Φ := by
   cases hs with
   | settled hr =>
     obtain ⟨_, _, _, hob⟩ := hasProt_reach h hr
@@ -460,14 +457,14 @@ theorem started_obligations [DecidableEq Tok] {sp : Spec S Tok Fact Ob}
 well-formed object by an interface-respecting substitution is well-formed, keeps the accepted
 history (answered and in flight), and every obligation that history established stays within the
 object's bound. -/
-theorem Open.resubst_wf [DecidableEq Role] [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {i : Ix}
-    {O : Open S Hole A Role Tok Fact Ob i} (hO : O.WF sp) {σ' : Subst S Hole A}
-    (hσ' : SubstOK sp O.me O.Ω σ')
+theorem Open.resubst_wf [DecidableEq Tok] {sp : Spec S Tok Fact Ob} {i : Ix}
+    {O : Open S Hole A Tok Fact Ob i} (hO : O.WF sp) {σ' : Subst S Hole A}
+    (hσ' : SubstOK sp O.Ω σ')
     (g : O.Replan σ') :
     (O.replan σ').WF sp ∧ (O.replan σ').hist = O.hist ∧
       ∀ o ∈ (O.replan σ').hist.established sp, o ∈ O.Φ := by
   have hst : Started (O.replan σ').current O.hist :=
-    resubst_preserves_started (σ := O.σ.mine O.me O.Ω) hO.started g
+    resubst_preserves_started (σ := O.σ.mine O.Ω) hO.started g
   have hwf : (O.replan σ').WF sp := ⟨hO.typed, hσ', hst⟩
   exact ⟨hwf, rfl, started_obligations (fill_preserves_hasProt hσ' hO.typed) hst⟩
 
@@ -656,9 +653,9 @@ representations need not name anything) carries a judged protocol to a judged pr
 new representation, its tokens renamed. -/
 theorem hasProt_mapTok {Tok' : Type} [DecidableEq Tok] [DecidableEq Tok']
     {e : Tok → Tok'} {e' : Tok' → Tok} (h₁ : ∀ a, e' (e a) = a)
-    {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Role Tok Fact Ob} {Γ : List Fact}
+    {sp : Spec S Tok Fact Ob} {Ω : Ctx S Hole A Tok Fact Ob} {Γ : List Fact}
     {Q : (j : Ix) → A j → Prop} {Φ : List Ob} {Δ : List Tok} {i : Ix} {P : Prot S Hole A i}
-    (h : HasProt sp me Ω Γ Q Φ Δ P) : HasProt (sp.mapTok e) me (Ω.mapTok e) Γ Q Φ (Δ.map e) P := by
+    (h : HasProt sp Ω Γ Q Φ Δ P) : HasProt (sp.mapTok e) (Ω.mapTok e) Γ Q Φ (Δ.map e) P := by
   induction h with
   | ret a hq => exact .ret a hq
   | call op k hc hr he _ ih =>
@@ -799,12 +796,11 @@ theorem response_indexed_names_have_foresight :
 /-- `planHole` is the response-free naming. -/
 theorem planHole_named : planHole = planNamed (Hn := HoleN) fun _ => () := rfl
 
-/-- **The peer's hole is never planned by the player**: chosen by the peer, the hole is never
-filled by the player's plan, so every run of the open plan stops at the hole. It "loses" only
-because `wins` scores a stuck run as `false`: the theorem says the player cannot win by filling, not
-that the peer wins. -/
+/-- **An `.other` hole is never planned**: declared chosen by `.other`, the hole is never filled by our plan, so
+every run of the open plan stops at the hole. It "loses" only because `wins` scores a stuck run as
+`false`: the theorem says the planner cannot win by filling, not that the peer wins. -/
 theorem peer_hole_never_planned (σ : Subst sig HoleN Res) (b : Bool) :
-    wins b (fill .player (ctxOf .peer) σ planHole) () = false := by
+    wins b (fill (ctxOf .other) σ planHole) () = false := by
   unfold fill
   rw [wins_planHole]
   simp [Subst.mine, ctxOf, iface]

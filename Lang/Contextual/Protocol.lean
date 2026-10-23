@@ -36,7 +36,7 @@ substitute into the filling, so a filling's own holes stay open under the same `
 
 namespace Nanodregg.Lang.Contextual.Protocol
 
-/-! ## Signatures, the accounting of an operation -/
+/-! ## Signatures, the accounting of an operation, the chooser -/
 
 /-- An indexed signature (mini's `IxSignature`, restated): at index `i` the operations `Op i`; each
 operation's response type; the response selects the next index. -/
@@ -53,6 +53,14 @@ structure Spec {Ix : Type} (S : Sig Ix) (Tok Fact Ob : Type) where
   requires : {i : Ix} → S.Op i → List Fact
   establishes : {i : Ix} → S.Op i → List Ob
 
+/-- Who chooses a hole's filling, as the judgment uses it: `me`, the party whose protocol is judged
+(`HasProt` admits a hole only with `chooser = .me`), or `other`, whose hole `fill` never fills. Two
+values because every rule tests exactly that; nothing here tells two other parties apart (LANG-75.15). -/
+inductive Chooser
+  | me
+  | other
+deriving DecidableEq, Repr
+
 /-! ## Open protocols -/
 
 /-- The free open protocol over `S` with result family `A` and hole names `Hole`: return a result,
@@ -68,14 +76,12 @@ inductive Prot {Ix : Type} (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) :
 section
 variable {Ix : Type} {S : Sig Ix} {Hole : Ix → Type} {A : Ix → Type}
 
-/-- A hole's interface `u :: [Γ_u; Δ_u ⊢ Protocol(i, post)] ⊣ owes`, with the ROLE that chooses
-its filling and an acceptance contract that every filling must pass (`Fills`). The start index is
-the hole name's index. `Role` is an index in place of the former `ours | theirs`: a protocol is
-judged as one role `me` (`HasProt sp me …`), and every rule tests `chooser = me` or `chooser ≠ me`.
-No theorem yet tells two roles other than `me` apart (LANG-75.10). -/
-structure Iface (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Role Tok Fact Ob : Type) (i : Ix) where
-  /-- the role that chooses the filling -/
-  chooser : Role
+/-- A hole's interface `u :: [Γ_u; Δ_u ⊢ Protocol(i, post)] ⊣ owes`, with its chooser and an
+acceptance contract that every filling must pass (`Fills`). The start index is the hole name's
+index. -/
+structure Iface (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact Ob : Type) (i : Ix) where
+  /-- who chooses the filling -/
+  chooser : Chooser
   /-- the reusable facts a filling may require (`Γ_u`) -/
   ctx : List Fact
   /-- the tokens a filling may spend (`Δ_u`) -/
@@ -88,8 +94,8 @@ structure Iface (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Role Tok Fa
   accepts : Prot S Hole A i → Prop
 
 /-- `Ω`: the declared interface of every unresolved component. -/
-abbrev Ctx (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Role Tok Fact Ob : Type) :=
-  (i : Ix) → Hole i → Option (Iface S Hole A Role Tok Fact Ob i)
+abbrev Ctx (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact Ob : Type) :=
+  (i : Ix) → Hole i → Option (Iface S Hole A Tok Fact Ob i)
 
 /-- `σ`: a partial substitution, a filling for some holes (doc 2 section 9). -/
 abbrev Subst (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) :=
@@ -103,17 +109,17 @@ def subst (σ : Subst S Hole A) : {i : Ix} → Prot S Hole A i → Prot S Hole A
     | some f => f
     | none => .hole h
 
-/-- `σ` restricted to the holes `Ω` declares chosen by `me`: another role's hole is never filled. -/
-def Subst.mine {Role Tok Fact Ob : Type} [DecidableEq Role] (me : Role)
-    (Ω : Ctx S Hole A Role Tok Fact Ob) (σ : Subst S Hole A) : Subst S Hole A := fun i h =>
+/-- `σ` restricted to the holes `Ω` declares chosen by `.me`: an `.other` hole is never filled. -/
+def Subst.mine {Tok Fact Ob : Type} (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A) :
+    Subst S Hole A := fun i h =>
   match Ω i h with
-  | some I => if I.chooser = me then σ i h else none
+  | some I => if I.chooser = .me then σ i h else none
   | none => none
 
-/-- `P[σ]` under `Ω`, as role `me`: fill the holes `me` chooses that `σ` names. -/
-def fill {Role Tok Fact Ob : Type} [DecidableEq Role] (me : Role) (Ω : Ctx S Hole A Role Tok Fact Ob)
-    (σ : Subst S Hole A) {i : Ix} (P : Prot S Hole A i) : Prot S Hole A i :=
-  subst (σ.mine me Ω) P
+/-- `P[σ]` under `Ω`: fill the `.me` holes `σ` names. -/
+def fill {Tok Fact Ob : Type} (Ω : Ctx S Hole A Tok Fact Ob) (σ : Subst S Hole A)
+    {i : Ix} (P : Prot S Hole A i) : Prot S Hole A i :=
+  subst (σ.mine Ω) P
 
 /-- The single substitution `[f/h]`. -/
 def Subst.single [DecidableEq Ix] [∀ i, DecidableEq (Hole i)] {i : Ix} (h : Hole i)
@@ -235,14 +241,12 @@ def Hist.established {Tok Fact Ob : Type} (sp : Spec S Tok Fact Ob) (H : Hist S)
 
 /-! ## The first-class open object (doc 2 section 9) -/
 
-/-- `(me, P, Ω, σ, Γ, Δ, Q, Φ, t)`: the role whose object it is, the retained TEMPLATE, its open
-interface, the current partial substitution, the hypotheses and tokens, the result contract, the
-obligation bound, and the accepted history. The template is kept apart from `σ`: that is what makes
-re-substitution possible. -/
-structure Open (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Role Tok Fact Ob : Type) (i : Ix) where
-  me : Role
+/-- `(P, Ω, σ, Γ, Δ, Q, Φ, t)`: the retained TEMPLATE, its open interface, the current partial
+substitution, the hypotheses and tokens, the result contract, the obligation bound, and the
+accepted history. The template is kept apart from `σ`: that is what makes re-substitution possible. -/
+structure Open (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Tok Fact Ob : Type) (i : Ix) where
   template : Prot S Hole A i
-  Ω : Ctx S Hole A Role Tok Fact Ob
+  Ω : Ctx S Hole A Tok Fact Ob
   σ : Subst S Hole A
   Γ : List Fact
   Δ : List Tok
@@ -251,15 +255,15 @@ structure Open (S : Sig Ix) (Hole : Ix → Type) (A : Ix → Type) (Role Tok Fac
   hist : Hist S
 
 /-- The object's current protocol `P[σ]`. -/
-def Open.current {Role Tok Fact Ob : Type} [DecidableEq Role] {i : Ix}
-    (O : Open S Hole A Role Tok Fact Ob i) : Prot S Hole A i :=
-  fill O.me O.Ω O.σ O.template
+def Open.current {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i) :
+    Prot S Hole A i :=
+  fill O.Ω O.σ O.template
 
 /-- Replace the object's partial substitution. Data only: the GUARD (no re-substitution of a hole
 the history has entered) is the statement `Open.Replan` in `Lang.Proofs.Contextual.ProtocolTyping`,
 a hypothesis of every theorem about a re-plan (`Open.resubst_wf`). -/
-def Open.replan {Role Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Role Tok Fact Ob i)
-    (σ' : Subst S Hole A) : Open S Hole A Role Tok Fact Ob i :=
+def Open.replan {Tok Fact Ob : Type} {i : Ix} (O : Open S Hole A Tok Fact Ob i)
+    (σ' : Subst S Hole A) : Open S Hole A Tok Fact Ob i :=
   { O with σ := σ' }
 
 /-! ## Admission: current evidence, separate from derivability -/
@@ -314,13 +318,13 @@ def Spec.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') (sp : Spec S Tok Fa
   establishes := sp.establishes
 
 /-- An interface with its tokens renamed. -/
-def Iface.mapTok {Role Tok Tok' Fact Ob : Type} (e : Tok → Tok') {i : Ix}
-    (I : Iface S Hole A Role Tok Fact Ob i) : Iface S Hole A Role Tok' Fact Ob i :=
+def Iface.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') {i : Ix}
+    (I : Iface S Hole A Tok Fact Ob i) : Iface S Hole A Tok' Fact Ob i :=
   { I with need := I.need.map e }
 
 /-- A context with its tokens renamed. -/
-def Ctx.mapTok {Role Tok Tok' Fact Ob : Type} (e : Tok → Tok') (Ω : Ctx S Hole A Role Tok Fact Ob) :
-    Ctx S Hole A Role Tok' Fact Ob := fun i h => (Ω i h).map (Iface.mapTok e)
+def Ctx.mapTok {Tok Tok' Fact Ob : Type} (e : Tok → Tok') (Ω : Ctx S Hole A Tok Fact Ob) :
+    Ctx S Hole A Tok' Fact Ob := fun i h => (Ω i h).map (Iface.mapTok e)
 
 /-- A view as a store of keys. -/
 def View.ofStore {Tok Fact : Type} (w : Fact ⊕ Tok → Bool) : View Tok Fact :=
@@ -426,25 +430,19 @@ def answer (c : Bool) : Subst sig HoleN Res := fun
   | .waiting, h => nomatch h
   | .revealed, () => some (.ret c)
 
-/-- The game's two roles: the player whose plan this is, and its peer. -/
-inductive Party
-  | player
-  | peer
-deriving DecidableEq, Repr
-
-/-- The hole's interface, chosen by `c` (no facts, tokens or obligations in this game). -/
-def iface (c : Party) : Iface sig HoleN Res Party Unit Unit Unit .revealed where
-  chooser := c
+/-- The hole's interface, chosen by `p` (no facts, tokens or obligations in this game). -/
+def iface (p : Chooser) : Iface sig HoleN Res Unit Unit Unit .revealed where
+  chooser := p
   ctx := []
   need := []
   post := fun _ _ => True
   owes := []
   accepts := fun _ => True
 
-/-- `Ω` declaring the answer hole chosen by `c`. -/
-def ctxOf (c : Party) : Ctx sig HoleN Res Party Unit Unit Unit := fun
+/-- `Ω` declaring the answer hole chosen by `p`. -/
+def ctxOf (p : Chooser) : Ctx sig HoleN Res Unit Unit Unit := fun
   | .waiting, h => nomatch h
-  | .revealed, () => some (iface c)
+  | .revealed, () => some (iface p)
 
 end Coin
 
@@ -454,12 +452,6 @@ The scalar matchers and the private Negotiation `World` went with PROT-6, replac
 deployed fuse (`Lang/StdOffer.lean`). -/
 
 namespace Negotiation
-
-/-- The roles: the buyer, whose plan this is, and a provider, who answers `commit`. -/
-inductive Party
-  | buyer
-  | provider
-deriving DecidableEq, Repr
 
 /-- Two candidate providers. -/
 inductive Provider
@@ -548,18 +540,17 @@ def plan (p : Provider) : P .reserved := .call (S := sig) (Op.commit p) fun ok =
 /-- The cancellation path. -/
 def cancelPlan : P .reserved := .call (S := sig) Op.cancel fun _ => .ret false
 
-/-- The hole's interface: chosen by the buyer, accepted by the buyer, may use both providers'
-authority and the deadline, may spend the capability, may owe payment to either provider or the
-refund. -/
-def iface : Iface sig HoleN Res Party Tok Fact Ob .reserved where
-  chooser := .buyer
+/-- The hole's interface: chosen by `.me` (the buyer), accepted by the buyer, may use both providers' authority and the
+deadline, may spend the capability, may owe payment to either provider or the refund. -/
+def iface : Iface sig HoleN Res Tok Fact Ob .reserved where
+  chooser := .me
   ctx := [.auth .p1, .auth .p2, .beforeDeadline]
   need := [.cap]
   post := fun _ _ => True
   owes := [.pay .p1, .pay .p2, .refund]
   accepts := fun _ => True
 
-def Ω : Ctx sig HoleN Res Party Tok Fact Ob := fun
+def Ω : Ctx sig HoleN Res Tok Fact Ob := fun
   | .reserved, () => some iface
   | .idle, h => nomatch h
   | .done, h => nomatch h
@@ -589,8 +580,7 @@ def Δ₀ : List Tok := [.cap]
 def Φ₀ : List Ob := [.holdDeposit, .pay .p1, .pay .p2, .refund]
 
 /-- The open object: the template with `f` chosen for the provider hole, history `H`. -/
-def obj (f : P .reserved) (H : Hist sig) : Open sig HoleN Res Party Tok Fact Ob .idle where
-  me := .buyer
+def obj (f : P .reserved) (H : Hist sig) : Open sig HoleN Res Tok Fact Ob .idle where
   template := template
   Ω := Ω
   σ := choose f
