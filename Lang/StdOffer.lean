@@ -93,12 +93,12 @@ def offerTermsOk : List Label → Term → Term
   | [], _ => .bool true
   | f :: fs, terms => andT (.prim .le (.get (.get terms f) "lo") (.get (.get terms f) "hi")) (offerTermsOk fs terms)
 
-/-- **The joint judge** `λ o q θ`: `refused "sameRole"` when the two chooser roles are equal,
-`refused "notCompliant"` unless θ is inside both boxes, else `ok`. Each `take` evaluates it on its
-own offer, its peer's, and the θ it decoded. -/
-def offerJoint (theta roles : List Label) : Term :=
+/-- **The joint judge** `λ o q θ` over offer values of type `V` (any record with a `role` and a
+`terms` field: `offerValTy`, or the escrow's value with its leg): `refused "sameRole"` when the two
+chooser roles are equal, `refused "notCompliant"` unless θ is inside both boxes, else `ok`. Each
+`take` evaluates it on its own offer, its peer's, and the θ it decoded. -/
+def offerJoint (theta roles : List Label) (V : Ty) : Term :=
   let fs := offerLabels theta
-  let V := offerValTy theta roles
   .lam V (.lam V (.lam (offerThetaTy theta)
     (.ite (eqData (offerRoleTy roles) (.get (.var 2) "role") (.get (.var 1) "role"))
       (refusedT "sameRole")
@@ -183,23 +183,26 @@ def offerFuseBody (budget : Nat) : Term :=
       someCallT offerCallTy (offerTakeCall budget (a "y") (a "viaY") (a "deal"))])
     (.var 2) (.record [])
 
-/-- **The take** (var 0 req, var 1 arg, var 2 state, var 3 rows). Refusals, in order: its own
-offer slot unpinned (`offerUnpinned`) or pinned absent (`noOffer`); the peer's offer slot unpinned
-(`peerRowUnpinned`) or pinned absent (`noPeerOffer`); its own pinned offer is not the one the deal
-names for it (`offerNotNamed`); the judge's `sameRole` / `notCompliant`. -/
-def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
-  let E := editTy rels
-  let fail (why : String) := Term.refuse (resultTy offerStateTy [] E 2) why.toUTF8
+/-- The take's two row edits on `ok`: retract its own pinned offer, insert its session row capturing
+`{pair, theta}` (inside the verdict's `ok` arm: its payload 0, peerVal 1, peerPoint 2, ownVal 3,
+ownPoint 4, req 5, arg 6, state 7, rows 8). Shared by `Std.offer` and its escrow instance. -/
+def offerTakeEdits (theta : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : List Term :=
   let C := activityCaptured [offerSettlePlan theta]
   let R := activityResponses [offerSettlePlan theta]
-  -- inside the verdict's `ok` arm: its payload 0, peerVal 1, peerPoint 2, ownVal 3, ownPoint 4,
-  -- req 5, arg 6, state 7, rows 8 (the judge itself sits one binder out: ownVal 2, peerVal 0, arg 5).
-  let done : Term := activityResult rels (.var 7) [
-    activityEdit rels "offer" od "retract" (.get (.var 4) "key"),
+  [activityEdit rels "offer" od "retract" (.get (.var 4) "key"),
     activityEdit rels "session" sd "insert"
       (activityKeyTerm (.get (.var 5) "agent") (.get (.var 5) "notBefore"))
       (.record [("answered", noCallT R),
         ("captured", .inj C "settle" (.record [("pair", .get (.var 6) "pair"), ("theta", .get (.var 6) "theta")]))])]
+
+/-- **The take's case tree** (var 0 req, var 1 arg, var 2 state, var 3 rows), shared by `Std.offer`
+and its escrow instance: `V` is the offer value type the judge is typed at, `done` the term of the
+verdict's `ok` arm, `R` the result type a refusal is typed at. Refusals, in order: its own offer slot
+unpinned (`offerUnpinned`) or pinned absent (`noOffer`); the peer's offer slot unpinned
+(`peerRowUnpinned`) or pinned absent (`noPeerOffer`); its own pinned offer is not the one the deal
+names for it (`offerNotNamed`); the judge's `sameRole` / `notCompliant`. -/
+def offerTakeTree (theta roles : List Label) (R V : Ty) (done : Term) : Term :=
+  let fail (why : String) := Term.refuse R why.toUTF8
   .case (.get (.get (.var 3) "offer") "p0") [
     ("none", fail "offerUnpinned"),
     ("some", .case (.get (.var 0) "val") [
@@ -210,11 +213,20 @@ def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (o
           ("none", fail "noPeerOffer"),
           -- peerVal 0, peerPoint 1, ownVal 2, ownPoint 3, req 4, arg 5
           ("some", .ite (offerNamedOkT (.var 3) (.var 4) (.var 5))
-            (.case (activityApply (offerJoint theta roles) [.var 2, .var 0, .get (.var 5) "theta"]) [
+            (.case (activityApply (offerJoint theta roles V) [.var 2, .var 0, .get (.var 5) "theta"]) [
               ("ok", done),
               ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
                 (fail "sameRole") (fail "notCompliant"))])
             (fail "offerNotNamed"))])])])]
+
+/-- The take's success: its two edits, no call. -/
+def offerTakeDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
+  activityResult rels (.var 7) (offerTakeEdits theta rels od sd)
+
+/-- **The take**: the shared tree over `Std.offer`'s values. -/
+def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
+  offerTakeTree theta roles (resultTy offerStateTy [] (editTy rels) 2) (offerValTy theta roles)
+    (offerTakeDone theta rels od sd)
 
 def offerPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
   activityResult rels (.var 2) [activityEdit rels "offer" od "insert"

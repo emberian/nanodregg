@@ -77,9 +77,6 @@ def escrowResult (rels : List (Label × RelDecl)) (call state : Term) (edits : L
   resultT (callsT [someCallT escrowCallTy call]) state (.record ((slotLabels "e" edits.length).zip
     (edits.map fun t => someCallT (editTy rels) t)))
 
-/-- What the joint judge reads of an escrow offer: its role and its box (`offerValTy`'s fields). -/
-def escrowJudged (v : Term) : Term := .record [("role", .get v "role"), ("terms", .get v "terms")]
-
 /-- **The post** (var 0 req, var 1 arg, var 2 state): insert the offer; move its leg in. -/
 def escrowPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
   let a (l : Label) := Term.get (.var 1) l
@@ -91,39 +88,24 @@ def escrowPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
     [activityEdit rels "offer" od "insert" (.record [("n", a "n")])
       (.record [("give", a "give"), ("payTo", a "payTo"), ("role", a "role"), ("terms", a "terms")])]
 
-/-- **The take** (var 0 req, var 1 arg, var 2 state, var 3 rows): `Std.offer`'s take with the leg
-paid to the peer. Refusals, in order: `offerUnpinned`, `noOffer`, `peerRowUnpinned`,
-`noPeerOffer`, `offerNotNamed`, `sameRole`, `notCompliant`. -/
+/-- The take's success (inside the verdict's `ok` arm: peerVal 1, ownVal 3, req 5, state 7): pay
+its own leg to the peer's `payTo`; `Std.offer`'s two edits. -/
+def escrowTakeDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
+  escrowResult rels (escrowPay (.get (.var 5) "self") (.get (.var 1) "payTo") (.get (.var 3) "give"))
+    (.var 7) (offerTakeEdits theta rels od sd)
+
+/-- **The take**: `Std.offer`'s tree (`offerTakeTree`: refusals `offerUnpinned`, `noOffer`,
+`peerRowUnpinned`, `noPeerOffer`, `offerNotNamed`, `sameRole`, `notCompliant`), the judge typed at
+the escrow's value (it reads its `role` and `terms`), the leg paid to the peer on `ok`. -/
 def escrowTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
-  let E := editTy rels
-  let fail (why : String) := Term.refuse (resultTy offerStateTy [escrowCallTy] E 2) why.toUTF8
-  let C := activityCaptured [offerSettlePlan theta]
-  let R := activityResponses [offerSettlePlan theta]
-  -- inside the verdict's `ok` arm: its payload 0, peerVal 1, peerPoint 2, ownVal 3, ownPoint 4,
-  -- req 5, arg 6, state 7, rows 8 (the judge sits one binder out: ownVal 2, peerVal 0, arg 5).
-  let done : Term := escrowResult rels (escrowPay (.get (.var 5) "self") (.get (.var 1) "payTo") (.get (.var 3) "give"))
-    (.var 7) [
-    activityEdit rels "offer" od "retract" (.get (.var 4) "key"),
-    activityEdit rels "session" sd "insert"
-      (activityKeyTerm (.get (.var 5) "agent") (.get (.var 5) "notBefore"))
-      (.record [("answered", noCallT R),
-        ("captured", .inj C "settle" (.record [("pair", .get (.var 6) "pair"), ("theta", .get (.var 6) "theta")]))])]
-  .case (.get (.get (.var 3) "offer") "p0") [
-    ("none", fail "offerUnpinned"),
-    ("some", .case (.get (.var 0) "val") [
-      ("none", fail "noOffer"),
-      ("some", .case (.get (.get (.get (.var 5) "peer") "offer") "p0") [
-        ("none", fail "peerRowUnpinned"),
-        ("some", .case (.get (.var 0) "val") [
-          ("none", fail "noPeerOffer"),
-          -- peerVal 0, peerPoint 1, ownVal 2, ownPoint 3, req 4, arg 5
-          ("some", .ite (offerNamedOkT (.var 3) (.var 4) (.var 5))
-            (.case (activityApply (offerJoint theta roles)
-                [escrowJudged (.var 2), escrowJudged (.var 0), .get (.var 5) "theta"]) [
-              ("ok", done),
-              ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
-                (fail "sameRole") (fail "notCompliant"))])
-            (fail "offerNotNamed"))])])])]
+  offerTakeTree theta roles (resultTy offerStateTy [escrowCallTy] (editTy rels) 2) (escrowValTy theta roles)
+    (escrowTakeDone theta rels od sd)
+
+/-- The withdraw's success (inside the inner `some`: ownVal 0, ownPoint 1, req 2, state 4): pay the
+pinned offer's leg back to its `payTo`; retract the offer. -/
+def escrowWithdrawDone (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
+  escrowResult rels (escrowPay (.get (.var 2) "self") (.get (.var 0) "payTo") (.get (.var 0) "give"))
+    (.var 4) [activityEdit rels "offer" od "retract" (.get (.var 1) "key")]
 
 /-- **The withdraw** (var 0 req, var 1 arg, var 2 state, var 3 rows): retract the pinned own offer
 and credit its leg back to its `payTo`. Refusals: `offerUnpinned`, `noOffer`. -/
@@ -134,8 +116,7 @@ def escrowWithdrawBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
     ("none", fail "offerUnpinned"),
     ("some", .case (.get (.var 0) "val") [
       ("none", fail "noOffer"),
-      ("some", escrowResult rels (escrowPay (.get (.var 2) "self") (.get (.var 0) "payTo") (.get (.var 0) "give"))
-        (.var 4) [activityEdit rels "offer" od "retract" (.get (.var 1) "key")])])]
+      ("some", escrowWithdrawDone rels od)])]
 
 /-- The package, emitted directly, with `Std.offer`'s method names and indices. -/
 def offerEscrowPackageOf (theta roles : List Label) (offerLimit sessionLimit budget : Nat) : Package :=

@@ -128,20 +128,25 @@ private theorem callsFuse_means {lib : List Term} {req state : Val} {rows : Data
       (.cons (get_data (ℓ := "y") (x := .digest y) (BigStep.var (i := 1) rfl) rfl) .digest
       (.cons (get_data (ℓ := "viaY") (x := vy) (BigStep.var (i := 1) rfl) rfl) (means_toVal hvy) .nil)))))))
 
-/-- **The matcher forwards one deal to both takes** (`Lang.program`'s `run` of `fuse`): a run that
-returned decoded `{deal, viaX, viaY, x, y}`, makes exactly two calls, `invoke x take deal budget`
+/-- **The matcher forwards one deal to both takes** (`Lang.program`'s `run` of `fuse`, for any closed
+package whose `fuse` method is the generated matcher and resolves to its signature: `Std.offer` and
+its escrow instance): a run that returned decoded `{deal, viaX, viaY, x, y}`, makes exactly two calls, `invoke x take deal budget`
 and `invoke y take deal budget`, carrying the SAME `deal` bytes (each `via` read as the kernel reads
 it), and edits no row. The matcher judges nothing: the honesty is each take's
 (`take_iff_compliant`); the one θ is this theorem's. Mutations: P3 (the second call dropped: the
 calls list has one element) and P4 (a second argument field `dealY` sent to `y`: the second call's
 bytes are not `deal`). -/
 theorem fuse_calls {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat}
+    {P : Package} {fs : List (Label × Term)} {budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
-    (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok P)
+    (hi : P.imports = []) (hh : P.holes = [])
+    (hres : ∀ {x : Label × Sig}, resolveMethod (D := D) P offerFuseIx = .ok x →
+      x = ("fuse", ⟨offerFuseArg, [offerCallTy, offerCallTy], [], 0⟩))
+    (hbody : P.body = .record fs)
+    (hf : Row.find? "fuse" fs = some (activityMethod offerStateTy offerFuseArg (.record []) (offerFuseBody budget)))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerFuseIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ deal x y vx vy x' y' vx' vy',
@@ -150,7 +155,7 @@ theorem fuse_calls {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray 
       digestOf x = some x' ∧ digestOf y = some y' ∧ ViaReads digestOf vx vx' ∧ ViaReads digestOf vy vy' ∧
       calls = [.invoke x' offerTakeIx deal budget vx', .invoke y' offerTakeIx deal budget vy'] ∧ rows = [] := by
   change (runMeasuredLive bytesOf digestOf rc look rv pkg state offerFuseIx args r budget').map _ = _ at h
-  rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
+  rw [runMeasuredLive_leaf_closed hid hp hi hh] at h
   cases hm : runMeasured bytesOf digestOf rc look rv pkg state offerFuseIx args r budget' with
   | error e => rw [hm] at h; cases h
   | ok x =>
@@ -159,11 +164,11 @@ theorem fuse_calls {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray 
   simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl, rfl, rfl⟩ := h
   obtain ⟨S, v, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
-  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, hpg, hres, -, had, -, hwd, rfl⟩ := runSetup_spec hS
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, hpg, hres', -, had, -, hwd, rfl⟩ := runSetup_spec hS
   obtain ⟨hpg', f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
   rw [hpg'] at hpg
   cases hpg
-  have hsig := fuse_resolve hres
+  have hsig := hres hres'
   cases hsig
   simp only at hrun hx hes
   obtain ⟨deal, vx, vy, xb, yb, rfl, hvx, hvy⟩ := fuseArg_cases (decodeData_conforms had)
@@ -171,7 +176,7 @@ theorem fuse_calls {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray 
   have hval : BigStep L.lib [(reqData bytesOf r).toVal, (fuseArgD deal vx vy xb yb).toVal, sd.toVal, wd.toVal]
       (offerFuseBody budget) _ := .record
   cases bigStep_deterministic hbig
-    (apply4_field hlib rfl (by simp [Row.find?]) (noRef_fuse budget) hval)
+    (apply4_field hlib hbody hf (noRef_fuse budget) hval)
   have hM := extract_means _ _ hx
   have hwC := BigStep.get (ℓ := "calls") hbig (.field (find_suspend_of (t := callsFuseT budget) rfl) .record)
   obtain ⟨A, hA, hmA⟩ := means_get hbig hM rfl hwC
@@ -384,7 +389,7 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
   obtain rfl := invokeRun_pkg hirz hz hidK
   rw [hX] at hrunz
   obtain ⟨deal', xb', yb', vx, vy, x'', y'', vx', vy', hdec', hdx, hdy, -, -, rfl, rfl⟩ :=
-    fuse_calls bytesOf digestOf hid hp hrunz
+    fuse_calls bytesOf digestOf (budget := budget) hid hp rfl rfl fuse_resolve rfl (by simp [Row.find?]) hrunz
   rw [hdec] at hdec'
   simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, Data.bytes.injEq,
     Data.digest.injEq, true_and, and_true] at hdec'
