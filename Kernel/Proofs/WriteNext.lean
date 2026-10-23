@@ -328,7 +328,7 @@ private theorem get_erase_ne {j k : Nat} (h : j ≠ k) : ∀ s : Slots, (Slots.e
       · rw [if_neg hj]; by_cases hk : k = k' <;> simp [List.lookup, hk, ih]
 
 omit [Ord D] [DecidableEq D] in
-private theorem get_applyOps_ne {k : Nat} :
+theorem get_applyOps_ne {k : Nat} :
     ∀ (ops : List Op) (s : Slots), (∀ o ∈ ops, o.key ≠ k) → (applyOps s ops).get k = s.get k
   | [], _, _ => rfl
   | o :: rest, s, h => by
@@ -360,7 +360,7 @@ private theorem get_stateFilter (k : Nat) :
           simp [List.lookup, hb]
 
 omit [Ord D] [DecidableEq D] in
-private theorem diffOps_keys {old new : Slots} {o : Op} (h : o ∈ diffOps old new) :
+theorem diffOps_keys {old new : Slots} {o : Op} (h : o ∈ diffOps old new) :
     (∃ p ∈ new, o.key = p.1) ∨ (∃ p ∈ old, o.key = p.1) := by
   simp only [diffOps, List.mem_append, List.mem_map, List.mem_filter] at h
   rcases h with ⟨p, ⟨hp, -⟩, rfl⟩ | ⟨p, ⟨hp, -⟩, rfl⟩

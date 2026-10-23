@@ -89,7 +89,7 @@ def Invoked (X : Ctx D) (w : World D) (c : Call D) (obj : D) : Prop :=
 /-! ## The calls a run returned, one at a time -/
 
 omit [Ord D] [DecidableEq D] in
-private theorem foldCalls_effects {sub : Sub D} {obj : D} :
+theorem foldCalls_effects {sub : Sub D} {obj : D} :
     ∀ (calls : List (Body D)) (acc : Draft D × Walk D) {r : Draft D × Walk D},
       calls.foldlM (callStep sub obj) acc = .ok r → ∃ l, r.1.effects = acc.1.effects ++ l
   | [], acc, r, h => by
@@ -873,7 +873,7 @@ theorem effect_at_grant {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × W
       · exact (notObj cl hko).elim
 
 omit [Ord D] in
-private theorem actFor_none {obj : D} {l : List (D × Act)} (h : ∀ e ∈ l, e.1 ≠ obj) : actFor l obj = .keep := by
+theorem actFor_none {obj : D} {l : List (D × Act)} (h : ∀ e ∈ l, e.1 ≠ obj) : actFor l obj = .keep := by
   unfold actFor
   rw [List.find?_eq_none.mpr (fun e he => by simpa using h e he)]
 
