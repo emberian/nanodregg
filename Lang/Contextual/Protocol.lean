@@ -15,7 +15,11 @@ foresight (`response_indexed_names_have_foresight`; `foresight_iff_names_separat
 condition). Scope (one filling into every branch unchanged) is a naming discipline the author
 keeps; the calculus does not enforce it. Its resources are tokens a `call` of a consuming operation
 spends. The discipline is AFFINE: a token is spent at most once, and a token left unspent at `ret`
-is allowed. Its executed prefix is a history (`Hist`), possibly ending in a call
+is allowed. There is one kind on purpose (PROT-8, LANG-75.18): LINEAR value is the kernel's, which
+conserves every denomination over an admitted turn (`Kernel.Proofs.Value.admit_value`), and the
+deployed offer that moves value (`Lang.StdOfferEscrow`) moves its leg in the same tree as every
+retract of its row. A linear `Val` kind here would be a second count of the same value, with no
+deployed reader. Its executed prefix is a history (`Hist`), possibly ending in a call
 whose reply was lost (`inflight`), and a re-substitution must leave every hole the history has
 already entered alone (`Dispatched`). The deployed lost reply is the resident's `AskEnd.lost` and
 the kernel's journal-first retry; what each does with it is `Lang.Proofs.Contextual.Failures`

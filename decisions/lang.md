@@ -6484,3 +6484,36 @@ Under PL5a/PL5e/PL5d, `Failures` sits in the unbuilt cone below the upstream red
 **Critique.** Proving the inversion would have taken about 60 lines and would have had a falsifying mutation (a hole rule that checks a wrong `Δ`). It still would have been a theorem with no consumer. In the fuse, the role of the quotient is played by `offerJoint_meaning`: θ inside both boxes is exactly the intersection. That is the deployed "weakest joint interface", over boxes rather than protocols.
 
 **Meta-critique.** The BIAS was completion pressure: a card numbered in a sequence reads as owed. The card's own consumer clause was the test, and it failed on a two-minute grep.
+
+### LANG-75.18 PROT-8 · linear value is the kernel's: the escrow instance of `Std.offer` holds its leg and moves it with every retract of its row; the calculus keeps one affine kind (2026-10-23; CX-PROMO-8; method R-0069)
+
+**Decision.** PROT-8 asked for two things: split the calculus's `Tok` into `Cap` (affine) and `Val` (linear: `ret` only with Δ_val empty, or the leftover credited back), stating the linear half "by READING `admit_value`, never by a second count", and build the escrow that PROT-6 deferred (LANG-75.11: an offer that moves value needs linear value). The two halves pull against each other. A `Val` bag in `HasProt` IS a second count of value, and it would have no reader: PROT-7 measured that nothing outside `Lang/Contextual` and `Lang/Proofs/Contextual` imports the calculus, and the escrow is a Lang package, not a `Prot`. So the escrow is built, and linearity is stated where value lives. The calculus keeps ONE affine kind, and its header now says why (`Lang/Contextual/Protocol.lean`). `hasProt_reach` and `at_most_once` are NOT restated. This departs from the card text, and the reason is the card's own clause.
+
+`Lang/StdOfferEscrow.lean`, `Std.offerEscrowPackage theta roles`: `Std.offer` with a value leg. Same method names and indices (`fuse post take withdraw`), the same fuse (the matcher forwards one deal), the same judge (`offerJoint` on each offer's `{role, terms}`), the same guard (`offer_guard`: a retract only from `take` or `withdraw`), the same session log. An offer row's value adds `give {amount, asset}` and `payTo`.
+- `post` inserts the row and, in the same tree, moves the leg from the poster's account into the object's (`transfer (of agent asset) (of self asset) amount (via := some grant)`, the poster's KERNEL-60 grant): the row stands exactly when the leg moved in.
+- `take`, on `ok`, retracts its own offer, logs its session, and pays its leg to the PEER's `payTo`. Both takes are in the matcher's one tree, so both legs move or neither.
+- `withdraw {}` reads its own pinned offer, retracts it, and credits its leg back to its own `payTo` (refusals `offerUnpinned`, `noOffer`).
+
+A standing offer's leg leaves the object only with its row, and only to the peer or back to `payTo`. The kernel makes what leaves one account arrive in another (`admit_value`).
+
+**Rows** (`Lang/Journey/OfferEscrow.lean`, §LE, through `Receive.submit` with `Lang.program`, balances read from the value cells):
+- LE0: setup. α and β minted, X holds its 5 α leg and Y its 8 β (two offers).
+- LE1: the fuse at price 9. Both rows go; X 5→0 α, B 0→5 α, Y 8→1 β, A 0→7 β; α in accounts 20 before and after.
+- LE2: not compliant. Refused `notCompliant`, nothing moved.
+- LE3: withdraw. The row goes, X 5→0, A 15→20.
+- LE4: withdraw with no row pinned. Refused `offerUnpinned`.
+- LE5: a post whose leg exceeds the poster's grant. Refused `transferSpent`, no row, nothing moved.
+
+**Plants** (hbox `logs/promo/p8/plants/`, each reverted byte-identical):
+- P8d: the take pays nothing (call slot `none`). LE1 RED: both rows gone, X still holds 5 α, B 0. The value is stranded, which is the linear tooth.
+- P8e: the withdraw pays nothing. LE3 RED: the row is gone and X keeps 5.
+- P8f: the post deposits nothing. LE0 RED. Then LE1 and LE3 are REJECTED `belowFloor`: the kernel will not pay a leg the object does not hold.
+- P8a/P8b: the take and the withdraw pay the object ITSELF. LE1 and LE3 RED, refused by the kernel's `sameAccount` before any Lang code could strand value that way (lesson 14: the layer before).
+
+**Price.** New: `Lang/StdOfferEscrow.lean` (generator), `Lang/Journey/OfferEscrow.lean` (6 rows, `Lang/Journey/Main.lean` runs them). No landed declaration changes (decls: 0 map lines). No byte moves (`lang:`). The rest of the journey is byte-identical (811 → 817 lines: the 6 LE rows).
+
+**Not in this landing, said out loud.** The run-grain theorems over the escrow's methods (`escrow_take_run_sound`: a returned take's one call is its own leg to the peer's `payTo`, and its edits are its own retract and session insert; `escrow_withdraw_run_sound`, the same for the refund), and the linear corollary over `offer_guard` (every retract of an escrow row is in a run that pays that row's leg). Today their evidence is the rows and plants above. They follow as their own landing.
+
+**Critique.** The escrow duplicates `Std.offer`'s take body (35 lines) instead of parametrising one generator by a leg. A parameter would have restated every PROT-6 theorem (each mentions `offerPackageOf theta roles ol sl b`) to buy one shape. Two shapes that agree today can drift later. If the PROT-6 offer without value finds no user, it should be deleted in favour of this one. The legs are fixed per offer and do not depend on θ (a real DvP would pay `θ.price`). That is a limit of the instance, not of the shape.
+
+**Meta-critique.** The BIAS was reading the card's two clauses as one plan. "Split `Tok`" and "never by a second count" contradict each other once the calculus is measured to have no reader. Following the first would have repeated LANG-75.10's mistake (an index generalised ahead of its theorem).
