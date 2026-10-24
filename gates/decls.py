@@ -10,35 +10,48 @@
 THE EXPORT. `#decl_export` (LEAN below: the JUDGE's Lean, interpreted, written after the imports into
 .lake/gates/DeclRun.lean exactly as census.py writes CensusRun) writes one row per constant of a named module that
 HAS A DECLARATION RANGE: the elaborator's own record that the source declared it (`.eq_1`, `match_`, `_proof_`,
-`_simp_` have none). Columns: name, its user name when private (else -), its owner (a constructor's or recursor's
-inductive, a projection's structure; else -), module, kind, first and last source line, the statement's
-serialization and the constants it names, the value's (a non-theorem's; a proof is irrelevant: -), and a theorem's
-statement as text (for the diff a refusal prints). Module docs are rows of kind `doc`. The serialization is the term's post-order DAG hash-consed on the emitted token (sharing is
-canonical, binder NAMES are erased, binder INFO kept, metadata transparent) with constants abstracted to indices
-into a first-visit list; the digest is SHA-256 over it, taken here. No hash is equality inside Lean.
+`_simp_` have none), and one row (`a`) per rangeless non-theorem constant a declared definition's value reaches under
+that definition's name (its `match_`, `_unary`: they are part of the definition; `splitter`, `sizeOf` and the like,
+which no value reads, are not exported). Columns: name, its user name when private (else -), its owner (a
+constructor's or recursor's inductive, a projection's structure; else -), module, kind, first and last source line,
+the statement's serialization and the constants it names, the value's (a non-theorem's; a proof is irrelevant: -), a
+theorem's statement as text (for the diff a refusal prints), `r`/`a`. Module docs are rows of
+kind `doc`. The serialization is the term's post-order DAG hash-consed on the emitted token (sharing is canonical,
+binder NAMES are erased, binder INFO kept, metadata transparent, a string literal hex) with constants abstracted to
+indices into a first-visit list. Digests are SHA-256 over it, taken here. No hash is equality inside Lean.
 
-THE CACHE. A digest file per (tree, exporter): `DIR/<tree>-<exporter>.tsv.gz`, rows `name priv owner module kind l0
-l1 statement value text` (digests under the identity map; text = a theorem's statement as the kernel prints it). A landing exports only its REACH (the changed modules and their
-importers, in either tree, plus the importers of a deleted module): a module outside both reaches has the same
-source and the same imports in both trees, so the same declarations. The candidate's digest is the parent's rows
-outside the reach plus the candidate's export of it, cached under the candidate's tree, which is main's tree once
-it lands. A miss (exit 4) is bootstrapped by scripts/pre-push: the parent built in the slot and exported whole.
+THE CACHE. A tree's export, raw, per (tree, exporter): `DIR/<tree>-<exporter>.tsv.gz` (about 7.5 MB; the newest 32
+kept): the body digest reads a definition's parts by name. A landing exports only its REACH (the changed modules and
+their importers, in either tree, plus the importers of a deleted module): a module outside both reaches has the same
+source and the same imports in both trees, so the same declarations. The candidate's export is the parent's rows
+outside the reach plus its own export of it, cached under the candidate's tree, which is main's tree once it lands. A
+miss (exit 4) is bootstrapped by scripts/pre-push: the parent built in the slot and exported whole.
 
-CHECK 1, THE DIFF (R-0034's conditions). Every declaration of the parent absent from the candidate, and every
-theorem (or axiom) of the parent whose elaborated statement differs, is named by a line of the landing's message:
-  RENAMES: OLD → NEW             NEW is OLD renamed: its statement must equal OLD's under the map (checked)
+CHECK 1, THE DIFF (R-0034's conditions). Every declaration of the parent absent from the candidate, every theorem (or
+axiom) of the parent whose elaborated statement differs, and every DEFINITION whose body differs while a theorem
+statement of the reach names it (GATES-20v′), is named by a line of the landing's message:
+  RENAMES: OLD → NEW             NEW is OLD renamed: its statement (a definition: and body) must equal OLD's under the
+                                 map (checked)
   RESTATES: OLD → NEW            the same check (`restate not equal`); OLD may be NEW (then it must have changed
                                  nothing but its proof, and the line is unused)
-  RESTATES-MEANING: OLD [→ NEW]  a deliberate change of meaning: the statement may differ (and must)
+  RESTATES-MEANING: OLD [→ NEW]  a deliberate change of meaning: the statement (a definition: the body) may differ
+                                 (and must)
   DELETES: NAME                  NAME removed
   DELETES-MODULE: MODULE         MODULE removed, with every declaration in it (one line; no free pass)
-A theorem whose statement differs without a RESTATES-MEANING line is `undeclared restatement`, printed with the
-diff of the two statements (the kernel printer's text; the digest, never the text, decides). A line covers the
-declarations its declaration OWNS (constructors, recursor, projections, `casesOn`/`noConfusion`, `where` helpers,
-a `native_decide` axiom). A two-name line renames OLD inside every candidate statement (inverted: NEW → OLD, by the
-longest component-wise prefix, so generated children follow their owner) before the compare, so the cached parent
-digest never depends on a map. A private declaration whose user name is unique among the private declarations of
-both trees is matched by that name across a module move. A line that applies to nothing is `unused map line`.
+A theorem whose statement differs without a line is `undeclared restatement`, printed with the diff of the two
+statements (the kernel printer's text; the digest, never the text, decides). A definition whose body moved under a
+statement that names it is `undeclared redefinition: D … the statements of T… name it`: `MovesThrough := … ∧ False`
+changed no statement and moved every theorem over it (GATES-20u's P3). A definition's BODY is its statement and value
+with its parts: the rangeless constants its value reaches under its name (`match_`, `_unary`) and its `where`
+helpers, so a matcher's patterns are part of it; a hygienic name is read without its macro scope. One line per edited
+definition, not per theorem. A declared change of meaning is accepted on its line: whether a restated statement still
+says what it said is the spec layer's (the pins of the top-level statements), not this diff's (GATES-20v′).
+A line covers the declarations its declaration OWNS (constructors, recursor, projections, `casesOn`/`noConfusion`,
+`where` helpers, a `native_decide` axiom). A two-name line renames OLD inside every candidate statement (inverted:
+NEW → OLD, by the longest component-wise prefix, so generated children follow their owner) before the compare, so the
+cached parent digest never depends on a map; a renamed definition's body is still compared. A private declaration
+whose user name is unique among the private declarations of both trees is matched by that name across a module
+move. A line that applies to nothing is `unused map line`.
 
 CHECK 2, THE STALE COPY. gates/rebase.py `stale` still detects, by text, that a `.lean` copy lacks a window commit
 C's change (GATES-20b/20b′); it no longer refuses it but writes the lack (--lean-lacks: path, C, side, the lines in
@@ -47,7 +60,8 @@ declarations whose recorded ranges hold them (main's environment for an added bl
 one). An added block is explained when each declaration holding it is in the candidate as main has it (theorem:
 the same statement, the proof free; anything else: the same type and value) or is named by the map; a removed
 block when each declaration holding it is in the parent as the candidate has it, or is named. A non-blank line in
-no declaration and no module doc keeps the text verdict (`stale path`, `--reverts C`).
+no declaration and no module doc keeps the text verdict (`stale path`, `--reverts C`). "As main has it" compares
+meanings (theorems) and bodies (everything else), so a reverted matcher is a stale declaration too.
 """
 from __future__ import annotations
 
@@ -63,7 +77,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tree  # noqa: E402
 
 LEAN = r'''
-open Lean Elab Command
+open Lean Elab Command Meta
 
 namespace GatesDecls
 
@@ -101,7 +115,11 @@ def lvl : Level → String
 def bi : BinderInfo → String
   | .default => "d" | .implicit => "i" | .strictImplicit => "s" | .instImplicit => "c"
 
-partial def go (e : Expr) : M Nat := do
+def hex (s : String) : String :=
+  s.toUTF8.foldl (fun acc b => acc ++ String.ofList (Nat.toDigits 16 (b.toNat / 16)) ++ String.ofList (Nat.toDigits 16 (b.toNat % 16))) ""
+
+/-- The post-order DAG of `e`, hash-consed on the emitted token. Structural on `Expr` (CHARTER law 4: no `partial`). -/
+def go (e : Expr) : M Nat := do
   if let .mdata _ b := e then return ← go b
   if let some i := (← get).memo[K.mk e]? then return i
   let tok ← match e with
@@ -111,11 +129,11 @@ partial def go (e : Expr) : M Nat := do
     | .app f a => do let x ← go f; let y ← go a; pure s!"A{x},{y}"
     | .lam _ t b i => do let x ← go t; let y ← go b; pure s!"L{bi i}{x},{y}"
     | .forallE _ t b i => do let x ← go t; let y ← go b; pure s!"P{bi i}{x},{y}"
-    | .letE _ t v b nd => do let x ← go t; let y ← go v; let z ← go b; pure s!"Z{nd}{x},{y},{z}"
+    | .letE _ t v b nd => do let x ← go t; let y ← go v; let z ← go b; pure s!"Z{if nd then 1 else 0}{x},{y},{z}"
     | .lit (.natVal n) => pure s!"N{n}"
-    | .lit (.strVal s) => pure ("T" ++ s.quote)
+    | .lit (.strVal s) => pure ("T" ++ hex s)
     | .proj n i v => do let k ← cidx n; let x ← go v; pure s!"J{k},{i},{x}"
-    | .mdata _ b => do let x ← go b; pure s!"{x}"
+    | .mdata _ b => go b >>= fun x => pure s!"{x}"
     | .fvar _ => pure "?f"
     | .mvar _ => pure "?m"
   let s ← get
@@ -136,6 +154,10 @@ def kind : ConstantInfo → String
 
 syntax (name := declExport) "#decl_export " str str : command
 
+/-- One row per constant of a named module: those the source declared (a declaration range), and the rangeless
+non-theorem constants generated beside them (`match_`, `_unary`, …: column 13 `a`), whose bodies are part of the
+definition that uses them. Columns: name, priv, owner, module, kind, l0, l1, statement (ser, names), value (ser,
+names), text, `r`/`a`. -/
 @[command_elab declExport]
 def elabDeclExport : CommandElab
   | `(#decl_export $path:str $mods:str) => do
@@ -144,11 +166,38 @@ def elabDeclExport : CommandElab
     let env ← getEnv
     let h ← IO.FS.Handle.mk path.getString .write
     let mut n := 0
+    -- the declared constants, and the rangeless non-theorem ones generated beside them (`match_`, `_unary`, …)
+    let mut declared : Array (Name × ConstantInfo × Name × Nat × Nat) := #[]
+    let mut rangeless : NameMap (ConstantInfo × Name) := {}
     for (c, ci) in env.constants.map₁.toList do
       let some idx := env.getModuleIdxFor? c | continue
       let mod := env.header.moduleNames[idx.toNat]!
       unless wanted.contains mod do continue
-      let some r ← findDeclarationRanges? c | continue
+      match ← findDeclarationRanges? c with
+      | some r => declared := declared.push (c, ci, mod, r.range.pos.line, r.range.endPos.line)
+      | none => unless ci matches .thmInfo _ do rangeless := rangeless.insert c (ci, mod)
+    -- a generated constant is a row (`a`) when a declared definition's value reaches it under that definition's name:
+    -- it is part of that definition (its matcher, its well-founded unfolding); the rest (`splitter`, `sizeOf`,
+    -- `noConfusionType`, …) no definition's value reads
+    let mut parts : Array (Name × ConstantInfo × Name) := #[]
+    let mut seen : NameSet := {}
+    for (c, ci, _, _, _) in declared do
+      if ci matches .thmInfo _ then continue
+      let some v := ci.value? (allowOpaque := true) | continue
+      let mut todo := v.getUsedConstants.toList
+      let mut fuel := rangeless.size + 1
+      while fuel > 0 do
+        fuel := fuel - 1
+        match todo with
+        | [] => fuel := 0
+        | x :: rest =>
+          todo := rest
+          if seen.contains x || !c.isPrefixOf x then continue
+          let some (xi, xm) := rangeless.find? x | continue
+          seen := seen.insert x
+          parts := parts.push (x, xi, xm)
+          if let some xv := xi.value? (allowOpaque := true) then todo := todo ++ xv.getUsedConstants.toList
+    let row := fun (c : Name) (ci : ConstantInfo) (mod : Name) (l0 l1 : Nat) (ranged : Bool) =>
       let priv := (privateToUserName? c).map toString |>.getD "-"
       let owner : String := match ci with
         | .ctorInfo i => toString i.induct
@@ -167,13 +216,18 @@ def elabDeclExport : CommandElab
       let pp := match ci with
         | .thmInfo _ | .axiomInfo _ => (toString ci.type).quote
         | _ => "-"
-      h.putStrLn s!"{c}\t{priv}\t{owner}\t{mod}\t{kind ci}\t{r.range.pos.line}\t{r.range.endPos.line}\t{ts}\t{tc}\t{vs}\t{vc}\t{pp}"
+      s!"{c}\t{priv}\t{owner}\t{mod}\t{kind ci}\t{l0}\t{l1}\t{ts}\t{tc}\t{vs}\t{vc}\t{pp}\t{if ranged then "r" else "a"}"
+    for (c, ci, mod, l0, l1) in declared do
+      h.putStrLn (row c ci mod l0 l1 true)
+      n := n + 1
+    for (c, ci, mod) in parts do
+      h.putStrLn (row c ci mod 0 0 false)
       n := n + 1
     for mod in env.header.moduleNames do
       unless wanted.contains mod do continue
       for d in (getModuleDoc? env mod).getD #[] do
         let r := d.declarationRange
-        h.putStrLn s!"-\t-\t-\t{mod}\tdoc\t{r.pos.line}\t{r.endPos.line}\t{d.doc.quote}\t-\t-\t-\t-"
+        h.putStrLn s!"-\t-\t-\t{mod}\tdoc\t{r.pos.line}\t{r.endPos.line}\t{d.doc.quote}\t-\t-\t-\t-\tr"
         n := n + 1
     h.flush
     logInfo m!"DECL-EXPORT ok: {n} rows"
@@ -182,41 +236,135 @@ def elabDeclExport : CommandElab
 end GatesDecls
 '''
 
-EXPORTER = hashlib.sha256((LEAN + "v2").encode()).hexdigest()[:12]
-KEEP = 64            # cache entries kept (the newest); each is one tree's digest
+EXPORTER = hashlib.sha256((LEAN + "v4").encode()).hexdigest()[:12]
+KEEP = 32            # cache entries kept (the newest); each is one tree's export, about 8 MB gzipped
 STATEMENT_KINDS = {"theorem", "axiom"}
-FIELDS = 12
+FIELDS = 13
 
 
 def sha(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
+def names_of(s: str) -> list[str]:
+    return s.split(" ") if s and s != "-" else []
+
+
+HYGIENE = re.compile(r"\._@\.\S*?\._hyg\.[0-9]+")
+
+
+def canon(x: str) -> str:
+    """A constant's name as a digest reads it: a hygienic name without its macro scope (`…match_on_same_ctor._@.
+    Kernel.World.4041475992._hygCtx._hyg.203`, which a derived `decEq` names, renumbers when unrelated text before it
+    moves)."""
+    return HYGIENE.sub("._@", x) if "._@." in x else x
+
+
+class Table:
+    """One tree's declarations, as exported: the raw rows by name (the declared ones and the rangeless generated
+    definitions beside them, `a`), and the digests a judge compares, under RENAME (a function on constant names)
+    applied before hashing.
+
+      stmt(n)     the statement: its serialization and the constants it names
+      body(n)     what a statement naming n reads of it: a definition's statement and value with its parts (the
+                  generated `match_`, `_unary`, … and its `where` helpers, which are the definition); an inductive's
+                  statement and its constructors'; an opaque's, a constructor's, a recursor's, an axiom's
+                  statement. A theorem has none (its proof is irrelevant)."""
+    def __init__(self, raws, rename=None):
+        self.rows: dict[str, list[str]] = {}
+        self.docs: list[list[str]] = []
+        r = rename or (lambda x: x)
+        self.r = lambda x: canon(r(x))
+        self.ctors: dict[str, list[str]] = {}
+        for f in raws:
+            if f[4] == "doc":
+                self.docs.append(f)
+                continue
+            self.rows[f[0]] = f
+            if f[4] == "constructor" and f[2] != "-":
+                self.ctors.setdefault(f[2], []).append(f[0])
+        self._body: dict[str, str] = {}
+        self._stmt: dict[str, str] = {}
+
+    def cs(self, s: str) -> str:
+        return " ".join(self.r(x) for x in names_of(s))
+
+    def stmt(self, n: str) -> str:
+        if n not in self._stmt:
+            f = self.rows[n]
+            self._stmt[n] = sha(f[7], self.cs(f[8]))
+        return self._stmt[n]
+
+    def value(self, n: str) -> str:
+        f = self.rows[n]
+        return "-" if f[9] == "-" else sha(f[9], self.cs(f[10]))
+
+    def parts(self, n: str) -> list[str]:
+        """What is part of definition N: the constants its value reaches under its name, generated beside it (no
+        range: `match_`, `_unary`) or declared inside its range (a `where` helper), as `adopt` reads ownership."""
+        f = self.rows[n]
+        out, todo, seen = [], names_of(f[10]), set()
+        while todo:
+            x = todo.pop()
+            if x in seen or not x.startswith(n + "."):
+                continue
+            seen.add(x)
+            g = self.rows.get(x)
+            if g is None or g[4] == "theorem":
+                continue
+            if g[12] == "a" or (g[3] == f[3] and int(f[5]) <= int(g[5]) and int(g[6]) <= int(f[6])):
+                out.append(x)
+                todo += names_of(g[10])
+        return sorted(out, key=self.r)
+
+    def body(self, n: str) -> str | None:
+        """None for a theorem and for a constant this tree does not export (the toolchain's)."""
+        f = self.rows.get(n)
+        if f is None or f[4] == "theorem":
+            return None
+        if n in self._body:
+            return self._body[n]
+        k = f[4]
+        if k == "definition":
+            out = sha("D", self.stmt(n), self.value(n),
+                      *(f"{self.r(x)}={self.stmt(x)}={self.value(x)}" for x in self.parts(n)))
+        elif k == "inductive":
+            ks = sorted(self.ctors.get(n, []), key=self.r)
+            out = sha("I", self.stmt(n), *(f"{self.r(x)}={self.stmt(x)}" for x in ks))
+        else:                                # opaque (uninterpreted in proofs), constructor, recursor, axiom, quotient
+            out = sha(k, self.stmt(n))
+        self._body[n] = out
+        return out
+
+
+
 class Row:
     __slots__ = ("name", "priv", "owner", "module", "kind", "l0", "l1", "stmt", "value", "text", "raw")
 
-    def __init__(self, name, priv, owner, module, kind, l0, l1, stmt, value, text="-", raw=None):
-        self.name, self.priv, self.owner, self.module, self.kind = name, priv, owner, module, kind
-        self.l0, self.l1, self.stmt, self.value, self.text, self.raw = int(l0), int(l1), stmt, value, text, raw
+    def __init__(self, f: list[str], t: Table | None):
+        self.name, self.priv, self.owner, self.module, self.kind = f[0], f[1], f[2], f[3], f[4]
+        self.l0, self.l1, self.text, self.raw = int(f[5]), int(f[6]), f[11], f
+        if self.kind == "doc":
+            self.stmt = self.value = sha("doc", f[7])
+        else:
+            self.stmt = t.stmt(self.name)
+            self.value = t.body(self.name) or "-"
 
     def key(self) -> str:
         return f"doc:{self.module}:{self.stmt}" if self.kind == "doc" else self.name
 
-    def line(self) -> str:
-        return "\t".join([self.name, self.priv, self.owner, self.module, self.kind, str(self.l0), str(self.l1),
-                          self.stmt, self.value, self.text]) + "\n"
 
-
-def digest_row(f: list[str], rename=None) -> Row:
-    """A raw export row → its digests; RENAME (a function on constant names) applied before hashing."""
-    name, priv, owner, module, kind, l0, l1, ts, tc, vs, vc, text = f
-    if kind == "doc":
-        return Row(name, priv, owner, module, kind, l0, l1, sha("doc", ts), "-", "-", f)
+def rows_of(t: Table, raws, rename=None) -> dict[str, Row]:
+    """The DECLARED rows of RAWS (a rangeless generated definition is part of its user, never a row of its own), keyed
+    by name under RENAME (docs by their text)."""
     r = rename or (lambda x: x)
-    cs = lambda s: " ".join(r(x) for x in s.split(" ")) if s else ""
-    stmt = sha(ts, cs(tc))
-    value = "-" if vs == "-" else sha(vs, cs(vc))
-    return Row(name, priv, owner, module, kind, l0, l1, stmt, value, text, f)
+    out = {}
+    for f in raws:
+        if f[4] != "doc" and f[12] != "r":
+            continue
+        row = Row(f, t)
+        out[r(row.name) if row.kind != "doc" else row.key()] = row
+    return out
 
 
 def run_export(root: str, modules: list[str]) -> list[list[str]]:
@@ -257,25 +405,22 @@ def cache_path(cache: str, oid: str) -> str:
     return os.path.join(cache, f"{oid}-{EXPORTER}.tsv.gz")
 
 
-def load_cache(cache: str, oid: str) -> dict[str, Row] | None:
+def load_cache(cache: str, oid: str) -> list[list[str]] | None:
+    """OID's export, raw (every row the judge's Lean wrote, so a parent's statement can be read back)."""
     p = cache_path(cache, oid)
     if not os.path.exists(p):
         return None
-    out = {}
     with gzip.open(p, "rt", encoding="utf-8") as fh:
-        for line in fh:
-            r = Row(*line.rstrip("\n").split("\t"))
-            out[r.key()] = r
-    return out
+        return [line.rstrip("\n").split("\t") for line in fh]
 
 
-def save_cache(cache: str, oid: str, rows: dict[str, Row]) -> None:
+def save_cache(cache: str, oid: str, raws: list[list[str]]) -> None:
     os.makedirs(cache, exist_ok=True)
     p = cache_path(cache, oid)
     tmp = f"{p}.{os.getpid()}.tmp"
     with gzip.open(tmp, "wt", encoding="utf-8") as fh:
-        for k in sorted(rows):
-            fh.write(rows[k].line())
+        for f in sorted(raws):
+            fh.write("\t".join(f) + "\n")
     os.replace(tmp, p)
     # This judge's own files only: the newest KEEP entries stay.
     entries = sorted((os.path.join(cache, x) for x in os.listdir(cache) if x.endswith(".tsv.gz")),
@@ -362,7 +507,9 @@ def text_diff(old: str, new: str, width: int = 6, cap: int = 8) -> list[str]:
 
 # ---------------------------------------------------------------- the judge
 
-def judge(a) -> int:
+def judge(a, lean=None) -> int:
+    """LEAN (the plants' stand-in for `run_export`) defaults to the judge's own Lean."""
+    lean = lean or run_export
     cand_t, base_t = tree.read(a.root), tree.read(a.base_root)
     changed = [l.strip() for l in open(a.changed, encoding="utf-8") if l.strip()]
     lean_mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean") and p != "lakefile.lean"}
@@ -371,48 +518,47 @@ def judge(a) -> int:
     rb_ = reach(base_t, lean_mods) if not build_inputs else set(base_t.modules)
     exe_roots = set(cand_t.exes.values()) | set(base_t.exes.values())
     rc, rb = rc_ - exe_roots, rb_ - exe_roots
-    base = load_cache(a.cache, a.base)
+    base_raw = load_cache(a.cache, a.base)
     if not rc and not rb:
-        if base is not None:
-            save_cache(a.cache, a.cand, base)
+        if base_raw is not None:
+            save_cache(a.cache, a.cand, base_raw)
         print("decls: ok (no module changed)")
         return 0
-    if base is None:
+    if base_raw is None:
         print(f"decls: the parent's declarations ({a.base[:12]}, exporter {EXPORTER}) are not cached")
         return 4
     entries = read_map(open(a.message, encoding="utf-8").read())
     # RENAMES / RESTATES / RESTATES-MEANING with two names rename OLD inside every statement (inverted on the
-    # candidate side, so the cached parent digest is used as it is).
+    # candidate side, so the parent's digests are taken as they are).
     pairs = {new: old for verb, old, new, _ in entries
              if verb in ("RESTATES", "RENAMES", "RESTATES-MEANING") and new != old}
+    base = Table(base_raw)
+    in_reach = lambda f: f[3] in rb or f[3] in rc
+    raw = lean(a.root, sorted(rc)) if rc else []
 
-    raw = run_export(a.root, sorted(rc)) if rc else []
     bpriv, cpriv = {}, {}
-    for r in base.values():
-        if r.priv != "-" and r.kind != "doc":
-            bpriv.setdefault(r.priv, []).append(r.name)
+    for f in base_raw:
+        if f[1] != "-" and f[4] != "doc" and f[12] == "r":
+            bpriv.setdefault(f[1], []).append(f[0])
     for f in raw:
-        if f[1] != "-":
+        if f[1] != "-" and f[12] == "r":
             cpriv.setdefault(f[1], []).append(f[0])
     for u, cs in cpriv.items():       # a private declaration moved with its module: matched by its user name
         bs = bpriv.get(u, [])
-        if len(cs) == 1 and len(bs) == 1 and cs[0] != bs[0] and cs[0] not in base:
+        if len(cs) == 1 and len(bs) == 1 and cs[0] != bs[0] and cs[0] not in base.rows:
             pairs.setdefault(cs[0], bs[0])
     inv = prefix_map(pairs)
-    plain = [digest_row(f) for f in raw]
-    cand_names = {r.name for r in plain if r.kind != "doc"}
-    C = {(inv(r.name) if r.kind != "doc" else r.key()): digest_row(r.raw, inv) for r in plain}
 
-    in_reach = lambda r: r.module in rb or r.module in rc
-    whole = {k: r for k, r in base.items() if not in_reach(r)}
-    for r in plain:
-        whole[r.key()] = r
+    whole = [f for f in base_raw if not in_reach(f)] + raw
     save_cache(a.cache, a.cand, whole)
-
-    P = {k: r for k, r in base.items() if in_reach(r)}
+    cand = Table(whole, inv)
+    plain = rows_of(Table(whole), raw)
+    cand_names = {r.name for r in plain.values() if r.kind != "doc"}
+    C = rows_of(cand, raw, inv)
+    P = rows_of(base, [f for f in base_raw if in_reach(f)])
     deleted_mods = {m for m in base_t.modules if m not in cand_t.modules}
     adopt(P.values())
-    adopt(plain)
+    adopt(plain.values())
     owned = {}
     for r in P.values():
         if r.owner != "-":
@@ -444,6 +590,13 @@ def judge(a) -> int:
         if c is None or p.kind not in STATEMENT_KINDS:
             return []
         return text_diff(p.text, c.text)
+
+    # the theorems of the parent's reach whose statements name each definition (GATES-20v′: what a body edit moves)
+    named_by: dict[str, list[str]] = {}
+    for r in P.values():
+        if r.kind in STATEMENT_KINDS:
+            for x in names_of(base.rows[r.name][8]):
+                named_by.setdefault(x, []).append(r.name)
 
     red, add = [], []
     named: dict[str, str] = {}             # parent declaration → the map line that names it
@@ -480,7 +633,8 @@ def judge(a) -> int:
                     continue
                 if not same(p, c):
                     what = "rename" if verb == "RENAMES" else "restate"
-                    red.append(f"  decls: {what} not equal: {line}: {new}'s elaborated statement under the map is "
+                    red.append(f"  decls: {what} not equal: {line}: {new}'s elaborated "
+                               f"{'statement' if p.kind in STATEMENT_KINDS else 'statement and body'} under the map is "
                                f"not {old}'s; a deliberate change of meaning is written RESTATES-MEANING: "
                                f"{old}{'' if old == new else ' → ' + new}")
                     red += diff_of(p, c)
@@ -489,13 +643,14 @@ def judge(a) -> int:
                     red.append(f"  decls: unused map line: {line} ({old} is unchanged); drop the line")
                     continue
             elif same(p, c):      # RESTATES-MEANING
-                red.append(f"  decls: unused map line: {line} ({new}'s statement is {old}'s under the map: "
-                           f"{'drop the line' if old == new else 'write RENAMES'})")
+                red.append(f"  decls: unused map line: {line} ({new}'s "
+                           f"{'statement' if p.kind in STATEMENT_KINDS else 'statement and body'} is {old}'s under "
+                           f"the map: {'drop the line' if old == new else 'write RENAMES'})")
                 continue
         for k in covers(old):
             named.setdefault(k, line)
 
-    lined = {old for verb, old, _, _ in entries if verb != "DELETES-MODULE"}   # a refused line is reported once
+    lined = {old for verb, old, *_ in entries if verb != "DELETES-MODULE"}   # a refused line is reported once
     reported_mods = set()
     for k, p in sorted(P.items()):
         if p.kind == "doc":
@@ -518,13 +673,19 @@ def judge(a) -> int:
             red.append(f"  decls: undeclared deletion: {k} ({p.kind}, {p.module}:{p.l0}-{p.l1}) is absent from the "
                        f"landing")
             add.append(f"DELETES: {k}")
-        elif p.kind in STATEMENT_KINDS and p.stmt != c.stmt and t is p and named.get(k, "").split(":")[0] \
-                != "RESTATES-MEANING":
-            if k in named or k in lined:
-                continue           # a RENAMES/RESTATES line that names it was refused above, with its diff
+        elif k in named or k in lined or t is not p:
+            continue
+        elif p.kind in STATEMENT_KINDS and p.stmt != c.stmt:
             red.append(f"  decls: undeclared restatement: {k} ({p.module}:{p.l0}-{p.l1}): its elaborated statement "
                        f"differs from the parent's")
             red += diff_of(p, c)
+            add.append(f"RESTATES-MEANING: {k}")
+        elif p.kind not in STATEMENT_KINDS and p.value != c.value and k in named_by:
+            # GATES-20v′: a definition a theorem's statement names moved its body (`MovesThrough := … ∧ False`): the
+            # meaning of those statements moved with no statement changing; one line names it
+            ts = named_by[k]
+            red.append(f"  decls: undeclared redefinition: {k} ({p.module}:{p.l0}-{p.l1}): its body changed, and the "
+                       f"statements of {', '.join(ts[:4])}{f' and {len(ts) - 4} more' if len(ts) > 4 else ''} name it")
             add.append(f"RESTATES-MEANING: {k}")
 
     # CHECK 2: the stale-copy lacks rebase.py forwarded (.lean paths).
@@ -532,7 +693,7 @@ def judge(a) -> int:
         cdocs = {r.stmt for r in C.values() if r.kind == "doc"}
         pdocs = {r.stmt for r in P.values() if r.kind == "doc"}
         crow_by_mod, prow_by_mod = {}, {}
-        for r in plain:
+        for r in plain.values():
             crow_by_mod.setdefault(r.module, []).append(r)
         for r in P.values():
             prow_by_mod.setdefault(r.module, []).append(r)
@@ -569,7 +730,7 @@ def judge(a) -> int:
                         else:
                             k = inv(r.name)
                             p = P.get(k)
-                            ok = k in named or (p is not None and same(p, C[k]))
+                            ok = k in named or (p is not None and k in C and same(p, C[k]))
                         if not ok:
                             bad.append(("declaration", r))
             seen = set()
@@ -634,12 +795,9 @@ def main() -> int:
         return 0 if os.path.exists(cache_path(a.cache, a.tree)) else 1
     if a.cmd == "bootstrap":
         t = tree.read(a.root)
-        rows = {}
-        for f in run_export(a.root, importable(t)):
-            r = digest_row(f)
-            rows[r.key()] = r
-        save_cache(a.cache, a.tree, rows)
-        print(f"decls: the parent's declarations exported whole: {len(rows)} rows ({a.tree[:12]})")
+        raws = run_export(a.root, importable(t))
+        save_cache(a.cache, a.tree, raws)
+        print(f"decls: the parent's declarations exported whole: {len(raws)} rows ({a.tree[:12]})")
         return 0
     t = tree.read(a.root)
     mods = [l.strip() for l in open(a.modules) if l.strip()] if a.modules else importable(t)

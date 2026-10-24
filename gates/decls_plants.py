@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """gates/decls_plants.py — the plants of the declaration diff (GATES-20t, R-0023), judged by the judge's own code.
 
-  gates/decls_plants.py --synthetic FRESH [--harness-control]     the standing plants (gates/runs.tsv row)
+  gates/decls_plants.py --synthetic FRESH [--harness-control]     the synthetic plants (the fast judge runs them)
+  gates/decls_plants.py --synthetic F1 --lean F2 [--harness-control]   the standing row: both, last line
+                                                                  `DECLS PLANTS GREEN`
   gates/decls_plants.py --repo REPO --work DIR --cache DIR [--wrap CMD] [--maps FILE] [--only NAME]...
+
+--lean (GATES-20v′) runs decls.py whole, its own Lean export included, over a two-module Demo package lake builds in
+F2: a definition's body edited to `∧ False` with no map line (`undeclared redefinition`, naming the theorems), and
+declared; a body equal by unfolding; a matcher changed under the same arms (the matcher is part of the definition);
+a definition no statement names (no line); a theorem restated to `True`, undeclared and declared (accepted: the spec
+layer's to judge); and, pinned as the KNOWN MISS, a body two levels below the statement (GREEN). About a minute.
 
 --synthetic runs decls.py's own decision code (judge) over hand-made export rows, the Lean export replaced by them:
 moved, deleted (declared and not), restated (declared and not), renamed (equal, unequal, undeclared), an unused map
@@ -245,7 +253,7 @@ package nanodregg where
 
 def syn_row(name, module, kind, l0, l1, shape, consts="", vshape="-", vconsts="-", priv="-", owner="-"):
     text = f'"{shape} {consts}"' if kind in ("theorem", "axiom") else "-"
-    return [name, priv, owner, module, kind, str(l0), str(l1), shape, consts, vshape, vconsts, text]
+    return [name, priv, owner, module, kind, str(l0), str(l1), shape, consts, vshape, vconsts, text, "r"]
 
 
 def synthetic(fresh: str, control: bool) -> int:
@@ -279,6 +287,11 @@ def synthetic(fresh: str, control: bool) -> int:
         ("deleted-declared", keep + [f], "DELETES: Demo.B.t", None, AB, 0, "GREEN"),
         ("restated", keep + [f, t2], "", None, AB, 0, "undeclared restatement: Demo.B.t"),
         ("restated-meaning", keep + [f, t2], "RESTATES-MEANING: Demo.B.t", None, AB, 0, "GREEN"),
+        # GATES-20v′: a definition a statement names, its body edited, is named by one line
+        ("body-edited", keep + [syn_row("Demo.A.f", A, "definition", 3, 5, "S0", "", "V2", "Nat.succ"), t], "", None,
+         AB, 0, "undeclared redefinition: Demo.A.f"),
+        ("body-edited-declared", keep + [syn_row("Demo.A.f", A, "definition", 3, 5, "S0", "", "V2", "Nat.succ"), t],
+         "RESTATES-MEANING: Demo.A.f", None, AB, 0, "GREEN"),
         ("restates-checked", keep + [f, t2], "RESTATES: Demo.B.t", None, AB, 0, "restate not equal: RESTATES: Demo.B.t"),
         ("restates-unrelated", keep + [f, u_other], "RESTATES: Demo.B.t → Demo.B.u", None, AB, 0,
          "restate not equal: RESTATES: Demo.B.t → Demo.B.u"),
@@ -322,11 +335,7 @@ def synthetic(fresh: str, control: bool) -> int:
         return d
     base_root = tree_dir(os.path.join(fresh, "base"), False)
     cache = os.path.join(fresh, "cache")
-    rows = {}
-    for raw in base:
-        r = decls.digest_row(raw)
-        rows[r.key()] = r
-    decls.save_cache(cache, "base", rows)
+    decls.save_cache(cache, "base", base)
     red = []
     for name, cand_rows, msg, lack, changed, drop_c, want in cases:
         d = os.path.join(fresh, name)
@@ -334,13 +343,12 @@ def synthetic(fresh: str, control: bool) -> int:
         for fn, text in (("changed", changed), ("msg", f"gates: plant {name}\n\n{msg}\n"),
                          ("lacks", "\t".join([lack[0], "c0ffee000000", "plant", lack[1], lack[2]]) + "\n" if lack else "")):
             open(os.path.join(d, fn), "w").write(text)
-        decls.run_export = lambda root, modules, _r=cand_rows: [list(x) for x in _r if x[3] in modules]
         a = argparse.Namespace(root=cand_root, base_root=base_root, cache=cache, base="base", cand=f"c-{name}",
                                changed=os.path.join(d, "changed"), message=os.path.join(d, "msg"),
                                lean_lacks=os.path.join(d, "lacks"))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = decls.judge(a)
+            rc = decls.judge(a, lean=lambda root, modules, _r=cand_rows: [list(x) for x in _r if x[3] in modules])
         got = out.getvalue()
         ok = rc == 0 if want == "GREEN" else (rc == 1 and want in got)
         print(f"  {name}: {'ok' if ok else 'FAIL'} (exit {rc}; want {want})")
@@ -351,9 +359,145 @@ def synthetic(fresh: str, control: bool) -> int:
     print(f"decls-synthetic: {'GREEN' if not red else 'RED (' + str(len(red)) + '): ' + ' '.join(red)}")
     return 1 if red else 0
 
+# ---------------------------------------------------------------- the standing Lean plants (GATES-20v)
+
+LEAN_A = """namespace Demo.A
+def Lim : Nat := 10
+def MovesThrough (n : Nat) : Prop := n ≤ Lim
+def Cap : Nat := 10
+def Spare : Nat := 1
+def Kind : Nat → Prop
+  | 0 => True
+  | _ => False
+end Demo.A
+"""
+LEAN_B = """import Demo.A
+namespace Demo.B
+open Demo.A
+theorem cap (n : Nat) (h : MovesThrough n) (h2 : 0 < n) : n ≤ Cap := h
+theorem two (n : Nat) (h : MovesThrough n) : n ≤ 10 := h
+theorem kind_ok (n : Nat) (h : Kind n) : Kind n := h
+end Demo.B
+"""
+
+
+def lean_cases() -> list[tuple[str, dict[str, str], str, list[str] | str]]:
+    """(name, the candidate's edits as (old, new) text replacements per file, the map, what the verdict must name)."""
+    false_body = {"Demo/A.lean": [("n ≤ Lim\n", "n ≤ Lim ∧ False\n")],
+                  "Demo/B.lean": [("n ≤ Cap := h\n", "n ≤ Cap := h.1\n"), ("n ≤ 10 := h\n", "n ≤ 10 := h.1\n")]}
+    true_cap = {"Demo/B.lean": [("theorem cap (n : Nat) (h : MovesThrough n) (h2 : 0 < n) : n ≤ Cap := h\n",
+                                 "theorem cap : True := trivial\n")]}
+    return [
+        # A2's plant: the body edit reds by name with no map line, naming the theorems it moved
+        ("body-false", false_body, "", ["undeclared redefinition: Demo.A.MovesThrough", "Demo.B.cap", "Demo.B.two"]),
+        ("body-false-declared", false_body, "RESTATES-MEANING: Demo.A.MovesThrough", "GREEN"),
+        # a body equal by unfolding is still an edit of the body
+        ("refactor", {"Demo/A.lean": [("def Cap : Nat := 10", "def Cap : Nat := 5 + 5")]}, "",
+         ["undeclared redefinition: Demo.A.Cap"]),
+        # the matcher is part of the definition: the same arms over another pattern is a redefinition
+        ("matcher", {"Demo/A.lean": [("  | 0 => True\n", "  | 1 => True\n")]}, "",
+         ["undeclared redefinition: Demo.A.Kind"]),
+        # a definition no statement names needs no line
+        ("unnamed-definition", {"Demo/A.lean": [("def Spare : Nat := 1", "def Spare : Nat := 2")]}, "", "GREEN"),
+        ("to-true-undeclared", true_cap, "", ["undeclared restatement: Demo.B.cap"]),
+        # a declared restatement is accepted on its line: whether it still says what it said is the spec layer's
+        # (GATES-20v′), pinned here so the boundary is findable
+        ("to-true-declared", true_cap, "RESTATES-MEANING: Demo.B.cap", "GREEN"),
+        # KNOWN MISS, pinned so it is findable: a body two levels below the statement (Lim, under MovesThrough)
+        ("two-levels-known-miss", {"Demo/A.lean": [("def Lim : Nat := 10", "def Lim : Nat := 9")],
+                                   "Demo/B.lean": [("n ≤ 10 := h\n", "n ≤ 10 := Nat.le_succ_of_le h\n"),
+                                                   ("n ≤ Cap := h\n", "n ≤ Cap := Nat.le_succ_of_le h\n")]},
+         "", "GREEN"),
+    ]
+
+
+def lean_plants(fresh: str, control: bool) -> int:
+    """decls.py judge, whole (the judge's own Lean: export, read-back, transplant, strength check), over a two-module
+    Demo package built by lake: base, then each case's candidate. Every case names what its verdict must read, and
+    its edit is checked to be in the candidate before the verdict is read. --harness-control adds a case whose
+    expectation nothing meets: the run must read RED naming harness-control."""
+    import contextlib
+    import io
+    import shutil
+    sys.path.insert(0, HERE)
+    import decls
+    cases = lean_cases()
+    if control:
+        # refactor's edit, expected GREEN: nothing meets it
+        cases.append(("harness-control", next(e for n, e, _, _ in cases if n == "refactor"), "", "GREEN"))
+    toolchain = open(os.path.join(HERE, "..", "lean-toolchain")).read()
+
+    def write_tree(d: str, files: dict[str, str]) -> None:
+        os.makedirs(os.path.join(d, "Demo"), exist_ok=True)
+        for p, text in {"lakefile.lean": SYN_LAKE, "lean-toolchain": toolchain, **files}.items():
+            with open(os.path.join(d, p), "w", encoding="utf-8") as fh:
+                fh.write(text)
+
+    def build(d: str) -> None:
+        r = subprocess.run(["lake", "build"], cwd=d, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f"decls-lean: NO VERDICT — a plant tree does not build ({d}):\n{(r.stdout + r.stderr)[-2000:]}")
+
+    t0 = time.monotonic()
+    # lake writes absolute LEAN_PATH entries, and a `:` splits one: the judge's {fresh} is
+    # `.lake/runs/script:gates/decls_plants.py-N` (GATES-20s's hazard), so the packages live in a temporary directory
+    # of their own, removed after
+    work = tempfile.mkdtemp(prefix="nanodregg-decls-lean-")
+    if ":" in work:
+        raise SystemExit(f"decls-lean: NO VERDICT — the temporary directory {work} holds ':' (LEAN_PATH would split)")
+    try:
+        return _lean_plants(work, cases, decls, toolchain, write_tree, build, t0)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _lean_plants(fresh, cases, decls, toolchain, write_tree, build, t0) -> int:
+    import contextlib
+    import io
+    import shutil
+    base_root, cand_root = os.path.join(fresh, "base"), os.path.join(fresh, "cand")
+    base_files = {"Demo/A.lean": LEAN_A, "Demo/B.lean": LEAN_B}
+    write_tree(base_root, base_files)
+    build(base_root)
+    cache = os.path.join(fresh, "cache")
+    decls.save_cache(cache, "base", decls.run_export(base_root, ["Demo.A", "Demo.B"]))
+    shutil.copytree(base_root, cand_root, ignore=shutil.ignore_patterns(".lake"))
+    red = []
+    for name, edits, msg, want in cases:
+        files = dict(base_files)
+        for path, reps in edits.items():
+            for old, new in reps:
+                if files[path].count(old) != 1:
+                    raise SystemExit(f"decls-lean: plant {name}: the site {old!r} does not occur once in {path}")
+                files[path] = files[path].replace(old, new)
+        assert files != base_files, name      # the mutation is in the candidate before any verdict is read
+        write_tree(cand_root, files)
+        build(cand_root)
+        d = os.path.join(fresh, "case-" + name)
+        os.makedirs(d, exist_ok=True)
+        for fn, text in (("changed", "".join(p + "\n" for p in edits)), ("msg", f"gates: plant {name}\n\n{msg}\n")):
+            open(os.path.join(d, fn), "w").write(text)
+        a = argparse.Namespace(root=cand_root, base_root=base_root, cache=cache, base="base", cand=f"c-{name}",
+                               changed=os.path.join(d, "changed"), message=os.path.join(d, "msg"), lean_lacks=None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = decls.judge(a)
+        got = out.getvalue()
+        ok = rc == 0 if want == "GREEN" else (rc == 1 and all(w in got for w in want))
+        print(f"  {name}: {'ok' if ok else 'FAIL'} (exit {rc}; want {want})")
+        if not ok:
+            red.append(name)
+        if not ok or os.environ.get("DECLS_PLANTS_VERBOSE"):
+            print("\n".join("    " + l for l in got.strip().splitlines()[:16]))
+    print(f"decls-lean: {'GREEN' if not red else 'RED (' + str(len(red)) + '): ' + ' '.join(red)} "
+          f"({len(cases)} cases, {time.monotonic() - t0:.0f} s)")
+    return 1 if red else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--synthetic", metavar="FRESH", help="the standing plants: decls.py's logic over hand-made rows")
+    ap.add_argument("--lean", metavar="FRESH", help="the standing plants: decls.py whole over a built Demo package")
     ap.add_argument("--harness-control", action="store_true")
     ap.add_argument("--repo")
     ap.add_argument("--work")
@@ -362,8 +506,13 @@ def main() -> int:
     ap.add_argument("--maps", help="a file of `PLANT<TAB>map line` rows: each historical landing's declared map")
     ap.add_argument("--only", action="append", default=[])
     a = ap.parse_args()
-    if a.synthetic:
-        return synthetic(a.synthetic, a.harness_control)
+    if a.synthetic or a.lean:
+        rc = synthetic(a.synthetic, a.harness_control) if a.synthetic else 0
+        if a.lean:
+            rc |= lean_plants(a.lean, a.harness_control)
+            # the row's last line (both sets ran): runs.py reads it exactly
+            print(f"DECLS PLANTS {'GREEN' if rc == 0 else 'RED'}")
+        return rc
     if not (a.repo and a.work and a.cache):
         ap.error("--repo, --work and --cache name the historical plants' clone, work tree and cache")
     a.work, a.cache = os.path.abspath(a.work), os.path.abspath(a.cache)

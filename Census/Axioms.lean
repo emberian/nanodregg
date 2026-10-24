@@ -51,23 +51,23 @@ def moduleOf (env : Environment) (c : Name) : Option Name :=
 def underRoots (roots : List Name) (m : Name) : Bool :=
   roots.any fun r => r.isPrefixOf m
 
-syntax (name := axiomCensus) "#axiom_census " str ident+ : command
-
-@[command_elab axiomCensus]
-def elabAxiomCensus : CommandElab
-  | `(#axiom_census $path:str $roots:ident*) => do
-    let roots := roots.toList.map (·.getId)
-    let text ← IO.FS.readFile path.getString
+/-- The census of every constant of a module under `roots` (and in `only`, when given: a landing's reach, GATES-20v
+(c)). With `only`, an allow row is judged when its declaration is declared in the reach: a row for a declaration
+outside the reach excuses an axiom the landing cannot have changed, and one whose declaration is not imported at all
+(outside the reach, or deleted) is the whole census's to judge, at convergence. -/
+def census (path : String) (roots : List Name) (only : Option NameSet) : CommandElabM Unit := do
+    let text ← IO.FS.readFile path
     let allowances ← match parseAllowances text with
       | .ok a => pure a
       | .error e => throwError e
     let env ← getEnv
+    let inScope := fun (m : Name) => underRoots roots m && (only.map (·.contains m)).getD true
     let mut checked := 0
     let mut bad : Array String := #[]
     let mut used : Array Allowance := #[]
     for (c, _) in env.constants.map₁.toList do
       let some m := moduleOf env c | continue
-      unless underRoots roots m do continue
+      unless inScope m do continue
       checked := checked + 1
       let axioms ← liftCoreM (collectAxioms c)
       for ax in axioms do
@@ -78,12 +78,31 @@ def elabAxiomCensus : CommandElab
         else
           bad := bad.push s!"{c} ({m}) uses {ax}"
     for row in allowances do
-      unless used.contains row do
+      let judged := match moduleOf env row.decl with
+        | some m => inScope m
+        | none => only.isNone
+      if judged && !used.contains row then
         bad := bad.push s!"allow row matches nothing: {row.decl} {row.axiomName}"
+    let scope := match only with | some o => s!" over {o.size} module(s) of the reach" | none => ""
     if bad.isEmpty then
-      logInfo m!"AXIOM-CENSUS ok: {checked} declarations, {allowances.length} allowed rows"
+      logInfo m!"AXIOM-CENSUS ok: {checked} declarations{scope}, {allowances.length} allowed rows"
     else
       throwError m!"AXIOM-CENSUS red ({bad.size}):\n{String.intercalate "\n" bad.toList}"
+
+syntax (name := axiomCensus) "#axiom_census " str ident+ : command
+syntax (name := axiomCensusIn) "#axiom_census_in " str str ident+ : command
+
+@[command_elab axiomCensus]
+def elabAxiomCensus : CommandElab
+  | `(#axiom_census $path:str $roots:ident*) => census path.getString (roots.toList.map (·.getId)) none
+  | _ => throwUnsupportedSyntax
+
+@[command_elab axiomCensusIn]
+def elabAxiomCensusIn : CommandElab
+  | `(#axiom_census_in $path:str $mods:str $roots:ident*) => do
+    let only := ((← IO.FS.readFile mods.getString).splitOn "\n").foldl
+      (fun s m => if m.isEmpty then s else s.insert m.toName) {}
+    census path.getString (roots.toList.map (·.getId)) (some only)
   | _ => throwUnsupportedSyntax
 
 end Census.Axioms

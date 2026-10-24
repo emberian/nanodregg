@@ -20,7 +20,9 @@
 #                                               is not a flag day and leaves the judge's code alone (gates/fast.py
 #                                               mode): steps 0-1, then `lake build` of only the targets the change
 #                                               reaches and `cargo check` + `cargo fmt --check` of only the packages
-#                                               it reaches (gates/fast.py targets/crates). The census, the rows, the
+#                                               it reaches (gates/fast.py targets/crates), the declaration diff, the
+#                                               axiom + statement census over the reach (GATES-20v (c)). The
+#                                               refine census, the plants, the rows, the
 #                                               benches, the waste measurements, the generated files and clippy run
 #                                               at the next CONVERGENCE (scripts/converge), not here
 #   --lean-lacks FILE                           (scripts/commit, GATES-20t) the `.lean` lacks gates/rebase.py `stale`
@@ -338,13 +340,24 @@ if [ $fast = 1 ]; then
     if grep -qE '^NO-BUILD:[[:space:]]*[^[:space:]]' "$msg"; then echo "  build: SKIPPED (NO-BUILD in message)"; note="$note (build skipped)"
     else echo "  build: --no-build needs a 'NO-BUILD: <reason>' message line"; fail="$fail no-build"; fi
   elif [ -n "$targets" ]; then
-    echo "  build targets (reached): $targets"
+    echo "  build targets (reached): $targets (and the census modules)"
     # shellcheck disable=SC2086
-    step build wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $targets
+    step build wrapped env -C "$G/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $targets +Census.Axioms +Census.Statements
   else
     echo "  build: none (no module, and no build input, changed)"
   fi
   decls_judge
+  # GATES-20v (c): the axiom and statement census over the reach (a `native_decide` with no allow row, a `sorryAx`, a
+  # vacuous disjunct red at the landing, not hours later), by the judge's census.py over main's Census (a fast
+  # landing cannot change either: Census/ and gates/*.py are judge code). Plants are never a landing gate
+  # (CHARTER's test clause): they run in the full judge and at convergence
+  if [ -n "$targets" ] && [ "$build" = 1 ]; then
+    case " $fail $killed " in
+      *" build "*) echo "  census: SKIPPED (the build did not pass)" ;;
+      *) step census wrapped python3 "$J/census.py" "$G/tree" --changed "$G/changed"
+         grep -E '^census \(reach' "$G/step.out" | sed 's/^/  /' || true ;;
+    esac
+  fi
   case $crates in
     "") echo "  cargo: none (no workspace member changed)" ;;
     workspace)
@@ -366,7 +379,7 @@ if [ $fast = 1 ]; then
     echo "PRE-PUSH NOT JUDGED tree $short:$killed — killed by a signal under memory pressure: not a verdict about this commit; re-run — log: $log"
     exit 76
   fi
-  echo "PRE-PUSH FAST GREEN tree $short$note (built: ${targets:-none}; cargo: ${crates:-none}; the census, rows, benches, waste, generated files and clippy judge it at the next convergence)"
+  echo "PRE-PUSH FAST GREEN tree $short$note (built: ${targets:-none}; cargo: ${crates:-none}; the census over the reach: judged; the refine census, rows, benches, waste, generated files and clippy judge it at the next convergence)"
   exit 0
 fi
 

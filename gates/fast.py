@@ -8,11 +8,13 @@ those points instead of EVERY LANDING").
 
 THE MODE. A landing is judged in FULL (scripts/pre-push: every target, the census, the selected rows, the waste, the
 generated files, the whole Rust workspace) when its subject is a flag day (`kernel!:`) or it changes the JUDGE'S CODE:
-gates/*.py or anything under scripts/ (the self-judge rule: main's code judges a judge change, and a judge change is
-judged in full). Everything else lands FAST: scripts/commit's stale-path guard (GATES-20b/20b'), every source gate
-(gates/check.py, the candidate's and the parent's: owners, closure, refusals, size, paths, the runs table, tcb, vectors,
-the waste ratchet, targets), `lake build` of exactly the targets the change reaches, `cargo check` and `cargo fmt --check`
-of the packages it reaches, and nothing else. A gates/*.tsv change is DATA (20h (b)): it is judged by the source gates
+gates/*.py, anything under scripts/, or the census's Lean under Census/ (the self-judge rule: main's code judges a judge
+change, and a judge change is judged in full). Everything else lands FAST: scripts/commit's stale-path guard
+(GATES-20b/20b'), every source gate (gates/check.py, the candidate's and the parent's: owners, closure, refusals, size,
+paths, the runs table, tcb, vectors, the waste ratchet, targets), `lake build` of exactly the targets the change reaches
+(and the census modules), the declaration diff (gates/decls.py), the axiom and statement census over the reach
+(gates/census.py --changed, GATES-20v (c)), `cargo check` and `cargo fmt --check` of the packages it reaches, and
+nothing else (no plant: a plant is never a landing gate). A gates/*.tsv change is DATA (20h (b)): it is judged by the source gates
 (the ratchets of ceilings.tsv and waste.tsv, runs.tsv's classification) at the landing, and by every row it feeds at
 the next convergence.
 
@@ -39,7 +41,9 @@ BUILD_INPUTS = ("lakefile.lean", "lean-toolchain", "lake-manifest.json")
 
 
 def judge_code(p: str) -> bool:
-    return p.startswith("scripts/") or (p.startswith("gates/") and p.endswith(".py"))
+    """The judge's code: scripts/, gates/*.py, and the census's Lean (Census/: the fast judge runs the census over
+    its reach, so a landing that changes the census would judge itself with it; GATES-20v (c))."""
+    return p.startswith(("scripts/", "Census/")) or (p.startswith("gates/") and p.endswith(".py"))
 
 
 def mode(subject: str, changed: list[str]) -> str:

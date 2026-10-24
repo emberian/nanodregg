@@ -13,7 +13,8 @@
 #     --reverts C (C's layer named in a CROSS-LAYER line when it is another layer's); a `.lean` module's
 #     lack is not refused by text: the judge decides it from the declarations holding those lines, and
 #     every declaration the landing deletes or restates is named by a `RESTATES:`/`RENAMES:`/`DELETES:`
-#     message line (gates/decls.py, GATES-20t);
+#     message line (gates/decls.py, GATES-20t), and so is every definition whose body changed under a theorem
+#     statement that names it (`undeclared redefinition`, GATES-20v′);
 #  3. writes SIZE.md, a purely generated view, for that candidate (gates/size.py --write). SIZE.md
 #     is refused as a PATH: ceilings are edited in gates/ceilings.tsv;
 #  4. refuses if the candidate differs from main anywhere outside PATH... and SIZE.md;

@@ -160,12 +160,13 @@ def fixtures : CommandElabM (Array (Syntax.Term × Bool)) := do
     (← `(∀ x y : Nat, True ∨ ∃ a ∈ [x, y], ∃ b ∈ [x, y], a ≠ b ∧ a % 2 = b % 2), false),
     (← `(∀ S : List (Nat × Nat), True ∨ ∃ a b, (a, b) ∈ S ∧ a ≠ b ∧ a % 2 = b % 2), false)]
 
-syntax (name := statementCensus) "#statement_census " str ident+ : command
+/-- The modules a file names, one per line: a landing's reach (GATES-20v (c): the fast judge censuses what the
+landing can change; a theorem outside the reach has the parent's statement over the parent's definitions). -/
+def readModules (path : String) : IO NameSet := do
+  return ((← IO.FS.readFile path).splitOn "\n").foldl (fun s m => if m.isEmpty then s else s.insert m.toName) {}
 
-@[command_elab statementCensus]
-def elabStatementCensus : CommandElab
-  | `(#statement_census $path:str $roots:ident*) => do
-    let roots := roots.toList.map (·.getId)
+/-- The census: the fixtures, then every theorem of a module under `roots` (and in `only`, when given). -/
+def census (path : String) (roots : List Name) (only : Option NameSet) : CommandElabM Unit := do
     for (stx, mustRed) in ← fixtures do
       let rows ← liftTermElabM do
         let e ← Term.elabTerm stx none
@@ -181,6 +182,7 @@ def elabStatementCensus : CommandElab
     for (c, ci) in env.constants.map₁.toList do
       let some m := moduleOf env c | continue
       unless roots.any (·.isPrefixOf m) do continue
+      if let some o := only then unless o.contains m do continue
       let .thmInfo t := ci | continue
       let found ← liftTermElabM <| judge roots t.type
       let file := m.toString.replace "." "/" ++ ".lean"
@@ -189,11 +191,25 @@ def elabStatementCensus : CommandElab
         if let some why := r.red then
           bad := bad.push s!"{file}: {c}: {why}"
     let sortedRows := rows.toList.mergeSort (· ≤ ·)
-    IO.FS.writeFile path.getString ("file\ttheorem\tleft\tright\tverdict\n" ++ String.intercalate "\n" sortedRows ++ "\n")
+    IO.FS.writeFile path ("file\ttheorem\tleft\tright\tverdict\n" ++ String.intercalate "\n" sortedRows ++ "\n")
+    let scope := match only with | some o => s!" over {o.size} module(s) of the reach" | none => ""
     if bad.isEmpty then
-      logInfo m!"STATEMENT-CENSUS ok: {sortedRows.length} disjunctions in {path.getString} (fixtures: 2 RED, 2 ok as required)"
+      logInfo m!"STATEMENT-CENSUS ok: {sortedRows.length} disjunctions in {path}{scope} (fixtures: 2 RED, 2 ok as required)"
     else
       throwError m!"STATEMENT-CENSUS RED ({bad.size}):\n{String.intercalate "\n" bad.toList}"
+
+syntax (name := statementCensus) "#statement_census " str ident+ : command
+syntax (name := statementCensusIn) "#statement_census_in " str str ident+ : command
+
+@[command_elab statementCensus]
+def elabStatementCensus : CommandElab
+  | `(#statement_census $path:str $roots:ident*) => census path.getString (roots.toList.map (·.getId)) none
+  | _ => throwUnsupportedSyntax
+
+@[command_elab statementCensusIn]
+def elabStatementCensusIn : CommandElab
+  | `(#statement_census_in $path:str $mods:str $roots:ident*) => do
+    census path.getString (roots.toList.map (·.getId)) (some (← readModules mods.getString))
   | _ => throwUnsupportedSyntax
 
 end Census.Statements

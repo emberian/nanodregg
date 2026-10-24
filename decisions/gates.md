@@ -1044,3 +1044,77 @@ LANG-P6's exchange object (LANG-74.12 moved it to Census) no longer exists. Its 
 - (f) One theorem is pinned. The pin is a freeze of `grant_moves_le_cap`'s claim, not a property of the tree.
 
 **Meta-critique.** The bias was executing the brief's letter. The card listed three pins and my first draft had three. The plant that refuted it (P3) was one I added to test the harness, not the card. The opposite pull was also mine: I proposed keeping the closure reader as a "demonstration" and cv-tasking the question. A component whose only consumer is its own tests fails the consumer test this program applies, and the cross-family read named that as the deferral it was.
+
+## GATES-20v · A definition's edited body is named by one line; the fast judge runs the axiom and statement census over its reach; a declared change of meaning is the spec layer's (2026-10-24, FIX-GATES; COLLATION-20261024 A2; READ-LEDGER-CENSUS-GATES D1, D2, D4; Ember via ROOT, real 10-24)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none. Gates code and the census's Lean only.
+
+**Finding** (the memo's D1, D2, D4, re-measured on f9657bd and on the real landing e7c2b13).
+- **D1.** GATES-20t's check 1 compared theorem and axiom statement digests, and a digest named each constant without its body. `MovesThrough := … ∧ False` passed with 0 map lines. Outside the certificate's one theorem, no gate saw a body move under a statement.
+- **D2.** A `RESTATES-MEANING:` line was accepted on the declaration alone, so a theorem restated to `True` passed with one line. Also, a two-name line on a definition renamed it inside every statement.
+- **D4.** A fast landing ran no census. A `native_decide` with no allow row, a `sorryAx`, a vacuous disjunct each landed green and were seen at the next convergence. A change to `Census/*.lean` was itself a fast landing.
+
+**The ruling** (Ember, real 10-24, through ROOT): "we only need the TOPLEVELMOST theorem to be nonvacuous; that cascades downward; we were enforcing it bottom-up."
+- A spec layer of top-level statements is being composed (FABLE-SPEC). Once it exists, a meaning change under a claimed statement is a build error.
+- Per-theorem machinery is the wrong direction: a meaning digest over every statement, a strength check of every restatement, a pin per theorem.
+- A plant is a vacuity check run when cheap, never a landing gate (CHARTER's test clause).
+
+**What was built, measured and withdrawn before landing.** The first version of this card built the per-theorem machine the brief named, and measured it:
+- every theorem's digest included the bodies of the constants it names;
+- a RESTATES-MEANING line landed only if the parent's statement followed from the landing's by `intro`/`exact`/`apply` in the export's own Lean run (the parent's definitions transplanted under `GatesOld.`, the proof kernel-checked), or carried `BY: READER`;
+- the convergence listed the BY lines.
+
+On e7c2b13 it read `RED (30)` in 28.3 s: 7 of 19 declared lines shown at least as strong, 12 needing a reader, 18 theorems moved through two definitions. Its first full judge was refused (its Lean plants could not build under the judge's `:` path, below). The ruling arrived while it was in that judge, so none of it landed. Its measurements are in redregg/work/codex/FIX-GATES.report.md.
+
+**Decision.**
+1. **One line per edited definition.** A DEFINITION of the reach whose body changed while a theorem statement of the reach names it is `undeclared redefinition: D (M:a-b): its body changed, and the statements of T… name it`. `RESTATES-MEANING: D` names it.
+   - **The body** is the definition's statement and value with its PARTS: the rangeless constants its value reaches under its name (`match_`, `_unary`) and its `where` helpers. A matcher's patterns are therefore part of it.
+   - **The export** writes those parts (rows marked `a`) and string literals as hex. `go` is structural, no longer `partial` (B2).
+   - **The cache** keeps each tree's raw rows (about 7.5 MB gzipped, 32 kept), since parts are read by name.
+   - **Hygienic names** are read without their macro scope. Eleven derived `decEq` bodies name `…_hyg.N`, which renumbers when unrelated text above it moves.
+   - Theorems are compared by their statements, as under GATES-20t. RENAMES/RESTATES compare a definition's statement and body, so a two-name line on a definition moves no theorem unseen.
+2. **A declared change of meaning is accepted on its line**, as under GATES-20t. Whether a restated statement still says what it said is the spec layer's to pin, at the top-level statements, not this diff's at every theorem. The hole the brief measured (a theorem restated to `True` with one line) is open here and closed by those pins. The Lean plant `to-true-declared` reads GREEN, pinned so the boundary is findable.
+3. **The fast path.** The fast judge runs `gates/census.py TREE --changed` after the build: the axiom census and the statement census over the landing's REACH (`#axiom_census_in`, `#statement_census_in`), importing only the reach.
+   - **Why the reach is enough.** A theorem outside the reach has the parent's statement, axioms and definitions.
+   - **Allow rows.** In reach mode an allow row is judged when its declaration is in the reach. One whose declaration is not imported (outside, or deleted) is the whole census's at convergence.
+   - The fast build adds `+Census.Axioms +Census.Statements`.
+   - **`Census/` is judge code** (gates/fast.py): a landing that changes the census is judged FULL by main's judge.
+   - **No plant runs in the fast path.** The refine census, the certificate, waste and the plants run in the full judge and at convergence.
+
+**Plants** (hbox, MEASURED):
+- **`gates/decls_plants.py --lean`** (new; with `--synthetic` the standing row `script:gates/decls_plants.py --synthetic {fresh}/syn --lean {fresh}/lean`, last line `DECLS PLANTS GREEN`). It runs decls.py whole, its Lean export included, over a two-module Demo package built by lake in a temporary directory: the judge's `{fresh}` holds a `:`, which splits lake's LEAN_PATH, and that is how the first full judge refused it. 8 cases GREEN in 30–72 s:
+  - `body-false`: `MovesThrough := … ∧ False`, 0 lines, reads `undeclared redefinition: Demo.A.MovesThrough … the statements of Demo.B.cap, Demo.B.two name it` (A2's plant). `body-false-declared` is GREEN.
+  - `refactor`: `Cap := 5 + 5`, unlined, is a redefinition.
+  - `matcher`: `| 0 =>` → `| 1 =>` under the same arms is a redefinition of `Demo.A.Kind`.
+  - `unnamed-definition`: a definition no statement names needs no line (GREEN).
+  - `to-true-undeclared`: reads `undeclared restatement`. `to-true-declared` is GREEN (the spec layer's).
+  - `two-levels-known-miss`: `Lim` under `MovesThrough` is GREEN (pinned).
+
+  The control reads `decls-lean: RED (1): harness-control`.
+- **`--synthetic`:** 25 cases, decls.py's judge over hand-made rows, GREEN. New: `body-edited` (`undeclared redefinition: Demo.A.f`) and `body-edited-declared`. The control reds.
+- **`gates/statement_plants.py` reach.** The plant module gains `plant_native : 2 + 2 = 4 := by native_decide`, which has no allow row. `#axiom_census_in` over the plant module alone names it (`…plant_native (StatementPlant.Vacuous) uses …native_decide.ax_1_1`). `#statement_census_in` reads the vacuous plants RED. Over a tree module both read ok.
+- **The real landing e7c2b13** (its own message): `decls: RED (8)`, eight undeclared redefinitions, each printed with its line to paste (offerEscrowPackageOf, offerPackageOf, offerFuseArg, offerFuseBody, EscrowLegMoved, and three private judge environments). GATES-20t read it ok.
+- `deser ∘ ser` was the identity on all 73,919 statements and values of f9657bd. The read-back was withdrawn with the strength check; the round-trip test is recorded because it shows the serialization is exact.
+
+**Price** (hbox, load 8–20, MEASURED):
+- The judge on e7c2b13 (90 modules): 14.7 s, of which the export is 8.4 s. GATES-20t took 7–17 s.
+- A bootstrap (cache miss): 36–51 s by load, 1.7 GB, 24,931 rows. It was 13.6 s with no parts.
+- The reach census: a leaf (3 modules) 10.1 s; Hosting.Proofs.Deployed (1 module) 18.3 s; Kernel/World.lean (329 modules) 15.7 s. The whole census.py: 21–44 s by load.
+
+**What breaks.**
+- The exporter's digest changes, so every cached tree misses. The first landing after this one bootstraps its parent (one build delta plus about 40 s).
+- A landing that edits a definition body that a statement names carries one `RESTATES-MEANING: D` per such definition (e7c2b13 would carry 8).
+- `Census/` changes are FULL landings.
+- A fast landing that changes a module runs the reach census (+10–18 s) and builds the two census modules.
+- gates/runs.tsv: the decls_plants row's arguments and pass line change.
+- GATES-20t's historical plants H1–H4 are superseded until re-pinned (cv 01a16d97-2a86).
+- Nothing re-emits; no wire or store format moves.
+
+**Critique.**
+- (a) **A declared redefinition, or restatement, is accepted on its line.** Until the spec layer exists, a lander who names `D` can weaken every theorem over it unseen.
+- (b) **One level only:** a body two levels down is GREEN (pinned).
+- (c) **`DELETES: T`** removes a statement on its line (cv 01a16d97-2a72). That is the same boundary as (a).
+- (d) **Core constants have no body here.** A toolchain bump is a build input, which makes the reach the whole tree.
+- (e) **The reach census trusts the reach.** It is complete for what a landing can change. An allow row for a deleted declaration waits for convergence.
+
+**Meta-critique.** I built the bottom-up machine first and measured its price: 30 reds and 12 readers on one ordinary landing. The measurement was the argument against it, and I did not make it. I priced the strength check's heartbeats and not its premise, that every theorem must carry its own proof of non-weakening. What survives is the part the measurement said was cheap: one line per edited definition.

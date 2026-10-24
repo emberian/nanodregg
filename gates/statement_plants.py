@@ -11,6 +11,10 @@ the tree), in SCRATCH only:
   control  the census over the tree alone must read `STATEMENT-CENSUS ok`.
   mutant   a scratch copy of Census/Statements.lean with the two-chosen-sides test disabled must be refused by
            its own fixtures (`STATEMENT-CENSUS harness:`), so the in-run fixtures are planted too.
+  reach    the fast judge's census (GATES-20v (c): `#axiom_census_in`, `#statement_census_in` over a landing's
+           reach): over the plant module alone it must read the plant's `native_decide` theorem, which has no allow
+           row, `AXIOM-CENSUS red` by name, and the three vacuous theorems `STATEMENT-CENSUS RED (3)`; over a tree
+           module (Kernel.Proofs.Fold) it must read both ok.
 --harness-control (GATES-15) adds one expectation nothing meets, a fourth RED the plant does not hold, judged on
 the same comparison. Last line on success: `STATEMENT PLANTS GREEN`.
 """
@@ -126,6 +130,9 @@ theorem chain_binds_chosen_list [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) 
     let ⟨dom, a, b, hne, h⟩ := lawful_collides hE
     .inr ⟨[(dom, a), (dom, b)], CollidesAmong.pair (fun e => hne (congrArg Prod.snd e)) h⟩
 
+/-- The reach census's plant (GATES-20v (c)): a `native_decide` theorem with no allow row in gates/axioms-allow.tsv. -/
+theorem plant_native : (2 : Nat) + 2 = 4 := by native_decide
+
 /-- CONTROL (ok): the landed `chain_binds`, over the two chains' own inputs. -/
 theorem chain_binds_named [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {c : D} :
     ∀ (k : Nat) (l₁ l₂ : List (Step D × D)), l₁.length = k → l₂.length = k →
@@ -237,6 +244,28 @@ def main() -> int:
                 red.append(f"mutant: with the test disabled the fixtures must refuse (`STATEMENT-CENSUS harness:`), read exit {code}")
             else:
                 print("PLANT RED: the two-chosen-sides test disabled -> the census's own fixtures refuse it")
+
+    # reach: the fast judge's census commands over a reach (the plant module; then a tree module, the control)
+    allow = os.path.join(ROOT, "gates", "axioms-allow.tsv")
+    for name, mod, roots, path, planted in (("ReachPlant", f"{PLANT_ROOT}.Vacuous", libs + [PLANT_ROOT], base + ["lib"], True),
+                                            ("ReachTree", "Kernel.Proofs.Fold", libs, base, False)):
+        write(os.path.join(scratch, f"{name}.txt"), mod + "\n")
+        write(os.path.join(scratch, f"{name}.lean"), "import Census.Axioms\nimport Census.Statements\n"
+              f"import {mod}\n#axiom_census_in \"{allow}\" \"{name}.txt\" {' '.join(roots)}\n"
+              f"#statement_census_in \"{name}.tsv\" \"{name}.txt\" {' '.join(roots)}\n")
+        code, out = lean(scratch, [f"{name}.lean"], path, f"{name}.out")
+        print(out.strip())
+        if planted:
+            bad = []
+            if "AXIOM-CENSUS red" not in out or f"{NS}plant_native ({PLANT_ROOT}.Vacuous) uses" not in out:
+                bad.append("reach: the plant's native_decide theorem is not named by `#axiom_census_in`")
+            if f"STATEMENT-CENSUS RED ({len(VACUOUS)}):" not in out:
+                bad.append(f"reach: `#statement_census_in` over the plant must read RED ({len(VACUOUS)})")
+            red += bad
+            if not bad:
+                print("PLANT RED: the reach census names the native_decide theorem and the three vacuous ones")
+        elif code != 0 or "AXIOM-CENSUS ok" not in out or "STATEMENT-CENSUS ok" not in out:
+            red.append(f"reach: over a tree module both must read ok, read exit {code}")
 
     if red:
         for r in red:
