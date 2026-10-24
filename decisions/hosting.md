@@ -2425,3 +2425,35 @@ The probe runs outside the residents tick, using the client's existing reply bou
 - A package bigger than the frame minus its description would now fail to describe. INFERRED: the kernel bounds a package by `eventBytesMax` (65536), so the hex is at most 131072 of `frameBytesMax` 262144; the rest of the description is not bounded by a theorem here.
 
 **Meta-critique.** The pull was the task's own sketch, an id comparison, because it reads as the cheap fix ("the resident compares two ids"). Priced, it adds a hash disjunct and a premise about follow's base to every downstream theorem, the premise-spread the KERNEL lesson (price premises, not only cost) warns about. The bias was taking "the cheap check" for "the cheap theorem".
+
+## HOSTING-46 · An abandoned ring does not stall the resident's queue: measured, and stated (2026-10-23, CX-BACKLOG-2; closes cv 01a1682e-7f9d, filed by CX-DEADLINE at LANG-76; R-0069)
+
+**The claim (INFERRED by CX-DEADLINE, never run).** A ring retired (LANG-76's deadline arm) between the resident's read of `pending` and its answer would end the resident `answerRefused` and stall the queue until a restart.
+
+**The measurement (MEASURED, hbox wt/backlog, `logs/backlog/c7-measure.log`).** New launcher row `resident_bell` Q7. Its steps:
+1. The resident is stopped and a ring `abandoned` is rung.
+2. 2048 writes (the Bell's patience) move the World past its deadline.
+3. The provider is set to hold the next ask, and the resident is started.
+4. Once the ask reaches the provider (so after the resident's read and before its answer), the owner retires the ring (`invoke BELL 3 …` with both pins). The ring leaves `pending` and `rings`.
+5. The hold is released.
+
+The resident's whole log for that process:
+
+    resident: resumed nothing kept
+    resident: serving bell 81ad44f5…
+    resident: describe exit 51 behind 1826 2086
+    resident: bell answer method 0 pending limit 64
+    resident: asked; answer 10 bytes
+    resident: answer refused (refused lawDenied); the ring is no longer pending
+
+A ring `after` is then rung and answered. Q7 asserts exactly one more ask and no `answerRefused` end. GREEN: 1 passed in 218.44 s (Q7 adds about 135 s to the row).
+
+**It does not reproduce. Why, exactly.** `deliverP` judges every refusal by the bell's ROWS, not by its name. After a refused answer it re-reads `pending`, and only if the ring is still listed does it end `answerRefused`. A retired ring is not listed, so the kept answer is forgotten and the tick ends `next`. The claim read Run's header ("a refusal that singled out one ring would block the rest") and missed the re-read branch. The header now names the abandoned ring as not such a refusal.
+
+**Stated** (`Hosting/Proofs/ResidentRun.lean`). `deliver_gone_continues`: in a run of `deliverP` whose invoke came back refused and whose re-read lists rings without this one, the tick ends `next {kept := none, unread := 0}`, or `stop volume "forget"`, and never `answerRefused`. Plant (MEASURED, `logs/backlog/plants/C7-gone-stops.build.log`): the gone branch ending `answerRefused` reds `deliver_core` (l.184), `deliver_kept` (l.503) and `deliver_gone_continues` (l.542) by name. Restored.
+
+**Also changed.** The row's 2048 extra heights left a member started later in the row (the race's `c2`) more than a page budget behind, so its first `sync` answered `behind` (51). That is follow's correct answer for a long catch-up (PROTOCOL-38). The row's `member_sync` re-runs `sync` while it answers `behind`, at most 64 times.
+
+**Critique.** Q7 costs about 135 s of the smoke for one race. The theorem covers every interleaving; the row covers one. The row stays because it is the measurement the theorem was built from, and it is the only end-to-end run of LANG-76's deadline arm with a live resident.
+
+**Meta-critique.** The pull was to build the fix the card offered ("skip by refusal name") before measuring. That would have added a second path beside a re-read that already did the job.

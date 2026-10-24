@@ -37,6 +37,10 @@
 //!   reply (the provider holds it back). Restarted, it answers that ring `(unanswered restart)` from
 //!   the intent it kept BEFORE the ask, and asks no more. Before its first tick the restart re-ran a
 //!   whole keep of that intent (`resident: resumed the kept answer`, said only once the keep read back, HOSTING-39).
+//! - Q7, the abandoned ring (LANG-76): a ring reached PATIENCE heights late, retired by the owner
+//!   while the resident's ask about it is held at the provider (between its read and its answer):
+//!   the answer is refused, the re-read finds the ring gone, the answer is forgotten, and the next
+//!   ring is answered; no `answerRefused`.
 //! - Refused, each by name (HOSTING-27's, re-cut to the queue): the resident exe on a bell whose
 //!   resident is the operator ends `answerRefused program` after exactly one ask, restarts, answers
 //!   from its kept text and asks no more; on a bell whose grant lacks `invoke:0`, `answerRefused
@@ -62,6 +66,23 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // a plant that cannot set up is a failed plant
 
+/// `sync` through a member socket until its follower is caught up: a fresh follower more than
+/// `pagesPerCommandMax` pages behind answers `behind` (PROTOCOL-38) and is run again, at most 64 times.
+fn member_sync(sock: &Path) -> (u8, String, String) {
+    let mut r = member_cmd(sock, &["sync"]);
+    for _ in 0..64 {
+        if r.0 != command_exit::BEHIND {
+            break;
+        }
+        r = member_cmd(sock, &["sync"]);
+    }
+    r
+}
+
+/// The Bell's `(patience 2048)` (LANG-76): an unanswered ring may be retired from its notBefore +
+/// this many heights.
+const PATIENCE: u64 = 2048;
+
 /// The controller's crash-loop window (Lean's `Controller.restartWindowMs`), in seconds.
 const RESTART_WINDOW_S: u64 = RESTART_WINDOW_MS as u64 / 1000;
 
@@ -75,7 +96,7 @@ use std::sync::atomic::Ordering;
 
 use common::*;
 use nanodregg_client::generated::layout::{Command as NdCommand, CommandReply};
-use nanodregg_client::generated::{follow_op, status};
+use nanodregg_client::generated::{command_exit, follow_op, status};
 use nanodregg_client::{frame, table};
 use nanodregg_devtools::lean_bin;
 use nanodregg_launcher::generated::RESTART_WINDOW_MS;
@@ -554,6 +575,79 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         answers(&b)
     );
 
+    // Q7, the abandoned ring (LANG-76, cv 01a1682e-7f9d): the resident reaches a ring PATIENCE
+    // heights late, and the owner retires it while the resident's ask about it is held at the
+    // provider, so between the resident's read of `pending` and its answer. The answer is refused;
+    // the resident re-reads `pending`, finds the ring gone, forgets the answer and goes on: the next
+    // ring is answered, and no `answerRefused` ends the queue.
+    stop();
+    no_child();
+    ring_op(&b, "abandoned");
+    let late = rel(&b, "pending");
+    assert_eq!(late.len(), 1, "Q7: one pending ring: {late:?}");
+    let late = late[0].clone();
+    let filler = line(&w.run(&["create"]), "id ").to_owned();
+    for i in 0..PATIENCE {
+        w.run(&["write", &filler, "2", &i.to_string()]);
+    }
+    let before = asks();
+    let refusals = log().matches("answerRefused").count();
+    let gone = "the ring is no longer pending";
+    let gones = log().matches(gone).count();
+    hold.store(true, Ordering::SeqCst);
+    start();
+    until(
+        "the abandoned ring's ask reaches the provider",
+        120,
+        || asks() == before + 1,
+        &log,
+    );
+    let key = format!(
+        "(record (agent #{}) (notBefore {}))",
+        late.ringer, late.not_before
+    );
+    w.run(&[
+        "invoke",
+        &b,
+        "3",
+        &format!(
+            "(record (notBefore {}) (ringer #{}))",
+            late.not_before, late.ringer
+        ),
+        "--pin",
+        "rings",
+        &key,
+        "--pin",
+        "pending",
+        &key,
+    ]);
+    w.run(&["sync"]);
+    assert!(
+        rel(&b, "pending").is_empty() && !rel(&b, "rings").contains(&late),
+        "Q7: the owner's retire past the deadline did not take the ring: {}",
+        state(&b)
+    );
+    hold.store(false, Ordering::SeqCst);
+    until(
+        "the abandoned ring's answer refused, the ring gone",
+        120,
+        || log().matches(gone).count() > gones,
+        &log,
+    );
+    ring_op(&b, "after");
+    until(
+        "the ring after the abandoned one answered",
+        120,
+        || rel(&b, "pending").is_empty(),
+        &|| state(&b),
+    );
+    assert_eq!(
+        (asks(), log().matches("answerRefused").count()),
+        (before + 2, refusals),
+        "Q7: the abandoned ring stopped the queue or asked twice:\n{}",
+        log()
+    );
+
     // the resident exe on a bell whose resident is the operator: one ask, then notResident
     let mutation = |bell: &str, via: &str, ring: &str, name: &str| {
         stop();
@@ -750,7 +844,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         || c2sock.exists(),
         &|| members.log(),
     );
-    let (exit, out, err) = member_cmd(&c2sock, &["sync"]);
+    let (exit, out, err) = member_sync(&c2sock);
     assert_eq!(exit, 0, "the late resident's member is served: {out}{err}");
     // the World's next Turn (an unrelated one) touches no grain: the crash-looped grain stays refused
     // (the control's premise: its window cannot have passed yet)
@@ -761,7 +855,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     let refusals = log().matches(&refused).count();
     w.run(&["create"]);
     w.run(&["sync"]);
-    member_cmd(&c2sock, &["sync"]);
+    member_sync(&c2sock);
     assert!(
         !log().contains(&format!("grain-launch: {c2} started"))
             && log().matches(&refused).count() == refusals,

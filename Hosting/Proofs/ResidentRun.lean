@@ -503,6 +503,50 @@ theorem deliver_kept {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : 
                       | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
           · cases h with | say h => cases h; rfl
 
+/-- **An abandoned ring does not stop the queue** (cv 01a1682e-7f9d, LANG-76): an answer refused
+while the re-read `pending` no longer lists its ring (another member retired it between the read
+and the answer) ends the tick `next`, its kept answer forgotten, or `volume` if the forget failed;
+never `answerRefused`. The next tick reads the queue again. -/
+theorem deliver_gone_continues {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : List Ev} {n : Tick}
+    (h : Runs (deliverP sh m r t) es n) {rr : Reply} (href : rr.exit = Protocol.CommandExit.refused.code)
+    {y : Except String Reply} {p : List Ring} (hp : readRings sh y = some p) (hr : r ∉ p) {rest : List Ev}
+    (hes : es = .cmd (.invoke sh r t) (.ok rr) :: .cmd (.reread sh) y :: rest) :
+    n = .next { m with kept := none, unread := 0 } ∨ n = .stop .volume "forget" := by
+  subst hes
+  obtain ⟨arg, harg⟩ := Option.isSome_iff_exists.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some r t)
+  unfold deliverP at h
+  rw [harg] at h
+  cases h with
+  | cmd x h =>
+    simp only at h
+    have hne : rr.exit ≠ Protocol.CommandExit.ok.code := by rw [href]; decide
+    rw [if_neg hne, if_pos href] at h
+    cases h with
+    | cmd y' h =>
+      unfold readRings at hp
+      rcases y with e | rr'
+      · simp at hp
+      · simp only at h hp
+        split at hp
+        · rename_i hx
+          rw [if_neg (fun hn => hn hx)] at h
+          cases hra : Ring.readAll sh ((String.fromUTF8? rr'.stdout).getD "") with
+          | error e => rw [hra] at hp; simp [Except.toOption] at hp
+          | ok q =>
+            rw [hra] at hp
+            simp only [Except.toOption, Option.some.injEq] at hp
+            subst hp
+            simp only [hra, if_neg hr] at h
+            cases h with
+            | say h =>
+              unfold forgetThen at h
+              cases h with
+              | forget b h =>
+                cases b
+                · simp at h; cases h; exact .inr rfl
+                · simp at h; cases h; exact .inl rfl
+        · cases hp
+
 theorem answered_kept {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
     (h : Runs (answeredP sh m r t) es (.next m')) : m'.kept = keptAfter (some (r, t)) es ∧
       ∃ es', es = .say s!"asked; answer {t.size} bytes" :: .keep r t true :: es' := by

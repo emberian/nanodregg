@@ -50,7 +50,10 @@ answer carries the ring's text and the `rings` guard refuses it unless that is t
 stops again until the operator acts. That is right for every refusal known to reach it (the
 resident is not the bell's, the grant lacks `invoke:0`, `answers` is full until the owner
 retires), each of which refuses every ring alike; a refusal that singled out one ring would block
-the rest behind it, and would need a refused marker to skip it. K = `pending`'s limit is complete:
+the rest behind it, and would need a refused marker to skip it. A ring RETIRED between the read and the
+answer (LANG-76: anyone may abandon an unanswered ring past its patience) is not one: its answer is
+refused, the re-read no longer lists it, and the answer is forgotten and the queue goes on
+(`Proofs.ResidentRun.deliver_gone_continues`; resident_bell Q7 runs it). K = `pending`'s limit is complete:
 the kernel holds at most `limit` rows (`relationFull`), and a range read past K is refused, never
 truncated, so a missed ring would be a failed read (logged, retried), never a silent gap. A not-sent ask whose intent cannot be
 forgotten ends `volume`, and the restart answers that ring `(unanswered restart)` without having
