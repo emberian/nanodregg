@@ -5,7 +5,7 @@ THE BAR's reopen at its TRUE worst cut, as sized bench rows (never a bar run: ~2
 BAR's mix are ~18.9 MB, and a socket run of that size is not a gate). Everything that writes or opens
 is the deployed definition: `Receive.genesis`/`Receive.submit` under `Host.Deployed.X`,
 `Host.genesis`, `openWriter`, `commitBatch` (each frame admitted only with `withinTail`'s proof),
-`sealNow` with the writer's file checkpoint, and `openFollower` with the writer's own fold
+`sealNow` with the writer's file checkpoint, and `openAt` with the writer's own fold
 (`foldStep`). The calls are signed by `Kernel.Sim.Deployed.params` (RFC 8032 Ed25519 from a Sim tag's
 seed): a bench's fixed identity, never a custody mode, so every count below is a function of the
 code alone (the Store's random key moves MAC bytes, never a size or a count).
@@ -110,7 +110,7 @@ def fail (s : String) : IO UInt32 := do IO.println s!"FAIL {s}"; return 1
 
 def openWith {F : Type} (dir : System.FilePath) (keys : Keys) (step : World D → ByteArray → Except F (World D)) :
     IO (Except String (Opening (World D))) := do
-  return (← openFollower dir keys c world recorder.mark originChain step).mapError (·.text)
+  return (← (·.map Prod.fst) <$> openAt dir keys c world recorder.mark originChain step).mapError (·.text)
 
 /-- Admit the founder's call of `body` on `w`, and the cell it bore, if any. -/
 def admitBorn (w : World D) (m : Who) (pins : List D) (body : Body D) :
@@ -130,7 +130,7 @@ def sealBase (dir : System.FilePath) (keys : Keys) : IO (Except String Sealed) :
   let ck := fileCheckpoint dir keys c world recorder.mark originChain wr (async := false)
   if let .error f ← sealNow ck recorder.mark wr.opening.resident then return .error s!"seal {f.name}"
   (← wr.segment.get).sync
-  match ← openFollower dir keys c world recorder.mark originChain foldStep with
+  match ← (·.map Prod.fst) <$> openAt dir keys c world recorder.mark originChain foldStep with
   | .ok o =>
     unless o.sealed.offset = o.pos.offset do return .error "the new base is not at the Store's tail"
     return .ok o.sealed

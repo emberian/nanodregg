@@ -1,7 +1,7 @@
 /-
 # Host.Check — `host check STORE [--anchor STEPS:CHAIN_HEX]` (ASSEMBLY-ops D6; ROOT 2026-10-16)
 
-The writer's own open (`openFollower`: the same `openAt`, no lock, nothing written, a torn tail
+The writer's own open (`openAt`, through `Check.openClean`: no lock, nothing written, a torn tail
 read as not yet written), folded with the writer's `foldStep` (every step taken by `World.step`: a recorded refusal is
 checked as a Turn is, its bounds, window, budget and stated roots), then one line on stdout:
 

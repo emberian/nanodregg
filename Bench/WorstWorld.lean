@@ -4,7 +4,7 @@
 `worldBytesMax` is the READER's bound: a base FILE may hold any World up to it, whatever the genesis
 allowance (which binds an honest history far below it: a create's bytes are paid three times, event,
 logged creates and growth). So the reopen's worst World is an adversarially sized base, not an honest
-history. Two modes, both on the deployed path (`Host.genesis`'s seal and MAC, `openFollower`):
+history. Two modes, both on the deployed path (`Host.genesis`'s seal and MAC, `openAt`):
 
 - `bench-worstworld SCRATCH synthetic N [--harness-control]` (the standing row, N = 200000):
   N tombstones (the smallest cell entry: an id and a tag) at uniformly hashed ids are put in the

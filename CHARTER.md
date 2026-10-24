@@ -73,9 +73,13 @@ empty proof slot, an agreement mesh with one host.
    than the reader's 2^48-frame lifetime) that no physical run can exhaust, with the theorem that
    exhausting it exits by name, never silently; no `partial` anywhere (HOST-19, blessed 10-17;
    supersedes the 10-16 "one unbounded loop" wording). A resource whose LIFETIME is the guarantee (a lock, a lease, a
-   PID-file descriptor) must be the handle actually in use, never a held-but-unused value: compiled
-   Lean frees a value at its last use, which dropped the writer lock mid-serve until the lock became
-   the append fd itself (HOST 7e23642; the plant was a second writer).
+   PID-file descriptor) lives in the value the running code holds, never in a separate local kept by
+   a dummy later use, and a plant against the LIVE process refutes its early release: compiled Lean
+   frees a value at its last use, which dropped the writer lock mid-serve while the lock was a local
+   (HOST 7e23642; the plant was a second writer). The writer lock is the key file's read handle, a
+   field of the `Writer` every effect of the loop holds (HOST-64, HOST-76); store-plants
+   `seal-live-writer-locked` and `follow-live-locked` are its teeth (a second process against a live
+   `host serve` / `host follow` is refused `locked`; RED with the lock removed).
 5. **Performance is designed.** The resident Host is one deterministic loop per Store holding the
    World, the trie and the memo; admission is batched; the follower is the only replayer. "Checkpoint
    = World" means the World is what a checkpoint DENOTES. O(store) work is forbidden on the REQUEST

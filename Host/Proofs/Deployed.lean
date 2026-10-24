@@ -1054,7 +1054,7 @@ theorem limits_batchMax : limits.batchMax = recordTurnsMax := rfl
 the deployed recorder returns (at most `recordTurnsMax` pairs, `Record.encode_eq_some`), of pairs
 that are a rooted run of `World.step` from `w` (`World.RootedFold`: the writer's
 `Machine.staged_rooted` at the deployed machine, the follower's `Protocol.Command.step_persists_admitted`;
-HOST-50), is folded at reopen (`foldStep`, the one step of `openWriter` and `openFollower`) to the
+HOST-50), is folded at reopen (`foldStep`, the one step of `openWriter` and `openAt`) to the
 same World `w'`, never refused `undecodable`. -/
 theorem foldStep_recorder_encode {w₀ w w' : World D} {staged : Array (Step D × D)} {b : ByteArray}
     (h : recorder.encode w₀ staged = some b) (hroot : World.RootedFold X.env w staged.toList w') :

@@ -2,7 +2,9 @@
 # Host.Base — the sealed whole-World base, and what open reads (HOST-14)
 
     STORE/base.world = one Log frame (under the base sealer) of
-                       shapes32 ‖ world bytes ‖ u64 offset ‖ tag32 ‖ u64 indexCount ‖ indexLast32
+                       shapes32 ‖ world bytes ‖ u64 offset ‖ tag32 ‖ u64 indexCount ‖ indexLast32 ‖
+                       u64 retainedFrom ‖ u64 indexFrom (`Base.codec`, HOST-64), the file then
+                       carrying `Host.Physical`'s u64 generation ‖ mac32 trailer (HOST-71)
     STORE/index.<k0>.log = fixed-width ENTRIES, one per record before the newest base, entry k at
                        byte k · entryBytes: u64 steps ‖ u64 offset ‖ chain ‖ tag32, the tag the
                        index sealer over (origin chain ‖ u64 k ‖ steps ‖ offset ‖ chain)
@@ -36,8 +38,10 @@ A base is replaced atomically (`base.tmp` → sync → rename → sync dir), so 
 old base or the new one, never a torn one. A base that does not verify is therefore not a crash:
 it is refused `baseCorrupt` by name, and open does not fall back to folding the whole log.
 
-Open reads the base (at most `Log.frameMax c.baseRecordMax` bytes), the origin frame at 0 (at most
-`originMax` bytes, checked against the base World's origin, HOST-25), the base's last index entry
+Open reads the base (at most `Log.frameMax c.baseRecordMax` bytes), the checkpoint header of the
+base's own segment file (`Host.Open.headerFault`, HOST-64: it verifies, states the genesis chain of
+the base World's origin, HOST-25, which the origin frame at offset 0 carried before a Store could drop
+the files holding it, and the base's own position), the base's last index entry
 (`entryBytes`), the record that entry names (at most a frame and a tag, checked to be the frame
 ending at `offset`, `lastFrame`, HOST-63; a base counting none must sit at the origin frame's end,
 HOST-65), and the segment from `offset`, and `tailRead` refuses a tail longer than

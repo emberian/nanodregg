@@ -403,8 +403,9 @@ over a list model of the port, `batch ++ port' = first :: port` with a non-empty
 and still conserve). `Host.Follow.loop`'s base download in progress moved from a recursion argument
 into a reference the caller owns, for the same reason: it is volatile state that must outlive a round. (2)
 `Host.restarts` is the resident's one fuel-and-restart loop (law 4). On `fuel`, it reopens the Store in
-process through `reopenAt` (the one `openAt`, with a fresh read handle; the locked append handle stays
-the lock). It refuses `reopenDiverged` unless the reopened (height, chain), segment position, tag and
+process through `reopenAt` (the one `openAt`, with a fresh read handle; the lock stays held: since
+HOST-64 the lock is the key file's read handle, not the append handle, which moves to each new
+segment file; HOST-76). It refuses `reopenDiverged` unless the reopened (height, chain), segment position, tag and
 index length equal what the loop held, and a torn tail at reopen is also `reopenDiverged`. Then it
 continues on the same port. `fuelBatches` drops 2^24 → 2^12, so every 4096 batches the open path is
 re-checked against the live state. That is a pair assertion that runs for real, not at the next crash.
@@ -539,7 +540,7 @@ an IO fact (`.turns []` is never appended) that no theorem states. If someone ma
 an empty record (a heartbeat, say), the two facts come apart silently.
 **Status.** landed (this commit).
 
-## HOST-22 · the unsealed tail is bounded in TURNS: a turn cadence beside the byte cadence; open refuses `tailTooManyTurns` (2026-10-17, HOST-5; PERF's verifies-per-open)
+## HOST-22 · (SUPERSEDED: the turn cadence and `tailTooManyTurns` are deleted, see the amendment below) the unsealed tail was bounded in TURNS (2026-10-17, HOST-5; PERF's verifies-per-open)
 **The defect.** HOST-14 bounds the tail after the newest base in BYTES (`tailMax` = two cadences
 and a frame). An open folds every Turn of that tail, and a follower's fold re-derives each one,
 which includes one Ed25519 verify (`Receive.audit`). At `worldBytesMax` a tail of small Turns is
@@ -3410,3 +3411,33 @@ harness error. All source mutations have been restored.
 **Meta-critique.** The card offered "absorbStep defined as audit over decoded bytes". Reading the page layout ruled it out: a page carries the call, not the Turn or the record, so `audit` cannot be run on what a follower receives. The direction is forced by the bytes, and the remaining twin is an ownership sequencing, written down with its file list so it is the next card and not a footnote.
 
 **Flag day.** None: no byte, file or exit changes. A row is added (`forgedRefusal`); the rows count rises by one.
+
+## HOST-76 · the writer lock is the key file's read handle, held by the `Writer` the loop holds; the five dummy re-locks are deleted, CHARTER law 4 and HOST-19 say so, and a live `host follow` has a lock plant (2026-10-24, FIX-HOST; READ-HOST F3)
+
+**The finding (READ).** HOST-64 (eb7028d) moved the lock off the append fd onto the key file's read handle (`Writer.lock`), because the append handle now moves to each new segment file. The handle was then kept alive by `Writer.hold`, a `tryLock` whose only purpose was to be a later use, at five sites (serve, follow, seal, the join and import reopens) and six in host-file-sim. CHARTER law 4 and HOST-19 still said the lock is the append fd. No plant ran a second process against a live `host follow`.
+
+**Measured.**
+- New store-plant `follow-live-locked`: a live `host follow` child (its own `STATUS follow` line read from its stderr, the process not exited), then `host seal` on its Store: `exit=16 want=locked(16) files unchanged=true :: refused locked` (logs/fixhost-sp1.log).
+- With `followVerb`'s `wr.hold` removed (logs/fixhost-sp2.log), and separately with `serveVerb`'s removed (logs/fixhost-sp3.log): both `seal-live-writer-locked` and `follow-live-locked` still PASS. The dummy uses are not what keeps the lock: the `Writer` is captured by the loop's effects (`fileStore wr`, `fileCheckpoint … wr`), and a live object's fields live with it.
+- With `openWriter`'s `tryLock` removed (the tooth, logs/fixhost-sp5.log): both plants FAIL, `exit=0 … files unchanged=false :: sealed steps=…`: a second process seals under a live writer.
+- After this change: store-plants ALL PASS (81 lines), host-file-sim seeds 1–3 ALL PASS (`plant-second-writer` now also asserts the first writer's own handle still holds the lock while the second open is refused).
+
+**Decision (law 1 picks the key handle).** One fact, "this process is the Store's one writer", needs one object whose life is the writer's. The append handle cannot be it any more: it is replaced at every rotation, so a lock on it would be several objects over one writer's life, with a window at each rotation where the new file is unlocked. The key file is never rotated, renamed or rewritten after genesis. So the lock stays the key file's read handle, and law 4 is amended to what holds: the resource lives in the value the running code holds, and a plant against the live process refutes its early release. `Writer.hold` and every call to it are deleted; `ImportFx.reopen` returns the World alone (its `release` act existed only to run `hold`); `sealVerb` loses its `held` reference. CHARTER law 4, HOST-19's restart paragraph and Host/Store.lean's doc say the key handle.
+
+**Premise spread.** None gains a hypothesis. `ImportFx.reopen` returns the World alone, so the four theorems over `importWithPin`/`joinWith` (`import_genesis_iff`, `join_genesis_iff`, `join_carried_iff`, `join_carried_trusted`) restate only in their `fx` argument's type (RESTATES-MEANING by the declaration diff); their proofs are unchanged.
+
+**Critique.** The lock's liveness now rests on the `Writer` being captured by the loop's closures, an observable property of `fileStore`/`fileCheckpoint` (they take the whole `Writer`), not on a theorem; the plants are what would see a regression, and they run only in store-plants (convergence), not per landing. `flock` stays advisory (an rsync or `cp` into the directory is not excluded), as READ-HOST F3 said.
+
+**Meta-critique.** The obvious reading of "delete the dummy re-lock" was that something must replace it. Measuring first showed nothing needed replacing at the deployed sites, so the work moved to the plant that proves it and the tooth that proves the plant.
+
+**Flag day.** None: no byte, file or exit changes.
+
+## HOST-77 · five Host docs say what the code does: `stepTooLarge` is after the machine, the base layout carries `retainedFrom`/`indexFrom` and the physical trailer, open reads the segment header (not an origin frame), `host seal`'s open also writes, HOST-22's title; `openFollower` (no deployed caller) is deleted (2026-10-24, FIX-HOST; READ-HOST F4, F7, F8, F9, F14)
+
+- **F4.** Host/Follow.lean listed `stepTooLarge` among the refusals before the machine. It is after: the step's absorbed steps are appended (or its adopted base sealed) BEFORE the refusal is sent; only the reply is refused. Kept as behaviour (the steps were re-derived; the member's next command starts from that durable World); the doc says so.
+- **F7.** Host/Base.lean's layout omitted `retainedFrom ‖ indexFrom` (`Base.codec`) and the physical generation/MAC trailer; its open paragraph said open reads the origin frame at 0 and checks `originMax`. Open checks the base segment file's checkpoint header (`headerFault`); `originMax` does not exist (`chainBytesMax` does).
+- **F8.** `host seal`'s SealFx called the seal "the ONE effect that writes" and `sealWith` "nothing written" before it. The open (`openWriter`) truncates a torn tail and orphan index entries, syncs, and with `--retain` unlinks surplus files; `seal_writes_iff` models the open as pure. The docs now say the seal is the one effect that writes a BASE.
+- **F9.** `openFollower` had no deployed caller (`host follow` opens with `openWriter`, HOST-22) and a name that says otherwise; Host/Check.lean said check uses it (it calls `openAt` through `openClean`). Deleted; its callers (host-file-sim's `follow`, bench-count, bench-worstcut) call `openAt` directly.
+- **F14.** HOST-22's title announced `tailTooManyTurns`, which its own amendment deleted; the title says SUPERSEDED.
+
+**Premise spread.** None. **Flag day.** None. `DELETES: Nanodregg.Host.openFollower`, `Nanodregg.Host.Writer.hold`.

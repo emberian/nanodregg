@@ -190,14 +190,13 @@ def PinArg.parse : PinArg → Option (Carry.Pin D)
 /-- What `host import` reaches outside itself, in the order it reaches it. Two effects write:
 `genesis` creates the Store's paths, and `reopen` (`openWriter`) locks, truncates and syncs what
 `genesis` wrote; `import_genesis_iff` states `genesis` comes first and only after every check. The
-others read (IN, the OS random source) or print. `reopen` gives back the reopened World and the act
-that releases the writer's handle (its lock lives until then). -/
+others read (IN, the OS random source) or print. `reopen` gives back the reopened World. -/
 structure ImportFx (m : Type → Type) where
   nonce : m (Except Status ByteArray)
   readIn : m (Except (StoreFault (Record.Fault (Reject D))) ByteArray)
   key : m (Option Digest)
   genesis : Digest → World D → m (Except (StoreFault (Record.Fault (Reject D))) Unit)
-  reopen : Digest → m (Except (StoreFault (Record.Fault (Reject D))) (World D × m Unit))
+  reopen : Digest → m (Except (StoreFault (Record.Fault (Reject D))) (World D))
   refuse : Status → String → m UInt32
   report : List String → m Unit
 
@@ -235,10 +234,9 @@ def importWithPin {m : Type → Type} [Monad m] (fx : ImportFx m) (name : ByteAr
   | .ok () =>
     match ← fx.reopen key with
     | .error f => fx.refuse f.status f.text
-    | .ok (back, release) =>
+    | .ok back =>
       unless (Codec.Kernel.carried X.env dc).bytes back.carried = bytes.extract r.carriedAt bytes.size do
         return ← fx.refuse .carryMismatch "carryMismatch reopen"
-      release
       fx.report [s!"origin {back.origin.toHex}", s!"nonce {Protocol.Text.toHex nonce}",
         s!"from {r.head.fromOrigin.toHex}", s!"height {back.height}", s!"chain {back.chain.toHex}",
         s!"start {Protocol.Text.toHex (Protocol.Invite.startBytes X (.carried back.origin name nonce r.head.fromOrigin r.head.height r.head.chain))}"]
@@ -297,7 +295,7 @@ def joinVerb (store inviteHex keyHex : String) (inPath : Option String) : IO UIn
       reopen := fun key => do
         match ← openWriter store (Keys.ofKey key shapes) c world recorder.mark originChain foldStep with
         | .error f => return .error f
-        | .ok wr => return .ok (wr.opening.opened.world, wr.hold)
+        | .ok wr => return .ok wr.opening.opened.world
       refuse := fun s n => refuse s n
       report := fun ls => ls.forM IO.println }
 
@@ -315,7 +313,7 @@ def importVerb (store name inPath : String) (pinHex : PinArg) (nonceArg : Option
       reopen := fun key => do
         match ← openWriter store (Keys.ofKey key shapes) c world recorder.mark originChain foldStep with
         | .error f => return .error f
-        | .ok wr => return .ok (wr.opening.opened.world, wr.hold)
+        | .ok wr => return .ok wr.opening.opened.world
       refuse := fun s n => refuse s n
       report := fun ls => ls.forM IO.println }
 
@@ -384,7 +382,6 @@ def serveVerb (store : String) (retain : Retain) : IO UInt32 := do
         restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark originChain wr) c
             (fileStore wr) (pager keys files) port limits fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
-      wr.hold  -- the writer's lock lives to here
       return code
 
 def followVerb (store memberHex grantHex : String) : IO UInt32 := do
@@ -405,12 +402,13 @@ def followVerb (store memberHex grantHex : String) : IO UInt32 := do
         restarts (Follow.loop keys ⟨wr.opening.opened.world.origin, member, grant, Follow.window⟩ (fileStore wr)
             (fileCheckpoint store keys c world recorder.mark originChain wr) port download fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
-      wr.hold  -- the follower's lock lives to here
       return code
 
 /-- What `host seal` reaches outside itself: the key, the writer's open (the Store's lock), the
-seal (`Loop.sealNow` over the Store's checkpoint: the ONE effect that writes), the refusal and the
-report. -/
+seal (`Loop.sealNow` over the Store's checkpoint: the one effect that writes a base), the refusal
+and the report. The open is `openWriter`'s, which also writes (HOST-77): it truncates a torn tail and
+orphan index entries and syncs, and with `--retain` unlinks surplus files; `seal_writes_iff`
+models the open as pure, so its "nothing written" is about the seal's effects, not the open's. -/
 structure SealFx (m : Type → Type) (R : Type) where
   key : m (Except (StoreFault (Record.Fault (Reject D))) Digest)
   open_ : Digest → m (Except (StoreFault (Record.Fault (Reject D))) R)
@@ -419,8 +417,8 @@ structure SealFx (m : Type → Type) (R : Type) where
   report : Sealed → m Unit
 
 /-- `host seal`'s decision over its effects (HOST-43): the key, then the writer's open, and only
-then the one seal; any refusal before it is answered by name with nothing written
-(`Host.Proofs.Cli.seal_writes_iff`). -/
+then the one seal; a refusal before the seal is answered by name with no base written
+(`Host.Proofs.Cli.seal_writes_iff`; the open's own repair of a torn tail is the open's, HOST-77). -/
 def sealWith {m : Type → Type} [Monad m] {R : Type} (fx : SealFx m R) : m UInt32 := do
   match ← fx.key with
   | .error f => fx.refuse f.status f.text
@@ -436,23 +434,19 @@ def sealWith {m : Type → Type} [Monad m] {R : Type} (fx : SealFx m R) : m UInt
 (`openWriter`: the Store's lock, so a running writer refuses it `locked`); the seal is `sealNow`
 with the writer's own file checkpoint, inline (the process waits for its one base); the report is
 the base an invitation pins: `sealed steps=S chain=C digest=D`. -/
-def sealVerb (store : String) (retain : Retain) : IO UInt32 := do
-  let held ← IO.mkRef (none : Option (Writer (World D)))
-  let code ← sealWith (R := Keys × Writer (World D))
+def sealVerb (store : String) (retain : Retain) : IO UInt32 :=
+  sealWith (R := Keys × Writer (World D))
     { key := readKey store
       open_ := fun key => do
         let keys := Keys.ofKey key shapes
         match ← openWriter store keys c world recorder.mark originChain foldStep retain with
         | .error f => return .error f
-        | .ok wr => held.set (some wr); return .ok (keys, wr)
+        | .ok wr => return .ok (keys, wr)
       write := fun (keys, wr) => do
         let ck := fileCheckpoint store keys c world recorder.mark originChain wr (async := false)
         return (← sealNow ck recorder.mark wr.opening.resident).map (·.sealed)
       refuse := fun s n => refuse s n
       report := fun s => IO.println s!"sealed steps={s.steps} chain={Protocol.Text.toHex s.chain} digest={Protocol.Text.toHex s.digest}" }
-  -- the writer's lock lives to here
-  if let some wr := ← held.get then wr.hold
-  return code
 
 /-- `--retain N`: refused `usage` by the name `retainBelowFloor` under the floor of two files
 (`Host.retainFloor`), `usage retain` when N is not a number; nothing is opened before it parses. -/

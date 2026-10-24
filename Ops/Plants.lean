@@ -870,6 +870,60 @@ def sealPlants (exe : String) (intact dir : System.FilePath) (w4 : World D) : IO
     failed := failed + 1
   return failed
 
+/-- HOST-76 (READ-HOST F3's question): a live `host follow` holds its Store's writer lock exactly as
+`host serve` does (`openWriter`; the lock is the key file's read handle, kept to the follower's end
+by `Writer.hold`): `host seal` on the Store of a RUNNING follower is refused `locked` and every
+Store file is byte-identical after it. The follower is proved running (its own `STATUS follow` line,
+read from its stderr, and the process not yet exited) before the seal and after it. -/
+def followLockPlant (exe : String) (intact dir : System.FilePath) (w4 : World D) : IO Nat := do
+  let s := dir / "follow-lock"
+  backup intact s
+  let member := (founderId X w4.origin 0).toHex
+  let grant := (founderGrantId X w4.origin 0).toHex
+  let snap : IO (List (String × ByteArray)) := snapshot s
+  let child ← IO.Process.spawn
+    { cmd := exe, args := #["follow", s.toString, member, grant], stdin := .piped, stdout := .piped,
+      stderr := .piped }
+  let (input, child) ← child.takeStdin
+  let out ← IO.asTask child.stdout.readBinToEnd (prio := .dedicated)
+  let opened ← IO.mkRef false
+  let err ← IO.asTask (prio := .dedicated) do
+    let mut acc := ""
+    for _ in [0:4096] do
+      let l ← child.stderr.getLine
+      if l.isEmpty then break
+      if l.startsWith "STATUS follow" then opened.set true
+      acc := acc ++ l
+    return acc
+  let waited ← IO.asTask child.wait (prio := .dedicated)
+  let mut steps := 0
+  while !(← opened.get) && !(← IO.hasFinished waited) && steps < pollSteps do
+    IO.sleep pollMs
+    steps := steps + 1
+  let before ← snap
+  let liveBefore := (← opened.get) && !(← IO.hasFinished waited)
+  let r ← host exe ["seal", s.toString]
+  let after ← snap
+  let liveAfter := !(← IO.hasFinished waited)
+  let ok := liveBefore && liveAfter && r.code = Status.locked.code.toUInt32 && before == after
+  IO.println s!"PLANT follow-live-locked {if ok then "PASS" else "FAIL"} :: follower running before={liveBefore} after={liveAfter}; exit={r.code} want=locked({Status.locked.code}) files unchanged={before == after} :: {r.out.replace "\n" " "}"
+  -- stop the follower: end of its input (used up to here), a bounded wait, its own Child handle if
+  -- it overstays
+  input.flush
+  let (_, child) ← child.takeStdin
+  steps := 0
+  while !(← IO.hasFinished waited) && steps < pollSteps do
+    IO.sleep pollMs
+    steps := steps + 1
+  unless ← IO.hasFinished waited do
+    child.kill
+    IO.println "PLANT follow-live-locked FAIL :: the follower did not end at eof within the deadline (killed by its own Child handle)"
+    return 1
+  let _ ← IO.ofExcept waited.get
+  let _ ← IO.ofExcept out.get
+  let _ ← IO.ofExcept err.get
+  return if ok then 0 else 1
+
 def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UInt32 := do
   if ← dir.pathExists then IO.eprintln s!"store-plants: {dir} exists"; return 2
   IO.FS.createDirAll dir
@@ -964,6 +1018,7 @@ def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UI
   failed := failed + (← missingPlants exe intact dir)
   failed := failed + (← joinPlants exe g.out dir)
   failed := failed + (← sealPlants exe intact dir w4)
+  failed := failed + (← followLockPlant exe intact dir w4)
   if failed = 0 then IO.println "ALL PASS"; return 0
   IO.println s!"FAIL {failed} of {plants.length}"; return 1
 

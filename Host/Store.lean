@@ -16,8 +16,12 @@ offset, and `Segs` reads logical ranges across the files. A base sits at the sta
 in the generation authenticated by the atomic base, so the open reads its header, its successors (the tail),
 and at most the file before it (the base's last indexed record, HOST-63): O(1) files.
 
-The lock is the key file's read handle, flock'd for the writer's life (`Writer.lock`, kept by
-`Writer.hold`): the append handle moves to each new file, the lock does not.
+The lock is the key file's read handle, flock'd for the writer's life (`Writer.lock`): the append
+handle moves to each new file, the lock does not. It lives as long as the `Writer` that holds it,
+and every effect of the loop holds the `Writer` (`fileStore`, `fileCheckpoint`), so it is held while
+the loop runs; no call site keeps it by a later use. A second process against a live `host serve`
+or `host follow` is refused `locked` (store-plants `seal-live-writer-locked`, `follow-live-locked`,
+HOST-76), which is what would show a lock freed early.
 
 `openAt` is the one open: the base (bounded before it is read), the files its offset names, and
 `openWith` over logical readers. The writer then truncates the torn tail (in the newest file only:
@@ -348,10 +352,6 @@ structure Writer (W : Type) where
   opening : Opening W
   generation : IO.Ref Nat
 
-/-- Keep the writer's lock to here: the lock's handle lives as long as a later use of it. -/
-def Writer.hold (wr : Writer W) : IO Unit := do
-  let _ ← wr.lock.tryLock
-
 /-- Unlink every Store file outside what the base keeps: segment files before `retainedFrom`, index
 files other than `indexFrom`'s, and stale `seg.tmp` / `index.tmp`. Only a writer with a finite
 retention runs it (only a drop leaves such files: a crash between the base install and the unlinks). -/
@@ -394,12 +394,6 @@ def openWriter (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stre
     if retain.isSome then removeSurplus dir (segmentIdentity fs.generation fs.retainedFrom) fs.indexFrom
     return .ok ⟨lock, ← IO.mkRef segment, ← IO.mkRef fs.newest, ← IO.mkRef index,
       ← IO.mkRef (fs.retainedFrom, fs.indexFrom), retain, o, ← IO.mkRef fs.generation⟩
-
-/-- Open the Store as a follower of its directory: the same open, no lock, nothing written. -/
-def openFollower (dir : System.FilePath) (keys : Keys) (c : Cadence) (world : Stream W)
-    (mark : W → Nat × ByteArray) (origin : W → ByteArray) (step : W → ByteArray → Except F W) :
-    IO (Except (StoreFault F) (Opening W)) := do
-  return (← openAt dir keys c world mark origin step).map Prod.fst
 
 /-- The loop's store over the writer's newest segment file. -/
 def fileStore (wr : Writer W) : Store where

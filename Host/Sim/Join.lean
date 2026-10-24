@@ -24,7 +24,7 @@ def trial (inv key : ByteArray) (input : Option String) (file : ByteArray) :
       reopen := fun _ => do
         match ← made.get with
         | none => pure (.error (.missing .base))
-        | some w => pure (.ok (w, pure ()))
+        | some w => pure (.ok w)
       refuse := fun s n => do why.set n; pure s.code.toUInt32
       report := fun _ => pure () }
     (Text.toHex inv) (Text.toHex key) input

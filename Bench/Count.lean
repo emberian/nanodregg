@@ -3,7 +3,7 @@
 
 THE BAR's work counted at deployed parameters, from THE BAR's own Store: the Store the deployed
 `host serve` wrote (scripts/bar.sh hands it over), opened read-only exactly as a follower reopens
-(`openFollower`), but with every record re-derived as a follower re-derives it at follow time:
+(`openAt`, the one open), but with every record re-derived as a follower re-derives it at follow time:
 `Receive.auditStep` (decode each logged event, `receive` it on its own World, require the very same
 Turn, admit it; a recorded refusal re-judged), under the deployed `Ctx` with two marks added:
 every trie-domain hash (KERNEL-36's `countingEnv`, `#`) and every signature verify (`@`). The marks
@@ -86,7 +86,7 @@ def toyPlant (dir : System.FilePath) : IO (Option String) := do
   match ← (readKey dir : IO (Except (StoreFault (Record.Fault (Verdict D))) D)) with
   | .error e => IO.println s!"PLANT toy-store refused {e.text}"; return none
   | .ok k =>
-    match ← openFollower dir (Keys.ofKey k shapes) c world recorder.mark originChain auditRecord with
+    match ← (·.map Prod.fst) <$> openAt dir (Keys.ofKey k shapes) c world recorder.mark originChain auditRecord with
     | .error e => IO.println s!"PLANT toy-store refused {e.text}"; return none
     | .ok _ => return some "a toy Store opened as THE BAR's: its work would be counted"
 
@@ -110,13 +110,13 @@ def count (args : List String) : IO UInt32 := do
   let host ← match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) D)) with
     | .error e => IO.println s!"FAIL open: {e.text}"; return 1
     | .ok k =>
-      match ← openFollower store (Keys.ofKey k shapes) c world recorder.mark originChain foldStep with
+      match ← (·.map Prod.fst) <$> openAt store (Keys.ofKey k shapes) c world recorder.mark originChain foldStep with
       | .error e => IO.println s!"FAIL open: {e.text}"; return 1
       | .ok o => pure o
   let key ← match ← (readKey store : IO (Except (StoreFault (Record.Fault (Verdict D))) D)) with
     | .error e => IO.println s!"FAIL open: {e.text}"; return 1
     | .ok k => pure k
-  let (r, err) ← captured (openFollower store (Keys.ofKey key shapes) c world recorder.mark originChain auditRecord)
+  let (r, err) ← captured ((·.map Prod.fst) <$> openAt store (Keys.ofKey key shapes) c world recorder.mark originChain auditRecord)
   let o ← match r with
     | .error e => IO.println s!"FAIL replay: the re-derivation refused {e.text}"; return 1
     | .ok o => pure o

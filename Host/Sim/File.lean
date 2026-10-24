@@ -8,7 +8,7 @@
    (`fileCheckpoint`: base.tmp → sync → rename → sync dir) at the toy cadence;
 2. plant-second-writer: while the first writer lives, a second `openWriter` is refused `locked`;
 3. plant-crash-mid-seal: a stale `base.tmp` (a truncated base) and half of one more frame are left
-   behind the writer's back (a crash during a seal, mid-write); `openFollower` reports the torn
+   behind the writer's back (a crash during a seal, mid-write); `openAt` (no lock) reports the torn
    tail and changes nothing; `openWriter` truncates it, ignores the tmp, and opens to the loop's
    height and chain; serving more turns seals over the tmp, and a reopen is clean;
 4. plant-foreign-key: the Store opened under another Store's key is refused `baseCorrupt`;
@@ -75,8 +75,9 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
         (fileStore wr) (fun _ _ => pure (0, ByteArray.empty)) port limits roundFuel)
       (reopenAt dir keys c world recorder.mark originChain foldStep) recorder.mark (frames.length + 1) o.resident
     let second ← (openWriter dir keys c world recorder.mark originChain foldStep : IO (Except Fault _))
-    let refused := match second with | .error .locked => true | _ => false
-    wr.hold  -- the writer's lock is alive up to here
+    -- the first writer still holds its lock (flock again on its own handle succeeds) while the
+    -- second open is refused: in process, as the store-plants' live serve/follow are across processes
+    let refused := (match second with | .error .locked => true | _ => false) && (← wr.lock.tryLock)
     let replies := (← sent.get).size
     match exit with
     | .eof =>
@@ -86,14 +87,14 @@ def serveDir (dir : System.FilePath) (keys : Keys) (c : Cadence) (seed : Nat) (f
     | e => return .error s!"serve ended {e.name}"
 
 def follow (dir : System.FilePath) (keys : Keys) (c : Cadence) : IO (Except Fault (Opening (World Nat))) :=
-  openFollower dir keys c world recorder.mark originChain foldStep
+  return (← openAt dir keys c world recorder.mark originChain foldStep).map Prod.fst
 
 def fileSize (p : System.FilePath) : IO Nat := do
   return (← (← File.open p .read).size).toNat
 
 /-- plant-missing-FILE (HOST-35): a fresh genesis Store (index count 0, where an absent index.log
 was never short of anything) with one file removed. The removal is asserted first; then
-`readKey` (for the key) or `openFollower`, and `openWriter`, refuse `missing FILE` by name, and the
+`readKey` (for the key) or `openAt`, and `openWriter`, refuse `missing FILE` by name, and the
 file is still absent afterwards (the append mode never re-creates it). -/
 def missingPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures : IO.Ref Nat) : IO Unit := do
   -- the parts of a genesis Store: the key, the origin frame's seg.0.log, the base's empty file, the
@@ -354,7 +355,6 @@ def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failu
           match ← followAppend fdir keys fwr r ps with
           | .error e => err := some e; break
           | .ok r' => r := r'
-      fwr.hold
       pure (match err with | some e => .error e | none => .ok (r, sizes))
   match caught with
   | .error e =>
@@ -378,7 +378,6 @@ def wideFollowPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failu
     | .error e => pure (Except.error s!"open {e.name}")
     | .ok fwr =>
       let x ← followAppend gdir keys fwr fwr.opening.resident pairs
-      fwr.hold
       pure x
   let after ← logicalSize gdir (physicalHeaderBytes keys)
   check s!"{q}: the follower append refuses `recordTooLarge` and writes nothing ({match res with | .ok _ => "appended" | .error e => e}, seg.log {before} -> {after})"
@@ -419,7 +418,6 @@ def boundPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
         let r := fwr.opening.resident
         let x ← append recorder keys.segment (fileCheckpoint dir keys wide world recorder.mark originChain fwr)
           wide (fileStore fwr) r r.world staged
-        fwr.hold
         pure (match x with | .error e => Except.error e.name | .ok _ => Except.ok ())
     let after ← logicalSize dir (physicalHeaderBytes keys)
     let shown := match res with | .ok () => "appended" | .error e => e
@@ -562,7 +560,6 @@ def emptyPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failures 
         let r := fwr.opening.resident
         let x ← append recorder keys.segment (fileCheckpoint dir keys cadence world recorder.mark originChain fwr)
           cadence (fileStore fwr) r r.world staged
-        fwr.hold
         pure (match x with
           | .error e => Except.error e.name
           | .ok r' => Except.ok (r'.pos.offset == r.pos.offset && r'.index.size == r.index.size))
@@ -595,7 +592,6 @@ def positionPlant (root : System.FilePath) (key : Digest) (keys : Keys) (failure
       let ck := fileCheckpoint dir keys cadence world recorder.mark originChain fwr (async := false)
       let pos : Position := if far then ⟨2 ^ 64, r.pos.tag⟩ else r.pos
       let res ← ck.write r.world pos #[] r.sealed.index
-      fwr.hold
       let base1 ← IO.FS.readBinFile (basePath dir)
       let idx1 ← IO.FS.readBinFile (← indexFile dir)
       let shown := match res with | .ok _ => "installed" | .error f => f.name
@@ -965,7 +961,6 @@ def adoptionPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failur
     | .ok wr =>
       let result ← prepareAdoption dst keys wide world recorder.mark originChain wr
         wr.opening.opened.world target wr.opening.pos
-      wr.hold
       pure result
   let (g, _, _) ← match prepared with
     | .error e => check s!"adopt prepare {e.name}" false failures; return
@@ -974,7 +969,7 @@ def adoptionPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failur
   let reopened ← do
     match ← (openWriter dst keys wide world recorder.mark originChain foldStep : IO (Except Fault _)) with
     | .error e => pure (.error e : Except Fault Nat)
-    | .ok wr => wr.hold; pure (.ok wr.opening.opened.world.steps)
+    | .ok wr => pure (.ok wr.opening.opened.world.steps)
   let unchanged ← oldSegments.allM fun (n, b) => return (← IO.FS.readBinFile (dst / n)) == b
   IO.println s!"adopt interruption generation={g} follower={match follower with | .ok o => s!"opened {o.opened.world.steps}" | .error e => e.name} writer={match reopened with | .ok n => s!"opened {n}" | .error e => e.name}"
   check "plant-adopt-interruption: prepared identity leaves every previous file intact and both opens at the previous base"
@@ -989,8 +984,8 @@ def adoptionPlants (root : System.FilePath) (key : Digest) (keys : Keys) (failur
     | .ok wr =>
       let ck := fileCheckpoint dst keys wide world recorder.mark originChain wr false
       match ← ck.adopt wr.opening.opened.world target wr.opening.pos with
-      | .error e => wr.hold; pure (.error e)
-      | .ok _ => let generation ← wr.generation.get; wr.hold; pure (.ok generation)
+      | .error e => pure (.error e)
+      | .ok _ => let generation ← wr.generation.get; pure (.ok generation)
   let generation ← match adopted with
     | .error e => check s!"adopt publish {e.name}" false failures; return
     | .ok g' => pure g'
