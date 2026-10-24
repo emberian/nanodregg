@@ -102,7 +102,7 @@ private theorem escrow_party {bytesOf : D → ByteArray} {digestOf : ByteArray �
 /-- **A signed escrow fuse that the World admits moves both legs with both retracts** (PROT-8 under
 LANG-77, the Turn grain; the escrow twin of `fuse_atomic`, `jointLaw_sound` and `invitation_once`). A
 signed call invoking `x'.fuse` of the escrow package `offerEscrowPackageOf …`, its deal naming the pair
-`{x', y'}` (digests `xb`, `yb`, each reading back, `x' ≠ y'`), both objects of that one package, which
+`{x', y'}` (digests `xb`, `yb`, each reading back), both objects of that one package, which
 `receive` turns into `t` and `World.admit` admits from canonical cells and rows to `w'`: BOTH parties'
 legs moved with their rows — the fuser `x'` on its own argument, its peer `y'` on the
 `{keys, pair, theta}` the fuser's run ENCODED for it, one value (`EscrowLegMoved` of each: the offer row
@@ -124,7 +124,7 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
     (hR : (offerRoleTy roles).wf = true)
     (hx : ∃ cl, w.live X.env x' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hy : ∃ cl, w.live X.env y' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
-    (hrx : digestOf (bytesOf x') = some x') (hry : digestOf (bytesOf y') = some y') (hne : x' ≠ y')
+    (hrx : digestOf (bytesOf x') = some x') (hry : digestOf (bytesOf y') = some y')
     (ha : World.admit X.env w t = .ok w') (hcan : w.Canon X.env) (hrc : w.RowsCanon X.env) :
     EscrowLegMoved bytesOf digestOf rc X w w' c t pkg theta roles ol sl
       (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]) x' ∧
@@ -150,20 +150,29 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
   obtain ⟨wkx, htx⟩ := dispatched_signed_children hc hb hirx hrunx 0 (by simp)
   obtain ⟨svx, dvx, hsx0, hdx0, hsx1, hdx1⟩ := transfer_reads_back_dispatched hc ha htx
   obtain ⟨τx, hτx, hsτx, haτx⟩ := hcov (.row ⟨x', 0, kb⟩, .retract) (by simp)
-  -- the peer's take: the second call, dispatched one level down; the peer is `y'`
-  have hfx : (Data.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th),
-      ("via", v)]).field "pair" = some (.record [("a", .digest xb), ("b", .digest yb)]) := by simp [Data.field, Row.find?]
-  rcases peer_of_pair hfx hxd hyd hrx hry hne (.inl rfl) hpeer with ⟨-, rfl⟩ | ⟨hxy, -⟩
-  · obtain ⟨wky, hdyd⟩ := dispatched_signed_children hc hb hirx hrunx 1 (by simp)
-    obtain ⟨keys', pair', th', hdy, hmy⟩ := escrow_party (n := 2) hX hc ha hrc hid hidK hp hR hdyd hy hry
-    have h1' := Wire.decodeData_eq_ok_iff.mpr hdb
-    rw [h1'] at hdy
-    simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] at hdy
-    obtain ⟨rfl, rfl, rfl⟩ := hdy
-    refine ⟨⟨keys, .record [("a", .digest xb), ("b", .digest yb)], th, k, o, kq, q, amt, ab, pb, asset, payTo, kb,
-      by simp [Data.field, Row.find?], by simp [Data.field, Row.find?], by simp [Data.field, Row.find?],
-      hm, hn, hj, hg, hpb, h2, h3, hkb, ⟨τx, hτx, hsτx, haτx⟩, admit_retract_row hrc ha hτx hsτx haτx,
-      svx, dvx, hsx0, hdx0, hsx1, hdx1⟩, hmy, fun d => admit_value hcan ha d⟩
-  · exact absurd hxy hne
+  -- the peer's take: the second call, dispatched one level down; the peer is `y'`, since the peer
+  -- `x'` itself would be `revisited` (`x'` is in the walk below the root)
+  obtain ⟨wky, hdyd⟩ := dispatched_signed_children hc hb hirx hrunx 1 (by simp)
+  have hpx : p ≠ x' := fun e => dispatched_invoke_fresh hc hdyd (by
+    rcases dispatched_actor_visited hdyd with h | h
+    · simp [Bounds.callDepthMax] at h
+    · rw [e]; exact h)
+  have hpy : p = y' := by
+    obtain ⟨a0, b0, hf, -, hcase⟩ := peerOf_party bytesOf digestOf hpeer
+    simp only [Data.field, Row.find?, ↓reduceIte] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    rcases hcase with ⟨-, hb0⟩ | ⟨-, ha0⟩
+    · rw [hyd] at hb0; exact (Option.some.inj hb0).symm
+    · rw [hxd] at ha0; exact absurd (Option.some.inj ha0).symm hpx
+  subst hpy
+  obtain ⟨keys', pair', th', hdy, hmy⟩ := escrow_party (n := 2) hX hc ha hrc hid hidK hp hR hdyd hy hry
+  have h1' := Wire.decodeData_eq_ok_iff.mpr hdb
+  rw [h1'] at hdy
+  simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] at hdy
+  obtain ⟨rfl, rfl, rfl⟩ := hdy
+  refine ⟨⟨keys, .record [("a", .digest xb), ("b", .digest yb)], th, k, o, kq, q, amt, ab, pb, asset, payTo, kb,
+    by simp [Data.field, Row.find?], by simp [Data.field, Row.find?], by simp [Data.field, Row.find?],
+    hm, hn, hj, hg, hpb, h2, h3, hkb, ⟨τx, hτx, hsτx, haτx⟩, admit_retract_row hrc ha hτx hsτx haτx,
+    svx, dvx, hsx0, hdx0, hsx1, hdx1⟩, hmy, fun d => admit_value hcan ha d⟩
 
 end Nanodregg.Lang.Std

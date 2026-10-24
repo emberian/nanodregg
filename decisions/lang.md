@@ -6652,6 +6652,24 @@ Restored. MEASURED green: `lang-journey: GREEN`, RC3 `refused … "notCommitted"
 
 **Meta-critique.** The pull was to place the row where the brief said (Protocol/Rows) and build a second-World harness there. The question is which runner already holds a foreign World. Lang journey's Head does. Building there needs no new machinery, which kept this card small.
 
+### LANG-75.24 Law 1 · the offer proofs' run helpers are MethodRun's; the fuse's twins deleted; the escrow fuse no longer takes `x' ≠ y'` (2026-10-23; CX-BACKLOG-3; closes cv 01a16821-581a; method R-0069)
+
+**Decision.**
+- **Deleted twins** (each an exact copy of a lemma that already existed):
+  - from `Lang.Proofs.StdOffer`: `get_data`, `find_suspend_of`, `means_toVal`, `rowMeans_toVal` and the private `find_rowToVal_of` (`Lang.Proofs.MethodRun`'s, HOSTING-44), and `apply4_field`, which is `apply4_method` at `activityMethod`. The six call sites in StdOffer, StdOfferFuse and StdOfferEscrow now call `apply4_method`.
+  - from `Lang.Proofs.StdOfferFuse`: the private `invokeRun_pkg` (DispatchRows has the public one), `peerOf_spec` (`Lang.Proofs.PeerRead.peerOf_party`, same statement) and the private `callStep_ok_`.
+  - from `Lang.Proofs.DispatchRows`: the private `callStep_ok'`, and the alias `admit_retract_absent`. StdOfferFuse now names `Kernel.admit_retract_row` (KERNEL-65) directly.
+- **Kernel** (`Kernel/Proofs/InvokeTree.lean`): `callStep_ok` is public now, so the two Lang copies could go. Two new lemmas:
+  - `dispatched_actor_visited`: below the root, a dispatched Body's caller is already in the walk.
+  - `dispatched_invoke_fresh`: in a received call, a dispatched invoke is of an object the walk had not yet visited (`revisited` otherwise).
+- **`escrow_fuse_admitted` loses `hne : x' ≠ y'`** (LANG-77's open follow-up (a)). The fuser's second call invokes its peer one level below the root, where `x'` is already in the walk. So the peer is not `x'`. `peerOf_party` then makes the peer `y'`: if the pair's `b` were `x'`'s bytes, the peer would be the pair's `a`, which reads back to `x'`. The premise was needed because `peerOf`'s `samePeer` check compares bytes, and two different byte strings can still read back to one object. The other fuse theorems (`fuse_atomic`, `jointLaw_sound`, `invitation_once`) keep their statements. `fuse_tree` already derives `x' ≠ y'` the same way, from the dispatch.
+
+**Plant (MEASURED, hbox `logs/backlog/plants/C6-no-revisited.build.log`).** `invoke`'s `revisited` check was replaced by `req true`. `lake build Kernel.Proofs.InvokeTree` is RED at `Kernel.Proofs.Tree` `invoke_ok` (l.46) and at `Kernel.Proofs.Authority` (l.147, l.151). `dispatched_invoke_fresh` and the escrow theorem sit behind that import. Restored; `git diff` empty.
+
+**Flag day.** None. The proofs changed, and no definition, wire format or VK did. The decls export shows deletions, one restated theorem (the dropped premise), one private-to-public change and two additions.
+
+**Critique.** DispatchRows' `foldCalls_rows` and `foldCalls_split_rows` are the rows analogues of InvokeTree's `foldCalls_effects` and `foldCalls_split`. They are not copies: one fold lemma over both fields would replace four, but that is a restatement and is not done here. The two private `fuseOkEnv` abbrevs (StdOfferFuse, StdOfferEscrowFuse) stay duplicated because closure C3 refuses a proof module that exports an abbrev.
+
 ## LANG-76 An activity may declare a patience: an unanswered row is retired by anyone from its deadline on, with its cursor row (2026-10-23; CX-DEADLINE; Ember's open decision cv 01a166ba-7af9, built as its DEFAULT; IMPACT `redregg/work/promo/IMPACT-P4.md` §1.5; method R-0069)
 
 **This was Ember's decision, and this landing is its default.** cv 01a166ba-7af9 asked whether an unanswered activity row may be retired after a declared deadline. The default was yes: a deadline arm in the generated guard, a widened check with a named refusal before the deadline and a journey row after it. The alternative was "leave it": an unanswered row waits forever and holds one of the log's slots (the Bell has 1024), on the bet that 1024 rows are enough in practice. The default was approved for building. The decision is resolved to the default with this landing's hash.

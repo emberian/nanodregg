@@ -27,6 +27,7 @@ A fuse in which the peer's take refuses derives no Turn: that branch is "no `rec
 of every refusal, and is no conjunct here.
 -/
 import Lang.Proofs.DispatchRows
+import Lang.Proofs.PeerRead
 import Lang.Proofs.StdOffer
 import Lang.Proofs.CallLive
 
@@ -187,41 +188,6 @@ private theorem callsFuse_means {lib : List Term} {theta : List Label} {budget :
     (.cons .nat .nat (.cons .nat .nat
     (.cons (peerT_eval hs hpa) .digest
     (.cons (get_data (ℓ := "via") (x := via) (BigStep.var (i := 6) rfl) rfl) (means_toVal hvia) .nil)))))))
-
-/-- What `peerOf` read: a pair of two different digests, one of them the reader's bytes, and the
-peer the other one's digest. -/
-theorem peerOf_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {self p : D}
-    {args : Data} (h : Nanodregg.Lang.peerOf bytesOf digestOf self args = .ok p) :
-    ∃ a b, args.field "pair" = some (.record [("a", .digest a), ("b", .digest b)]) ∧ a ≠ b ∧
-      ((a = bytesOf self ∧ digestOf b = some p) ∨ (b = bytesOf self ∧ digestOf a = some p)) := by
-  unfold Nanodregg.Lang.peerOf at h
-  split at h
-  · rename_i a b hf
-    refine ⟨a, b, hf, ?_⟩
-    by_cases hab : a = b
-    · subst hab
-      simp [bind, Except.bind] at h
-    · refine ⟨hab, ?_⟩
-      by_cases ha : a = bytesOf self
-      · subst ha
-        simp [hab, bind, Except.bind, pure, Except.pure] at h
-        split at h
-        · rename_i q hq
-          simp only [Except.ok.injEq] at h
-          subst h
-          exact .inl ⟨rfl, hq⟩
-        · simp [throw, throwThe, MonadExceptOf.throw] at h
-      · by_cases hb : b = bytesOf self
-        · subst hb
-          simp [ha, bind, Except.bind, pure, Except.pure] at h
-          split at h
-          · rename_i q hq
-            simp only [Except.ok.injEq] at h
-            subst h
-            exact .inr ⟨rfl, hq⟩
-          · simp [throw, throwThe, MonadExceptOf.throw] at h
-        · simp [hab, ha, hb, bind, Except.bind, pure, Except.pure] at h
-  · simp [throw, throwThe, MonadExceptOf.throw] at h
 
 /-- A read of one offer point is a record with one field, `offer`. -/
 theorem readsData_offer {D : Type} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D}
@@ -392,7 +358,7 @@ theorem fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteAr
       BigStep L.lib [(reqData bytesOf r).toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]).toVal,
         sd.toVal, (Data.record [("offer", .record [("p0", X)]), ("peer", .record [("offer", .record [("p0", Y)])])]).toVal]
         (apply4 g "fuse") r' :=
-    fun hb => apply4_field hlib rfl (by simp [Row.find?]) (noRef_fuse _ _ _ _ _ _) hb
+    fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_fuse _ _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, offerFuseDone theta (offerRels theta roles ol sl) (offerDecl theta roles ol)
       (offerSessionDecl theta sl) budget = .record fs := ⟨_, rfl⟩
   obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, rfl⟩ :=
@@ -457,22 +423,6 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 /-! ## Helpers -/
 
-/-- An invoke of an object whose live cell names package `pkg` runs `pkg`. -/
-private theorem invokeRun_pkg {X : Ctx D} {w : World D} {pins : List (D × D)} {c : Call D} {actor obj : D}
-    {method : Nat} {via : Option D} {cell : Cell} {p : D} {rq : Req D} {pkg : D}
-    (h : invokeRun X (pinned X.env w pins) c actor obj method via = .ok (cell, p, rq))
-    (ho : ∃ cl, w.live X.env obj = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
-    (hk : X.digestOf (X.env.bytes pkg) = some pkg) : p = pkg := by
-  obtain ⟨hrk, hpk, -⟩ := Nanodregg.Lang.invokeRun_ok h
-  have hl := (readKind_pinned hrk).1
-  obtain ⟨cl, hcl, hsl⟩ := ho
-  rw [hl] at hcl
-  cases hcl
-  unfold packageOf at hpk
-  rw [hsl] at hpk
-  simp only [hk, Except.ok.injEq, Option.some.injEq] at hpk
-  exact hpk.symm
-
 omit [Ord D] [DecidableEq D] in
 /-- A reader whose peer read succeeded on the pair `{a := xb, b := yb}`, with `xb`, `yb` the bytes
 of `x'`, `y'` and the reader one of them: its peer is the other. -/
@@ -484,7 +434,7 @@ theorem peer_of_pair {bytesOf : D → ByteArray} {digestOf : ByteArray → Optio
     (hself : self = x' ∨ self = y')
     (h : Nanodregg.Lang.peerOf bytesOf digestOf self args = .ok p) :
     (self = x' ∧ p = y') ∨ (self = y' ∧ p = x') := by
-  obtain ⟨a, b, hf', -, hc⟩ := peerOf_spec h
+  obtain ⟨a, b, hf', -, hc⟩ := Nanodregg.Lang.peerOf_party _ _ h
   rw [hf] at hf'
   simp only [Option.some.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, Data.digest.injEq,
     true_and, and_true] at hf'
@@ -496,14 +446,6 @@ theorem peer_of_pair {bytesOf : D → ByteArray} {digestOf : ByteArray → Optio
   · rcases hc with ⟨ha, -⟩ | ⟨-, ha⟩
     · exfalso; rw [ha, hry] at hxd; exact hne (Option.some.inj hxd).symm
     · rw [hxd] at ha; exact .inr ⟨rfl, (Option.some.inj ha).symm⟩
-
-omit [Ord D] [DecidableEq D] in
-private theorem callStep_ok_ {sub : Receive.Sub D} {obj : D} {acc q : Draft D × Walk D} {b : Body D}
-    (h : callStep sub obj acc b = .ok q) : ∃ q', sub acc.2 obj b = .ok q' ∧ q = (acc.1.append q'.1, q'.2) := by
-  unfold callStep at h
-  simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
-  obtain ⟨q', h1, rfl⟩ := h
-  exact ⟨q', h1, rfl⟩
 
 /-- **The fuse's tree, unfolded.** The signed call ran `x'`'s `fuse`; its one call invoked `y'`'s
 `take` on the bytes `db` of the deal `x'` judged (`fuse_run_sound`); each run's row acts are touches
@@ -563,13 +505,13 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
   obtain ⟨a1, h1, h2⟩ := hdcx
   simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at h2
   subst h2
-  obtain ⟨qy, hqy, rfl⟩ := callStep_ok_ h1
+  obtain ⟨qy, hqy, rfl⟩ := callStep_ok h1
   obtain ⟨my, -, -, hqy⟩ := effect_as_signed hqy
   simp only [dispatch] at hqy
   obtain ⟨hyv, cy, py, rqy, sy, callsy, rowsy, usedy, hiry, hruny, -, -, -, -, -, hdcy⟩ := invoke_ok hqy
   -- the peer the fuse named is `y'`: `x'` itself would be `revisited`
   have hpy : p = y' := by
-    obtain ⟨a, b', hf, -, hcase⟩ := peerOf_spec hpeer
+    obtain ⟨a, b', hf, -, hcase⟩ := Nanodregg.Lang.peerOf_party _ _ hpeer
     simp only [Data.field, Row.find?, ↓reduceIte] at hf
     obtain ⟨rfl, rfl⟩ := hf
     rw [hselfx] at hcase
@@ -815,7 +757,7 @@ theorem invitation_once {bytesOf : D → ByteArray} {digestOf : ByteArray → Op
   obtain ⟨kx, ky, kbx, kby, hnx, hny, hkx, hky, ⟨τx, hτx, hsτx, haτx⟩, ⟨τy, hτy, hsτy, haτy⟩⟩ :=
     fuse_atomic hX hc hb hdec hxd hyd hid hidK hp hR hx hy
   exact ⟨kx, ky, kbx, kby, hnx, hny, hkx, hky,
-    Nanodregg.Lang.admit_retract_absent hcan ha hτx hsτx haτx,
-    Nanodregg.Lang.admit_retract_absent hcan ha hτy hsτy haτy⟩
+    admit_retract_row hcan ha hτx hsτx haτx,
+    admit_retract_row hcan ha hτy hsτy haτy⟩
 
 end Nanodregg.Lang.Std

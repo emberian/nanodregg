@@ -10,8 +10,7 @@ The steps every run-grain theorem about a specific method takes, stated once:
 * `get_data`: selecting a field of data put into the machine means the field's data;
 * `means_toVal`: data conforming to a type means itself there.
 
-`Lang.Proofs.StdOffer` proves private copies of the same four for the offer's `take`; they can move
-onto these.
+The offer's proofs (`Lang.Proofs.StdOffer`, `StdOfferFuse`, `StdOfferEscrow`) use these.
 -/
 import Lang.Proofs.Extract
 import Lang.Proofs.Rel

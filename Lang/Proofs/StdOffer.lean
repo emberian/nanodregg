@@ -17,8 +17,9 @@ Every theorem here is about a term `Lang.StdOffer` generates, by its `BigStep` m
 * `fuse_refused_disjoint`: buyer `[5,10]` and seller `[11,12]` over `["price"]` have no common θ, and
   the take term refuses that pair `notCompliant` at every θ.
 
-The matcher's run (`fuse_calls`) is in `Lang.Proofs.StdOfferFuse`, with what a signed fuse seals:
-a plant in the matcher's body reds that module, and this one builds.
+The fuse's run (`fuse_run_sound`) is in `Lang.Proofs.StdOfferFuse`, with what a signed fuse seals.
+The run-grain steps (`get_data`, `apply4_method`, `runMeasured_inv`, `means_toVal`) are
+`Lang.Proofs.MethodRun`'s.
 
 The run-grain converse of `take_run_sound` is not here: the tree has no completeness lemma for the
 machine at the deployed `Bounds.stackMax` (`bigStep_run` gives an existential stack bound) nor for
@@ -51,25 +52,6 @@ def NamedKey (self : ByteArray) (keys pair k : Data) : Prop :=
     pair = .record [("a", .digest a), ("b", .digest b)] ∧ k = .record [("n", .nat (if self = a then na else nb))]
 
 /-! ## Data in the environment, forward -/
-
-private theorem find_rowToVal_of {ℓ : Label} : ∀ {fs : List (Label × Data)} {x : Data},
-    Row.find? ℓ fs = some x → Row.find? ℓ (Data.rowToVal fs) = some (.var 0, [x.toVal])
-  | [], _, h => by simp [Row.find?] at h
-  | (k, d) :: fs, x, h => by
-    by_cases hk : ℓ = k
-    · subst hk; simp only [Row.find?, if_true, Option.some.injEq] at h; subst h
-      simp [Data.rowToVal, Row.find?]
-    · simp only [Row.find?, hk, if_false] at h
-      simp only [Data.rowToVal, Row.find?, hk, if_false]
-      exact find_rowToVal_of h
-
-/-- A field of a record that evaluated to `d.toVal` evaluates to the field's `Data`. -/
-theorem get_data {lib : List Term} {env : Env} {t : Term} {d x : Data} {ℓ : Label}
-    (ht : BigStep lib env t (.ok d.toVal)) (hf : d.field ℓ = some x) :
-    BigStep lib env (.get t ℓ) (.ok x.toVal) := by
-  cases d with
-  | record fs => exact .get ht (.field (find_rowToVal_of hf) (.var rfl))
-  | _ => simp [Data.field] at hf
 
 private theorem andT_eval {lib : List Term} {env : Env} {a b : Term} {x y : Bool}
     (ha : BigStep lib env a (.ok (.bool x))) (hb : BigStep lib env b (.ok (.bool y))) :
@@ -809,39 +791,6 @@ private theorem noRef_take (theta roles : List Label) (rels : List (Label × Rel
 
 /-! ## The deployed run of `take` -/
 
-/-- A found field of a suspended record is found, suspended in the same environment. -/
-theorem find_suspend_of {ℓ : Label} {env : Env} : ∀ {fs : List (Label × Term)} {t : Term},
-    Row.find? ℓ fs = some t → Row.find? ℓ (suspend env fs) = some (t, env)
-  | [], _, h => by simp [Row.find?] at h
-  | (k, u) :: fs, t, h => by
-    by_cases hk : ℓ = k
-    · subst hk; simp only [Row.find?, if_true, Option.some.injEq] at h; subst h
-      simp [suspend, Row.find?]
-    · simp only [Row.find?, hk, if_false] at h
-      have := find_suspend_of (env := env) h
-      simpa [suspend, Row.find?, hk] using this
-
-/-- The receiver's method application `apply4 g ℓ`, at a closure body whose field `ℓ` is a
-generated method term, runs that method's body over `[req, arg, state, rows]`. -/
-theorem apply4_field {lib : List Term} {g : Nat} {f : Nat → Nat} {pb : Term}
-    {fs : List (Label × Term)} {ℓ : Label} {S A R : Ty} {body : Term} {req state : Val} {arg rows : Data}
-    {r : Except Fault Val}
-    (hlib : lib[g]? = some (pb.relocate f)) (hb : pb = .record fs)
-    (hf : Row.find? ℓ fs = some (activityMethod S A R body))
-    (hn : NoRef (activityMethod S A R body))
-    (h : BigStep lib [req, arg.toVal, state, rows.toVal] body r) :
-    BigStep lib [req, arg.toVal, state, rows.toVal] (apply4 g ℓ) r := by
-  subst hb
-  have hrel : (Term.record fs).relocate f = .record (Term.relocateRow f fs) := by simp [Term.relocate]
-  rw [hrel] at hlib
-  have hf' : Row.find? ℓ (Term.relocateRow f fs) = some (activityMethod S A R body) := by
-    rw [find_relocateRow, hf, Option.map_some, relocate_noRef f _ hn]
-  have hget : BigStep lib [req, arg.toVal, state, rows.toVal] (.get (.ref g) ℓ)
-      (.ok (.clo (.lam S (.lam A (.lam reqTy body))) [])) :=
-    .get (.ref hlib .record) (.field (find_suspend_of hf') .lam)
-  unfold apply4
-  exact .app (.app (.app (.app hget (.var rfl) .lam) (.var rfl) .lam) (.var rfl) .lam) (.var rfl) h
-
 theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
   cases h with | record hr => cases hr; rfl
 
@@ -918,25 +867,6 @@ theorem offerTakeRows_cases {od sd : RelDecl} {wd : Data}
         obtain ⟨P, rfl, hp⟩ := rec1_cases h2
         obtain ⟨Y, rfl, hy⟩ := rec1_cases hp
         exact ⟨X, Y, rfl, hx, hy⟩
-
-/-! ### What a conforming value means -/
-
-mutual
-/-- A conforming value means itself. -/
-theorem means_toVal {lib : List Term} : ∀ {d : Data} {T : Ty}, Conforms d T → Means lib T d.toVal d
-  | _, _, .nat _ => .nat
-  | _, _, .bool => .bool
-  | _, _, .bytes _ => .bytes
-  | _, _, .digest _ => .digest
-  | _, _, .record h => .record .record (rowMeans_toVal h)
-  | _, _, .inj hf h => .inj hf (means_toVal h)
-
-/-- A conforming row means itself. -/
-theorem rowMeans_toVal {lib : List Term} : ∀ {ds : List (Label × Data)} {r : List (Label × Ty)},
-    RowConforms ds r → RowMeans lib r (Data.rowToVal ds) ds
-  | _, _, .nil => .nil
-  | _, _, .cons h hs => .cons (.var rfl) (means_toVal h) (rowMeans_toVal hs)
-end
 
 /-! ### The take's tree, inverted -/
 
@@ -1122,7 +1052,7 @@ theorem take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteAr
       BigStep L.lib [(reqData bytesOf r).toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal,
         sd.toVal, (Data.record [("offer", .record [("p0", X)]), ("peer", .record [("offer", .record [("p0", Y)])])]).toVal]
         (apply4 g "take") r' :=
-    fun hb => apply4_field hlib rfl (by simp [Row.find?]) (noRef_take _ _ _ _ _) hb
+    fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_take _ _ _ _ _) hb
   obtain ⟨k, o, kq, q, rfl, rfl, hk, -, -, hnk, hok, rfl⟩ :=
     offerTakeTree_inv offer_fields hR rfl hth hself hkeys hpair hX hY rfl fwd hbig
   have hM := extract_means _ _ hx

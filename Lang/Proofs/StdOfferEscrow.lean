@@ -348,7 +348,7 @@ private theorem take_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
       BigStep L.lib [(reqData bytesOf r).toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal,
         sd.toVal, (Data.record [("offer", .record [("p0", X)]), ("peer", .record [("offer", .record [("p0", Y)])])]).toVal]
         (apply4 g "take") r' :=
-    fun hb => apply4_field hlib rfl (by simp [Row.find?]) (noRef_take _ _ _ _ _) hb
+    fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_take _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowTakeDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol)
       (offerSessionDecl theta sl) = .record fs := ⟨_, rfl⟩
   obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, rfl⟩ :=
@@ -588,7 +588,7 @@ theorem escrow_fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
       BigStep L.lib [(reqData bytesOf r).toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]).toVal,
         sd.toVal, (Data.record [("offer", .record [("p0", X)]), ("peer", .record [("offer", .record [("p0", Y)])])]).toVal]
         (apply4 g "fuse") r' :=
-    fun hb => apply4_field hlib rfl (by simp [Row.find?]) (noRef_escrow_fuse _ _ _ _ _ _) hb
+    fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_escrow_fuse _ _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowFuseDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol)
       (offerSessionDecl theta sl) budget = .record fs := ⟨_, rfl⟩
   obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, rfl⟩ :=
@@ -736,7 +736,7 @@ private theorem withdraw_core {D : Type} (bytesOf : D → ByteArray) (digestOf :
       (escrowWithdrawBody (escrowRels theta roles ol sl) (escrowDecl theta roles ol)) r' →
       BigStep L.lib [(reqData bytesOf r).toVal, (Data.record []).toVal, sd.toVal,
         (Data.record [("offer", .record [("p0", X)])]).toVal] (apply4 g "withdraw") r' :=
-    fun hb => apply4_field hlib rfl (by simp [Row.find?]) (noRef_withdraw _ _) hb
+    fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_withdraw _ _) hb
   rcases point_cases hX with rfl | ⟨k, hk, rfl | ⟨o, ho, rfl⟩⟩
   · cases bigStep_deterministic hbig (fwd wd_offerUnpinned)
   · cases bigStep_deterministic hbig (fwd wd_noOffer)
@@ -914,7 +914,7 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
         ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
         ("payTo", payTo), ("role", role), ("terms", terms)]).toVal, sd.toVal, wd.toVal] fs))) := by
     rw [hfs]; exact .record
-  cases bigStep_deterministic hbig (apply4_field hlib rfl (by simp [Row.find?]) (noRef_post theta roles _ _) hval)
+  cases bigStep_deterministic hbig (apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_post theta roles _ _) hval)
   have hM := extract_means _ _ hx
   have hfE : Row.find? "edits" fs = some (.record ((slotLabels "e" 1).zip
       [someCallT (editTy (escrowRels theta roles ol sl))

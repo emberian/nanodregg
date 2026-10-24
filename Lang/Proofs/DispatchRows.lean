@@ -17,7 +17,6 @@ Facts about the kernel's definitions, proved from outside it (PROT-6's `fuse_ato
 * `invokeRun_ok`, `invokeRun_req`, `invokeRun_pkg`: what `invokeRun` hands the run: the cell it read
   as an object, the package its package slot names (the live cell's, `invokeRun_pkg`), and a request
   whose `self` is the invoked object.
-* `admit_retract_absent`: an admitted turn's retract touch at a row slot leaves the slot absent.
 -/
 import Kernel.Proofs.InvokeTree
 import Kernel.Proofs.Rows
@@ -51,14 +50,6 @@ private theorem foldCalls_rows {sub : Receive.Sub D} {obj : D} :
       exact ⟨q.1.rows ++ l, by rw [hl]; simp [Draft.append]⟩
 
 omit [Ord D] [DecidableEq D] in
-private theorem callStep_ok' {sub : Receive.Sub D} {obj : D} {acc q : Draft D × Walk D} {b : Body D}
-    (h : callStep sub obj acc b = .ok q) : ∃ q', sub acc.2 obj b = .ok q' ∧ q = (acc.1.append q'.1, q'.2) := by
-  unfold callStep at h
-  simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
-  obtain ⟨q', h1, rfl⟩ := h
-  exact ⟨q', h1, rfl⟩
-
-omit [Ord D] [DecidableEq D] in
 /-- The whole fold, split at the `i`-th call: its derivation succeeded, and its rows sit inside. -/
 private theorem foldCalls_split_rows {sub : Receive.Sub D} {obj : D} {calls : List (Body D)} {i : Nat}
     (hi : i < calls.length) {a0 acc r : Draft D × Walk D}
@@ -73,7 +64,7 @@ private theorem foldCalls_split_rows {sub : Receive.Sub D} {obj : D} {calls : Li
   | error e => rw [hq'] at hall; cases hall
   | ok q' =>
       rw [hq'] at hall
-      obtain ⟨q, hq, rfl⟩ := callStep_ok' hq'
+      obtain ⟨q, hq, rfl⟩ := callStep_ok hq'
       obtain ⟨l, hl⟩ := foldCalls_rows _ _ hall
       exact ⟨q, hq, l, by rw [hl]; simp [Draft.append]⟩
 
@@ -328,14 +319,5 @@ theorem invokeRun_pkg {X : Ctx D} {w : World D} {pins : List (D × D)} {c : Call
   rw [hsl] at hpk
   simp only [hk, Except.ok.injEq, Option.some.injEq] at hpk
   exact hpk.symm
-
-/-! ## A retract removes its row -/
-
-/-- **An admitted retract removes its row**: `Kernel.admit_retract_row`, under the name the offer
-theorems read (`Lang.Proofs.StdOfferFuse`). -/
-theorem admit_retract_absent {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
-    (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} (hτ : τ ∈ t.rows)
-    (hs : τ.slot = .row key) (hact : τ.act = .retract) : rowAt E w'.rows (.row key) = none :=
-  admit_retract_row hr ha hτ hs hact
 
 end Nanodregg.Lang

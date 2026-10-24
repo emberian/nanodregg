@@ -107,7 +107,7 @@ theorem foldCalls_effects {sub : Sub D} {obj : D} :
 
 omit [Ord D] [DecidableEq D] in
 /-- One step of the calls' fold: from where the first `i` left it, the `i`-th call's derivation. -/
-private theorem callStep_ok {sub : Sub D} {obj : D} {acc q : Draft D × Walk D} {b : Body D}
+theorem callStep_ok {sub : Sub D} {obj : D} {acc q : Draft D × Walk D} {b : Body D}
     (h : callStep sub obj acc b = .ok q) : ∃ q', sub acc.2 obj b = .ok q' ∧ q = (acc.1.append q'.1, q'.2) := by
   unfold callStep at h
   simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
@@ -431,6 +431,36 @@ theorem invoked_of_signed {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {o
       ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
   | error e => rw [hr] at hd; cases hd
   | ok r => exact ⟨r, hr, (visit_distinct hr).2 obj method args budget via hb⟩
+
+/-- **Below the root, the caller is visited.** A Body the walk dispatched one level or more below
+the signed call is dispatched as an object the walk has already recorded: the invoke whose run
+returned it (`invoke` puts its object in the walk before deriving its calls, and the calls' fold
+only extends the walk). -/
+theorem dispatched_actor_visited {X : Ctx D} {w : World D} {c : Call D} {n : Nat} {wk : Walk D} {a : D}
+    {b : Body D} (hd : Dispatched X w c n wk a b) : n = Bounds.callDepthMax ∨ a ∈ wk.visited := by
+  cases hd with
+  | root => exact .inl rfl
+  | call i hi _ _ _ _ hpre =>
+      obtain ⟨⟨l, hl⟩, -, -⟩ := foldCalls_grows (tree_grows _) _ _ hpre
+      exact .inr (by rw [hl]; simp)
+
+/-- **A dispatched invoke is of an object not yet visited** (`revisited` otherwise), in a call
+`receive` turned into a Turn. -/
+theorem dispatched_invoke_fresh {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {n : Nat} {wk : Walk D}
+    {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    (hc : receive X w c = .ok t) (hd : Dispatched X w c n wk actor (.invoke obj method args budget via)) :
+    obj ∉ wk.visited := by
+  obtain ⟨-, hw⟩ := receive_ok_with hc
+  obtain ⟨-, d, hd', -⟩ := receiveWith_sealed hw
+  rw [derive_eq] at hd'
+  cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+      (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+  | error e => rw [hR] at hd'; cases hd'
+  | ok R =>
+      obtain ⟨r, hr, -⟩ := dispatched_ok hR hd
+      simp only [dispatch] at hr
+      exact (invoke_ok hr).1
 
 
 /-! ## No receiver but write, law and invoke writes an object (the totality) -/
