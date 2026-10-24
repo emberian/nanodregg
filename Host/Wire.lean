@@ -23,7 +23,11 @@ structure Frame where
   payload : ByteArray
 
 /-- The largest body toward the Host: a client frame body plus the connection id. -/
-def bodyMax : Nat := Protocol.Bounds.frameBytesMax + 4
+def bodyMax : Nat := Protocol.Bounds.childBodyMax
+
+/-- A frame on the child wire, either direction: `u32le len ‖ body`, `len ≤ bodyMax`; `decodeBody` says
+what a request's body holds (a reply's is the same shape, a status for the op). -/
+def childFrame : Stream (Codec.Bytes bodyMax) := Stream.bytesOf bodyMax
 
 /-- Why the request stream stopped. -/
 inductive Stop where

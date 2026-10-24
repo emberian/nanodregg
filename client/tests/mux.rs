@@ -165,7 +165,7 @@ fn a_child_frame_without_a_status_is_malformed() {
     let end = mux::serve(listener, req_w, rep_r, limits(1, 5000));
     assert!(matches!(
         end,
-        MuxEnd::ChildMalformed(FrameError::Truncated { .. })
+        MuxEnd::ChildMalformed(FrameError::BadLength { len: 4 })
     ));
     let _ = std::fs::remove_file(&path);
 }

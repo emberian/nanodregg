@@ -217,7 +217,8 @@ theorem drivePrevent_split :
 /-- An honest driver never trips its own start limit: at one run per `syncSeconds` (a run's own
 time only spaces starts further), any `startIntervalSeconds` window holds fewer than `startBurst`
 starts. False if the interval is shortened to 30 s or less at today's limit. -/
-theorem sync_loop_under_start_limit : startIntervalSeconds / syncSeconds + 1 < startBurst := by decide
+theorem sync_loop_under_start_limit :
+    Hosting.startIntervalSeconds / syncSeconds + 1 < Hosting.startBurst := by decide
 
 /-- A driver renders only as the trusted side: as the writer's user, not the follower's, toward
 the writer's own socket (ROOT's direction rule). -/

@@ -143,7 +143,12 @@ def stateRoot (l : ByteArray) : Path := membersHome ++ [l, lit "follow"]
 and short, for sun_path. -/
 def followSockRoot : Path := [lit "run", lit "nd-member-follow"]
 /-- A resident follower's socket's name in its own directory of `followSockRoot`. -/
-def followSock : ByteArray := lit "follow.sock"
+def followSockName : String := "follow.sock"
+def followSock : ByteArray := lit followSockName
+/-- A writer's Host socket's name in its workspace's runtime directory (`Ops.Units`' `nd-host` unit, the
+`ND_HOST_SOCK` nd defaults to beside `followSock`). -/
+def hostSockName : String := "host.sock"
+def hostSock : ByteArray := lit hostSockName
 
 /-- An absolute path's text, as bytes: a `/` before each component (what a unit's argument and a
 `connect` carry). -/

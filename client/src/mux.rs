@@ -38,8 +38,6 @@ use std::time::{Duration, Instant};
 use crate::frame::{self, FrameError, Limits};
 use crate::generated::{self as g, CloseReason, status};
 
-const CONN: usize = 4;
-
 /// The mux's bounds, from the generated table.
 #[derive(Clone, Copy, Debug)]
 pub struct MuxLimits {
@@ -136,7 +134,7 @@ impl<I> Shared<I> {
         if let Some(c) = lock(&self.conns).open.get(&id) {
             *lock(&c.hang) = Some(why.unwrap_or(CloseReason::PeerLeft));
         }
-        self.end(id, why.map(close_frame));
+        self.end(id, why.and_then(close_frame));
     }
 
     /// End connection `id` once, its last frame being `last` (if any).
@@ -153,18 +151,15 @@ impl<I> Shared<I> {
     }
 }
 
-/// The frame that names a close.
-fn close_frame(r: CloseReason) -> Vec<u8> {
-    let name = r.name().as_bytes();
-    let mut b = Vec::with_capacity(5 + name.len());
-    b.extend_from_slice(
-        &u32::try_from(1 + name.len())
-            .unwrap_or(u32::MAX)
-            .to_le_bytes(),
-    );
-    b.push(status::CLOSED);
-    b.extend_from_slice(name);
-    b
+/// The frame that names a close (`Protocol.ack`'s bytes, framed): `None`, said on stderr, if it does
+/// not frame, and the connection is then shut without a name.
+fn close_frame(r: CloseReason) -> Option<Vec<u8>> {
+    frame::encode_body(
+        g::FRAME_BYTES_MAX,
+        &[&[status::CLOSED], r.name().as_bytes()],
+    )
+    .map_err(|e| nanodregg_sandbox::say("mux", &format!("close {}: {e}", r.name())))
+    .ok()
 }
 
 /// Write `bytes` within `limit` in all, however slowly the peer reads (CLIENT-39).
@@ -217,7 +212,7 @@ where
         .map(|(i, c)| (*i, Arc::clone(c)))
         .collect();
     for (id, _) in &open {
-        shared.end(*id, Some(close_frame(CloseReason::Unreachable)));
+        shared.end(*id, close_frame(CloseReason::Unreachable));
     }
     for (_, c) in open {
         if let Some(w) = lock(&c.writer).take() {
@@ -296,12 +291,8 @@ fn accept<I: Write + Send + 'static>(
             if let Some(r) = lock(&conn.hang).take()
                 && let Some(child) = lock(&sh.child_in).as_mut()
             {
-                let max = limits.frame.frame_bytes_max.saturating_add(CONN as u32);
-                let _ = frame::write_body(
-                    child,
-                    max,
-                    &[&id.to_le_bytes(), &[g::HANGUP], r.name().as_bytes()],
-                );
+                let max = frame::child_max(limits.frame);
+                let _ = frame::write_child(child, max, id, g::HANGUP, r.name().as_bytes());
             }
         });
     }
@@ -309,7 +300,9 @@ fn accept<I: Write + Send + 'static>(
 
 /// Answer a connection that is not admitted with its named close, then shut it.
 fn refuse(s: &UnixStream, limits: MuxLimits, why: CloseReason) {
-    let _ = write_within(s, limits.reply_write, &close_frame(why));
+    if let Some(b) = close_frame(why) {
+        let _ = write_within(s, limits.reply_write, &b);
+    }
     let _ = s.shutdown(Shutdown::Both);
 }
 
@@ -339,7 +332,7 @@ fn timed_out(e: &io::Error) -> bool {
 /// Client → child: each client frame becomes one child frame tagged with `id`. Returns why the
 /// connection ends (`None`: the peer left or the child is gone).
 fn forward<I: Write>(id: u32, c: &Conn, sh: &Shared<I>, limits: MuxLimits) -> Option<CloseReason> {
-    let child_max = limits.frame.frame_bytes_max.saturating_add(CONN as u32);
+    let child_max = frame::child_max(limits.frame);
     // The boundary wait wakes at least this often to judge `idle` and `replyTimeout`.
     let tick = limits.idle.min(limits.reply) / 4;
     let s = &c.stream;
@@ -374,7 +367,9 @@ fn forward<I: Write>(id: u32, c: &Conn, sh: &Shared<I>, limits: MuxLimits) -> Op
             Err(FrameError::Closed | FrameError::Io(_) | FrameError::Truncated { .. }) => {
                 return None;
             }
-            Err(FrameError::Empty | FrameError::PastBound { .. }) => {
+            Err(
+                FrameError::Empty | FrameError::PastBound { .. } | FrameError::BadLength { .. },
+            ) => {
                 return Some(CloseReason::FrameRefused);
             }
         };
@@ -388,7 +383,7 @@ fn forward<I: Write>(id: u32, c: &Conn, sh: &Shared<I>, limits: MuxLimits) -> Op
         }
         let mut child = lock(&sh.child_in);
         let child = child.as_mut()?;
-        if frame::write_body(child, child_max, &[&id.to_le_bytes(), &[f.op], &f.payload]).is_err() {
+        if frame::write_child(child, child_max, id, f.op, &f.payload).is_err() {
             return None;
         }
     }
@@ -399,21 +394,17 @@ fn forward<I: Write>(id: u32, c: &Conn, sh: &Shared<I>, limits: MuxLimits) -> Op
 fn route<I>(child_out: &mut impl Read, shared: &Shared<I>, limits: MuxLimits) -> MuxEnd {
     // `conn ‖ status ‖ payload`: the client-side bound plus the connection id, so what is
     // forwarded (`status ‖ payload`) is within the client's bound.
-    let child_max = limits.frame.frame_bytes_max.saturating_add(CONN as u32);
+    let child_max = frame::child_max(limits.frame);
     loop {
         let body = match frame::read_body(child_out, child_max) {
             Ok(body) => body,
             Err(FrameError::Closed) => return MuxEnd::ChildClosed,
             Err(e) => return MuxEnd::ChildMalformed(e),
         };
-        let (Some((conn, rest)), true) = (body.split_first_chunk::<CONN>(), body.len() > CONN)
-        else {
-            return MuxEnd::ChildMalformed(FrameError::Truncated {
-                wanted: CONN + 1,
-                got: body.len(),
-            });
+        let (id, st, payload) = match frame::child_parts(&body) {
+            Ok(p) => p,
+            Err(e) => return MuxEnd::ChildMalformed(e),
         };
-        let id = u32::from_le_bytes(*conn);
         let Some(c) = lock(&shared.conns).open.get(&id).cloned() else {
             continue;
         };
@@ -427,10 +418,13 @@ fn route<I>(child_out: &mut impl Read, shared: &Shared<I>, limits: MuxLimits) ->
                 flight.1 = Instant::now();
             }
         }
-        let mut bytes = Vec::with_capacity(4 + rest.len());
-        bytes.extend_from_slice(&u32::try_from(rest.len()).unwrap_or(u32::MAX).to_le_bytes());
-        bytes.extend_from_slice(rest);
-        if rest[0] == status::CLOSED {
+        // `status ‖ payload` is within the client's bound (the child's less the id); a reply that is
+        // not is the child's to answer for, never cut or relabelled (CLIENT-40).
+        let bytes = match frame::encode_body(limits.frame.frame_bytes_max, &[&[st], payload]) {
+            Ok(b) => b,
+            Err(e) => return MuxEnd::ChildMalformed(e),
+        };
+        if st == status::CLOSED {
             // A `closed` from upstream (nd-attach relaying the box's supervisor) ends this
             // connection here too: it is delivered as the connection's last frame.
             shared.end(id, Some(bytes));

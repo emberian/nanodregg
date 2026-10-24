@@ -4,6 +4,8 @@ import Protocol.Exit
 import Protocol.Envelope
 import Protocol.Command.Stdio
 import Codec.Layout
+import Protocol.Frames
+import Hosting.Plan
 
 /-!
 # Emit.Rust — the Rust copy of the protocol table
@@ -100,7 +102,12 @@ def bounds : List (String × Nat) :=
    ("FRAME_MS_MAX", Bounds.frameMsMax),
    ("REPLY_MS_MAX", Bounds.replyMsMax),
    ("REPLY_WRITE_MS_MAX", Bounds.replyWriteMsMax),
-   ("HINT_BYTES_MAX", Bounds.hintBytesMax)]
+   ("HINT_BYTES_MAX", Bounds.hintBytesMax),
+   ("FRAME_LEN_BYTES", Bounds.frameLenBytes),
+   ("CONN_BYTES", Bounds.connBytes),
+   ("CHILD_BODY_MAX", Bounds.childBodyMax),
+   ("PUBLIC_KEY_BYTES", Codec.Ed25519.publicKeyBytes),
+   ("ROTATION_BYTES", rotationBytes)]
 
 /-- A `pub const NAME: u32 = n;` line, or the name of a bound that does not fit `u32`. -/
 def u32Const (entry : String × Nat) : Except String String :=
@@ -596,10 +603,11 @@ def taggedFile (title : String) (bounds : List (String × Nat)) (max : Nat)
 
 /-- The follow socket's payloads. -/
 def layoutModule : String := String.intercalate "\n\n" ([
-  "/// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).\npub mod layout {",
+  "/// The follow socket's payloads and the custody rotation record (Protocol.Table layouts; Lean codec:\n/// Protocol.Frames).\npub mod layout {",
   layoutPrelude] ++
   (let es := oneOfs (commandLayout :: resumeLayout :: Step.all.map Step.layout)
-   let ls := commandLayout :: resumeLayout :: signResultLayout :: precommitResultLayout :: Step.all.map Step.layout
+   let ls := commandLayout :: resumeLayout :: signResultLayout :: precommitResultLayout :: rotationLayout ::
+     Step.all.map Step.layout
    let hasU64 := ls.flatten.any fun f => match f with | .u64 _ => true | _ => false
    (if es.isEmpty then [] else [oneOfReader]) ++ (if hasU64 then [u64Reader] else []) ++
      es.map fun p => oneOfEnum p.1 p.2) ++ [
@@ -609,6 +617,7 @@ def layoutModule : String := String.intercalate "\n\n" ([
   structFor "PrecommitResult" Bounds.frameBytesMax precommitResultLayout,
   structFor "CustodyRefused" Bounds.frameBytesMax custodyRefusalLayout (ty := fun _ => "super::CustodyRefusal"),
   structFor "CommandReply" Bounds.frameBytesMax commandReplyLayout,
+  structFor "ArmedRotation" Codec.Ed25519.publicKeyBytes rotationLayout (some rotationBytes),
   stepEnum Bounds.frameBytesMax ++ "\n}"])
 
 /-- `CustodyRefusal` as a Rust enum: the code on the wire (`layout::CustodyRefused`'s one byte), the
@@ -664,6 +673,10 @@ def attemptModule : String :=
      "        pub fn code(self) -> u8 {", "            match self {"] ++
     actions.map (fun a => s!"                Action::{ctorName a} => {a.code},") ++
     ["            }", "        }", "    }", "",
+     "    /// The first words of follow's three `receipt CALL` lines (Protocol.Attempt), each then one space.",
+     s!"    pub const RECEIPT_WORD: &str = \"{receiptWord}\";",
+     s!"    pub const HEAD_WORD: &str = \"{headWord}\";",
+     s!"    pub const SETTLE_WORD: &str = \"{settleWord}\";", "",
      "    /// What a confirm or probe saw: the first word of follow's `settle` line.",
      "    pub fn settle_seen(word: &str) -> Option<Seen> {", "        match word {"] ++
     settleWords.map (fun w => s!"            \"{w}\" => Some(Seen::{(settleSeen w).elim "" ctorName}),") ++
@@ -689,13 +702,26 @@ def header : String :=
   "// Regenerate: lake exe emit-rust client/src/generated.rs\n" ++
   "// Check:      lake exe emit-rust --check client/src/generated.rs"
 
+/-- A socket's name (Hosting.Plan) as a Rust `&str`, or why it is not UTF-8. -/
+def sockConst (entry : String × ByteArray) : Except String String :=
+  match String.fromUTF8? entry.2 with
+  | some t => .ok s!"pub const {entry.1}: &str = \"{t}\";"
+  | none => .error s!"socket name {entry.1} is not UTF-8"
+
+/-- The sockets nd, nd-members and keybroker name (Hosting.Plan; CLIENT-40). -/
+def sockets : List (String × ByteArray) :=
+  [("FOLLOW_SOCK", Hosting.followSock), ("HOST_SOCK", Hosting.hostSock), ("MEMBER_SOCK", Hosting.memberSock),
+   ("BROKER_SOCK", Hosting.brokerSock)]
+
 /-- The whole file. -/
 def file : Except String String := do
   let consts ← bounds.mapM u32Const
+  let socks ← sockets.mapM sockConst
   let opsOn (s : Socket) := Op.all.filter (·.socket == s)
   pure <| String.intercalate "\n\n"
     [header,
      String.intercalate "\n" consts,
+     "/// The socket names (Hosting.Plan): each alone in its own directory.\n" ++ String.intercalate "\n" socks,
      byteModule "host_op" (opsOn .host) Op.code,
      byteModule "follow_op" (opsOn .follow) Op.code,
      byteModule "status" Status.all Status.code,

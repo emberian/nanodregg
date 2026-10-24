@@ -5,7 +5,8 @@
 //! (`fixtures/foreign/Accept`) accepts a call A committed, once, on its receipt checked by Lean
 //! (`Protocol.Foreign.check`) against that head. Every accept and refuse is Lean's.
 //! * X1: an offer written in A, accepted in B on A's receipt: admitted, the acceptance row shows A's
-//!   transaction id; X1b: the same acceptance again: refused (one receipt, one acceptance).
+//!   transaction id; X1b: the same acceptance again: refused `keyTaken` (one receipt, one
+//!   acceptance), and so is a later receipt of the same call once B's head has advanced to it.
 //! * X2: the receipt with its stated commit height changed (the roots still open the held head):
 //!   refused `pathMismatch`; X2r: a receipt of another call of A with its cells root changed:
 //!   refused `headMismatch` (never accepted, so a check without the roots comparison admits it);
@@ -337,9 +338,14 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
         "X2r: {}",
         both(&o)
     );
-    // X1b: the same acceptance again is refused (one receipt, one acceptance).
+    // X1b: the same acceptance again is refused (one receipt, one acceptance): the receipt checks,
+    // and the acceptance row's key is taken.
     let o = accept(bf, &r);
-    assert!(!o.status.success(), "X1b: {}", both(&o));
+    assert!(
+        !o.status.success() && both(&o).contains("keyTaken"),
+        "X1b: {}",
+        both(&o)
+    );
     // X2h: A moves on; a receipt built at A's NEW head does not open B's held one.
     a.founder.ok(&["write", &offer, "2", "later"]);
     let (r_later, s2, h2, roots2) = receipt(&ba, &call);
@@ -349,9 +355,15 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
         "X2h: {}",
         both(&o)
     );
-    // ... and once B's head advances to it, it checks (the first acceptance already stands: refused
-    // as a second acceptance, not as a receipt).
+    // ... and once B's head advances to it, it checks: the first acceptance already stands, so it is
+    // refused as a second acceptance (`keyTaken`), not as a receipt (`headMismatch`).
     bf.ok(&["invoke", &h, "1", &head_text(&s2, &h2, &roots2)]);
+    let o = accept(bf, &r_later);
+    assert!(
+        !o.status.success() && both(&o).contains("keyTaken") && !both(&o).contains("headMismatch"),
+        "X2h: at the advanced head: {}",
+        both(&o)
+    );
 
     // X3: `cb` (granted post and fork) posts a head at the SAME step count with other roots.
     let g = line(&bf.ok(&["grant", &h, &cb_id, "invoke:0,invoke:1"]), "id ").to_owned();

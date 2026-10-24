@@ -221,4 +221,17 @@ def codesOf (k : ExitClass) : List Nat := (all.filter (·.cls == k)).map code
 
 end MembersExit
 
+/-- The restart policy of a restart-class end, one for every manager: the service manager's
+(`Ops.Units` renders it as RestartSec, StartLimitBurst and StartLimitIntervalSec, and launchd's
+ThrottleInterval) and nd-members' per resident (emitted `RESTART_SECONDS`, `START_BURST`,
+`START_INTERVAL_SECONDS`, CLIENT-40). Seconds between restarts: -/
+def restartSeconds : Nat := 2
+
+/-- The start limit: more than `startBurst` starts inside `startIntervalSeconds` and the unit (or the
+resident) fails instead of restarting. Without it a deterministic crash of a restart class (a child
+killed by a signal on every start, `uncertain` on every open) loops every `restartSeconds` forever:
+systemd's default (5 starts in 10 s) never trips at a 2 s restart. -/
+def startIntervalSeconds : Nat := 120
+def startBurst : Nat := 5
+
 end Nanodregg.Hosting

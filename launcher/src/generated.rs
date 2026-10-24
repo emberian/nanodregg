@@ -655,3 +655,10 @@ pub mod controller_exit {
 /// The directories under `worlds/<label>` every plan hides (`Hosting.layoutHidden`,
 /// `Proofs.plan_hidden_layout`): grain-launch refuses to start without them.
 pub const LAYOUT_HIDDEN: &[&str] = &["store"];
+
+/// The bytes a Store label or a grain name may hold (`Hosting.labelByte`, CLIENT-40): a label is
+/// one clean path component (`wire::path_clean`) of these bytes (`Hosting.labelOk`).
+pub const LABEL_BYTES: &[u8] = &[
+    45, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107,
+    108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
+];

@@ -53,7 +53,7 @@ enum End {
     ControllerEnded(Option<i32>),
     /// `wait` on the controller failed
     ControllerLost(String),
-    /// the controller's process ended below 128 with a code `ControllerExit` does not name
+    /// the controller's process ended, not by a signal, with a code `ControllerExit` does not name
     /// (`controller_exit::ALL`): the mechanism's, not the controller's (HOSTING-23)
     ControllerMechanism(i32),
     /// a directory the World's layout hides is absent (`LAYOUT_HIDDEN`, HOSTING-24)
@@ -110,12 +110,11 @@ fn main() -> ExitCode {
         End::Usage => k::USAGE,
         End::RootsOverlap => k::ROOTS_OVERLAP,
         End::ControllerRefused(_) => k::CONTROLLER_REFUSED,
-        // the controller's own code, passed through (Lean's `ControllerExit`: `ended` made any other
-        // code below 128 ControllerMechanism); under bwrap a status of 128 or more is a signal
-        // death, never a code
+        // the controller's own code, passed through: `ended` made every code Lean's `ControllerExit`
+        // does not name ControllerMechanism, and a signal death ControllerEnded(None)
         End::ControllerEnded(Some(c)) => match u8::try_from(c) {
-            Ok(c) if c < 128 => c,
-            _ => k::CONTROLLER_SIGNALED,
+            Ok(c) if controller_exit::ALL.contains(&c) => c,
+            _ => k::CONTROLLER_MECHANISM,
         },
         End::ControllerMechanism(_) => k::CONTROLLER_MECHANISM,
         End::LayoutMissing(_) => k::LAYOUT_MISSING,
@@ -386,12 +385,13 @@ impl Launcher {
     }
 }
 
-/// How the controller's process ended: its own code if Lean's `ControllerExit` names it; a signal
-/// (`None`, or under bwrap a status of 128 or more: the OOM killer); otherwise the mechanism's.
-fn ended(code: Option<i32>) -> End {
-    match code {
-        Some(c) if c >= 128 => End::ControllerEnded(None),
-        Some(c) if c < 128 && !u8::try_from(c).is_ok_and(|c| controller_exit::ALL.contains(&c)) => {
+/// How the controller's process ended: a signal (`nanodregg_sandbox::killed_by_signal`, the
+/// platform's fact: under bwrap a status of 128 or more, the OOM killer); its own code if Lean's
+/// `ControllerExit` names it; otherwise the mechanism's.
+fn ended(status: std::process::ExitStatus) -> End {
+    match status.code() {
+        _ if nanodregg_sandbox::killed_by_signal(status) => End::ControllerEnded(None),
+        Some(c) if !u8::try_from(c).is_ok_and(|c| controller_exit::ALL.contains(&c)) => {
             End::ControllerMechanism(c)
         }
         c => End::ControllerEnded(c),
@@ -467,7 +467,7 @@ fn run() -> End {
     drop(l);
     match end {
         End::ControllerEnded(None) => match ctl_child.wait() {
-            Ok(s) => ended(s.code()),
+            Ok(s) => ended(s),
             Err(e) => End::ControllerLost(e.to_string()),
         },
         // A report the controller could not take: it is most likely gone, and then ITS end names
@@ -477,7 +477,7 @@ fn run() -> End {
         End::ReportPipe(why) => {
             for _ in 0..REPORT_PIPE_WAIT_TICKS {
                 match ctl_child.try_wait() {
-                    Ok(Some(s)) => return ended(s.code()),
+                    Ok(Some(s)) => return ended(s),
                     Ok(None) => std::thread::sleep(TICK),
                     Err(e) => return End::ControllerLost(e.to_string()),
                 }

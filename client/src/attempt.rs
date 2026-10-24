@@ -62,9 +62,12 @@ impl Receipt {
         let [receipt, head, settle] = lines[..] else {
             return None;
         };
-        receipt.strip_prefix("receipt ")?;
-        head.strip_prefix("head ")?;
-        let verdict = settle.strip_prefix("settle ")?;
+        fn word<'s>(line: &'s str, w: &str) -> Option<&'s str> {
+            line.strip_prefix(w)?.strip_prefix(' ')
+        }
+        word(receipt, table::RECEIPT_WORD)?;
+        word(head, table::HEAD_WORD)?;
+        let verdict = word(settle, table::SETTLE_WORD)?;
         Some(Self {
             seen: table::settle_seen(verdict.split(' ').next()?)?,
             verdict: verdict.to_string(),

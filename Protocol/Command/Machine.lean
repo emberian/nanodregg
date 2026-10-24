@@ -982,7 +982,8 @@ def receiptText (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (c : Cal
   let r := Receipt.build X.env w (txIdOf X c)
   let v := settleOf X me w c
   (Receipt.bytes X.env dc r).map fun b =>
-    s!"receipt {Text.toHex b}\nhead {w.steps} {w.height} {hex X (w.roots X.env)}\nsettle {v.text X.env.bytes}\n"
+    s!"{Attempt.receiptWord} {Text.toHex b}\n{Attempt.headWord} {w.steps} {w.height} {hex X (w.roots X.env)}\n" ++
+      s!"{Attempt.settleWord} {v.text X.env.bytes}\n"
 
 def receiptLines (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (cb : ByteArray) : Reply :=
   match X.decodeCall cb with

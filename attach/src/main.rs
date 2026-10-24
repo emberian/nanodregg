@@ -13,7 +13,7 @@
 //! ends the conn here and is relayed. It decides nothing about a request and exits when stdin ends.
 
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
@@ -32,10 +32,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// One conn-tagged frame to stdout; the lock keeps frames whole.
 fn emit(out: &Mutex<io::Stdout>, conn: u32, st: u8, payload: &[u8]) -> Result<(), FrameError> {
-    let max = table::LIMITS.frame_bytes_max.saturating_add(4);
     let mut o = lock(out);
-    frame::write_body(&mut *o, max, &[&conn.to_le_bytes(), &[st], payload])?;
-    o.flush().map_err(FrameError::Io)
+    frame::write_child(&mut *o, frame::child_max(table::LIMITS), conn, st, payload)
 }
 
 fn closed(out: &Mutex<io::Stdout>, conn: u32, r: CloseReason) -> Result<(), FrameError> {
@@ -70,26 +68,14 @@ fn run(sock: &str) -> Result<(), FrameError> {
     let mut input = io::stdin().lock();
     // The friend's supervisor numbers conns upward from 0; one at or below this has been seen.
     let mut seen: Option<u32> = None;
-    let max = table::LIMITS.frame_bytes_max.saturating_add(4);
+    let max = frame::child_max(table::LIMITS);
     loop {
         let body = match frame::read_body(&mut input, max) {
             Ok(b) => b,
             Err(FrameError::Closed) => return Ok(()),
             Err(e) => return Err(e),
         };
-        let Some((c, rest)) = body.split_first_chunk::<4>() else {
-            return Err(FrameError::Truncated {
-                wanted: 5,
-                got: body.len(),
-            });
-        };
-        let Some((&byte, payload)) = rest.split_first() else {
-            return Err(FrameError::Truncated {
-                wanted: 5,
-                got: body.len(),
-            });
-        };
-        let conn = u32::from_le_bytes(*c);
+        let (conn, byte, payload) = frame::child_parts(&body)?;
         if byte == g::HANGUP {
             // The friend's connection ended: free its slot, acknowledge by name (PROTOCOL-23).
             drop_conn(&open, conn);

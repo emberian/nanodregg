@@ -20,6 +20,7 @@ Each operation names the one function that answers it (`receiver`). The names ar
 receiving layers commit those declarations; a gate then resolves each name in the environment.
 -/
 import Codec.Layout
+import Codec.Ed25519
 import Host.Bounds
 
 namespace Nanodregg.Protocol
@@ -305,6 +306,12 @@ def signResultLayout : Codec.Layout := [.bytes "key", .bytes "next", .bytes "sig
 one a rotation to `next` precommits, by digest). -/
 def precommitResultLayout : Codec.Layout := [.bytes "next", .bytes "pending"]
 
+/-- The custody workspace's armed rotation (`ws/rotation`, CLIENT-27/40): the attempt that carries it,
+the incoming key that signs it and the pending key it precommits, each key an Ed25519 public key
+(`Codec.Ed25519.publicKeyBytes`). Written once (`fsx::create_once`) before the attempt is first sent;
+`rotationBytes` is its one size, and a file of any other size refuses by name (`Length`). -/
+def rotationLayout : Codec.Layout := [.u64 "attempt", .bytes "incoming", .bytes "pending"]
+
 /-- Why custody refuses a step (CLIENT-2's `CustodyError`, as names on the wire). A custody result
 that is `refused` carries exactly one of these (`custodyRefusalLayout`); follow renders it by
 name. -/
@@ -475,6 +482,15 @@ a cancel signature's eight-byte length and the signature at `cancelBytesMax` (ta
 call at `eventBytesMax`. A page budget of this plus the page's 4-byte length serves every event a
 record decodes to (`Host.Page.budget_fits_event`). -/
 def pageEventBytesMax : Nat := Kernel.Bounds.eventBytesMax + 1 + 8 + Kernel.Bounds.cancelBytesMax
+/-- A socket frame's length prefix (either socket, either direction, and the child wire): the body's
+size as a `Codec.Stream.u32`, so a frame is `Stream.bytesOf frameBytesMax` of its body (CLIENT-40:
+`client/src/frame.rs` reads this width, and fails to build if it is not a `u32`'s). -/
+def frameLenBytes : Nat := Codec.Stream.u32.size 0
+/-- The child wire's connection id ahead of a request's op or a reply's status: a `Codec.Stream.u32`
+(`client/src/mux.rs`, `Host.Wire`). -/
+def connBytes : Nat := Codec.Stream.u32.size 0
+/-- The largest child-wire body: a client frame body and the connection id ahead of it. -/
+def childBodyMax : Nat := frameBytesMax + connBytes
 
 /-! ### The frame as a whole (PROTOCOL-70)
 

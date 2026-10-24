@@ -23,16 +23,18 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use zeroize::Zeroizing;
 
 use crate::fsx;
-use crate::generated::layout::SignResult;
-use crate::generated::{CustodyRefusal, ENVELOPE_DOMAIN};
+use crate::generated::layout::{ArmedRotation, SignResult};
+use crate::generated::{CustodyRefusal, ENVELOPE_DOMAIN, PUBLIC_KEY_BYTES, ROTATION_BYTES};
 pub use nanodregg_sandbox::custody::Refused;
 use nanodregg_sandbox::custody::{check_private_dir, read_private};
 
 /// Seed length in bytes.
-pub const SEED_BYTES: usize = 32;
+pub const SEED_BYTES: usize = ed25519_dalek::SECRET_KEY_LENGTH;
 
 /// An Ed25519 public key.
-pub type Public = [u8; 32];
+pub type Public = [u8; PUBLIC_KEY_BYTES as usize];
+// Lean's verifier width (`Codec.Ed25519.publicKeyBytes`) is the signer's.
+const _: () = assert!(PUBLIC_KEY_BYTES as usize == ed25519_dalek::PUBLIC_KEY_LENGTH);
 
 /// Why custody refused.
 #[derive(Debug)]
@@ -183,7 +185,7 @@ impl Keys for Separate {
         Ok(key(&read(&self.ws.join("seed"), SEED_BYTES)?))
     }
     fn next_public(&self) -> Result<Public, CustodyError> {
-        let b = read(&self.ws.join("next.pub"), 32)?;
+        let b = read(&self.ws.join("next.pub"), PUBLIC_KEY_BYTES as usize)?;
         Ok(key_bytes(&b))
     }
     fn next(&self) -> Result<SigningKey, CustodyError> {
@@ -231,7 +233,7 @@ impl Keys for Separate {
 }
 
 fn key_bytes(b: &[u8]) -> Public {
-    let mut p = [0u8; 32];
+    let mut p = [0u8; PUBLIC_KEY_BYTES as usize];
     p.copy_from_slice(&b[..32]);
     p
 }
@@ -322,7 +324,8 @@ fn record(ws: &Path, name: &str) -> Result<(), CustodyError> {
     fsx::create_once(ws, name, &bytes).map_err(exists)
 }
 
-/// The armed rotation's record in the workspace: `u64le attempt ‖ incoming ‖ pending`.
+/// The armed rotation's record in the workspace: Lean's `Protocol.rotationLayout` (`u64le attempt ‖
+/// incoming ‖ pending`, each key length-prefixed), exactly `ROTATION_BYTES` long (CLIENT-40).
 const ROTATION: &str = "rotation";
 
 /// A member's custody over its workspace.
@@ -528,7 +531,14 @@ impl Custody {
 
     /// Record that attempt `n` carries rotation `r`, durably, before the attempt is first sent.
     pub fn arm(&self, n: u64, r: &Rotation) -> Result<(), CustodyError> {
-        let bytes = [&n.to_le_bytes()[..], &r.incoming, &r.pending].concat();
+        let record = ArmedRotation {
+            attempt: n,
+            incoming: r.incoming.to_vec(),
+            pending: r.pending.to_vec(),
+        };
+        let bytes = record
+            .encode()
+            .map_err(|_| CustodyError::Mismatch("rotation ≠ its record layout"))?;
         fsx::create_once(&self.ws, ROTATION, &bytes).map_err(|e| match e.kind() {
             io::ErrorKind::AlreadyExists => CustodyError::RotationInFlight,
             _ => CustodyError::Io(e),
@@ -537,16 +547,17 @@ impl Custody {
 
     /// The armed rotation and its attempt number, if any.
     pub fn armed(&self) -> Result<Option<(u64, Rotation)>, CustodyError> {
-        let Some(b) = read_optional(&self.ws.join(ROTATION), 72)? else {
+        let Some(b) = read_optional(&self.ws.join(ROTATION), ROTATION_BYTES as usize)? else {
             return Ok(None);
         };
-        let mut n = [0u8; 8];
-        n.copy_from_slice(&b[..8]);
+        // `rotationBytes` long with each key at most `publicKeyBytes`: both keys are whole.
+        let bad = || CustodyError::Mismatch("rotation record ≠ its layout");
+        let a = ArmedRotation::decode(&b).map_err(|_| bad())?;
         let r = Rotation {
-            incoming: key_bytes(&b[8..40]),
-            pending: key_bytes(&b[40..72]),
+            incoming: Public::try_from(a.incoming.as_slice()).map_err(|_| bad())?,
+            pending: Public::try_from(a.pending.as_slice()).map_err(|_| bad())?,
         };
-        Ok(Some((u64::from_le_bytes(n), r)))
+        Ok(Some((a.attempt, r)))
     }
 
     /// The armed rotation's attempt settled: committed advances the keys, a definitive refusal

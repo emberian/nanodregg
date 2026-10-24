@@ -40,9 +40,13 @@ use std::process::{Child, Command, ExitCode, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nanodregg_client::generated::{FOLLOW_SOCK, MEMBER_SOCK};
 use nanodregg_client::run::Follow;
 use nanodregg_client::{sockets::FollowSocket, table};
-use nanodregg_launcher::broker_generated::{GRAIN_NAME_MAX, RESIDENTS_MAX, SOCK_PATH_MAX};
+use nanodregg_launcher::broker_generated::{
+    DECIDER_TICK_MS, GRAIN_NAME_MAX, RESIDENTS_MAX, RESTART_SECONDS, SOCK_PATH_MAX, START_BURST,
+    START_INTERVAL_SECONDS,
+};
 use nanodregg_launcher::broker_generated::{decider_exit, members_exit as exit};
 use nanodregg_launcher::residents::{self, DeciderEnd};
 use nanodregg_launcher::{grain_name_ok, pairwise_apart};
@@ -51,16 +55,17 @@ use nanodregg_sandbox::{Policy, command};
 use rustix::process::{Pid, Signal, kill_process};
 
 const USAGE: &str = "usage: nd-members MEMBER MEMBERS STATE FOLLOW PIDS HOST_SOCK PEER SUPERVISE ND HOST STORE [--hide PATH]... -- /ABS/DECIDER [ARG]...";
-/// How often the decider is asked (keybroker's tick): liveness only.
-const TICK: Duration = Duration::from_millis(200);
+/// How often the decider is asked (keybroker's tick, `Broker.Bounds.tickMs`): liveness only.
+const TICK: Duration = Duration::from_millis(DECIDER_TICK_MS as u64);
 /// Ticks a decider that stopped answering has to end on its own before it is stopped.
 const ENDING_TICKS: u32 = 10;
 /// Ticks: centuries.
 const LIFETIME: u64 = 1 << 48;
-/// nd-member@'s RestartSec, StartLimitBurst and StartLimitIntervalSec, per resident.
-const RESTART_AFTER: Duration = Duration::from_secs(2);
-const STARTS_MAX: usize = 5;
-const STARTS_WINDOW: Duration = Duration::from_secs(120);
+/// The restart policy (`Hosting.restartSeconds`, `startBurst`, `startIntervalSeconds`; the units
+/// render it as RestartSec, StartLimitBurst and StartLimitIntervalSec), applied per resident.
+const RESTART_AFTER: Duration = Duration::from_secs(RESTART_SECONDS as u64);
+const STARTS_MAX: usize = START_BURST as usize;
+const STARTS_WINDOW: Duration = Duration::from_secs(START_INTERVAL_SECONDS as u64);
 /// The largest `follow` file read: two digests in hex, a space and LF.
 const FOLLOW_MAX: usize = 256;
 /// After SIGTERM, an nd-supervise's writers deliver a queued reply and the close, each within
@@ -186,8 +191,8 @@ fn run() -> End {
     }
     // ROOT/<name>/SOCK for the longest grain name must fit sun_path (Lean's sockets_fit, any root)
     for (n, c, r, sock) in [
-        ("memberRoot", exit::MEMBER_ROOT, &member, "nd.sock"),
-        ("followRoot", exit::FOLLOW_ROOT, &follow, "follow.sock"),
+        ("memberRoot", exit::MEMBER_ROOT, &member, MEMBER_SOCK),
+        ("followRoot", exit::FOLLOW_ROOT, &follow, FOLLOW_SOCK),
     ] {
         let len = r.as_os_str().len() + GRAIN_NAME_MAX as usize + sock.len() + 2;
         if len > SOCK_PATH_MAX as usize {
@@ -455,8 +460,14 @@ fn provision(conf: &Conf, name: &str) -> Result<Id, String> {
         return Err(missing(format!("{} not a directory", store.display())));
     }
     let shared = |why: String| format!("socketDirShared {name} {why}");
-    socket_dir(&conf.member.join(name), 0o2710, Some(conf.group), "nd.sock").map_err(shared)?;
-    socket_dir(&conf.follow.join(name), 0o700, None, "follow.sock").map_err(shared)?;
+    socket_dir(
+        &conf.member.join(name),
+        0o2710,
+        Some(conf.group),
+        MEMBER_SOCK,
+    )
+    .map_err(shared)?;
+    socket_dir(&conf.follow.join(name), 0o700, None, FOLLOW_SOCK).map_err(shared)?;
     Ok(id)
 }
 
@@ -599,7 +610,7 @@ impl Pair {
         self.follow.reap(name, "follow");
         self.stdio.reap(name, "stdio");
         let ws = conf.members.join(name);
-        let fsock = conf.follow.join(name).join("follow.sock");
+        let fsock = conf.follow.join(name).join(FOLLOW_SOCK);
         let o = OsStr::new;
         if self.follow.due(name, "follow")? {
             let store = conf.state.join(name).join("store");
@@ -618,7 +629,7 @@ impl Pair {
             false
         };
         if ready && self.stdio.due(name, "stdio")? {
-            let msock = conf.member.join(name).join("nd.sock");
+            let msock = conf.member.join(name).join(MEMBER_SOCK);
             let (f, n, hs, w) = (
                 fsock.as_os_str(),
                 conf.nd.as_os_str(),
@@ -648,8 +659,8 @@ impl Pair {
     /// Remove both sockets and both directories (a connect is then `ENOENT`), and SIGTERM both
     /// children, so each names every peer's close (CLIENT-30): `stopping` holds them, the tick goes on.
     fn stop(&mut self, conf: &Conf, name: &str, stopping: &mut Stopping) {
-        let msock = conf.member.join(name).join("nd.sock");
-        let fsock = conf.follow.join(name).join("follow.sock");
+        let msock = conf.member.join(name).join(MEMBER_SOCK);
+        let fsock = conf.follow.join(name).join(FOLLOW_SOCK);
         for s in [msock, fsock] {
             let _ = std::fs::remove_file(&s);
             if let Some(d) = s.parent() {

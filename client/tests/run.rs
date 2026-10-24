@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::io;
 
 use nanodregg_client::custody::Custody;
-use nanodregg_client::generated::attempt::Action;
+use nanodregg_client::generated::attempt::{Action, HEAD_WORD, RECEIPT_WORD, SETTLE_WORD};
 use nanodregg_client::generated::layout::{Op, Step};
 use nanodregg_client::run::{self, Follow, Host, Outcome, RunError, Table};
 
@@ -53,7 +53,8 @@ impl Follow for ScriptedFollow {
 fn receipt(verdict: &str) -> Step {
     Step::Done {
         exit: 0,
-        stdout: format!("receipt 00ab\nhead 7 3 cd\nsettle {verdict}\n").into_bytes(),
+        stdout: format!("{RECEIPT_WORD} 00ab\n{HEAD_WORD} 7 3 cd\n{SETTLE_WORD} {verdict}\n")
+            .into_bytes(),
         stderr: Vec::new(),
     }
 }

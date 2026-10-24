@@ -77,7 +77,8 @@ pub fn ask(d: &mut Decider, at_ms: u64) -> Option<Vec<Vec<u8>>> {
 pub enum DeciderEnd {
     /// a code Lean's `DeciderExit` names (`decider_exit::ALL`): the decider's own end, passed through
     Own(u8),
-    /// killed by a signal (under bwrap, a code of 128 or more IS one: the OOM killer), restartable
+    /// killed by a signal (`nanodregg_sandbox::killed_by_signal`, the platform's fact: under bwrap
+    /// a code of 128 or more IS one, the OOM killer), restartable
     Signaled,
     /// any other code: the mechanism's (bwrap's setup, a missing program), which a restart meets
     /// again (HOSTING-23; VACUITY-READER-H4: 137 must not read as the mechanism)
@@ -87,8 +88,8 @@ pub enum DeciderEnd {
 /// The end `status` names.
 pub fn decider_end(status: ExitStatus) -> DeciderEnd {
     match status.code() {
+        _ if nanodregg_sandbox::killed_by_signal(status) => DeciderEnd::Signaled,
         None => DeciderEnd::Signaled,
-        Some(c) if c >= 128 => DeciderEnd::Signaled,
         Some(c) => match u8::try_from(c) {
             Ok(b) if decider_exit::ALL.contains(&b) => DeciderEnd::Own(b),
             _ => DeciderEnd::Mechanism(c),

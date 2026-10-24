@@ -8,7 +8,9 @@
 use std::fs;
 
 use nanodregg_client::attempt::{Attempt, AttemptError, Receipt, Reply, State};
-use nanodregg_client::generated::attempt::{Action, Request, Seen};
+use nanodregg_client::generated::attempt::{
+    Action, HEAD_WORD, RECEIPT_WORD, Request, SETTLE_WORD, Seen,
+};
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let d = nanodregg_devtools::scratch(&format!("nd-attempt-{}-{name}", std::process::id()));
@@ -21,7 +23,7 @@ fn done(d: &std::path::Path) {
 }
 
 fn lines(verdict: &str) -> Vec<u8> {
-    format!("receipt 00ab\nhead 7 3 cd\nsettle {verdict}\n").into_bytes()
+    format!("{RECEIPT_WORD} 00ab\n{HEAD_WORD} 7 3 cd\n{SETTLE_WORD} {verdict}\n").into_bytes()
 }
 
 /// Follow's answer to `receipt CALL` with `verdict`.

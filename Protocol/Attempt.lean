@@ -145,6 +145,13 @@ def settleSeen : String → Option Seen
   | "forgotten" => some .forgotten
   | _ => none
 
+/-- The first words of the three lines follow prints for `receipt CALL` (`Command.Machine.receiptText`),
+each followed by one space: the receipt in hex, the head it was built at, the settlement. The client reads
+a confirm's answer by them (`client/src/attempt.rs`, emitted `RECEIPT_WORD`, `HEAD_WORD`, `SETTLE_WORD`, CLIENT-40). -/
+def receiptWord : String := "receipt"
+def headWord : String := "head"
+def settleWord : String := "settle"
+
 /-- The words `settleSeen` reads, in the order the emitter prints them. -/
 def settleWords : List String := ["committed", "refused", "expired", "open", "forgotten"]
 

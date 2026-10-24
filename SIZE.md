@@ -12,30 +12,30 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean proof-modules | 275 | — |
 | Lean lines (Bench) | 965 | — |
 | Lean lines (Census) | 1211 | — |
-| Lean lines (Codec) | 13750 | — |
-| Lean lines (Emit) | 1756 | — |
-| Lean lines (Host) | 18502 | — |
-| Lean lines (Hosting) | 13097 | — |
+| Lean lines (Codec) | 13754 | — |
+| Lean lines (Emit) | 1857 | — |
+| Lean lines (Host) | 18506 | — |
+| Lean lines (Hosting) | 13120 | — |
 | Lean lines (Kernel) | 37182 | — |
 | Lean lines (Lang) | 46743 | — |
 | Lean lines (Ledger) | 2904 | — |
-| Lean lines (Ops) | 2564 | — |
-| Lean lines (Protocol) | 13527 | — |
-| Lean lines (deployed) | 30246 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 22637 | — |
+| Lean lines (Ops) | 2558 | — |
+| Lean lines (Protocol) | 13618 | — |
+| Lean lines (deployed) | 30325 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 22731 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 380 | — |
-| theorems | 6428 | — |
+| theorems | 6437 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 12 | 12 |
 | C lines | 315 | 315 |
-| Rust lines | 22989 | — |
-| Rust lines (nd) | 98 | 100 |
+| Rust lines | 23321 | — |
+| Rust lines (nd) | 99 | 100 |
 | Rust lines (nd-supervise) | 164 | 164 |
-| Rust lines (client library) | 2742 | 2742 |
-| Rust lines (attach/src) | 148 | 300 |
-| Rust lines (generated) | 2236 | — |
+| Rust lines (client library) | 2811 | 2811 |
+| Rust lines (attach/src) | 134 | 300 |
+| Rust lines (generated) | 2326 | — |
 | Rust files with an unregistered generated header | 0 | 0 |
 | protocol operations | 7 | 7 |
 | call kinds (Receive.Body constructors) | 13 | 13 |
@@ -44,4 +44,4 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | protocol status codes | 6 | — |
 | protocol step codes | 7 | — |
 | conformance rows | 49 | — |
-| Rust lines (nd-members) | 690 | 690 |
+| Rust lines (nd-members) | 701 | 701 |

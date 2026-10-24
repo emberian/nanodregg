@@ -73,14 +73,11 @@ struct Child(UnixStream);
 
 impl Child {
     fn ask(&mut self, (op, payload): (u8, Vec<u8>)) -> io::Result<Step> {
-        let max = table::LIMITS.frame_bytes_max.saturating_add(4);
-        let bad = |e: String| io::Error::new(io::ErrorKind::InvalidData, e);
-        frame::write_body(&mut self.0, max, &[&[0; 4], &[op], &payload])
-            .map_err(|e| bad(e.to_string()))?;
-        let b = frame::read_body(&mut self.0, max).map_err(|e| bad(e.to_string()))?;
-        let (Some(&status), Some(reply)) = (b.get(4), b.get(5..)) else {
-            return Err(bad("short child frame".into()));
-        };
+        let max = frame::child_max(table::LIMITS);
+        let bad = |e: frame::FrameError| io::Error::new(io::ErrorKind::InvalidData, e.to_string());
+        frame::write_child(&mut self.0, max, 0, op, &payload).map_err(bad)?;
+        let b = frame::read_body(&mut self.0, max).map_err(bad)?;
+        let (_, status, reply) = frame::child_parts(&b).map_err(bad)?;
         sockets::step(status, reply)
     }
 }

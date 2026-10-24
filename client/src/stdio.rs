@@ -90,29 +90,23 @@ pub fn answer(
 /// Serve the mux's child wire until stdin closes: `u32le conn ‖ op ‖ payload` in, `u32le conn ‖
 /// status ‖ payload` out; a hang-up frame is skipped. Requests are answered in order.
 pub fn serve(mut r: impl Read, mut w: impl Write, at: &Place, custody: &Custody) -> io::Result<()> {
-    let max = table::LIMITS.frame_bytes_max.saturating_add(4);
+    let max = frame::child_max(table::LIMITS);
+    let bad = |e: frame::FrameError| io::Error::new(io::ErrorKind::InvalidData, e.to_string());
     loop {
         let body = match frame::read_body(&mut r, max) {
             Ok(b) => b,
             Err(frame::FrameError::Closed) => return Ok(()),
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string())),
+            Err(e) => return Err(bad(e)),
         };
-        let (Some(conn), Some(&op)) = (body.get(..4), body.get(4)) else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "short child frame",
-            ));
-        };
+        let (conn, op, payload) = frame::child_parts(&body).map_err(bad)?;
         if op == HANGUP {
             continue;
         }
-        let reply = answer(op, &body[5..], at, custody, STDIO_VERBS);
+        let reply = answer(op, payload, at, custody, STDIO_VERBS);
         let bytes = reply
             .encode()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))?;
-        frame::write_body(&mut w, max, &[conn, &[status::OK], &bytes])
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-        w.flush()?;
+        frame::write_child(&mut w, max, conn, status::OK, &bytes).map_err(bad)?;
     }
 }
 

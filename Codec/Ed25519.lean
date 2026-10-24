@@ -215,6 +215,10 @@ def decodePoint (b : ByteArray) (off : Nat) : Option Point :=
   | none => none
   | some x => signed x y (n >>> 255)
 
+/-- An Ed25519 public key's size: what `verify` accepts as `pk` (`Codec.Ed25519.verify_pk_size`), and
+the width of every key a client record holds (`Protocol.rotationLayout`). -/
+def publicKeyBytes : Nat := 32
+
 /-- RFC 8032 §5.1.7, cofactored: does `sig` sign `msg` under the 32-byte public key `pk`? Every
 malformed input is `false`. -/
 def verify (pk msg sig : ByteArray) : Bool :=

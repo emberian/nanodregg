@@ -53,10 +53,18 @@ fn empty_closed_and_truncated() {
     ));
     assert!(matches!(
         frame::read(&mut [1u8, 0].as_slice(), L),
-        Err(FrameError::Truncated { wanted: 4, got: 2 })
+        Err(FrameError::Truncated {
+            offset: 0,
+            wanted: 4,
+            got: 2
+        })
     ));
     assert!(matches!(
         frame::read(&mut bytes(5, &[1, 2]).as_slice(), L),
-        Err(FrameError::Truncated { wanted: 5, got: 2 })
+        Err(FrameError::Truncated {
+            offset: 4,
+            wanted: 5,
+            got: 2
+        })
     ));
 }

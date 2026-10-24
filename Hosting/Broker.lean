@@ -34,6 +34,11 @@ def bodyMax : Nat := frameMax - 4096
 /-- An allowance's cap (and so every charge) is below this, so a charge fits the wire's u64. -/
 def capMax : Nat := 2 ^ 63
 
+/-- How often keybroker and nd-members ask their decider which residents the World holds, in ms:
+liveness only (a socket appears within a tick of the decider seeing a grain's birth). Emitted
+`DECIDER_TICK_MS` (CLIENT-40). -/
+def tickMs : Nat := 200
+
 end Bounds
 
 /-- What the operator allows one resident on one model, per window of `windowMs` operator

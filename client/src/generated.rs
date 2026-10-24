@@ -13,6 +13,17 @@ pub const FRAME_MS_MAX: u32 = 30000;
 pub const REPLY_MS_MAX: u32 = 120000;
 pub const REPLY_WRITE_MS_MAX: u32 = 30000;
 pub const HINT_BYTES_MAX: u32 = 512;
+pub const FRAME_LEN_BYTES: u32 = 4;
+pub const CONN_BYTES: u32 = 4;
+pub const CHILD_BODY_MAX: u32 = 262148;
+pub const PUBLIC_KEY_BYTES: u32 = 32;
+pub const ROTATION_BYTES: u32 = 80;
+
+/// The socket names (Hosting.Plan): each alone in its own directory.
+pub const FOLLOW_SOCK: &str = "follow.sock";
+pub const HOST_SOCK: &str = "host.sock";
+pub const MEMBER_SOCK: &str = "nd.sock";
+pub const BROKER_SOCK: &str = "broker.sock";
 
 pub mod host_op {
     pub const SUBMIT: u8 = 1;
@@ -269,7 +280,8 @@ impl StdioRefusal {
     }
 }
 
-/// The follow socket's payloads (Protocol.Table layouts; Lean codec: Protocol.Frames).
+/// The follow socket's payloads and the custody rotation record (Protocol.Table layouts; Lean codec:
+/// Protocol.Frames).
 pub mod layout {
 
     /// Why a payload was refused: `Codec.Refusal`, with the same offsets.
@@ -383,6 +395,19 @@ pub mod layout {
             let at = self.i;
             let tag = self.byte()?;
             from_code(tag).ok_or(Refusal::BadTag { offset: at, tag })
+        }
+    }
+
+    impl Cursor<'_> {
+        fn u64(&mut self) -> Result<u64, Refusal> {
+            let eight = self.b.get(self.i..self.i + 8).ok_or(Refusal::Truncated {
+                offset: self.i,
+                need: 8,
+            })?;
+            self.i += 8;
+            let mut v = [0u8; 8];
+            v.copy_from_slice(eight);
+            Ok(u64::from_le_bytes(v))
         }
     }
 
@@ -595,6 +620,55 @@ pub mod layout {
             out.push(*exit);
             put_bytes(&mut out, stdout, 262144)?;
             put_bytes(&mut out, stderr, 262144)?;
+            Ok(out)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ArmedRotation {
+        pub attempt: u64,
+        pub incoming: Vec<u8>,
+        pub pending: Vec<u8>,
+    }
+
+    impl ArmedRotation {
+        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
+            let mut c = Cursor { b, i: 0 };
+            let attempt = c.u64()?;
+            let incoming = c.bytes(32)?;
+            let pending = c.bytes(32)?;
+            if c.i > 80 {
+                return Err(Refusal::PastBound {
+                    offset: 0,
+                    limit: 80,
+                    got: c.i,
+                });
+            }
+            c.end()?;
+            Ok(ArmedRotation {
+                attempt,
+                incoming,
+                pending,
+            })
+        }
+
+        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
+            let mut out = Vec::new();
+            let ArmedRotation {
+                attempt,
+                incoming,
+                pending,
+            } = self;
+            out.extend_from_slice(&attempt.to_le_bytes());
+            put_bytes(&mut out, incoming, 32)?;
+            put_bytes(&mut out, pending, 32)?;
+            if out.len() > 80 {
+                return Err(Refusal::PastBound {
+                    offset: 0,
+                    limit: 80,
+                    got: out.len(),
+                });
+            }
             Ok(out)
         }
     }
@@ -818,6 +892,11 @@ pub mod attempt {
             }
         }
     }
+
+    /// The first words of follow's three `receipt CALL` lines (Protocol.Attempt), each then one space.
+    pub const RECEIPT_WORD: &str = "receipt";
+    pub const HEAD_WORD: &str = "head";
+    pub const SETTLE_WORD: &str = "settle";
 
     /// What a confirm or probe saw: the first word of follow's `settle` line.
     pub fn settle_seen(word: &str) -> Option<Seen> {

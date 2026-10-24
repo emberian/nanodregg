@@ -130,14 +130,13 @@ pub fn foreign_path<'a>(
         })
 }
 
-/// A grain name is a single directory-name component of lowercase ASCII letters, digits and `-`
-/// (Lean's `labelOk`, which `plan` checks). The launcher names PID files by it, so it asserts the
+/// A grain name is one clean directory-name component of the label bytes (Lean's `labelOk`, which
+/// `plan` checks: `Codec.Path.clean` and `labelByte`, both emitted). The launcher names PID files by it, so it asserts the
 /// premise where the bytes enter rather than trusting it.
 pub fn grain_name_ok(g: &[u8]) -> bool {
     !g.is_empty()
-        && g.len() <= broker_generated::GRAIN_NAME_MAX as usize
-        && g.iter()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+        && generated::wire::path_clean(g)
+        && g.iter().all(|b| generated::LABEL_BYTES.contains(b))
 }
 
 /// Why the sandbox refused, as the wire names it (`Hosting.LaunchFailure`). Exhaustive: a new

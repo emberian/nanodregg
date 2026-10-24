@@ -5,6 +5,10 @@ pub const RESIDENTS_MAX: u32 = 1024;
 pub const GRAIN_NAME_MAX: u32 = 64;
 pub const SOCK_PATH_MAX: u32 = 107;
 pub const ANSWER_MS_MAX: u32 = 120000;
+pub const DECIDER_TICK_MS: u32 = 200;
+pub const RESTART_SECONDS: u32 = 2;
+pub const START_BURST: u32 = 5;
+pub const START_INTERVAL_SECONDS: u32 = 120;
 
 /// Why a frame could not be read or written (the pipe framing: `u32le len ‖ payload`,
 /// `1 <= len <= FRAME_MAX`).

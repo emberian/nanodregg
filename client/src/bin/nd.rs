@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use nanodregg_client::custody::Custody;
+use nanodregg_client::generated::{FOLLOW_SOCK, HOST_SOCK};
 use nanodregg_client::sockets::{FollowSocket, HostSocket};
 use nanodregg_client::table;
 use nanodregg_client::{join, run, stdio};
@@ -70,10 +71,10 @@ fn go() -> Result<u8, String> {
     }
     let sock =
         |var: &str, name: &str| std::env::var_os(var).map_or_else(|| ws.join(name), PathBuf::from);
-    let mut follow = FollowSocket::connect(&sock("ND_FOLLOW_SOCK", "follow.sock"), table::REPLY)
-        .map_err(|e| format!("follow.sock: {e}"))?;
-    let mut host = HostSocket::connect(&sock("ND_HOST_SOCK", "host.sock"), table::REPLY)
-        .map_err(|e| format!("host.sock: {e}"))?;
+    let mut follow = FollowSocket::connect(&sock("ND_FOLLOW_SOCK", FOLLOW_SOCK), table::REPLY)
+        .map_err(|e| format!("{FOLLOW_SOCK}: {e}"))?;
+    let mut host = HostSocket::connect(&sock("ND_HOST_SOCK", HOST_SOCK), table::REPLY)
+        .map_err(|e| format!("{HOST_SOCK}: {e}"))?;
     let argv = join::kept(&ws, argv)?;
     let argv: Vec<Vec<u8>> = argv.into_iter().map(OsString::into_vec).collect();
     let (exit, stdout, stderr) = run::run(

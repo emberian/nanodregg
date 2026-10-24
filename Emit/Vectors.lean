@@ -7,6 +7,8 @@ import Lang.Package
 import Lang.Rel
 import Lang.Print
 import Kernel.Sim
+import Protocol.Frames
+import Host.Wire
 
 /-!
 # Emit.Vectors — the codec vectors: a change of meaning under the same bytes bumps the label (CODEC-28 (d))
@@ -335,6 +337,10 @@ def site {α : Type} (name : String) (c : Stream α) (vs : G (List α)) (pr : α
   ⟨name, Tag.of name c, (·.map c.bytes) <$> vs, print c pr⟩
 
 def each {α : Type} (n : Nat) (g : Nat → G α) : G (List α) := (List.range n).mapM g
+
+def hex (b : ByteArray) : String :=
+  let digit (n : UInt8) : Char := if n < 10 then Char.ofNat (48 + n.toNat) else Char.ofNat (87 + n.toNat)
+  b.foldl (fun s x => (s.push (digit (x >>> 4))).push (digit (x &&& 15))) ""
 
 def pathMax : Nat := 255
 
@@ -732,6 +738,68 @@ def packageVecs : List ByteArray :=
      rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨#[0x61, 0xff]⟩,
      lang59Package]
 
+/-! ## The client's frames and its rotation record (CLIENT-40)
+
+The Rust reads these bytes by hand (`client/src/frame.rs`, `client/src/mux.rs`) or through the emitted
+`layout::ArmedRotation`; `client/tests/vectors.rs` decodes every row of these sites in Rust, renders the
+same text and re-encodes an accepted one to the same bytes. -/
+
+/-- `u32le n ‖ b`: a frame header declaring `n`, then `b` (which need not be `n` bytes long). -/
+def lenThen (n : Nat) (b : ByteArray) : ByteArray := Stream.u32.bytes (UInt32.ofNat n) ++ b
+
+def printFrame (b : ByteArray) : String :=
+  oneLine <| match Protocol.socketFrame.decode b with
+  | .error e => "refused " ++ text e
+  | .ok body => match Protocol.bodyParts? body.val with
+    | some (op, p) => s!"ok op={op} payload={hex p}"
+    | none => "refused empty"
+
+def frameVecs : G (List ByteArray) := do
+  let drawn ← each 3 fun _ => do
+    let body := ByteArray.mk #[(← below 256).toUInt8] ++ (← bytes 40)
+    return lenThen body.size body
+  return drawn ++
+    [lenThen 1 ⟨#[7]⟩, lenThen 0 .empty, lenThen (Protocol.Bounds.frameBytesMax + 1) .empty,
+     ⟨#[1, 0, 0]⟩, lenThen 10 ⟨#[1, 2, 3]⟩, lenThen 2 ⟨#[5, 6, 9]⟩, .empty]
+
+def printChild (b : ByteArray) : String :=
+  oneLine <| match Host.childFrame.decode b with
+  | .error e => "refused " ++ text e
+  | .ok body => match Host.decodeBody body.val with
+    | .ok f => s!"ok conn={f.conn} op={f.op} payload={hex f.payload}"
+    | .error s => s!"refused {s.name} {body.val.size}"
+
+def childVecs : G (List ByteArray) := do
+  let drawn ← each 3 fun _ => do
+    return Host.encodeFrame { conn := (← u64).toUInt32, op := (← below 256).toUInt8, payload := ← bytes 40 }
+  return drawn ++
+    [Host.encodeFrame { conn := 3, op := Protocol.hangupCode, payload := "idle".toUTF8 },
+     Host.encodeReply { conn := 9, status := Protocol.Status.closed.code, payload := "full".toUTF8 },
+     lenThen 4 ⟨#[1, 0, 0, 0]⟩, lenThen (Host.bodyMax + 1) .empty, lenThen 6 ⟨#[1, 0, 0, 0, 2]⟩]
+
+/-- A whole public key's worth of drawn bytes. -/
+def key : G (Bytes Codec.Ed25519.publicKeyBytes) := do
+  let mut b := ByteArray.empty
+  for _ in [0:Codec.Ed25519.publicKeyBytes] do
+    b := b.push (← below 256).toUInt8
+  return if h : b.size ≤ Codec.Ed25519.publicKeyBytes then ⟨b, h⟩ else ⟨.empty, by decide⟩
+
+def printRotation (b : ByteArray) : String :=
+  oneLine <| match Protocol.rotationFrame.decode b with
+  | .ok (a, i, p, ()) => s!"ok attempt={a} incoming={hex i.val} pending={hex p.val}"
+  | .error e => "refused " ++ text e
+
+def rotationVecs : G (List ByteArray) := do
+  let drawn ← each 3 fun _ => do
+    return Protocol.rotationFrame.bytes (← u64, ← key, ← key, ())
+  let whole := drawn.headD .empty
+  return drawn ++
+    -- the CLIENT-39-era record, `u64le ‖ 32 ‖ 32` with no lengths: refused, never read as keys
+    [Stream.u64.bytes 7 ++ ⟨Array.replicate 32 0x11⟩ ++ ⟨Array.replicate 32 0x22⟩,
+     -- a short incoming key: the layout reads it; the client refuses the record's size (`Length`)
+     Stream.u64.bytes 8 ++ lenThen 31 ⟨Array.replicate 31 0x33⟩ ++ lenThen 32 ⟨Array.replicate 32 0x44⟩,
+     whole.extract 0 (whole.size - 1), whole ++ ⟨#[0]⟩]
+
 def sites : List Site :=
   [ site "i64" Stream.i64 (each 2 fun _ => (·.toInt64) <$> u64) text,
     site "bool" Stream.bool (pure [false, true]) text,
@@ -808,13 +876,12 @@ def sites : List Site :=
     ⟨"lang/key", Tag.of "lang/key" (Lang.Wire.dataStream keyVecTy), pure keyVecs,
       print (Lang.Wire.dataStream keyVecTy) fun v => (Lang.Print.data (Lang.Wire.toData keyVecTy v)).getD "?"⟩,
     ⟨"lang/data: no value", Tag.of "lang/data: no value" Lang.Wire.noData, pure [ByteArray.empty],
-      print Lang.Wire.noData (fun e => nomatch e)⟩ ]
+      print Lang.Wire.noData (fun e => nomatch e)⟩,
+    ⟨"wire/frame", Tag.of "wire/frame" Protocol.socketFrame, frameVecs, printFrame⟩,
+    ⟨"wire/child", Tag.of "wire/child" Host.childFrame, childVecs, printChild⟩,
+    ⟨"client/rotation", Tag.of "client/rotation" Protocol.rotationFrame, rotationVecs, printRotation⟩ ]
 
 /-! ## The table -/
-
-def hex (b : ByteArray) : String :=
-  let digit (n : UInt8) : Char := if n < 10 then Char.ofNat (48 + n.toNat) else Char.ofNat (87 + n.toNat)
-  b.foldl (fun s x => (s.push (digit (x >>> 4))).push (digit (x &&& 15))) ""
 
 def unhex (s : String) : Option ByteArray :=
   let val (c : Char) : Option UInt8 :=

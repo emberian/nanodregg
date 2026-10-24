@@ -49,8 +49,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nanodregg_client::generated::BROKER_SOCK;
 use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal, Request, Verdict};
-use nanodregg_launcher::broker_generated::{FRAME_MAX, keybroker_exit, read_frame, write_frame};
+use nanodregg_launcher::broker_generated::{
+    DECIDER_TICK_MS, FRAME_MAX, keybroker_exit, read_frame, write_frame,
+};
 use nanodregg_launcher::grain_name_ok;
 use nanodregg_launcher::residents::{self, DeciderEnd};
 use nanodregg_sandbox::custody::{self, Refused};
@@ -78,7 +81,7 @@ const LIFETIME: u64 = 1 << 48;
 const RESPONSE_MAX: usize = FRAME_MAX as usize - 64;
 /// How often keybroker asks its decider which residents the World holds (HOSTING-26). Liveness
 /// only: a socket appears within a tick of the decider seeing a grain's birth.
-const TICK: Duration = Duration::from_millis(200);
+const TICK: Duration = Duration::from_millis(DECIDER_TICK_MS as u64);
 /// Ticks a decider that answered out of turn has to end on its own before it is stopped.
 const ENDING_TICKS: u32 = 10;
 
@@ -511,11 +514,11 @@ fn resident_socket(sockdir: &Path, group: u32, r: &str) -> Result<PathBuf, Strin
     }
     for entry in std::fs::read_dir(&d).map_err(|e| at(&d, &e))? {
         let name = entry.map_err(|e| at(&d, &e))?.file_name();
-        if name != "broker.sock" {
+        if name != BROKER_SOCK {
             return Err(format!("{} holds {name:?}", d.display()));
         }
     }
-    let sock = d.join("broker.sock");
+    let sock = d.join(BROKER_SOCK);
     let own = std::fs::symlink_metadata(&d).map_err(|e| at(&d, &e))?.uid();
     match std::fs::symlink_metadata(&sock) {
         Err(e) if e.kind() == ErrorKind::NotFound => {}
