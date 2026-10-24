@@ -8,6 +8,9 @@ the text says exactly what `invoke` will check:
     object HEX
     owner HEX
     package HEX                    (or `data`: an object with no package)
+    core HEX                       the package cell's bytes, the ones `Lang.readPackage` decodes
+                                   (`Lang.Print.hex`): a reader can check WHICH program it calls,
+                                   not only its interface (HOSTING-45: the resident checks the Bell)
     doc "TEXT"                     what the package says of itself (LANG-60; `Lang.Print.bytesText` of
                                    its doc, one line, which `Lang.Read` reads back); no line when empty
     state TYPE

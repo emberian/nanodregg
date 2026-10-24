@@ -8,7 +8,8 @@ package (read), its volume (read and write), its own broker socket and its own m
 nothing else. Its argv must be its plan (`Args.place`), or it ends `argvNotPlan` before reading
 anything. It reads `pkg/resident.conf`, ONE Lang data value at `Bell.confTy`. Then, every
 `tickMs`, for at most `lifetimeTicks` ticks:
-1. Until it has the bell's shape, it describes the bell (`read OBJ ?` → `Shape.read`).
+1. Until it has the bell's shape, it describes the bell (`read OBJ ?` → `Shape.read`); a package
+   that is not the Bell ends it `bellShape notBell` (HOSTING-45).
 2. It reads every pending ring in ONE read (`read OBJ pending K`, K = `pending`'s declared limit →
    `Ring.readAll`), lowest first.
 3. It acts on `decideTick`:

@@ -14,7 +14,8 @@ HOSTING-42 named as its triggers, each a theorem here or below:
   every frame it answers.
 - (iii) `describe_shape`: a description that reads as a shape says the bell's method `answer` has
   argument type exactly `answerArgTy` (`describe`'s `noBreak` and kind check, `methodLine`'s
-  `labelAtom` and `Ty.wf`, `Lang.Print.readTy_ty`).
+  `labelAtom` and `Ty.wf`, `Lang.Print.readTy_ty`), and that the package is the Bell
+  (`describeText_core`, `bellCore_ok`: the `core` line is the package cell's bytes, HOSTING-45).
 
 `delivered_answer_committed_strong` assembles them with `run_describe_ok` (a describe that ends ok
 is follow's own description, on the World its `done` was handed out at) and `StdioLeg`'s one
@@ -285,6 +286,8 @@ theorem describeText_method {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {l
             · cases hpk; assumption
           rcases List.mem_cons.mp hl with rfl | hl
           · simp [toString, Resident.methodWords] at hm
+          rcases List.mem_cons.mp hl with rfl | hl
+          · simp [toString, Resident.methodWords] at hm
           rcases List.mem_append.mp hl with hl | hl
           · obtain ⟨j, ℓ, sg, a, hr', hat, hwf, ha, rfl⟩ := packageLines_method hpls hl hm
             exact ⟨P, pk, j, ℓ, sg, a, rfl, hrp, hr', hat, hwf, ha, rfl⟩
@@ -294,6 +297,45 @@ theorem describeText_method {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {l
             cases hx
             simp [toString, Resident.methodWords] at hm
       · cases hv
+omit [Ord D] [DecidableEq D] in
+/-- A package's description lines: none is in `core` form. -/
+theorem packageLines_core {pk : Lang.Package} {ls : List String} (h : packageLines (D := D) pk = some ls)
+    {l : String} (hl : l ∈ ls) : Resident.coreWords l.toList = none := by
+  unfold packageLines at h
+  cases hst : Lang.Print.ty pk.state with
+  | none => simp [hst] at h
+  | some st =>
+    cases hms : (List.range pk.methods.length).mapM (methodLine (D := D) pk) with
+    | none => simp [hst, hms] at h
+    | some ms =>
+      cases hrs : pk.rels.mapM relLine with
+      | none => simp [hst, hms, hrs] at h
+      | some rs =>
+        simp only [hst, hms, hrs, Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq] at h
+        subst h
+        simp only [List.mem_append, List.mem_cons] at hl
+        rcases hl with ((hl | hl | hl) | hl) | hl
+        · unfold docLines at hl
+          split at hl
+          · cases hl
+          · simp at hl; subst hl; simp [toString, Resident.coreWords]
+        · subst hl; simp [toString, Resident.coreWords]
+        · obtain ⟨mj, hmj, hl⟩ := List.mem_flatten.mp hl
+          obtain ⟨j, -, hj⟩ := mapM_some_mem hms mj hmj
+          obtain ⟨ℓ, sg, a, cs, -, -, -, -, hc, rfl⟩ := methodLine_resolves hj
+          rcases List.mem_cons.mp hl with rfl | hl
+          · simp [toString, Resident.coreWords]
+          · unfold callLines at hc
+            obtain ⟨⟨k, jj⟩, -, hk⟩ := mapM_some_mem hc l hl
+            obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hk
+            simp [toString, Resident.coreWords]
+        · obtain ⟨ℓ, -, rfl⟩ := List.mem_map.mp hl
+          simp [toString, Resident.coreWords]
+        · obtain ⟨r, -, hr⟩ := mapM_some_mem hrs l hl
+          unfold relLine at hr
+          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hr
+          simp [toString, Resident.coreWords]
+
 omit [Ord D] [DecidableEq D] in
 theorem word_append {ys : List Char} : ∀ {xs : List Char}, (∀ c ∈ xs, c ≠ ' ') →
     Resident.word (xs ++ ' ' :: ys) = some (xs, ys)
@@ -335,16 +377,24 @@ theorem answerWords_some {ls : List (List Char)} {i ty : String} (h : Resident.a
   · cases hf
 
 omit [Ord D] [DecidableEq D] in
-/-- What a shape the resident read says of the text it read: the first `method I answer TYPE` line's
-index is the shape's, and its type text reads as `answerArgTy`. -/
+/-- What a shape the resident read says of the text it read: the package's `core` line passed
+`bellCore` (HOSTING-45), the first `method I answer TYPE` line's index is the shape's, and its type
+text reads as `answerArgTy`. -/
 theorem shape_read_ok {out : String} {sh : Resident.Shape} (h : Resident.Shape.read out = .ok sh) :
+    (∃ p, Resident.bellCore (Resident.splitLines out.toList) = .ok p) ∧
     ∃ i ty, Resident.answerWords (Resident.splitLines out.toList) = some (i, ty) ∧
       i.toNat? = some sh.answer ∧ Lang.Read.readTy ty = .ok Resident.answerArgTy := by
   unfold Resident.Shape.read at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  rename_i p hp
+  refine ⟨⟨p, hp⟩, ?_⟩
+  unfold Resident.Shape.ofLines at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
   all_goals first | (cases h; done) | skip
-  rename_i _ i ty haw _ j hj _ T hT hTa _ d _ _ _ _
+  rename_i i ty haw _ j hj _ T hT hTa _ d _ _ _ _
   cases h
   exact ⟨i, ty, haw, hj, hTa ▸ hT⟩
 
@@ -393,6 +443,108 @@ theorem invokedPackage_at {X : Ctx D} {w : World D} {obj P : D} {pc : Cell} {pk 
   simp only [hpk, bind, Except.bind, requireMethods] at h
   cases h; rfl
 
+/-- **The `core` line of a description is the package cell's bytes**: the one line of `describeText`
+in `core` form is the hex of slot 0 of the live cell at the object's package. -/
+theorem describeText_core {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {ls : List String}
+    (h : describeText X w obj cell = .ok ls) {l : String} (hl : l ∈ ls) {hx : List Char}
+    (hm : Resident.coreWords l.toList = some hx) :
+    ∃ P pc b, packageOf X obj cell = .ok (some P) ∧ w.live X.env P = some pc ∧ pc.slots.get 0 = some b ∧
+      hx = (Lang.Print.hex b).toList := by
+  unfold describeText at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  split at h
+  · cases h
+  rename_i v hv
+  cases h
+  rcases List.mem_cons.mp hl with rfl | hl
+  · simp [toString, Resident.coreWords] at hm
+  rcases List.mem_append.mp hl with hl | hl
+  · cases ho : cell.slots.get slotOwner with
+    | none => simp [ho] at hl
+    | some ow =>
+      simp [ho] at hl
+      subst hl
+      simp [toString, Resident.coreWords] at hm
+  unfold describeLines at hv
+  simp only [bind, Except.bind, pure, Except.pure] at hv
+  cases hp : packageOf X obj cell with
+  | error e => simp [hp, Except.mapError] at hv
+  | ok pkg =>
+  cases hlw : lawsOf X obj cell with
+  | error e => simp [hp, hlw, Except.mapError] at hv
+  | ok laws =>
+  simp only [hp, hlw, Except.mapError] at hv
+  cases pkg with
+  | none =>
+    simp only at hv
+    split at hv
+    · cases hv
+    · rename_i r hr
+      cases hv
+      rcases List.mem_append.mp hl with hl | hl
+      · simp only [List.mem_singleton] at hl
+        subst hl
+        simp [Resident.coreWords] at hm
+      · obtain ⟨x, -, hx⟩ := Lifetime.mapM_ok_mem hr l hl
+        repeat' split at hx
+        all_goals first | (cases hx; done) | skip
+        cases hx
+        simp [toString, Resident.coreWords] at hm
+  | some P =>
+    simp only at hv
+    split at hv
+    · cases hv
+    · rename_i pk hpk
+      split at hv
+      · rename_i pls hpls
+        split at hv
+        · cases hv
+        · rename_i r hr
+          cases hv
+          have hrp : Lang.readPackage (worldLook X.env w) P = .ok pk := by
+            split at hpk
+            · cases hpk
+            · cases hpk; assumption
+          obtain ⟨pc, b, hrk, -, hb, -⟩ := Lang.readPackage_ok.mp hrp
+          have hpl := (readKind_worldLook hrk).1
+          rcases List.mem_cons.mp hl with rfl | hl
+          · simp [toString, Resident.coreWords] at hm
+          rcases List.mem_cons.mp hl with rfl | hl
+          · refine ⟨P, pc, b, rfl, hpl, hb, ?_⟩
+            simp only [hpl, hb, Option.bind_some, Option.getD_some] at hm
+            simp [toString, Resident.coreWords] at hm
+            exact hm.symm
+          rcases List.mem_append.mp hl with hl | hl
+          · rw [packageLines_core hpls hl] at hm; cases hm
+          · obtain ⟨x, -, hx⟩ := Lifetime.mapM_ok_mem hr l hl
+            repeat' split at hx
+            all_goals first | (cases hx; done) | skip
+            cases hx
+            simp [toString, Resident.coreWords] at hm
+      · cases hv
+
+omit [Ord D] [DecidableEq D] in
+/-- What `bellCore` accepting says: the first `core` line's hex is a package's bytes, and that
+package is the Bell. -/
+theorem bellCore_ok {ls : List (List Char)} {p : Lang.Package} (h : Resident.bellCore ls = .ok p) :
+    ∃ hx b, ls.findSome? Resident.coreWords = some hx ∧ Text.ofHex (String.ofList hx) = some b ∧
+      Lang.Wire.decodePackage b = .ok p ∧ Lang.Bell.shapeOk p = true := by
+  unfold Resident.bellCore at h
+  cases hf : ls.findSome? Resident.coreWords with
+  | none => simp [hf] at h
+  | some hx =>
+    cases hb : Text.ofHex (String.ofList hx) with
+    | none => simp [hf, hb] at h
+    | some b =>
+      cases hd : Lang.Wire.decodePackage b with
+      | error e => simp [hf, hb, hd] at h
+      | ok q =>
+        by_cases hs : Lang.Bell.shapeOk q = true
+        · simp only [hf, hb, hd, hs, if_true, pure, Except.pure, Except.ok.injEq] at h
+          subst h
+          exact ⟨hx, b, rfl, hb, hd, hs⟩
+        · simp [hf, hb, hd, hs] at h
+
 /-- **Trigger (iii): a description that reads as a shape says the method's declared argument type.**
 If follow described `obj` on `w` (`ok`) and the resident read that text as the shape `sh`, then on
 `w` the object is live, an object, with package `P` in a live ROM cell (`PackageAt`), and the
@@ -400,17 +552,45 @@ package's method at `sh.answer` is labelled `answer` with argument type exactly 
 line the resident read is that method's line (no other line of a description begins `method`, and
 none holds a break, `describe`'s `noBreak`), its words are the index, the label and the type text
 (the label one atom, `methodLine`'s `labelAtom`), and the type text reads back as the declared type
-(`Lang.Print.readTy_ty`, the type well formed, `methodLine`'s `Ty.wf`). -/
+(`Lang.Print.readTy_ty`, the type well formed, `methodLine`'s `Ty.wf`). And the package IS the Bell
+(`Lang.Bell.shapeOk`, HOSTING-45): the one `core` line is the package cell's bytes
+(`describeText_core`), which the resident decoded and checked (`bellCore_ok`), and which
+`readPackage` decodes to `pk`. -/
 theorem describe_shape {X : Ctx D} {w : World D} {obj : D} {o e : ByteArray} {sh : Resident.Shape}
     (h : describe X w obj = .done CommandExit.ok.code.toUInt8 o e)
     (hs : Resident.Shape.read ((String.fromUTF8? o).getD "") = .ok sh) :
     ∃ P pc pk sg, PackageAt X w obj P pc ∧ Lang.readPackage (worldLook X.env w) P = .ok pk ∧
-      Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) ∧ sg.arg = Resident.answerArgTy := by
+      Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) ∧ sg.arg = Resident.answerArgTy ∧
+      Lang.Bell.shapeOk pk = true := by
   obtain ⟨cell, ls, hl, hk, ht, hnb, rfl⟩ := describe_ok_text h
   rw [fromUTF8_toUTF8'] at hs
   simp only [Option.getD_some] at hs
-  obtain ⟨i, ty, haw, hi, hty⟩ := shape_read_ok hs
-  rw [splitLines_join ls hnb] at haw
+  obtain ⟨⟨q, hq⟩, i, ty, haw, hi, hty⟩ := shape_read_ok hs
+  rw [splitLines_join ls hnb] at haw hq
+  -- the core line: the package cell's bytes, which decode to the Bell
+  obtain ⟨hx, bq, hfx, hbq, hdq, hsq⟩ := bellCore_ok hq
+  obtain ⟨lc, hlcm, hlc⟩ := List.exists_of_findSome?_eq_some hfx
+  have hcore : ∀ (P : D) (pk : Lang.Package), packageOf X obj cell = .ok (some P) →
+      Lang.readPackage (worldLook X.env w) P = .ok pk → Lang.Bell.shapeOk pk = true := by
+    intro P pk hpP hrP
+    rcases List.mem_append.mp hlcm with hlcm | hlcm
+    · obtain ⟨l', hl', rfl⟩ := List.mem_map.mp hlcm
+      obtain ⟨P', pc', b', hpP', hpl', hb', rfl⟩ := describeText_core ht hl' hlc
+      rw [hpP] at hpP'
+      cases hpP'
+      rw [String.ofList_toList, ofHex_hex] at hbq
+      cases hbq
+      obtain ⟨pc'', b'', hrk, -, hb'', hd''⟩ := Lang.readPackage_ok.mp hrP
+      rw [(readKind_worldLook hrk).1] at hpl'
+      cases hpl'
+      rw [hb'] at hb''
+      cases hb''
+      rw [hdq] at hd''
+      cases hd''
+      exact hsq
+    · simp only [List.mem_singleton] at hlcm
+      subst hlcm
+      simp [Resident.coreWords] at hlc
   obtain ⟨l, hlm, hmw⟩ := answerWords_some haw
   rcases List.mem_append.mp hlm with hlm | hlm
   · obtain ⟨l', hl', rfl⟩ := List.mem_map.mp hlm
@@ -424,7 +604,7 @@ theorem describe_shape {X : Ctx D} {w : World D} {obj : D} {o e : ByteArray} {sh
     rw [Lang.Print.readTy_ty hwf hpty] at hty
     obtain ⟨pc, b, hrk, hrom, -, -⟩ := Lang.readPackage_ok.mp hrp
     exact ⟨P, pc, pk, sg, ⟨⟨cell, hl, hk, hpk⟩, (readKind_worldLook hrk).1, hrom⟩, hrp, hres,
-      Except.ok.inj hty⟩
+      Except.ok.inj hty, hcore P pk hpk hrp⟩
   · simp only [List.mem_singleton] at hlm
     subst hlm
     simp [Resident.methodWords] at hmw
@@ -453,8 +633,10 @@ bounds (`Lifetime.lifetime_bounds`). The last conjunct names the method the call
 commit is to be found: the call's canonical bytes read back as itself (step 3 checks it before it
 submits); on the World `wb` the invoke's run started at, from which follow's own frames reach the
 settling World `wf`, the bell holds package `P` in a ROM cell (`PackageAt`), `P` reads as `pk`, and
-`pk`'s method at `sh.answer` is labelled `answer` (what `BellRow.answered_row_is_kept_answer` runs,
-and what `BellRow.answered_row_committed` takes to the commit, HOSTING-44). -/
+`pk`'s method at `sh.answer` is labelled `answer`, and `pk` IS the Bell (`Lang.Bell.shapeOk`: the
+resident's own check of the description's `core` line, HOSTING-45), which is what
+`BellRow.answered_row_is_kept_answer` runs and `BellRow.answered_row_committed` takes to the commit
+(HOSTING-44). -/
 theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
     {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D} {w : Resident.Where} {m : Resident.Mem}
     {es : List Resident.Ev}
@@ -472,7 +654,8 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
       X.decodeCall (X.callBytes ⟨u, sig⟩) = some ⟨u, sig⟩ ∧
       ∃ (wb : World D) (P : D) (pc : Cell) (pk : Lang.Package) (sg : Lang.Sig), Reach X dc B me wb wf ∧
         PackageAt X wb o P pc ∧
-        Lang.readPackage (worldLook X.env wb) P = .ok pk ∧ Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) := by
+        Lang.readPackage (worldLook X.env wb) P = .ok pk ∧ Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) ∧
+        Lang.Bell.shapeOk pk = true := by
   -- (i): the shape came from an earlier describe in this process
   rcases Lifetime.shape_provenance h hi with hsh | ⟨y, pre, mid, post, hc, hy⟩
   · rw [hm] at hsh; cases hsh
@@ -506,7 +689,7 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
     (fun _ _ => start_ne_ok) (by simp [hdok])
   obtain ⟨od', hbd, hod⟩ := describeArgv_parse hpd
   cases hod
-  obtain ⟨P, pc, pk, sg, hpat, hrp, hres, harg⟩ := describe_shape hdesc hshape
+  obtain ⟨P, pc, pk, sg, hpat, hrp, hres, harg, hbell⟩ := describe_shape hdesc hshape
   -- the invoke's run: a planned call, committed
   obtain ⟨txt, htxt⟩ := Option.isSome_iff_exists.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some r t)
   have hv : (Resident.Cmd.invoke sh r t).argv w.conf = Resident.invokeArgv w.conf sh txt := by
@@ -545,6 +728,6 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
   rw [htx] at hj
   have hpatB := reach_packageAt (hr₂.trans hr₃) hpat
   exact ⟨od, g, gf.world, u, sig, hh, td, args, hbd, hg, hmem, hbody, henc harg, hj, hrt, fi₀.world, _, pc, pk,
-    sg, hgf, hpatB, (readPackage_live (hpatB.2.1.trans hpat.2.1.symm)).trans hrp, hres⟩
+    sg, hgf, hpatB, (readPackage_live (hpatB.2.1.trans hpat.2.1.symm)).trans hrp, hres, hbell⟩
 
 end Nanodregg.Hosting.Proofs.Socket

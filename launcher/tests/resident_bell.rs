@@ -41,7 +41,8 @@
 //!   resident is the operator ends `answerRefused program` after exactly one ask, restarts, answers
 //!   from its kept text and asks no more; on a bell whose grant lacks `invoke:0`, `answerRefused
 //!   grantRight`; an argv that is not its plan, `argvNotPlan` (CONTROL: its true argv reaches the
-//!   config).
+//!   config); a config naming a Bell-shaped object whose package is not the Bell (its `answer`
+//!   planted to write the ring's text), `bellShape notBell` before any ask (HOSTING-45).
 //!
 //! - the race (HOSTING-26, at nd-members): a resident started while nd-members is down is refused
 //!   `pathMissing` for its member socket alone, exactly `restartsMax` times, then `crashLoop`, and
@@ -582,6 +583,46 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
     };
     mutation(&nr, &gnr, "nr", "program");
     mutation(&ng, &gng, "ng", "grantRight");
+
+    // HOSTING-45: a config naming an object that is not the Bell. Here a Bell whose `answer` writes
+    // the ring's own text as the answer (LBw's plant): the same `answer` type and `pending` layout,
+    // so only the description's `core` line tells it apart. The resident ends `bellShape notBell`
+    // at its first describe, before any read or ask.
+    let shipped =
+        fs::read_to_string(nanodregg_devtools::repo().join("world/resident/Bell")).unwrap();
+    let planted = shipped.replace("ask (. x2 text))", "ask (. x2 ringText))");
+    assert_ne!(planted, shipped, "notBell: the plant changed nothing");
+    let pb_pkg = line(&w.run(&["install", &planted]), "id ").to_owned();
+    let pb = line(
+        &w.run(&["create", "--pkg", &pb_pkg, &bell_state(&m)]),
+        "id ",
+    )
+    .to_owned();
+    let gpb = grant(&pb, &m, "observe,invoke:0");
+    stop();
+    no_child();
+    let before = asks();
+    let ends = log().matches("bellShape notBell").count();
+    fs::write(pkg.join("resident.conf"), conf(&pb, &gpb)).unwrap();
+    ring_op(&pb, "pb");
+    start();
+    until(
+        "a notBell end",
+        120,
+        || log().matches("bellShape notBell").count() > ends,
+        &log,
+    );
+    assert_eq!(
+        asks(),
+        before,
+        "notBell: the resident asked about a ring of a bell that is not the Bell:\n{}",
+        log()
+    );
+    let p = rel(&pb, "pending");
+    assert!(
+        p.len() == 1 && p[0].text == "pb" && answers(&pb).is_empty(),
+        "notBell: the non-Bell took an answer: {p:?}"
+    );
 
     // off its fence: argv that is not its plan. Its true argv, as grain-launch joined it:
     let connects: Vec<String> = log()

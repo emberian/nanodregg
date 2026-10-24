@@ -3,8 +3,8 @@
 
 `SocketStrong.delivered_answer_committed_strong` says an `ok` answer for `(r, t)` journaled, on the
 member's own World, a call invoking the bell at `sh.answer` whose argument bytes ARE
-`answerDatum r t`. This module says what that call writes when the bell is the deployed Bell
-(`Lang.Bell.shapeOk`, computed of the shipped core by `Lang.Journey`'s LBw):
+`answerDatum r t`. This module says what that call writes; the bell is the deployed Bell (`Lang.Bell.shapeOk`,
+checked by the resident of the configured object's package, HOSTING-45):
 
 * `lifetime_invoke_kept`: the `t` the resident invoked for `r` is the kept answer: the one the
   process started with (`m.kept`, read back from the volume) or one it kept, with `keep r t true`,
@@ -26,6 +26,10 @@ are the run's argument (`Lang.Bell.answer_run`); the method at `sh.answer` is la
   and the World it left HOLDS `rings` at the ring's key `answeredVal` and no `pending` row there
   (`Lang.Bell.answer_commits`, through `Committed.journal_committed`), or another decodable byte
   string has the call's id (a second preimage of `X.env.hash domTx` at the call's bytes).
+
+That `pk` is the Bell is the resident's own check, not a premise: `Resident.bellCore` refuses
+`notBell` at the first describe unless the description's `core` line (the package cell's bytes)
+decodes to a package with `Lang.Bell.shapeOk` (HOSTING-45), and `describe_shape` carries it.
 
 Not claimed, and named: that follow's base World lacked the entry, or is canonical (premises of
 `answered_row_committed`); that every `answered` row of the bell came from the resident's socket (a
@@ -135,7 +139,8 @@ variable {D : Type} [Ord D] [DecidableEq D]
 strong theorem's premises), an invoke of `answer` for `(r, t)` that came back `ok`: `t` is a kept
 answer of `r` (`lifetime_invoke_kept`), and follow's World at its `ok` journals a call of the
 member's invoking the bell `o` at `sh.answer` with argument bytes `args`, where the bell's package
-`P` reads as `pk` with `sh.answer` labelled `answer`. If `pk` is the Bell (`Lang.Bell.shapeOk`), every
+`P` reads as `pk` with `sh.answer` labelled `answer`, and `pk` IS the Bell (`Lang.Bell.shapeOk`: the
+resident read the description's `core` line and checked it, HOSTING-45, `describe_shape`). Every
 run of that invoke that returned (the program at `P` on any view that reads `P` as `pk`, any state,
 any request) signed by the resident, makes no calls, and writes exactly: `rings` at the ring's key
 `(r.ringer, r.notBefore)` upserted to `answered (some (ask t))` with capture `ask {text := r.text}`,
@@ -158,8 +163,8 @@ theorem answered_row_is_kept_answer [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ct
       wf.journalAt X.env (txIdOf X ⟨u, sig⟩) = some (hh, td) ∧
       X.decodeCall (X.callBytes ⟨u, sig⟩) = some ⟨u, sig⟩ ∧ Reach X dc B me wb wf ∧
       PackageAt X wb o P pc ∧ Lang.readPackage (worldLook X.env wb) P = .ok pk ∧
-      Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) ∧
-      (Lang.Bell.shapeOk pk = true → ∀ {look : Pinned D} {rv : RowView D} {state : Slots} {req : Req D}
+      Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) ∧ Lang.Bell.shapeOk pk = true ∧
+      (∀ {look : Pinned D} {rv : RowView D} {state : Slots} {req : Req D}
         {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat},
         X.digestOf (X.env.bytes P) = some P → Lang.readPackage look P = .ok pk →
         (Lang.program X.env.bytes X.digestOf rc).run look rv P state sh.answer args req budget =
@@ -175,9 +180,9 @@ theorem answered_row_is_kept_answer [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ct
             Lang.Std.WaitingStep lib Lang.Bell.resumer (some Lang.Bell.patience) (Lang.reqData X.env.bytes req) sd x.data old) := by
   refine ⟨Lifetime.lifetime_invoke_kept h hi, ?_⟩
   obtain ⟨o, g, wf, u, sig, hh, td, args, ho, -, hmem, hbody, henc, hj, hrt, wb, P, pc, pk, sg, hwb, hpat, hrp,
-    hres⟩ := delivered_answer_committed_strong hX h hm hk hs hi hok
-  refine ⟨o, g, wf, wb, u, sig, hh, td, args, P, pc, pk, sg, ho, hmem, hbody, hj, hrt, hwb, hpat, hrp, hres, ?_⟩
-  intro hshape look rv state req budget s calls rows used hid hlook hrun
+    hres, hshape⟩ := delivered_answer_committed_strong hX h hm hk hs hi hok
+  refine ⟨o, g, wf, wb, u, sig, hh, td, args, P, pc, pk, sg, ho, hmem, hbody, hj, hrt, hwb, hpat, hrp, hres, hshape, ?_⟩
+  intro look rv state req budget s calls rows used hid hlook hrun
   have hdec : Lang.Wire.decodeData Lang.Bell.answerArg args = .ok (Lang.Bell.answerData r.notBefore r.text r.ringer t) :=
     Lang.Wire.decodeData_eq_ok_iff.mpr henc
   obtain ⟨nb, x, k, y, kb, vb, hdec', -, -, hst, hcalls, hkb, -, hvb, hrows⟩ :=

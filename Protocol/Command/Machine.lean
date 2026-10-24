@@ -606,8 +606,10 @@ def describeLines (X : Ctx D) (w : World D) (obj : D) (cell : Cell) : Except (Re
     | none => pure ["data"]
     | some p =>
       let pk ← (Lang.readPackage look p).mapError .receive
+      -- the package cell's bytes, which `readPackage` just decoded (its id is their digest, KERNEL-3)
+      let core := ((w.live X.env p).bind fun c => c.slots.get 0).getD ByteArray.empty
       match packageLines (D := D) pk with
-      | some ls => pure (s!"package {hex X p}" :: ls)
+      | some ls => pure (s!"package {hex X p}" :: s!"core {Lang.Print.hex core}" :: ls)
       | none => throw .noText
   let ls ← laws.mapM fun l => do
     let lp ← (Lang.readPackage look l).mapError .receive

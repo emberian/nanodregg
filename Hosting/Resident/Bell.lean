@@ -3,7 +3,10 @@
 
 The resident serves ONE bell (`world/resident/Bell.ob`, LANG-58: a queue of rings) through its
 member socket:
-- It reads the bell's description once (`read OBJ ?`, PROTOCOL-44). From it come the index of the
+- It reads the bell's description once (`read OBJ ?`, PROTOCOL-44). Its `core` line, the package
+  cell's bytes, must decode to the Bell (`bellCore`: `Lang.Bell.shapeOk`, HOSTING-45), or the
+  resident ends `bellShape notBell` before any read or ask: the object the config names is the
+  program the theorems speak of. From it come the index of the
   method labelled `answer`, whose argument must be `answerArgTy`, and the relation `pending`, whose
   key must be `(notBefore nat) (agent digest)` and whose value holds the captured `ask` plan. No index,
   bound or relation layout is written into the program; the read's K is `pending`'s declared limit.
@@ -31,6 +34,8 @@ kept ring is answered first wherever it stands, and only then is the lowest aske
 -/
 import Lang.Read
 import Lang.Print
+import Lang.Bell
+import Protocol.Command.Text
 import Hosting.BrokerWire
 
 namespace Nanodregg.Hosting.Resident
@@ -122,11 +127,25 @@ def answerWords (ls : List (List Char)) : Option (String × String) :=
     | some (i, "answer", ty) => some (i, ty)
     | _ => none
 
-/-- The shape from `read OBJ ?`'s lines, or why not. The `method I answer TYPE` line's type is read
+/-- The hex of a description's `core HEX` line: the bell's package bytes (`Protocol.Command.Describe`). -/
+def coreWords : List Char → Option (List Char)
+  | 'c' :: 'o' :: 'r' :: 'e' :: ' ' :: rest => some rest
+  | _ => none
+
+/-- The package the description's `core` line carries, if it is the Bell (`Lang.Bell.shapeOk`: the
+package the theorems of `Lang.Proofs.Bell` speak of), or why not: `noCore` (no `core` line: a data
+object), `core` (its text is not a package's bytes), `notBell` (a package, not the Bell). -/
+def bellCore (ls : List (List Char)) : Except String Lang.Package := do
+  let some hx := ls.findSome? coreWords | throw "noCore"
+  let some b := Protocol.Text.ofHex (String.ofList hx) | throw "core"
+  match Wire.decodePackage b with
+  | .ok p => if Lang.Bell.shapeOk p then pure p else throw "notBell"
+  | .error _ => throw "core"
+
+/-- The shape from a description's lines, or why not. The `method I answer TYPE` line's type is read
 by `Lang.Read.readTy` (HOSTING-43: `Proofs.Socket.describe_shape` reads it back as the method's
 declared argument type), the `rel (pending …)` line by `Lang.Read.rel`. -/
-def Shape.read (out : String) : Except String Shape := do
-  let ls := splitLines out.toList
+def Shape.ofLines (ls : List (List Char)) : Except String Shape := do
   let some (i, ty) := answerWords ls | throw "noAnswer"
   let some i := i.toNat? | throw "answerIndex"
   match Read.readTy ty with
@@ -141,6 +160,14 @@ def Shape.read (out : String) : Except String Shape := do
   if hk : d.key = pendingKey then
     if hv : d.val = pendingVal then pure ⟨i, d, hk, hv⟩ else throw "pendingType"
   else throw "pendingType"
+
+/-- The shape from `read OBJ ?`'s text, or why not: first the package is the Bell (`bellCore`,
+HOSTING-45: a config that names another object is refused `notBell` at the first describe, before
+any read or ask), then `Shape.ofLines`. -/
+def Shape.read (out : String) : Except String Shape := do
+  let ls := splitLines out.toList
+  let _ ← bellCore ls
+  Shape.ofLines ls
 
 /-! ## A ring -/
 
