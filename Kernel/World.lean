@@ -927,7 +927,11 @@ def checkBounds (t : Turn D) : Except (Reject D) Unit := do
 
 variable [DecidableEq D]
 
-/-- A transaction id is admitted at most once; a retry names the height it landed at. -/
+/-- A transaction id is admitted at most once; a retry names the height it landed at, and a recorded
+refusal is final (`refusedFinal`, KERNEL-44). On the Host's path `Receive.submit` answers both before it
+derives (its journal and `refusedAnswer` reads), so these two arms are not reached there; they are
+the follower's (`World.fold`, the audit), which admits a log's Turns with nothing before them, and are
+kept for it (KERNEL-67). -/
 def checkJournal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   match w.journalAt E t.txId with
   | some (h, _) => .error (.replayed h)

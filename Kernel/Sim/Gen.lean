@@ -958,8 +958,9 @@ def ledgerAct (P : Params D) (st : State D) (k : Nat) : State D :=
               | none => st
           | _, _, _ => st
 
-/-- A refusal no receiver produces, met straight at the seal (the `planted` table says so): the
-last call's first pin given two effects. -/
+/-- `duplicateEffect`, met straight at the seal (the `planted` table says so): the last call's first
+pin given two effects. A signed invoke whose run returns two calls moving one account reaches the
+same refusal (KERNEL-67); this probe does not sign one. -/
 def probeSeal (P : Params D) (st : State D) : State D :=
   match st.lastCall with
   | none => st
@@ -2818,8 +2819,9 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
       | .error _, _ => { st with failures := s!"forgery at {i}: fold refused it (not a forgery test)" :: st.failures }
 
 /-- The refusals the generator plants, each of which a run of 16 or more seeds must meet. Every
-name is reached through a signed call on the Host path, except `duplicateEffect`, which no
-receiver can produce and the probe meets straight at `sealTurn` (`probeSeal`), and
+name is reached through a signed call on the Host path, except `duplicateEffect`, which the probe
+meets straight at `sealTurn` (`probeSeal`; a signed call reaches it too, a method whose run returns
+two transfers out of the object's own account, which no arm here signs: KERNEL-67), and
 `notConserved`, `floorNotConserved`, `valueMalformed` and `overBound` (nine denominations), which
 no receiver derives and `probeValue` meets straight at `World.admit` with forged turns, and
 `founderKeyTooLong`, genesis's refusal, which `probeGenesis` meets at `genesis`. -/

@@ -84,12 +84,14 @@ inductive Body (D : Type)
   keyed id `accountId owner asset`: anyone may open anyone's, once (`idTaken` after) -/
   | account (asset owner : D)
   /-- move `amount` from `src` to `dst` (same denomination), with the authority of `src`'s owner
-  (directly, or through `via`'s grant chain for `mutate`); `once` spends the nullifier
+  (directly, or through `via`'s grant chain for `transfer`, whose cap the move spends: KERNEL-60;
+  `mutate` moves no value); `once` spends the nullifier
   `onceNullifier src key`, so a call carrying the same key for the same source lands once.
   Minting is a transfer out of a well, burning one into it -/
   | transfer (src dst : AcctRef D) (amount : Nat) (via : Option D) (once : Option ByteArray)
   /-- a credit line: move `amount` of the well's floor to `acct` (same denomination), with the
-  authority of the well's owner, the issuer (directly, or through `via` for `mutate`). The
+  authority of the well's owner, the issuer (directly, or through `via` for `credit`, whose cap the
+  line spends: KERNEL-60; `mutate` moves no value). The
   denomination's floor sum is unchanged, so its cap still bounds what is outstanding (LEDGER-4) -/
   | credit (well : D) (acct : AcctRef D) (amount : Nat) (via : Option D)
   deriving DecidableEq
@@ -174,7 +176,9 @@ inductive Refusal (D : Type)
   | undecodableEvent
   /-- a logged Turn is not what its own event derives on the World before it -/
   | eventMismatch
-  /-- a receiver gave one cell two effects (no receiver does: a probe meets it) -/
+  /-- the receivers of one call's tree gave one cell two effects (`effectsPinned`): reached on the
+  signed path when a method's run returns two calls that move one account (two transfers out of the
+  object's own account), so one call debits an account at most once; `LedgerNext` relies on it -/
   | duplicateEffect (cell : D)
   /-- a transfer from an account to itself -/
   | sameAccount

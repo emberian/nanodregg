@@ -289,7 +289,9 @@ txId → height index outside the World (a second copy of state). **Critique.** 
 forever: at THE BAR, 1000 turns cost 72 KB; at 10^6 turns, 72 MB resident. **Meta-critique.**
 "Pruning loses receipts" is a correctness argument, and I may be leaning on it so I don't have to build
 (a). Revisit when a World passes 10^6 turns. Nothing earlier forces it.
-Status: open.
+Status: SUPERSEDED by KERNEL-33 (the journal IS pruned to the window: `kept`, `pruneJournal`; a call's
+entry answers below `notBefore + 2·windowMax`, and past `journalForgets` absence is `forgotten`, never a
+false answer; a journal entry is not growth, `Turn.lean`). Marked here by KERNEL-67.
 
 ## KERNEL-18 · `worldBytesMax` is the genesis budget; the theorem is `fold_world_weight` (KERNEL-2, 2026-10-16)
 **Decision.** `World.weight` (each cell entry with its id, journal entries, spent nullifiers, at the
@@ -460,7 +462,7 @@ my layer's deployed count; the test is that every module it moves is reached onl
 build exe, which C9 now enforces.
 Status: built.
 
-## KERNEL-23 · An authenticated cell root: the World's cell map IS a canonical binary Merkle trie, and the chain commits its root (KERNEL-4, 2026-10-16; DESIGN, not yet built)
+## KERNEL-23 · An authenticated cell root: the World's cell map IS a canonical binary Merkle trie, and the chain commits its root (KERNEL-4, 2026-10-16; DESIGN, BUILT as KERNEL-30)
 **Why.** Ember ruled phones in scope, thin in SPACE (ROOT, 10-16). A phone that holds no World
 must check one cell against a head it trusts. That needs a root over the cells, kept up to date
 in O(touched) per admitted turn and bound into the chain. The same structure later serves
@@ -565,7 +567,8 @@ shows the sequential version paying for the shared top twice.
 - I am departing from ROOT on the Turn codec on the grounds that the root is post-state. Check:
   if someone wanted a Turn to state the root it expects (an optimistic check), that would be a
   pin on the whole World, and every concurrent turn would be stale. So no.
-Status: proposed (ROOT to rule on (e) and the nullifier question before the flag day).
+Status: BUILT as KERNEL-30 (the World is one canonical trie of cells and nullifiers, its root in the
+chain); marked here by KERNEL-67.
 **Flag day when built.**
 - `World` gains the trie in place of the TreeMap, and its codec changes (CODEC-14 checkpoint
   base). A base written before refuses to load, through the base's schema epoch.
@@ -576,7 +579,7 @@ Status: proposed (ROOT to rule on (e) and the nullifier question before the flag
 
 LEDGER-1..5 (written here while LEDGER built under KERNEL's prefix) moved to decisions/ledger.md on 2026-10-17.
 
-## KERNEL-24 · A call names its World: `Unsigned.world` = the World's genesis ORIGIN, refused `wrongWorld` before anything else; genesis commits to everything it was made from (KERNEL-4, 2026-10-17; DESIGN, ROOT's D3, not yet built)
+## KERNEL-24 · A call names its World: `Unsigned.world` = the World's genesis ORIGIN, refused `wrongWorld` before anything else; genesis commits to everything it was made from (KERNEL-4, 2026-10-17; DESIGN, ROOT's D3, BUILT: `Receive.receive`'s first check, `receive_wrongWorld`)
 **Defect (measured by OPS on 87c721e, with the real `host` exe).** The SAME signed `create` frame was
 admitted by two Stores both named "w": nothing in `Unsigned` binds a call to a World. And CLIENT-2's
 round trip found that `host genesis` prints the same genesis `chain` for different founder keys under one
@@ -634,7 +637,7 @@ spec): OS draw (refused `entropy`), `--nonce` for a member's own Store, `origin`
 NAME past the bound refused `usage name`. Plants: World check skipped ⇒ the replay-elsewhere arm
 reads `unknownKey`, red; origin ignoring founders ⇒ swapped founders give the same chain, red.
 
-## KERNEL-25 · `invoke` is authorized like write: the owner, or a chain for `invoke m` rooted at the owner (KERNEL-4, 2026-10-17; ROOT's ruling on HOSTING-4, not yet built)
+## KERNEL-25 · `invoke` is authorized like write: the owner, or a chain for `invoke m` rooted at the owner (KERNEL-4, 2026-10-17; ROOT's ruling on HOSTING-4, BUILT: `Receive.invoke` through `ownerAuthority … (.invoke m)`)
 **Defect (HOSTING, measured in hosting-sim).** `Derive.invoke` computes the principal with
 `principalOf` and never compares it to the owner. With `via = none`, any member could invoke any method
 of any programmed object, and every package had to carry its own owner law. That contradicts
@@ -659,7 +662,7 @@ shape.
 should decide authority once, and laws should narrow it.
 Status: BUILT (KERNEL-5): invoke via ownerAuthority, theorem invoke_authorized; Sim arms invoke-owner:ok, invoke-no-grant:noGrant; plant principalOf in invoke ⇒ 56/64 seeds red.
 
-## KERNEL-26 · Public objects: a grant whose grantee is the World means "any enrolled member" (KERNEL-4, 2026-10-17; ROOT ruled, not yet built)
+## KERNEL-26 · Public objects: a grant whose grantee is the World means "any enrolled member" (KERNEL-4, 2026-10-17; ROOT ruled, BUILT: the World grantee in `Authority.lean`, kernel-sim `invoke-public:ok`)
 **Decision.** Under KERNEL-25 a non-owner invokes only through a grant chain. A public object (any hunter
 may claim a bounty) is the owner issuing a grant for `invoke m` whose GRANTEE is `worldId X`. `walk`
 accepts such a link for any signer whose member cell is live. Strangers are already refused
@@ -2642,7 +2645,7 @@ ROOT's prior was the last-write height. It loses on the measurement: 0 premises 
 **Critique.** The restatement doubles as the cheapest audit the kernel has had: every escape now has to name what it compares, and a theorem whose proof cannot name its colliding pair does not compile. Its cost is statement size (S lists, threaded through the trie helpers). **Meta-critique.** This was found because a proof lane tried to close a sorry honestly and noticed it could close it in one line. Green builds, census, and two earlier vacuity reads all passed these 61 statements; the reader rule ROOT added ("a disjunct provable from the premises alone, or from the instance, is vacuous") is the instrument that would have seen it, and it now runs on every reader brief.
 
 
-## KERNEL-55 (PROPOSED) · A create's bytes, and what `worldBytesMax` protects: one potential theorem, a derived bound, and two writer paths that reach it today (KERNEL-20 / K20-P55, 2026-10-19; PERF-2's item-2 lead, routed by ROOT; HOST-14 to co-sign). DESIGN ONLY until ROOT rules.
+## KERNEL-55 (PROPOSED; RULED and BUILT below, parts 1 and 2) · A create's bytes, and what `worldBytesMax` protects: one potential theorem, a derived bound, and two writer paths that reach it today (KERNEL-20 / K20-P55, 2026-10-19; PERF-2's item-2 lead, routed by ROOT; HOST-14 to co-sign). DESIGN ONLY until ROOT rules.
 
 Tags: MEASURED = grepped or read at main a18d6ea (or read in a log); ARITH = computed from measured numbers or definitions; ASSUMED = not checked.
 
@@ -3246,3 +3249,17 @@ Item 3's trigger fired. The trigger was "the first row whose invariant spans two
 **Critique.** (1) `submit` now composes `signedBy` and `deriveTurn` instead of calling `receive`; `receive_signed` keeps the two equal, but a future edit to `receive` that does not go through those halves would be invisible to `submit`. (2) The rotation's receiver runs twice on the Host path (once in `authKey`, once in `deriveTurn`); it reads one member cell. (3) A row pin on a relation that does not exist is compared against the floor-0 absent pin: a wrong digest there reads `stale` where admission would have said `noRelation`; both are refusals, and the first is declined.
 
 **Meta-critique, naming a bias.** The first design put the pins before the signature (cheapest; "stale before anything") and it built green on all 755 jobs. That is a bias toward the cheapest refusal and toward the brief's wording ("before any receiver or law"), read as "before everything". Its cost was a confidentiality hole, found only by asking who may receive a `stale` answer. Build-green measured nothing about it, and no theorem here states it either: the oracle argument is prose. The second bias is to trust "one verify" (PERF-1) as a constraint rather than as a measurement; it held here, but it shaped the design before the oracle question was asked.
+
+## KERNEL-67 · The kernel memo's documentation debt: comments and decision entries that said the opposite of the code (FIX-KERNEL, 2026-10-24; READ-KERNEL B2, B3, B4, B7; method R-0069)
+
+**Fixed (text only; no definition, statement or bytes change).**
+- `Body.transfer` / `Body.credit` (`Call.lean`): the grant chain is for `transfer` / `credit`, whose cap the move spends; `mutate` moves no value (KERNEL-60; the code: `Ledger.lean` `ownerAuthority … (.transfer 0)`, `(.credit 0)`). They said `mutate`.
+- `Refusal.duplicateEffect` (`Call.lean`), `planted` and `probeSeal` (`Sim/Gen.lean`): it IS reachable on the signed path (a method returning two transfers out of the object's own account; `Proofs/LedgerNext.lean` relies on it). They said no receiver produces it.
+- `checkJournal` (`World.lean`), READ-KERNEL B7: its `replayed` and `refusedFinal` arms are unreachable from `submit`, which answers both before deriving. They are NOT deleted: they are the follower's (`World.fold`, the audit), which admits a log's Turns with nothing before them, and a fold without them would admit a replayed or a recorded txId. The docstring now says so. Neither "delete" nor "make reachable from submit": the arms are reachable where they are needed.
+- `decisions/kernel.md`: KERNEL-17 (`Status: open`, "the journal is not pruned") marked SUPERSEDED by KERNEL-33; KERNEL-23 (`Status: proposed`) marked BUILT as KERNEL-30; the "not yet built" titles of KERNEL-23/24/25/26 name what built them; KERNEL-55's (PROPOSED) title points at its RULED/BUILT parts.
+
+**Not done here, and why (each a card).**
+- The twin read: `refusedAnswer` (submit) and `checkJournal`'s inner match (admission) are one KERNEL-44 read written twice. One function for both moves `submit`'s first two matches, which ~8 proofs across Kernel and Protocol unfold. Law-1 work, not a doc fix.
+- Three duplicate detectors → one (B5): `firstDup` needs a lawful `Ord` (the premise the touch theorems carry); `dupBy` and `rowsRun`'s inline count are O(n²) with no order. One detector is a fork: `firstDup` everywhere puts the lawful-`Ord` premise on the row theorems; `dupBy` everywhere is O(n²) at `touchesMax` = 512. It needs its premise priced first.
+- Refusals under the wrong name: `rowView`'s `rangeUnpinned` for a relation with no head (B8) and `spendAt`'s `short` reused as `grantWidens` for a full ledger (B10). Each needs a new `Refusal` constructor. `refusalNames`' order IS the recorded code, so every code after it moves (a record-code flag day, re-genesis). That is not a doc fix.
+- A signed row for `duplicateEffect` (a two-transfer method in `lang-journey`).
