@@ -166,7 +166,7 @@ def TickCore (c : Conf) (m : Mem) (es : List Ev) : Prop :=
   match m.shape with
   | some sh => ReadCore c sh m.kept es
   | none => ∃ y rest, es = .cmd .describe y :: rest ∧
-      match describedShape y with
+      match describedShape c y with
       | none => rest = []
       | some sh => ReadCore c sh m.kept rest
 
@@ -354,7 +354,7 @@ theorem tick_order {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (ti
             | say h => simpa using read_core h
           · rename_i e he
             simp only [he, Except.toOption]
-            cases h with | say h => cases h; rfl
+            cases h; rfl
 
 /-! ## Counted: what the order says, stated on its own -/
 
@@ -580,7 +580,7 @@ theorem deliver_gone_continues {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray}
         split at hp
         · rename_i hx
           rw [if_neg (fun hn => hn hx)] at h
-          cases hra : Ring.readAll sh ((String.fromUTF8? rr'.stdout).getD "") with
+          cases hra : readOut sh rr' with
           | error e => rw [hra] at hp; simp [Except.toOption] at hp
           | ok q =>
             rw [hra] at hp
@@ -677,7 +677,7 @@ theorem kept_follows {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w 
         · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
         · split at h
           · cases h with | say h => simpa using read_kept h
-          · cases h with | say h => cases h
+          · cases h
 
 /-! ## No refusal repeats forever (HOSTING-48) -/
 
@@ -842,12 +842,9 @@ theorem tick_retry {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (ti
               have := read_retry h (unsettled_cons (not_unsettled_say _)
                 (unsettled_cons (by simpa [Unsettled] using hx) hu))
               exact this
-          · cases h with
-            | say h =>
-              cases h
-              obtain ⟨_, he, hu'⟩ := unsettled_cons (not_unsettled_say _)
-                (unsettled_cons (by simpa [Unsettled] using hx) hu)
-              cases he
+          · cases h
+            obtain ⟨_, he, hu'⟩ := unsettled_cons (by simpa [Unsettled] using hx) hu
+            cases he
 
 theorem retry_lt {m m' : Mem} {why : String} (h : retry m why = .next m') : m'.retries < retriesMax := by
   unfold retry at h
@@ -964,7 +961,7 @@ theorem tick_lt {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w m) es
         · cases h with | say h => exact done_retry_lt h
         · split at h
           · cases h with | say h => exact read_lt h
-          · cases h with | say h => cases h
+          · cases h
 
 /-- A chain of ticks of one process life: each a path of `tickP` (every reply, every keep and
 forget result, `Runs`) from the memory the last one went on with; the last ends `stop`, or the
@@ -1000,6 +997,23 @@ theorem no_refusal_repeats_forever {w : Where} {m : Mem} {ess : List (List Ev)} 
         simp only [List.length_cons]; omega
       · cases he
     · cases he
+
+/-- **An undecodable read ends the resident by name** (HOSTING-49): a read whose reply is `ok` but whose
+stdout is not UTF-8 ends the tick `undecodable read`, with no effect after the read: never "nothing
+pending", never a forget of the kept answer, never an ask. -/
+theorem read_undecodable_stops {w : Where} {sh : Shape} {m : Mem} {es : List Ev} {a : Tick}
+    (h : Runs (readP w sh m) es a) {rr : Reply} {rest : List Ev} (hes : es = .cmd (.read sh) (.ok rr) :: rest)
+    (hok : rr.exit = Protocol.CommandExit.ok.code) (hu : String.fromUTF8? rr.stdout = none) :
+    a = .stop .undecodable "read" ∧ rest = [] := by
+  subst hes
+  unfold readP at h
+  cases h with
+  | cmd y h =>
+    simp only [hok, ne_eq, not_true_eq_false, if_false] at h
+    have : readOut sh rr = .error (.undecodable, "read") := by unfold readOut; rw [hu]
+    rw [this] at h
+    cases h
+    exact ⟨rfl, rfl⟩
 
 /-! ## Teeth: orders the grammar refuses -/
 

@@ -16,6 +16,8 @@ asks about that ring again only after something FREED it, an invoke of its answe
   and may be asked again, as the meter was not charged); `frees r` clears it.
 - `bell_resident_conforms`: on every chain, between two asks about one ring, the first spent, an
   effect in between frees it.
+- `undecodable_frees_nothing` (HOSTING-49): a read reply whose stdout is not UTF-8 frees no ring (it
+  used to read as zero pending rings, freeing every one: the double ask READ-HOSTING D2 measured).
 
 The tooth is `decideTick`'s kept-pending check. Drop it (a kept ring still pending is asked about
 again) and a chain asks twice with nothing in between, while `tick_order` and `tick_counts` stay
@@ -44,6 +46,19 @@ def Frees (r : Ring) : Ev → Prop
   | .cmd (.read sh) y => ∃ p, readRings sh y = some p ∧ r ∉ p
   | .cmd (.reread sh) y => ∃ p, readRings sh y = some p ∧ r ∉ p
   | _ => False
+
+/-- **An undecodable read frees nothing** (HOSTING-49, READ-HOSTING D2): a read or re-read reply
+whose stdout is not UTF-8 lists no rings (`readOut` refuses it `undecodable` before any parse), so it
+never frees the ring the resident asked about, and a second ask of it is not permitted by
+`bell_resident_conforms` on its account. Before HOSTING-49 such a reply read as `""`, zero pending
+rings, and freed every ring. -/
+theorem undecodable_frees_nothing {r : Ring} {sh : Shape} {rr : Reply}
+    (h : String.fromUTF8? rr.stdout = none) :
+    ¬ Frees r (.cmd (.read sh) (.ok rr)) ∧ ¬ Frees r (.cmd (.reread sh) (.ok rr)) := by
+  have hn : readRings sh (.ok rr) = none := by
+    simp only [readRings, readOut, h]
+    split <;> rfl
+  constructor <;> rintro ⟨p, hp, -⟩ <;> rw [hn] at hp <;> cases hp
 
 /-- `Frees`, decided (the round below is a fold over it). -/
 private def frees (r : Ring) : Ev → Bool

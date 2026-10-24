@@ -114,7 +114,7 @@ theorem read_shape {w : Where} {sh : Shape} {m m' : Mem} {es : List Ev}
 /-- **The shape a tick hands on** is the one it was given, or the one its own describe (its first
 effect) read. -/
 theorem tick_shape {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w m) es (.next m')) :
-    m'.shape = m.shape ∨ ∃ y rest, core es = .cmd .describe y :: rest ∧ describedShape y = m'.shape := by
+    m'.shape = m.shape ∨ ∃ y rest, core es = .cmd .describe y :: rest ∧ describedShape w.conf y = m'.shape := by
   unfold tickP at h
   split at h
   · exact .inl (read_shape h)
@@ -136,7 +136,7 @@ theorem tick_shape {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w m)
               refine .inr ⟨.ok rr, _, core_cmd _ _ _, ?_⟩
               simp only [describedShape, hx, if_true, hsh, Except.toOption]
               exact hs'.symm
-          · cases h with | say h => cases h
+          · cases h
 
 /-! ## The shape each invoke is sent at -/
 
@@ -206,7 +206,7 @@ theorem readCore_invoke {c : Conf} {sh sh' : Shape} {k : Option (Ring × ByteArr
 theorem tick_invoke_shape {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (tickP w m) es a)
     {sh : Shape} {r : Ring} {t : ByteArray} {x : Except String Reply}
     (he : Ev.cmd (.invoke sh r t) x ∈ core es) :
-    m.shape = some sh ∨ ∃ y rest, core es = .cmd .describe y :: rest ∧ describedShape y = some sh ∧
+    m.shape = some sh ∨ ∃ y rest, core es = .cmd .describe y :: rest ∧ describedShape w.conf y = some sh ∧
       Ev.cmd (.invoke sh r t) x ∈ rest := by
   have ho := tick_order h
   unfold TickCore at ho
@@ -234,7 +234,7 @@ theorem shape_provenance {w : Where} :
     ∀ {m : Mem} {ess : List (List Ev)}, Ticks w m ess → ∀ {sh : Shape} {r : Ring} {t : ByteArray}
       {x : Except String Reply}, Ev.cmd (.invoke sh r t) x ∈ core ess.flatten →
       m.shape = some sh ∨ ∃ y pre mid post, core ess.flatten = pre ++ .cmd .describe y :: mid ++
-        .cmd (.invoke sh r t) x :: post ∧ describedShape y = some sh := by
+        .cmd (.invoke sh r t) x :: post ∧ describedShape w.conf y = some sh := by
   intro m ess hl
   induction hl with
   | nil => intro sh r t x he; simp at he
@@ -368,14 +368,24 @@ theorem readRings_ok {sh : Shape} {y : Except String Reply} {p : List Ring} (h :
   split at h
   · split at h
     · rename_i rr _
-      cases ha : Ring.readAll sh ((String.fromUTF8? rr.stdout).getD "") with
+      cases ha : readOut sh rr with
       | error e => rw [ha] at h; cases h
       | ok p' =>
         rw [ha] at h
         cases h
-        unfold Ring.readAll at ha
-        obtain ⟨line, -, hl⟩ := mapM_ok_mem ha r hr
-        exact ring_read_ok hl
+        unfold readOut at ha
+        split at ha
+        · cases ha
+        · rename_i out _
+          cases hb : Ring.readAll sh out with
+          | error e => rw [hb] at ha; cases ha
+          | ok q =>
+            rw [hb] at ha
+            simp only [Except.mapError, Except.ok.injEq] at ha
+            subst ha
+            unfold Ring.readAll at hb
+            obtain ⟨line, -, hl⟩ := mapM_ok_mem hb r hr
+            exact ring_read_ok hl
     · cases h
   · cases h
 

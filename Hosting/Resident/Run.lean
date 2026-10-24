@@ -96,21 +96,26 @@ inductive Exit
   | lifetime
   /-- `retriesMax` ticks in a row ended on a retry (the detail names the last) -/
   | retryExhausted
+  /-- a member reply's stdout is not UTF-8: refused by name before any parse (law 7: it is never
+  read as an empty text, so never as "nothing pending"; HOSTING-49) -/
+  | undecodable
   deriving DecidableEq, Repr
 
 namespace Exit
 
 def all : List Exit :=
-  [argvNotPlan, confMissing, confMalformed, bellShape, answerRefused, volume, lifetime, retryExhausted]
+  [argvNotPlan, confMissing, confMalformed, bellShape, answerRefused, volume, lifetime, retryExhausted,
+   undecodable]
 
 def code : Exit → UInt32
   | argvNotPlan => 10 | confMissing => 11 | confMalformed => 12 | bellShape => 13
   | answerRefused => 14 | volume => 15 | lifetime => 16 | retryExhausted => 17
+  | undecodable => 18
 
 def name : Exit → String
   | argvNotPlan => "argvNotPlan" | confMissing => "confMissing" | confMalformed => "confMalformed"
   | bellShape => "bellShape" | answerRefused => "answerRefused" | volume => "volume"
-  | lifetime => "lifetime" | retryExhausted => "retryExhausted"
+  | lifetime => "lifetime" | retryExhausted => "retryExhausted" | undecodable => "undecodable"
 
 end Exit
 
@@ -171,6 +176,22 @@ structure Where where
 /-- The kept file's fresh copy: its name with `.tmp` after it, so never the kept name itself
 (`Proofs.ResidentVolume.keptTmp_ne`). -/
 def Where.keptTmp (w : Where) : System.FilePath := ⟨w.kept.toString ++ ".tmp"⟩
+
+/-- The pending rings an `ok` read reply lists, or how the resident ends: `undecodable` when its
+stdout is not UTF-8 (refused before any parse), `bellShape` naming the row a line does not read as.
+The tick's read and re-read, and the theorems' `readRings`, are this one function (HOSTING-49). -/
+def readOut (sh : Shape) (r : Reply) : Except (Exit × String) (List Ring) :=
+  match String.fromUTF8? r.stdout with
+  | none => .error (.undecodable, "read")
+  | some out => (Ring.readAll sh out).mapError (.bellShape, ·)
+
+/-- The shape an `ok` describe reply reads as, or how the resident ends: `undecodable` when its
+stdout is not UTF-8, `bellShape` naming why the description is not the configured Bell's
+(`Shape.ofDescription`: `wrongObject`, `notBell`, …; READ-HOSTING B6: the reason is the detail). -/
+def describeOut (c : Conf) (r : Reply) : Except (Exit × String) Shape :=
+  match String.fromUTF8? r.stdout with
+  | none => .error (.undecodable, "describe")
+  | some out => (Shape.ofDescription c.bell out).mapError (.bellShape, ·)
 
 /-- One step on the volume, as `keep` and `forget` take them (HOSTING-37). Each is one POSIX call
 (`perform`); `Volume.apply` is the contract each is trusted to meet, and the theorems of
@@ -373,8 +394,8 @@ def deliverP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :=
       | .error e => unread e
       | .ok rr =>
         if rr.exit ≠ Protocol.CommandExit.ok.code then unread s!"exit {rr.exit}" else
-        match Ring.readAll sh ((String.fromUTF8? rr.stdout).getD "") with
-        | .error e => .done (.stop .bellShape e)
+        match readOut sh rr with
+        | .error (x, d) => .done (.stop x d)
         | .ok pending =>
           if ring ∈ pending then .done (.stop .answerRefused s!"{n} ({line})")
           else
@@ -413,8 +434,8 @@ def readP (w : Where) (sh : Shape) (m : Mem) : Prog Tick :=
     if r.exit ≠ Protocol.CommandExit.ok.code then
       .say s!"read exit {r.exit} {String.fromUTF8? r.stderr |>.getD "?"}" (.done (retry m s!"read exit {r.exit}"))
     else
-    match Ring.readAll sh ((String.fromUTF8? r.stdout).getD "") with
-    | .error e => .done (.stop .bellShape e)
+    match readOut sh r with
+    | .error (x, d) => .done (.stop x d)
     | .ok pending => actOn w sh m pending
 
 /-- One tick: the shape once, then the read and the act. -/
@@ -429,11 +450,11 @@ def tickP (w : Where) (m : Mem) : Prog Tick :=
         .say s!"describe exit {r.exit} {String.fromUTF8? r.stderr |>.getD "?"}"
           (.done (retry m s!"describe exit {r.exit}"))
       else
-        match Shape.read (String.fromUTF8? r.stdout |>.getD "") with
+        match describeOut w.conf r with
         | .ok sh =>
           .say s!"bell answer method {sh.answer} pending limit {sh.pending.limit}" <|
             readP w sh { m with shape := some sh }
-        | .error e => .say s!"bellShape {e}" (.done (.stop .bellShape "description"))
+        | .error (x, d) => .done (.stop x d)
 
 /-- One tick, performed. -/
 def tick (w : Where) (m : Mem) : IO Tick := (tickP w m).interp (ioHandler w)

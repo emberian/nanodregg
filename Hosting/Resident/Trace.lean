@@ -26,16 +26,15 @@ def Ev.quiet : Ev → Bool
 /-- The effects on the world: every `say` dropped. -/
 def core (es : List Ev) : List Ev := es.filter fun e => !e.quiet
 
-/-- The rings a read's reply lists, when it is a successful read the resident could parse. -/
+/-- The rings a read's reply lists, when it is a successful read the resident could decode and parse
+(`readOut`: an undecodable stdout lists nothing, HOSTING-49). -/
 def readRings (sh : Shape) : Except String Reply → Option (List Ring)
-  | .ok r => if r.exit = Protocol.CommandExit.ok.code then
-      (Ring.readAll sh ((String.fromUTF8? r.stdout).getD "")).toOption else none
+  | .ok r => if r.exit = Protocol.CommandExit.ok.code then (readOut sh r).toOption else none
   | .error _ => none
 
-/-- The shape a describe's reply reads as. -/
-def describedShape : Except String Reply → Option Shape
-  | .ok r => if r.exit = Protocol.CommandExit.ok.code then
-      (Shape.read (String.fromUTF8? r.stdout |>.getD "")).toOption else none
+/-- The shape a describe's reply reads as, for the configured bell (`describeOut`). -/
+def describedShape (c : Conf) : Except String Reply → Option Shape
+  | .ok r => if r.exit = Protocol.CommandExit.ok.code then (describeOut c r).toOption else none
   | .error _ => none
 
 /-- The answer text an ask's end leaves to keep: none when the ask never left. -/

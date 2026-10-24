@@ -525,6 +525,52 @@ theorem describeText_core {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {ls 
       · cases hv
 
 omit [Ord D] [DecidableEq D] in
+/-- What a describe reply the resident accepted is (HOSTING-49): UTF-8 text whose `object` line names
+the configured bell, and which `Shape.read` reads as the shape. -/
+theorem describeOut_ok {c : Resident.Conf} {r : Resident.Reply} {sh : Resident.Shape}
+    (h : Resident.describeOut c r = .ok sh) :
+    ∃ out, String.fromUTF8? r.stdout = some out ∧
+      Resident.objectNamed c.bell (Resident.splitLines out.toList) = true ∧ Resident.Shape.read out = .ok sh := by
+  unfold Resident.describeOut at h
+  split at h
+  · cases h
+  · rename_i out hout
+    unfold Resident.Shape.ofDescription at h
+    split at h
+    · rename_i hn
+      refine ⟨out, hout, hn, ?_⟩
+      cases hr : Resident.Shape.read out with
+      | error e => rw [hr] at h; cases h
+      | ok sh' => rw [hr] at h; simp only [Except.mapError, Except.ok.injEq] at h; rw [h]
+    · cases h
+
+omit [Ord D] [DecidableEq D] in
+/-- **The shape the resident holds is the configured bell's** (HOSTING-49, READ-HOSTING Q4): a describe
+reply that reads as a shape has an `object` line whose hex is the config's bell id. With
+`Lifetime.shape_provenance`, every invoke is sent at the shape of a description that named
+`w.conf.bell`, checked where the description entered, not only under `StdioLeg`. -/
+theorem describedShape_names_bell {c : Resident.Conf} {y : Except String Resident.Reply} {sh : Resident.Shape}
+    (h : Resident.describedShape c y = some sh) :
+    ∃ rd out hx, y = .ok rd ∧ String.fromUTF8? rd.stdout = some out ∧
+      (Resident.splitLines out.toList).findSome? Resident.objectWords = some hx ∧
+      Text.ofHex (String.ofList hx) = some c.bell := by
+  unfold Resident.describedShape at h
+  split at h
+  · rename_i rd
+    split at h
+    · cases hr : Resident.describeOut c rd with
+      | error _ => rw [hr] at h; cases h
+      | ok sh' =>
+        obtain ⟨out, hout, hn, -⟩ := describeOut_ok hr
+        unfold Resident.objectNamed at hn
+        split at hn
+        · rename_i hx hf
+          exact ⟨rd, out, hx, rfl, hout, hf, by simpa using hn⟩
+        · cases hn
+    · cases h
+  · cases h
+
+omit [Ord D] [DecidableEq D] in
 /-- What `bellCore` accepting says: the first `core` line's hex is a package's bytes, and that
 package is the Bell. -/
 theorem bellCore_ok {ls : List (List Char)} {p : Lang.Package} (h : Resident.bellCore ls = .ok p) :
@@ -668,9 +714,12 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
       split at hy
       · rename_i hx
         refine ⟨rd, rfl, hx, ?_⟩
-        cases hr : Resident.Shape.read ((String.fromUTF8? rd.stdout).getD "") with
+        cases hr : Resident.describeOut w.conf rd with
         | error _ => rw [hr] at hy; cases hy
-        | ok sh' => rw [hr] at hy; cases hy; rfl
+        | ok sh' =>
+          rw [hr] at hy; cases hy
+          obtain ⟨out, hout, -, hs⟩ := describeOut_ok hr
+          rw [hout]; exact hs
       · cases hy
     · cases hy
   -- the one follower: the describe's run, then the invoke's, from a World follow reached

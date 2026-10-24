@@ -169,6 +169,23 @@ def Shape.read (out : String) : Except String Shape := do
   let _ ← bellCore ls
   Shape.ofLines ls
 
+/-- The hex of a description's `object HEX` line (`Protocol.Command.describe`'s first line). -/
+def objectWords : List Char → Option (List Char)
+  | 'o' :: 'b' :: 'j' :: 'e' :: 'c' :: 't' :: ' ' :: rest => some rest
+  | _ => none
+
+/-- The description names the object `bell`: its `object` line's hex is `bell`'s bytes. -/
+def objectNamed (bell : ByteArray) (ls : List (List Char)) : Bool :=
+  match ls.findSome? objectWords with
+  | some hx => Protocol.Text.ofHex (String.ofList hx) == some bell
+  | none => false
+
+/-- The shape from the description of the configured bell (HOSTING-49, law 4: the premise "this
+reply describes `bell`" crosses the member socket, so it is asserted where it enters): the `object`
+line names `bell` or the description is refused `wrongObject`; then `Shape.read`. -/
+def Shape.ofDescription (bell : ByteArray) (out : String) : Except String Shape :=
+  if objectNamed bell (splitLines out.toList) then Shape.read out else .error "wrongObject"
+
 /-! ## A ring -/
 
 /-- A pending ring: its key (the signed notBefore it rang at, who rang) and its text. -/
@@ -197,9 +214,10 @@ def Ring.read (sh : Shape) (line : String) : Except String Ring :=
   | .error e => .error s!"rowUnread {e.name}"
 
 /-- Every pending ring, in the order the range read lists them (key order: ring order). The
-output's lines end in a line feed; a blank line is no row. -/
+output's lines end in a line feed; a blank line is no row. The lines are the description's own
+splitter's (`splitLines`, HOSTING-49: one splitter for the member surface's one output grammar). -/
 def Ring.readAll (sh : Shape) (out : String) : Except String (List Ring) :=
-  ((out.splitOn "\n").filter (· ≠ "")).mapM (Ring.read sh)
+  ((splitLines out.toList).filter (· ≠ [])).mapM fun l => Ring.read sh (String.ofList l)
 
 /-! ## Deciding a tick -/
 
@@ -228,10 +246,11 @@ def decideTick (pending : List Ring) (kept : Option (Ring × ByteArray)) : Act :
 
 /-! ## The answer -/
 
-/-- The longest answer text: the bell's `answer` takes text of 1..2000 bytes (LANG-52). The
-description shows the argument's type, not its bound. So this is the one copy of the bound, and a
+/-- The longest answer text: the upper bound of the `text` field among the Bell's own `answer`
+bounds (`Lang.Bell.answerBounds`, which the package `bellCore` accepts carries: `Lang.Bell.shapeOk`
+checks its `answer` term, `boundCheck` over these bounds). One definition, Lang's (HOSTING-49); a
 text the bell still refuses ends the resident by that refusal's name, never as a second ask. -/
-def textMax : Nat := 2000
+def textMax : Nat := ((Lang.Bell.answerBounds.find? (·.path == ["text"])).map (·.hi)).getD 0
 
 /-- Whether a byte continues a UTF-8 sequence (`10xxxxxx`). -/
 def continues (b : UInt8) : Bool := b &&& 0xC0 == 0x80
