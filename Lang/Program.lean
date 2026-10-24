@@ -6,8 +6,9 @@ caller's `Pinned` view (so `receive_congr` covers LANG's reads): a package and e
 closure must be pinned, or the receiver refuses `unpinned`.
 
 * `checkInstall` decodes the package (canonical bytes or a named decode refusal), loads its imports'
-  closure exactly as a run does (each import pinned, decoded and RE-CHECKED, depth one below the
-  package's own load), and runs `Package.checkWith` over those interfaces (LANG-35).
+  closure exactly as a run does (each import pinned, decoded and RE-CHECKED by `admitContextual` at
+  its own holes, depth one below the package's own load), and admits the package by that same
+  admission over those interfaces (LANG-35, LANG-78).
 * `run` loads the closure (each package once, depth ≤ `closureDepthMax`, bodies relocated to the
   closure's indices), decodes the state at the package's state type and the arguments at the
   method's argument type, runs `method state args req` under the call's tick budget and extracts
@@ -232,28 +233,20 @@ def Package.preparationCost (p : Package) : Nat :=
   p.holeCharge ((p.holes.flatMap (fun h => h.code)).foldl (fun n c => max n (Term.nodes c.body)) 1)
 
 
+/-- The install check (LANG-35, LANG-78): the package decoded (canonical bytes or a named decode
+refusal), its imports' closure loaded by the one admission every load uses (`admitContextual`:
+each package of the closure admitted at ITS OWN holes, as a run admits it, one depth below the
+package's own load), and the package itself admitted by that same admission over those imports.
+That is the tail of `loadContextual` of a cell holding `b` (`install_loads`). Install has no row
+view, so a hole is prepared as its typed refusal (`unresolvedBody`), as a law's load prepares it;
+a run prepares it from the caller's pinned rows (`loadLive`). -/
 def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := do
   let p ← match Wire.decodePackage b with
     | .ok p => pure p
     | .error e => throw (.program (decodeText e))
-  -- the imports' closure, loaded and re-checked exactly as a run loads it (one depth below the
-  -- package's own load), so every interface the check reads passed `checkShape` (LANG-35)
-  let (L, gis) ← loadAll digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩
-  let some ifaces := ifacesAt L.pkgs gis | throw (.program "closure")
-  match p.checkWith ifaces with
-  | .ok () => checkLits digestOf p
-  | .error e => throw (.program e.wire)
-
-def checkInstallContextual (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := do
-  let p ← match Wire.decodePackage b with
-    | .ok p => pure p
-    | .error e => throw (.program (decodeText e))
-  if p.holes.isEmpty then return ← checkInstall digestOf look b
   let (L, gis) ← loadAllContextual digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩
-  let some ifaces := ifacesAt L.pkgs gis | throw (.program "closure")
-  match p.checkContextual ifaces with
-  | .error e => throw (.program e.wire)
-  | .ok () => checkROMLits digestOf p
+  let _ ← admitContextual digestOf (fun _ => unresolvedBody) b p L gis
+  pure ()
 
 /-- The state slots of a record row: field `i` at `stateBase + i`; `none` if a field has no bytes at
 its type (extraction at the state type makes that unreachable; it is refused by name, not written). -/
@@ -561,7 +554,7 @@ end
 
 /-- The language, as the kernel's receivers see it. -/
 def program (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck) : Program D where
-  checkInstall := checkInstallContextual digestOf
+  checkInstall := checkInstall digestOf
   judge := judgeContextual bytesOf digestOf
   -- the slots, the calls the method makes as the object, and the ticks it used (LEDGER-8 (e))
   run := fun look rv pkg state method args r budget =>

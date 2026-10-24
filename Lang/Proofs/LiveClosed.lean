@@ -174,14 +174,6 @@ theorem program_run_closed {D : Type}
   change (runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget).map _ = _
   rw [runMeasuredLive_closed h]
 
-/-- Empty-signature install uses the closed check exactly, including refusals. -/
-theorem checkInstallContextual_closed {D : Type} (digestOf : ByteArray → Option D)
-    (look : Pinned D) (b : ByteArray) {p : Package}
-    (hd : Wire.decodePackage b = .ok p) (hc : p.holes = []) :
-    checkInstallContextual digestOf look b = checkInstall digestOf look b := by
-  simp [checkInstallContextual, hd, hc, bind, Except.bind, pure, Except.pure]
-  cases checkInstall digestOf look b <;> rfl
-
 /-- Law execution is identical once a closed closure loads, for any request or states. -/
 theorem judgeOneContextual_closed {D : Type} (bytesOf : D → ByteArray)
     (digestOf : ByteArray → Option D) (look : Pinned D) (law : D)

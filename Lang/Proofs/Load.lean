@@ -481,36 +481,4 @@ theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArr
   subst h
   exact ⟨_, _, _, _, _, _, _, _, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, rfl⟩
 
-/-- **An installed package loads** (LANG-35): if the install check admits bytes `b` and the cell
-named by `idb` holds `b` as a package, in ROM (install's birth; HOSTING-43), a run's `load` of `idb`
-succeeds under the same pinned view,
-and the package at the index it returns is `b`'s. The install check and the loader agree: no package
-installs only to fail its own load at every invoke. -/
-theorem install_loads {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
-    {b idb : ByteArray} {id : D} {cell : Kernel.Cell}
-    (h : checkInstall digestOf look b = .ok ()) (hid : digestOf idb = some id)
-    (hk : readKind look id kindPackage = .ok cell) (hr : cell.discipline = .rom) (hb : cell.slots.get 0 = some b) :
-    ∃ L g p, load digestOf look closureDepthMax idb ⟨[], [], []⟩ = .ok (L, g) ∧
-      Wire.decodePackage b = .ok p ∧ L.pkgs[g]? = some p := by
-  unfold checkInstall at h
-  simp only [bind, Except.bind, pure, Except.pure] at h
-  repeat' split at h
-  all_goals first | (simp at h; done) | skip
-  all_goals
-    rename_i p hd _ L hl _ ifaces hif _ hc
-    obtain ⟨L, gis⟩ := L
-    have hp : readPackage look id = .ok p := by
-      exact readPackage_ok.mpr ⟨cell, b, hk, hr, hb, hd⟩
-    have hinv := (loadAll_inv digestOf look _ _ _ Inv.empty hl).1
-    refine ⟨{ ids := L.ids ++ [idb], lib := L.lib ++ [p.body.relocate fun i => gis.getD i 0],
-               pkgs := L.pkgs ++ [p] }, L.ids.length, p, ?_, ?_, ?_⟩
-    · show load digestOf look (7 + 1) idb _ = _
-      unfold load loadUsing
-      simp only [indexIn, idOf, hid, hp, closureDepthMax] at hl ⊢
-      unfold loadAll at hl
-      rw [hl]
-      simp only [admitPackage, hif, hc, h]
-    · simp only [hd]
-    · simp [hinv.1]
-
 end Nanodregg.Lang

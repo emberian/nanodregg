@@ -15,6 +15,13 @@ def liveDeclaration : HoleROM :=
     hypotheses := [some (pin 1), some (pin 4)]
     guardPin := some (pin 5) }
 
+/-- A plain package (no holes) whose one import is `imp` (A10's layer): `set n` writes its state. -/
+def layerState : Ty := .record [("n", .nat)]
+
+def layerOver (imp : ByteArray) : Package :=
+  { imports := [imp], state := layerState, iface := .record [("set", methodTy layerState .nat)],
+    body := .record [("set", Std.methodOf layerState .nat [("n", .var 1)])], methods := ["set"], laws := [] }
+
 def contextualRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let prog := langProgram
   let X := ctxWith prog
@@ -188,6 +195,23 @@ def contextualRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     | some (.nat n) => some n | _ => none
   r := note rr s!"LP E5 replacement satisfies new contract: {v}"
     (v == "admitted" && out == some 2)
+  -- A10 (LANG-78): a plain package layered over the installed contextual ROM. Install admits its
+  -- import at the import's own holes, as the run's load does, so it installs, and its method runs
+  -- over a closure that holds the holed ROM.
+  let some layerBytes := Wire.encodePackage (layerOver (Sim.dc.bytes pkg)) | return note r "LP A10 wire" false
+  let (rr, v, turn) := go prog r (Sim.signed r.st a a.key
+    (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ ids)) (.install layerBytes))
+  r := note rr s!"LP A10 a plain package importing the contextual ROM installs: {v}" (v == "admitted")
+  let some layer := turn.bind fun t => (createdIds t).head? | return r
+  let some layerSeed := stateSlots (recordRow layerState) [("n", .nat 0)] 0 | return note r "LP A10 seed" false
+  let (rr, v, turn) := go prog r (Sim.signed r.st a a.key
+    (Sim.S.pinsFor r.st.host ([a.id, layer, pkg] ++ ids)) (.create (some layer) [] layerSeed))
+  r := note rr s!"LP A10 create the layer: {v}" (v == "admitted")
+  let some lobj := turn.bind fun t => (createdIds t).head? | return r
+  let (rr, v, _) := go prog r (signedAt r.st a (Sim.S.pinsFor r.st.host ([a.id, lobj, layer, pkg] ++ ids))
+    (.invoke lobj 0 (argBytes .nat (.nat 7)) 100000 none) r.st.host.height (r.st.host.height + 1024))
+  r := note rr s!"LP A10 the layer's method runs over the holed import: {v}"
+    (v == "admitted" && natSlotOf X.env rr.st.host lobj 0 == some 7)
   return r
 
 def contextualSession : Run :=

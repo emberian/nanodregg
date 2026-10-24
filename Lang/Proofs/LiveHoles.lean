@@ -686,6 +686,86 @@ theorem loadLive_checked {D : Type} {digestOf : ByteArray → Option D}
   (loadUsing_inv digestOf look _ (fun hi hw ha => admitContextual_inv hi hw ha)
     fuel idb _ Inv.empty h).1.2.2.2
 
+/-- What one admission returns: the package appended at index `acc.ids.length`, and the same
+admission under any other id (the id is recorded, never read). -/
+theorem admitContextual_shape {D : Type} {digestOf : ByteArray → Option D}
+    {prepare : List Ty → Package → Except HoleRefusal Term}
+    {b : ByteArray} {p : Package} {acc L : Loaded} {gis : List Nat} {g : Nat}
+    (h : admitContextual digestOf prepare b p acc gis = .ok (L, g)) :
+    g = acc.ids.length ∧ L.pkgs = acc.pkgs ++ [p] ∧
+      ∀ idb, admitContextual digestOf prepare idb p acc gis = .ok ({ L with ids := acc.ids ++ [idb] }, g) := by
+  unfold admitContextual admitPackage at h ⊢
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  all_goals
+    simp only [Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    refine ⟨rfl, rfl, fun idb => ?_⟩
+    simp_all
+
+/-- The interfaces an admission reads, and for a package without holes the closed check over them. -/
+theorem admitContextual_ifaces {D : Type} {digestOf : ByteArray → Option D}
+    {prepare : List Ty → Package → Except HoleRefusal Term}
+    {b : ByteArray} {p : Package} {acc L : Loaded} {gis : List Nat} {g : Nat}
+    (h : admitContextual digestOf prepare b p acc gis = .ok (L, g)) :
+    ∃ ifs, ifacesAt acc.pkgs gis = some ifs ∧ (p.holes = [] → p.checkWith ifs = .ok ()) := by
+  unfold admitContextual at h
+  split at h
+  · unfold admitPackage at h
+    split at h
+    · cases h
+    · rename_i ifs hif
+      split at h
+      · cases h
+      · exact ⟨ifs, hif, fun _ => ‹_›⟩
+  · rename_i hne
+    split at h
+    · cases h
+    · exact ⟨_, ‹_›, fun hh => absurd (by simp [hh]) hne⟩
+
+/-- **An installed package loads** (LANG-35, LANG-78): if the install check admits bytes `b` and
+the cell named by `idb` holds `b` as a package, in ROM (install's birth; HOSTING-43), the contextual
+load of `idb` succeeds under the same pinned view, and the package at the index it returns is
+`b`'s. Install IS that load's last step: the same import closure by the same admission
+(`admitContextual`, each package at its own holes), then the same admission of the package, so no
+package installs only to fail its own load. `loadContextual` is the judge's loader; a run's
+`loadLive` is the same traversal and admission with the holes prepared from the caller's rows. A
+plain package over a holed import is one such package (journey LP A10). -/
+theorem install_loads {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
+    {b idb : ByteArray} {id : D} {cell : Kernel.Cell}
+    (h : checkInstall digestOf look b = .ok ()) (hid : digestOf idb = some id)
+    (hk : readKind look id kindPackage = .ok cell) (hr : cell.discipline = .rom) (hb : cell.slots.get 0 = some b) :
+    ∃ L g p, loadContextual digestOf look closureDepthMax idb ⟨[], [], []⟩ = .ok (L, g) ∧
+      Wire.decodePackage b = .ok p ∧ L.pkgs[g]? = some p := by
+  unfold checkInstall at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  cases hd : Wire.decodePackage b with
+  | error e => simp [hd] at h
+  | ok p =>
+  simp only [hd] at h
+  cases hl : loadAllContextual digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩ with
+  | error e => simp [hl] at h
+  | ok x =>
+  obtain ⟨L, gis⟩ := x
+  simp only [hl] at h
+  cases ha : admitContextual digestOf (fun _ => unresolvedBody) b p L gis with
+  | error e => simp [ha] at h
+  | ok y =>
+  obtain ⟨L', g⟩ := y
+  have hp : readPackage look id = .ok p := readPackage_ok.mpr ⟨cell, b, hk, hr, hb, hd⟩
+  obtain ⟨hg, hpk, hany⟩ := admitContextual_shape ha
+  have hinv := (loadAllUsing_inv digestOf look _ (fun hi hw ha => admitContextual_inv hi hw ha)
+    _ _ _ Inv.empty hl).1
+  refine ⟨{ L' with ids := L.ids ++ [idb] }, g, p, ?_, rfl, ?_⟩
+  · show loadUsing digestOf _ look (7 + 1) idb _ = _
+    unfold loadUsing
+    simp only [indexIn, idOf, hid, hp]
+    change loadAllUsing digestOf (admitContextual digestOf (fun _ => unresolvedBody)) look 7 p.imports _ = _ at hl
+    rw [hl]
+    exact hany idb
+  · simp only [hpk, hg, hinv.1, List.getElem?_append_right (Nat.le_refl _), Nat.sub_self,
+      List.getElem?_cons_zero]
+
 end
 
 /-! ## From `Lang.Proofs.Contextual.LiveCost`: Live preparation is charged from its committed ROM, including blocked holes. -/
