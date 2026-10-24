@@ -100,6 +100,8 @@ enum End {
     /// `wait` on the decider failed
     DeciderLost(String),
     Pid(String),
+    /// the parent-death link could not be set (`die_with_parent`, CLIENT-38)
+    ParentDeath(String),
 }
 
 impl End {
@@ -119,6 +121,7 @@ impl End {
             End::DeciderMechanism(c) => format!("deciderMechanism {c}"),
             End::DeciderLost(e) => format!("deciderLost {e}"),
             End::Pid(e) => format!("pidFile {e}"),
+            End::ParentDeath(e) => format!("parentDeath {e}"),
         }
     }
 }
@@ -141,6 +144,7 @@ fn main() -> ExitCode {
         End::DeciderEnded(None) => keybroker_exit::DECIDER_SIGNALED,
         End::DeciderMechanism(_) => keybroker_exit::DECIDER_MECHANISM,
         End::DeciderLost(_) => keybroker_exit::DECIDER_LOST,
+        End::ParentDeath(_) => keybroker_exit::PARENT_DEATH,
     })
 }
 
@@ -309,6 +313,10 @@ struct Shared {
 }
 
 fn run() -> End {
+    // First: a keybroker whose parent dies (a killed test, never systemd) does not outlive it.
+    if let Err(e) = nanodregg_sandbox::die_with_parent() {
+        return End::ParentDeath(e.to_string());
+    }
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let [
         keys_path,

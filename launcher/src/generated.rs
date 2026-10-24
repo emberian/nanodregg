@@ -631,8 +631,9 @@ pub mod launch_exit {
     pub const CONTROLLER_MECHANISM: u8 = 67;
     pub const LAYOUT_MISSING: u8 = 68;
     pub const FOREIGN_PATH: u8 = 69;
+    pub const PARENT_DEATH: u8 = 63;
     pub const ALL: &[u8] = &[
-        116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 67, 68, 69,
+        116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 67, 68, 69, 63,
     ];
 }
 

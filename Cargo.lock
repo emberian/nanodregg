@@ -336,6 +336,9 @@ dependencies = [
 [[package]]
 name = "nanodregg-devtools"
 version = "0.0.0"
+dependencies = [
+ "rustix",
+]
 
 [[package]]
 name = "nanodregg-launcher"

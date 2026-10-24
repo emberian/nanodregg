@@ -118,6 +118,11 @@ struct Conf {
 }
 
 fn run() -> End {
+    // First: an nd-members whose parent dies (a killed test, never systemd) does not outlive it,
+    // and its supervisors (each linked the same way) follow it.
+    if let Err(e) = nanodregg_sandbox::die_with_parent() {
+        return End(format!("parentDeath {e}"), exit::PARENT_DEATH);
+    }
     let usage = || End(USAGE.into(), exit::USAGE);
     let mut argv = std::env::args_os().skip(1);
     let fixed: Vec<PathBuf> = argv.by_ref().take(11).map(PathBuf::from).collect();

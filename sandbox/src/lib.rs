@@ -225,6 +225,66 @@ pub fn killed_by_signal(status: std::process::ExitStatus) -> bool {
         || (cfg!(target_os = "linux") && status.code().is_some_and(|c| c >= 128))
 }
 
+/// Write `WHO: LINE` to stderr in ONE write, and never panic. Every launcher process shares its
+/// stderr with children of other languages (the controller, the deciders, nd-supervise), and
+/// `eprintln!` writes a line in pieces (prefix, body, newline) that another process's line can land
+/// between: GATES-6 read `keybroker: hosting-broker: keybrokerGone sockDir …`, GATES-9
+/// `grain-launch: hosting-drive: launcherGone` then `foreignPath …`. A pipe write of at most
+/// `PIPE_BUF` bytes (4096 on Linux) is never interleaved; a line past it (a path near `PATH_MAX`) can
+/// be. And `eprintln!` PANICS when stderr is gone: nd-supervise's SIGTERM thread died in its first
+/// line when its parent's stderr pipe had no reader, so it never stopped its child (CLIENT-38,
+/// measured): a dead stderr loses the line, never the process's end.
+pub fn say(who: &str, line: &str) {
+    say_line(&format!("{who}: {line}"));
+}
+
+/// [`say`] for a line that already names its writer.
+pub fn say_line(line: &str) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(format!("{line}\n").as_bytes());
+}
+
+/// Shared fate with the parent (CLIENT-38, A19). Every binary of ours calls this first in `main`, so
+/// a parent that dies without stopping it (a test process killed by SIGKILL, a crashed nd-members)
+/// takes it along: it is sent SIGTERM, the stop a service manager sends, which nd-supervise answers
+/// by naming every close (CLIENT-30) and every other binary takes as its default end. Its confined
+/// children follow it (`--die-with-parent` on Linux; EOF on stdin on macOS).
+///
+/// A platform fact (law 2). Linux: `PR_SET_PDEATHSIG` (rustix's safe wrapper), which fires when the
+/// THREAD that spawned this process exits: a spawner keeps the child on the thread that owns it. A
+/// parent that died between the spawn and this call is caught by `getppid` differing across the
+/// call; one that died before the first `getppid` (inside exec and runtime start) is not. macOS has
+/// no parent-death signal: a thread compares `getppid` every [`ORPHAN_POLL`] and raises the same
+/// SIGTERM on a change (the parent PROCESS, not its thread).
+pub fn die_with_parent() -> io::Result<()> {
+    use rustix::process::{Signal, getpid, getppid, kill_process};
+    let parent = getppid();
+    let orphaned = move || getppid() != parent;
+    let stop = || kill_process(getpid(), Signal::TERM);
+    #[cfg(target_os = "linux")]
+    {
+        rustix::process::set_parent_process_death_signal(Some(Signal::TERM))?;
+        if orphaned() {
+            stop()?;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    std::thread::Builder::new()
+        .name("orphan-watch".into())
+        .spawn(move || {
+            while !orphaned() {
+                std::thread::sleep(ORPHAN_POLL);
+            }
+            let _ = stop();
+        })?;
+    Ok(())
+}
+
+/// How often a process without a parent-death signal (macOS) compares its parent (a liveness
+/// interval of the watch, not a protocol bound).
+#[cfg(not(target_os = "linux"))]
+pub const ORPHAN_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
 #[cfg(target_os = "linux")]
 /// Not `/usr/bin/bwrap`: Ubuntu 24.04+ (`kernel.apparmor_restrict_unprivileged_userns = 1`) gives an
 /// unprivileged user namespace no capabilities, so the distro bwrap fails `setting up uid map:

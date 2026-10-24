@@ -67,6 +67,8 @@ enum End {
     ReportPipe(String),
     Pid(String),
     Lifetime,
+    /// the parent-death link could not be set (`die_with_parent`, CLIENT-38)
+    ParentDeath(String),
 }
 
 impl End {
@@ -90,6 +92,7 @@ impl End {
             End::ReportPipe(e) => format!("reportPipe {e}"),
             End::Pid(e) => format!("pidFile {e}"),
             End::Lifetime => "lifetime".into(),
+            End::ParentDeath(e) => format!("parentDeath {e}"),
         }
     }
 }
@@ -126,6 +129,7 @@ fn main() -> ExitCode {
         End::ReportPipe(_) => k::REPORT_PIPE,
         End::Pid(_) => k::PID_FILE,
         End::Lifetime => k::LIFETIME,
+        End::ParentDeath(_) => k::PARENT_DEATH,
     })
 }
 
@@ -395,6 +399,10 @@ fn ended(code: Option<i32>) -> End {
 }
 
 fn run() -> End {
+    // First: a grain-launch whose parent dies (a killed test, never systemd) does not outlive it.
+    if let Err(e) = nanodregg_sandbox::die_with_parent() {
+        return End::ParentDeath(e.to_string());
+    }
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let [root, broker, member, label, pids, controller, rest @ ..] = args.as_slice() else {
         return End::Usage;

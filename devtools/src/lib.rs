@@ -254,3 +254,87 @@ pub fn supervise_host(
     }
     s
 }
+
+/// One process as `/proc` saw it: its pid and its start time (clock ticks after boot), so a pid the
+/// kernel has since given to another process is never taken for it (CLIENT-38's plants).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Proc {
+    /// The pid.
+    pub pid: u32,
+    /// `/proc/PID/stat` field 22.
+    pub start: u64,
+}
+
+/// `(ppid, start, zombie)` of `pid` from `/proc/PID/stat`, `None` when it is gone. The fields after
+/// the command name (which may hold spaces and parentheses) start after its last `)`.
+fn stat(pid: u32) -> Option<(u32, u64, bool)> {
+    let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = s.get(s.rfind(')')? + 2..)?;
+    let f: Vec<&str> = rest.split(' ').collect();
+    Some((
+        f.get(1)?.parse().ok()?,
+        f.get(19)?.parse().ok()?,
+        f.first() == Some(&"Z"),
+    ))
+}
+
+/// Every live descendant of `pid` (its children, theirs, …) from one walk of `/proc`. Linux only:
+/// a plant that cannot walk `/proc` FAILS by name.
+pub fn descendants(pid: u32) -> Vec<Proc> {
+    let entries = std::fs::read_dir("/proc");
+    assert!(entries.is_ok(), "plant: /proc: {entries:?}");
+    let all: Vec<(u32, u32, u64)> = entries
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter_map(|p| stat(p).filter(|s| !s.2).map(|(pp, st, _)| (p, pp, st)))
+        .collect();
+    let mut out: Vec<Proc> = Vec::new();
+    let mut frontier = vec![pid];
+    while let Some(parent) = frontier.pop() {
+        for &(p, pp, start) in &all {
+            if pp == parent && !out.iter().any(|o| o.pid == p) {
+                out.push(Proc { pid: p, start });
+                frontier.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `p` is still that process and not a zombie.
+pub fn alive(p: Proc) -> bool {
+    stat(p.pid).is_some_and(|(_, start, zombie)| start == p.start && !zombie)
+}
+
+/// The processes of `procs` still alive after waiting up to `within` (polled every 50 ms).
+pub fn survivors(procs: &[Proc], within: Duration) -> Vec<Proc> {
+    let deadline = Instant::now() + within;
+    loop {
+        let left: Vec<Proc> = procs.iter().copied().filter(|&p| alive(p)).collect();
+        if left.is_empty() || Instant::now() >= deadline {
+            return left;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Stop each of `procs` that is still the process it was (pid AND start time): a plant's teardown
+/// of the processes it started, by their own pids, never by a pattern.
+pub fn stop_all(procs: &[Proc]) {
+    for &p in procs {
+        if let (true, Some(pid)) = (
+            alive(p),
+            rustix::process::Pid::from_raw(i32::try_from(p.pid).unwrap_or(0)),
+        ) {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+    }
+}
+
+/// The scratch directories this thread made ([`scratch`]), for a process whose own guard will
+/// never run (one a plant kills by SIGKILL) to hand to the plant that removes them.
+pub fn scratch_dirs() -> Vec<PathBuf> {
+    SCRATCH_DIRS.with(|d| d.0.borrow().clone())
+}

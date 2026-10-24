@@ -71,7 +71,8 @@ def available() -> str | None:
     if not p:
         return None
     try:
-        r = subprocess.run([p, "--decode-pids=pidns", "-V"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([p, "--decode-pids=pidns", "--kill-on-exit", "-V"], capture_output=True, text=True,
+                           timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     # Without host-PID annotations, clone inside CLONE_NEWPID returns a namespace PID
@@ -80,7 +81,9 @@ def available() -> str | None:
 
 
 def wrap(strace: str, argv: list[str], out: str) -> list[str]:
-    return [strace, "-f", "-q", "-y", "--seccomp-bpf", "--decode-pids=pidns", "-e",
+    # --kill-on-exit: a strace that ends (killed with its group past the deadline) takes every
+    # tracee with it instead of detaching them (CLIENT-38, A19)
+    return [strace, "-f", "-q", "-y", "--seccomp-bpf", "--decode-pids=pidns", "--kill-on-exit", "-e",
             "trace=%file,execve,getdents64,clone,clone3,fork,vfork,bind,unshare,setns,fchdir,open_tree,move_mount,fsopen,fsconfig,fsmount,mount_setattr,umount2",
             "-e", "signal=none",
             "-s", "4096", "-o", out] + list(argv)

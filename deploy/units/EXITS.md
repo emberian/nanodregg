@@ -107,6 +107,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 104 | deciderLost | fatal | stopped (RestartPreventExitStatus) | keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit |
 | 105 | sockDir | fatal | stopped (RestartPreventExitStatus) | the broker's socket directory fails its checks: /run/nd-broker must be nd:nd-hosted mode 02710 (tmpfiles), every directory above it owned by root, and each resident directory in it nd's, mode 02710 (HOSTING-17, RUNBOOK §2a) |
 | 79 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's sandbox or program failed before the decider ran (stderr names the raw code: bwrap, a missing library, the unit's RestrictAddressFamilies — it needs AF_NETLINK): fix the mechanism (deploy/live/README.md), then start the unit |
+| 149 | parentDeath | fatal | stopped (RestartPreventExitStatus) | the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT |
 
 ## hosting-broker (the decider, under keybroker)
 
@@ -140,6 +141,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 159 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's process ended with a code DeciderExit does not name (bwrap setup, a missing program or library, the unit's RestrictAddressFamilies): a restart meets the same thing; fix the mechanism |
 | 160 | stateRoot | fatal | stopped (RestartPreventExitStatus) | STATE (/srv/nd-members/L/follow) is not a 0700 nd directory with a clean chain (RUNBOOK §2b) |
 | 161 | rootsOverlap | fatal | stopped (RestartPreventExitStatus) | two of nd-members' roots nest: MEMBER, MEMBERS, STATE and FOLLOW must be pairwise disjoint trees (HOSTING-32); fix the unit's argv |
+| 162 | parentDeath | fatal | stopped (RestartPreventExitStatus) | the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT |
 
 ## grain-launch (the nd-grain-launch@ unit; its controller's codes below are passed through)
 
@@ -160,6 +162,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 67 | controllerMechanism | fatal | stopped (RestartPreventExitStatus) | the controller's sandbox or program failed before the controller ran (stderr names the raw code): fix the mechanism, then start the unit |
 | 68 | layoutMissing | fatal | stopped (RestartPreventExitStatus) | a directory the World's layout requires is absent (stderr names it, e.g. /srv/nd-hosted/worlds/LABEL/store): make it as nd-hosted 0700 (RUNBOOK §2b), then start the unit |
 | 69 | foreignPath | fatal | stopped (RestartPreventExitStatus) | a defect in the controller's actions: keep the World's state, report to HOSTING |
+| 63 | parentDeath | fatal | stopped (RestartPreventExitStatus) | the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT |
 
 ## hosting-controller (under grain-launch)
 

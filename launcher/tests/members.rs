@@ -1147,3 +1147,164 @@ fn the_residents_decider_answers_residents_and_refuses_a_decide() {
         String::from_utf8_lossy(&o.stderr)
     );
 }
+
+/// CLIENT-38 (A19): a test PROCESS killed by SIGKILL (the gate's deadline, earlyoom, a Ctrl-C of
+/// cargo) unwinds nothing, so no `Drop` stops what it started: the 336 supervisors of 10-23.
+/// `hold_a_tree`, run only as this test's child, starts a World (nd-supervise over `host serve`
+/// and `host follow`), nd-members serving one resident (nd-supervise over `nd --stdio` and over its
+/// follower, the decider), keybroker (its decider) and grain-launch (its controller), prints its
+/// scratch directories and `held`, and sleeps. This test kills it with SIGKILL and finds every
+/// process that was under it gone within the bound. The plants: drop `die_with_parent` from
+/// nd-members, keybroker or grain-launch.
+#[test]
+fn a_killed_test_process_leaves_no_supervisor_behind() {
+    use std::io::{BufRead, BufReader};
+    use std::time::Duration;
+    let mut h = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "hold_a_tree", "--ignored", "--nocapture"])
+        .env("ND_HOLD_A_TREE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = h.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for l in BufReader::new(out).lines().map_while(Result::ok) {
+            if tx.send(l).is_err() {
+                return;
+            }
+        }
+    });
+    let mut dirs = Vec::new();
+    let held = loop {
+        match rx.recv_timeout(Duration::from_secs(120)) {
+            Ok(l) if l == "held" => break true,
+            Ok(l) => dirs.extend(l.strip_prefix("scratch ").map(PathBuf::from)),
+            Err(_) => break false,
+        }
+    };
+    let tree = nanodregg_devtools::descendants(h.id());
+    let cmdlines: Vec<String> = tree
+        .iter()
+        .map(|p| fs::read_to_string(format!("/proc/{}/cmdline", p.pid)).unwrap_or_default())
+        .collect();
+    let _ = h.kill();
+    let _ = h.wait();
+    let left = nanodregg_devtools::survivors(&tree, Duration::from_secs(15));
+    nanodregg_devtools::stop_all(&left);
+    for d in &dirs {
+        let _ = fs::remove_dir_all(d);
+    }
+    assert!(held, "plant: the held tree never said held");
+    let named = |n: &str| cmdlines.iter().any(|c| c.contains(n));
+    assert!(
+        tree.len() >= 8
+            && [
+                "nd-members",
+                "keybroker",
+                "grain-launch",
+                "hosting-controller",
+                "nd-supervise"
+            ]
+            .iter()
+            .all(|n| named(n)),
+        "plant: the held tree is not the one meant: {tree:?}"
+    );
+    let who: Vec<String> = left
+        .iter()
+        .filter_map(|l| tree.iter().position(|p| p == l))
+        .map(|i| cmdlines[i].replace('\0', " "))
+        .collect();
+    assert!(
+        left.is_empty(),
+        "outlived the killed test process: {who:#?}"
+    );
+}
+
+/// The tree `a_killed_test_process_leaves_no_supervisor_behind` kills (only as its child).
+#[test]
+#[ignore = "run only as a_killed_test_process_leaves_no_supervisor_behind's child"]
+fn hold_a_tree() {
+    use std::io::Write;
+    if std::env::var_os("ND_HOLD_A_TREE").is_none() {
+        return;
+    }
+    // the World's follower Store is the hosted one grain-launch's controller tails (grain.rs's layout)
+    let hosting = Gone(nanodregg_devtools::scratch(&format!(
+        "kbh{}",
+        std::process::id()
+    )));
+    let world = hosting.0.join("worlds").join("w");
+    nanodregg_devtools::mkdirs(&world).unwrap();
+    let w = World::genesis_following("hold", Some(world.join("store")));
+    let r = Roots::new('h');
+    w.provision(&r, &w.r1);
+    let m = Members::start(&w, &r, uid(&r.member.0));
+    until(
+        "a served sync",
+        60,
+        || nd_via(&r.sock(&w.r1), &["sync"]).is_ok_and(|(e, _)| e == command_exit::OK),
+        &|| m.log(),
+    );
+    let d = dir("hold");
+    let keys = key_file(&d, 0o600);
+    let anchors = Pki::new().anchors(&d, 0o644);
+    let b = start_residents(
+        &d.socks,
+        &d.join("pids"),
+        &keys,
+        &anchors,
+        "127.0.0.1:9",
+        &w,
+        &[&w.r1],
+        me(&d).0,
+    );
+    let gl_pids = w.root.join("gl-pids");
+    nanodregg_devtools::mkdirs(&gl_pids).unwrap();
+    let broker = Gone(nanodregg_devtools::scratch(&format!(
+        "kbhb{}",
+        std::process::id()
+    )));
+    let member = Gone(nanodregg_devtools::scratch(&format!(
+        "kbhm{}",
+        std::process::id()
+    )));
+    let controller = lean_bin("hosting-controller");
+    let store = world.join("store");
+    let gl = Logged::spawn(
+        grain_launch_rendered(&[
+            ("/srv/nd-hosted", hosting.0.as_os_str()),
+            ("/run/nd-broker", broker.0.as_os_str()),
+            ("/run/nd-member", member.0.as_os_str()),
+            ("%i", "w".as_ref()),
+            ("/run/nd-grain-launch/%i", gl_pids.as_os_str()),
+            ("/opt/nd/bin/hosting-controller", controller.as_os_str()),
+            ("/srv/nd-hosted/worlds/%i/store", store.as_os_str()),
+        ]),
+        w.root.join("grain-launch.pid"),
+    );
+    let me_pid = std::process::id();
+    until(
+        "grain-launch's controller",
+        60,
+        || {
+            nanodregg_devtools::descendants(me_pid).iter().any(|p| {
+                fs::read_to_string(format!("/proc/{}/cmdline", p.pid))
+                    .is_ok_and(|c| c.contains("hosting-controller"))
+            })
+        },
+        &|| gl.log(),
+    );
+    let mut o = std::io::stdout();
+    for p in nanodregg_devtools::scratch_dirs() {
+        writeln!(o, "scratch {}", p.display()).unwrap();
+    }
+    writeln!(o, "held").unwrap();
+    o.flush().unwrap();
+    let _held = (hosting, w, r, m, d, b, broker, member, gl);
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}

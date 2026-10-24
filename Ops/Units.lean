@@ -401,6 +401,7 @@ def keybrokerAction : KeybrokerExit → String
   | .deciderSignaled => "automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit"
   | .deciderLost => "keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit"
   | .deciderMechanism => "the decider's sandbox or program failed before the decider ran (stderr names the raw code: bwrap, a missing library, the unit's RestrictAddressFamilies — it needs AF_NETLINK): fix the mechanism (deploy/live/README.md), then start the unit"
+  | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
 
 /-- The codes the keybroker unit must not restart: both broker tables' fatal classes. -/
 def brokerPreventCodes : List Nat := DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal
@@ -587,6 +588,7 @@ def membersAction : MembersExit → String
   | .deciderMechanism => "the decider's process ended with a code DeciderExit does not name (bwrap setup, a missing program or library, the unit's RestrictAddressFamilies): a restart meets the same thing; fix the mechanism"
   | .stateRoot => "STATE (/srv/nd-members/L/follow) is not a 0700 nd directory with a clean chain (RUNBOOK §2b)"
   | .rootsOverlap => "two of nd-members' roots nest: MEMBER, MEMBERS, STATE and FOLLOW must be pairwise disjoint trees (HOSTING-32); fix the unit's argv"
+  | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
 
 /-- The codes nd-members must not restart: the decider's fatal class and its own (only a signalled
 decider restarts). -/
@@ -734,6 +736,7 @@ def launchAction : LaunchExit → String
   | .controllerLost => "grain-launch could not wait on its controller: nothing says a restart is safe; read the journal, then start the unit"
   | .controllerMechanism => "the controller's sandbox or program failed before the controller ran (stderr names the raw code): fix the mechanism, then start the unit"
   | .layoutMissing => "a directory the World's layout requires is absent (stderr names it, e.g. /srv/nd-hosted/worlds/LABEL/store): make it as nd-hosted 0700 (RUNBOOK §2b), then start the unit"
+  | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
 
 /-- The codes the grain-launch unit must not restart: both launch tables' fatal classes. -/
 def launchPreventCodes : List Nat := ControllerExit.codesOf .fatal ++ LaunchExit.codesOf .fatal

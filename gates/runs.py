@@ -330,6 +330,26 @@ def summary(out: str) -> tuple[int, int] | None:
     return (sum(int(p) for p, _ in rs), sum(int(f) for _, f in rs)) if rs else None
 
 
+def run_group(argv: list[str], cwd: str, env: dict) -> subprocess.CompletedProcess:
+    """Run `argv` as the leader of a process group of its own; past DEADLINE the WHOLE group is
+    killed (SIGKILL), not only the direct child (CLIENT-38, A19: the child is cargo or strace, and a
+    kill of it alone left the test binary and every supervisor under it alive: the 336 of 10-23).
+    A process that left the group (bwrap's --new-session) is our binaries' parent-death link's
+    to end. Raises subprocess.TimeoutExpired as subprocess.run does, with what was printed."""
+    with subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, start_new_session=True) as p:
+        try:
+            out, err = p.communicate(timeout=DEADLINE)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, 9)
+            except ProcessLookupError:
+                pass
+            out, err = p.communicate()
+            raise subprocess.TimeoutExpired(argv, DEADLINE, output=out, stderr=err)
+        return subprocess.CompletedProcess(argv, p.returncode, out, err)
+
+
 def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bindir: str,
         drives: list[str] = (), sets: list | None = None) -> tuple[str, str]:
     """One run: (its output, its verdict). `bindir` is where the Lean exes are taken from (a cargo
@@ -375,7 +395,7 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
             pass
         argv = readset.wrap(TRACING["strace"], argv, tr)
     try:
-        r = subprocess.run(argv, cwd=t.root, capture_output=True, text=True, timeout=DEADLINE, env=env)
+        r = run_group(argv, t.root, env)
         out = r.stdout + r.stderr
         if exe.startswith(CARGO):
             failed = re.findall(r"(?m)^---- (\S+) stdout ----", out)

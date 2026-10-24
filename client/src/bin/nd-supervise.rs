@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use nanodregg_client::generated::supervisor_exit as exit;
 use nanodregg_client::mux::{self, MuxEnd};
 use nanodregg_client::{sockets, table};
-use nanodregg_sandbox::{Policy, command};
+use nanodregg_sandbox::{Policy, command, say_line};
 use signal_hook::consts::SIGTERM;
 use signal_hook::iterator::Signals;
 use signal_hook::low_level::emulate_default_handler;
@@ -84,13 +84,15 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("{e}");
+            say_line(&e);
             ExitCode::from(exit::REFUSED_AT_LAUNCH)
         }
     }
 }
 
 fn run() -> Result<ExitCode, String> {
+    // A parent that dies unstopped sends SIGTERM, answered below as a unit stop (CLIENT-38).
+    nanodregg_sandbox::die_with_parent().map_err(|e| format!("nd-supervise: parentDeath: {e}"))?;
     let a = parse(std::env::args_os().skip(1))?;
     // Law 4: every fd the mux may hold is one the kernel will give (CLIENT-28).
     let need = table::MUX.fds_max();
@@ -126,7 +128,7 @@ fn run() -> Result<ExitCode, String> {
     std::thread::spawn(move || {
         if term.forever().next().is_some() {
             said.store(true, Ordering::SeqCst);
-            eprintln!("nd-supervise: SIGTERM: stopping the child");
+            say_line("nd-supervise: SIGTERM: stopping the child");
             // serving: the child's stdout closes, `serve` names every close; past it: the default
             match held.try_lock() {
                 Ok(mut c) => drop(c.kill()),
@@ -140,12 +142,14 @@ fn run() -> Result<ExitCode, String> {
     if let MuxEnd::ChildMalformed(ref e) = end {
         // A child that writes unroutable frames is broken; stop it (we hold its handle).
         let _ = child.kill();
-        eprintln!("nd-supervise: child wrote an unroutable frame: {e}");
+        say_line(&format!(
+            "nd-supervise: child wrote an unroutable frame: {e}"
+        ));
     }
     let status = child
         .wait()
         .map_err(|e| format!("nd-supervise: wait: {e}"))?;
-    eprintln!("nd-supervise: {end:?}; child {status}");
+    say_line(&format!("nd-supervise: {end:?}; child {status}"));
     if termed.load(Ordering::SeqCst) {
         // stopped by SIGTERM: end as it would have ended us, the service manager's clean stop
         let _ = emulate_default_handler(SIGTERM);

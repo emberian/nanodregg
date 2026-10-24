@@ -242,7 +242,7 @@ fn accept<I: Write + Send + 'static>(
             Err(e) => {
                 // No peer to name it to: counted, and paced so a lasting error cannot spin.
                 failed += 1;
-                eprintln!("mux: accept failed ({failed} so far): {e}");
+                nanodregg_sandbox::say("mux", &format!("accept failed ({failed} so far): {e}"));
                 thread::sleep(limits.reply_write);
                 continue;
             }

@@ -105,24 +105,28 @@ inductive LaunchExit where
   the controller (Lean's launches never do: `Proofs.reconcile_launch_named`), and another grain's
   socket is another grain's identity (HOSTING-25) -/
   | foreignPath
+  /-- the parent-death link could not be set (`nanodregg_sandbox::die_with_parent`, CLIENT-38): a
+  process of ours that would outlive the parent that spawned it does not start -/
+  | parentDeath
   deriving DecidableEq, Repr
 
 namespace LaunchExit
 
 def all : List LaunchExit :=
   [usage, rootsOverlap, controllerRefused, frame, badAction, badGrain, duplicateLaunch, reportPipe,
-   pidFile, lifetime, controllerSignaled, controllerLost, controllerMechanism, layoutMissing, foreignPath]
+   pidFile, lifetime, controllerSignaled, controllerLost, controllerMechanism, layoutMissing, foreignPath,
+   parentDeath]
 
 def code : LaunchExit → Nat
   | usage => 116 | rootsOverlap => 117 | controllerRefused => 118 | frame => 119 | badAction => 120
   | badGrain => 121 | duplicateLaunch => 122 | reportPipe => 123 | pidFile => 124 | lifetime => 125
   | controllerSignaled => 126 | controllerLost => 127 | controllerMechanism => 67 | layoutMissing => 68
-  | foreignPath => 69
+  | foreignPath => 69 | parentDeath => 63
 
 def cls : LaunchExit → ExitClass
   | reportPipe | lifetime | controllerSignaled => .restart
   | usage | rootsOverlap | controllerRefused | frame | badAction | badGrain | duplicateLaunch | pidFile
-  | controllerLost | controllerMechanism | layoutMissing | foreignPath => .fatal
+  | controllerLost | controllerMechanism | layoutMissing | foreignPath | parentDeath => .fatal
 
 /-- The name printed on stderr (`grain-launch: NAME …`). -/
 def name (e : LaunchExit) : String := ((toString (repr e)).splitOn ".").getLast!

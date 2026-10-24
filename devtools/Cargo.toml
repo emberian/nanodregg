@@ -9,6 +9,7 @@ description = "Test harness shared by the workspace's integration tests: where t
 path = "src/lib.rs"
 
 [dependencies]
+rustix = { version = "=1.1.2", default-features = false, features = ["std", "process"] }
 
 [lints.rust]
 unsafe_code = "forbid"

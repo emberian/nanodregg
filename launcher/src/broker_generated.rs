@@ -631,9 +631,10 @@ pub mod keybroker_exit {
     pub const DECIDER_LOST: u8 = 104;
     pub const SOCK_DIR: u8 = 105;
     pub const DECIDER_MECHANISM: u8 = 79;
+    pub const PARENT_DEATH: u8 = 149;
     pub const ALL: &[u8] = &[
         80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 140, 141, 142, 143,
-        144, 145, 146, 147, 148, 98, 99, 100, 103, 102, 104, 105, 79,
+        144, 145, 146, 147, 148, 98, 99, 100, 103, 102, 104, 105, 79, 149,
     ];
 }
 
@@ -665,5 +666,8 @@ pub mod members_exit {
     pub const DECIDER_MECHANISM: u8 = 159;
     pub const STATE_ROOT: u8 = 160;
     pub const ROOTS_OVERLAP: u8 = 161;
-    pub const ALL: &[u8] = &[150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161];
+    pub const PARENT_DEATH: u8 = 162;
+    pub const ALL: &[u8] = &[
+        150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162,
+    ];
 }

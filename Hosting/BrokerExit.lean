@@ -119,6 +119,9 @@ inductive KeybrokerExit where
   its own end (bwrap failed to set up the sandbox, the program or a library is missing), so a
   restart meets the same mechanism (HOSTING-23; burst5's AF_NETLINK) -/
   | deciderMechanism
+  /-- the parent-death link could not be set (`nanodregg_sandbox::die_with_parent`, CLIENT-38): a
+  process of ours that would outlive the parent that spawned it does not start -/
+  | parentDeath
   deriving DecidableEq, Repr
 
 namespace KeybrokerExit
@@ -128,7 +131,7 @@ def all : List KeybrokerExit :=
    keyFileIo, keyFileFormat, anchorsLink, anchorsNotRegular, anchorsOwner, anchorsMode, anchorsLength,
    anchorsDir, anchorsMissing, anchorsIo, anchorsMalformed, pinsLink, pinsNotRegular, pinsOwner, pinsMode,
    pinsLength, pinsDir, pinsMissing, pinsIo, pinsMalformed, tlsConfig, socket, deciderRefused, pidFile,
-   deciderSignaled, deciderLost, sockDir, deciderMechanism]
+   deciderSignaled, deciderLost, sockDir, deciderMechanism, parentDeath]
 
 def code : KeybrokerExit → Nat
   | usage => 80 | keyFileLink => 81 | keyFileNotRegular => 82 | keyFileOwner => 83 | keyFileMode => 84
@@ -138,7 +141,7 @@ def code : KeybrokerExit → Nat
   | anchorsMalformed => 97 | tlsConfig => 98 | socket => 99 | deciderRefused => 100 | pidFile => 103
   | deciderSignaled => 102 | deciderLost => 104 | sockDir => 105 | deciderMechanism => 79
   | pinsLink => 140 | pinsNotRegular => 141 | pinsOwner => 142 | pinsMode => 143 | pinsLength => 144
-  | pinsDir => 145 | pinsMissing => 146 | pinsIo => 147 | pinsMalformed => 148
+  | pinsDir => 145 | pinsMissing => 146 | pinsIo => 147 | pinsMalformed => 148 | parentDeath => 149
 
 /-- Every own end but a signalled decider is fatal: each is a file, an argument or the build, and
 a restart reads the same one. -/
@@ -188,18 +191,21 @@ inductive MembersExit where
   child's write set must never reach a follower Store; `Proofs.Plan.roots_disjoint` for the
   deployed roots) -/
   | rootsOverlap
+  /-- the parent-death link could not be set (`nanodregg_sandbox::die_with_parent`, CLIENT-38): a
+  process of ours that would outlive the parent that spawned it does not start -/
+  | parentDeath
   deriving DecidableEq, Repr
 
 namespace MembersExit
 
 def all : List MembersExit :=
   [usage, memberRoot, membersRoot, followRoot, fdLimit, deciderRefused, pidFile, deciderSignaled,
-   deciderLost, deciderMechanism, stateRoot, rootsOverlap]
+   deciderLost, deciderMechanism, stateRoot, rootsOverlap, parentDeath]
 
 def code : MembersExit → Nat
   | usage => 150 | memberRoot => 151 | membersRoot => 152 | followRoot => 153 | fdLimit => 154
   | deciderRefused => 155 | pidFile => 156 | deciderSignaled => 157 | deciderLost => 158
-  | deciderMechanism => 159 | stateRoot => 160 | rootsOverlap => 161
+  | deciderMechanism => 159 | stateRoot => 160 | rootsOverlap => 161 | parentDeath => 162
 
 /-- Every own end but a signalled decider is fatal: each is a root, an argument, a limit or the
 build, and a restart reads the same one. -/

@@ -26,7 +26,7 @@ fn main() -> ExitCode {
     match go() {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
-            eprintln!("nd: {e}");
+            nanodregg_sandbox::say("nd", &e);
             // nd's own failure is its own class, never follow's `uncertain` (PROTOCOL-7).
             ExitCode::from(nanodregg_client::generated::command_exit::CLIENT)
         }
