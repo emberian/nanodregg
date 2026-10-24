@@ -51,6 +51,13 @@ fits one frame (`Proofs.Broker.residents_encode`). A World holding more ends the
 `residentsPastBound` by name, never a silent truncation. -/
 def residentsMax : Nat := 1024
 
+/-- How long keybroker and nd-members wait for one decider answer, from the first byte of the
+question to the last byte of the verdict (one deadline per answer, never per read: CLIENT-39, A18). A
+decider past it is LOST: it is never asked again (a late or half-read answer would desync the pipe),
+and its consumer ends `deciderLost` by name. A backstop, as `Protocol.Bounds.replyMsMax` is: above
+THE BAR's 60 s cold reopen, since a decider's first answer may follow its own Store open. -/
+def answerMsMax : Nat := 120000
+
 end Bounds
 
 /-- Why the broker refuses an ask, by name (law 7). `Broker.decide` refuses every case but keybroker's

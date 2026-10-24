@@ -6,7 +6,7 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 
-use crate::frame::{self, FrameError};
+use crate::frame::{self, Deadline, FrameError};
 use crate::generated::{self as g, layout};
 use crate::run::{Follow, Host, Outcome};
 use std::time::Duration;
@@ -25,43 +25,39 @@ fn malformed(what: &str, r: layout::Refusal) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("{what}: {r:?}"))
 }
 
-/// One request, one reply, each bounded by `replyMsMax`; past it the error is `timeout` by name
-/// (the step loop then treats a frozen call as lost: uncertain, settled by lookup).
-fn exchange(s: &mut UnixStream, op: u8, payload: &[u8]) -> io::Result<(u8, Vec<u8>)> {
+/// One request and its reply within ONE `reply` (`replyMsMax`) from the first byte sent to the last
+/// byte read, however the peer trickles (CLIENT-39); past it the error is `timeout` by name (the
+/// step loop then treats a frozen call as lost: uncertain, settled by lookup).
+fn exchange(s: &UnixStream, reply: Duration, op: u8, payload: &[u8]) -> io::Result<(u8, Vec<u8>)> {
     let timeout = |e: io::Error| match e.kind() {
         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
             io::Error::new(io::ErrorKind::TimedOut, "timeout (replyMsMax)")
         }
         _ => e,
     };
-    frame::write(s, LIMITS, op, payload)
+    let mut d = Deadline::within(s, reply);
+    frame::write(&mut d, LIMITS, op, payload)
         .map_err(io_err)
         .map_err(timeout)?;
-    let f = frame::read(s, LIMITS).map_err(io_err).map_err(timeout)?;
+    let f = frame::read(&mut d, LIMITS)
+        .map_err(io_err)
+        .map_err(timeout)?;
     Ok((f.op, f.payload))
 }
 
-/// Connect, with both directions bounded by `reply` (nd passes `table::REPLY`, replyMsMax).
-fn connect(path: &Path, reply: Duration) -> io::Result<UnixStream> {
-    let s = UnixStream::connect(path)?;
-    s.set_read_timeout(Some(reply))?;
-    s.set_write_timeout(Some(reply))?;
-    Ok(s)
-}
+/// `follow.sock`; each exchange bounded by its `Duration` (nd passes `table::REPLY`).
+pub struct FollowSocket(UnixStream, Duration);
 
-/// `follow.sock`.
-pub struct FollowSocket(UnixStream);
-
-/// `host.sock`.
-pub struct HostSocket(UnixStream);
+/// `host.sock`; each exchange bounded by its `Duration`.
+pub struct HostSocket(UnixStream, Duration);
 
 impl FollowSocket {
     /// Connect; each reply is waited for at most `reply`.
     pub fn connect(path: &Path, reply: Duration) -> io::Result<Self> {
-        connect(path, reply).map(Self)
+        Ok(Self(UnixStream::connect(path)?, reply))
     }
     fn ask(&mut self, (op, payload): (u8, Vec<u8>)) -> io::Result<Step> {
-        let (status, reply) = exchange(&mut self.0, op, &payload)?;
+        let (status, reply) = exchange(&self.0, self.1, op, &payload)?;
         step(status, &reply)
     }
 }
@@ -123,13 +119,13 @@ impl Follow for FollowSocket {
 impl HostSocket {
     /// Connect; each reply is waited for at most `reply`.
     pub fn connect(path: &Path, reply: Duration) -> io::Result<Self> {
-        connect(path, reply).map(Self)
+        Ok(Self(UnixStream::connect(path)?, reply))
     }
 }
 
 impl Host for HostSocket {
     fn exchange(&mut self, op: u8, payload: &[u8]) -> io::Result<(u8, Vec<u8>)> {
-        exchange(&mut self.0, op, payload)
+        exchange(&self.0, self.1, op, payload)
     }
 }
 

@@ -1022,3 +1022,76 @@ fn a_bad_pins_file_stops_keybroker_by_name() {
         );
     }
 }
+
+/// CLIENT-39 (A18): a decider that is alive and silent, or that writes half a verdict and stalls, is
+/// LOST within the answer bound, by name, never a hang (keybroker held its decider lock across the
+/// read with no deadline: every resident's ask behind it waited for good). Lost is for good: the next
+/// question is not asked. CONTROL: a decider that answers is read.
+#[test]
+fn a_silent_or_stalled_decider_is_lost_within_the_answer_bound() {
+    use nanodregg_launcher::broker_generated::wire::Verdict;
+    use nanodregg_launcher::broker_generated::write_frame;
+    use nanodregg_launcher::residents::{Decider, ask};
+    use std::process::Command;
+    let d = dir("lost");
+    let mut answer = Vec::new();
+    let names = vec![b"ab".to_vec()];
+    write_frame(
+        &mut answer,
+        &Verdict::Residents {
+            names: names.clone(),
+        }
+        .encode()
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(d.join("answer"), &answer).unwrap();
+    let half = d.join("half");
+    fs::write(&half, &answer[..answer.len() - 1]).unwrap();
+    let silent = "sleep 30".to_string();
+    let stalled = format!("cat {}; sleep 30", half.display());
+    let answers = format!("cat {}; sleep 30", d.join("answer").display());
+    for (what, script, want) in [
+        ("silent", silent, None),
+        ("stalled", stalled, None),
+        ("answers", answers, Some(names.clone())),
+    ] {
+        let mut c = Command::new("/bin/sh")
+            .args(["-c", &script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut dec = Decider::new(
+            c.stdin.take().unwrap(),
+            c.stdout.take().unwrap(),
+            Duration::from_millis(300),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            let first = ask(&mut dec, 0);
+            let lost = dec.lost();
+            let again = Instant::now();
+            let second = ask(&mut dec, 0);
+            let _ = tx.send((first, lost, second, again.elapsed()));
+        });
+        let got = rx.recv_timeout(Duration::from_secs(5));
+        let _ = c.kill();
+        let _ = c.wait();
+        let (first, lost, second, quick) = got.unwrap_or_else(|_| panic!("{what}: HANG past 5 s"));
+        assert_eq!(first, want, "{what}");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{what}: {:?}",
+            started.elapsed()
+        );
+        if want.is_none() {
+            assert!(lost && second.is_none(), "{what}: lost for good");
+            assert!(
+                quick < Duration::from_millis(100),
+                "{what}: a lost decider is not asked again"
+            );
+        }
+    }
+}

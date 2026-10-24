@@ -167,11 +167,9 @@ fn close_frame(r: CloseReason) -> Vec<u8> {
     b
 }
 
-/// Write `bytes` within `limit`, then flush.
-fn write_within(mut w: &UnixStream, limit: Duration, bytes: &[u8]) -> io::Result<()> {
-    w.set_write_timeout(Some(limit))?;
-    w.write_all(bytes)?;
-    w.flush()
+/// Write `bytes` within `limit` in all, however slowly the peer reads (CLIENT-39).
+fn write_within(w: &UnixStream, limit: Duration, bytes: &[u8]) -> io::Result<()> {
+    frame::Deadline::within(w, limit).write_all(bytes)
 }
 
 /// Run the mux until the child closes. `child_in`/`child_out` are the child's stdin and stdout.
@@ -334,23 +332,6 @@ fn write_loop<I>(id: u32, rx: &Receiver<Out>, c: &Conn, sh: &Shared<I>, limits: 
     }
 }
 
-/// A reader that fails `TimedOut` once `until` has passed, however the bytes trickle in.
-struct Deadline<'a> {
-    s: &'a UnixStream,
-    until: Instant,
-}
-
-impl Read for Deadline<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let left = self.until.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err(ErrorKind::TimedOut.into());
-        }
-        self.s.set_read_timeout(Some(left))?;
-        self.s.read(buf)
-    }
-}
-
 fn timed_out(e: &io::Error) -> bool {
     matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
 }
@@ -386,10 +367,7 @@ fn forward<I: Write>(id: u32, c: &Conn, sh: &Shared<I>, limits: MuxLimits) -> Op
             Err(_) => return None,
         }
         let started = Instant::now();
-        let mut rest = Deadline {
-            s,
-            until: started + limits.frame_deadline,
-        };
+        let mut rest = frame::Deadline::until(s, started + limits.frame_deadline);
         let f = match frame::read(&mut (&first[..]).chain(&mut rest), limits.frame) {
             Ok(f) => f,
             Err(FrameError::Io(e)) if timed_out(&e) => return Some(CloseReason::FrameStalled),

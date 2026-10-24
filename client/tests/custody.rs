@@ -402,3 +402,31 @@ fn an_armed_rotation_signs_read_envelopes_with_its_incoming_key_only() {
     );
     done(&ws);
 }
+
+/// CLIENT-39 (A18): `rotation` is created whole or not at all. A crash inside `arm` leaves only
+/// fsx's residue `.rotation.tmp` (written before the name exists), never a short `rotation`: so the
+/// workspace reads as NOT armed and the next `arm` succeeds (an empty `rotation`, the old in-place
+/// write's crash state, refused every later command `custody: …rotation: Length(0)`). A short
+/// `rotation` made by anything else still refuses by name.
+#[test]
+fn a_crash_inside_arm_leaves_the_workspace_unarmed() {
+    let (ws, h) = scratch("arm-crash");
+    Custody::create_separate(&ws, &h).unwrap();
+    let c = Custody::open(&ws, Some(h.clone())).unwrap();
+    c.precommit().unwrap();
+    let (_, r) = c.sign_next(b"rotate").unwrap();
+    fs::write(ws.join(".rotation.tmp"), [9u8; 20]).unwrap();
+    assert_eq!(c.armed().unwrap(), None, "residue is not a rotation");
+    c.arm(3, &r).unwrap();
+    assert_eq!(c.armed().unwrap(), Some((3, r)));
+    assert!(!ws.join(".rotation.tmp").exists(), "the residue is gone");
+    fs::remove_file(ws.join("rotation")).unwrap();
+    fs::write(ws.join("rotation"), []).unwrap();
+    fs::set_permissions(ws.join("rotation"), fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(
+        matches!(c.armed(), Err(CustodyError::File(_, Refused::Length(0)))),
+        "a short rotation from outside fsx refuses by name: {:?}",
+        c.armed()
+    );
+    done(&ws);
+}

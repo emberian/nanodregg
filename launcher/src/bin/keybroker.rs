@@ -44,10 +44,10 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, ChildStdout, ExitCode, Stdio};
+use std::process::{ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal, Request, Verdict};
 use nanodregg_launcher::broker_generated::{FRAME_MAX, keybroker_exit, read_frame, write_frame};
@@ -67,7 +67,8 @@ const KEYFILE_MAX: usize = 65536;
 const ANCHORS_MAX: usize = 1 << 20;
 /// The largest pin file read.
 const PINS_MAX: usize = 1 << 16;
-/// How long one upstream call may take, connect to last byte.
+/// How long one upstream call may take, connect to last byte: one deadline over the whole call
+/// (`frame::Deadline`, CLIENT-39), never per read.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a resident's connection may sit idle between asks.
 const RESIDENT_IDLE: Duration = Duration::from_secs(60);
@@ -301,7 +302,7 @@ fn now_ms() -> u64 {
 }
 
 struct Shared {
-    decider: Mutex<(ChildStdin, ChildStdout)>,
+    decider: Mutex<residents::Decider>,
     keys: Keys,
     pins: Pins,
     upstream: String,
@@ -417,7 +418,7 @@ fn run() -> End {
         return End::DeciderRefused("pipes".into());
     };
     let shared = Arc::new(Shared {
-        decider: Mutex::new((din, dout)),
+        decider: Mutex::new(residents::Decider::new(din, dout, residents::ANSWER)),
         keys,
         pins,
         upstream,
@@ -542,9 +543,7 @@ struct Served {
 
 /// The residents the decider answers, or `None` when it cannot be reached or answers anything else.
 fn residents(sh: &Shared) -> Option<Vec<Vec<u8>>> {
-    let mut d = sh.decider.lock().ok()?;
-    let (din, dout) = &mut *d;
-    residents::ask(din, dout, now_ms())
+    residents::ask(&mut *sh.decider.lock().ok()?, now_ms())
 }
 
 /// Serve exactly `names`: bind a socket for each name not yet served (HOSTING-17's checks first),
@@ -673,14 +672,7 @@ fn ask_once(sh: &Shared, resident: &[u8], ask: &[u8]) -> Option<Answer> {
     }
     .encode()
     .ok()?;
-    let verdict = {
-        let mut d = sh.decider.lock().ok()?;
-        let (din, dout) = &mut *d;
-        write_frame(din, &req).ok()?;
-        write_frame(din, ask).ok()?;
-        din.flush().ok()?;
-        Verdict::decode(&read_frame(dout).ok()?).ok()?
-    };
+    let verdict = sh.decider.lock().ok()?.exchange(&[&req, ask])?;
     Some(match verdict {
         Verdict::Refuse { broker_refusal } => refused(broker_refusal),
         // a residents answer to a decide is the decider out of turn: the connection closes
@@ -728,13 +720,7 @@ fn reply(sh: &Shared, status: u32, body: &[u8], key: &[u8]) -> Option<Answer> {
     }
     .encode()
     .ok()?;
-    let verdict = {
-        let mut d = sh.decider.lock().ok()?;
-        let (din, dout) = &mut *d;
-        write_frame(din, &req).ok()?;
-        din.flush().ok()?;
-        Verdict::decode(&read_frame(dout).ok()?).ok()?
-    };
+    let verdict = sh.decider.lock().ok()?.exchange(&[&req])?;
     Some(match verdict {
         Verdict::Reply { text } if contains(&text, key) => refused(BrokerRefusal::KeyEchoed),
         Verdict::Reply { text } => Answer::Reply { text },
@@ -796,13 +782,12 @@ fn call(sh: &Shared, r: &Call<'_>, key: &[u8]) -> Result<Vec<u8>, BrokerRefusal>
         .map_err(failed)?
         .next()
         .ok_or(BrokerRefusal::UpstreamFailed)?;
-    let mut t = TcpStream::connect_timeout(&addr, UPSTREAM_TIMEOUT).map_err(failed)?;
-    t.set_read_timeout(Some(UPSTREAM_TIMEOUT)).map_err(failed)?;
-    t.set_write_timeout(Some(UPSTREAM_TIMEOUT))
-        .map_err(failed)?;
+    let until = Instant::now() + UPSTREAM_TIMEOUT;
+    let t = TcpStream::connect_timeout(&addr, UPSTREAM_TIMEOUT).map_err(failed)?;
+    let mut io = nanodregg_client::frame::Deadline::until(&t, until);
     let mut conn = ClientConnection::new(Arc::clone(&sh.tls), name).map_err(|e| tls_refusal(&e))?;
     while conn.is_handshaking() {
-        conn.complete_io(&mut t).map_err(|e| io_refusal(&e))?;
+        conn.complete_io(&mut io).map_err(|e| io_refusal(&e))?;
     }
     // the verified leaf's key must be one the operator pinned for Lean's host (HOSTING-28)
     let pinned = sh.pins.get(r.host).map(Vec::as_slice).unwrap_or(&[]);
@@ -810,7 +795,7 @@ fn call(sh: &Shared, r: &Call<'_>, key: &[u8]) -> Result<Vec<u8>, BrokerRefusal>
         Some(p) if pinned.contains(&p) => {}
         _ => return Err(BrokerRefusal::PinMismatch),
     }
-    let mut s = StreamOwned::new(conn, t);
+    let mut s = StreamOwned::new(conn, io);
     let mut req = Zeroizing::new(Vec::with_capacity(r.body.len() + 512));
     req.extend_from_slice(b"POST ");
     req.extend_from_slice(r.target);

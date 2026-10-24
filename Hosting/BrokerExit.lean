@@ -113,7 +113,8 @@ inductive KeybrokerExit where
   | pidFile
   /-- the decider was killed by a signal (the OOM killer, an operator): transient by assumption -/
   | deciderSignaled
-  /-- keybroker could not read its decider's end (`wait` failed): nothing says a restart is safe -/
+  /-- keybroker could not read its decider's end (`wait` failed), or the decider gave no answer within
+  `Broker.Bounds.answerMsMax` and did not end (CLIENT-39): nothing says a restart is safe -/
   | deciderLost
   /-- the decider's process ended with a code `DeciderExit` does not name: the decider never ran
   its own end (bwrap failed to set up the sandbox, the program or a library is missing), so a

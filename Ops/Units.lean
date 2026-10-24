@@ -399,7 +399,7 @@ def keybrokerAction : KeybrokerExit → String
   | .deciderRefused => "the sandbox refused the decider's policy or could not spawn it: check the mechanism (deploy/live/README.md) and the DECIDER path"
   | .pidFile => "the decider's PID file could not be written: check the runtime directory"
   | .deciderSignaled => "automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit"
-  | .deciderLost => "keybroker could not read its decider's end: nothing says a restart is safe; read the journal, then start the unit"
+  | .deciderLost => "keybroker could not read its decider's end, or the decider gave no answer within ANSWER_MS_MAX (120 s) and did not end: nothing says a restart is safe; read the journal, then start the unit"
   | .deciderMechanism => "the decider's sandbox or program failed before the decider ran (stderr names the raw code: bwrap, a missing library, the unit's RestrictAddressFamilies — it needs AF_NETLINK): fix the mechanism (deploy/live/README.md), then start the unit"
   | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
 

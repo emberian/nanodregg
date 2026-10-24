@@ -449,3 +449,55 @@ fn a_receipt_reads_only_as_three_lines_with_a_named_verdict() {
         );
     }
 }
+
+/// CLIENT-39 (A18): a writer killed (SIGKILL) at any instant of `freeze` leaves each attempt's `call`
+/// absent or WHOLE. A child of this test freezes 4 MiB calls in a loop and is killed after a random
+/// few milliseconds, twenty times; every `call` present has all its bytes. Written in place (the old
+/// `create_once`), a kill inside the write leaves a short `call` that reloads as a different call.
+#[test]
+fn a_killed_freeze_leaves_its_call_absent_or_whole() {
+    const BIG: usize = 4 << 20;
+    let at = scratch("killed-freeze");
+    fs::create_dir(&at).unwrap();
+    let mut short = Vec::new();
+    for round in 0..20u64 {
+        let dir = at.join(round.to_string());
+        fs::create_dir(&dir).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "freeze_forever", "--ignored", "--nocapture"])
+            .env("ND_FREEZE_AT", &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        // past the test harness's start, into the loop: a few ms, varied by round
+        std::thread::sleep(std::time::Duration::from_millis(40 + (round * 7) % 23));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        for e in fs::read_dir(&dir).unwrap() {
+            let call = e.unwrap().path().join("call");
+            if let Ok(m) = fs::metadata(&call)
+                && m.len() as usize != BIG
+            {
+                short.push((call, m.len()));
+            }
+        }
+    }
+    done(&at);
+    assert!(short.is_empty(), "short calls after a kill: {short:?}");
+}
+
+/// The writer `a_killed_freeze_leaves_its_call_absent_or_whole` kills (only as its child).
+#[test]
+#[ignore = "run only as a_killed_freeze_leaves_its_call_absent_or_whole's child"]
+fn freeze_forever() {
+    let Some(at) = std::env::var_os("ND_FREEZE_AT") else {
+        return;
+    };
+    let at = std::path::PathBuf::from(at);
+    let big = vec![7u8; 4 << 20];
+    // until this test's parent kills it (bounded by u64, never reached)
+    for n in 0..u64::MAX {
+        let _ = Attempt::freeze(&at.join(n.to_string()), &big, b"ARGV", b"K");
+    }
+}

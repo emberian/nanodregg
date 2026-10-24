@@ -374,6 +374,9 @@ fn scan(dir: &Path) -> Result<(u32, bool), AttemptError> {
     for entry in fs::read_dir(dir)? {
         let name = entry?.file_name();
         let name = name.to_str().ok_or(AttemptError::Inconsistent)?;
+        if fsx::is_residue(name) {
+            continue;
+        }
         if let Some(n) = name.strip_prefix(SENT_PREFIX) {
             seen.push(n.parse::<u32>().map_err(|_| AttemptError::Inconsistent)?);
         } else if name == SETTLED {

@@ -1169,3 +1169,73 @@ E5 had just given range rows its `receipt` column (`receiptRow`, `receiptSeen`).
 **Flag day.** Three exit codes are added to the emitted tables and the rendered units (re-emitted: `launcher/src/generated.rs`, `launcher/src/broker_generated.rs`, `deploy/units/`). No wire, no Store.
 
 **Status.** landed (this commit).
+
+## CLIENT-38 · every process of ours dies with the parent that spawned it; the runner kills a timed-out row's whole process group; a dead stderr no longer stops nd-supervise's SIGTERM (2026-10-24, FIX-RUST; readers/COLLATION-20261024 A19, READ-RUST F2; closes cv 01a16b44)
+
+**The defect (READ at f9657bd).** cv 01a16b44's 328/336 leaked processes (nd-supervise, host, keybroker, nd-members, hosting-broker, nd-bwrap, 4–5 days old). Teardown is `Drop` only, and `Drop` runs only if the test process unwinds. `gates/runs.py` ran each row with `subprocess.run(…, timeout=600)`, which SIGKILLs its DIRECT child only: cargo, or `strace -f` without `--kill-on-exit` (whose tracees are then detached, not killed). The test binary under it lived on, then died without unwinding, and every unconfined process it had started (nd-supervise, nd-members, keybroker, grain-launch) was orphaned with its confined child alive. No binary of ours had a parent-death link. CLIENT-29 said there was "no safe way, without `unsafe`" to give one. That was false: rustix 1.1.2, already a dependency, has the safe `set_parent_process_death_signal`.
+
+**Measured.**
+- The old runner's call (`subprocess.run(sh -c 'sleep & sleep', timeout=2)`): the grandchild is alive after the timeout. With `run_group`: it is gone.
+- A second defect found by the plant, not by the reader. With every binary linked, the held tree below still left four nd-supervise alive, with their children, under one plant. Reproduced alone (`fixrust-scratch/pd/epipe.py`): an nd-supervise whose stderr pipe has no reader does NOT stop on SIGTERM. Its SIGTERM thread's first act was `eprintln!`, which panics on EPIPE (Rust ignores SIGPIPE), so the thread died before `kill()` of the child. A supervisor under a dead nd-members has exactly that stderr. CLIENT-30's SIGTERM path depended on the stderr reader being alive.
+
+**Decision.**
+- `nanodregg_sandbox::die_with_parent()` (a platform fact, law 2). Linux: `PR_SET_PDEATHSIG = SIGTERM`, plus a `getppid` compare across the call for a parent that died in between. macOS: no such signal exists, so a thread compares `getppid` every `ORPHAN_POLL` (200 ms) and raises the same SIGTERM. The signal is SIGTERM because it is the stop a service manager sends: nd-supervise answers it by naming every close (CLIENT-30), and the other binaries take it as their default end. Their confined children follow (`--die-with-parent`). It is the first act of nd-supervise, nd-members, keybroker and grain-launch.
+- `nd` is not linked. It is a member's CLI, and a parent-death signal would kill `nohup nd …` when its shell exits. As a stdio child it is confined (`--die-with-parent`). `probe` is a test grain, already confined.
+- A failure to set the link is an end by name in each emitted table: `parentDeath` = keybroker 149, nd-members 162, grain-launch 63 (fatal; `Hosting/BrokerExit.lean`, `Hosting/LaunchExit.lean`; `codes_nodup` / `codes_disjoint` / `codes_reserved` re-decided). nd-supervise uses its `refusedAtLaunch` with the text `parentDeath: E`. The Ops unit actions are rendered; `RestartPreventExitStatus` gains the three codes.
+- `gates/runs.py run_group`: every row runs as the leader of its own process group (`start_new_session`); past DEADLINE the WHOLE group is killed. `gates/readset.py` traces with `--kill-on-exit` (and probes for it), so a killed strace takes its tracees.
+- `nanodregg_sandbox::say` / `say_line` is the ONE stderr line writer: one write, never a panic (was `nanodregg_launcher::say`, which is now a re-export). nd-supervise, the mux's accept loop and nd use it in place of `eprintln!`.
+
+**Plants** (`fixrust-scratch/plants2.log`, each RED under its mutation, GREEN restored).
+- `devtools/tests/orphan.rs a_supervisor_whose_parent_is_killed_ends_with_its_child`: nd-supervise under an `sh` killed by SIGKILL; it and its confined child are gone within 10 s. P1: no `die_with_parent` in nd-supervise → 4 processes outlive.
+- `devtools/tests/orphan.rs sigterm_stops_a_supervisor_whose_stderr_has_no_reader`. P2: the SIGTERM line by `eprintln!` → it does not end within 10 s.
+- `launcher/tests/members.rs a_killed_test_process_leaves_no_supervisor_behind`: the real leak's shape. A child test process (`hold_a_tree`) holds a World, nd-members with one resident, keybroker and grain-launch (24+ processes, every unconfined binary named), and is SIGKILLed. Nothing under it survives 15 s. P-nd-members, P-keybroker and P-grain-launch: each binary without the link → exactly its own subtree outlives.
+- The devtools helpers name each process by (pid, start time), and teardown stops survivors only by that pair, never by a pattern.
+
+**Critique.**
+- PDEATHSIG fires on the death of the spawning THREAD. Every spawner of ours keeps its children on the thread that owns them (main loops; libtest's test thread outlives its locals). A spawner that hands a child to a thread which ends early would see it SIGTERMed. MEASURED that a SIGKILLed parent's non-main-thread child does die.
+- Residual window: a parent that dies before the child's first `getppid` (inside exec and runtime start) is not caught. Closing it needs the spawner to pass its pid, or a `pre_exec` prctl (`unsafe`, forbidden). The window is microseconds; the runner's group kill covers the test case.
+- A process that left the runner's process group (bwrap's `--new-session`) is reached only through the parent-death chain, which is why both halves are needed.
+- macOS: the watch costs one wakeup per 200 ms per supervisor process.
+- The 328 already-leaked processes are not touched: no PID file names them. They are Ember's to stop by hand (cv 01a16b44's option (a)).
+
+**Meta-critique.** The reader's diagnosis (no parent-death link, the runner kills one process) was right and incomplete. The plant that holds a real tree found the EPIPE panic, which the reader could not see: a fix verified only against the `sh` toy (the first plant) would have shipped with nd-members' supervisors still leaking. The last plant is the leak's own shape, a SIGKILLed test process, and not a reconstruction of it.
+
+**Flag day.** Three exit codes are added to the emitted tables and the rendered units (re-emitted: `launcher/src/generated.rs`, `launcher/src/broker_generated.rs`, `deploy/units/`). No wire, no Store.
+
+**Status.** landed (this commit).
+
+## CLIENT-39 · one deadline per reply, never per read: every peer of ours (Host, follow, a decider, an upstream) is bounded by `frame::Deadline`; a late decider is lost for good; `create_once` leaves a file absent or whole (2026-10-24, FIX-RUST; readers/COLLATION-20261024 A18, READ-RUST F3, F4, F5, F20)
+
+**The defects (READ at f9657bd).**
+- `sockets.rs` bounded each `read()` by `replyMsMax` (`SO_RCVTIMEO`), not the reply. A Host or follow that sends one byte every 119 s held one frame (up to 262 144 bytes) for about a year, and behind it the resident's serial `nd --stdio`. The mux's reply writes had the same per-syscall shape (`write_within`).
+- keybroker and nd-members read their decider with no timeout at all. keybroker held the decider `Mutex` across the read, so a decider that was alive and silent (stuck, SIGSTOPped, half a frame written) wedged the tick and every resident's ask, and its `ENDING_TICKS` path never ran.
+- keybroker's `UPSTREAM_TIMEOUT` was documented "connect to last byte" and enforced per read.
+- `fsx::create_once` wrote in place, so a crash after the create and before the write left an empty `rotation`, and every later command refused (`custody: …rotation: Length(0)`).
+
+**Decision.**
+- `nanodregg_client::frame::Deadline`: reads and writes on any fd that fail `TimedOut` once one instant has passed. Each call polls for what is left. A write moves at most `PIPE_BUF` bytes, which a ready pipe or socket takes without blocking. ONE mechanism (law 1), used by:
+  - `sockets.rs`: one deadline over the request AND its reply (`replyMsMax`);
+  - the mux: the frame deadline (`frameMsMax`, its own `Deadline` deleted) and every reply write (`replyWriteMsMax`);
+  - keybroker's upstream call (connect to last byte, as documented);
+  - the decider pipes.
+- The decider bound is LEAN's: `Hosting.Broker.Bounds.answerMsMax` (120 000 ms, a backstop above THE BAR's 60 s cold reopen), emitted as `ANSWER_MS_MAX`.
+- `residents::Decider` is the one shape both consumers hold (CLIENT-29's "one consumer shape"). Every question is its frames written and one verdict read under one deadline. A decider that misses it, or sends bytes that do not decode, is LOST for good, because a late or half-read verdict would put the next answer out of step. Its consumer then ends by the decider's own end or `deciderLost`, as before. `KeybrokerExit.deciderLost`'s doc and its unit action now name the silent case.
+- `fsx::create_once` writes `.NAME.tmp`, syncs it, and gives it its name by a HARD LINK, which refuses an existing name as `O_EXCL` did, then syncs the directory. `replace` shares the staging. `.NAME.tmp` is fsx's crash residue: the next write removes it, and the attempt scan passes over it.
+
+**Plants** (`fixrust-scratch/plants3.log`, `plants3c.log`; each RED under its mutation).
+- `client/tests/sockets.rs a_trickling_peer_is_a_timeout_within_one_reply_bound`: a header and then one byte per 100 ms is `timeout` within the 1 s bound. P3a: per-read timeouts → HANG past 5 s.
+- `launcher/tests/broker.rs a_silent_or_stalled_decider_is_lost_within_the_answer_bound`: a silent decider and a half-frame decider are lost within 300 ms, and the next question is not asked. CONTROL: an answering one is read. P3c: no deadline on the read → HANG.
+- `client/tests/attempt.rs a_killed_freeze_leaves_its_call_absent_or_whole`: a child freezing 4 MiB calls is SIGKILLed twenty times; every `call` present is whole. P3b: the in-place write → short calls (red three runs of three).
+- `client/tests/custody.rs a_crash_inside_arm_leaves_the_workspace_unarmed`: the residue reads as not armed and the next `arm` succeeds. A short `rotation` made outside fsx still refuses by name.
+
+**Critique.**
+- The mux's reply-write bound has no plant of its own (it is the same `Deadline` the trickle plant reds). The keybroker upstream bound has none either: a trickling TLS upstream needs a test server, and the call goes through the same type.
+- `PIPE_BUF` chunking costs one poll per 4 096 bytes on Linux (512 on macOS): 64 polls for a full 262 144-byte frame.
+- The residents' own broker sockets (`RESIDENT_IDLE`, per read) are not changed. A resident is the client of its own grant, and the trust class is the member's, not a stranger's. If that changes, the same type applies.
+- The bound for one decider answer is a constant, not a theorem about the decider. The decider's loop is total (fuel), but no Lean statement says an answer takes at most 120 s: it is the consumer's patience, named.
+
+**Meta-critique.** The fix is ONE type, not three local timeouts, because the defect was one class (a per-syscall bound standing in for a per-reply one) found at four sites, and the mux already had the right shape privately. A future peer gets the bound by using the type, not by remembering it.
+
+**Flag day.** A new emitted constant (`ANSWER_MS_MAX`, `launcher/src/broker_generated.rs`) and one changed unit-action text (`deploy/units/EXITS.md`). No wire or Store format changes: `create_once`'s files are byte-identical, only the way they come to exist changed.
+
+**Status.** landed (this commit).

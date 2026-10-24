@@ -36,7 +36,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
+use std::process::{Child, Command, ExitCode, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -274,7 +274,8 @@ fn run() -> End {
         return End(format!("pidFile {e}"), exit::PID_FILE);
     }
     let (mut served, mut stopping) = (BTreeMap::new(), Vec::new());
-    let end = serve(&conf, &mut child, din, dout, &mut served, &mut stopping);
+    let mut d = residents::Decider::new(din, dout, residents::ANSWER);
+    let end = serve(&conf, &mut child, &mut d, &mut served, &mut stopping);
     for (n, p) in &mut served {
         p.stop(&conf, n, &mut stopping);
     }
@@ -323,8 +324,7 @@ fn reap(stopping: &mut Stopping, keep: usize) {
 fn serve(
     conf: &Conf,
     child: &mut Child,
-    mut din: ChildStdin,
-    mut dout: ChildStdout,
+    d: &mut residents::Decider,
     served: &mut BTreeMap<String, Pair>,
     stopping: &mut Stopping,
 ) -> End {
@@ -337,7 +337,7 @@ fn serve(
         if let Ok(Some(st)) = child.try_wait() {
             return decider(residents::decider_end(st));
         }
-        let Some(names) = residents::ask(&mut din, &mut dout, now_ms()) else {
+        let Some(names) = residents::ask(d, now_ms()) else {
             for _ in 0..ENDING_TICKS {
                 if let Ok(Some(st)) = child.try_wait() {
                     return decider(residents::decider_end(st));

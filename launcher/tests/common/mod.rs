@@ -75,6 +75,8 @@ pub fn dir(name: &str) -> Scratch {
         "bel" => 'l',
         // members.rs's held tree (CLIENT-38), in a process of its own
         "hold" => 'h',
+        // broker.rs's lost deciders (CLIENT-39)
+        "lost" => 'u',
         other => panic!("plant: dir({other}) has no socket-directory letter"),
     };
     let socks = short_dir(&letter.to_string());

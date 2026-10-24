@@ -1118,10 +1118,13 @@ fn the_residents_decider_answers_residents_and_refuses_a_decide() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let mut din = child.stdin.take().unwrap();
-    let mut dout = child.stdout.take().unwrap();
-    let mut names = nanodregg_launcher::residents::ask(&mut din, &mut dout, now_ms())
-        .expect("a residents answer");
+    let mut dec = nanodregg_launcher::residents::Decider::new(
+        child.stdin.take().unwrap(),
+        child.stdout.take().unwrap(),
+        nanodregg_launcher::residents::ANSWER,
+    );
+    let mut names =
+        nanodregg_launcher::residents::ask(&mut dec, now_ms()).expect("a residents answer");
     names.sort();
     let mut want = vec![w.r1.clone().into_bytes(), w.r2.clone().into_bytes()];
     want.sort();
@@ -1132,8 +1135,11 @@ fn the_residents_decider_answers_residents_and_refuses_a_decide() {
     }
     .encode()
     .unwrap();
-    write_frame(&mut din, &decide).unwrap();
-    drop(din);
+    assert!(
+        dec.exchange(&[&decide]).is_none(),
+        "no verdict answers a decide"
+    );
+    drop(dec);
     let o = child.wait_with_output().unwrap();
     assert_eq!(
         o.status.code(),

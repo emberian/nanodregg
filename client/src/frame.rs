@@ -3,9 +3,65 @@
 //!
 //! The bound is the codec table's `frameBytesMax`, passed in as [`Limits`]. A length past the
 //! bound is refused before any allocation; a stream that ends inside a frame is `Truncated`,
-//! never a short frame.
+//! never a short frame. Time is bounded per REPLY, not per syscall, by [`Deadline`].
 
 use std::io::{self, ErrorKind, Read, Write};
+use std::os::fd::AsFd;
+use std::time::{Duration, Instant};
+
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+
+/// Reads and writes on `s` that fail `TimedOut` once `until` has passed, however the bytes trickle
+/// (CLIENT-39, A18: a bound per reply; a per-syscall timeout let a peer sending one byte per 119 s
+/// hold a 262 144-byte frame open for a year). Each call first polls for at most what is left. A
+/// write moves at most `PIPE_BUF` bytes, which a ready pipe or socket takes without blocking. One
+/// mechanism for every peer of ours: a socket, a decider's pipe, an upstream TCP stream.
+pub struct Deadline<'a, S: AsFd> {
+    s: &'a S,
+    until: Instant,
+}
+
+impl<'a, S: AsFd> Deadline<'a, S> {
+    /// A deadline `within` from now.
+    pub fn within(s: &'a S, within: Duration) -> Self {
+        Self::until(s, Instant::now() + within)
+    }
+    /// A deadline at `until`.
+    pub fn until(s: &'a S, until: Instant) -> Self {
+        Self { s, until }
+    }
+    fn ready(&self, flags: PollFlags) -> io::Result<()> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        let timeout =
+            Timespec::try_from(left).map_err(|_| io::Error::from(ErrorKind::InvalidInput))?;
+        if left.is_zero() {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        match poll(&mut [PollFd::new(self.s, flags)], Some(&timeout)) {
+            Ok(0) => Err(ErrorKind::TimedOut.into()),
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl<S: AsFd> Read for Deadline<'_, S> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.ready(PollFlags::IN)?;
+        Ok(rustix::io::read(self.s, buf)?)
+    }
+}
+
+impl<S: AsFd> Write for Deadline<'_, S> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.ready(PollFlags::OUT)?;
+        let n = buf.len().min(rustix::pipe::PIPE_BUF);
+        Ok(rustix::io::write(self.s, &buf[..n])?)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 /// The bounds a frame obeys. Built only from the generated operation table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
