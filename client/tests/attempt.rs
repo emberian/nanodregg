@@ -358,26 +358,29 @@ fn declined_leaves_the_attempt_open_and_a_reload_looks_up() {
     done(&d);
 }
 
-/// A lookup is never judged, so a `declined` answer to one cannot answer it: `badReply`.
+/// HOST-74: the writer declines a lookup it decided nothing about (bytes it cannot decode, a frame
+/// still queued when it stopped). The run ends `declined` with the Host's name, nothing settled,
+/// never `confirm` (so never `contradicted`), and the attempt reloads open.
 #[test]
-fn a_declined_lookup_is_a_bad_reply() {
+fn a_declined_lookup_ends_the_run_declined() {
     let d = scratch("declined-lookup");
     let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let s = a
         .drive(State::Signed, 3, |r, _| -> R {
             Ok(match r {
                 Request::Submit => host(Seen::Unknown),
-                _ => Reply::Host(Seen::Declined, b"wrongWorld".to_vec()),
+                _ => Reply::Host(Seen::Declined, b"stopped".to_vec()),
             })
         })
         .unwrap();
-    assert!(matches!(
+    assert_eq!(
         s,
         State::Open {
-            end: Action::BadReply,
-            ..
+            sends: 1,
+            end: Action::Declined,
+            payload: b"stopped".to_vec()
         }
-    ));
+    );
     assert_eq!(Attempt::load(&d).unwrap().1, State::Uncertain { sends: 1 });
     done(&d);
 }

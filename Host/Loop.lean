@@ -396,8 +396,9 @@ def restarts (round : Resident W → IO (Exit × Resident W))
         else return (.reopenDiverged, r)
     | e => return (e, r)
 
-/-- At an exit that ends the resident: stop the port and answer every frame still queued
-`refused stopped`, so no accepted request goes unanswered; a queued hang-up is acknowledged by
+/-- At an exit that ends the resident: stop the port and answer every frame still queued with
+`stopped` (the writer passes `declined stopped`, `Host.FrameRefusal.stopped.reply`: not final), so no
+accepted request goes unanswered; a queued hang-up is acknowledged by
 `hangUp` (its name, never `stopped`). At most `bound` frames. -/
 def refuseQueued (port : Port) (stopped : UInt8 × ByteArray) (hangUp : Frame → Option (UInt8 × ByteArray))
     (bound : Nat) : IO Nat := do

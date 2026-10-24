@@ -12,7 +12,8 @@ is the kernel's or the receive layer's.
   window: `judge_recorded_final`), `declined` commits nothing. The status of every refused reply is
   PROTOCOL's one rule, `Protocol.Settle.verdictReply` (`refused` when final, `declined` when not).
   The Host's step is `Receive.judge`'s (`Host.Proofs.Serve.step_submit`).
-* `lookup` — the same call bytes: `ok` with the receipt if journaled; `refused NAME` if its
+* `lookup` — the same call bytes (undecodable: `declined undecodableCall`, as at submit): `ok`
+  with the receipt if journaled; `refused NAME` if its
   transaction id holds a recorded refusal (the name of its recorded code, `Receive.codeName`:
   `Kernel.refused_answers`); otherwise, once the journal may have pruned the call's entry
   (`Kernel.journalForgets`: `notBefore + 2 * windowMax ≤ height`, KERNEL-33), `uncertain` with
@@ -41,6 +42,11 @@ is the kernel's or the receive layer's.
   commits nothing. `Host.Proofs.Serve.step_cancel`.
   `command`, `resume` belong to `follow.sock` and are refused `wrongSocket`.
 
+A frame refusal's status is the refusal's own (`FrameRefusal.reply`, HOST-74): `declined` when
+nothing was decided about the call and the same bytes may yet be answered otherwise (an undecodable
+call at submit, lookup and cancel alike; a frame still queued when the resident stopped), `refused`
+when the frame itself can never be served as sent. No call site picks a status for a frame refusal.
+
 A receipt is `u64 height ‖ turn digest`. A refusal's payload is its NAME as UTF-8, from its owner's
 total `name` (`Receive.Refusal.name`, `Reject.name`, `FrameRefusal.name`): never a parse failure
 posing as a verdict, never a derived `Repr` (law 7, ROOT ruling 2026-10-16).
@@ -61,10 +67,9 @@ variable {D : Type} [Ord D] [DecidableEq D]
 inductive FrameRefusal where
   | unknownOp (code : UInt8)
   | undecodableCall
-  | notServed (op : Protocol.Op)
   | wrongSocket (op : Protocol.Op)
   /-- the resident stopped before this frame reached a batch: nothing of it was admitted, and
-  resending it to the restarted Host is safe -/
+  resending it to the restarted Host is safe; so it is `declined` (not final), never `refused` -/
   | stopped
   /-- `lookup`: the call is not journaled and its window ended at or before this World's height,
   so no admission of it can ever happen (`lookup_expired_final`); `absent` would leave the caller
@@ -78,7 +83,6 @@ inductive FrameRefusal where
 def FrameRefusal.name : FrameRefusal → String
   | .unknownOp _ => "unknownOp"
   | .undecodableCall => "undecodableCall"
-  | .notServed _ => "notServed"
   | .wrongSocket _ => "wrongSocket"
   | .stopped => "stopped"
   | .expired => "expired"
@@ -91,6 +95,18 @@ def named (name : String) : UInt8 × ByteArray :=
 /-- A `declined` reply (PROTOCOL-41): refused by name, NOT final, nothing recorded. -/
 def declined (name : String) : UInt8 × ByteArray :=
   (Protocol.Status.declined.code, name.toUTF8)
+
+/-- Whether a frame refusal is the Host's final word on the frame as sent (law 7: the status is the
+verdict). `undecodableCall`: nothing authenticated the bytes and nothing was decided about any call
+(PROTOCOL-41's class); `stopped`: nothing of the frame was admitted and resending it is safe. Both
+are NOT final. Every other frame refusal answers the same frame the same way at any Host. -/
+def FrameRefusal.final : FrameRefusal → Bool
+  | .undecodableCall | .stopped => false
+  | .unknownOp _ | .wrongSocket _ | .expired | .badHangup => true
+
+/-- THE reply to a frame refusal: its status from `final` (`refused` or `declined`), its name. -/
+def FrameRefusal.reply (r : FrameRefusal) : UInt8 × ByteArray :=
+  if r.final then named r.name else declined r.name
 
 /-- The name a recorded refusal's code answers with (`Receive.codeName`); a code with no name is
 never recorded (`Kernel.codeName_code`), and would answer `refusedFinal`. -/
@@ -119,7 +135,7 @@ def hangUpAnswer (f : Frame) : Option (UInt8 × ByteArray) :=
   | some .hangup =>
     some (match Protocol.CloseReason.ofBytes? f.payload with
       | some r => (Protocol.Status.closed.code, r.name.toUTF8)
-      | none => named FrameRefusal.badHangup.name)
+      | none => FrameRefusal.badHangup.reply)
   | _ => none
 
 /-- A frame's answer from the World as the batch has advanced it. -/
@@ -129,10 +145,10 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Step D) :=
   | none =>
     match hangUpAnswer f with
     | some p => refuse p
-    | none => refuse (named (FrameRefusal.unknownOp f.op).name)
+    | none => refuse (FrameRefusal.unknownOp f.op).reply
   | some .submit =>
     match X.decodeCall f.payload with
-    | none => refuse (declined FrameRefusal.undecodableCall.name)
+    | none => refuse FrameRefusal.undecodableCall.reply
     | some c =>
       match w.journalAt X.env (txIdOf X c) with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
@@ -146,7 +162,7 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Step D) :=
         | .declined v => refuse (settled X w c (.declined v))
   | some .lookup =>
     match X.decodeCall f.payload with
-    | none => refuse (named FrameRefusal.undecodableCall.name)
+    | none => refuse FrameRefusal.undecodableCall.reply
     | some c =>
       match w.journalAt X.env (txIdOf X c) with
       | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
@@ -155,7 +171,7 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Step D) :=
         | some code => refuse (named (recordedName code))
         | none =>
         if journalForgets w.height c.unsigned.notBefore then refuse forgotten
-        else if c.unsigned.validUntil ≤ w.height then refuse (named FrameRefusal.expired.name)
+        else if c.unsigned.validUntil ≤ w.height then refuse FrameRefusal.expired.reply
         else .reply Protocol.Status.absent.code ByteArray.empty
   | some .read =>
     match Protocol.Envelope.ofBytes X f.payload with
@@ -173,10 +189,10 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Step D) :=
       | .ok () => .defer (.log e.start)
   | some .cancel =>
     match (if f.payload[0]? = some Protocol.eventCancel then Protocol.cancelParts f.payload else none) with
-    | none => refuse (declined FrameRefusal.undecodableCall.name)
+    | none => refuse FrameRefusal.undecodableCall.reply
     | some (sig, cb) =>
       match X.decodeCall cb with
-      | none => refuse (declined FrameRefusal.undecodableCall.name)
+      | none => refuse FrameRefusal.undecodableCall.reply
       | some c =>
         match w.journalAt X.env (txIdOf X c) with
         | some (h, d) => .reply Protocol.Status.ok.code (receipt X h d)
@@ -187,8 +203,8 @@ def handle (X : Ctx D) (w : World D) (f : Frame) : Answer (World D) (Step D) :=
             let (st, p) := settled X w c (.recorded v r w')
             .commit (.refusal r) w' st p
           | o => refuse (settled X w c o)
-  | some .command => refuse (named (FrameRefusal.wrongSocket .command).name)
-  | some .resume => refuse (named (FrameRefusal.wrongSocket .resume).name)
+  | some .command => refuse (FrameRefusal.wrongSocket .command).reply
+  | some .resume => refuse (FrameRefusal.wrongSocket .resume).reply
 
 /-- The writer's machine: every step it commits is `World.step`'s (`Host.Proofs.Serve.machine_commits`). -/
 def machine (X : Ctx D) : Machine (World D) (Step D) Frame D where

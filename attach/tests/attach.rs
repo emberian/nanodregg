@@ -94,8 +94,8 @@ fn nd_attach_bridges_to_the_real_host_caps_a_session_and_frees_a_slot_on_hang_up
         let r = ask(&mut c, t, g::host_op::LOOKUP, b"not a call").unwrap();
         assert_eq!(
             (r.op, r.payload.as_slice()),
-            (status::REFUSED, &b"undecodableCall"[..]),
-            "{label}: Lean's refusal, by name, over the bridge"
+            (status::DECLINED, &b"undecodableCall"[..]),
+            "{label}: Lean's refusal, by name, over the bridge (declined: HOST-74)"
         );
         c
     };

@@ -29,6 +29,7 @@ import Kernel.Proofs.Journal
 import Kernel.Proofs.RootedFold
 import Kernel.Proofs.Refusals
 import Protocol.Proofs.Settle
+import Protocol.Proofs.Attempt
 import Host.Proofs.Batch
 
 namespace Nanodregg.Host
@@ -181,7 +182,7 @@ theorem handle_cancel_untagged (X : Ctx D) (w : World D) (f : Frame)
     (hop : Protocol.Op.ofCode? f.op = some .cancel) (h0 : f.payload[0]? ≠ some Protocol.eventCancel) :
     handle X w f = .reply (declined FrameRefusal.undecodableCall.name).1
       (declined FrameRefusal.undecodableCall.name).2 := by
-  simp [handle, hop, h0]
+  simp [handle, hop, h0, FrameRefusal.reply, FrameRefusal.final]
 
 theorem step_journaled (X : Ctx D) (w : World D) (out : Out (Step D × D)) (q : Request Frame) (c : Call D)
     (h : Nat) (d : D)
@@ -212,7 +213,49 @@ theorem step_hangup_bad (X : Ctx D) (w : World D) (out : Out (Step D × D)) (q :
         replies := out.replies.push ⟨q.conn, Protocol.Status.refused.code, FrameRefusal.badHangup.name.toUTF8⟩ }) := by
   have hn : Protocol.Op.ofCode? Protocol.hangupCode = none := by decide
   have hk : Protocol.childKindOf? Protocol.hangupCode = some .hangup := by decide
-  simp only [Machine.step, machine, handle, hop, hn, hangUpAnswer, hk, hp, named]
+  simp only [Machine.step, machine, handle, hop, hn, hangUpAnswer, hk, hp, FrameRefusal.reply,
+    FrameRefusal.final, if_true, named]
+
+/-! ## A frame refusal's status is the refusal's own (HOST-74)
+
+The writer answers a frame it refuses before any kernel decision with `FrameRefusal.reply`, whose
+status is `declined` exactly for the two refusals that decide nothing about any call. Before HOST-74
+a frame still queued at an exit was answered `refused stopped`: the attempt store reads `refused` as
+the Host's final word, asks the member's follow to confirm, follow answers `open` (the call is
+absent, its window live), and the run ended `contradicted`: an honest Host shutting down reported
+as a Host that lied. -/
+
+/-- A frame refusal answers `declined` exactly when it is not final: `undecodableCall` and
+`stopped`; every other one answers `refused`. -/
+theorem FrameRefusal.reply_declined_iff (r : FrameRefusal) :
+    r.reply.1 = Protocol.Status.declined.code ↔ r = .undecodableCall ∨ r = .stopped := by
+  cases r <;> simp [FrameRefusal.reply, FrameRefusal.final, named, declined] <;> decide
+
+/-- **`stopped_is_declined`** (HOST-74): a frame the resident still held queued when it stopped is
+answered `declined stopped` (`Host.Cli.runResident` hands exactly `FrameRefusal.stopped.reply` to
+`refuseQueued`), and the attempt store's decision on `declined`, whether that frame was the
+attempt's submit or its lookup, is to end the run `declined` with the attempt open: never
+`confirm`, so the member's follow is never asked to contradict a Host that only stopped. (The client
+reads the status byte `declined` as `Seen.declined`, `client/src/run.rs` `hint`.) -/
+theorem stopped_is_declined :
+    FrameRefusal.stopped.reply = (Protocol.Status.declined.code, "stopped".toUTF8) ∧
+      ∀ (b : Bool) (r : Protocol.Attempt.Request), (r = .submit ∨ r = .lookup) →
+        Protocol.Attempt.next b (some (r, .declined)) = .declined := by
+  refine ⟨rfl, fun b r hr => ?_⟩
+  rcases hr with rfl | rfl
+  · exact Protocol.Attempt.next_declined b
+  · exact Protocol.Attempt.next_lookup_declined b
+
+/-- **One name per meaning for undecodable call bytes** (HOST-74, law 7): a `submit` and a `lookup`
+whose payload `Ctx.decodeCall` does not read are answered alike, `declined undecodableCall`, and
+commit nothing (before HOST-74 the lookup answered `refused`, the final status, for the very
+condition the submit declines). -/
+theorem handle_undecodable_declined (X : Ctx D) (w : World D) (f : Frame)
+    (hop : Protocol.Op.ofCode? f.op = some .submit ∨ Protocol.Op.ofCode? f.op = some .lookup)
+    (hc : X.decodeCall f.payload = none) :
+    handle X w f = .reply Protocol.Status.declined.code "undecodableCall".toUTF8 := by
+  rcases hop with hop | hop <;>
+    simp only [handle, hop, hc, FrameRefusal.reply, FrameRefusal.final, declined, FrameRefusal.name] <;> rfl
 
 /-- The acknowledgement as a reply's `status ‖ payload` is `Protocol.ack r`. -/
 theorem hangup_reply_is_ack (r : Protocol.CloseReason) :
@@ -224,7 +267,8 @@ theorem handle_lookup_expired (X : Ctx D) (w : World D) (f : Frame) (c : Call D)
     (hnf : journalForgets w.height c.unsigned.notBefore = false)
     (hv : c.unsigned.validUntil ≤ w.height) :
     handle X w f = .reply Protocol.Status.refused.code "expired".toUTF8 := by
-  simp only [handle, hop, hc, hj, hr, hnf, hv, if_true, named, FrameRefusal.name]
+  simp only [handle, hop, hc, hj, hr, hnf, hv, if_true, FrameRefusal.reply, FrameRefusal.final, named,
+    FrameRefusal.name]
   rfl
 
 /-- A `lookup` of an un-journaled call whose transaction id holds a recorded refusal answers

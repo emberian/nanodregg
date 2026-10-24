@@ -24,8 +24,9 @@ verdict (`settle_seen` reads its first word). Sends exhausted and still `absent`
   beside this one (`Proofs.Settle.settle_open_not_final`);
 * a confirm follow answers `open` or `forgotten` after the Host said committed or refused → over,
   `contradicted`, named (`hostContradicted HOSTSAID FOLLOWSAID`); the attempt stays open;
-* a submit answered `declined` (refused by name, NOT recorded: unauthenticated, an early window, the
-  member's refusal budget) → over for this run, `declined`, the attempt stays open (PROTOCOL-41);
+* a submit or a lookup answered `declined` (refused by name, NOT recorded: unauthenticated, an early
+  window, the member's refusal budget, undecodable bytes, or a frame the writer still held queued
+  when it stopped, HOST-74) → over for this run, `declined`, the attempt stays open (PROTOCOL-41);
 * a submit whose reply was lost or `uncertain` → `lookup`, never a second submit: the first may
   still be queued at the writer, and only a lookup can say;
 * a lookup that says `absent` → `probe` FIRST (KERNEL-54, PROTOCOL-15's condition 3): follow says
@@ -117,7 +118,7 @@ def next (sendsLeft : Bool) : Option (Request × Seen) → Action
   -- the Host's word: never final
   | some (.submit, .committed) | some (.submit, .refused)
   | some (.lookup, .committed) | some (.lookup, .refused) => .confirm
-  | some (.submit, .declined) => .declined
+  | some (.submit, .declined) | some (.lookup, .declined) => .declined
   | some (.submit, .unknown) | some (.submit, .lost) => .lookup
   | some (.lookup, .unknown) | some (.lookup, .lost) => .uncertain
   | some (.lookup, .absent) => .probe
@@ -130,7 +131,7 @@ def next (sendsLeft : Bool) : Option (Request × Seen) → Action
   | some (.confirm, .lost) | some (.probe, .lost) => .uncertain
   -- a reply that cannot answer its request
   | some (.submit, .absent) | some (.submit, .open) | some (.submit, .forgotten)
-  | some (.lookup, .declined) | some (.lookup, .open) | some (.lookup, .forgotten)
+  | some (.lookup, .open) | some (.lookup, .forgotten)
   | some (.confirm, .declined) | some (.confirm, .unknown) | some (.confirm, .absent)
   | some (.probe, .declined) | some (.probe, .unknown) | some (.probe, .absent) => .badReply
 

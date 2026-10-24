@@ -1031,7 +1031,7 @@ than its docstring names. The `baseMoved` red caught it only because the expecta
   - A resubmit of a recorded call leaves `judge` as `declined (refusedFinal code)`, so finality cannot be read from the Outcome constructor or from the verdict's name. It is read from the record and the height.
 - **The attempt store (PROTOCOL-4 / PROTOCOL-17).**
   - `Seen.declined` → `Action.declined`: the run ends, and the attempt stays OPEN (frozen, unsettled; the next run looks it up). Example: a call signed with the precommitted next key is `unknownKey` before the rotate and admissible after it.
-  - A lookup is never `declined`; one that is is `badReply`.
+  - A lookup is never `declined`; one that is is `badReply`. (SUPERSEDED by HOST-74: the writer declines a lookup it decided nothing about, undecodable bytes or a frame queued at an exit, and `(lookup, declined)` is `declined`.)
   - `CommandExit.declined` = 53, restart class, printed `declined NAME`.
   - Custody keeps an armed rotation armed on `declined`.
   - Theorems:

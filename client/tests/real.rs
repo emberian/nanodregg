@@ -85,6 +85,40 @@ fn losing_host(listen: &Path, upstream: PathBuf) {
     });
 }
 
+/// A writer that stops while the member's submit is still queued (HOST-74). The first `submit`
+/// never reaches the real writer: it is answered `status ‖ stopped`, exactly what
+/// `Host.Cli.runResident` hands `refuseQueued` for every frame still queued at an exit
+/// (`Host.stopped_is_declined`: `(Status.declined.code, "stopped")`). Everything else passes through.
+fn stopping_host(listen: &Path, upstream: PathBuf, status: u8) {
+    use nanodregg_client::{frame, generated as g, table::LIMITS};
+    let l = UnixListener::bind(listen).unwrap();
+    std::thread::spawn(move || {
+        let mut stopped = false;
+        for nd in l.incoming() {
+            let (Ok(mut nd), Ok(mut up)) = (nd, UnixStream::connect(&upstream)) else {
+                return;
+            };
+            while let Ok(req) = frame::read(&mut nd, LIMITS) {
+                let (op, payload) = if req.op == g::host_op::SUBMIT && !stopped {
+                    stopped = true;
+                    (status, b"stopped".to_vec())
+                } else {
+                    if frame::write(&mut up, LIMITS, req.op, &req.payload).is_err() {
+                        break;
+                    }
+                    let Ok(reply) = frame::read(&mut up, LIMITS) else {
+                        break;
+                    };
+                    (reply.op, reply.payload)
+                };
+                if frame::write(&mut nd, LIMITS, op, &payload).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+}
+
 #[test]
 fn real_host_create_write_read_rotate_write_read() {
     let host = nanodregg_devtools::lean_bin("host");
@@ -366,6 +400,81 @@ fn real_host_create_write_read_rotate_write_read() {
     );
     assert_eq!(ok(&["read", &obj]), "1=hello\n2=after\n3=lied\n4=once\n");
 
+    // HOST-74: a writer that stopped with this write's submit still queued. Answered the way the
+    // writer answered before HOST-74 (`refused stopped`), the member's follow, asked to confirm,
+    // finds the call absent with its window live, and the run accuses the Host of lying
+    // (`hostContradicted refused open`): the defect. Answered `declined stopped` (the writer's
+    // reply now), the run ends `declined` with nothing settled, and running the write again
+    // continues that attempt (CLIENT-37) and settles it committed on the member's own receipt.
+    let through = |sock: &Path, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_nd"))
+            .env("ND_WORKSPACE", &ws)
+            .env("ND_HOLDING", &holding)
+            .env("ND_HOST_SOCK", sock)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let attempt_dirs = || -> Vec<u64> {
+        let mut v: Vec<u64> = std::fs::read_dir(ws.join("attempts"))
+            .unwrap()
+            .filter_map(|e| e.unwrap().file_name().to_str()?.parse::<u64>().ok())
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    use nanodregg_client::generated::{command_exit, status};
+    let old = root.join("stop-old.sock");
+    stopping_host(&old, ws.join("host.sock"), status::REFUSED);
+    let o = through(&old, &["write", &obj, "5", "accused"]);
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert_eq!(
+        o.status.code(),
+        Some(i32::from(command_exit::HOST_CONTRADICTED)),
+        "refused stopped: {err}"
+    );
+    assert!(err.starts_with("hostContradicted refused open"), "{err}");
+    let stop = root.join("stop.sock");
+    stopping_host(&stop, ws.join("host.sock"), status::DECLINED);
+    let o = through(&stop, &["write", &obj, "5", "stopped"]);
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert_eq!(
+        o.status.code(),
+        Some(i32::from(command_exit::DECLINED)),
+        "declined stopped: {err}"
+    );
+    assert!(
+        err.contains("stopped") && !err.contains("hostContradicted"),
+        "{err}"
+    );
+    let declined = *attempt_dirs().last().unwrap();
+    assert!(
+        !ws.join(format!("attempts/{declined}/settled")).exists(),
+        "a declined attempt is not settled"
+    );
+    assert_eq!(
+        ok(&["read", &obj]),
+        "1=hello\n2=after\n3=lied\n4=once\n",
+        "nothing landed"
+    );
+    ok(&["write", &obj, "5", "stopped"]);
+    assert_eq!(
+        ok(&["read", &obj]),
+        "1=hello\n2=after\n3=lied\n4=once\n5=stopped\n"
+    );
+    let rerun = *attempt_dirs().last().unwrap();
+    assert_eq!(
+        rerun, declined,
+        "the re-run continues the declined attempt (CLIENT-37): no second call"
+    );
+    let settled = std::fs::read_to_string(ws.join(format!("attempts/{rerun}/settled"))).unwrap();
+    assert!(
+        settled
+            .lines()
+            .nth(2)
+            .is_some_and(|l| l.starts_with("settle committed ")),
+        "the re-run settles on follow's receipt: {settled}"
+    );
     drop(_o);
     drop((_h, _f));
     std::fs::remove_dir_all(&root).unwrap();

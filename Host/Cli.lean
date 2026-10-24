@@ -352,7 +352,8 @@ def residentFields (r : Resident (World D)) : List (String × String) :=
    ("base_steps", toString r.sealed.steps)]
 
 /-- Run a resident on stdin/stdout: prove the reader thread live, state the opened Store, run the
-rounds, and at the end answer every frame still queued `refused stopped`, then state the exit. -/
+rounds, and at the end answer every frame still queued `declined stopped` (`FrameRefusal.stopped.reply`:
+nothing of it was admitted, so not final), then state the exit. -/
 def runResident (verb : String) (r₀ : Resident (World D))
     (rounds : Port → Resident (World D) → IO (Exit × Resident (World D))) : IO UInt32 := do
   if !(← threadsLive) then return ← refuse .noThreads
@@ -365,7 +366,7 @@ def runResident (verb : String) (r₀ : Resident (World D))
       | .ok stop => pure (Exit.stream stop)
       | .error _ => pure (Exit.stream .readFailed)
     | e => pure e
-  let refused ← refuseQueued port (named FrameRefusal.stopped.name) hangUpAnswer (queueMax + 1)
+  let refused ← refuseQueued port FrameRefusal.stopped.reply hangUpAnswer (queueMax + 1)
   status verb (("exit", exit.status.name) :: ("refused_queued", toString refused) :: residentFields r)
   return exitCode exit
 

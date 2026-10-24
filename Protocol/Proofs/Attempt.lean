@@ -89,8 +89,11 @@ theorem table_complete (b : Bool) (l : Option (Request × Seen)) : ((b, l), next
 settlement: its plant is client/tests/attempt.rs `declined_leaves_the_attempt_open_and_the_next_run_looks_up`). -/
 theorem next_declined (b : Bool) : next b (some (.submit, .declined)) = .declined := rfl
 
-/-- A lookup is never answered `declined` (only a submit is judged): such a reply is `badReply`. -/
-theorem next_lookup_declined (b : Bool) : next b (some (.lookup, .declined)) = .badReply := rfl
+/-- **A declined lookup ends the run `declined`** (HOST-74): the writer declines a lookup it decided
+nothing about (bytes it cannot decode, a frame still queued when it stopped). Nothing is recorded,
+so the attempt stays open and the next run looks it up; never `confirm`, so never `contradicted`
+(plant: client/tests/attempt.rs `a_declined_lookup_ends_the_run_declined`). -/
+theorem next_lookup_declined (b : Bool) : next b (some (.lookup, .declined)) = .declined := rfl
 
 /-- `settleSeen` reads exactly the settle words, and none of them is a Host-only status. -/
 theorem settleSeen_words (w : String) : (settleSeen w).isSome = true ↔ w ∈ settleWords := by
