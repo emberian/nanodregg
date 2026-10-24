@@ -1,14 +1,16 @@
 /-
 # Lang.Journey.OfferEscrow — §LE: `Std.offer` with a value leg through the real receivers (PROT-8)
 
-`E := offerEscrowPackage ["price"] ["buyer", "seller"]`, installed by A. A's object X and the
-matcher Z, B's object Y, all of `E`. A issues denomination α and B issues β; each mints 20 to
-its own account. A posts X's offer 0 (buyer, price [5,10], leg 5 α, payTo A) and B posts Y's
-offer 0 (seller, [8,12], leg 7 β, payTo B) and offer 1 (seller, [11,12], leg 1 β); each post
-moves its leg from the poster's account into the offering object's through the poster's grant
-of `transfer` to the object. Every row is a call through `Receive.submit` with `Lang.program`,
-read back from the World it leaves: offer rows by `storyRow`, balances by the value cells.
-LE2–LE5 are judged on the World before LE1.
+`E := offerEscrowPackage ["price"] ["buyer", "seller"]`, installed by A. A's object X and B's
+object Y, both of `E`. A issues denomination α and B issues β; each mints 20 to its own account. A
+posts X's offer 0 (buyer, price [5,10], leg 5 α, payTo A) and B posts Y's offer 0 (seller, [8,12],
+leg 7 β, payTo B) and offer 1 (seller, [11,12], leg 1 β); each post moves its leg from the poster's
+account into the offering object's through the poster's grant of `transfer` to the object. B
+invites X (`[invoke take]` on Y); A invokes `X.fuse`, which pays X's leg to B, retracts X's offer,
+logs, and invokes `Y.take` on the judged deal (LANG-77), which pays Y's leg to A, retracts and logs.
+Every row is a call through `Receive.submit` with `Lang.program`, read back from the World it
+leaves: offer rows by `storyRow`, balances by the value cells. LE2–LE5 are judged on the World
+before LE1.
 -/
 import Lang.Journey.Offer
 import Lang.StdOfferEscrow
@@ -47,18 +49,16 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     (r', v, t.bind fun t => (createdIds t).head?)
   let (rt1, vx, X?) := mk r a [pkg] (.create (some pkg) [] [])
   r := rt1
-  let (rt2, vz, Z?) := mk r a [pkg] (.create (some pkg) [] [])
-  r := rt2
   let (rt3, vy, Y?) := mk r b [pkg] (.create (some pkg) [] [])
   r := rt3
   let (rt4, vα, α?) := mk r a [] (.issue 100)
   r := rt4
   let (rt5, vβ, β?) := mk r b [] (.issue 100)
   r := rt5
-  let (some ox, some oz, some oy, some α, some β) := (X?, Z?, Y?, α?, β?)
-    | return note r s!"LE0 objects and denominations: {[vx, vz, vy, vα, vβ]}" false
+  let (some ox, some oy, some α, some β) := (X?, Y?, α?, β?)
+    | return note r s!"LE0 objects and denominations: {[vx, vy, vα, vβ]}" false
   let acct (owner asset : D) : D := accountId X owner asset
-  let mut setup : List String := [v1, vx, vz, vy, vα, vβ]
+  let mut setup : List String := [v1, vx, vy, vα, vβ]
   for (owner, asset) in [(a.id, α), (ox, α), (b.id, α), (b.id, β), (oy, β), (a.id, β)] do
     let (r', v, _) := mk r a [asset] (.account asset owner)
     r := r'; setup := setup ++ [v]
@@ -84,16 +84,14 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := rt9
   let (rt10, vpy1) := post r b oy [gB, β, acct b.id β, acct oy β] (lvPostArg 1 "seller" 11 12 1 β gB b.id)
   r := rt10
-  let (rt11, vix, gX?) := mk r a [ox, oz] (.grant ox oz [.invoke Std.offerTakeIx] none)
-  r := rt11
-  let (rt12, viy, gY?) := mk r b [oy, oz] (.grant oy oz [.invoke Std.offerTakeIx] none)
+  let (rt12, viy, gY?) := mk r b [oy, ox] (.grant oy ox [.invoke Std.offerTakeIx] none)
   r := rt12
-  let (some gX, some gY) := (gX?, gY?) | return note r s!"LE0 invitations: {[vix, viy]}" false
-  setup := setup ++ [vpx, vpy, vpy1, vix, viy]
+  let some gY := gY? | return note r s!"LE0 invitation: {viy}" false
+  setup := setup ++ [vpx, vpy, vpy1, viy]
   let w0 := r.st.host
   let bal (w : World D) (owner asset : D) : Int := (lvBalance w (acct owner asset)).getD (-1)
   let present (w : World D) (obj : D) (n : Nat) : Bool := (storyRow w obj 0 od (lfOfferKey n)).isSome
-  r := note r s!"LE0 A installs E = offerEscrowPackage [price] [buyer, seller], creates X and the matcher Z, B creates Y; A issues α and B β (mint 20 each); A posts X's offer 0 (buyer [5,10], leg 5 α, payTo A) and B posts Y's offers 0 (seller [8,12], leg 7 β) and 1 (seller [11,12], leg 1 β), each through its grant to its object of transfer on its own account; A and B invite Z [invoke take]: {setup}; held: X {bal w0 ox α} α, Y {bal w0 oy β} β; A {bal w0 a.id α} α, B {bal w0 b.id β} β"
+  r := note r s!"LE0 A installs E = offerEscrowPackage [price] [buyer, seller] and creates X, B creates Y; A issues α and B β (mint 20 each); A posts X's offer 0 (buyer [5,10], leg 5 α, payTo A) and B posts Y's offers 0 (seller [8,12], leg 7 β) and 1 (seller [11,12], leg 1 β), each through its grant to its object of transfer on its own account; B invites X [invoke take] on Y: {setup}; held: X {bal w0 ox α} α, Y {bal w0 oy β} β; A {bal w0 a.id α} α, B {bal w0 b.id β} β"
     (setup.all (· == "admitted") && bal w0 ox α == 5 && bal w0 oy β == 8 && bal w0 a.id α == 15 &&
       bal w0 b.id β == 12 && present w0 ox 0 && present w0 oy 0 && present w0 oy 1)
   let r0' := r
@@ -102,24 +100,24 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     | none => (r, "no bytes")
     | some x =>
       let (r', v, _) := go prog r (signedRows r.st a (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ cells)) rows []
-        (.invoke oz Std.offerFuseIx x 1000000 none))
+        (.invoke ox Std.offerFuseIx x 1000000 none))
       (r', v)
   let pinOffer (w : World D) (obj : D) (n : Nat) := hole_pinAt obj w 0 od (lfOfferKey n)
-  let cells := [oz, ox, oy, gX, gY, α, β, acct ox α, acct b.id α, acct oy β, acct a.id β]
-  let arg1 := lfFuseArg (lfDeal ox oy 9 0 0) ox oy (some gX) (some gY)
+  let cells := [ox, oy, gY, α, β, acct ox α, acct b.id α, acct oy β, acct a.id β]
+  let arg1 := lfFuseArg ox oy 9 0 0 (some gY)
   -- LE1 the fuse moves both legs: X's 5 α to B, Y's 7 β to A; both offers gone (an instance of
   -- `Std.escrow_fuse_admitted`, Lang.Proofs.StdOfferEscrowFuse)
   let (rf1, vf1) := fuse r0' cells (pinOffer w0 ox 0 ++ pinOffer w0 oy 0) arg1
   let w1 := rf1.st.host
-  r := note rf1 s!"LE1 A invokes Z.fuse (theta price 9) pinning both offers 0: {vf1}; X's offer 0 present {present w1 ox 0}, Y's offer 0 present {present w1 oy 0}; X holds {bal w1 ox α} α (was 5), B holds {bal w1 b.id α} α (was 0); Y holds {bal w1 oy β} β (was 8), A holds {bal w1 a.id β} β (was 0); α outstanding in accounts {bal w1 a.id α + bal w1 ox α + bal w1 b.id α} (was 20)"
+  r := note rf1 s!"LE1 A invokes X.fuse (theta price 9, via B's grant) pinning both offers 0: {vf1}; X's offer 0 present {present w1 ox 0}, Y's offer 0 present {present w1 oy 0}; X holds {bal w1 ox α} α (was 5), B holds {bal w1 b.id α} α (was 0); Y holds {bal w1 oy β} β (was 8), A holds {bal w1 a.id β} β (was 0); α outstanding in accounts {bal w1 a.id α + bal w1 ox α + bal w1 b.id α} (was 20)"
     (vf1 == "admitted" && !present w1 ox 0 && !present w1 oy 0 && present w1 oy 1 &&
       bal w1 ox α == 0 && bal w1 b.id α == 5 && bal w1 oy β == 1 && bal w1 a.id β == 7 &&
       bal w1 a.id α + bal w1 ox α + bal w1 b.id α == 20)
   -- LE2 not compliant: nothing moves
   let (rf2, vf2) := fuse r0' cells (pinOffer w0 ox 0 ++ pinOffer w0 oy 1)
-    (lfFuseArg (lfDeal ox oy 9 0 1) ox oy (some gX) (some gY))
+    (lfFuseArg ox oy 9 0 1 (some gY))
   r := note r s!"LE2 the same fuse naming and pinning Y's offer 1 (seller [11,12], price 9 outside it): {vf2}; X still holds {bal rf2.st.host ox α} α, Y {bal rf2.st.host oy β} β"
-    (refusedBy vf2 "take" "notCompliant" && bal rf2.st.host ox α == 5 && bal rf2.st.host oy β == 8 &&
+    (refusedBy vf2 "fuse" "notCompliant" && bal rf2.st.host ox α == 5 && bal rf2.st.host oy β == 8 &&
       present rf2.st.host ox 0 && present rf2.st.host oy 1)
   -- LE3 withdraw credits the leg back to payTo
   let wd (r : Run) (rows : List (RowSlot D × D)) : Run × String :=

@@ -571,12 +571,13 @@ theorem callsOf_live {ks : List Ty} {c : Data} (hks : ∀ k ∈ ks, callSlotOk k
 
 /-- `callSlotsOf` on a row of two slots of one call type, read off that type's `callSlotOk` (a slot
 type that depends on a package parameter, as `Std.offer`'s does, is not decided: LANG-77). -/
-theorem callSlotsOf_two (T : Ty) :
-    callSlotsOf [("c0", optTy T), ("c1", optTy T)] = if callSlotOk T then some [T, T] else none := by
+theorem callSlotsOf_two (T U : Ty) :
+    callSlotsOf [("c0", optTy T), ("c1", optTy U)] =
+      if callSlotOk T then (if callSlotOk U then some [T, U] else none) else none := by
   have hl : slotLabels "c" 2 = ["c0", "c1"] := by decide
   simp only [callSlotsOf, callSlotOf, optTy, List.length_cons, List.length_nil, List.map, hl,
     Kernel.Bounds.callsMax, List.mapM, List.mapM.loop]
-  split <;> cases h : callSlotOk T <;> simp_all
+  split <;> cases h : callSlotOk T <;> cases h' : callSlotOk U <;> simp_all
 
 theorem callSlotsOf_one (T : Ty) :
     callSlotsOf [("c0", optTy T)] = if callSlotOk T then some [T] else none := by

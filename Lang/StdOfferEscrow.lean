@@ -101,6 +101,20 @@ def escrowTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (
   offerTakeTree theta roles (resultTy offerStateTy [escrowCallTy] (editTy rels) 2) (escrowValTy theta roles)
     (escrowTakeDone theta rels od sd)
 
+/-- The fuse's success (inside the verdict's `ok` arm: payload 0, peerVal 1, ownVal 3, req 5, arg 6,
+state 7): the take's leg payment and edits, and the invoke of the peer's `take` on the judged deal
+(LANG-77: the deal leaves as the bytes of the value). -/
+def escrowFuseDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) : Term :=
+  activityResultCalls rels
+    (callsT [someCallT escrowCallTy (escrowPay (.get (.var 5) "self") (.get (.var 1) "payTo") (.get (.var 3) "give")),
+      someCallT (offerCallTy theta) (offerFuseCall theta budget (.var 5) (.var 6))])
+    (.var 7) (offerTakeEdits theta rels od sd)
+
+/-- **The fuse**: the take's tree over the escrow's values, paying its leg and invoking the peer. -/
+def escrowFuseBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) : Term :=
+  offerTakeTree theta roles (resultTy offerStateTy [escrowCallTy, offerCallTy theta] (editTy rels) 2)
+    (escrowValTy theta roles) (escrowFuseDone theta rels od sd budget)
+
 /-- The withdraw's success (inside the inner `some`: ownVal 0, ownPoint 1, req 2, state 4): pay the
 pinned offer's leg back to its `payTo`; retract the offer. -/
 def escrowWithdrawDone (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
@@ -127,8 +141,8 @@ def offerEscrowPackageOf (theta roles : List Label) (offerLimit sessionLimit bud
   let od := escrowDecl theta roles offerLimit
   let sd := offerSessionDecl theta sessionLimit
   let fields : List (Label × Ty × Term) := [
-    ("fuse", methodTy S (offerFuseArg theta) [offerCallTy theta, offerCallTy theta] (.record []) E 0,
-      activityMethod S (offerFuseArg theta) (.record []) (offerFuseBody theta budget)),
+    ("fuse", methodTy S (offerFuseArg theta) [T, offerCallTy theta] (offerTakeRows rels) E 2,
+      activityMethod S (offerFuseArg theta) (offerTakeRows rels) (escrowFuseBody theta roles rels od sd budget)),
     ("offer_guard", guardTy S od, offerGuard theta od),
     ("post", methodTy S (escrowPostArg theta roles) [T] (.record []) E 1,
       activityMethod S (escrowPostArg theta roles) (.record []) (escrowPostBody rels od)),

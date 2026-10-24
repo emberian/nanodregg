@@ -6816,5 +6816,73 @@ helper); the real reach was measured by the decls export, not by the name. The t
 `callSlotOk` had to be READ off the resolve hypothesis, which is the honest shape (a malformed `theta` does not
 install, and the theorem should not presume it does).
 
-**Status.** L1 landed in the commit that carries this text (`lang!`, FABLE-T, 2026-10-23). L2 (the fuse as two objects: `X.fuse` judges, retracts, logs and invokes `Y.take`
+**Status.** L1 landed in the commit that carries the text above (`lang!`, FABLE-T, 2026-10-23). L2 landed in the
+commit that carries the addendum below (`lang:`, the same session).
+
+### LANG-77 · second landing · the fuse is one party's method, the matcher deleted (2026-10-23; FABLE-T; DESIGN-T §3; retires LANG-75.11's fork M)
+
+**Decision.** `Std.offer`'s `fuse {keys, pair, theta, via}` is run by a PARTY as itself: it is the take's tree (own
+offer, peer's offer, `offerNotNamed`, the judge) whose success retracts its own offer, logs its session row, and
+invokes its PEER's `take` on `{keys, pair, theta}` of its own argument — a VALUE the runtime encodes (LANG-77) —
+through the grant `via` the peer's owner gave it. `offerPeerT` names the peer as the other member of `pair`.
+`offerGuard` admits `invoke fuse` as a consumer. The escrow instance's fuse pays its own leg to the peer offer's
+`payTo` beside the invoke (two call slots). The matcher object, its two forwarded invokes and `x`/`y`/`viaX`/`viaY`
+are deleted; `activityResultCalls` is the result-with-calls both fuses use (`activityResult` its no-call case).
+Journeys §LF/§LE have two objects: B invites X (`[invoke take]` on Y), A invokes `X.fuse`; LF2/LF2r/LF3r/LF5 refuse at
+`fuse` (X judges first), LF8 at the nested take (`offerNotNamed`), LF6a–c follow `via` at the nested take, LF7 is
+`peer: samePeer`. LE1 moves both legs.
+
+**Why "either", not "a third".** READ-PROT-6b §(2) said the matcher was "the fuse this ABI can express", and that T
+"does not make L the honest fuse: a driver that judges θ and sends a different value is the same split as a matcher
+that forwards two blobs, except the generated driver can be tied to one value by the encoder." That last clause is
+the point: the fuser's run ENCODES the value it judged, so `jointLaw_sound`'s one θ is the codec's canonicity
+(`decodeData_eq_ok_iff`) on the fuser's own argument — no third party holds the bytes, nothing forwarded is trusted,
+and the sentence "a package other than this one, granted take, could hand the two takes different bytes" leaves the
+docstrings. `rowParent` and `revisited` still make each retract its own object's and keep a party from calling itself.
+
+**Theorems.** `fuse_run_sound` (the fuser's run: decoded `{keys, pair, theta, via}`, its reads, `NamedKey`, `JointOk`,
+its own retract and session insert, ONE call `invoke p take db budget via'` with `encodeData (offerTakeArg theta)
+{keys, pair, theta} = some db`, `p` the peer `peerOf` named) replaces `fuse_calls`. `fuse_atomic`, `jointLaw_sound`,
+`invitation_once` are restated over the two-object tree (`fuse_tree`: the root run is the fuser's, its one call the
+peer's take; `fuser` and `party` locate each run's row acts in the Turn). `take_iff_compliant`, `take_run_sound` and
+the six take refusals are untouched (the take did not move). `escrow_fuse_run_sound` (two calls) and the escrow's
+`escrow_retract_moves_leg` fuse case (a retract with its transfer). LANG-75.22's `escrow_fuse_admitted` is restated
+over `x'.fuse`: the fuser's leg by its own run's transfer, the peer's by its take, one value; `EscrowLegMoved` takes
+the party's argument; the theorem takes `x' ≠ y'` (a same-object pair is `samePeer`-refused at run time, LF7; the
+theorem does not re-derive it). Proof plumbing: the take-tree helper lemmas of `Lang/Proofs/StdOffer.lean` take a
+`tail` of extra argument fields, so one `offerTakeTree_inv` serves the take (`[]`) and the fuse (`[via]`);
+`readsData_offer_args` (a point read without `live`/`receipt` reads nothing of the argument) couples the fuser's peer
+read to the peer's own read; `callSlotsOf_two (T U)`.
+
+**Price (MEASURED, `decls.py export` L1 vs L2 over 10 modules).** 19 RESTATES-MEANING (7 public: the three fuse
+theorems, `escrow_fuse_admitted`, `escrow_fuse_resolve`, `offerTakeTree_inv`, `callSlotsOf_two`; 12 private helpers),
+20 DELETES (`fuse_calls`, `lfDeal`, the matcher's private helpers, and 7 shape lemmas re-emitted public), 35 added.
+Hypotheses gained: `escrow_fuse_admitted`'s `hne : x' ≠ y'`; `offerTakeTree_inv`'s `tail` is a binder, not a premise.
+
+**What re-emits.** `Std.offer` and `Std.offerEscrow` re-id (fixtures; no deployed Store holds them). The matcher shape
+is no longer generated: a `fuse {deal, x, y, viaX, viaY}` text would not install (no such method type is emitted and
+the LF/LE rows do not write one).
+
+**Plants (whole tree; hbox `wt/fable-t2/logs/l2-plant{3,4}-*.log`, each restored).**
+- PT3 the fuse sends `keys` where it sends `theta` (`("theta", .get arg "keys")`): the generated package no longer
+  CHECKS — `offerPackage` and `offerEscrowPackage` refuse `body does not check at its interface: payload
+  @fuse…calls.c0.some` / `…c1.some` (the typed invoke arm catches the wrong value at generation, before any run);
+  `lang-journey: RED (2)` (LF0, LE0 cannot build the package); RED `Lang.Proofs.StdOfferFuse` at
+  `callsFuse_means`. Under fork M the same mutation (P4, a second deal) was a run-time matter; under LANG-77 it is a
+  type error.
+- PT4 the fuse drops its call (`noCallT` in its slot): RED `Lang.Proofs.StdOfferFuse` at `noRef_fuse` and
+  `fuse_run_sound` (the calls conjunct), its dependents unbuilt; `lang-journey: RED (5)`: LF1 ADMITTED with X's offer
+  gone and Y's standing and no session row under Y (half a fuse), LF8 and LF6a–c admitted (no nested take to refuse).
+
+**Critique.** `fuse` and `take` share one tree and one judge; the fuse differs in one call and `via`. A third party can
+still run a fuse if either owner grants it `[invoke fuse]`: the fuser is then that party's object, and `rowParent`
+still makes the retract the fuser's own. One session row is still not a fuse (the owner's root `take`; READ-PROT-6b
+condition 2); K's trigger stays. `escrow_fuse_admitted`'s `hne` is a premise the dispatch could discharge (the
+nested invoke of the fuser itself is `revisited`); it is left as a premise to keep the Dispatched-based proof.
+
+**Meta-critique.** The BIAS this landing watched for was the one LANG-75.11 recorded: designing the two-party protocol
+from the session-type picture instead of the ABI. This time the ABI was read first (LANG-77's first landing) and the
+consumer written to it; the proofs then forced one honest generalisation (the take tree's argument may carry more
+fields than the three it reads), which the original matcher design had hidden by giving the matcher its own argument.
+ L2 (the fuse as two objects: `X.fuse` judges, retracts, logs and invokes `Y.take`
 with the deal it decoded; the matcher deleted) is the next commit of this session (DESIGN-T §3, §4 PT3/PT4).

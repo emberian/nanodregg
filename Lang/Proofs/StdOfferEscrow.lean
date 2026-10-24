@@ -106,15 +106,23 @@ private theorem post_resolve {D : Type} {theta roles : List Label} {ol sl b : Na
     · cases hsg
   · simp [throw, throwThe, MonadExceptOf.throw] at h
 
-/-- The escrow package's `fuse` resolves to the generated matcher's signature (`fuse_calls`' premise). -/
+/-- The escrow package's `fuse` resolves to its signature: the deal with `via`, a transfer slot and an
+invoke slot at the take's argument type, the one offer point read under itself and under its peer,
+two edits (`escrow_fuse_run_sound`'s premise). -/
 theorem escrow_fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
     (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) offerFuseIx = .ok x) :
-    x = ("fuse", ⟨offerFuseArg theta, [offerCallTy theta, offerCallTy theta], [], 0⟩) := by
-  have hc := callSlotsOf_two (offerCallTy theta)
+    x = ("fuse", ⟨offerFuseArg theta, [escrowCallTy, offerCallTy theta], offerRead, 2⟩) := by
+  have he : editSlotsOf (escrowRels theta roles ol sl)
+      [("e0", optTy (editTy (escrowRels theta roles ol sl))), ("e1", optTy (editTy (escrowRels theta roles ol sl)))] =
+      some 2 := by simp [editSlotsOf, editsMax, slot_e2]
+  have hn : pairNamed (offerFuseArg theta) offerRead = true := by
+    simp [pairNamed, offerFuseArg, Row.find?, offerRead]
+  have hc := callSlotsOf_two escrowCallTy (offerCallTy theta)
+  rw [if_pos (by decide)] at hc
   by_cases hok : callSlotOk (offerCallTy theta) = true
   · rw [if_pos hok] at hc
     simp [resolveMethod, offerEscrowPackageOf, offerFuseIx, offerMethods, recordRow, Row.find?, methodSig, methodTy,
-      resultTy, callsTy, slot_c2, hc, empty_rowsOf, pairNamed] at h
+      resultTy, callsTy, slot_c2, slot_e2, hc, he, take_rowsOf, hn] at h
     split at h
     · rename_i sg hsg
       simp only [pure, Except.pure, Except.ok.injEq] at h
@@ -125,7 +133,11 @@ theorem escrow_fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat
     · simp [throw, throwThe, MonadExceptOf.throw] at h
   · rw [if_neg hok] at hc
     simp [resolveMethod, offerEscrowPackageOf, offerFuseIx, offerMethods, recordRow, Row.find?, methodSig, methodTy,
-      resultTy, callsTy, slot_c2, hc, empty_rowsOf, throw, throwThe, MonadExceptOf.throw] at h
+      resultTy, callsTy, slot_c2, slot_e2, hc, he, take_rowsOf, throw, throwThe, MonadExceptOf.throw] at h
+
+private theorem escrow_fuse_peerReads (theta roles : List Label) (ol sl b : Nat) :
+    (offerEscrowPackageOf theta roles ol sl b).peerReads "fuse" = offerRead := by
+  simp [Package.peerReads, offerEscrowPackageOf, recordRow, Row.find?, methodPeer, methodTy, take_rowsOf]
 
 /-- The package has four methods: no other index resolves. -/
 private theorem resolve_lt {D : Type} {theta roles : List Label} {ol sl b m : Nat} {x : Label × Sig}
@@ -152,6 +164,15 @@ private theorem noRef_take (theta roles : List Label) (rels : List (Label × Rel
     escrowAcct, escrowNoVia, offerTakeEdits, NoRef, NoRefRow, resultT, callsT, someCallT, activityEdit,
     activityKeyTerm, noCallT, slot_e2, slot_c1, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT]
 
+private theorem noRef_escrow_fuse (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl)
+    (budget : Nat) :
+    NoRef (activityMethod offerStateTy (offerFuseArg theta) (offerTakeRows rels)
+      (escrowFuseBody theta roles rels od sd budget)) := by
+  simp [activityMethod, escrowFuseBody, offerTakeTree, escrowFuseDone, activityResultCalls, escrowPay, escrowTransfer,
+    escrowAcct, escrowNoVia, offerFuseCall, offerTakeCall, offerPeerT, offerTakeEdits, NoRef, NoRefRow, resultT,
+    callsT, someCallT, activityEdit, activityKeyTerm, noCallT, slot_e2, slot_c2, activityApply, noRef_offerJoint,
+    offerNamedOkT, offerNamedT]
+
 private theorem noRef_withdraw (rels : List (Label × RelDecl)) (od : RelDecl) :
     NoRef (activityMethod offerStateTy (.record []) (escrowWithdrawRows rels) (escrowWithdrawBody rels od)) := by
   simp [activityMethod, escrowWithdrawBody, escrowWithdrawDone, escrowResult, escrowPay, escrowTransfer, escrowAcct,
@@ -165,7 +186,7 @@ private theorem noRef_post (theta roles : List Label) (rels : List (Label × Rel
 /-! ## Shapes -/
 
 /-- An escrow offer value: its leg, its `payTo`, its role and box. -/
-private theorem escrow_shape {theta roles : List Label} {o : Data} (h : Conforms o (escrowValTy theta roles)) :
+theorem escrow_shape {theta roles : List Label} {o : Data} (h : Conforms o (escrowValTy theta roles)) :
     ∃ amt ab po ro ot, o = .record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]),
         ("payTo", .digest po), ("role", ro), ("terms", ot)] ∧
       Conforms ro (offerRoleTy roles) ∧ Conforms ot (offerTermsTy theta) := by
@@ -183,7 +204,7 @@ private theorem escrow_shape {theta roles : List Label} {o : Data} (h : Conforms
               | cons ha hg => cases hg with
                 | cons hb hg => cases hg; cases ha; cases hb; exact ⟨_, _, _, _, _, rfl, h3, h4⟩
 
-private theorem escrow_fields {theta roles : List Label} {u : Data} (h : Conforms u (escrowValTy theta roles)) :
+theorem escrow_fields {theta roles : List Label} {u : Data} (h : Conforms u (escrowValTy theta roles)) :
     (∃ ru, u.field "role" = some ru ∧ Conforms ru (offerRoleTy roles)) ∧
       (∃ tu, u.field "terms" = some tu ∧ Conforms tu (offerTermsTy theta)) := by
   obtain ⟨_, _, _, ro, ot, rfl, hro, hot⟩ := escrow_shape h
@@ -421,6 +442,216 @@ theorem escrow_take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
     subst hfs; rfl)
   exact ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset', payTo', kb, sb, vb, hd, hm, hn, hj, hg, hpb,
     h1, h2, h3, hc, hkb, hsb, hvb, hrows⟩
+
+/-! ## The escrow fuse: its leg paid, the peer's take invoked on the judged deal (LANG-77) -/
+
+/-- The fuse's `ok`-arm environment (as `Lang.Proofs.StdOfferFuse` spells it, private there): payload 0, peer
+value 1, peer point 2, own value 3, own point 4, request 5, argument 6, state 7, rows 8. -/
+private abbrev fuseOkEnv (rq keys pair th via k o kq q : Data) (state : Val) : Env :=
+  .record [] :: q.toVal :: (Data.record [("key", kq), ("val", .inj "some" q)]).toVal ::
+    o.toVal :: (Data.record [("key", k), ("val", .inj "some" o)]).toVal :: rq.toVal ::
+    (Data.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]).toVal :: state ::
+    (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+      ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal ::
+      []
+
+/-- **What the escrow fuse's calls row means** in the `ok` arm: the own leg paid to the peer offer's
+`payTo`, and one invoke of the peer's `take`, its argument the VALUE `{keys, pair, theta}`. -/
+private theorem escrowFuseCalls_means {lib : List Term} {theta : List Label} {budget : Nat}
+    {rq keys th via k o kq q : Data} {state : Val} {a b sb : ByteArray} {amt : Nat} {ab pb : ByteArray}
+    (hself : rq.field "self" = some (.digest sb))
+    (hog : o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]))
+    (hqp : q.field "payTo" = some (.digest pb))
+    (hkeys : Conforms keys offerKeysTy)
+    (hpair : Conforms (Data.record [("a", .digest a), ("b", .digest b)]) pairTy)
+    (hth : Conforms th (offerThetaTy theta)) (hvia : Conforms via (optTy .digest)) {W : Val}
+    (hW : BigStep lib (fuseOkEnv rq keys (.record [("a", .digest a), ("b", .digest b)]) th via k o kq q state)
+      (callsT [someCallT escrowCallTy (escrowPay (.get (.var 5) "self") (.get (.var 1) "payTo") (.get (.var 3) "give")),
+        someCallT (offerCallTy theta) (offerFuseCall theta budget (.var 5) (.var 6))]) (.ok W)) :
+    Means lib (callsTy [escrowCallTy, offerCallTy theta]) W
+      (.record [("c0", .inj "some" (.inj "transfer" (.record [("amount", .nat amt),
+          ("dst", .inj "of" (.record [("asset", .digest ab), ("owner", .digest pb)])),
+          ("once", .inj "none" (.record [])),
+          ("src", .inj "of" (.record [("asset", .digest ab), ("owner", .digest sb)])),
+          ("via", .inj "none" (.record []))]))),
+        ("c1", .inj "some" (.inj "invoke" (.record [
+          ("args", .record [("keys", keys), ("pair", .record [("a", .digest a), ("b", .digest b)]), ("theta", th)]),
+          ("budget", .nat budget), ("method", .nat offerTakeIx),
+          ("obj", .digest (if sb = a then b else a)), ("via", via)])))]) := by
+  unfold callsT at hW
+  cases hW
+  simp only [callsTy, List.length_cons, List.length_nil, Nat.zero_add, Nat.reduceAdd, slot_c2, List.map, List.zip,
+    suspend, escrowPay, escrowTransfer, escrowAcct, escrowNoVia, offerFuseCall, offerTakeCall]
+  have hf : Row.find? "invoke" ((callArms (some (offerTakeArg theta))).filter
+      fun x => x.1 == "invoke" || ([] : List Label).contains x.1) = some (invokeArm (offerTakeArg theta)) := rfl
+  have hs : BigStep lib (fuseOkEnv rq keys (.record [("a", .digest a), ("b", .digest b)]) th via k o kq q state)
+      (.get (.var 5) "self") (.ok (.digest sb)) :=
+    get_data (x := .digest sb) (BigStep.var (i := 5) rfl) hself
+  have hpa : BigStep lib (fuseOkEnv rq keys (.record [("a", .digest a), ("b", .digest b)]) th via k o kq q state)
+      (.get (.var 6) "pair") (.ok (Data.record [("a", .digest a), ("b", .digest b)]).toVal) :=
+    get_data (ℓ := "pair") (x := .record [("a", .digest a), ("b", .digest b)]) (BigStep.var (i := 6) rfl) rfl
+  have hgive : BigStep lib (fuseOkEnv rq keys (.record [("a", .digest a), ("b", .digest b)]) th via k o kq q state)
+      (.get (.var 3) "give") (.ok (Data.record [("amount", .nat amt), ("asset", .digest ab)]).toVal) :=
+    get_data (x := .record [("amount", .nat amt), ("asset", .digest ab)]) (BigStep.var (i := 3) rfl) hog
+  have hd : BigStep lib (fuseOkEnv rq keys (.record [("a", .digest a), ("b", .digest b)]) th via k o kq q state)
+      (.get (.var 1) "payTo") (.ok (.digest pb)) :=
+    get_data (x := .digest pb) (BigStep.var (i := 1) rfl) hqp
+  refine .record .record (.cons (.inj (.inj .record)) ?_ (.cons (.inj (.inj .record)) ?_ .nil))
+  · exact .inj rfl (.inj find_transfer (.record .record
+      (.cons (get_data (ℓ := "amount") (x := .nat amt) hgive rfl) .nat
+      (.cons (.inj .record) (.inj find_of (.record .record
+        (.cons (get_data (ℓ := "asset") (x := .digest ab) hgive rfl) .digest (.cons hd .digest .nil))))
+      (.cons (.inj .record) (.inj rfl (.record .record .nil))
+      (.cons (.inj .record) (.inj find_of (.record .record
+        (.cons (get_data (ℓ := "asset") (x := .digest ab) hgive rfl) .digest (.cons hs .digest .nil))))
+      (.cons (.inj .record) (.inj rfl (.record .record .nil)) .nil)))))))
+  · exact .inj rfl (.inj hf (.record .record
+      (.cons .record (.record .record
+        (.cons (get_data (ℓ := "keys") (x := keys) (BigStep.var (i := 6) rfl) rfl) (means_toVal hkeys)
+        (.cons hpa (means_toVal hpair)
+        (.cons (get_data (ℓ := "theta") (x := th) (BigStep.var (i := 6) rfl) rfl) (means_toVal hth) .nil))))
+      (.cons .nat .nat (.cons .nat .nat
+      (.cons (peerT_eval hs hpa) .digest
+      (.cons (get_data (ℓ := "via") (x := via) (BigStep.var (i := 6) rfl) rfl) (means_toVal hvia) .nil)))))))
+
+/-- **The deployed escrow fuse is sound** (`Lang.program`'s `run` of `fuse` of an object of the
+generated escrow package): a run that RETURNED decoded `{keys, pair, theta := th, via}`, read (by the
+declared peer read) its own pinned offer `o` and its peer's `q`, its own the one the deal names for
+`self` (`NamedKey`), found them `JointOk` at θ, makes exactly TWO calls — `transfer (of self asset)
+(of payTo asset) amount` of its OWN leg to the PEER offer's `payTo`, and `invoke p take db budget via'`
+with `p` the peer and `db` the bytes of the VALUE `{keys, pair, theta}` (LANG-77) — and its row acts
+are exactly the retract of its own offer and the insert of its session row. Mutations: the leg not
+paid (its call slot `none`) and PT4 (the invoke dropped) each make the calls conjunct false. -/
+theorem escrow_fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
+    {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
+    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
+    (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerFuseIx args r budget' =
+      .ok (s, calls, rows, used)) :
+    ∃ keys pair th via k o kq q amt ab pb self' asset' payTo' p db via' kb sb vb,
+      Wire.decodeData (offerFuseArg theta) args =
+        .ok (.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]) ∧
+      methodReads bytesOf digestOf rc look pkg (escrowRels theta roles ol sl) rv r.self
+        (.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]) offerRead offerRead =
+        .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
+      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧
+      o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) ∧
+      q.field "payTo" = some (.digest pb) ∧
+      digestOf (bytesOf r.self) = some self' ∧ digestOf ab = some asset' ∧ digestOf pb = some payTo' ∧
+      Nanodregg.Lang.peerOf bytesOf digestOf r.self
+        (.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]) = .ok p ∧
+      Wire.encodeData (offerTakeArg theta) (.record [("keys", keys), ("pair", pair), ("theta", th)]) = some db ∧
+      ViaReads digestOf via via' ∧
+      calls = [.transfer (.of self' asset') (.of payTo' asset') amt none none, .invoke p offerTakeIx db budget via'] ∧
+      keyBytes (escrowDecl theta roles ol) k = some kb ∧
+      keyBytes (offerSessionDecl theta sl)
+        (.record [("agent", .digest (bytesOf r.agent)), ("notBefore", .nat r.notBefore)]) = some sb ∧
+      Wire.encodeData (offerSessionDecl theta sl).val
+        (.record [("answered", .inj "none" (.record [])),
+          ("captured", .inj "settle" (.record [("pair", pair), ("theta", th)]))]) = some vb ∧
+      rows = [(.row ⟨r.self, 0, kb⟩, .retract), (.row ⟨r.self, 1, sb⟩, .insert 0 vb)] := by
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state offerFuseIx args r budget').map _ = _ at h
+  rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state offerFuseIx args r budget' with
+  | error e => rw [hm] at h; cases h
+  | ok x =>
+  rw [hm] at h
+  obtain ⟨s', calls', rows', t', n'⟩ := x
+  simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+  obtain ⟨S, v, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, hpg, hres, -, had, -, hwd, rfl⟩ := runSetup_spec hS
+  obtain ⟨hpg', f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
+  rw [hpg'] at hpg
+  cases hpg
+  obtain ⟨mty, -, hA⟩ := resolveMethod_spec hres
+  have hks := methodSig_slots hA
+  have hsig := escrow_fuse_resolve hres
+  cases hsig
+  have hT : Wire.dataTy (offerTakeArg theta) = true :=
+    callSlotOk_dataTy (hks _ (List.mem_cons_of_mem _ (List.mem_cons_self ..))) _ (slotInvokeArg_offer theta)
+  rw [escrow_fuse_peerReads] at hwd
+  simp only at hrun hx hes
+  obtain ⟨keys, pair, th, via, rfl, hkeys, hpair, hth, hvia⟩ := fuseArg_cases (decodeData_conforms had)
+  obtain ⟨X, Y, rfl, hX, hY⟩ := offerTakeRows_cases (methodReads_conforms hwd)
+  have hbig := run_bigStep hrun
+  have hself : (reqData bytesOf r).field "self" = some (.digest (bytesOf r.self)) := by
+    simp [reqData, Data.field, Row.find?]
+  have fwd : ∀ {r' : Except Fault Val}, BigStep L.lib
+      [(reqData bytesOf r).toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]).toVal, sd.toVal,
+        (Data.record [("offer", .record [("p0", X)]), ("peer", .record [("offer", .record [("p0", Y)])])]).toVal]
+      (escrowFuseBody theta roles (escrowRels theta roles ol sl) (escrowDecl theta roles ol) (offerSessionDecl theta sl) budget) r' →
+      BigStep L.lib [(reqData bytesOf r).toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]).toVal,
+        sd.toVal, (Data.record [("offer", .record [("p0", X)]), ("peer", .record [("offer", .record [("p0", Y)])])]).toVal]
+        (apply4 g "fuse") r' :=
+    fun hb => apply4_field hlib rfl (by simp [Row.find?]) (noRef_escrow_fuse _ _ _ _ _ _) hb
+  obtain ⟨fs, hfs⟩ : ∃ fs, escrowFuseDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol)
+      (offerSessionDecl theta sl) budget = .record fs := ⟨_, rfl⟩
+  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, rfl⟩ :=
+    offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs fwd hbig
+  obtain ⟨a, b, rfl⟩ := pair_shape hpair
+  obtain ⟨amt, ab, po, ro, ot, hoe, -, -⟩ := escrow_shape ho
+  obtain ⟨amtq, abq, pb, rq', qt, hqe, -, -⟩ := escrow_shape hq
+  have hog : o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) := by rw [hoe]; rfl
+  have hqp : q.field "payTo" = some (.digest pb) := by rw [hqe]; rfl
+  have hM := extract_means _ _ hx
+  -- the edits
+  have hfE : Row.find? "edits" fs = some (.record ((slotLabels "e"
+      (offerTakeEdits theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol) (offerSessionDecl theta sl)).length).zip
+      ((offerTakeEdits theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol) (offerSessionDecl theta sl)).map
+        fun t => someCallT (editTy (escrowRels theta roles ol sl)) t))) := by
+    simp only [escrowFuseDone, activityResultCalls, resultT, Term.record.injEq] at hfs
+    subst hfs; rfl
+  have hwE := BigStep.get (ℓ := "edits") hbig (.field (find_suspend_of hfE) .record)
+  obtain ⟨A, hA, hmA⟩ := means_get hbig hM rfl hwE
+  simp [Row.find?] at hA
+  subst hA
+  have hED := offerTakeEdits_means (lib := L.lib) (od := escrowDecl theta roles ol) (sl := sl)
+    (env := fuseOkEnv (reqData bytesOf r) keys (.record [("a", .digest a), ("b", .digest b)]) th via k o kq q sd.toVal) rfl
+    (get_data (d := .record [("key", k), ("val", .inj "some" o)]) (BigStep.var (i := 4) rfl) rfl) hk
+    (get_data (ℓ := "agent") (d := reqData bytesOf r) (x := .digest (bytesOf r.agent)) (BigStep.var (i := 5) rfl) rfl)
+    (get_data (ℓ := "notBefore") (d := reqData bytesOf r) (x := .nat r.notBefore) (BigStep.var (i := 5) rfl) rfl)
+    (get_data (ℓ := "pair") (x := .record [("a", .digest a), ("b", .digest b)]) (BigStep.var (i := 6) rfl) rfl) hpair
+    (get_data (ℓ := "theta") (x := th) (BigStep.var (i := 6) rfl) rfl) hth .record
+  have he := means_deterministic hmA hED
+  subst he
+  obtain ⟨kb, sb, vb, hkb, hsb, hvb, hmap⟩ := offerTake_editsOf (od := escrowDecl theta roles ol) rfl hes
+  -- the calls
+  have hfC : Row.find? "calls" fs = some (callsT [someCallT escrowCallTy
+      (escrowPay (.get (.var 5) "self") (.get (.var 1) "payTo") (.get (.var 3) "give")),
+      someCallT (offerCallTy theta) (offerFuseCall theta budget (.var 5) (.var 6))]) := by
+    simp only [escrowFuseDone, activityResultCalls, resultT, Term.record.injEq] at hfs
+    subst hfs; rfl
+  have hwC := BigStep.get (ℓ := "calls") hbig (.field (find_suspend_of hfC) .record)
+  obtain ⟨A', hA', hmC⟩ := means_get hbig hM rfl hwC
+  simp [Row.find?] at hA'
+  subst hA'
+  have hce := means_deterministic hmC (escrowFuseCalls_means (budget := budget) (k := k) (o := o) (kq := kq) (q := q)
+    (state := sd.toVal) hself hog hqp hkeys hpair hth hvia .record)
+  subst hce
+  obtain ⟨pr, A, B, hpeer, -, -, -⟩ := methodReads_offer hwd
+  have hpd := peer_term (bytesOf := bytesOf) (digestOf := digestOf) (self := r.self) (a := a) (b := b)
+    (args := .record [("keys", keys), ("pair", .record [("a", .digest a), ("b", .digest b)]), ("theta", th), ("via", via)])
+    (by simp [Data.field, Row.find?]) hpeer
+  have hdc : Conforms (Data.record [("keys", keys), ("pair", .record [("a", .digest a), ("b", .digest b)]), ("theta", th)])
+      (offerTakeArg theta) := .record (.cons hkeys (.cons hpair (.cons hth .nil)))
+  obtain ⟨db, hdb⟩ := encodeData_of_conforms hT hdc
+  have hn : optOf (bytesAt "once") "once" (Data.inj "none" (.record [])) = (.ok none : Except String (Option ByteArray)) :=
+    rfl
+  have hnv : optOf (digestAt digestOf "via") "via" (Data.inj "none" (.record [])) = (.ok none : Except String (Option D)) :=
+    rfl
+  cases h1 : digestOf (bytesOf r.self) <;> cases h2 : digestOf ab <;> cases h3 : digestOf pb <;>
+    cases hov : optOf (digestAt digestOf "via") "via" via <;>
+    simp [callsOf, callsOf.go, bodyOf, acctRefOf, argsBytes, slotInvokeArg_offer, digestAt, natOf, hdb, hpd, h1, h2, h3,
+      hov, hn, hnv, bind, Except.bind, pure, Except.pure, Except.map] at hc
+  rename_i self' asset' payTo' via'
+  exact ⟨keys, .record [("a", .digest a), ("b", .digest b)], th, via, k, o, kq, q, amt, ab, pb, self', asset', payTo', pr,
+    db, via', kb, sb, vb, had, hwd, hnk, hok, hog, hqp, rfl, h2, h3, hpeer, hdb, viaReads_of hvia hov, hc.symm, hkb, hsb,
+    hvb, hrows.trans hmap⟩
 
 /-! ## The withdraw -/
 
@@ -808,7 +1039,8 @@ object of `offerEscrowPackageOf …`, every retract of an `offer` row among its 
 `⟨self, 0, kb⟩`) is of a row the run READ (its own pinned point `{key k, val o}`, `keyBytes k = kb`),
 and the run's calls include `transfer (of self asset) (of to asset) amount` of THAT row's leg
 `o.give = {amount, asset}`, where `to` is the row's own `payTo` or the `payTo` of the offer the run
-read under its peer. `fuse` makes no row act and `post` only inserts, so neither retracts. The kernel
+read under its peer. `fuse` retracts as a take does, with its leg's transfer beside the invoke of its peer; `post` only
+inserts. The kernel
 then conserves the denomination over the Turn (`admit_value`). Mutations P8d (the take pays nothing)
 and P8e (the withdraw pays nothing) each make it false: a retract with no transfer. -/
 theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
@@ -833,9 +1065,13 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
         digestOf to = some to' ∧ Kernel.Receive.Body.transfer (.of self' asset') (.of to' asset') amt none none ∈ calls := by
   match m, h with
   | 0, h =>
-    obtain ⟨_, _, _, _, _, _, _, _, _, _, -, -, -, -, -, -, -, rfl⟩ :=
-      fuse_calls bytesOf digestOf (budget := budget) hid hp rfl rfl escrow_fuse_resolve rfl (by simp [Row.find?]) h
-    simp at hmem
+    obtain ⟨keys, pair, th, via, k, o, kq, q, amt, ab, pb, self', asset', payTo', p, db, via', kb', sb, vb, hd, hm, -, -,
+      hg, hpb, h1, h2, h3, -, -, -, hcalls, hkb, -, -, hrows⟩ := escrow_fuse_run_sound bytesOf digestOf hR hid hp h
+    subst hcalls hrows
+    have hk : kb = kb' := by simp at hmem; first | exact hmem | exact hmem.symm
+    subst hk
+    exact ⟨_, _, _, _, k, o, amt, ab, pb, hd, hm, by simp [Data.field, Row.find?], hkb, hg,
+      .inr ⟨kq, q, by simp [Data.field, Row.find?], hpb⟩, self', asset', payTo', h1, h2, h3, by simp⟩
   | 1, h =>
     obtain ⟨_, _, _, _, _, _, _, _, _, -, -, -, -, rfl⟩ := post_core bytesOf digestOf hid hp h
     simp at hmem

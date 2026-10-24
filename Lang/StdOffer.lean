@@ -1,32 +1,34 @@
 /-
-# Lang.StdOffer — an object's latent contract as an offer row, and the matcher that fuses two (PROT-6)
+# Lang.StdOffer — an object's latent contract as an offer row, and the fuse of two (PROT-6, LANG-77)
 
 An OFFER is a row of the object that makes it: a chooser role and an acceptance box over the deal's
 terms θ (a record of naturals; each field a closed interval `lo ≤ θ.f ≤ hi`). Two offers FUSE when
 their roles differ and θ is inside both boxes (`offerJoint`). The fuse is Bartoletti's [Fuse] rule
-fired by a third object (fork M, R-0050):
+fired by EITHER party (LITP C.1's "a third or either object"; the third-object matcher of fork M
+went with LANG-77, which let a method hand its peer a value it computed):
 
-* `fuse {deal, x, y, viaX, viaY}`, the MATCHER, returns two invokes of `take` carrying the SAME
-  `deal` bytes, one to `x` and one to `y`. It reads no row and judges nothing.
-* `take {keys, pair, theta}`, run once by each party as itself, reads its own offer and its PEER's
-  (the member of `pair` that is not itself: `Lang.peerOf`, the declared peer read), refuses unless
-  its own pinned offer is the one the deal NAMES for it (`keys.a` for `pair.a`, `keys.b` for
-  `pair.b`: `offerNotNamed`), evaluates `offerJoint` on the two pinned offers and θ, and only on
-  `ok` retracts its OWN offer and inserts its own `session` row capturing `{pair, theta}`. A run
-  edits only its own object's rows (kernel law 4, `rowParent`), so each party consumes its own
-  offer, and the deal, not the caller's pins, says which of its standing offers that is.
+* `take {keys, pair, theta}`, run by a party as itself, reads its own offer and its PEER's (the
+  member of `pair` that is not itself: `Lang.peerOf`, the declared peer read), refuses unless its
+  own pinned offer is the one the deal NAMES for it (`keys.a` for `pair.a`, `keys.b` for `pair.b`:
+  `offerNotNamed`), evaluates `offerJoint` on the two pinned offers and θ, and only on `ok`
+  retracts its OWN offer and inserts its own `session` row capturing `{pair, theta}`. A run edits
+  only its own object's rows (kernel law 4, `rowParent`), so each party consumes its own offer, and
+  the deal, not the caller's pins, says which of its standing offers that is.
+* `fuse {keys, pair, theta, via}`, run by a party as itself, IS a take that also invokes its peer's
+  `take` on the very deal it judged, `{keys, pair, theta}` of its own argument, through the grant
+  `via` the peer's owner gave it. The peer's take decodes the bytes the fuser's run ENCODED of that
+  value (`Lang.callsOf`, LANG-77), so the two judges see one θ by construction: no third party
+  holds the bytes, and no forwarding is trusted.
 
-Both takes run inside one call tree, so the Turn seals both retracts or neither (KERNEL-45: the tree
-commits or fails whole). The two judges see one θ because they decode one byte string; that is the
-MATCHER's guarantee (`fuse` forwards one `deal` to both), not the takes': a package other than this
-one, granted `take`, could hand the two takes different bytes, and an owner may root-invoke its own
-`take` with no matcher at all. Each take's honesty (it retracts only after judging the pair itself)
-does not depend on who called it.
+Both runs sit inside one call tree, so the Turn seals both retracts or neither (KERNEL-45: the tree
+commits or fails whole), and `revisited` keeps a party from calling itself. An owner may still
+root-invoke its own `take` with no fuse (a nested call's principal is the grant's issuer, so `take`
+cannot tell: READ-PROT-6b condition 2): one session row is not a fuse; the fuse is the two.
 
-An owner invites a matcher by granting it `[.invoke take]` on the offering object; the grant is not
-spent (KERNEL-25's `.invoke` is not a counted right), so an offer is consumed once per STANDING ROW:
-its retract is what stops a second fuse, and a `post` at the same key afterwards is a new offer.
-The session row is an activity log row (`Lang.Std.activityLog`, guarded by `activityWaiting`); this
+A party invites its peer by granting it `[.invoke take]` on its own object; the grant is not spent
+(KERNEL-25's `.invoke` is not a counted right), so an offer is consumed once per STANDING ROW: its
+retract is what stops a second fuse, and a `post` at the same key afterwards is a new offer. The
+session row is an activity log row (`Lang.Std.activityLog`, guarded by `activityWaiting`); this
 package has no method that answers it (settlement moves value: PROT-8).
 -/
 import Lang.StdActivity
@@ -119,14 +121,15 @@ def offerRels (theta roles : List Label) (offerLimit sessionLimit : Nat) : List 
   [("offer", offerDecl theta roles offerLimit), ("session", offerSessionDecl theta sessionLimit)]
 
 /-- The offer row's guard: an insert's box is well formed (`badTerms`); a retract is the run of
-`take` or `withdraw` (`notConsumer`); an offer is never rewritten in place (`final`). -/
+`fuse`, `take` or `withdraw` (`notConsumer`); an offer is never rewritten in place (`final`). -/
 def offerGuard (theta : List Label) (d : RelDecl) : Term :=
   let fs := offerLabels theta
   -- inside the retract arm: var 0 the retracted key, var 1 the input, var 2 the request
   let consumer : Term := .case (.get (.var 2) "occasion") [
     ("adopt", refusedT "notConsumer"), ("birth", refusedT "notConsumer"),
     ("invoke", .ite (.prim .eq (.var 0) (.nat offerTakeIx)) okT
-      (.ite (.prim .eq (.var 0) (.nat offerWithdrawIx)) okT (refusedT "notConsumer"))),
+      (.ite (.prim .eq (.var 0) (.nat offerWithdrawIx)) okT
+        (.ite (.prim .eq (.var 0) (.nat offerFuseIx)) okT (refusedT "notConsumer")))),
     ("relaw", refusedT "notConsumer"), ("write", refusedT "notConsumer")]
   .lam offerStateTy (.lam reqTy (.lam (guardInTy d) (.case (.get (.var 0) "edit") [
     ("insert", guard (offerTermsOk fs (.get (.get (.var 0) "val") "terms")) "badTerms" okT),
@@ -160,11 +163,10 @@ def offerRead : List (Label × RelRead) := [("offer", ⟨1, none, false, false�
 /-- `take`'s rows argument: its own offer point and its peer's. -/
 def offerTakeRows (rels : List (Label × RelDecl)) : Ty := rowsTy rels offerRead offerRead
 
-/-- The matcher's argument: the deal as a VALUE of the take's argument type (LANG-77: the runtime
-encodes it for each take), the two parties and the grants the two takes go through. -/
+/-- The fuse's argument: the deal (the take's argument, field for field) and the grant `via`
+through which the fuser invokes its peer's `take`. -/
 def offerFuseArg (theta : List Label) : Ty :=
-  .record [("deal", offerTakeArg theta), ("viaX", optTy .digest), ("viaY", optTy .digest), ("x", .digest),
-    ("y", .digest)]
+  .record [("keys", offerKeysTy), ("pair", pairTy), ("theta", offerThetaTy theta), ("via", optTy .digest)]
 
 def offerPostArg (theta roles : List Label) : Ty :=
   .record [("n", .nat), ("role", offerRoleTy roles), ("terms", offerTermsTy theta)]
@@ -179,12 +181,17 @@ def offerTakeCall (theta : List Label) (budget : Nat) (obj via deal : Term) : Te
   .inj (offerCallTy theta) "invoke" (.record [("args", deal), ("budget", .nat budget),
     ("method", .nat offerTakeIx), ("obj", obj), ("via", via)])
 
-/-- **The matcher** (var 0 req, var 1 arg, var 2 state): both takes, the same `deal`. -/
-def offerFuseBody (theta : List Label) (budget : Nat) : Term :=
-  let a (l : Label) := Term.get (.var 1) l
-  resultT (callsT [someCallT (offerCallTy theta) (offerTakeCall theta budget (a "x") (a "viaX") (a "deal")),
-      someCallT (offerCallTy theta) (offerTakeCall theta budget (a "y") (a "viaY") (a "deal"))])
-    (.var 2) (.record [])
+/-- The other member of the argument's `pair`: `b` when `req.self` is `a`, else `a` (the run's peer
+read already refused a `self` that is neither: `peer: notParty`). -/
+def offerPeerT (req arg : Term) : Term :=
+  .ite (.prim .deq (.get req "self") (.get (.get arg "pair") "a"))
+    (.get (.get arg "pair") "b") (.get (.get arg "pair") "a")
+
+/-- **The fuser's call**: its peer's `take` on the deal it judged, `{keys, pair, theta}` of its own
+argument as a VALUE (the runtime encodes it, LANG-77), through `arg.via`. -/
+def offerFuseCall (theta : List Label) (budget : Nat) (req arg : Term) : Term :=
+  offerTakeCall theta budget (offerPeerT req arg) (.get arg "via")
+    (.record [("keys", .get arg "keys"), ("pair", .get arg "pair"), ("theta", .get arg "theta")])
 
 /-- The take's two row edits on `ok`: retract its own pinned offer, insert its session row capturing
 `{pair, theta}` (inside the verdict's `ok` arm: its payload 0, peerVal 1, peerPoint 2, ownVal 3,
@@ -231,6 +238,17 @@ def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (o
   offerTakeTree theta roles (resultTy offerStateTy [] (editTy rels) 2) (offerValTy theta roles)
     (offerTakeDone theta rels od sd)
 
+/-- The fuse's success (inside the verdict's `ok` arm: req 5, arg 6, state 7): the take's two edits
+and the one call to the peer's `take`. Shared by `Std.offer` and its escrow instance's shape. -/
+def offerFuseDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) : Term :=
+  activityResultCalls rels (callsT [someCallT (offerCallTy theta) (offerFuseCall theta budget (.var 5) (.var 6))])
+    (.var 7) (offerTakeEdits theta rels od sd)
+
+/-- **The fuse**: the take's tree, its success also invoking the peer's `take` on the judged deal. -/
+def offerFuseBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) : Term :=
+  offerTakeTree theta roles (resultTy offerStateTy [offerCallTy theta] (editTy rels) 2) (offerValTy theta roles)
+    (offerFuseDone theta rels od sd budget)
+
 def offerPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
   activityResult rels (.var 2) [activityEdit rels "offer" od "insert"
     (.record [("n", .get (.var 1) "n")])
@@ -240,7 +258,8 @@ def offerWithdrawBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
   activityResult rels (.var 2) [activityEdit rels "offer" od "retract" (.record [("n", .get (.var 1) "n")])]
 
 /-- The package, emitted directly (no `activityPackage`: it would add `start_settle`, a method that
-inserts a session row without a take). -/
+inserts a session row without a take). `fuse` and `take` read the same rows (own offer, peer's offer)
+and take the same deal; `fuse` also takes `via` and makes the one call. -/
 def offerPackageOf (theta roles : List Label) (offerLimit sessionLimit budget : Nat) : Package :=
   let rels := offerRels theta roles offerLimit sessionLimit
   let S := offerStateTy
@@ -248,8 +267,8 @@ def offerPackageOf (theta roles : List Label) (offerLimit sessionLimit budget : 
   let od := offerDecl theta roles offerLimit
   let sd := offerSessionDecl theta sessionLimit
   let fields : List (Label × Ty × Term) := [
-    ("fuse", methodTy S (offerFuseArg theta) [offerCallTy theta, offerCallTy theta] (.record []) E 0,
-      activityMethod S (offerFuseArg theta) (.record []) (offerFuseBody theta budget)),
+    ("fuse", methodTy S (offerFuseArg theta) [offerCallTy theta] (offerTakeRows rels) E 2,
+      activityMethod S (offerFuseArg theta) (offerTakeRows rels) (offerFuseBody theta roles rels od sd budget)),
     ("offer_guard", guardTy S od, offerGuard theta od),
     ("post", methodTy S (offerPostArg theta roles) [] (.record []) E 1,
       activityMethod S (offerPostArg theta roles) (.record []) (offerPostBody rels od)),

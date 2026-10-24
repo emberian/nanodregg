@@ -140,9 +140,13 @@ def activityEdit (rels : List (Label × RelDecl)) (name : Label) (d : RelDecl)
   .inj (editTy rels) name (.inj (relEditTy d) op
     (.record (if op = "retract" then [("key", key)] else [("key", key), ("val", value)])))
 
+/-- A method's result with its calls: `{calls, edits, state}`, the edits each in its own slot. -/
+def activityResultCalls (rels : List (Label × RelDecl)) (calls state : Term) (edits : List Term) : Term :=
+  resultT calls state (.record ((slotLabels "e" edits.length).zip (edits.map fun t => someCallT (editTy rels) t)))
+
+/-- A method's result with no calls. -/
 def activityResult (rels : List (Label × RelDecl)) (state : Term) (edits : List Term) : Term :=
-  resultT (.record []) state (.record ((slotLabels "e" edits.length).zip
-    (edits.map fun t => someCallT (editTy rels) t)))
+  activityResultCalls rels (.record []) state edits
 
 def activityMethod (S A R : Ty) (body : Term) : Term :=
   .lam R (.lam S (.lam A (.lam reqTy body)))
