@@ -107,15 +107,16 @@ theorem tick_invoke_kept {w : Where} {m : Mem} {es : List Ev} {a : Tick}
 /-- **The resident invokes only kept answers**: in one process's lifetime, an invoke of `(r, t)`
 is of the answer the process started with or one it kept (`keep r t true`) in the same lifetime. -/
 theorem lifetime_invoke_kept {w : Where} :
-    ∀ {m : Mem} {es : List Ev}, Lifetime w m es → ∀ {sh : Shape} {r : Ring} {t : ByteArray}
-      {x : Except String Reply}, Ev.cmd (.invoke sh r t) x ∈ core es →
-      m.kept = some (r, t) ∨ Ev.keep r t true ∈ core es := by
-  intro m es hl
+    ∀ {m : Mem} {ess : List (List Ev)}, Ticks w m ess → ∀ {sh : Shape} {r : Ring} {t : ByteArray}
+      {x : Except String Reply}, Ev.cmd (.invoke sh r t) x ∈ core ess.flatten →
+      m.kept = some (r, t) ∨ Ev.keep r t true ∈ core ess.flatten := by
+  intro m ess hl
   induction hl with
-  | last hr => intro sh r t x he; exact tick_invoke_kept hr he
+  | nil => intro sh r t x he; simp at he
+  | last hr => intro sh r t x he; simpa using tick_invoke_kept hr (by simpa using he)
   | @next m₁ m' es₁ rest hr _ ih =>
     intro sh r t x he
-    rw [core_append] at he ⊢
+    rw [List.flatten_cons, core_append] at he ⊢
     rcases List.mem_append.mp he with he | he
     · rcases tick_invoke_kept hr he with h | h
       · exact .inl h
@@ -150,14 +151,14 @@ and `pending` retracted there; and that upsert is the `answer` step of the log r
 the row the kernel found at the key. -/
 theorem answered_row_is_kept_answer [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
     {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D} {w : Resident.Where} {m : Resident.Mem}
-    {es : List Resident.Ev}
+    {ess : List (List Resident.Ev)}
     (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
-    (h : Lifetime.Lifetime w m es) (hm : m.shape = none) (hk : Lifetime.KeptOk m.kept)
-    (hs : StdioLeg X dc B me w.conf (Resident.core es))
+    (h : ResidentRun.Ticks w m ess) (hm : m.shape = none) (hk : Lifetime.KeptOk m.kept)
+    (hs : StdioLeg X dc B me w.conf (Resident.core ess.flatten))
     {sh : Resident.Shape} {r : Resident.Ring} {t : ByteArray} {rr : Resident.Reply}
-    (hi : Resident.Ev.cmd (.invoke sh r t) (.ok rr) ∈ Resident.core es)
+    (hi : Resident.Ev.cmd (.invoke sh r t) (.ok rr) ∈ Resident.core ess.flatten)
     (hok : rr.exit = CommandExit.ok.code) (rc : Lang.ReceiptCheck) :
-    (m.kept = some (r, t) ∨ Resident.Ev.keep r t true ∈ Resident.core es) ∧
+    (m.kept = some (r, t) ∨ Resident.Ev.keep r t true ∈ Resident.core ess.flatten) ∧
     ∃ (o g : D) (wf wb : World D) (u : Unsigned D) (sig : ByteArray) (hh : Nat) (td : D) (args : ByteArray)
       (P : D) (pc : Cell) (pk : Lang.Package) (sg : Lang.Sig),
       X.digestOf w.conf.bell = some o ∧ u.member = me.member ∧

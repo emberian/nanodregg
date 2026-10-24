@@ -26,8 +26,13 @@ anything. It reads `pkg/resident.conf`, ONE Lang data value at `Bell.confTy`. Th
    forgotten; if it is still pending, the resident ends `answerRefused NAME` (`program` for a
    method's check such as `notResident`, `grantRight` for a grant without the right). The kept
    text stays, so a restart answers again but never asks again.
-A transport failure on either socket is logged and retried at the next tick: a not-sent ask costs
-nothing, a spent one is never repeated. Every line on stderr starts `resident: `.
+A transport failure on either socket, and every member reply that did not settle (a describe or read
+that did not answer `ok`; an answer that came back neither `ok` nor `refused`: `uncertain`, `behind`,
+`declined`, `client`, `open`, `hostContradicted`, `pageIo`; a refusal whose re-read failed), is logged
+and retried at the next tick: a not-sent ask costs nothing, a spent one is never repeated. Retries
+are bounded: `retriesMax` ticks in a row that ended on one, and the resident ends `retryExhausted`
+naming the last (HOSTING-48, `Proofs.ResidentRun.no_refusal_repeats_forever`); any tick that
+settles starts the count again. Every line on stderr starts `resident: `.
 
 The tick is a tree of effects (`Prog`, HOSTING-36): `tickP` builds it, `Prog.interp` performs it one
 node at a time (HOSTING-37: `interp_runs`). The order above is a theorem over every path of that tree, for every reply the
@@ -89,20 +94,23 @@ inductive Exit
   | volume
   /-- `lifetimeTicks` ran out -/
   | lifetime
+  /-- `retriesMax` ticks in a row ended on a retry (the detail names the last) -/
+  | retryExhausted
   deriving DecidableEq, Repr
 
 namespace Exit
 
-def all : List Exit := [argvNotPlan, confMissing, confMalformed, bellShape, answerRefused, volume, lifetime]
+def all : List Exit :=
+  [argvNotPlan, confMissing, confMalformed, bellShape, answerRefused, volume, lifetime, retryExhausted]
 
 def code : Exit → UInt32
   | argvNotPlan => 10 | confMissing => 11 | confMalformed => 12 | bellShape => 13
-  | answerRefused => 14 | volume => 15 | lifetime => 16
+  | answerRefused => 14 | volume => 15 | lifetime => 16 | retryExhausted => 17
 
 def name : Exit → String
   | argvNotPlan => "argvNotPlan" | confMissing => "confMissing" | confMalformed => "confMalformed"
   | bellShape => "bellShape" | answerRefused => "answerRefused" | volume => "volume"
-  | lifetime => "lifetime"
+  | lifetime => "lifetime" | retryExhausted => "retryExhausted"
 
 end Exit
 
@@ -131,17 +139,26 @@ def refusedName (stderr : ByteArray) : String :=
 structure Mem where
   shape : Option Shape
   kept : Option (Ring × ByteArray)
-  /-- refusals in a row whose bell state could not be re-read (`deliver`) -/
-  unread : Nat := 0
+  /-- ticks in a row that ended on a retry (`retry`); a tick that settles sets it to 0 -/
+  retries : Nat := 0
 
-/-- Refused answers in a row with the state unread before the resident ends `answerRefused`:
-re-delivering never asks, but a refusal must not repeat forever. -/
-def unreadMax : Nat := 8
+/-- Ticks in a row that may end on a retry before the resident ends `retryExhausted`: re-delivering
+never asks, but nothing may repeat forever (law 4: a static bound on everything). 32 ticks at
+`tickMs` is half a minute, during which every tick's read and answer each catch follow up by up to
+`pagesPerCommandMax` pages; past it the resident ends by name and its controller's restart budget
+(`Controller.restartsMax`) decides what comes next. -/
+def retriesMax : Nat := 32
 
 /-- The result of one tick: go on with this memory, or end. -/
 inductive Tick
   | next (m : Mem)
   | stop (e : Exit) (detail : String)
+
+/-- The end of a tick that did not settle: go on with one more retry counted, or end
+`retryExhausted WHY` once that would be `retriesMax` in a row. -/
+def retry (m : Mem) (why : String) : Tick :=
+  if m.retries + 1 < retriesMax then .next { m with retries := m.retries + 1 }
+  else .stop .retryExhausted why
 
 /-- The files of one resident. -/
 structure Where where
@@ -341,18 +358,17 @@ def deliverP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :=
   | none => .done (.stop .bellShape "answer unprintable (unreachable: answerArg_some)")
   | some _ =>
   .cmd (.invoke sh ring t) fun
-  | .error e => .say s!"answer unsettled {e}" (.done (.next m))
+  | .error e => .say s!"answer unsettled {e}" (.done (retry m s!"answer {e}"))
   | .ok r =>
     if r.exit = Protocol.CommandExit.ok.code then
       .say s!"answered {ring.notBefore} {Lang.Print.hex ring.ringer} {t.size} bytes" <|
-        forgetThen (.next { m with kept := none, unread := 0 })
+        forgetThen (.next { m with kept := none, retries := 0 })
     else if r.exit = Protocol.CommandExit.refused.code then
       let n := refusedName r.stderr
       let line := ((String.fromUTF8? r.stderr).getD "?").trimAsciiEnd.toString
       let unread (why : String) : Prog Tick :=
         .say s!"answer refused ({line}); state unread {why}" <|
-          if m.unread + 1 ≥ unreadMax then .done (.stop .answerRefused s!"{n} ({line}; state unread)")
-          else .done (.next { m with unread := m.unread + 1 })
+          .done (retry m s!"answer refused {n} ({line}); state unread {why}")
       .cmd (.reread sh) fun
       | .error e => unread e
       | .ok rr =>
@@ -363,8 +379,8 @@ def deliverP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :=
           if ring ∈ pending then .done (.stop .answerRefused s!"{n} ({line})")
           else
             .say s!"answer refused ({line}); the ring is no longer pending" <|
-              forgetThen (.next { m with kept := none, unread := 0 })
-    else .say s!"answer unsettled exit {r.exit}" (.done (.next m))
+              forgetThen (.next { m with kept := none, retries := 0 })
+    else .say s!"answer unsettled exit {r.exit}" (.done (retry m s!"answer exit {r.exit}"))
 
 /-- After the ask: say how it went and keep the answer `t` (the intent replaced), then deliver. -/
 def answeredP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :=
@@ -376,15 +392,15 @@ def answeredP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :
 def actOn (w : Where) (sh : Shape) (m : Mem) (pending : List Ring) : Prog Tick :=
   match decideTick pending m.kept with
   | .idle =>
-    if m.kept.isSome then forgetThen (.next { m with kept := none })
-    else .done (.next { m with kept := none })
+    if m.kept.isSome then forgetThen (.next { m with kept := none, retries := 0 })
+    else .done (.next { m with kept := none, retries := 0 })
   | .answer ring t => deliverP sh m ring t
   | .ask ring =>
     -- the intent, before a byte of the ask leaves
     .keep ring intentText fun ok =>
     if !ok then .done (.stop .volume "keep") else
     .ask ring (askOf w.conf ring) fun
-    | .notSent why => .say s!"ask not sent {why}" <| forgetThen (.next { m with kept := none })
+    | .notSent why => .say s!"ask not sent {why}" <| forgetThen (retry { m with kept := none } s!"ask {why}")
     | .answered a => answeredP sh m ring (answerText a)
     | .lost why =>
       .say s!"ask spent, answer lost {why}" <| answeredP sh m ring (fit (named s!"unanswered {why}"))
@@ -392,10 +408,10 @@ def actOn (w : Where) (sh : Shape) (m : Mem) (pending : List Ring) : Prog Tick :
 /-- The tick's one read of every pending ring, then its act. -/
 def readP (w : Where) (sh : Shape) (m : Mem) : Prog Tick :=
   .cmd (.read sh) fun
-  | .error e => .say s!"read {e}" (.done (.next m))
+  | .error e => .say s!"read {e}" (.done (retry m s!"read {e}"))
   | .ok r =>
     if r.exit ≠ Protocol.CommandExit.ok.code then
-      .say s!"read exit {r.exit} {String.fromUTF8? r.stderr |>.getD "?"}" (.done (.next m))
+      .say s!"read exit {r.exit} {String.fromUTF8? r.stderr |>.getD "?"}" (.done (retry m s!"read exit {r.exit}"))
     else
     match Ring.readAll sh ((String.fromUTF8? r.stdout).getD "") with
     | .error e => .done (.stop .bellShape e)
@@ -407,10 +423,11 @@ def tickP (w : Where) (m : Mem) : Prog Tick :=
   | some sh => readP w sh m
   | none =>
     .cmd .describe fun
-    | .error e => .say s!"describe {e}" (.done (.next m))
+    | .error e => .say s!"describe {e}" (.done (retry m s!"describe {e}"))
     | .ok r =>
       if r.exit ≠ Protocol.CommandExit.ok.code then
-        .say s!"describe exit {r.exit} {String.fromUTF8? r.stderr |>.getD "?"}" (.done (.next m))
+        .say s!"describe exit {r.exit} {String.fromUTF8? r.stderr |>.getD "?"}"
+          (.done (retry m s!"describe exit {r.exit}"))
       else
         match Shape.read (String.fromUTF8? r.stdout |>.getD "") with
         | .ok sh =>

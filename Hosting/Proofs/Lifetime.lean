@@ -1,10 +1,10 @@
 /-
 # Hosting.Proofs.Lifetime — one resident process's ticks: where its shape came from, and what it holds
 
-`Lifetime w m es`: the effects of one process's ticks, in order: each tick a path of `tickP` (every
-result each effect could have) from the memory the tick before went on with; the last tick ends any
-way. `run` starts it at `{ shape := none, kept := seed }`, the seed being what the volume held
-(`seedOf`).
+`ResidentRun.Ticks w m ess`: the effects of one process's ticks, tick by tick (`ess.flatten` in
+order): each tick a path of `tickP` (every result each effect could have) from the memory the tick
+before went on with. `run` starts it at `{ shape := none, kept := seed }`, the seed being what the
+volume held (`seedOf`). (HOSTING-48: the flattened twin `Lifetime` is deleted; `Ticks` is the one.)
 
 - `tick_shape` / `tick_invoke_shape`: a tick hands on the shape it was given, or the one its own
   describe read; every invoke a tick sends is at the shape it was given or at the one its describe,
@@ -23,15 +23,6 @@ namespace Nanodregg.Hosting.Proofs.Lifetime
 
 open Nanodregg.Hosting Nanodregg.Hosting.Resident Nanodregg.Hosting.Proofs.ResidentRun
 
-/-- One process's ticks (see the module doc). -/
-inductive Lifetime (w : Where) : Mem → List Ev → Prop
-  | last {m : Mem} {es : List Ev} {a : Tick} : Runs (tickP w m) es a → Lifetime w m es
-  | next {m m' : Mem} {es rest : List Ev} : Runs (tickP w m) es (.next m') → Lifetime w m' rest →
-      Lifetime w m (es ++ rest)
-
-theorem core_append (es rest : List Ev) : core (es ++ rest) = core es ++ core rest := by
-  simp [core, List.filter_append]
-
 /-! ## The shape a tick hands on -/
 
 theorem forgetThen_shape {n : Tick} {m' : Mem} {es : List Ev} (h : Runs (forgetThen n) es (.next m')) :
@@ -45,7 +36,7 @@ theorem deliver_shape {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es :
   · cases h with
     | cmd x h =>
       rcases x with e | rr
-      · simp only at h; cases h with | say h => cases h; rfl
+      · simp only at h; cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
       · simp only at h
         split at h
         · cases h with
@@ -55,17 +46,17 @@ theorem deliver_shape {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es :
             | cmd y h =>
               rcases y with e | rr'
               · simp only at h
-                cases h with | say h => split at h <;> cases h; rfl
+                cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
               · simp only at h
                 split at h
-                · cases h with | say h => split at h <;> cases h; rfl
+                · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
                 · split at h
                   · cases h
                   · split at h
                     · cases h
                     · cases h with
                       | say h => have hn := forgetThen_shape h; cases hn; rfl
-          · cases h with | say h => cases h; rfl
+          · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
 
 theorem answered_shape {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
     (h : Runs (answeredP sh m r t) es (.next m')) : m'.shape = m.shape := by
@@ -98,7 +89,7 @@ theorem actOn_shape {w : Where} {sh : Shape} {m m' : Mem} {p : List Ring} {es : 
           rcases x with why | ans | why
           · simp only at h
             cases h with
-            | say h => have hn := forgetThen_shape h; cases hn; rfl
+            | say h => obtain rfl := retry_next (forgetThen_shape h); rfl
           · simp only at h
             have hs := answered_shape h
             exact hs
@@ -112,10 +103,10 @@ theorem read_shape {w : Where} {sh : Shape} {m m' : Mem} {es : List Ev}
   cases h with
   | cmd y h =>
     rcases y with e | rr
-    · simp only at h; cases h with | say h => cases h; rfl
+    · simp only at h; cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
     · simp only at h
       split at h
-      · cases h with | say h => cases h; rfl
+      · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
       · split at h
         · cases h
         · exact actOn_shape h
@@ -131,10 +122,10 @@ theorem tick_shape {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w m)
     cases h with
     | cmd y h =>
       rcases y with e | rr
-      · simp only at h; cases h with | say h => cases h; exact .inl rfl
+      · simp only at h; cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; exact .inl rfl
       · simp only at h
         split at h
-        · cases h with | say h => cases h; exact .inl rfl
+        · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; exact .inl rfl
         · rename_i hok
           split at h
           · rename_i sh hsh
@@ -240,26 +231,27 @@ lifetime started with no shape (as `run` starts every one), every invoke `.cmd (
 is preceded, in the order the effects were performed, by a describe `y` whose reply reads as
 exactly `sh`, maybe ticks earlier. -/
 theorem shape_provenance {w : Where} :
-    ∀ {m : Mem} {es : List Ev}, Lifetime w m es → ∀ {sh : Shape} {r : Ring} {t : ByteArray}
-      {x : Except String Reply}, Ev.cmd (.invoke sh r t) x ∈ core es →
-      m.shape = some sh ∨ ∃ y pre mid post, core es = pre ++ .cmd .describe y :: mid ++
+    ∀ {m : Mem} {ess : List (List Ev)}, Ticks w m ess → ∀ {sh : Shape} {r : Ring} {t : ByteArray}
+      {x : Except String Reply}, Ev.cmd (.invoke sh r t) x ∈ core ess.flatten →
+      m.shape = some sh ∨ ∃ y pre mid post, core ess.flatten = pre ++ .cmd .describe y :: mid ++
         .cmd (.invoke sh r t) x :: post ∧ describedShape y = some sh := by
-  intro m es hl
+  intro m ess hl
   induction hl with
+  | nil => intro sh r t x he; simp at he
   | last hr =>
     intro sh r t x he
-    rcases tick_invoke_shape hr he with hs | ⟨y, rest, hc, hy, hm⟩
+    rcases tick_invoke_shape hr (by simpa using he) with hs | ⟨y, rest, hc, hy, hm⟩
     · exact .inl hs
     · obtain ⟨mid, post, rfl⟩ := List.append_of_mem hm
-      exact .inr ⟨y, [], mid, post, by rw [hc]; simp, hy⟩
+      exact .inr ⟨y, [], mid, post, by simp [hc], hy⟩
   | @next m₁ m' es₁ rest hr _ ih =>
     intro sh r t x he
-    rw [core_append] at he ⊢
+    rw [List.flatten_cons, core_append] at he ⊢
     rcases List.mem_append.mp he with he | he
     · rcases tick_invoke_shape hr he with hs | ⟨y, rest₁, hc, hy, hm⟩
       · exact .inl hs
       · obtain ⟨mid, post, rfl⟩ := List.append_of_mem hm
-        exact .inr ⟨y, [], mid, post ++ core rest, by rw [hc]; simp, hy⟩
+        exact .inr ⟨y, [], mid, post ++ core rest.flatten, by rw [hc]; simp, hy⟩
     · rcases ih he with hs | ⟨y, pre, mid, post, hc, hy⟩
       · rcases tick_shape hr with hm | ⟨y, rest₁, hc₁, hy⟩
         · exact .inl (hm ▸ hs)
@@ -488,15 +480,16 @@ theorem tick_invoke_ok {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs
 /-- **Every ring and answer the resident invokes, in a whole lifetime, is within Lang's bounds**,
 when the seed it started with is (`seed_ok`: what `run` reads back from the volume is). -/
 theorem lifetime_bounds {w : Where} :
-    ∀ {m : Mem} {es : List Ev}, Lifetime w m es → KeptOk m.kept → ∀ {sh : Shape} {r : Ring}
-      {t : ByteArray} {x : Except String Reply}, Ev.cmd (.invoke sh r t) x ∈ core es →
+    ∀ {m : Mem} {ess : List (List Ev)}, Ticks w m ess → KeptOk m.kept → ∀ {sh : Shape} {r : Ring}
+      {t : ByteArray} {x : Except String Reply}, Ev.cmd (.invoke sh r t) x ∈ core ess.flatten →
       RingOk r ∧ t.size ≤ Lang.Bounds.bytesMax := by
-  intro m es hl
+  intro m ess hl
   induction hl with
-  | last hr => intro hk sh r t x he; exact tick_invoke_ok hr hk he
+  | nil => intro hk sh r t x he; simp at he
+  | last hr => intro hk sh r t x he; exact tick_invoke_ok hr hk (by simpa using he)
   | @next m₁ m' es₁ rest hr _ ih =>
     intro hk sh r t x he
-    rw [core_append] at he
+    rw [List.flatten_cons, core_append] at he
     rcases List.mem_append.mp he with he | he
     · exact tick_invoke_ok hr hk he
     · refine ih ?_ he

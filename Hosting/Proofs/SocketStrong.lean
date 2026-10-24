@@ -640,12 +640,12 @@ resident's own check of the description's `core` line, HOSTING-45), which is wha
 (HOSTING-44; over the frames' results `S` of `Reach`, an entry absent at `wb`, HOSTING-47). -/
 theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
     {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D} {w : Resident.Where} {m : Resident.Mem}
-    {es : List Resident.Ev}
+    {ess : List (List Resident.Ev)}
     (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
-    (h : Lifetime.Lifetime w m es) (hm : m.shape = none) (hk : Lifetime.KeptOk m.kept)
-    (hs : StdioLeg X dc B me w.conf (Resident.core es))
+    (h : ResidentRun.Ticks w m ess) (hm : m.shape = none) (hk : Lifetime.KeptOk m.kept)
+    (hs : StdioLeg X dc B me w.conf (Resident.core ess.flatten))
     {sh : Resident.Shape} {r : Resident.Ring} {t : ByteArray} {rr : Resident.Reply}
-    (hi : Resident.Ev.cmd (.invoke sh r t) (.ok rr) ∈ Resident.core es)
+    (hi : Resident.Ev.cmd (.invoke sh r t) (.ok rr) ∈ Resident.core ess.flatten)
     (hok : rr.exit = CommandExit.ok.code) :
     ∃ (o g : D) (wf : World D) (u : Unsigned D) (sig : ByteArray) (hh : Nat) (td : D) (args : ByteArray),
       X.digestOf w.conf.bell = some o ∧ X.digestOf w.conf.grant = some g ∧

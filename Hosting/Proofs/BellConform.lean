@@ -9,8 +9,8 @@ again. This module states it across ticks: once an ask about a ring has left in 
 asks about that ring again only after something FREED it, an invoke of its answer that came back
 `ok`, or a read of the pending rings that no longer listed it.
 
-- `Ticks w m ess`: a chain of ticks of one process life, each a path of `tickP` (every reply, every
-  keep and forget result, `Runs`), each tick from the memory the last one went on with.
+- `ResidentRun.Ticks w m ess`: a chain of ticks of one process life, each a path of `tickP` (every
+  reply, every keep and forget result, `Runs`), each tick from the memory the last one went on with.
 - (private) `debtRun`: reading a trace, the ring whose spent ask is not yet freed; an ask while one is owed
   breaks the round (`none`); a spent ask owes its ring (a not-sent ask owes nothing: it is forgotten
   and may be asked again, as the meter was not charged); `frees r` clears it.
@@ -36,14 +36,6 @@ import Hosting.Proofs.ResidentRun
 namespace Nanodregg.Hosting.Proofs.BellConform
 
 open Nanodregg.Hosting Nanodregg.Hosting.Resident Nanodregg.Hosting.Proofs.ResidentRun
-
-/-- A chain of ticks: each a path of `tickP` from the memory the previous one went on with. -/
-inductive Ticks (w : Where) : Mem → List (List Ev) → Prop
-  | nil (m : Mem) : Ticks w m []
-  | last {m : Mem} {es : List Ev} {e : Exit} {d : String} :
-      Runs (tickP w m) es (.stop e d) → Ticks w m [es]
-  | next {m m' : Mem} {es : List Ev} {ess : List (List Ev)} :
-      Runs (tickP w m) es (.next m') → Ticks w m' ess → Ticks w m (es :: ess)
 
 /-- An effect that frees ring `r` for another ask: an invoke of `r`'s answer answered `ok`, or a read
 of the pending rings (the tick's read or the re-read) that listed them without `r`. -/
@@ -129,9 +121,6 @@ theorem keptAfter_core (k : Option (Ring × ByteArray)) (es : List Ev) :
     | forget b => cases b <;> simp [keptAfter, ih]
     | cmd c x => simp [keptAfter, ih]
     | ask r q x => simp [keptAfter, ih]
-
-theorem core_append (l₁ l₂ : List Ev) : core (l₁ ++ l₂) = core l₁ ++ core l₂ := by
-  simp [core, List.filter_append]
 
 /-! ## One tick keeps the round -/
 

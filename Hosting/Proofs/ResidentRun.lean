@@ -27,6 +27,12 @@ function of its name (`Cmd.argv`), so a name in a trace is the command sent.
 - `kept_follows`: on every path that goes on (`.next m'`), the answer the tick hands the next one
   (`m'.kept`) is what its successful keeps and forgets leave, in order, from the one it was given:
   the memory never holds a text the volume did not report kept.
+- Retries (HOSTING-48): `tick_retry`: a path holding an `Unsettled` effect (a member command that
+  failed or answered an exit that does not settle it, `declined NAME` and `behind` among them; an
+  ask never sent) ends `Retried`: one more retry counted, below `retriesMax`, or `retryExhausted` at
+  it. `tick_lt`: every memory a tick hands on is below the bound. `Ticks` is the one chain of a
+  process's ticks, and `no_refusal_repeats_forever`: a chain whose every tick is unsettled is at
+  most `retriesMax - m.retries` long.
 - Teeth (`order_refuses_*`): an ask before the intent, an ask after a failed intent keep, an invoke
   of the intent itself, an invoke of another pair than the kept one, an invoke with nothing kept, a
   second ask, a forget after a refused answer whose ring the re-read still lists, a second
@@ -67,6 +73,50 @@ inductive Runs {α : Type} : Prog α → List Ev → α → Prop
   simp [core, Ev.quiet]
 @[simp] theorem core_ask (r : Ring) (q : Broker.Ask) (x : AskEnd) (es : List Ev) :
     core (.ask r q x :: es) = .ask r q x :: core es := by simp [core, Ev.quiet]
+
+/-! ## Retries: the vocabulary -/
+
+/-- An effect that did not settle, so the tick it ends is a retry (`retry`): a member command that
+failed (`.error`) or answered an exit that is not its settling one (a describe, a read or the re-read
+anything but `ok`; an answer neither `ok` nor `refused`), or an ask that never left. -/
+def Unsettled : Ev → Prop
+  | .cmd (.invoke _ _ _) x => match x with
+    | .error _ => True
+    | .ok rr => rr.exit ≠ Protocol.CommandExit.ok.code ∧ rr.exit ≠ Protocol.CommandExit.refused.code
+  | .cmd _ x => match x with
+    | .error _ => True
+    | .ok rr => rr.exit ≠ Protocol.CommandExit.ok.code
+  | .ask _ _ (.notSent _) => True
+  | _ => False
+
+/-- A tick from a memory holding `n` retries ended on one more: it goes on with `n + 1`, still below
+`retriesMax`, or `n + 1` reached the bound and it ended `retryExhausted`. -/
+def Retried (n : Nat) (a : Tick) : Prop :=
+  (∃ m', a = .next m' ∧ m'.retries = n + 1 ∧ m'.retries < retriesMax) ∨
+    (retriesMax ≤ n + 1 ∧ ∃ d, a = .stop .retryExhausted d)
+
+theorem retry_retried (m : Mem) (why : String) : Retried m.retries (retry m why) := by
+  unfold retry Retried
+  split
+  · exact .inl ⟨_, rfl, rfl, by assumption⟩
+  · exact .inr ⟨by omega, _, rfl⟩
+
+theorem retry_next {m m' : Mem} {why : String} (h : retry m why = .next m') :
+    m' = { m with retries := m.retries + 1 } := by
+  unfold retry at h
+  split at h
+  · cases h; rfl
+  · cases h
+
+theorem done_retry {m m' : Mem} {why : String} {es : List Ev} (h : Runs (.done (retry m why)) es (.next m')) :
+    es = [] ∧ m' = { m with retries := m.retries + 1 } := by
+  generalize hx : retry m why = x at h
+  cases h
+  exact ⟨rfl, retry_next hx⟩
+
+theorem done_retried {m : Mem} {why : String} {es : List Ev} {a : Tick} (h : Runs (.done (retry m why)) es a) :
+    es = [] ∧ Retried m.retries a := by
+  cases h; exact ⟨rfl, retry_retried m why⟩
 
 /-- What follows an invoke for ring `r` that answered `x`: taken (exit ok) → one forget; refused →
 the re-read, and a forget ONLY when the re-read listed the rings and `r` is no longer among them
@@ -159,12 +209,12 @@ theorem deliver_core {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : Lis
             unfold readRings
             rcases y with e | rr'
             · simp only at h ⊢
-              cases h with | say h => split at h <;> cases h <;> rfl
+              cases h with | say h => cases h; rfl
             · simp only at h ⊢
               split at h
               · rename_i hx
                 simp only [hx, if_false]
-                cases h with | say h => split at h <;> cases h <;> rfl
+                cases h with | say h => cases h; rfl
               · rename_i hx
                 simp only [Decidable.not_not] at hx
                 simp only [hx, if_true]
@@ -480,7 +530,7 @@ theorem deliver_kept {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : 
     | cmd x h =>
       simp only [keptAfter]
       rcases x with e | rr
-      · simp only at h; cases h with | say h => cases h; rfl
+      · simp only at h; cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
       · simp only at h
         split at h
         · cases h with
@@ -491,17 +541,17 @@ theorem deliver_kept {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : 
               simp only [keptAfter]
               rcases y with e | rr'
               · simp only at h
-                cases h with | say h => split at h <;> cases h; rfl
+                cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
               · simp only at h
                 split at h
-                · cases h with | say h => split at h <;> cases h; rfl
+                · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
                 · split at h
                   · cases h
                   · split at h
                     · cases h
                     · cases h with
                       | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
-          · cases h with | say h => cases h; rfl
+          · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
 
 /-- **An abandoned ring does not stop the queue** (cv 01a1682e-7f9d, LANG-76): an answer refused
 while the re-read `pending` no longer lists its ring (another member retired it between the read
@@ -511,7 +561,7 @@ theorem deliver_gone_continues {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray}
     (h : Runs (deliverP sh m r t) es n) {rr : Reply} (href : rr.exit = Protocol.CommandExit.refused.code)
     {y : Except String Reply} {p : List Ring} (hp : readRings sh y = some p) (hr : r ∉ p) {rest : List Ev}
     (hes : es = .cmd (.invoke sh r t) (.ok rr) :: .cmd (.reread sh) y :: rest) :
-    n = .next { m with kept := none, unread := 0 } ∨ n = .stop .volume "forget" := by
+    n = .next { m with kept := none, retries := 0 } ∨ n = .stop .volume "forget" := by
   subst hes
   obtain ⟨arg, harg⟩ := Option.isSome_iff_exists.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some r t)
   unfold deliverP at h
@@ -583,7 +633,7 @@ theorem actOn_kept {w : Where} {sh : Shape} {m m' : Mem} {p : List Ring} {es : L
           rcases x with why | ans | why
           · simp only at h
             cases h with
-            | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
+            | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; obtain rfl := retry_next hn; rfl
           · simp only at h
             obtain ⟨hk, es', rfl⟩ := answered_kept h
             simpa [keptAfter] using hk
@@ -600,10 +650,10 @@ theorem read_kept {w : Where} {sh : Shape} {m m' : Mem} {es : List Ev}
   | cmd y h =>
     simp only [keptAfter]
     rcases y with e | rr
-    · simp only at h; cases h with | say h => cases h; rfl
+    · simp only at h; cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
     · simp only at h
       split at h
-      · cases h with | say h => cases h; rfl
+      · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
       · split at h
         · cases h
         · exact actOn_kept h
@@ -621,13 +671,335 @@ theorem kept_follows {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w 
     | cmd y h =>
       simp only [keptAfter]
       rcases y with e | rr
-      · simp only at h; cases h with | say h => cases h; rfl
+      · simp only at h; cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
       · simp only at h
         split at h
-        · cases h with | say h => cases h; rfl
+        · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
         · split at h
           · cases h with | say h => simpa using read_kept h
           · cases h with | say h => cases h
+
+/-! ## No refusal repeats forever (HOSTING-48) -/
+
+theorem mem_core_cons {e e₀ : Ev} {es : List Ev} (h : e ∈ core (e₀ :: es)) : e = e₀ ∨ e ∈ core es := by
+  unfold core at h ⊢
+  rw [List.filter_cons] at h
+  split at h
+  · exact List.mem_cons.mp h
+  · exact .inr h
+
+theorem unsettled_cons {e₀ : Ev} {es : List Ev} (h₀ : ¬ Unsettled e₀)
+    (h : ∃ e ∈ core (e₀ :: es), Unsettled e) : ∃ e ∈ core es, Unsettled e := by
+  obtain ⟨e, he, hu⟩ := h
+  rcases mem_core_cons he with rfl | he
+  · exact absurd hu h₀
+  · exact ⟨e, he, hu⟩
+
+theorem not_unsettled_keep (r : Ring) (t : ByteArray) (b : Bool) : ¬ Unsettled (.keep r t b) := id
+theorem not_unsettled_forget (b : Bool) : ¬ Unsettled (.forget b) := id
+theorem not_unsettled_say (s : String) : ¬ Unsettled (.say s) := id
+
+theorem forgetThen_settled {n : Tick} {es : List Ev} {a : Tick} (h : Runs (forgetThen n) es a) :
+    ¬ ∃ e ∈ core es, Unsettled e := by
+  obtain ⟨b, hb⟩ := forgetThen_core h
+  rintro ⟨e, he, hu⟩
+  rw [hb, List.mem_singleton] at he
+  subst he; exact hu
+
+/-- `deliver r t`: a path holding an unsettled effect ends a retry. -/
+theorem deliver_retry {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : List Ev} {a : Tick}
+    (h : Runs (deliverP sh m r t) es a) (hu : ∃ e ∈ core es, Unsettled e) : Retried m.retries a := by
+  unfold deliverP at h
+  split at h
+  · cases h; simp at hu
+  · cases h with
+    | cmd x h =>
+      rcases x with err | rr
+      · simp only at h
+        cases h with | say h => exact (done_retried h).2
+      · simp only at h
+        split at h
+        · rename_i hok
+          cases h with
+          | say h =>
+            obtain ⟨b, hb⟩ := forgetThen_core h
+            simp [hb, Unsettled, hok] at hu
+        · rename_i hok
+          split at h
+          · rename_i href
+            cases h with
+            | cmd y h =>
+              rcases y with err | rr'
+              · simp only at h
+                cases h with | say h => exact (done_retried h).2
+              · simp only at h
+                split at h
+                · cases h with | say h => exact (done_retried h).2
+                · rename_i hx
+                  split at h
+                  · cases h; simp [Unsettled, href, hx] at hu
+                  · split at h
+                    · cases h; simp [Unsettled, href, hx] at hu
+                    · cases h with
+                      | say h =>
+                        obtain ⟨b, hb⟩ := forgetThen_core h
+                        simp [hb, Unsettled, href, hx] at hu
+          · cases h with | say h => exact (done_retried h).2
+
+theorem answered_retry {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : List Ev} {a : Tick}
+    (h : Runs (answeredP sh m r t) es a) (hu : ∃ e ∈ core es, Unsettled e) : Retried m.retries a := by
+  unfold answeredP at h
+  cases h with
+  | say h =>
+    have hu1 := unsettled_cons (not_unsettled_say _) hu
+    cases h with
+    | keep b h =>
+      have hu2 := unsettled_cons (not_unsettled_keep _ _ _) hu1
+      cases b
+      · simp only [Bool.false_eq_true, if_false] at h
+        cases h; simp at hu2
+      · simp only [if_true] at h
+        have := deliver_retry h hu2
+        exact this
+
+/-- What a tick does with the rings it read: a path holding an unsettled effect ends a retry, or
+`volume` when the forget after an ask that never left failed. -/
+theorem actOn_retry {w : Where} {sh : Shape} {m : Mem} {p : List Ring} {es : List Ev} {a : Tick}
+    (h : Runs (actOn w sh m p) es a) (hu : ∃ e ∈ core es, Unsettled e) :
+    Retried m.retries a ∨ a = .stop .volume "forget" := by
+  unfold actOn at h
+  split at h
+  · split at h
+    · exact absurd hu (forgetThen_settled h)
+    · cases h; simp at hu
+  · exact .inl (deliver_retry h hu)
+  · cases h with
+    | keep b h =>
+      cases b
+      · simp only [Bool.not_false, if_true] at h
+        cases h; simp [Unsettled] at hu
+      · simp only [Bool.not_true, Bool.false_eq_true, if_false] at h
+        cases h with
+        | ask x h =>
+          rcases x with why | ans | why
+          · simp only at h
+            cases h with
+            | say h =>
+              unfold forgetThen at h
+              cases h with
+              | forget b h =>
+                cases b
+                · simp only [Bool.false_eq_true, if_false] at h; cases h; exact .inr rfl
+                · simp only [if_true] at h; exact .inl (done_retried h).2
+          · simp only at h
+            have := answered_retry h
+              (unsettled_cons (by simp [Unsettled]) (unsettled_cons (not_unsettled_keep _ _ _) hu))
+            exact .inl this
+          · simp only at h
+            cases h with
+            | say h =>
+              have := answered_retry h (unsettled_cons (not_unsettled_say _)
+                (unsettled_cons (by simp [Unsettled]) (unsettled_cons (not_unsettled_keep _ _ _) hu)))
+              exact .inl this
+
+theorem read_retry {w : Where} {sh : Shape} {m : Mem} {es : List Ev} {a : Tick}
+    (h : Runs (readP w sh m) es a) (hu : ∃ e ∈ core es, Unsettled e) :
+    Retried m.retries a ∨ a = .stop .volume "forget" := by
+  unfold readP at h
+  cases h with
+  | cmd y h =>
+    rcases y with err | rr
+    · simp only at h; cases h with | say h => exact .inl (done_retried h).2
+    · simp only at h
+      split at h
+      · cases h with | say h => exact .inl (done_retried h).2
+      · rename_i hx
+        split at h
+        · cases h; simp [Unsettled, hx] at hu
+        · exact actOn_retry h (unsettled_cons (by simpa [Unsettled] using hx) hu)
+
+/-- **A tick that did not settle ends a retry**: on every path of `tick` holding an unsettled effect
+(`Unsettled`: a member command failed or answered an exit that does not settle it, `declined NAME`
+and `behind` among them; an ask never sent), the tick goes on with one more retry counted, below
+`retriesMax`, or ends `retryExhausted` once that count reached it; or ends `volume` when the forget
+after an unsent ask failed. -/
+theorem tick_retry {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (tickP w m) es a)
+    (hu : ∃ e ∈ core es, Unsettled e) : Retried m.retries a ∨ a = .stop .volume "forget" := by
+  unfold tickP at h
+  split at h
+  · exact read_retry h hu
+  · cases h with
+    | cmd y h =>
+      rcases y with err | rr
+      · simp only at h; cases h with | say h => exact .inl (done_retried h).2
+      · simp only at h
+        split at h
+        · cases h with | say h => exact .inl (done_retried h).2
+        · rename_i hx
+          split at h
+          · cases h with
+            | say h =>
+              have := read_retry h (unsettled_cons (not_unsettled_say _)
+                (unsettled_cons (by simpa [Unsettled] using hx) hu))
+              exact this
+          · cases h with
+            | say h =>
+              cases h
+              obtain ⟨_, he, hu'⟩ := unsettled_cons (not_unsettled_say _)
+                (unsettled_cons (by simpa [Unsettled] using hx) hu)
+              cases he
+
+theorem retry_lt {m m' : Mem} {why : String} (h : retry m why = .next m') : m'.retries < retriesMax := by
+  unfold retry at h
+  split at h
+  · cases h; assumption
+  · cases h
+
+theorem done_retry_lt {m m' : Mem} {why : String} {es : List Ev} (h : Runs (.done (retry m why)) es (.next m')) :
+    m'.retries < retriesMax := by
+  generalize hx : retry m why = x at h
+  cases h
+  exact retry_lt hx
+
+theorem forgetThen_lt {n : Tick} {m' : Mem} {es : List Ev} (hn : ∀ m'', n = .next m'' → m''.retries < retriesMax)
+    (h : Runs (forgetThen n) es (.next m')) : m'.retries < retriesMax :=
+  hn _ (forgetThen_next h).1
+
+theorem retriesMax_pos : 0 < retriesMax := by decide
+
+theorem deliver_lt {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
+    (h : Runs (deliverP sh m r t) es (.next m')) : m'.retries < retriesMax := by
+  unfold deliverP at h
+  split at h
+  · cases h
+  · cases h with
+    | cmd x h =>
+      rcases x with e | rr
+      · simp only at h; cases h with | say h => exact done_retry_lt h
+      · simp only at h
+        split at h
+        · cases h with
+          | say h => exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
+        · split at h
+          · cases h with
+            | cmd y h =>
+              rcases y with e | rr'
+              · simp only at h
+                cases h with | say h => exact done_retry_lt h
+              · simp only at h
+                split at h
+                · cases h with | say h => exact done_retry_lt h
+                · split at h
+                  · cases h
+                  · split at h
+                    · cases h
+                    · cases h with
+                      | say h => exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
+          · cases h with | say h => exact done_retry_lt h
+
+theorem answered_lt {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
+    (h : Runs (answeredP sh m r t) es (.next m')) : m'.retries < retriesMax := by
+  unfold answeredP at h
+  cases h with
+  | say h =>
+    cases h with
+    | keep b h =>
+      cases b
+      · simp at h; cases h
+      · simp only [if_true] at h
+        exact deliver_lt h
+
+theorem actOn_lt {w : Where} {sh : Shape} {m m' : Mem} {p : List Ring} {es : List Ev}
+    (h : Runs (actOn w sh m p) es (.next m')) : m'.retries < retriesMax := by
+  unfold actOn at h
+  split at h
+  · split at h
+    · exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
+    · cases h; exact retriesMax_pos
+  · exact deliver_lt h
+  · cases h with
+    | keep b h =>
+      cases b
+      · simp at h; cases h
+      · simp only [Bool.not_true, Bool.false_eq_true, if_false] at h
+        cases h with
+        | ask x h =>
+          rcases x with why | ans | why
+          · simp only at h
+            cases h with
+            | say h => exact forgetThen_lt (fun _ he => retry_lt he) h
+          · simp only at h
+            exact answered_lt h
+          · simp only at h
+            cases h with
+            | say h => exact answered_lt h
+
+theorem read_lt {w : Where} {sh : Shape} {m m' : Mem} {es : List Ev}
+    (h : Runs (readP w sh m) es (.next m')) : m'.retries < retriesMax := by
+  unfold readP at h
+  cases h with
+  | cmd y h =>
+    rcases y with e | rr
+    · simp only at h; cases h with | say h => exact done_retry_lt h
+    · simp only at h
+      split at h
+      · cases h with | say h => exact done_retry_lt h
+      · split at h
+        · cases h
+        · exact actOn_lt h
+
+/-- **Every memory a tick hands on is below the bound** (`m'.retries < retriesMax`), so
+`no_refusal_repeats_forever` applies from every tick a process reaches, not only its first. -/
+theorem tick_lt {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w m) es (.next m')) :
+    m'.retries < retriesMax := by
+  unfold tickP at h
+  split at h
+  · exact read_lt h
+  · cases h with
+    | cmd y h =>
+      rcases y with e | rr
+      · simp only at h; cases h with | say h => exact done_retry_lt h
+      · simp only at h
+        split at h
+        · cases h with | say h => exact done_retry_lt h
+        · split at h
+          · cases h with | say h => exact read_lt h
+          · cases h with | say h => cases h
+
+/-- A chain of ticks of one process life: each a path of `tickP` (every reply, every keep and
+forget result, `Runs`) from the memory the last one went on with; the last ends `stop`, or the
+chain is cut at a tick boundary (`nil`). The one inductive over a process's ticks (HOSTING-48:
+`Lifetime`, its flattened twin, is deleted). -/
+inductive Ticks (w : Where) : Mem → List (List Ev) → Prop
+  | nil (m : Mem) : Ticks w m []
+  | last {m : Mem} {es : List Ev} {e : Exit} {d : String} :
+      Runs (tickP w m) es (.stop e d) → Ticks w m [es]
+  | next {m m' : Mem} {es : List Ev} {ess : List (List Ev)} :
+      Runs (tickP w m) es (.next m') → Ticks w m' ess → Ticks w m (es :: ess)
+
+theorem core_append (l₁ l₂ : List Ev) : core (l₁ ++ l₂) = core l₁ ++ core l₂ := by
+  simp [core, List.filter_append]
+
+/-- **No refusal repeats forever** (HOSTING-48; COLLATION A13). In any chain of ticks from a memory
+below the bound (the start's `retries = 0`; every memory a tick hands on, `tick_lt`), if every tick
+holds an unsettled effect (`declined NAME`, `behind`, `uncertain`, `client`, `open`,
+`hostContradicted`, `pageIo`, a transport failure, a refusal whose re-read failed, an ask never
+sent), the chain is at most `retriesMax - m.retries` ticks long: the tick that reaches the bound ends
+`retryExhausted` (`tick_retry`), by name, never a silent loop. -/
+theorem no_refusal_repeats_forever {w : Where} {m : Mem} {ess : List (List Ev)} (h : Ticks w m ess)
+    (hm : m.retries < retriesMax) (hu : ∀ es ∈ ess, ∃ e ∈ core es, Unsettled e) :
+    ess.length ≤ retriesMax - m.retries := by
+  induction h with
+  | nil => simp
+  | last _ => simp only [List.length_singleton]; omega
+  | @next m₀ m₁ es ess hr _ ih =>
+    rcases tick_retry hr (hu _ List.mem_cons_self) with hr' | he
+    · rcases hr' with ⟨m₂, he, h1, h2⟩ | ⟨-, d, he⟩
+      · cases he
+        have := ih h2 (fun es' he' => hu es' (List.mem_cons_of_mem _ he'))
+        simp only [List.length_cons]; omega
+      · cases he
+    · cases he
 
 /-! ## Teeth: orders the grammar refuses -/
 
@@ -704,7 +1076,7 @@ theorem order_refuses_describe_with_shape (c : Conf) (m : Mem) (sh : Shape) (hs 
 theorem deliver_runs {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {arg : String}
     (h : answerArg r t = some arg) :
     Runs (deliverP sh m r t) [.cmd (.invoke sh r t) (.error "e"), .say "answer unsettled e"]
-      (.next m) := by
+      (retry m "answer e") := by
   unfold deliverP
   rw [h]
   exact Runs.cmd (.error "e") (Runs.say (Runs.done _))
@@ -722,7 +1094,7 @@ theorem ask_path_exists {w : Where} {sh : Shape} {m : Mem} {p : List Ring} {r : 
   let t := answerText ans
   refine ⟨[.keep r intentText true, .ask r (askOf w.conf r) (.answered ans),
     .say s!"asked; answer {t.size} bytes", .keep r t true, .cmd (.invoke sh r t) (.error "e"),
-    .say "answer unsettled e"], .next { m with kept := some (r, t) }, ?_, by simp [asks],
+    .say "answer unsettled e"], retry { m with kept := some (r, t) } "answer e", ?_, by simp [asks],
     by simp [invokes, t]⟩
   apply Runs.keep true
   apply Runs.ask (.answered ans)

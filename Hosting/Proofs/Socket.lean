@@ -28,7 +28,7 @@ This module states what an `ok` one MEANS on the member's side, under ONE premis
   `sh.answer`, with the printed text, through the config's grant; `ofHex_hex`), `run_invoke_ok`.
 - R1-R3 on the resident's side, no premise: `resident_argv_on_stdio` (every argv starts `read` or
   `invoke`, both on the stdio surface: nd's screen never fires on it), `deliverAfter_unsettled` (an exit
-  neither `ok` nor `refused` is followed by what a failure is followed by).
+  neither `ok` nor `refused` ends the tick a bounded retry, HOSTING-48).
 - `delivered_answer_committed`: an `ok` invoke of `answer` for `(r, t)` was the kept answer (or this
   tick's), and follow's World at its `ok` journals a call that invokes the bell at `sh.answer` with the
   bytes read from the text `answerArg r t` at the bell's own method. `answer_args_at_answerArgTy`: at a
@@ -537,13 +537,25 @@ theorem resident_argv_on_stdio (conf : Resident.Conf) (c : Resident.Cmd) :
     · rename_i hn
       exact absurd hn (Option.isSome_iff_ne_none.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some _ _))
 
-/-- **R2 and R3 are crash-stop to the resident**: an answer whose exit is neither `ok` nor `refused`
-(nd's `client`, `hostContradicted`, `open`, `uncertain`, `declined`) is followed by exactly what a
-failed connection is followed by: nothing. -/
-theorem deliverAfter_unsettled {sh : Resident.Shape} {r : Resident.Ring} {rr : Resident.Reply} {e : String}
-    {rest : List Resident.Ev} (hok : rr.exit ≠ CommandExit.ok.code) (hre : rr.exit ≠ CommandExit.refused.code) :
-    ResidentRun.DeliverAfter sh r (.ok rr) rest ↔ ResidentRun.DeliverAfter sh r (.error e) rest := by
-  simp [ResidentRun.DeliverAfter, hok, hre]
+/-- **R2 and R3 are bounded retries to the resident** (HOSTING-48; READ-HOSTING D3): on every path of
+`deliver r t` whose invoke came back with an exit neither `ok` nor `refused` (nd's `client`,
+`hostContradicted`, `open`, `uncertain`, `declined`, `behind`, `pageIo`), nothing follows the invoke
+in the tick, and the tick ends a retry (`ResidentRun.Retried`): it goes on with one more retry
+counted, below `retriesMax`, or ends `retryExhausted` at it. `ResidentRun.no_refusal_repeats_forever`
+bounds a run of such ticks by `retriesMax`: a refusal by name that never reaches the re-read ends the
+process by name, it does not repeat forever. -/
+theorem deliverAfter_unsettled {sh : Resident.Shape} {m : Resident.Mem} {r : Resident.Ring} {t : ByteArray}
+    {es : List Resident.Ev} {n : Resident.Tick} (h : ResidentRun.Runs (Resident.deliverP sh m r t) es n)
+    {rr : Resident.Reply} {rest : List Resident.Ev}
+    (hes : Resident.core es = .cmd (.invoke sh r t) (.ok rr) :: rest)
+    (hok : rr.exit ≠ CommandExit.ok.code) (hre : rr.exit ≠ CommandExit.refused.code) :
+    rest = [] ∧ ResidentRun.Retried m.retries n := by
+  obtain ⟨x, rest', hc, hd⟩ := ResidentRun.deliver_core h
+  rw [hes] at hc
+  simp only [List.cons.injEq, Resident.Ev.cmd.injEq, true_and] at hc
+  obtain ⟨rfl, rfl⟩ := hc
+  refine ⟨by simpa [ResidentRun.DeliverAfter, hok, hre] using hd, ResidentRun.deliver_retry h ?_⟩
+  exact ⟨_, by rw [hes]; exact List.mem_cons_self, by simp [ResidentRun.Unsettled, hok, hre]⟩
 
 /-! ## The delivered answer -/
 

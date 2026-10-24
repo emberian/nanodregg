@@ -41,6 +41,13 @@
 //!   while the resident's ask about it is held at the provider (between its read and its answer):
 //!   the answer is refused, the re-read finds the ring gone, the answer is forgotten, and the next
 //!   ring is answered; no `answerRefused`.
+//! - Q8, the bounded retry (HOSTING-48, COLLATION A13): the resident exe run on its own argv, its
+//!   member socket a proxy at the plan's path under another root that passes every describe and
+//!   read through to the real member socket and answers EVERY invoke exit `behind`, as a Host
+//!   whose follower never catches up. The resident asks once, re-delivers the kept answer each tick,
+//!   and ends `retryExhausted answer exit 51` by name (exit 17) after the bound
+//!   (`Resident.retriesMax` ticks in a row, `Proofs.ResidentRun.no_refusal_repeats_forever`), never
+//!   retrying forever; the grain then answers the ring from the kept text and asks no more.
 //! - Refused, each by name (HOSTING-27's, re-cut to the queue): the resident exe on a bell whose
 //!   resident is the operator ends `answerRefused program` after exactly one ask, restarts, answers
 //!   from its kept text and asks no more; on a bell whose grant lacks `invoke:0`, `answerRefused
@@ -125,6 +132,55 @@ fn member_cmd(sock: &Path, argv: &[&str]) -> (u8, String, String) {
 }
 
 /// The Bell's state for a new bell whose resident is `resident`.
+/// HOSTING-48's member socket: a proxy bound at `at` that passes every command through to the real
+/// member socket `real`, except `invoke`, which it answers exit `behind` itself, as a Host whose
+/// follower never catches up would make follow answer. Counts the invokes it answered. Stops when
+/// `stop` is set (the listener polls; one command per connection, as the resident sends them).
+fn behind_proxy(
+    at: &Path,
+    real: std::path::PathBuf,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    invokes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> std::thread::JoinHandle<()> {
+    let l = std::os::unix::net::UnixListener::bind(at).unwrap();
+    l.set_nonblocking(true).unwrap();
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::SeqCst) {
+            let mut s = match l.accept() {
+                Ok((s, _)) => s,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
+                }
+                Err(e) => panic!("proxy accept: {e}"),
+            };
+            s.set_nonblocking(false).unwrap();
+            s.set_read_timeout(Some(table::REPLY)).unwrap();
+            let Ok(f) = frame::read(&mut s, table::LIMITS) else {
+                continue;
+            };
+            let argv = NdCommand::decode(&f.payload).unwrap().argv;
+            if argv.first().map(Vec::as_slice) == Some(b"invoke".as_slice()) {
+                invokes.fetch_add(1, Ordering::SeqCst);
+                let r = CommandReply {
+                    exit: command_exit::BEHIND,
+                    stdout: Vec::new(),
+                    stderr: b"behind 1 2\n".to_vec(),
+                }
+                .encode()
+                .unwrap();
+                let _ = frame::write(&mut s, table::LIMITS, status::OK, &r);
+            } else {
+                let mut u = UnixStream::connect(&real).unwrap();
+                u.set_read_timeout(Some(table::REPLY)).unwrap();
+                frame::write(&mut u, table::LIMITS, f.op, &f.payload).unwrap();
+                let r = frame::read(&mut u, table::LIMITS).unwrap();
+                let _ = frame::write(&mut s, table::LIMITS, r.op, &r.payload);
+            }
+        }
+    })
+}
+
 fn bell_state(resident: &str) -> String {
     format!("(record (open true) (resident #{resident}))")
 }
@@ -759,6 +815,69 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
             String::from_utf8_lossy(&o.stderr).into_owned(),
         )
     };
+    // Q8 (HOSTING-48): a Host that answers `behind` forever. The resident exe, on its true argv but
+    // its member socket a proxy at the plan's path under another root (describe and read pass
+    // through; every invoke is answered exit `behind`), asks once, re-delivers each tick, and ends
+    // `retryExhausted` by name after the bound; then the grain answers the ring from the kept text.
+    stop();
+    no_child();
+    fs::write(pkg.join("resident.conf"), conf(&b, &gb)).unwrap();
+    ring_op(&b, "q8");
+    w.run(&["sync"]);
+    let before = asks();
+    let proxy = Short::new("x");
+    let rel_ms = Path::new(&ms).strip_prefix(&roots.member.0).unwrap();
+    let pms = proxy.0.join(rel_ms);
+    nanodregg_devtools::mkdirs(pms.parent().unwrap()).unwrap();
+    let pstop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pinv = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let pt = behind_proxy(
+        &pms,
+        std::path::PathBuf::from(&ms),
+        pstop.clone(),
+        pinv.clone(),
+    );
+    let t8 = std::time::Instant::now();
+    let (c, e) = run(argv(&bs, &pms.display().to_string()), false);
+    let took = t8.elapsed().as_secs();
+    pstop.store(true, Ordering::SeqCst);
+    pt.join().unwrap();
+    let unsettled = e.matches("resident: answer unsettled exit 51").count();
+    assert_eq!(
+        (c, e.lines().last()),
+        (Some(17), Some("resident: retryExhausted answer exit 51")),
+        "Q8: a Host answering behind forever ends the resident retryExhausted by name:\n{e}"
+    );
+    assert!(
+        unsettled > 1 && unsettled == pinv.load(Ordering::SeqCst),
+        "Q8: every invoke the proxy answered behind is one logged retry ({} invokes):\n{e}",
+        pinv.load(Ordering::SeqCst)
+    );
+    assert!(
+        took <= unsettled as u64 + 30,
+        "Q8: {took} s for {unsettled} ticks: the retries are not one per tick:\n{e}"
+    );
+    assert_eq!(asks(), before + 1, "Q8: re-delivering asked again:\n{e}");
+    let p = rel(&b, "pending");
+    assert!(
+        p.iter().any(|r| r.text == "q8"),
+        "Q8: the ring left pending while every invoke was behind: {p:?}"
+    );
+    start();
+    until(
+        "Q8: the grain answers the ring from the kept text",
+        120,
+        || rel(&b, "pending").is_empty(),
+        &|| state(&b),
+    );
+    assert_eq!(
+        (asks(), rel(&b, "pending")),
+        (before + 1, vec![]),
+        "Q8: the restart asked again, or left the ring pending:\n{}",
+        log()
+    );
+    eprintln!("Q8: {unsettled} retries in {took} s, then retryExhausted");
+
     // CONTROL: the true argv is its plan (it gets as far as the config, which is moved away)
     stop();
     let (c, e) = run(argv(&bs, &ms), true);
