@@ -255,7 +255,8 @@ def runAll {D : Type} [Ord D] [DecidableEq D] (R : Params D) (selected : List Ro
         | .pass =>
             IO.println s!"ROW {r.name} PASS{match r.plant with
               | .caught m l g => s!" (plant {repr m} caught at line {l}: {g.text})"
-              | .internal _ => ""}"
+              | .internal _ => ""
+              | .measured w => s!" (no plant; measured before its fix: {w})"}"
             if verbose then IO.println (tail t)
         | .fail why =>
             failed := failed + 1

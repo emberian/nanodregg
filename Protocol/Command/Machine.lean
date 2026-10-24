@@ -928,20 +928,25 @@ def envelopeRefused (X : Ctx D) (me : Self D) (argv : List ByteArray) (cmd : Cmd
 follow's own fold? Only the member's OWN call for its own World (custody signs only what follow
 planned, and `plan` signs `notBefore` = the planning World's height and pins from that World, a
 World of follow's fold), planned at a height follow has reached (`notBefore ≤ w.height`: every World
-of one height holds the same entries, refusal steps change none), whose Turn follow's World now
-refuses `stale`. Then the pin was observed on the fold and is stale now, so it is stale at every
-World the fold reaches (`Kernel.stale_behind_forever`). A planning height follow has not reached
-(AHEAD), another member's call (unplaceable), or any other verdict: `false`, and the settlement
-stays `open`. -/
+of one height holds the same entries, refusal steps change none), that follow's World declines
+`stale` by the Host's OWN order (KERNEL-66, PROTOCOL-73): the call's authority (`signedBy`), then its
+pins against the World (`checkPins`), before any receiver runs. One definition with the Host's
+`submit` (`Proofs.Command.staleBehind_declined`): a moved pin is `stale` whatever a receiver would
+say of the World as it is now. Before PROTOCOL-73 this read `receive` first, so a call whose receiver
+also refused on the new World was not stale here while the Host declined it `stale`, and the
+settlement stayed `open`. A stale pin observed on the fold stays stale at every World the fold
+reaches (`Kernel.stale_behind_forever`). A planning height follow has not reached (AHEAD), another
+member's call (unplaceable), a call whose authority the World refuses, or pins that agree: `false`,
+and the settlement stays `open`. -/
 def staleBehind (X : Ctx D) (me : Self D) (w : World D) (c : Call D) : Bool :=
   decide (c.unsigned.member = me.member) && decide (c.unsigned.world = me.world) &&
     decide (c.unsigned.notBefore ≤ w.height) &&
-    match receive X w c with
-    | .ok t =>
-      match World.admit X.env w t with
-      | .error (.stale _) => true
-      | _ => false
+    match signedBy X w c false with
     | .error _ => false
+    | .ok () =>
+      match checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges with
+      | .error _ => true
+      | .ok () => false
 
 /-- A range read's pin inputs at a World: its listing's range-pin input at the relation's width and
 floor there, then each listed row's leaf input (a range pin embeds its rows' leaf digests); none

@@ -943,38 +943,55 @@ theorem refusedAt_program (X : Ctx D) (why : String) :
 
 /-! ## Stale BEHIND, from the member's own fold (KERNEL-54, PROTOCOL-15's conditions 1 and 2) -/
 
-/-- **What `staleBehind` says**: the member's own call for its own World, planned at a height
-follow has reached, whose Turn follow's World derives and refuses `stale` by the kernel's name. -/
+/-- **What `staleBehind` says** (PROTOCOL-73): the member's own call for its own World, planned at a
+height follow has reached, whose authority follow's World passes (`signedBy`) and whose pins it refuses
+(`checkPins`, which refuses nothing but `stale`): the Host's own first two judgements, in its order. -/
 theorem staleBehind_spec {X : Ctx D} {me : Self D} {w : World D} {c : Call D}
     (h : staleBehind X me w c = true) :
     c.unsigned.member = me.member ∧ c.unsigned.world = me.world ∧ c.unsigned.notBefore ≤ w.height ∧
-      ∃ t x, receive X w c = .ok t ∧ World.admit X.env w t = .error (.stale x) := by
+      signedBy X w c false = .ok () ∧
+      ∃ x, checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges = .error (.stale x) := by
   unfold staleBehind at h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
   obtain ⟨⟨⟨hm, hw⟩, hn⟩, hr⟩ := h
   refine ⟨hm, hw, hn, ?_⟩
   split at hr
-  · rename_i t ht
-    split at hr
-    · rename_i x hx
-      exact ⟨t, x, ht, hx⟩
-    · cases hr
   · cases hr
+  · rename_i hs
+    split at hr
+    · rename_i e he
+      obtain ⟨x, rfl⟩ := checkPins_error_stale he
+      exact ⟨hs, x, he⟩
+    · cases hr
+
+/-- **The Host declines exactly what `staleBehind` says** (PROTOCOL-73, law 1 with KERNEL-66): where
+the call is neither journaled nor recorded, `staleBehind` holds only of a call `submit` refuses `stale`
+and `judge` declines (never records): the client's word and the Host's are one function's. -/
+theorem staleBehind_declined {X : Ctx D} {me : Self D} {w : World D} {c : Call D}
+    (hj : w.journalAt X.env (txIdOf X c) = none) (hr : refusedAnswer X w c = none)
+    (h : staleBehind X me w c = true) :
+    ∃ y, submit X w c = .error (.rejected (.stale y)) ∧ judge X w c = .declined (.rejected (.stale y)) := by
+  obtain ⟨-, -, -, hsb, x, hp⟩ := staleBehind_spec h
+  have hs : submit X w c = .error (.rejected (.stale x)) := by
+    unfold submit; rw [hj, hr, hsb]; simp only [hp]
+  exact ⟨x, hs, judge_stale_declined hs rfl⟩
 
 /-- **A call this World would admit is never stale BEHIND here** (the tooth of the settlement's
 stale arm): wherever `submit` admits the call, `staleBehind` is false, so its settlement there is
 never `refused stale`. -/
 theorem staleBehind_admissible {X : Ctx D} {me : Self D} {w w' : World D} {c : Call D} {t : Turn D}
     (hs : submit X w c = .ok (t, w')) : staleBehind X me w c = false := by
-  obtain ⟨-, hr, ha⟩ := submit_ok hs
   cases h : staleBehind X me w c with
   | false => rfl
   | true =>
-    obtain ⟨-, -, -, t', x, hr', ha'⟩ := staleBehind_spec h
-    rw [hr] at hr'
-    cases hr'
-    rw [ha] at ha'
-    cases ha'
+    obtain ⟨-, -, -, hsb, x, hp⟩ := staleBehind_spec h
+    have hs' := hs
+    unfold submit at hs'
+    split at hs'
+    · cases hs'
+    · split at hs'
+      · cases hs'
+      · rw [hsb] at hs'; simp only [hp] at hs'; cases hs'
 
 omit [Ord D] [DecidableEq D] in
 /-- **The settlement's stale arm** (`Settle.ofReceipt`): an absent receipt inside a live window

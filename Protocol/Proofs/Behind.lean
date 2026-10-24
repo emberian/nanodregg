@@ -240,6 +240,26 @@ theorem receive_pins {X : Ctx D} {v : World D} {c : Call D} {t : Turn D} (h : re
     exact ⟨(rowTouchesOf_pins hr).1, (rowTouchesOf_pins hr).2, rfl⟩
   · cases hs
 
+/-- **What `checkPins` refuses is a disagreement** (the contrapositive of `checkPins_ok_iff`): a cell
+pin not its cell's entry's pin, a row pin not its row's, or a range read not its listing's. -/
+theorem checkPins_error_disagree {E : Env D} {w : World D} {pins : List (D × D)}
+    {rowPins : List (RowSlot D × D)} {ranges : List (RangeRead D)}
+    (h : checkPins E w pins rowPins ranges ≠ .ok ()) :
+    (∃ p ∈ pins, Kernel.pinOf E (w.entry E p.1) ≠ p.2) ∨
+    (∃ p ∈ rowPins, ∃ key, p.1 = .row key ∧
+        rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) ≠ p.2) ∨
+    (∃ q ∈ ranges, ∃ c s lim cap width rt l,
+        headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧
+        rangeRows E w.rows q.parent q.rel width q.pre q.most = some l ∧
+        rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l ≠ q.seen) := by
+  refine Classical.byContradiction fun hn => h (checkPins_ok_iff.mpr ⟨?_, ?_, ?_⟩)
+  · intro p hp; exact Classical.byContradiction fun hne => hn (.inl ⟨p, hp, hne⟩)
+  · intro p hp key hk
+    exact Classical.byContradiction fun hne => hn (.inr (.inl ⟨p, hp, key, hk, hne⟩))
+  · intro q hq c s lim cap width rt l hh hl
+    exact Classical.byContradiction fun hne =>
+      hn (.inr (.inr ⟨q, hq, c, s, lim, cap, width, rt, l, hh, hl, hne⟩))
+
 /-- **A call refused stale BEHIND on follow's fold is never admitted later** (cv 01a15187; the
 settlement's `refused staleCode` arm, PROTOCOL-52's "final by fold structure" now by theorem). The
 member's own call, as `plan` signed it at a World `w₀` of follow's fold (the W0 premise: its pins
@@ -254,9 +274,8 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
     (h₁ : World.fold X.env w₀ l₁ = .ok w) (h₂ : World.fold X.env w l₂ = .ok w')
     (hs : staleBehind X me w c = true) :
     (∀ r, submit X w' c ≠ .ok r) ∨ CollidesAmong X.env.hash (behindPres X.env w₀ w' u) := by
-  obtain ⟨-, -, -, t, y, hrt, hat⟩ := staleBehind_spec hs
+  obtain ⟨-, -, -, -, y, hcp⟩ := staleBehind_spec hs
   obtain ⟨hpc, hpr, hpq⟩ := plan_pins hplan
-  obtain ⟨htc, -, htr, htq⟩ := receive_pins hrt
   have hrw := fold_rowsCanon hr h₁
   have hrw' := fold_rowsCanon hrw h₂
   by_cases hsub : ∃ r, submit X w' c = .ok r
@@ -265,18 +284,20 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
   right
   obtain ⟨-, hrt', hat'⟩ := submit_ok hsub
   obtain ⟨htc', htr', -, htq'⟩ := receive_pins hrt'
-  rcases admit_stale_pin hrw hat with ⟨x, hx, -, hne⟩ | ⟨x, hx, k, s, hxs, -, hseen, hne⟩ | ⟨q, hq, -, c₁, s₁, lim₁, cap₁, width₁, rt₁, l₁, hh₁, hl₁, hne₁⟩
+  have hne0 : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges ≠ .ok () := by
+    rw [hcp]; exact fun h => by cases h
+  rcases checkPins_error_disagree hne0 with
+      ⟨⟨xc, xs⟩, hm, hne⟩ | ⟨⟨xslot, s⟩, hm, k, hxs, hne⟩ | ⟨q, hq, c₁, s₁, lim₁, cap₁, width₁, rt₁, l₁, hh₁, hl₁, hne₁⟩
   · -- a cell pin
-    have hm : (x.cell, x.seen) ∈ c.unsigned.pins := by
-      rw [← htc]; exact List.mem_map_of_mem hx
-    have hseen : x.seen = Kernel.pinOf X.env (w₀.entry X.env x.cell) := by
-      rw [hc] at hm; exact hpc _ hm
-    have hm' : (x.cell, x.seen) ∈ t'.touches.map (fun x => (x.cell, x.seen)) := by rw [htc']; exact hm
+    simp only at hne
+    have hseen : xs = Kernel.pinOf X.env (w₀.entry X.env xc) := by
+      have hm0 := hm; rw [hc] at hm0; exact hpc _ hm0
+    have hm' : (xc, xs) ∈ t'.touches.map (fun x => (x.cell, x.seen)) := by rw [htc']; exact hm
     obtain ⟨x', hx', he⟩ := List.mem_map.mp hm'
     simp only [Prod.mk.injEq] at he
     have hp' := admit_pins hat' x' hx'
     rw [he.1, he.2, hseen] at hp'
-    rcases stale_behind_forever hf h₁ h₂ (c := x.cell) (by rw [← hseen]; exact hne) with h | h
+    rcases stale_behind_forever hf h₁ h₂ (c := xc) (by rw [← hseen]; exact hne) with h | h
     · exact (h hp').elim
     · refine CollidesAmong.mono ?_ h
       intro z hz
@@ -284,14 +305,14 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
         (List.mem_flatMap.mpr ⟨_, by rw [← hc]; exact hm, ?_⟩))
       simpa using hz
   · -- a row pin
-    have hm := htr x hx s hseen
+    simp only at hxs hne
+    subst hxs
     rw [hc] at hm
     obtain ⟨k', hk'⟩ := hpr _ hm
-    simp only [rowPinAt, hxs, Prod.mk.injEq, RowSlot.row.injEq] at hk'
+    simp only [rowPinAt, Prod.mk.injEq, RowSlot.row.injEq] at hk'
     obtain ⟨rfl, rfl⟩ := hk'
     obtain ⟨x', hx', hs', hseen'⟩ := htr' _ (by rw [hc]; exact hm)
     simp only at hs' hseen'
-    rw [hxs] at hs'
     have hp' := admit_row_pins hrw' hat' x' hx' k _ hs' hseen'
     rcases row_stale_behind_forever hE hr hok h₁ h₂ (key := k) hne with h | h | h
     · exact (h hp').elim
@@ -300,9 +321,9 @@ theorem staleBehind_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {n : 
     · refine CollidesAmong.mono ?_ h
       intro z hz
       refine List.mem_append_left _ (List.mem_append_right _ (List.mem_flatMap.mpr ⟨_, hm, ?_⟩))
-      simpa [hxs] using hz
+      simpa using hz
   · -- a range pin: `plan` signed it at `w₀`'s listing (`signedReads_ranges`)
-    have hq0 : q ∈ rs.ranges := by rw [htq, hc, hpq] at hq; exact hq
+    have hq0 : q ∈ rs.ranges := by rw [hc, hpq] at hq; exact hq
     have hqu : q ∈ u.ranges := by rw [hpq]; exact hq0
     have hq' : q ∈ t'.ranges := by rw [htq', hc]; exact hqu
     obtain ⟨⟨cell₀, hlive₀⟩, c₀, s₀, lim₀, cap₀, width₀, rt₀, l₀, hh₀, hwd, hl₀, hseen₀⟩ :=

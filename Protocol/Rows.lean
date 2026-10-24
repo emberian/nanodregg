@@ -340,6 +340,9 @@ inductive Plant
   | caught (mutation : Mutation) (line : Nat) (got : Expect)
   /-- an `exe` row's executable runs its own plant -/
   | internal (what : String)
+  /-- no cheap plant exists (a plant is a vacuity check run when cheap, never a landing gate: CHARTER,
+  Ember 10-24): the row was MEASURED red against the code it replaced, as `what` says -/
+  | measured (what : String)
   deriving Repr
 
 /-- A row: one fresh deployment, how it is driven, what it reaches, and its plant. -/
@@ -1616,6 +1619,25 @@ def cancelRow : Row where
     ok "operator" ["read", "@shared", "4=1"]])
   plant := .caught .cancelUndomained 8 (.refused "badSignature")
 
+/-- A moved pin and a refusing receiver at once (PROTOCOL-73, FIX-KERNEL's finding after KERNEL-66): the
+newcomer writes through its grant `g` while the sponsor revokes `g`. The Host compares the call's pins
+first, so the moved grant pin makes it `declined stale`, though the write's receiver would also refuse
+it now (no grant). The next run's settlement is follow's own fold: `staleBehind` asks what the Host
+asks, in its order (`signedBy`, then `checkPins`), so it settles `refused stale`, final. Before
+PROTOCOL-73 follow asked `receive` first, read the refusing receiver as "not stale" and left the
+settlement `open`, so the attempt sent the call again and the Host declined it again: line 7 `declined
+stale`, never settled (MEASURED, both parameter sets). -/
+def staleRefusingRow : Row where
+  name := "staleRefusing"
+  replaces := []
+  ops := settled
+  kinds := ["enroll", "install", "create", "grant", "write", "revoke"]
+  drive := .members (welcome ++ [
+    { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"],
+      expect := .declined "stale", fault := .race "sponsor" ["revoke", "@g"] },
+    { actor := "newcomer", act := .rerun, expect := .refused "stale" }])
+  plant := .measured "receive-first staleBehind: line 7 declined stale, the settlement open"
+
 /-- A Host that says it recorded a cancel it never saw (PROTOCOL-71, readers A7): the sponsor's write
 never reaches the writer (`open`); its cancel is answered `refused cancelled` by a relay that kept the
 cancel from the writer. Follow catches up again, finds the call still open on its own World and ends
@@ -1691,6 +1713,6 @@ def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
-   fullPageRow, cancelLieRow]
+   fullPageRow, cancelLieRow, staleRefusingRow]
 
 end Nanodregg.Protocol

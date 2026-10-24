@@ -67,7 +67,7 @@ def judge (r : Row) (o : Observed) : Verdict :=
 def Row.plantDiffers (r : Row) : Bool :=
   match r.plant with
   | .caught _ l g => decide (l < r.lines.length) && (r.lines.map Line.expect)[l]? != some g
-  | .internal _ => true
+  | .internal _ | .measured _ => true
 
 /-- A plant is caught when the lines before its line keep their declared outcomes and its line gets
 the planted outcome (which `Protocol.Proofs.Rows.plants_differ` says is not the declared one). -/
