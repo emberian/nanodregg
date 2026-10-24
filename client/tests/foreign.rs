@@ -16,8 +16,10 @@
 //! * X5: the owner withdraws the trust anchor (`distrust`): a valid receipt refuses `untrusted`.
 //!
 //! The control "A's call at B's writer refuses `wrongWorld`" is the `wrongWorld` row
-//! (`Protocol.Rows.wrongWorld`). `headDead` (a retired head object) and `notCommitted` have no row:
-//! `nd` has no verb that retires an object or signs a call it does not send (cv 01a1671d-09d7).
+//! (`Protocol.Rows.wrongWorld`). `headDead` (a retired head object) and `notCommitted` have no row
+//! here (`nd` has no verb that retires an object or signs a call it does not send); they are the
+//! Lang journey's rows RC1 (`headDead`), RC2 (`notCommitted`, an absent receipt) and RC3
+//! (`notCommitted`, a refused one), in `Lang/Journey/Head.lean`.
 #![allow(clippy::unwrap_used, clippy::panic)] // a plant that cannot set up is a failed plant
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

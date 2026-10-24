@@ -23,6 +23,9 @@ deployed ones. A row passes only when its verdict is the expected one.
 * RC1 `headDead`: the trusted key names a RETIRED cell (B's revoked grant: no Body retires an object
   in nano, so a dead anchor is a retired cell of another kind), read through the caller's pins.
 * RC2 `notCommitted`: the receipt of a call A never committed (it shows `absent`).
+* RC3 `notCommitted`, the refused arm: the receipt of a call A's Host refused and RECORDED
+  (`Receive.judge`; it shows `refused`, `Protocol.Foreign.refused_receipt_notCommitted`: the column
+  refuses it, and it is A's recorded refusal).
 -/
 import Lang.Journey
 import Lang.StdHead
@@ -64,7 +67,14 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let cNever := Sim.signed rA0.st a a.key (Sim.S.pinsFor rA0.st.host [a.id])
     (.create none [] [(stateBase, "never".toUTF8)])
   let (rA, vA, _) := go prog rA0 cA
-  let wA := rA.st.host
+  -- and one call A's Host refused and RECORDED (`Receive.judge`, the Host's decision): a create
+  -- naming a package A does not hold
+  let cRef := Sim.signed rA.st a a.key (Sim.S.pinsFor rA.st.host [a.id, 999]) (.create (some 999) [] [])
+  let (wA, vRef) := match Receive.judge X rA.st.host cRef with
+    | .recorded (.refused e) _ w' => (w', s!"recorded {Sim.nameOf e}")
+    | .recorded _ _ w' => (w', "recorded")
+    | .admitted _ _ => (rA.st.host, "admitted")
+    | .declined _ => (rA.st.host, "declined")
   let worldA := hdDig wA.origin
   let receiptOf (c : Call D) : Option ByteArray :=
     Protocol.Receipt.bytes Sim.env Sim.dc (Protocol.Receipt.build Sim.env wA (txIdOf X c))
@@ -158,6 +168,8 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let (ra6, va6) := invoke ra5 Acc [apkg] 2 (cellArg HA)
   let (ra7, va7) := invoke ra6 Acc [apkg] 2 (cellArg G)
   let setup := [vA, va1, va2, va3, va4, va5, va6, va7]
+  r := note r s!"RC3 setup: A's Host records its refusal of a create naming a package A does not hold: {vRef}"
+    (vRef.startsWith "recorded")
   r := note r s!"RC0 setup: A commits one call ({vA}); B installs the acceptor from {acceptSourcePath} (methods {acc.methods}) and creates it, creates HA holding A's head at \{height {wA.height}, steps {wA.steps}}, grants and revokes G, and trusts HA and G: {setup}"
     (setup.all (· == "admitted") && acc.methods == ["accept", "distrust", "trust"])
   let w1 := ra7
@@ -188,6 +200,13 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let (_, vc2) := invoke w1 Acc [apkg, HA] 0 (acceptArg (receiptOf cNever)) (rangeAt w1.st.host HA)
   r := note r s!"RC2 accept, the range naming HA, with A's receipt of a call it never committed (absent): {vc2}"
     (programRefused vc2 "notCommitted")
+  -- RC3 the refused arm: the receipt states A's recorded refusal (asserted before the verdict is read)
+  let refusedAnswer := match (Protocol.Receipt.build Sim.env wA (txIdOf X cRef)).answer with
+    | .refused .. => true
+    | _ => false
+  let (_, vc3) := invoke w1 Acc [apkg, HA] 0 (acceptArg (receiptOf cRef)) (rangeAt w1.st.host HA)
+  r := note r s!"RC3 accept, the range naming HA, with A's receipt of a call it refused and recorded (the receipt states refused: {refusedAnswer}): {vc3}"
+    (refusedAnswer && programRefused vc3 "notCommitted")
   return r
 
 /-- A fresh session for the HD and RC rows: World B (the rows' World) and World A (the foreign one). -/

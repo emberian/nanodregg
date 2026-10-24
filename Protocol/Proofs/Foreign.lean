@@ -12,7 +12,9 @@ thin-member trust of PROTOCOL-42). B holds A head, not THE head; `forkedHead` na
 
 `forged_receipt_refused` (P3): a receipt at the right head that states an entry the World does not
 hold is refused `pathMismatch`, or the hash collides. `forked_head_column_refused` (P4): a recorded
-fork checks no receipt.
+fork checks no receipt. `refused_receipt_notCommitted` (P5): a receipt that checks `refused` is
+refused `notCommitted`, and is the World's recorded refusal (`check_refused_sound`), or the hash
+collides (journey row RC3).
 -/
 import Protocol.Foreign
 import Protocol.Proofs.Receipt
@@ -148,6 +150,30 @@ theorem forged_receipt_refused {dc : Stream D} {wA : World D} (hjc : wA.JournalC
           · cases hc
           · cases hc; rfl
     simp [check, hv, hro, hrb, hc, he, Receipt.Refusal.name]
+
+include hE in
+/-- **P5: a refused receipt is refused `notCommitted`, and it is A's recorded refusal.** A receipt
+at the held head's roots, of a World folded from A's genesis, that checks `refused`: the deployed
+column refuses it `notCommitted` (the refused arm, as an absent receipt is), and the World holds
+that refusal at the call's id, with its height, code and charged member, or the hash collides among
+the listed inputs (`check_refused_sound`, the receipt and the World the theorem's own). -/
+theorem refused_receipt_notCommitted {dc : Stream D} {name nonce : ByteArray} {a : Nat}
+    {fs : List (ByteArray × D)} {l : List (Kernel.Step D)} {wA : World D}
+    (hA : World.fold X.env (genesisWorld X name nonce a fs) l = .ok wA)
+    {cell : Cell} {rb : ByteArray} {r : Receipt D} {w : ByteArray} {h₀ : Nat} {rootsB : ByteArray} {s₀ : Nat}
+    (hv : Lang.headView (fun b => (dc.decode b).toOption) (X.env.bytes (headPackageId X.env)) cell =
+      some (.at w h₀ rootsB s₀))
+    (hro : (dc.decode rootsB).toOption = some (wA.roots X.env))
+    (hrb : Receipt.ofBytes X.env dc rb = some r) {h code : Nat} {m : D}
+    (hk : Receipt.check X.env h₀ (wA.roots X.env) r.txId 0 r = .ok (.refused h code m)) :
+    check X.env dc cell rb = .error "notCommitted" ∧
+      (wA.refusalAt X.env (.tx r.txId) = some (.refused h code m) ∨
+        CollidesAmong X.env.hash ([rootsPre X.env r.root r.jroot r.rroot r.rowsroot, wA.rootsPre X.env] ++
+          inclPres (refusalSpec X.env) (refusalPre X.env) (.tx r.txId) (.refused h code m) r.rpath wA.refusals)) := by
+  refine ⟨by simp [check, hv, hro, hrb, hk], ?_⟩
+  have h0 : (genesisWorld X name nonce a fs).RefusalsOk X.env :=
+    refusalsOk_of_empty (by simp [genesisWorld, World.genesis])
+  exact check_refused_sound hE (fold_refusalsOk h0 hA) hk
 
 end Sound
 

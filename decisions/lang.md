@@ -6633,6 +6633,24 @@ Under P1/P2/P5/PA the generator's take is unfolded by `Lang.Proofs.StdOffer`, so
 
 **Meta-critique.** The BIAS was to copy `fuse_tree`'s shape: unroll the derivation by hand, `callStep` by `callStep`. The kernel already records the walk as `Dispatched`, and `spend_reads_back_dispatched` is the pattern at any depth. Reading the kernel's own index of the tree is shorter, and it is the same statement whichever object makes the call.
 
+### LANG-75.23 E5 follow-up · the refused arm of `notCommitted`: a row and its theorem (2026-10-23; CX-BACKLOG-2; closes cv 01a16814-02d9; method R-0069)
+
+**Decision.**
+- **The row** (`Lang/Journey/Head.lean`, RC3). A's Host refuses and RECORDS one call (`Receive.judge`, the Host's decision: a create naming a package A does not hold, `missingCell`) before B builds the head object of A's head. B's deployed acceptor, given A's receipt of that call, refuses `notCommitted`. The row first asserts that the receipt's own answer is `refused` (so it cannot pass on the absent arm), then reads the verdict. RC0 to RC2 are unchanged (A's head now has 2 steps: the commit and the refusal).
+- **The theorem** (`Protocol/Proofs/Foreign.lean`, P5 `refused_receipt_notCommitted`, the consumer of `check_refused_sound`). Take a receipt at the held head's roots, of a World folded from A's genesis, that checks `refused h code m`. Then the column refuses it `notCommitted`, and A's World holds `refusalAt (.tx r.txId) = some (.refused h code m)`, or the hash collides among the listed inputs (the receipt and the World are premises, so the list is explicit). `RefusalsOk` is discharged from the fold (`fold_refusalsOk` from the empty genesis refusals).
+- **CLIENT's doc** (`client/tests/foreign.rs`): `headDead` and `notCommitted` have no Rust row because `nd` has no verb for them. They are now journey rows RC1–RC3, and the doc points there instead of saying "no row".
+- The brief named Protocol/Rows. The row lives beside RC1/RC2 in the Lang journey, where both Worlds and the deployed acceptor already are. The loopback rows have no second World.
+
+**Plant (MEASURED, hbox `logs/backlog/plants/C5-refused-accepted.*`).** `Foreign.check` was changed to accept a `refused` receipt as committed. Results:
+- `Protocol.Proofs.Foreign` RED at `check_committed_of` (l.59) and at `refused_receipt_notCommitted` (l.173);
+- lang-journey `RC3 … admitted` FAIL, `RED (1)`.
+
+Restored. MEASURED green: `lang-journey: GREEN`, RC3 `refused … "notCommitted"` with `the receipt states refused: true` (`c5-lang-journey.log`).
+
+**Critique.** RC3's refused call is a `missingCell` create. A `cancelled` record (`Receive.cancel`) would exercise the same arm by another writer of the refusals trie. The theorem covers both; the row covers one.
+
+**Meta-critique.** The pull was to place the row where the brief said (Protocol/Rows) and build a second-World harness there. The question is which runner already holds a foreign World. Lang journey's Head does. Building there needs no new machinery, which kept this card small.
+
 ## LANG-76 An activity may declare a patience: an unanswered row is retired by anyone from its deadline on, with its cursor row (2026-10-23; CX-DEADLINE; Ember's open decision cv 01a166ba-7af9, built as its DEFAULT; IMPACT `redregg/work/promo/IMPACT-P4.md` §1.5; method R-0069)
 
 **This was Ember's decision, and this landing is its default.** cv 01a166ba-7af9 asked whether an unanswered activity row may be retired after a declared deadline. The default was yes: a deadline arm in the generated guard, a widened check with a named refusal before the deadline and a journey row after it. The alternative was "leave it": an unanswered row waits forever and holds one of the log's slots (the Bell has 1024), on the bet that 1024 rows are enough in practice. The default was approved for building. The decision is resolved to the default with this landing's hash.
