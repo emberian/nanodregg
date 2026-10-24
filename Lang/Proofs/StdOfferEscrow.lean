@@ -2,7 +2,7 @@
 # Lang.Proofs.StdOfferEscrow — what the escrow instance of `Std.offer` does at the deployed run (PROT-8)
 
 Every theorem here is about `Lang.program`'s `run` of the generated package
-`offerEscrowPackageOf theta roles ol sl b`, the run the kernel records:
+`offerEscrowPackageOf theta roles ol sl pt b`, the run the kernel records:
 
 * `escrow_take_run_sound`: a returned take decoded its deal, read both pinned offers, its own the
   one the deal names for it, found them `JointOk`, makes ONE call, its own offer's leg from the
@@ -55,8 +55,8 @@ private theorem empty_rowsOf (theta roles : List Label) (ol sl : Nat) :
     rowsOf (escrowRels theta roles ol sl) (.record []) = some ([], []) := by
   simp [rowsOf, readsOf, readsTy, Row.find?]
 
-private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
-    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) offerTakeIx = .ok x) :
+private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl pt b) offerTakeIx = .ok x) :
     x = ("take", ⟨offerTakeArg theta, [escrowCallTy], offerRead, 2⟩) := by
   have he : editSlotsOf (escrowRels theta roles ol sl)
       [("e0", optTy (editTy (escrowRels theta roles ol sl))), ("e1", optTy (editTy (escrowRels theta roles ol sl)))] =
@@ -74,8 +74,8 @@ private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl b : Na
     · cases hsg
   · simp [throw, throwThe, MonadExceptOf.throw] at h
 
-private theorem withdraw_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
-    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) offerWithdrawIx = .ok x) :
+private theorem withdraw_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl pt b) offerWithdrawIx = .ok x) :
     x = ("withdraw", ⟨.record [], [escrowCallTy], offerRead, 1⟩) := by
   have he : editSlotsOf (escrowRels theta roles ol sl) [("e0", optTy (editTy (escrowRels theta roles ol sl)))] =
       some 1 := by simp [editSlotsOf, editsMax, slot_e1]
@@ -90,8 +90,8 @@ private theorem withdraw_resolve {D : Type} {theta roles : List Label} {ol sl b 
     · cases hsg
   · simp [throw, throwThe, MonadExceptOf.throw] at h
 
-private theorem post_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
-    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) offerPostIx = .ok x) :
+private theorem post_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl pt b) offerPostIx = .ok x) :
     x = ("post", ⟨escrowPostArg theta roles, [escrowCallTy], [], 1⟩) := by
   have he : editSlotsOf (escrowRels theta roles ol sl) [("e0", optTy (editTy (escrowRels theta roles ol sl)))] =
       some 1 := by simp [editSlotsOf, editsMax, slot_e1]
@@ -106,11 +106,27 @@ private theorem post_resolve {D : Type} {theta roles : List Label} {ol sl b : Na
     · cases hsg
   · simp [throw, throwThe, MonadExceptOf.throw] at h
 
+private theorem retire_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl pt b) offerRetireIx = .ok x) :
+    x = ("retire", ⟨keyTy (offerSessionDecl theta sl), [], [], 1⟩) := by
+  have he : editSlotsOf (escrowRels theta roles ol sl) [("e0", optTy (editTy (escrowRels theta roles ol sl)))] =
+      some 1 := by simp [editSlotsOf, editsMax, slot_e1]
+  simp [resolveMethod, offerEscrowPackageOf, offerRetireIx, offerMethods, recordRow, Row.find?, methodSig,
+    methodTy, resultTy, callsTy, activityRetireTy, slot_e1, he, empty_rowsOf, pairNamed] at h
+  split at h
+  · rename_i sg hsg
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    subst h
+    split at hsg
+    · cases hsg; rfl
+    · cases hsg
+  · simp [throw, throwThe, MonadExceptOf.throw] at h
+
 /-- The escrow package's `fuse` resolves to its signature: the deal with `via`, a transfer slot and an
 invoke slot at the take's argument type, the one offer point read under itself and under its peer,
 two edits (`escrow_fuse_run_sound`'s premise). -/
-theorem escrow_fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
-    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) offerFuseIx = .ok x) :
+theorem escrow_fuse_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl pt b) offerFuseIx = .ok x) :
     x = ("fuse", ⟨offerFuseArg theta, [escrowCallTy, offerCallTy theta], offerRead, 2⟩) := by
   have he : editSlotsOf (escrowRels theta roles ol sl)
       [("e0", optTy (editTy (escrowRels theta roles ol sl))), ("e1", optTy (editTy (escrowRels theta roles ol sl)))] =
@@ -135,32 +151,37 @@ theorem escrow_fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat
     simp [resolveMethod, offerEscrowPackageOf, offerFuseIx, offerMethods, recordRow, Row.find?, methodSig, methodTy,
       resultTy, callsTy, slot_c2, slot_e2, hc, he, take_rowsOf, throw, throwThe, MonadExceptOf.throw] at h
 
-private theorem escrow_fuse_peerReads (theta roles : List Label) (ol sl b : Nat) :
-    (offerEscrowPackageOf theta roles ol sl b).peerReads "fuse" = offerRead := by
+private theorem escrow_fuse_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
+    (offerEscrowPackageOf theta roles ol sl pt b).peerReads "fuse" = offerRead := by
   simp [Package.peerReads, offerEscrowPackageOf, recordRow, Row.find?, methodPeer, methodTy, take_rowsOf]
 
-/-- The package has four methods: no other index resolves. -/
-private theorem resolve_lt {D : Type} {theta roles : List Label} {ol sl b m : Nat} {x : Label × Sig}
-    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) (m + 4) = .ok x) : False := by
+/-- The package has five methods: no other index resolves. -/
+private theorem resolve_lt {D : Type} {theta roles : List Label} {ol sl pt b m : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl pt b) (m + 5) = .ok x) : False := by
   simp [resolveMethod, offerEscrowPackageOf, offerMethods, throw, throwThe, MonadExceptOf.throw] at h
 
-private theorem take_peerReads (theta roles : List Label) (ol sl b : Nat) :
-    (offerEscrowPackageOf theta roles ol sl b).peerReads "take" = offerRead := by
+private theorem take_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
+    (offerEscrowPackageOf theta roles ol sl pt b).peerReads "take" = offerRead := by
   simp [Package.peerReads, offerEscrowPackageOf, recordRow, Row.find?, methodPeer, methodTy, take_rowsOf]
 
-private theorem withdraw_peerReads (theta roles : List Label) (ol sl b : Nat) :
-    (offerEscrowPackageOf theta roles ol sl b).peerReads "withdraw" = [] := by
+private theorem withdraw_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
+    (offerEscrowPackageOf theta roles ol sl pt b).peerReads "withdraw" = [] := by
   simp [Package.peerReads, offerEscrowPackageOf, recordRow, Row.find?, methodPeer, methodTy, withdraw_rowsOf]
 
-private theorem post_peerReads (theta roles : List Label) (ol sl b : Nat) :
-    (offerEscrowPackageOf theta roles ol sl b).peerReads "post" = [] := by
+private theorem retire_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
+    (offerEscrowPackageOf theta roles ol sl pt b).peerReads "retire" = [] := by
+  simp [Package.peerReads, offerEscrowPackageOf, recordRow, Row.find?, methodPeer, methodTy, activityRetireTy,
+    empty_rowsOf]
+
+private theorem post_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
+    (offerEscrowPackageOf theta roles ol sl pt b).peerReads "post" = [] := by
   simp [Package.peerReads, offerEscrowPackageOf, recordRow, Row.find?, methodPeer, methodTy, empty_rowsOf]
 
 /-! ## Relocation: the escrow's method terms name no closure package -/
 
 private theorem noRef_take (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) :
     NoRef (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels) (escrowTakeBody theta roles rels od sd)) := by
-  simp [activityMethod, escrowTakeBody, offerTakeTree, escrowTakeDone, escrowResult, escrowPay, escrowTransfer,
+  simp [activityMethod, escrowTakeBody, offerTakeTree, offerUnwrap, offerGate, escrowTakeDone, escrowResult, escrowPay, escrowTransfer,
     escrowAcct, escrowNoVia, offerTakeEdits, NoRef, NoRefRow, resultT, callsT, someCallT, activityEdit,
     activityKeyTerm, noCallT, slot_e2, slot_c1, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT]
 
@@ -168,7 +189,7 @@ private theorem noRef_escrow_fuse (theta roles : List Label) (rels : List (Label
     (budget : Nat) :
     NoRef (activityMethod offerStateTy (offerFuseArg theta) (offerTakeRows rels)
       (escrowFuseBody theta roles rels od sd budget)) := by
-  simp [activityMethod, escrowFuseBody, offerTakeTree, escrowFuseDone, activityResultCalls, escrowPay, escrowTransfer,
+  simp [activityMethod, escrowFuseBody, offerTakeTree, offerUnwrap, offerGate, escrowFuseDone, activityResultCalls, escrowPay, escrowTransfer,
     escrowAcct, escrowNoVia, offerFuseCall, offerTakeCall, offerPeerT, offerTakeEdits, NoRef, NoRefRow, resultT,
     callsT, someCallT, activityEdit, activityKeyTerm, noCallT, slot_e2, slot_c2, activityApply, noRef_offerJoint,
     offerNamedOkT, offerNamedT]
@@ -182,6 +203,11 @@ private theorem noRef_post (theta roles : List Label) (rels : List (Label × Rel
     NoRef (activityMethod offerStateTy (escrowPostArg theta roles) (.record []) (escrowPostBody rels od)) := by
   simp [activityMethod, escrowPostBody, escrowResult, escrowTransfer, escrowAcct, NoRef, NoRefRow, resultT, callsT,
     someCallT, activityEdit, slot_e1, slot_c1]
+
+private theorem noRef_retire (rels : List (Label × RelDecl)) (sd : RelDecl) :
+    NoRef (offerRetireBody rels sd) := by
+  simp [offerRetireBody, activityRetireMethod, activityMethod, activityResult, activityResultCalls, NoRef, NoRefRow,
+    resultT, someCallT, activityEdit, activityKeyTerm, slot_e1]
 
 /-! ## Shapes -/
 
@@ -289,12 +315,12 @@ private abbrev takeOkEnv (rq keys pair th k o kq q : Data) (state : Val) : Env :
 the premise that the success term's `calls` field is the leg paid to the peer (each theorem below
 discharges it against `escrowTakeDone` itself). -/
 private theorem take_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerTakeIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ keys pair th k o kq q amt ab pb kb sb vb,
@@ -409,12 +435,12 @@ offer's leg and `payTo` the PEER's offer's, and its row acts are exactly the ret
 and the insert of its session row. Mutation P8d (the take pays nothing: its call slot `none`) makes
 the call conjunct false: the run returns with no call. -/
 theorem escrow_take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerTakeIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ keys pair th k o kq q amt ab pb self' asset' payTo' kb sb vb,
@@ -523,12 +549,12 @@ with `p` the peer and `db` the bytes of the VALUE `{keys, pair, theta}` (LANG-77
 are exactly the retract of its own offer and the insert of its session row. Mutations: the leg not
 paid (its call slot `none`) and PT4 (the invoke dropped) each make the calls conjunct false. -/
 theorem escrow_fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerFuseIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ keys pair th via k o kq q amt ab pb self' asset' payTo' p db via' kb sb vb,
@@ -690,12 +716,12 @@ private theorem wd_ok {rels : List (Label × RelDecl)} {od : RelDecl} {lib : Lis
 
 /-- The withdraw's run, all but reading its call off the generator (as `take_core`). -/
 private theorem withdraw_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerWithdrawIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ k o amt ab po kb,
@@ -774,7 +800,7 @@ private theorem withdraw_core {D : Type} (bytesOf : D → ByteArray) (digestOf :
   have i0 : List.findIdx? (fun x => decide (x.fst = "offer"))
       [("offer", escrowDecl theta roles ol), ("session", offerSessionDecl theta sl)] = some 0 := rfl
   have hr : (escrowDecl theta roles ol).retract = true := rfl
-  rw [show (offerEscrowPackageOf theta roles ol sl budget).rels = escrowRels theta roles ol sl from rfl] at hes
+  rw [show (offerEscrowPackageOf theta roles ol sl pt budget).rels = escrowRels theta roles ol sl from rfl] at hes
   cases hkb : keyBytes (escrowDecl theta roles ol) k with
   | none =>
     simp [editsOf, editsOf.go, editOf, relIndex, i0, escrowRels, Row.find?, hkb, hr, bind, Except.bind] at hes
@@ -806,18 +832,118 @@ private theorem withdraw_core {D : Type} (bytesOf : D → ByteArray) (digestOf :
   subst hv'
   exact ⟨s', a', d', h1, h2, h3, rfl⟩
 
+/-! ## The retire (LANG-80) -/
+
+private theorem key_arg_cases {theta : List Label} {sl : Nat} {ad : Data}
+    (h : Conforms ad (keyTy (offerSessionDecl theta sl))) :
+    ∃ ag nb, ad = .record [("agent", .digest ag), ("notBefore", .nat nb)] := by
+  have hk : keyTy (offerSessionDecl theta sl) = .record [("agent", .digest), ("notBefore", .nat)] := rfl
+  rw [hk] at h
+  cases h with
+  | record hr =>
+  cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+  cases hr; cases h1; cases h2
+  exact ⟨_, _, rfl⟩
+
+/-- The retire's run: its one row act is the retract of a SESSION row (relation 1), never of an
+offer row, and it makes no call. -/
+private theorem retire_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
+    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
+    {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
+    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
+    (hid : digestOf (bytesOf pkg) = some pkg)
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerRetireIx args r budget' =
+      .ok (s, calls, rows, used)) :
+    ∃ kb, rows = [(.row ⟨r.self, 1, kb⟩, .retract)] := by
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state offerRetireIx args r budget').map _ = _ at h
+  rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state offerRetireIx args r budget' with
+  | error e => rw [hm] at h; cases h
+  | ok x =>
+  rw [hm] at h
+  obtain ⟨s', calls', rows', t', n'⟩ := x
+  simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+  obtain ⟨S, v, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, hpg, hres, -, had, -, hwd, rfl⟩ := runSetup_spec hS
+  obtain ⟨hpg', f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
+  rw [hpg'] at hpg
+  cases hpg
+  have hsig := retire_resolve hres
+  cases hsig
+  simp only at hrun hx hes
+  obtain ⟨ag, nb, rfl⟩ := key_arg_cases (decodeData_conforms had)
+  have hbig := run_bigStep hrun
+  obtain ⟨fs, hfs⟩ : ∃ fs, activityResult (escrowRels theta roles ol sl) (.var 2)
+      [activityEdit (escrowRels theta roles ol sl) "session" (offerSessionDecl theta sl) "retract"
+        (activityKeyTerm (.get (.var 1) "agent") (.get (.var 1) "notBefore"))] = .record fs := ⟨_, rfl⟩
+  have hval : BigStep L.lib [(reqData bytesOf r).toVal,
+      (Data.record [("agent", .digest ag), ("notBefore", .nat nb)]).toVal, sd.toVal, wd.toVal]
+      (activityResult (escrowRels theta roles ol sl) (.var 2)
+        [activityEdit (escrowRels theta roles ol sl) "session" (offerSessionDecl theta sl) "retract"
+          (activityKeyTerm (.get (.var 1) "agent") (.get (.var 1) "notBefore"))])
+      (.ok (.record (suspend [(reqData bytesOf r).toVal,
+        (Data.record [("agent", .digest ag), ("notBefore", .nat nb)]).toVal, sd.toVal, wd.toVal] fs))) := by
+    rw [hfs]; exact .record
+  cases bigStep_deterministic hbig (apply4_method hlib rfl
+    (by simp [Row.find?, offerRetireBody, activityRetireMethod, activityMethod]) (noRef_retire _ _) hval)
+  have hM := extract_means _ _ hx
+  have hfE : Row.find? "edits" fs = some (.record ((slotLabels "e" 1).zip
+      [someCallT (editTy (escrowRels theta roles ol sl))
+        (activityEdit (escrowRels theta roles ol sl) "session" (offerSessionDecl theta sl) "retract"
+          (activityKeyTerm (.get (.var 1) "agent") (.get (.var 1) "notBefore")))])) := by
+    simp only [activityResult, activityResultCalls, resultT, Term.record.injEq] at hfs
+    subst hfs; rfl
+  have hwE := BigStep.get (ℓ := "edits") hbig (.field (find_suspend_of hfE) .record)
+  obtain ⟨A, hA, hmA⟩ := means_get hbig hM rfl hwE
+  simp [Row.find?] at hA
+  subst hA
+  have harg := BigStep.var (i := 1) rfl (lib := L.lib) (env := [(reqData bytesOf r).toVal,
+      (Data.record [("agent", .digest ag), ("notBefore", .nat nb)]).toVal, sd.toVal, wd.toVal])
+  have hED : Means L.lib (.record ((slotLabels "e" 1).map fun l => (l, optTy (editTy (escrowRels theta roles ol sl)))))
+      (.record (suspend [(reqData bytesOf r).toVal,
+        (Data.record [("agent", .digest ag), ("notBefore", .nat nb)]).toVal, sd.toVal, wd.toVal]
+        ((slotLabels "e" 1).zip [someCallT (editTy (escrowRels theta roles ol sl))
+          (activityEdit (escrowRels theta roles ol sl) "session" (offerSessionDecl theta sl) "retract"
+            (activityKeyTerm (.get (.var 1) "agent") (.get (.var 1) "notBefore")))])))
+      (.record [("e0", .inj "some" (.inj "session" (.inj "retract" (.record [("key",
+        .record [("agent", .digest ag), ("notBefore", .nat nb)])]))))]) := by
+    simp only [slot_e1, activityEdit, activityKeyTerm, List.map, List.zip, List.zipWith, suspend, ↓reduceIte]
+    refine .record .record (.cons (.inj (.inj (.inj .record))) ?_ .nil)
+    refine .inj rfl (.inj rfl (.inj (A := .record [("key", keyTy (offerSessionDecl theta sl))])
+      (by simp [offerSessionDecl, activityLog, Row.find?]) (.record .record (.cons .record ?_ .nil))))
+    have hkt : keyTy (offerSessionDecl theta sl) = .record [("agent", .digest), ("notBefore", .nat)] := rfl
+    rw [hkt]
+    exact .record .record (.cons (get_data harg rfl) .digest (.cons (get_data harg rfl) .nat .nil))
+  have he := means_deterministic hmA hED
+  subst he
+  have i1 : List.findIdx? (fun x => decide (x.fst = "session"))
+      [("offer", escrowDecl theta roles ol), ("session", offerSessionDecl theta sl)] = some 1 := rfl
+  have hr : (offerSessionDecl theta sl).retract = true := rfl
+  rw [show (offerEscrowPackageOf theta roles ol sl pt budget).rels = escrowRels theta roles ol sl from rfl] at hes
+  cases hkb : keyBytes (offerSessionDecl theta sl) (.record [("agent", .digest ag), ("notBefore", .nat nb)]) with
+  | none =>
+    simp [editsOf, editsOf.go, editOf, relIndex, i1, escrowRels, Row.find?, hkb, hr, bind, Except.bind] at hes
+  | some kb =>
+  simp [editsOf, editsOf.go, editOf, relIndex, i1, escrowRels, Row.find?, hkb, hr, bind, Except.bind, pure,
+    Except.pure] at hes
+  subst hes
+  exact ⟨kb, hrows⟩
+
 /-- **The deployed escrow withdraw is sound** (`Lang.program`'s `run` of `withdraw`): a run that
 RETURNED read its own pinned offer `o` (present: `offerUnpinned` and `noOffer` refuse), makes
 exactly ONE call, paying `o`'s leg from the object back to `o`'s own `payTo` (`transfer (of self
 asset) (of payTo asset) amount`, no grant, no once key), and its one row act is that offer's retract.
 Mutation P8e (the withdraw pays nothing) makes the call conjunct false. -/
 theorem escrow_withdraw_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerWithdrawIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ k o amt ab po self' asset' to' kb,
@@ -858,12 +984,12 @@ private theorem post_arg_cases {theta roles : List Label} {ad : Data} (h : Confo
 
 /-- The post's run, all but reading its call off the generator. -/
 private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerPostIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ amt ab grant n payTo role terms kb vb,
@@ -959,7 +1085,7 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
       [("offer", escrowDecl theta roles ol), ("session", offerSessionDecl theta sl)] = some 0 := rfl
   have ha : amtOf (escrowDecl theta roles ol) (.record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]),
       ("payTo", payTo), ("role", role), ("terms", terms)]) = 0 := rfl
-  rw [show (offerEscrowPackageOf theta roles ol sl budget).rels = escrowRels theta roles ol sl from rfl] at hes
+  rw [show (offerEscrowPackageOf theta roles ol sl pt budget).rels = escrowRels theta roles ol sl from rfl] at hes
   cases hkb : keyBytes (escrowDecl theta roles ol) (.record [("n", .nat n)]) with
   | none =>
     simp [editsOf, editsOf.go, editOf, relIndex, i0, escrowRels, Row.find?, hkb, bind, Except.bind] at hes
@@ -1004,12 +1130,12 @@ asset) (of self asset) amount (via := some grant)`, no once key), and its one ro
 `n` with exactly the value `{give, payTo, role, terms}`. Mutation P8f (the post deposits nothing)
 makes the call conjunct false. -/
 theorem escrow_post_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerPostIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ amt ab grant n payTo role terms agent' self' asset' grant' kb vb,
@@ -1040,16 +1166,16 @@ object of `offerEscrowPackageOf …`, every retract of an `offer` row among its 
 and the run's calls include `transfer (of self asset) (of to asset) amount` of THAT row's leg
 `o.give = {amount, asset}`, where `to` is the row's own `payTo` or the `payTo` of the offer the run
 read under its peer. `fuse` retracts as a take does, with its leg's transfer beside the invoke of its peer; `post` only
-inserts. The kernel
+inserts; `retire` retracts only a session row (LANG-80). The kernel
 then conserves the denomination over the Turn (`admit_value`). Mutations P8d (the take pays nothing)
 and P8e (the withdraw pays nothing) each make it false: a retract with no transfer. -/
 theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
-    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl budget : Nat}
+    {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {m : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state m args r budget' = .ok (s, calls, rows, used))
     {kb : ByteArray} (hmem : (Kernel.RowSlot.row ⟨r.self, 0, kb⟩, Kernel.RowAct.retract) ∈ rows) :
     ∃ (A : Ty) (ad : Data) (ps : List (Label × RelRead)) (RD k o : Data) (amt : Nat) (ab to : ByteArray),
@@ -1076,6 +1202,9 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
     obtain ⟨_, _, _, _, _, _, _, _, _, -, -, -, -, rfl⟩ := post_core bytesOf digestOf hid hp h
     simp at hmem
   | 2, h =>
+    obtain ⟨kb', rfl⟩ := retire_core bytesOf digestOf hid hp h
+    simp at hmem
+  | 3, h =>
     obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb', sb, vb, hd, hm, -, -, hg, hpb, hcall, hkb, -, -, rfl⟩ :=
       take_core bytesOf digestOf hR hid hp h
     obtain ⟨self', asset', payTo', h1, h2, h3, rfl⟩ := hcall (fun fs hfs => by
@@ -1085,7 +1214,7 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
     subst hk
     exact ⟨_, _, _, _, k, o, amt, ab, pb, hd, hm, by simp [Data.field, Row.find?], hkb, hg,
       .inr ⟨kq, q, by simp [Data.field, Row.find?], hpb⟩, self', asset', payTo', h1, h2, h3, by simp⟩
-  | 3, h =>
+  | 4, h =>
     obtain ⟨k, o, amt, ab, po, kb', hd, hm, hg, hpo, hcall, hkb, rfl⟩ := withdraw_core bytesOf digestOf hid hp h
     obtain ⟨self', asset', to', h1, h2, h3, rfl⟩ := hcall (fun fs hfs => by
       simp only [escrowWithdrawDone, escrowResult, resultT, Term.record.injEq] at hfs
@@ -1094,11 +1223,11 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
     subst hk
     exact ⟨_, _, _, _, k, o, amt, ab, po, hd, hm, by simp [Data.field, Row.find?], hkb, hg, .inl hpo,
       self', asset', to', h1, h2, h3, by simp⟩
-  | m + 4, h =>
+  | m + 5, h =>
     exfalso
-    change (runMeasuredLive bytesOf digestOf rc look rv pkg state (m + 4) args r budget').map _ = _ at h
+    change (runMeasuredLive bytesOf digestOf rc look rv pkg state (m + 5) args r budget').map _ = _ at h
     rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
-    cases hm : runMeasured bytesOf digestOf rc look rv pkg state (m + 4) args r budget' with
+    cases hm : runMeasured bytesOf digestOf rc look rv pkg state (m + 5) args r budget' with
     | error e => rw [hm] at h; cases h
     | ok x =>
     obtain ⟨s', calls', rows', t', n'⟩ := x

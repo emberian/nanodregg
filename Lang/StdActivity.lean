@@ -209,33 +209,48 @@ def activityResumeMethod (S : Ty) (rels : List (Label × RelDecl)) (cursor log :
     (fail "notResumer")
   activityMethod S A (readsTy rels [(log, ⟨1, none, false, false⟩)]) resumeBody
 
-/-- The generated `retire` of an activity with a declared patience (LANG-76). It reads the log row
-at its key (the caller's pin, as `resume` does). An answered row leaves the log alone: its cursor row
-left with the answer. An unanswered row leaves the log AND the cursor in one Turn, which the log
-guard admits only at or past the row's deadline (`activityLate`, anyone) and the cursor guard admits
-there too (`activityDequeue`). So the activity's own methods keep exactly one cursor row for each
-unanswered log row across an abandon: a log-only retraction of an unanswered row would leave a cursor
-row its resumer can no longer answer. -/
-def activityRetireMethod (S : Ty) (rels : List (Label × RelDecl)) (cursor log : Label)
-    (cd ld : RelDecl) : Term :=
-  let E := editTy rels
-  let f (i : Nat) (l : Label) := Term.get (.var i) l
-  let key (i : Nat) := activityKeyTerm (f i "agent") (f i "notBefore")
-  let fail (why : String) := Term.refuse (resultTy S [] E 2) why.toUTF8
-  -- Under the answered case's binder: payload=0, row=1, point=2, request=3, argument=4, state=5.
-  let leave (cursorToo : Bool) : Term := resultT (.record []) (.var 5) (.record [
-    ("e0", someCallT E (activityEdit rels log ld "retract" (key 4))),
-    ("e1", if cursorToo then someCallT E (activityEdit rels cursor cd "retract" (key 4)) else noCallT E)])
-  -- Binders: request=0, argument=1, state=2, rows=3; under the point's case, point=0 and the rest
-  -- shift by one; under the value's case, row=0, point=1, argument=3.
-  activityMethod S (keyTy ld) (readsTy rels [(log, ⟨1, none, false, false⟩)])
-    (.case (.get (.get (.var 3) log) "p0") [
-      ("none", fail "unknown"),
-      ("some", .case (f 0 "val") [
+/-- The generated `retire` of an activity log (LANG-76; LANG-80: one method for every log, with or
+without a cursor). Without a cursor (`none`: the offer's session log, or an activity with no
+patience) it is the one edit, the log's retract at the argument key; the log guard decides
+(`activityWaiting`: an answered row, or an unanswered one at or past its deadline). With a cursor it
+reads the log row at its key (the caller's pin, as `resume` does). An answered row leaves the log
+alone: its cursor row left with the answer. An unanswered row leaves the log AND the cursor in one
+Turn, which the log guard admits only at or past the row's deadline (`activityLate`, anyone) and the
+cursor guard admits there too (`activityDequeue`). So the activity's own methods keep exactly one
+cursor row for each unanswered log row across an abandon: a log-only retraction of an unanswered row
+would leave a cursor row its resumer can no longer answer. -/
+def activityRetireMethod (S : Ty) (rels : List (Label × RelDecl)) (log : Label) (ld : RelDecl) :
+    Option (Label × RelDecl) → Term
+  | none =>
+    let f (i : Nat) (l : Label) := Term.get (.var i) l
+    let key (i : Nat) := activityKeyTerm (f i "agent") (f i "notBefore")
+    activityMethod S (keyTy ld) (.record []) (activityResult rels (.var 2) [activityEdit rels log ld "retract" (key 1)])
+  | some (cursor, cd) =>
+    let E := editTy rels
+    let f (i : Nat) (l : Label) := Term.get (.var i) l
+    let key (i : Nat) := activityKeyTerm (f i "agent") (f i "notBefore")
+    let fail (why : String) := Term.refuse (resultTy S [] E 2) why.toUTF8
+    -- Under the answered case's binder: payload=0, row=1, point=2, request=3, argument=4, state=5.
+    let leave (cursorToo : Bool) : Term := resultT (.record []) (.var 5) (.record [
+      ("e0", someCallT E (activityEdit rels log ld "retract" (key 4))),
+      ("e1", if cursorToo then someCallT E (activityEdit rels cursor cd "retract" (key 4)) else noCallT E)])
+    -- Binders: request=0, argument=1, state=2, rows=3; under the point's case, point=0 and the rest
+    -- shift by one; under the value's case, row=0, point=1, argument=3.
+    activityMethod S (keyTy ld) (readsTy rels [(log, ⟨1, none, false, false⟩)])
+      (.case (.get (.get (.var 3) log) "p0") [
         ("none", fail "unknown"),
-        ("some", .ite (eqData (keyTy ld) (f 1 "key") (key 3))
-          (.case (f 0 "answered") [("none", leave true), ("some", leave false)])
-          (fail "key"))])])
+        ("some", .case (f 0 "val") [
+          ("none", fail "unknown"),
+          ("some", .ite (eqData (keyTy ld) (f 1 "key") (key 3))
+            (.case (f 0 "answered") [("none", leave true), ("some", leave false)])
+            (fail "key"))])])
+
+/-- `activityRetireMethod`'s type: without a cursor one edit and no read; with one, the log row
+read and two edits. -/
+def activityRetireTy (S : Ty) (rels : List (Label × RelDecl)) (ld : RelDecl) (log : Label) :
+    Option (Label × RelDecl) → Ty
+  | none => methodTy S (keyTy ld) [] (.record []) (editTy rels) 1
+  | some _ => methodTy S (keyTy ld) [] (readsTy rels [(log, ⟨1, none, false, false⟩)]) (editTy rels) 2
 
 /-- Emit the activity as an ordinary checked package. Additional application
 methods/laws can be composed with its fields; the final package is checked by
@@ -255,8 +270,6 @@ def activityPackage (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
   let E := editTy rels
   let reads := readsTy rels [(log, ⟨1, none, false, false⟩)]
   let empty := Ty.record []
-  let f (i : Nat) (l : Label) := Term.get (.var i) l
-  let key (i : Nat) := activityKeyTerm (f i "agent") (f i "notBefore")
   let mut fields : List (Label × Ty × Term) := [
     (cg, guardTy S cd, activityQueued S cd resumer names patience),
     (lg, guardTy S ld, activityWaiting S plans ld resumer names patience)]
@@ -270,11 +283,10 @@ def activityPackage (S : Ty) (cursor log : Label) (cursorLimit logLimit : Nat)
       (resumeName, methodTy S (activityResumeArg p) [] reads E 2,
         activityResumeMethod S rels cursor log cd ld resumer plans p)]
     methods := methods ++ [startName, resumeName]
-  let K := keyTy ld
-  fields := fields ++ [match patience with
-    | none => ("retire", methodTy S K [] empty E 1,
-        activityMethod S K empty (activityResult rels (.var 2) [activityEdit rels log ld "retract" (key 1)]))
-    | some _ => ("retire", methodTy S K [] reads E 2, activityRetireMethod S rels cursor log cd ld)]
+  -- with a patience the abandon must take the cursor row too; without one an unanswered row is
+  -- never retired, so the one-edit form is the whole method
+  let cur := patience.map fun _ => (cursor, cd)
+  fields := fields ++ [("retire", activityRetireTy S rels ld log cur, activityRetireMethod S rels log ld cur)]
   methods := methods ++ ["retire"]
   let sortedFields := Row.sort fields
   let pkg : Package := {

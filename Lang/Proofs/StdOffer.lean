@@ -323,22 +323,31 @@ private theorem rows_own {lib : List Term} {req state : Val} {arg own peer : Dat
   get_data (ℓ := "p0") (x := own) (get_data (ℓ := "offer") (x := .record [("p0", own)])
     (BigStep.var (i := 3) rfl) rfl) rfl
 
-private theorem body_offerUnpinned {theta roles : List Label} {R V : Ty}
-    {done : Term} {lib : List Term} {req state : Val} {arg peer : Data} {E : Env} :
-    BigStep lib (bodyEnv req state arg (takeRows (optD none) peer) E) (offerTakeTree theta roles R V done)
-      (.error (.refused "offerUnpinned".toUTF8)) := by
-  unfold offerTakeTree; dsimp only
-  exact .case rows_own rfl .refuse
+/-- `offerUnwrap` over a `some`: the body runs with the payload bound, as under a `some` arm. -/
+theorem offerUnwrap_some {lib : List Term} {env : Env} {T : Ty} {s body : Term} {why : String} {w : Val}
+    {r : Except Fault Val} (hs : BigStep lib env s (.ok (.inj "some" w))) (hb : BigStep lib (w :: env) body r) :
+    BigStep lib env (offerUnwrap T s why body) r :=
+  .app .lam (.case hs rfl (.var rfl)) hb
 
-private theorem body_noOffer {theta roles : List Label} {R V : Ty}
+/-- `offerUnwrap` over a `none`: refused `why`. -/
+theorem offerUnwrap_none {lib : List Term} {env : Env} {T : Ty} {s body : Term} {why : String} {u : Val}
+    (hs : BigStep lib env s (.ok (.inj "none" u))) :
+    BigStep lib env (offerUnwrap T s why body) (.error (.refused why.toUTF8)) :=
+  .appA .lam (.case hs rfl .refuse)
+
+private theorem body_offerUnpinned {theta roles : List Label} {V : Ty}
+    {done : Term} {lib : List Term} {req state : Val} {arg peer : Data} {E : Env} :
+    BigStep lib (bodyEnv req state arg (takeRows (optD none) peer) E) (offerTakeTree theta roles V done)
+      (.error (.refused "offerUnpinned".toUTF8)) :=
+  offerUnwrap_none rows_own
+
+private theorem body_noOffer {theta roles : List Label} {V : Ty}
     {done : Term} {lib : List Term} {req state : Val} {arg peer k : Data} {E : Env} :
     BigStep lib (bodyEnv req state arg (takeRows (.inj "some" (pointD k none)) peer) E)
-      (offerTakeTree theta roles R V done) (.error (.refused "noOffer".toUTF8)) := by
-  unfold offerTakeTree; dsimp only
-  refine .case rows_own rfl ?_
-  exact .case (get_data (ℓ := "val") (x := optD none) (BigStep.var (i := 0) rfl) rfl) rfl .refuse
+      (offerTakeTree theta roles V done) (.error (.refused "noOffer".toUTF8)) :=
+  offerUnwrap_some rows_own (offerUnwrap_none (get_data (ℓ := "val") (x := optD none) (BigStep.var (i := 0) rfl) rfl))
 
-/-- The peer slot, inside the own offer's two arms. -/
+/-- The peer slot, inside the own offer's two binders. -/
 private theorem rows_peer {lib : List Term} {req state : Val} {arg k o peer : Data} {E : Env} :
     BigStep lib (o.toVal :: (pointD k (some o)).toVal ::
         bodyEnv req state arg (takeRows (.inj "some" (pointD k (some o))) peer) E)
@@ -347,24 +356,20 @@ private theorem rows_peer {lib : List Term} {req state : Val} {arg k o peer : Da
     (get_data (ℓ := "peer") (x := .record [("offer", .record [("p0", peer)])]) (BigStep.var (i := 5) rfl) rfl)
     rfl) rfl
 
-private theorem body_peerRowUnpinned {theta roles : List Label} {R V : Ty}
+private theorem body_peerRowUnpinned {theta roles : List Label} {V : Ty}
     {done : Term} {lib : List Term} {req state : Val} {arg k o : Data} {E : Env} :
     BigStep lib (bodyEnv req state arg (takeRows (.inj "some" (pointD k (some o))) (optD none)) E)
-      (offerTakeTree theta roles R V done) (.error (.refused "peerRowUnpinned".toUTF8)) := by
-  unfold offerTakeTree; dsimp only
-  refine .case rows_own rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  exact .case rows_peer rfl .refuse
+      (offerTakeTree theta roles V done) (.error (.refused "peerRowUnpinned".toUTF8)) :=
+  offerUnwrap_some rows_own (offerUnwrap_some
+    (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) (offerUnwrap_none rows_peer))
 
-private theorem body_noPeerOffer {theta roles : List Label} {R V : Ty}
+private theorem body_noPeerOffer {theta roles : List Label} {V : Ty}
     {done : Term} {lib : List Term} {req state : Val} {arg k o kq : Data} {E : Env} :
     BigStep lib (bodyEnv req state arg (takeRows (.inj "some" (pointD k (some o))) (.inj "some" (pointD kq none))) E)
-      (offerTakeTree theta roles R V done) (.error (.refused "noPeerOffer".toUTF8)) := by
-  unfold offerTakeTree; dsimp only
-  refine .case rows_own rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  refine .case rows_peer rfl ?_
-  exact .case (get_data (ℓ := "val") (x := optD none) (BigStep.var (i := 0) rfl) rfl) rfl .refuse
+      (offerTakeTree theta roles V done) (.error (.refused "noPeerOffer".toUTF8)) :=
+  offerUnwrap_some rows_own (offerUnwrap_some
+    (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) (offerUnwrap_some rows_peer
+      (offerUnwrap_none (get_data (ℓ := "val") (x := optD none) (BigStep.var (i := 0) rfl) rfl))))
 
 /-- The judge's env inside the take: peer value, peer point, own value, own point, then the body env. -/
 private abbrev judgeEnv (req state : Val) (keys pair th : Data) (tail : List (Label × Data)) (k o kq q : Data) (E : Env) : Env :=
@@ -374,15 +379,19 @@ private abbrev judgeEnv (req state : Val) (keys pair th : Data) (tail : List (La
 private abbrev bothRows (k o kq q : Data) : Data :=
   takeRows (.inj "some" (pointD k (some o))) (.inj "some" (pointD kq (some q)))
 
-/-- The named-offer check, its judge and the success term, as both take bodies nest them. -/
-private theorem named_ok {lib : List Term} {env : Env} {c j : Term} {arms : List (Label × Term)} {r : Except Fault Val}
-    {fail : Term} {done : Term}
-    (hn : BigStep lib env c (.ok (.bool true))) (hj : BigStep lib env j (.ok (.inj "ok" (.record []))))
-    (ha : Row.find? "ok" arms = some done) (hd : BigStep lib (.record [] :: env) done r) :
-    BigStep lib env (.ite c (.case j arms) fail) r :=
-  .iteT hn (.case hj ha hd)
+/-- The four unwraps of a take over two present offers: whatever the gate-and-done term does under
+the judge's env, the tree does. -/
+private theorem tree_present {theta roles : List Label} {V : Ty} {done : Term} {lib : List Term}
+    {req state : Val} {keys pair th k o kq q : Data} {E : Env} {tail : List (Label × Data)} {r : Except Fault Val}
+    (h : BigStep lib (judgeEnv req state keys pair th tail k o kq q E)
+      (.app (.lam (.record []) done) (offerGate theta roles V)) r) :
+    BigStep lib (bodyEnv req state (takeArg keys pair th tail) (bothRows k o kq q) E)
+      (offerTakeTree theta roles V done) r :=
+  offerUnwrap_some rows_own (offerUnwrap_some
+    (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) (offerUnwrap_some rows_peer
+      (offerUnwrap_some (get_data (ℓ := "val") (x := optD (some q)) (BigStep.var (i := 0) rfl) rfl) h)))
 
-private theorem body_ok {theta roles : List Label} {R V : Ty}
+private theorem body_ok {theta roles : List Label} {V : Ty}
     {done : Term} {lib : List Term} {req state : Val} {keys pair th k o kq q : Data} {E : Env} {tail : List (Label × Data)}
     {r : Except Fault Val}
     (hn : BigStep lib (judgeEnv req state keys pair th tail k o kq q E) (offerNamedOkT (.var 3) (.var 4) (.var 5))
@@ -392,29 +401,19 @@ private theorem body_ok {theta roles : List Label} {R V : Ty}
       (.ok (.inj "ok" (.record []))))
     (hd : BigStep lib (okEnv req state keys pair th tail k o kq q E) done r) :
     BigStep lib (bodyEnv req state (takeArg keys pair th tail) (bothRows k o kq q) E)
-      (offerTakeTree theta roles R V done) r := by
-  unfold offerTakeTree; dsimp only
-  refine .case rows_own rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  refine .case rows_peer rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some q)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  exact named_ok hn hj rfl hd
+      (offerTakeTree theta roles V done) r :=
+  tree_present (.app .lam (.iteT hn (.case hj rfl (.var rfl))) hd)
 
 /-- Both offers present, the own pinned key not the one the deal names: `offerNotNamed`. -/
-private theorem body_notNamed {theta roles : List Label} {R V : Ty}
+private theorem body_notNamed {theta roles : List Label} {V : Ty}
     {done : Term} {lib : List Term} {req state : Val} {keys pair th k o kq q : Data} {E : Env} {tail : List (Label × Data)}
     (hn : BigStep lib (judgeEnv req state keys pair th tail k o kq q E) (offerNamedOkT (.var 3) (.var 4) (.var 5))
       (.ok (.bool false))) :
     BigStep lib (bodyEnv req state (takeArg keys pair th tail) (bothRows k o kq q) E)
-      (offerTakeTree theta roles R V done) (.error (.refused "offerNotNamed".toUTF8)) := by
-  unfold offerTakeTree; dsimp only
-  refine .case rows_own rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  refine .case rows_peer rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some q)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  exact .iteF hn .refuse
+      (offerTakeTree theta roles V done) (.error (.refused "offerNotNamed".toUTF8)) :=
+  tree_present (.appA .lam (.iteF hn .refuse))
 
-private theorem body_refused {theta roles : List Label} {R V : Ty}
+private theorem body_refused {theta roles : List Label} {V : Ty}
     {done : Term} {lib : List Term} {req state : Val} {keys pair th k o kq q : Data} {E : Env} {tail : List (Label × Data)}
     {why : String} (hw : why = "sameRole" ∨ why = "notCompliant")
     (hn : BigStep lib (judgeEnv req state keys pair th tail k o kq q E) (offerNamedOkT (.var 3) (.var 4) (.var 5))
@@ -423,13 +422,8 @@ private theorem body_refused {theta roles : List Label} {R V : Ty}
       (activityApply (offerJoint theta roles V) [.var 2, .var 0, .get (.var 5) "theta"])
       (.ok (.inj "refused" (.bytes why.toUTF8)))) :
     BigStep lib (bodyEnv req state (takeArg keys pair th tail) (bothRows k o kq q) E)
-      (offerTakeTree theta roles R V done) (.error (.refused why.toUTF8)) := by
-  unfold offerTakeTree; dsimp only
-  refine .case rows_own rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some o)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  refine .case rows_peer rfl ?_
-  refine .case (get_data (ℓ := "val") (x := optD (some q)) (BigStep.var (i := 0) rfl) rfl) rfl ?_
-  refine .iteT hn (.case hj rfl ?_)
+      (offerTakeTree theta roles V done) (.error (.refused why.toUTF8)) := by
+  refine tree_present (.appA .lam (.iteT hn (.case hj rfl ?_)))
   rcases hw with rfl | rfl
   · have hb := BigStep.prim (lib := lib) (p := .beq) (x := .bytes "sameRole".toUTF8) (y := .bytes "sameRole".toUTF8)
       (a := .var 0) (b := .bytes "sameRole".toUTF8)
@@ -748,8 +742,8 @@ private theorem take_rowsOf (theta roles : List Label) (ol sl : Nat) :
 
 /-- The take resolves to its declared signature: argument `{pair, theta}`, no calls, the one offer
 point read under itself and under its peer, two edits. -/
-private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
-    (h : resolveMethod (D := D) (offerPackageOf theta roles ol sl b) offerTakeIx = .ok x) :
+private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerPackageOf theta roles ol sl pt b) offerTakeIx = .ok x) :
     x = ("take", ⟨offerTakeArg theta, [], offerRead, 2⟩) := by
   have hc : callSlotsOf [] = some [] := by simp [callSlotsOf, slotLabels]
   have he : editSlotsOf (offerRels theta roles ol sl)
@@ -768,8 +762,8 @@ private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl b : Na
     · cases hsg
   · simp [throw, throwThe, MonadExceptOf.throw] at h
 
-private theorem take_peerReads (theta roles : List Label) (ol sl b : Nat) :
-    (offerPackageOf theta roles ol sl b).peerReads "take" = offerRead := by
+private theorem take_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
+    (offerPackageOf theta roles ol sl pt b).peerReads "take" = offerRead := by
   simp [Package.peerReads, offerPackageOf, recordRow, Row.find?, methodPeer, methodTy, take_rowsOf]
 
 /-! ## Relocation: the take and fuse terms name no closure package -/
@@ -786,7 +780,7 @@ theorem noRef_offerJoint (theta roles : List Label) (V : Ty) : NoRef (offerJoint
 private theorem noRef_take (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) :
     NoRef (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels) (offerTakeBody theta roles rels od sd)) := by
   simp [activityMethod, offerTakeBody, NoRef, NoRefRow, activityResult, activityResultCalls, activityEdit, resultT, activityKeyTerm,
-    noCallT, someCallT, slot_e2, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT, offerTakeTree,
+    noCallT, someCallT, slot_e2, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT, offerTakeTree, offerUnwrap, offerGate,
     offerTakeDone, offerTakeEdits]
 
 /-! ## The deployed run of `take` -/
@@ -875,7 +869,7 @@ take and the escrow's run, as the receiver applies the method: `fwd` carries the
 the run). Its own slot and its peer's held offers `o` and `q` (pinned keys `k`, `kq`), `k` is the key
 the deal names for `self` (`NamedKey`), the two are `JointOk` at θ (their `role` and `terms`), and
 the result is the `ok` arm's record `done`, its fields suspended in the arm's environment. -/
-theorem offerTakeTree_inv {theta roles : List Label} {R V : Ty}
+theorem offerTakeTree_inv {theta roles : List Label} {V : Ty}
     {done : Term} {fs : List (Label × Term)} {d : RelDecl} {lib : List Term} {E env0 : Env} {tail : List (Label × Data)} {t0 : Term}
     {state : Val} {rq keys pair th X Y : Data} {sb : ByteArray} {v : Val}
     (hval : ∀ {u : Data}, Conforms u d.val →
@@ -889,7 +883,7 @@ theorem offerTakeTree_inv {theta roles : List Label} {R V : Ty}
     (fwd : ∀ {r : Except Fault Val}, BigStep lib (rq.toVal ::
         (takeArg keys pair th tail).toVal :: state ::
         (Data.record [("offer", .record [("p0", X)]), ("peer", .record [("offer", .record [("p0", Y)])])]).toVal :: E)
-        (offerTakeTree theta roles R V done) r → BigStep lib env0 t0 r)
+        (offerTakeTree theta roles V done) r → BigStep lib env0 t0 r)
     (h : BigStep lib env0 t0 (.ok v)) :
     ∃ k o kq q, X = .inj "some" (.record [("key", k), ("val", .inj "some" o)]) ∧
       Y = .inj "some" (.record [("key", kq), ("val", .inj "some" q)]) ∧
@@ -999,13 +993,13 @@ then the peer key's bytes. P5 (the retract became an upsert) is refused earlier,
 `final`, so on P5 the run does not return and this theorem is not its tooth. PA (the name check
 skipped): the run returns at LF8 with `k` Y's offer 0 where the deal names offer 1. -/
 theorem take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat}
+    {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true)
     (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerTakeIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ keys pair th k o kq q kb sb vb,
@@ -1162,5 +1156,23 @@ theorem fuse_refused_disjoint :
   · intro th keys pair k kq rq sb rels od sd lib env state hth hself hkeys hpair hk hnk
     exact take_notCompliant (o := buyerA) (q := sellerB) roles_wf buyerA_conforms sellerB_conforms hth hself hkeys
       hpair hk hnk hrole (hnot th)
+
+/-- **A deal's session row leaves exactly from its deadline** (LANG-80): the package's session guard
+(`offerSessionGuard`, `activityWaiting` at patience `pt`) admits the retraction of a session row
+(always unanswered: nothing in the package answers it) iff the call's signed `notBefore` `m` is at
+least the row key's `notBefore` `n` plus `pt`, whoever retracts; before that it refuses `unanswered`.
+`waiting_retract_iff` (LANG-76) at the offer's guard. -/
+theorem offer_session_retract_iff (theta : List Label) (sd : RelDecl) (pt n m : Nat) (key captured req : Data)
+    (lib : List Term) (env : Env) (state : Val)
+    (hk : key.field "notBefore" = some (.nat n)) (hr : req.field "notBefore" = some (.nat m))
+    (hlim : n + pt < Bounds.natLimit) :
+    (∃ w, BigStep lib
+      ((Data.record [("edit", .inj "retract" (.record [("key", key)])), ("old", .inj "some" (.record [
+        ("answered", .inj "none" (.record [])), ("captured", captured)]))]).toVal :: req.toVal :: state :: env)
+      (activityApply (offerSessionGuard theta sd pt) [.var 2, .var 1, .var 0]) (.ok (.inj "ok" w))) ↔
+      n + pt ≤ m := by
+  have h := waiting_retract_iff offerStateTy [offerSettlePlan theta] sd offerResumer {} (some pt) n m key captured
+    req none lib env state hk hr (fun P hP => by cases hP; exact hlim)
+  simpa [offerSessionGuard] using h
 
 end Nanodregg.Lang.Std

@@ -67,11 +67,11 @@ def EscrowLegMoved (bytesOf : D → ByteArray) (digestOf : ByteArray → Option 
 escrow package whose id reads back, moved its leg with its row (`EscrowLegMoved`) on the
 `{keys, pair, theta}` its deal decodes to. -/
 private theorem escrow_party {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {pkg : D} (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
     (ha : World.admit X.env w t = .ok w') (hrc : w.RowsCanon X.env)
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
-    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (hR : (offerRoleTy roles).wf = true)
     {n : Nat} {wk : Walk D} {actor P : D} {deal : ByteArray} {b : Nat} {vP : Option D}
     (hd : Dispatched X w c (n + 1) wk actor (.invoke P offerTakeIx deal b vP))
@@ -111,7 +111,7 @@ amount and into its peer offer's `payTo` account by exactly that amount); and ev
 sum over the World is unchanged (`admit_value`, read here, not recounted). Mutation P8d (the take pays
 nothing: its call slot `none`) makes `escrow_take_run_sound`, read for the peer, false: no leg moves. -/
 theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {keys th v : Data}
     {xb yb : ByteArray} {x' y' : D}
     (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
@@ -120,7 +120,7 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
       .ok (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]))
     (hxd : digestOf xb = some x') (hyd : digestOf yb = some y')
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
-    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
+    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (hR : (offerRoleTy roles).wf = true)
     (hx : ∃ cl, w.live X.env x' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hy : ∃ cl, w.live X.env y' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))

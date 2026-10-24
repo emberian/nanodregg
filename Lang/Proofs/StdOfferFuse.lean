@@ -69,8 +69,8 @@ private theorem fuse_rowsOf (theta roles : List Label) (ol sl : Nat) :
 /-- The fuse resolves to its declared signature: the deal with `via`, one invoke slot at the take's
 argument type, the one offer point read under itself and under its peer, two edits. The slot's
 argument type depends on `theta`, so whether the slot checks is read off `h`, not decided. -/
-private theorem fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
-    (h : resolveMethod (D := D) (offerPackageOf theta roles ol sl b) offerFuseIx = .ok x) :
+private theorem fuse_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
+    (h : resolveMethod (D := D) (offerPackageOf theta roles ol sl pt b) offerFuseIx = .ok x) :
     x = ("fuse", ⟨offerFuseArg theta, [offerCallTy theta], offerRead, 2⟩) := by
   have he : editSlotsOf (offerRels theta roles ol sl)
       [("e0", optTy (editTy (offerRels theta roles ol sl))), ("e1", optTy (editTy (offerRels theta roles ol sl)))] =
@@ -94,8 +94,8 @@ private theorem fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Na
     simp [resolveMethod, offerPackageOf, offerFuseIx, offerMethods, recordRow, Row.find?, methodSig, methodTy,
       resultTy, callsTy, slot_c1, slot_e2, hc, he, fuse_rowsOf, throw, throwThe, MonadExceptOf.throw] at h
 
-private theorem fuse_peerReads (theta roles : List Label) (ol sl b : Nat) :
-    (offerPackageOf theta roles ol sl b).peerReads "fuse" = offerRead := by
+private theorem fuse_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
+    (offerPackageOf theta roles ol sl pt b).peerReads "fuse" = offerRead := by
   simp [Package.peerReads, offerPackageOf, recordRow, Row.find?, methodPeer, methodTy, fuse_rowsOf]
 
 private theorem noRef_fuse (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) :
@@ -103,7 +103,7 @@ private theorem noRef_fuse (theta roles : List Label) (rels : List (Label × Rel
       (offerFuseBody theta roles rels od sd budget)) := by
   simp [activityMethod, offerFuseBody, NoRef, NoRefRow, activityResultCalls, activityEdit, resultT, activityKeyTerm,
     noCallT, someCallT, callsT, slot_e2, slot_c1, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT,
-    offerTakeTree, offerFuseDone, offerFuseCall, offerTakeCall, offerPeerT, offerTakeEdits]
+    offerTakeTree, offerUnwrap, offerGate, offerFuseDone, offerFuseCall, offerTakeCall, offerPeerT, offerTakeEdits]
 
 /-- The slot's invoke argument type, read off the slot. -/
 theorem slotInvokeArg_offer (theta : List Label) :
@@ -295,13 +295,13 @@ q}}}}` from the caller's pins, its own pinned key `k` is the one the deal NAMES 
 insert of its own session row. Mutations: PT4 (the call dropped) makes the calls conjunct false;
 PT3 (the fuse sends `keys` where it sends `theta`) makes `db` the bytes of another value. -/
 theorem fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat}
+    {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true)
     (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerFuseIx args r budget' =
       .ok (s, calls, rows, used)) :
     ∃ keys pair th via k o kq q p db via' kb sb vb,
@@ -451,7 +451,7 @@ theorem peer_of_pair {bytesOf : D → ByteArray} {digestOf : ByteArray → Optio
 `take` on the bytes `db` of the deal `x'` judged (`fuse_run_sound`); each run's row acts are touches
 of the sealed Turn; `y'` is not `x'` (`revisited`). -/
 private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {keys th v : Data}
     {xb yb : ByteArray} {x' y' : D}
     (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
@@ -460,7 +460,7 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       .ok (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]))
     (hxd : digestOf xb = some x') (hyd : digestOf yb = some y')
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
-    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (hR : (offerRoleTy roles).wf = true)
     (hx : ∃ cl, w.live X.env x' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hy : ∃ cl, w.live X.env y' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg)) :
@@ -535,11 +535,11 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
 omit [Ord D] [DecidableEq D] in
 /-- One party's take, read off `take_run_sound` at `self = P`, its row acts located in the Turn. -/
 private theorem party {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {look : Pinned D} {rv : RowView D} {pkg : D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {look : Pinned D} {rv : RowView D} {pkg : D}
     {t : Turn D} {deal : ByteArray} {P : D} {st : Slots} {rq : Req D} {f : Nat} {s : Slots}
     {rows : List (RowSlot D × RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (hself : rq.self = P)
     (hrun : (Lang.program bytesOf digestOf rc).run look rv pkg st offerTakeIx deal rq f = .ok (s, [], rows, used))
     (hcov : ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2) :
@@ -567,11 +567,11 @@ private theorem party {bytesOf : D → ByteArray} {digestOf : ByteArray → Opti
 omit [Ord D] [DecidableEq D] in
 /-- The fuser's run, read off `fuse_run_sound` at `self = P`, its row acts located in the Turn. -/
 private theorem fuser {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {look : Pinned D} {rv : RowView D} {pkg : D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {look : Pinned D} {rv : RowView D} {pkg : D}
     {t : Turn D} {args : ByteArray} {P : D} {st : Slots} {rq : Req D} {f : Nat} {s : Slots}
     {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
     (hR : (offerRoleTy roles).wf = true) (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage look pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (hself : rq.self = P)
     (hrun : (Lang.program bytesOf digestOf rc).run look rv pkg st offerFuseIx args rq f = .ok (s, calls, rows, used))
     (hcov : ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2) :
@@ -610,7 +610,7 @@ and `y'`'s retract is absent. This is about the fuse call only: the owner can ro
 alone, and one session row is not a fuse. A fuse whose take refuses derives no Turn; that branch is
 true of every refusal and is not a conjunct. -/
 theorem fuse_atomic {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {keys th v : Data}
     {xb yb : ByteArray} {x' y' : D}
     (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
@@ -619,7 +619,7 @@ theorem fuse_atomic {bytesOf : D → ByteArray} {digestOf : ByteArray → Option
       .ok (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]))
     (hxd : digestOf xb = some x') (hyd : digestOf yb = some y')
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
-    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (hR : (offerRoleTy roles).wf = true)
     (hx : ∃ cl, w.live X.env x' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hy : ∃ cl, w.live X.env y' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg)) :
@@ -652,7 +652,7 @@ runs read the same two pinned rows (`ox = qy`, `qx = oy`, keys too); and the two
 `t.rows` carry the same value bytes. Mutations: P1 (`offerJoint := okT`: `JointOk` fails on F2's pair)
 and PT3 (the fuse sends `keys` where it sends `theta`: the one-θ conjunct fails). -/
 theorem jointLaw_sound {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {keys th v : Data}
     {xb yb : ByteArray} {x' y' : D}
     (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
@@ -661,7 +661,7 @@ theorem jointLaw_sound {bytesOf : D → ByteArray} {digestOf : ByteArray → Opt
       .ok (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]))
     (hxd : digestOf xb = some x') (hyd : digestOf yb = some y')
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
-    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (hR : (offerRoleTy roles).wf = true)
     (hx : ∃ cl, w.live X.env x' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hy : ∃ cl, w.live X.env y' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
@@ -735,7 +735,7 @@ key afterwards is a new offer: this is not a spent-never-minted claim. A later f
 either slot refuses `noOffer` (journey row LF5). A retract turned into an upsert (P5) is refused
 `final` by `offer_guard`, so no such world admits. -/
 theorem invitation_once {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
+    {theta roles : List Label} {ol sl pt budget : Nat} {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {keys th v : Data}
     {xb yb : ByteArray} {x' y' : D}
     (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
@@ -744,7 +744,7 @@ theorem invitation_once {bytesOf : D → ByteArray} {digestOf : ByteArray → Op
       .ok (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]))
     (hxd : digestOf xb = some x') (hyd : digestOf yb = some y')
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
-    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl budget))
+    (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerPackageOf theta roles ol sl pt budget))
     (hR : (offerRoleTy roles).wf = true)
     (hx : ∃ cl, w.live X.env x' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hy : ∃ cl, w.live X.env y' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))

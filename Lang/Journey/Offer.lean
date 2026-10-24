@@ -43,6 +43,34 @@ def lfPostArg (n : Nat) (role : Label) (lo hi : Nat) : Option ByteArray :=
 
 def lfOfferKey (n : Nat) : Data := .record [("n", .nat n)]
 
+/-- LANG-80: the session row a deal left under `obj` (key `{agent a, notBefore 0}`) has a patience,
+`Std.offerSessionPatience` heights from its key's `notBefore`. `retire` before the deadline is
+refused by the session guard by name; at the deadline it is admitted, by the object's owner, and the
+row leaves (the heights are set, as LB10's are). -/
+def sessionRetireRows (tag : String) (prog : Program D) (r0 : Run) (a : Sim.Member) (cells : List D)
+    (obj : D) (sd : RelDecl) : Run := Id.run do
+  let mut r := r0
+  let key : Data := .record [("agent", .digest (Sim.dc.bytes a.id)), ("notBefore", .nat 0)]
+  let some x := Wire.encodeData (keyTy sd) key | return note r s!"{tag} retire argument has no bytes" false
+  let present (w : World D) : Bool := (storyRow w obj 1 sd key).isSome
+  let call (w : Run) (nb : Nat) : Call D :=
+    signedAt w.st a (Sim.S.pinsFor w.st.host (a.id :: cells)) (.invoke obj Std.offerRetireIx x 100000 none)
+      nb (nb + 100) (hole_pinAt obj w.st.host 1 sd key)
+  let P := Std.offerSessionPatience
+  let (_, v0, _) := go prog r (call r 0)
+  r := note r s!"{tag}a A retires the deal's session row under its object (signed notBefore 0, the row's deadline {P}): {v0}; the row stands {present r.st.host}"
+    (deniedWith v0 "session_waiting: unanswered" && present r.st.host)
+  let atHeight (H : Nat) : Run := { r with st := { r.st with host := { r.st.host with height := H } } }
+  let early := atHeight (P - 1)
+  let (_, v1, _) := go prog early (call early (P - 1))
+  r := note r s!"{tag}b one height before its deadline (signed notBefore {P - 1}): {v1}"
+    (deniedWith v1 "session_waiting: unanswered")
+  let late := atHeight P
+  let (rl, v2, _) := go prog late (call late P)
+  r := note r s!"{tag}c at its deadline (signed notBefore {P}): {v2}; the row leaves {!present rl.st.host}"
+    (v2 == "admitted" && !present rl.st.host)
+  return r
+
 def lfRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let prog := langProgram
   let mut r := r0
@@ -172,6 +200,8 @@ def lfRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let (_, vf7) := fuse w0 allCells (rowsAt w0.st.host 0) (lfFuseArg X X 9 0 0 (some gY))
   r := note r s!"LF7 control: X.fuse with pair \{a X, b X}: {vf7}"
     (vf7.startsWith "refused program" && (vf7.splitOn "peer: samePeer").length > 1)
+  -- LF9 (LANG-80) the session row LF1 left under X is retired from its deadline on, not before
+  r := sessionRetireRows "LF9" prog { r with st := rf1.st } a [pkg, X] X sd
   return r
 
 /-- A fresh session for the LF rows. -/

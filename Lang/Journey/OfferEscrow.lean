@@ -38,6 +38,7 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     | .ok p => pure p
     | .error e => return note r s!"LE0 offerEscrowPackage refused: {e.name}" false
   let some od := P.rels.lookup "offer" | return note r "LE0 E has no offer relation" false
+  let some sd := P.rels.lookup "session" | return note r "LE0 E has no session relation" false
   let some pb := Wire.encodePackage P | return note r "LE0 E has no bytes" false
   let (r1, v1, t1) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install pb))
   let some pkg := t1.bind fun t => (createdIds t).head? | return note r1 s!"LE0 install E: {v1}" false
@@ -139,6 +140,8 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r s!"LE5 A posts X's offer 2 with leg 6 α through its grant of transfer 5: {vp5}; offer 2 present {present rp5.st.host ox 2}"
     (vp5.startsWith "refused" && !present rp5.st.host ox 2 && bal rp5.st.host ox α == 5 &&
       bal rp5.st.host a.id α == 15)
+  -- LE6 (LANG-80) the session row LE1 left under X is retired from its deadline on, not before
+  r := sessionRetireRows "LE6" prog { r with st := rf1.st } a [pkg, ox] ox sd
   return r
 
 /-- A fresh session for the LV rows. -/
