@@ -4,7 +4,7 @@
 `Socket.delivered_answer_committed` says an `ok` answer is a committed call carrying the TEXT the
 resident printed, read at whatever type the bell's method declares on follow's World. This module
 joins that text to the type the resident checked, `answerArgTy`, so the call's argument bytes are
-`answerDatum r t`'s (R-0065), under the same `stdio-leg` premise and nothing more. The three facts
+`answerDatum r t`'s (R-0065), under the same `StdioLeg` premise and nothing more. The three facts
 HOSTING-42 named as its triggers, each a theorem here or below:
 
 - (i) `Lifetime.shape_provenance`: the shape an invoke is sent at was read, earlier in the same
@@ -659,7 +659,7 @@ theorem describe_shape {X : Ctx D} {w : World D} {obj : D} {o e : ByteArray} {sh
 /-! ## The strong form -/
 
 /-- **The delivered answer is the resident's datum, committed on the member's own World** (the
-strong form of `delivered_answer_committed`, R-0065; premise `StdioLeg`, the `stdio-leg` row,
+strong form of `delivered_answer_committed`, R-0065; premise `StdioLeg`, the `stdio-*` and `follow-loop` rows (HOSTING-50),
 nothing more; codec premise `hX`, discharged at the deployed codec by
 `Codec.Proofs.Deployed.eq_callBytes_of_decodeCall`). In one resident process's lifetime (`run` starts
 it with no shape and the volume's seed, `Lifetime.seed_ok`), an invoke of `answer` for `(r, t)` whose

@@ -13,7 +13,9 @@ This module states what an `ok` one MEANS on the member's side, under ONE premis
   continuation follow handed out with SOME result (the attempt store's, custody's, the Host's: chosen,
   never trusted), follow's World `Reach`ed between frames (other commands' frames), ending in a `done`
   handed out at a follow state the run names.
-- `LegFrom` / `StdioLeg` (the `gates/tcb.tsv` row `stdio-leg`): read along the resident's effects in the
+- `LegFrom` / `StdioLeg` (the `gates/tcb.tsv` rows `stdio-relay`, `stdio-one-follower`,
+  `stdio-continuation` and `follow-loop`, HOSTING-50; the pure half of the last is
+  `FollowAnswer.answer_reach`): read along the resident's effects in the
   order it performed them, each `ok`-exit reply is the `done` of a follower run of exactly that command's
   argv, from a World follow reached from where the last such run ended: ONE follower serves the resident.
   Every other reply and every failure claims nothing. Rust is trusted to MOVE three byte fields (the
@@ -429,8 +431,8 @@ theorem start_contOf {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)}
 
 /-! ## The member socket: what the resident's leg is trusted for -/
 
-/-- **The resident's member commands against ONE follower** (the transport premise, the `stdio-leg`
-row). Read along the resident's effects in the order it performed them, from follow's World `w`:
+/-- **The resident's member commands against ONE follower** (the transport premise, the `stdio-*`
+rows and `follow-loop`). Read along the resident's effects in the order it performed them, from follow's World `w`:
 an `ok`-exit reply to `.cmd c` is the `done` of a follower run of exactly `c`'s argv, started at a
 World follow reached from `w` (follow answers other frames in between), and the reading goes on
 from the World that `done` was handed out at; every other reply and every failure claims nothing
@@ -447,7 +449,7 @@ def LegFrom (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Se
     else LegFrom X dc B me conf w es
   | w, _ :: es => LegFrom X dc B me conf w es
 
-/-- **The transport premise, named** (`gates/tcb.tsv` row `stdio-leg`): the resident's member
+/-- **The transport premise, named** (`gates/tcb.tsv` rows `stdio-*`, `follow-loop`): the resident's member
 effects `es` are `LegFrom` some World of follow's. A hypothesis of the theorems below only. -/
 def StdioLeg (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D)
     (conf : Resident.Conf) (es : List Resident.Ev) : Prop :=
@@ -568,7 +570,7 @@ private theorem invoke_mem_invokes {sh : Resident.Shape} {r : Resident.Ring} {t 
   exact List.mem_filterMap.mpr ⟨_, h, rfl⟩
 
 /-- **The delivered answer is committed on the member's own World** (E2b; premise `StdioLeg`, the
-`stdio-leg` row; codec premise `hX`, discharged at the deployed codec by
+`stdio-*` and `follow-loop` rows; codec premise `hX`, discharged at the deployed codec by
 `Codec.Proofs.Deployed.eq_callBytes_of_decodeCall`). On every path of a tick, an invoke of `answer`
 for `(r, t)` whose reply came back `ok`:
 - the resident's side: `(r, t)` was the kept answer the tick was handed, or this tick kept it

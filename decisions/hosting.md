@@ -2535,3 +2535,28 @@ A ring `after` is then rung and answered. Q7 asserts exactly one more ask and no
 - `textMax` reads `answerBounds` by the field path `["text"]`. If Lang renamed the field, `textMax` would be 0 and `fit` would answer `(empty reply)` for everything; no theorem pins the path. `fit_size`'s `0 < size` still holds (it names the empty reply), so it would fail loudly in the rows, not in the proofs.
 
 **Meta-critique.** The pull was a one-line fix at Run.lean:400 (`getD ""` → refuse) and leave `readRings` as a second copy of the decode, because the card names one line. The reader had already named that copy (B5); fixing the line and not the copy would have left `Frees` reading the old semantics while the program read the new one, a green proof about a program that no longer exists.
+
+## HOSTING-50 · The `stdio-leg` trust row is four trusts; the one that was a theorem away is now a theorem (2026-10-24, FIX-HOSTING; COLLATION §A20, READ-HOSTING Q1; R-0069, R-0071)
+
+**Finding (READ, READ-HOSTING Q1).** gates/tcb.tsv's `stdio-leg` row was one long sentence bundling four trusts: (1) the byte relay (argv in, continuations back, `done` out); (2) topology: ONE follower behind the member socket for the resident's process life; (3) follow's World moves only by the frames it answers; (4) a restarted follow reopens exactly what it persisted; and, named only in HOSTING-42's meta-critique, (5) WHICH continuation nd sends back.
+
+**Decision.** The row is deleted and replaced by four rows, each one sentence, each with its own lift condition:
+- `stdio-relay` (client/src/{stdio,run,sockets,frame,mux}.rs): nd --stdio moves the three byte fields and nothing else.
+- `stdio-one-follower` (nd-supervise, Ops units): one follower on one Store serves the member socket for the resident's process life (READ-HOSTING Q3: a member re-genesised under a running resident breaks it; named in the row).
+- `stdio-continuation` (client/src/run.rs, attempt.rs): nd resumes follow with the continuation follow handed out for THIS command (any result; never another command's). Lift: follow authenticates its continuations.
+- `follow-loop` (Host/Follow.lean `loop`, Host/Loop.lean `append`): the IO loop answers each frame only after its absorbed steps are durable and goes on with exactly the World `Host.Follow.answer` returned.
+
+**Proved, so no longer trusted** (`Hosting/Proofs/FollowAnswer.lean`, new). `answer_world`: the World `Host.Follow.answer` returns is the one it was given (a refusal before the machine, a hang-up, `Command.start`) or `Command.step`'s on the continuation and result of the value `v` the frame's own payload decoded to as a `resume` frame (stated: `resumeFrame.decode f.payload = .ok v`). `answer_reach`: so it is `ReachOn S` from the given World with `S = []` or `S = [v.2.1.1]`, that frame's result: the list the journal join (HOSTING-47) bounds by. This is the pure half of trust (3), which the old row carried whole; what remains in `follow-loop` is the loop's three IO arms handing that World on (code reading: `world := fs'.world`; `Host.append`, whose Resident takes `w'` for a non-empty batch; `world := w'` at an adopt, where `Command.step`'s adopt arm returns that World).
+
+**Cited, not a row.** Trust (4): a restarted follow reopens by the writer's own open (`Host/Follow.lean` header, HOST-22), and `Host.Proofs.Refine.host_reopen_folds` states that whatever base and segment bytes the deployed open reads, the World it returns is the fold of exactly the steps its records decode to; the physical IO under it is the existing `extern:Host.File` row (HOST's). That the records ARE the steps follow answered is the `follow-loop` row's "only after the steps are durable".
+
+**Builds (MEASURED).** `Hosting.Proofs.FollowAnswer` green on hbox (6G swarm-build); `python3 gates/tcb.py` below.
+
+**Price.** No theorem restated; `StdioLeg`'s statement is unchanged (its docstrings now name the four rows). New theorems: `answer_world`, `answer_reach`. Nothing re-emits.
+
+**Critique.**
+- (3)'s proven half is about `answer`, not `loop`: the theorem does not see the IO. The loop is three lines per arm and the row says exactly what is read there; the lift is the pure-round factoring Host.Loop's writer already has.
+- (2) and (5) remain trusts about Rust and the deployment. (5) is the sharper: a relay that resends another of follow's OWN continuations is outside every theorem here; follow-side MAC on continuations would make it follow's choice. Named as the lift; not built.
+- COLLATION A20's other half (tcb.py comparing sha256 pins; rows for rustix, linux-raw-sys, libc, errno, windows-sys) landed beside this card at 294d1c5 (GATES-20y); the four rows here sit under that table and `tcb.check` reads them `[]`.
+
+**Meta-critique.** The pull was to delete trust (3) outright as "already a theorem" because `FollowRun` quantifies over `Reach`. `Reach` is a premise, not a fact about the deployed loop; what was a theorem away was the pure `answer`, and the IO glue is still a trust. Deleting the row would have been the "honestly labelled" move in reverse: a trust renamed a theorem.
