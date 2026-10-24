@@ -237,13 +237,18 @@ def offerUnwrap (T : Ty) (s : Term) (why : String) (body : Term) : Term :=
 def offerPointTy (V : Ty) : Ty := .record [("key", .record offerKey), ("val", optTy V)]
 
 /-- The named-offer check and the judge (under the four unwrapped binders: peerVal 0, peerPoint 1,
-ownVal 2, ownPoint 3, req 4, arg 5): `{}` when the own pinned offer is the one the deal names and the
-judge says `ok`, else the refusal by name, `offerNotNamed`, `sameRole` or `notCompliant`, typed at `{}`. -/
-def offerGate (theta roles : List Label) (V : Ty) : Term :=
+ownVal 2, ownPoint 3, req 4, arg 5): `{}` when the own pinned offer is the one the deal names, the
+judge says `ok` and the instance's own compliance `fair` (if any, LANG-82: the escrow's legs) holds,
+else the refusal by name, `offerNotNamed`, `sameRole`, `notCompliant` or `unfairLegs`, typed at `{}`.
+`fair` runs under the judge's `ok` arm: its payload 0, peerVal 1, peerPoint 2, ownVal 3, ownPoint 4,
+req 5, arg 6. -/
+def offerGate (theta roles : List Label) (V : Ty) (fair : Option Term) : Term :=
   let U := Ty.record []
   .ite (offerNamedOkT (.var 3) (.var 4) (.var 5))
     (.case (activityApply (offerJoint theta roles V) [.var 2, .var 0, .get (.var 5) "theta"]) [
-      ("ok", .var 0),
+      ("ok", match fair with
+        | none => .var 0
+        | some f => .ite f (.var 0) (.refuse U "unfairLegs".toUTF8)),
       ("refused", .ite (.prim .beq (.var 0) (.bytes "sameRole".toUTF8))
         (.refuse U "sameRole".toUTF8) (.refuse U "notCompliant".toUTF8))])
     (.refuse U "offerNotNamed".toUTF8)
@@ -254,13 +259,14 @@ under the gate's `{}`: payload 0, peerVal 1, peerPoint 2, ownVal 3, ownPoint 4, 
 rows 8). Refusals, in order: its own offer slot unpinned (`offerUnpinned`) or pinned absent
 (`noOffer`); the peer's offer slot unpinned (`peerRowUnpinned`) or pinned absent (`noPeerOffer`); its
 own pinned offer is not the one the deal names for it (`offerNotNamed`); the judge's `sameRole` /
-`notCompliant`. Each refusal is typed at what its arm would have bound (`offerUnwrap`, `offerGate`). -/
-def offerTakeTree (theta roles : List Label) (V : Ty) (done : Term) : Term :=
+`notCompliant`; and, for an instance that declares its own compliance `fair` (the escrow's legs),
+`unfairLegs`. Each refusal is typed at what its arm would have bound (`offerUnwrap`, `offerGate`). -/
+def offerTakeTree (theta roles : List Label) (V : Ty) (fair : Option Term) (done : Term) : Term :=
   offerUnwrap (offerPointTy V) (.get (.get (.var 3) "offer") "p0") "offerUnpinned"
     (offerUnwrap V (.get (.var 0) "val") "noOffer"
       (offerUnwrap (offerPointTy V) (.get (.get (.get (.var 5) "peer") "offer") "p0") "peerRowUnpinned"
         (offerUnwrap V (.get (.var 0) "val") "noPeerOffer"
-          (.app (.lam (.record []) done) (offerGate theta roles V)))))
+          (.app (.lam (.record []) done) (offerGate theta roles V fair)))))
 
 /-- The take's success: its two edits, no call. -/
 def offerTakeDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
@@ -268,7 +274,7 @@ def offerTakeDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd :
 
 /-- **The take**: the shared tree over `Std.offer`'s values. -/
 def offerTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
-  offerTakeTree theta roles (offerValTy theta roles) (offerTakeDone theta rels od sd)
+  offerTakeTree theta roles (offerValTy theta roles) none (offerTakeDone theta rels od sd)
 
 /-- The fuse's success (inside the verdict's `ok` arm: req 5, arg 6, state 7): the take's two edits
 and the one call to the peer's `take`. Shared by `Std.offer` and its escrow instance's shape. -/
@@ -278,7 +284,7 @@ def offerFuseDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd :
 
 /-- **The fuse**: the take's tree, its success also invoking the peer's `take` on the judged deal. -/
 def offerFuseBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) : Term :=
-  offerTakeTree theta roles (offerValTy theta roles) (offerFuseDone theta rels od sd budget)
+  offerTakeTree theta roles (offerValTy theta roles) none (offerFuseDone theta rels od sd budget)
 
 def offerPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
   activityResult rels (.var 2) [activityEdit rels "offer" od "insert"

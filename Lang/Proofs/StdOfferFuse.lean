@@ -243,7 +243,7 @@ private theorem relReads_points_args {D : Type} {digestOf : ByteArray → Option
   simp only [Nanodregg.Lang.relReads, Nanodregg.Lang.pointData, Nanodregg.Lang.keyColumns, Bool.false_eq_true,
     ↓reduceIte]
 
-private theorem readsData_offer_args {D : Type} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem readsData_offer_args {D : Type} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rels : List (Label × RelDecl)} {rv : RowView D} {self : D} (a1 a2 : Data) :
     Nanodregg.Lang.readsData digestOf rc look rels rv self offerRead a1 =
       Nanodregg.Lang.readsData digestOf rc look rels rv self offerRead a2 := by
@@ -361,8 +361,8 @@ theorem fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteAr
     fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_fuse _ _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, offerFuseDone theta (offerRels theta roles ol sl) (offerDecl theta roles ol)
       (offerSessionDecl theta sl) budget = .record fs := ⟨_, rfl⟩
-  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, rfl⟩ :=
-    offerTakeTree_inv offer_fields hR rfl hth hself hkeys hpair hX hY hfs fwd hbig
+  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, -, rfl⟩ :=
+    offerTakeTree_inv offer_fields hR rfl hth hself hkeys hpair hX hY hfs (fun (f : Term) (e : (none : Option Term) = some f) => nomatch e) fwd hbig
   obtain ⟨a, b, rfl⟩ := pair_shape hpair
   have hM := extract_means _ _ hx
   -- the edits

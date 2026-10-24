@@ -22,13 +22,16 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 def lvBalance (w : World D) (id : D) : Option Int :=
   (w.live Sim.env id).bind fun c => (c.slots.get Value.balanceKey).bind Value.balanceOf
 
-/-- `post {give {amount, asset}, grant, n, payTo, role, terms}` with the one term `price` in `[lo, hi]`. -/
-def lvPostArg (n : Nat) (role : Label) (lo hi amount : Nat) (asset grant payTo : D) : Option ByteArray :=
+/-- `post {give {amount, asset}, grant, n, payTo, role, terms, want {amount, asset}}` with the one term
+`price` in `[lo, hi]`: the offer gives `amount` of `asset` and asks at least `wamount` of `wasset`. -/
+def lvPostArg (n : Nat) (role : Label) (lo hi amount : Nat) (asset grant payTo : D) (wamount : Nat) (wasset : D) :
+    Option ByteArray :=
   Wire.encodeData (Std.escrowPostArg ["price"] ["buyer", "seller"])
     (.record [("give", .record [("amount", .nat amount), ("asset", .digest (Sim.dc.bytes asset))]),
       ("grant", .digest (Sim.dc.bytes grant)), ("n", .nat n), ("payTo", .digest (Sim.dc.bytes payTo)),
       ("role", .inj role (.record [])),
-      ("terms", .record [("price", .record [("hi", .nat hi), ("lo", .nat lo)])])])
+      ("terms", .record [("price", .record [("hi", .nat hi), ("lo", .nat lo)])]),
+      ("want", .record [("amount", .nat wamount), ("asset", .digest (Sim.dc.bytes wasset))])])
 
 def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let prog := langProgram
@@ -69,7 +72,7 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   -- each poster's grant to its object of `transfer` on its own account (KERNEL-60)
   let (rt6, vga, gA?) := mk r a [ox, acct a.id α] (.grant (acct a.id α) ox [.transfer 5] none)
   r := rt6
-  let (rt7, vgb, gB?) := mk r b [oy, acct b.id β] (.grant (acct b.id β) oy [.transfer 8] none)
+  let (rt7, vgb, gB?) := mk r b [oy, acct b.id β] (.grant (acct b.id β) oy [.transfer 9] none)
   r := rt7
   let (some gA, some gB) := (gA?, gB?) | return note r s!"LE0 deposit grants: {[vga, vgb]}" false
   setup := setup ++ [vga, vgb]
@@ -79,11 +82,11 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
     | some x =>
       let (r', v, _) := go prog r (signed r m ([obj, pkg] ++ ids) (.invoke obj Std.offerPostIx x 100000 none))
       (r', v)
-  let (rt8, vpx) := post r a ox [gA, α, acct a.id α, acct ox α] (lvPostArg 0 "buyer" 5 10 5 α gA a.id)
+  let (rt8, vpx) := post r a ox [gA, α, acct a.id α, acct ox α] (lvPostArg 0 "buyer" 5 10 5 α gA a.id 7 β)
   r := rt8
-  let (rt9, vpy) := post r b oy [gB, β, acct b.id β, acct oy β] (lvPostArg 0 "seller" 8 12 7 β gB b.id)
+  let (rt9, vpy) := post r b oy [gB, β, acct b.id β, acct oy β] (lvPostArg 0 "seller" 8 12 7 β gB b.id 5 α)
   r := rt9
-  let (rt10, vpy1) := post r b oy [gB, β, acct b.id β, acct oy β] (lvPostArg 1 "seller" 11 12 1 β gB b.id)
+  let (rt10, vpy1) := post r b oy [gB, β, acct b.id β, acct oy β] (lvPostArg 1 "seller" 11 12 1 β gB b.id 5 α)
   r := rt10
   let (rt12, viy, gY?) := mk r b [oy, ox] (.grant oy ox [.invoke Std.offerTakeIx] none)
   r := rt12
@@ -136,10 +139,27 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r s!"LE4 X.withdraw with no offer row pinned: {vw4}"
     (refusedBy vw4 "withdraw" "offerUnpinned" && bal rw4.st.host ox α == 5 && present rw4.st.host ox 0)
   -- LE5 a post whose grant is smaller than its leg: refused, no row, nothing moved
-  let (rp5, vp5) := post r0' a ox [gA, α, acct a.id α, acct ox α] (lvPostArg 2 "buyer" 5 10 6 α gA a.id)
+  let (rp5, vp5) := post r0' a ox [gA, α, acct a.id α, acct ox α] (lvPostArg 2 "buyer" 5 10 6 α gA a.id 7 β)
   r := note r s!"LE5 A posts X's offer 2 with leg 6 α through its grant of transfer 5: {vp5}; offer 2 present {present rp5.st.host ox 2}"
     (vp5.startsWith "refused" && !present rp5.st.host ox 2 && bal rp5.st.host ox α == 5 &&
       bal rp5.st.host a.id α == 15)
+  -- LE7 (LANG-82) the judge reads the legs: on the World before LE1, B posts Y's offer 3 (seller [8,12],
+  -- compliant with X's at price 9) giving 1 β where X wants 7 β; the fuse naming it is refused by name,
+  -- and nothing moves. LE7b: Y's offer 4 gives 7 β but wants 6 α where X gives 5 α.
+  let (rp7, vp7) := post r0' b oy [gB, β, acct b.id β, acct oy β] (lvPostArg 3 "seller" 8 12 1 β gB b.id 5 α)
+  let w7 := rp7.st.host
+  let (rf7, vf7) := fuse rp7 cells (pinOffer w7 ox 0 ++ pinOffer w7 oy 3) (lfFuseArg ox oy 9 0 3 (some gY))
+  r := note r s!"LE7 B posts Y's offer 3 (seller [8,12], gives 1 β, wants 5 α: {vp7}); X.fuse naming it at price 9 (X wants 7 β): {vf7}; X holds {bal rf7.st.host ox α} α, Y {bal rf7.st.host oy β} β"
+    (vp7 == "admitted" && refusedBy vf7 "fuse" "unfairLegs" && bal rf7.st.host ox α == 5 &&
+      bal rf7.st.host oy β == 9 && present rf7.st.host ox 0 && present rf7.st.host oy 3)
+  let (rb7, rv7) := mk r0' b [oy, acct b.id β] (.grant (acct b.id β) oy [.transfer 7] none)
+  let some gB' := rv7.2 | return note r s!"LE7b second deposit grant: {rv7.1}" false
+  let (rp7b, vp7b) := post rb7 b oy [gB', β, acct b.id β, acct oy β] (lvPostArg 4 "seller" 8 12 7 β gB' b.id 6 α)
+  let w7b := rp7b.st.host
+  let (rf7b, vf7b) := fuse rp7b cells (pinOffer w7b ox 0 ++ pinOffer w7b oy 4) (lfFuseArg ox oy 9 0 4 (some gY))
+  r := note r s!"LE7b B posts Y's offer 4 (gives 7 β, wants 6 α: {vp7b}); X.fuse naming it (X gives 5 α): {vf7b}; X holds {bal rf7b.st.host ox α} α"
+    (vp7b == "admitted" && refusedBy vf7b "fuse" "unfairLegs" && bal rf7b.st.host ox α == 5 &&
+      present rf7b.st.host oy 4)
   -- LE6 (LANG-80) the session row LE1 left under X is retired from its deadline on, not before
   r := sessionRetireRows "LE6" prog { r with st := rf1.st } a [pkg, ox] ox sd
   return r

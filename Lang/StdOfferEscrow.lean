@@ -4,25 +4,32 @@
 `Std.offer` (PROT-6) fuses two offers into a session and moves nothing. An offer that moves value
 needs its value to be LINEAR: it may not vanish with the row. Here an offer HOLDS its leg:
 
-* `post {give, grant, n, payTo, role, terms}` inserts offer `n` with value `{give, payTo, role,
-  terms}` and, in the same tree, ONE call: `transfer (of agent give.asset) (of self give.asset)
+* `post {give, grant, n, payTo, role, terms, want}` inserts offer `n` with value `{give, payTo, role,
+  terms, want}` and, in the same tree, ONE call: `transfer (of agent give.asset) (of self give.asset)
   give.amount (via := some grant)`. `grant` is the poster's grant to the object of `transfer` on its
   own account (KERNEL-60): the kernel spends it from the grant's cap. The row stands exactly when the
-  leg moved in.
-* `take {keys, pair, theta}` judges exactly as `Std.offer`'s take (its own pinned offer the one the
-  deal names for it, `offerNotNamed`; `offerJoint` on the two pinned offers' `{role, terms}` and θ)
-  and, on `ok`, retracts its own offer, inserts its session row and makes ONE
-  call: `transfer (of self give.asset) (of peer.payTo give.asset) give.amount`, its own leg to the
-  peer's `payTo`. Both takes run in the matcher's one tree, so both legs move or neither (KERNEL-45).
+  leg moved in. `want` is the leg it asks in return: at least `want.amount` of `want.asset`.
+* `take {keys, pair, theta}` judges as `Std.offer`'s take (its own pinned offer the one the deal
+  names for it, `offerNotNamed`; `offerJoint` on the two pinned offers' `{role, terms}` and θ) AND
+  the legs (LANG-82, `escrowFairT`: what the peer gives meets this offer's `want`, and what this
+  offer gives meets the peer's `want`; `unfairLegs`), and, on `ok`, retracts its own offer, inserts
+  its session row and makes ONE call: `transfer (of self give.asset) (of peer.payTo give.asset)
+  give.amount`, its own leg to the peer's `payTo`.
+* `fuse {keys, pair, theta, via}` is a take that also invokes its peer's `take` on the deal it
+  judged (LANG-77): both takes run in the fuser's one call tree, so both legs move or neither
+  (KERNEL-45).
 * `withdraw {}` reads its own pinned offer and retracts it, crediting its leg back: `transfer (of
   self give.asset) (of payTo give.asset) give.amount`.
+* `retire {agent, notBefore}` retracts a session row from its deadline on (LANG-80); it moves nothing.
 
-So a standing offer's leg leaves the object only with its row, and only to the peer (take) or back
-to its own `payTo` (withdraw): `offer_guard` admits a retract only from `take` or `withdraw`
-(`notConsumer`), and each of them moves the leg in the same tree. That is the linear half of
-PROT-8 (Nomos: a contract may not terminate holding linear assets); the kernel conserves every
+So a standing offer's leg leaves the object only with its row, and only to the peer (take, fuse) or
+back to its own `payTo` (withdraw): `offer_guard` admits a retract only from `fuse`, `take` or
+`withdraw` (`notConsumer`), and each of them moves the leg in the same tree. That is the linear half
+of PROT-8 (Nomos: a contract may not terminate holding linear assets); the kernel conserves every
 denomination over the turn (`Kernel.Proofs.Value.admit_value`), so what leaves one account arrives
-in another. The fuse, the guard, the judge and the session log are `Std.offer`'s.
+in another. The guard, the role-and-box judge and the session log are `Std.offer`'s; the legs'
+judgment is the escrow's own. θ still moves nothing: the legs are fixed per offer, and θ is the
+terms both boxes accepted.
 -/
 import Lang.StdOffer
 
@@ -33,9 +40,11 @@ namespace Nanodregg.Lang.Std
 /-- An offer's leg: the amount of one denomination it holds. -/
 def escrowLegTy : Ty := .record [("amount", .nat), ("asset", .digest)]
 
-/-- An escrow offer row's value: its leg, where the counterparty's leg is paid, its role and box. -/
+/-- An escrow offer row's value: its leg (`give`), where the counterparty's leg is paid, its role and
+box, and the leg it asks for in return (`want`, LANG-82: the least amount of one denomination). -/
 def escrowValTy (theta roles : List Label) : Ty :=
-  .record [("give", escrowLegTy), ("payTo", .digest), ("role", offerRoleTy roles), ("terms", offerTermsTy theta)]
+  .record [("give", escrowLegTy), ("payTo", .digest), ("role", offerRoleTy roles), ("terms", offerTermsTy theta),
+    ("want", escrowLegTy)]
 
 def escrowDecl (theta roles : List Label) (limit : Nat) : RelDecl :=
   ⟨offerKey, escrowValTy theta roles, limit, none, 0, true, some "offer_guard"⟩
@@ -48,7 +57,7 @@ def escrowCallTy : Ty := callOf ["transfer"]
 
 def escrowPostArg (theta roles : List Label) : Ty :=
   .record [("give", escrowLegTy), ("grant", .digest), ("n", .nat), ("payTo", .digest),
-    ("role", offerRoleTy roles), ("terms", offerTermsTy theta)]
+    ("role", offerRoleTy roles), ("terms", offerTermsTy theta), ("want", escrowLegTy)]
 
 /-- `withdraw` reads its own offer point. -/
 def escrowWithdrawRows (rels : List (Label × RelDecl)) : Ty := rowsTy rels offerRead []
@@ -86,7 +95,23 @@ def escrowPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
       (.inj (optTy .digest) "some" (a "grant")))
     (.var 2)
     [activityEdit rels "offer" od "insert" (.record [("n", a "n")])
-      (.record [("give", a "give"), ("payTo", a "payTo"), ("role", a "role"), ("terms", a "terms")])]
+      (.record [("give", a "give"), ("payTo", a "payTo"), ("role", a "role"), ("terms", a "terms"),
+        ("want", a "want")])]
+
+/-- An escrow leg as data: `amount` of the denomination `asset` (a value of `escrowLegTy`). -/
+def escrowLegD (amount : Nat) (asset : ByteArray) : Data :=
+  .record [("amount", .nat amount), ("asset", .digest asset)]
+
+/-- `giver`'s leg meets what `want` asks: the same denomination, at least the amount. -/
+def escrowLegMeetsT (giver want : Term) : Term :=
+  andT (.prim .deq (.get giver "asset") (.get want "asset")) (.prim .le (.get want "amount") (.get giver "amount"))
+
+/-- **The escrow's own compliance** (LANG-82), under the judge's `ok` arm (peerVal 1, ownVal 3): what
+the peer gives meets what this offer wants, and what this offer gives meets what the peer wants. The
+two parties' judges each check both directions. -/
+def escrowFairT : Term :=
+  andT (escrowLegMeetsT (.get (.var 1) "give") (.get (.var 3) "want"))
+    (escrowLegMeetsT (.get (.var 3) "give") (.get (.var 1) "want"))
 
 /-- The take's success (inside the verdict's `ok` arm: peerVal 1, ownVal 3, req 5, state 7): pay
 its own leg to the peer's `payTo`; `Std.offer`'s two edits. -/
@@ -98,7 +123,7 @@ def escrowTakeDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd 
 `peerRowUnpinned`, `noPeerOffer`, `offerNotNamed`, `sameRole`, `notCompliant`), the judge typed at
 the escrow's value (it reads its `role` and `terms`), the leg paid to the peer on `ok`. -/
 def escrowTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
-  offerTakeTree theta roles (escrowValTy theta roles) (escrowTakeDone theta rels od sd)
+  offerTakeTree theta roles (escrowValTy theta roles) (some escrowFairT) (escrowTakeDone theta rels od sd)
 
 /-- The fuse's success (inside the verdict's `ok` arm: payload 0, peerVal 1, ownVal 3, req 5, arg 6,
 state 7): the take's leg payment and edits, and the invoke of the peer's `take` on the judged deal
@@ -111,7 +136,7 @@ def escrowFuseDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd 
 
 /-- **The fuse**: the take's tree over the escrow's values, paying its leg and invoking the peer. -/
 def escrowFuseBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) : Term :=
-  offerTakeTree theta roles (escrowValTy theta roles) (escrowFuseDone theta rels od sd budget)
+  offerTakeTree theta roles (escrowValTy theta roles) (some escrowFairT) (escrowFuseDone theta rels od sd budget)
 
 /-- The withdraw's success (inside the inner `some`: ownVal 0, ownPoint 1, req 2, state 4): pay the
 pinned offer's leg back to its `payTo`; retract the offer. -/

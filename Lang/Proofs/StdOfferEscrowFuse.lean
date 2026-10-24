@@ -37,20 +37,22 @@ variable {D : Type} [Ord D] [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D]
 
 /-- **One escrow leg moved with its row** (PROT-8, at the admitted Turn `t` from `w` to `w'`). Party
 `P`'s run, on its argument `ad` (the deal, with the fuser's `via` or without), read its own pinned
-offer `{k, o}` (the one the deal names for `P`) and its peer's `{kq, q}` and found them `JointOk`; its
-offer row `⟨P, 0, kb⟩` is retracted in `t` and absent in `w'`; `o.give = {amount, asset}` left `P`'s
-account in `asset` and arrived in the account of `q.payTo` in `asset`, each balance moved by exactly
-`amount`. -/
+offer `{k, o}` (the one the deal names for `P`) and its peer's `{kq, q}`, found them `JointOk` and
+their legs matching (`LegsMatch o q`, LANG-82: what `q` gives meets what `o` wants, and what `o` gives
+meets what `q` wants); its offer row `⟨P, 0, kb⟩` is retracted in `t` and absent in `w'`;
+`o.give = {amount, asset}` left `P`'s account in `asset` and arrived in the account of `q.payTo` in
+`asset`, each balance moved by exactly `amount`. `o` and `q` are parameters, so a statement can say
+which offers two parties' legs are. -/
 def EscrowLegMoved (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : Lang.ReceiptCheck)
     (X : Ctx D) (w w' : World D) (c : Call D) (t : Turn D) (pkg : D) (theta roles : List Label) (ol sl : Nat)
-    (ad : Data) (P : D) : Prop :=
-  ∃ (keys pair th k o kq q : Data) (amt : Nat) (ab pb : ByteArray) (asset payTo : D) (kb : ByteArray),
+    (ad : Data) (P : D) (o q : Data) : Prop :=
+  ∃ (keys pair th k kq : Data) (amt : Nat) (ab pb : ByteArray) (asset payTo : D) (kb : ByteArray),
     ad.field "keys" = some keys ∧ ad.field "pair" = some pair ∧ ad.field "theta" = some th ∧
     methodReads bytesOf digestOf rc (pinned X.env w c.unsigned.pins) pkg (escrowRels theta roles ol sl)
       (rowView X.env w c.unsigned) P ad offerRead offerRead =
       .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
         ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
-    NamedKey (bytesOf P) keys pair k ∧ JointOk (offerLabels theta) o q th ∧
+    NamedKey (bytesOf P) keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
     o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) ∧
     q.field "payTo" = some (.digest pb) ∧ digestOf ab = some asset ∧ digestOf pb = some payTo ∧
     keyBytes (escrowDecl theta roles ol) k = some kb ∧
@@ -77,15 +79,15 @@ private theorem escrow_party {bytesOf : D → ByteArray} {digestOf : ByteArray �
     (hd : Dispatched X w c (n + 1) wk actor (.invoke P offerTakeIx deal b vP))
     (hP : ∃ cl, w.live X.env P = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hrP : digestOf (bytesOf P) = some P) :
-    ∃ keys pair th, Wire.decodeData (offerTakeArg theta) deal =
+    ∃ keys pair th o q, Wire.decodeData (offerTakeArg theta) deal =
         .ok (.record [("keys", keys), ("pair", pair), ("theta", th)]) ∧
       EscrowLegMoved bytesOf digestOf rc X w w' c t pkg theta roles ol sl
-        (.record [("keys", keys), ("pair", pair), ("theta", th)]) P := by
+        (.record [("keys", keys), ("pair", pair), ("theta", th)]) P o q := by
   obtain ⟨cell, p, rq, new, calls, rows, used, hir, hrun, -, hcov⟩ := dispatched_invoke_rows hc hd
   obtain rfl := invokeRun_pkg hir hP hidK
   have hrun' := hrun
   rw [hX] at hrun'
-  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset, payTo, kb, sb, vb, hdec, hm, hn, hj, hg, hpb,
+  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset, payTo, kb, sb, vb, hdec, hm, hn, hj, hl, hg, hpb,
     h1, h2, h3, hcalls, hkb, -, -, hrows⟩ := escrow_take_run_sound bytesOf digestOf hR hid hp hrun'
   obtain ⟨hself, -, -⟩ := invokeRun_req hir
   rw [hself] at hm hn h1 hrows
@@ -95,9 +97,9 @@ private theorem escrow_party {bytesOf : D → ByteArray} {digestOf : ByteArray �
   obtain ⟨wk', ht⟩ := dispatched_invoke_children hc hd hir hrun 0 (by simp)
   obtain ⟨sv, dv, hs0, hd0, hs1, hd1⟩ := transfer_reads_back_dispatched hc ha ht
   obtain ⟨τ, hτ, hsτ, haτ⟩ := hcov (.row ⟨P, 0, kb⟩, .retract) (by simp)
-  exact ⟨keys, pair, th, hdec, keys, pair, th, k, o, kq, q, amt, ab, pb, asset, payTo, kb,
+  exact ⟨keys, pair, th, o, q, hdec, keys, pair, th, k, kq, amt, ab, pb, asset, payTo, kb,
     by simp [Data.field, Row.find?], by simp [Data.field, Row.find?], by simp [Data.field, Row.find?],
-    hm, hn, hj, hg, hpb, h2, h3, hkb, ⟨τ, hτ, hsτ, haτ⟩, admit_retract_row hrc ha hτ hsτ haτ, sv, dv, hs0, hd0, hs1, hd1⟩
+    hm, hn, hj, hl, hg, hpb, h2, h3, hkb, ⟨τ, hτ, hsτ, haτ⟩, admit_retract_row hrc ha hτ hsτ haτ, sv, dv, hs0, hd0, hs1, hd1⟩
 
 /-- **A signed escrow fuse that the World admits moves both legs with both retracts** (PROT-8 under
 LANG-77, the Turn grain; the escrow twin of `fuse_atomic`, `jointLaw_sound` and `invitation_once`). A
@@ -107,8 +109,12 @@ signed call invoking `x'.fuse` of the escrow package `offerEscrowPackageOf …`,
 legs moved with their rows — the fuser `x'` on its own argument, its peer `y'` on the
 `{keys, pair, theta}` the fuser's run ENCODED for it, one value (`EscrowLegMoved` of each: the offer row
 the deal names retracted in `t` and absent in `w'`, the leg out of its party's account by exactly its
-amount and into its peer offer's `payTo` account by exactly that amount); and every denomination's
-sum over the World is unchanged (`admit_value`, read here, not recounted). Mutation P8d (the take pays
+amount and into its peer offer's `payTo` account by exactly that amount); the two parties' offers are
+ONE pair `ox`, `oy` — the offer `x'` read under its peer is the one `y'` consumed and vice versa — and
+their legs match (`LegsMatch`, LANG-82): `x'` receives `oy.give` at `ox.payTo`, which meets `ox.want`,
+and `y'` receives `ox.give` at `oy.payTo`, which meets `oy.want`; and every denomination's sum over
+the World is unchanged (`admit_value`, read here, not recounted). Mutation P8j (the judge ignores the
+legs) makes the `LegsMatch` conjuncts unprovable: LE7's unfair deal is admitted. Mutation P8d (the take pays
 nothing: its call slot `none`) makes `escrow_take_run_sound`, read for the peer, false: no leg moves. -/
 theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl pt budget : Nat} {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
@@ -126,17 +132,17 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
     (hy : ∃ cl, w.live X.env y' = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hrx : digestOf (bytesOf x') = some x') (hry : digestOf (bytesOf y') = some y')
     (ha : World.admit X.env w t = .ok w') (hcan : w.Canon X.env) (hrc : w.RowsCanon X.env) :
+    ∃ ox oy, EscrowLegMoved bytesOf digestOf rc X w w' c t pkg theta roles ol sl
+      (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]) x' ox oy ∧
     EscrowLegMoved bytesOf digestOf rc X w w' c t pkg theta roles ol sl
-      (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th), ("via", v)]) x' ∧
-    EscrowLegMoved bytesOf digestOf rc X w w' c t pkg theta roles ol sl
-      (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th)]) y' ∧
+      (.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th)]) y' oy ox ∧
     ∀ d, w'.valueSum d = w.valueSum d := by
   have hroot := dispatched_of_signed (X := X) (w := w) hb
   obtain ⟨cx, px, rqx, newx, callsx, rowsx, usedx, hirx, hrunx, -, hcov⟩ := dispatched_invoke_rows hc hroot
   obtain rfl := invokeRun_pkg hirx hx hidK
   have hrunx' := hrunx
   rw [hX] at hrunx'
-  obtain ⟨keys', pair', th', v', k, o, kq, q, amt, ab, pb, self', asset, payTo, p, db, vg, kb, sb, vb, hdec', hm, hn, hj,
+  obtain ⟨keys', pair', th', v', k, o, kq, q, amt, ab, pb, self', asset, payTo, p, db, vg, kb, sb, vb, hdec', hm, hn, hj, hl,
     hg, hpb, h1, h2, h3, hpeer, hdb, -, hcalls, hkb, -, -, hrows⟩ := escrow_fuse_run_sound bytesOf digestOf hR hid hp hrunx'
   rw [hdec] at hdec'
   simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] at hdec'
@@ -165,14 +171,38 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
     · rw [hyd] at hb0; exact (Option.some.inj hb0).symm
     · rw [hxd] at ha0; exact absurd (Option.some.inj ha0).symm hpx
   subst hpy
-  obtain ⟨keys', pair', th', hdy, hmy⟩ := escrow_party (n := 2) hX hc ha hrc hid hidK hp hR hdyd hy hry
+  obtain ⟨keys', pair', th', oy, qy, hdy, hmy⟩ := escrow_party (n := 2) hX hc ha hrc hid hidK hp hR hdyd hy hry
   have h1' := Wire.decodeData_eq_ok_iff.mpr hdb
   rw [h1'] at hdy
   simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] at hdy
   obtain ⟨rfl, rfl, rfl⟩ := hdy
-  refine ⟨⟨keys, .record [("a", .digest xb), ("b", .digest yb)], th, k, o, kq, q, amt, ab, pb, asset, payTo, kb,
+  -- the coupling (READ-LANGPROOFS F10): the offer X read under its peer is the one Y consumed, and
+  -- the one Y read under its peer is X's own, as `jointLaw_sound` shows for `Std.offer`
+  have hmy' := hmy
+  obtain ⟨-, -, -, ky, kqy, -, -, -, -, -, -, -, -, -, hmry, -⟩ := hmy'
+  have hne : x' ≠ p := fun e => hpx e.symm
+  have hfy : (Data.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]), ("theta", th)]).field
+      "pair" = some (.record [("a", .digest xb), ("b", .digest yb)]) := by simp [Data.field, Row.find?]
+  obtain ⟨px, Ax, Bx, hpx', hox, hqx, hRx⟩ := methodReads_offer hm
+  obtain ⟨py, Ay, By, hpy', hoy, hqy, hRy⟩ := methodReads_offer hmry
+  rw [hpeer] at hpx'
+  cases hpx'
+  rcases peer_of_pair hfy hxd hyd hrx hry hne (.inr rfl) hpy' with ⟨hyx, -⟩ | ⟨-, rfl⟩
+  · exact absurd hyx.symm hne
+  simp only [Data.record.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] at hRx hRy
+  obtain ⟨rfl, rfl⟩ := hRx
+  obtain ⟨rfl, rfl⟩ := hRy
+  rw [readsData_offer_args _ (Data.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]),
+    ("theta", th)]), hoy] at hqx
+  rw [readsData_offer_args _ (Data.record [("keys", keys), ("pair", .record [("a", .digest xb), ("b", .digest yb)]),
+    ("theta", th), ("via", v)]), hox] at hqy
+  simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, Data.inj.injEq, true_and,
+    and_true] at hqx hqy
+  obtain ⟨-, rfl⟩ := hqx
+  obtain ⟨-, rfl⟩ := hqy
+  refine ⟨_, _, ⟨keys, .record [("a", .digest xb), ("b", .digest yb)], th, k, kq, amt, ab, pb, asset, payTo, kb,
     by simp [Data.field, Row.find?], by simp [Data.field, Row.find?], by simp [Data.field, Row.find?],
-    hm, hn, hj, hg, hpb, h2, h3, hkb, ⟨τx, hτx, hsτx, haτx⟩, admit_retract_row hrc ha hτx hsτx haτx,
+    hm, hn, hj, hl, hg, hpb, h2, h3, hkb, ⟨τx, hτx, hsτx, haτx⟩, admit_retract_row hrc ha hτx hsτx haτx,
     svx, dvx, hsx0, hdx0, hsx1, hdx1⟩, hmy, fun d => admit_value hcan ha d⟩
 
 end Nanodregg.Lang.Std

@@ -183,7 +183,7 @@ private theorem noRef_take (theta roles : List Label) (rels : List (Label × Rel
     NoRef (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels) (escrowTakeBody theta roles rels od sd)) := by
   simp [activityMethod, escrowTakeBody, offerTakeTree, offerUnwrap, offerGate, escrowTakeDone, escrowResult, escrowPay, escrowTransfer,
     escrowAcct, escrowNoVia, offerTakeEdits, NoRef, NoRefRow, resultT, callsT, someCallT, activityEdit,
-    activityKeyTerm, noCallT, slot_e2, slot_c1, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT]
+    activityKeyTerm, noCallT, slot_e2, slot_c1, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT, escrowFairT, escrowLegMeetsT, andT]
 
 private theorem noRef_escrow_fuse (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl)
     (budget : Nat) :
@@ -192,7 +192,7 @@ private theorem noRef_escrow_fuse (theta roles : List Label) (rels : List (Label
   simp [activityMethod, escrowFuseBody, offerTakeTree, offerUnwrap, offerGate, escrowFuseDone, activityResultCalls, escrowPay, escrowTransfer,
     escrowAcct, escrowNoVia, offerFuseCall, offerTakeCall, offerPeerT, offerTakeEdits, NoRef, NoRefRow, resultT,
     callsT, someCallT, activityEdit, activityKeyTerm, noCallT, slot_e2, slot_c2, activityApply, noRef_offerJoint,
-    offerNamedOkT, offerNamedT]
+    offerNamedOkT, offerNamedT, escrowFairT, escrowLegMeetsT, andT]
 
 private theorem noRef_withdraw (rels : List (Label × RelDecl)) (od : RelDecl) :
     NoRef (activityMethod offerStateTy (.record []) (escrowWithdrawRows rels) (escrowWithdrawBody rels od)) := by
@@ -213,8 +213,9 @@ private theorem noRef_retire (rels : List (Label × RelDecl)) (sd : RelDecl) :
 
 /-- An escrow offer value: its leg, its `payTo`, its role and box. -/
 theorem escrow_shape {theta roles : List Label} {o : Data} (h : Conforms o (escrowValTy theta roles)) :
-    ∃ amt ab po ro ot, o = .record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]),
-        ("payTo", .digest po), ("role", ro), ("terms", ot)] ∧
+    ∃ amt ab po ro ot wamt wab, o = .record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]),
+        ("payTo", .digest po), ("role", ro), ("terms", ot),
+        ("want", .record [("amount", .nat wamt), ("asset", .digest wab)])] ∧
       Conforms ro (offerRoleTy roles) ∧ Conforms ot (offerTermsTy theta) := by
   unfold escrowValTy escrowLegTy at h
   cases h with
@@ -223,17 +224,23 @@ theorem escrow_shape {theta roles : List Label} {o : Data} (h : Conforms o (escr
     | cons h1 hr => cases hr with
       | cons h2 hr => cases hr with
         | cons h3 hr => cases hr with
-          | cons h4 hr =>
+          | cons h4 hr => cases hr with
+            | cons h5 hr =>
             cases hr; cases h2
-            cases h1 with
-            | record hg => cases hg with
-              | cons ha hg => cases hg with
-                | cons hb hg => cases hg; cases ha; cases hb; exact ⟨_, _, _, _, _, rfl, h3, h4⟩
+            cases h5 with
+            | record hw => cases hw with
+              | cons hwa hw => cases hw with
+                | cons hwb hw =>
+                cases hw; cases hwa; cases hwb
+                cases h1 with
+                | record hg => cases hg with
+                  | cons ha hg => cases hg with
+                    | cons hb hg => cases hg; cases ha; cases hb; exact ⟨_, _, _, _, _, _, _, rfl, h3, h4⟩
 
 theorem escrow_fields {theta roles : List Label} {u : Data} (h : Conforms u (escrowValTy theta roles)) :
     (∃ ru, u.field "role" = some ru ∧ Conforms ru (offerRoleTy roles)) ∧
       (∃ tu, u.field "terms" = some tu ∧ Conforms tu (offerTermsTy theta)) := by
-  obtain ⟨_, _, _, ro, ot, rfl, hro, hot⟩ := escrow_shape h
+  obtain ⟨_, _, _, ro, ot, _, _, rfl, hro, hot⟩ := escrow_shape h
   exact ⟨⟨ro, by simp [Data.field, Row.find?], hro⟩, ⟨ot, by simp [Data.field, Row.find?], hot⟩⟩
 
 private theorem withdraw_rows_cases {theta roles : List Label} {ol sl : Nat} {wd : Data}
@@ -247,6 +254,62 @@ private theorem withdraw_rows_cases {theta roles : List Label} {ol sl : Nat} {wd
   obtain ⟨P, rfl, hp⟩ := rec1_cases h
   obtain ⟨X, rfl, hx⟩ := rec1_cases hp
   exact ⟨X, rfl, hx⟩
+
+/-! ## The legs (LANG-82) -/
+
+/-- **What the escrow's compliance decides** (LANG-82, `escrowFairT`): what `q` gives meets what `o`
+wants, and what `o` gives meets what `q` wants: the same denomination, at least the amount. -/
+def LegsMatch (o q : Data) : Prop :=
+  ∃ ga gb wa wb qa qb va vb, o.field "give" = some (escrowLegD ga gb) ∧ o.field "want" = some (escrowLegD wa wb) ∧
+    q.field "give" = some (escrowLegD qa qb) ∧ q.field "want" = some (escrowLegD va vb) ∧
+    qb = wb ∧ wa ≤ qa ∧ gb = vb ∧ va ≤ ga
+
+private theorem meets_eval {lib : List Term} {env : Env} {g w : Term} {ga gb wa wb : _}
+    (hg : BigStep lib env g (.ok (escrowLegD ga gb).toVal)) (hw : BigStep lib env w (.ok (escrowLegD wa wb).toVal)) :
+    BigStep lib env (escrowLegMeetsT g w) (.ok (.bool (decide (gb = wb) && decide (wa ≤ ga)))) :=
+  andT_eval
+    (BigStep.prim (x := .digest gb) (y := .digest wb) (get_data (d := escrowLegD ga gb) (ℓ := "asset") (x := .digest gb) hg rfl)
+      (get_data (d := escrowLegD wa wb) (ℓ := "asset") (x := .digest wb) hw rfl) (by simp [primEval]))
+    (BigStep.prim (x := .nat wa) (y := .nat ga) (get_data (d := escrowLegD wa wb) (ℓ := "amount") (x := .nat wa) hw rfl)
+      (get_data (d := escrowLegD ga gb) (ℓ := "amount") (x := .nat ga) hg rfl) (by simp [primEval]))
+
+/-- The escrow's compliance evaluates, in any environment holding the peer's value at 1 and the own at
+3 (the judge's `ok` arm), to a Boolean that is `true` exactly when the legs match. -/
+theorem escrowFair_eval {theta roles : List Label} {lib : List Term} {env : Env} {o q : Data}
+    (ho : Conforms o (escrowValTy theta roles)) (hq : Conforms q (escrowValTy theta roles))
+    (h1 : env[1]? = some q.toVal) (h3 : env[3]? = some o.toVal) :
+    ∃ b, BigStep lib env escrowFairT (.ok (.bool b)) ∧ (b = true ↔ LegsMatch o q) := by
+  obtain ⟨ga, gb, po, ro, ot, wa, wb, rfl, -, -⟩ := escrow_shape ho
+  obtain ⟨qa, qb, pq, rq, qt, va, vb, rfl, -, -⟩ := escrow_shape hq
+  have hq1 : BigStep lib env (.var 1) (.ok (Data.record [("give", escrowLegD qa qb), ("payTo", .digest pq), ("role", rq),
+      ("terms", qt), ("want", escrowLegD va vb)]).toVal) := .var h1
+  have ho3 : BigStep lib env (.var 3) (.ok (Data.record [("give", escrowLegD ga gb), ("payTo", .digest po), ("role", ro),
+      ("terms", ot), ("want", escrowLegD wa wb)]).toVal) := .var h3
+  refine ⟨_, andT_eval (meets_eval (get_data hq1 rfl) (get_data ho3 rfl)) (meets_eval (get_data ho3 rfl) (get_data hq1 rfl)), ?_⟩
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  constructor
+  · rintro ⟨⟨e1, l1⟩, e2, l2⟩
+    exact ⟨ga, gb, wa, wb, qa, qb, va, vb, rfl, rfl, rfl, rfl, e1, l1, e2, l2⟩
+  · rintro ⟨ga', gb', wa', wb', qa', qb', va', vb', h1, h2, h3, h4, e1, l1, e2, l2⟩
+    have k1 : escrowLegD ga gb = escrowLegD ga' gb' := Option.some.inj h1
+    have k2 : escrowLegD wa wb = escrowLegD wa' wb' := Option.some.inj h2
+    have k3 : escrowLegD qa qb = escrowLegD qa' qb' := Option.some.inj h3
+    have k4 : escrowLegD va vb = escrowLegD va' vb' := Option.some.inj h4
+    simp [escrowLegD] at k1 k2 k3 k4
+    obtain ⟨rfl, rfl⟩ := k1
+    obtain ⟨rfl, rfl⟩ := k2
+    obtain ⟨rfl, rfl⟩ := k3
+    obtain ⟨rfl, rfl⟩ := k4
+    exact ⟨⟨e1, l1⟩, e2, l2⟩
+
+theorem escrow_fair_true {theta roles : List Label} {lib : List Term} {env : Env} {o q : Data}
+    (ho : Conforms o (escrowValTy theta roles)) (hq : Conforms q (escrowValTy theta roles))
+    (h1 : env[1]? = some q.toVal) (h3 : env[3]? = some o.toVal)
+    (h : BigStep lib env escrowFairT (.ok (.bool true))) : LegsMatch o q := by
+  obtain ⟨b, hb, hi⟩ := escrowFair_eval ho hq h1 h3
+  have := bigStep_deterministic hb h
+  simp only [Except.ok.injEq, Val.bool.injEq] at this
+  exact hi.mp this
 
 /-! ## The one transfer -/
 
@@ -329,7 +392,7 @@ private theorem take_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
         (.record [("keys", keys), ("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
-      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧
+      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
       o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) ∧
       q.field "payTo" = some (.digest pb) ∧
       ((∀ fs, escrowTakeDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol) (offerSessionDecl theta sl) =
@@ -377,10 +440,13 @@ private theorem take_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
     fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_take _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowTakeDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol)
       (offerSessionDecl theta sl) = .record fs := ⟨_, rfl⟩
-  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, rfl⟩ :=
-    offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs fwd hbig
-  obtain ⟨amt, ab, po, ro, ot, hoe, -, -⟩ := escrow_shape ho
-  obtain ⟨amtq, abq, pb, rq', qt, hqe, -, -⟩ := escrow_shape hq
+  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, hfair, rfl⟩ :=
+    offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs
+      (fun f e k o kq q ho hq => by cases e; exact Exists.imp (fun _ h => h.1) (escrowFair_eval ho hq rfl rfl))
+      fwd hbig
+  have hlm := escrow_fair_true ho hq rfl rfl (hfair _ rfl)
+  obtain ⟨amt, ab, po, ro, ot, _wa, _wb, hoe, -, -⟩ := escrow_shape ho
+  obtain ⟨amtq, abq, pb, rq', qt, _qwa, _qwb, hqe, -, -⟩ := escrow_shape hq
   have hog : o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) := by rw [hoe]; rfl
   have hqp : q.field "payTo" = some (.digest pb) := by rw [hqe]; rfl
   have hM := extract_means _ _ hx
@@ -404,7 +470,7 @@ private theorem take_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
   have he := means_deterministic hmA hED
   subst he
   obtain ⟨kb, sb, vb, hkb, hsb, hvb, hmap⟩ := offerTake_editsOf (od := escrowDecl theta roles ol) rfl hes
-  refine ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, had, hwd, hnk, hok, hog, hqp, ?_, hkb, hsb, hvb,
+  refine ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, had, hwd, hnk, hok, hlm, hog, hqp, ?_, hkb, hsb, hvb,
     hrows.trans hmap⟩
   -- the call, under the premise that the generator's `calls` field is the leg paid to the peer
   intro hcalls
@@ -449,7 +515,7 @@ theorem escrow_take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
         (.record [("keys", keys), ("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
-      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧
+      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
       o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) ∧
       q.field "payTo" = some (.digest pb) ∧
       digestOf (bytesOf r.self) = some self' ∧ digestOf ab = some asset' ∧ digestOf pb = some payTo' ∧
@@ -461,12 +527,12 @@ theorem escrow_take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
         (.record [("answered", .inj "none" (.record [])),
           ("captured", .inj "settle" (.record [("pair", pair), ("theta", th)]))]) = some vb ∧
       rows = [(.row ⟨r.self, 0, kb⟩, .retract), (.row ⟨r.self, 1, sb⟩, .insert 0 vb)] := by
-  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, hd, hm, hn, hj, hg, hpb, hcall, hkb, hsb, hvb, hrows⟩ :=
+  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, hd, hm, hn, hj, hl, hg, hpb, hcall, hkb, hsb, hvb, hrows⟩ :=
     take_core bytesOf digestOf hR hid hp h
   obtain ⟨self', asset', payTo', h1, h2, h3, hc⟩ := hcall (fun fs hfs => by
     simp only [escrowTakeDone, escrowResult, resultT, Term.record.injEq] at hfs
     subst hfs; rfl)
-  exact ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset', payTo', kb, sb, vb, hd, hm, hn, hj, hg, hpb,
+  exact ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset', payTo', kb, sb, vb, hd, hm, hn, hj, hl, hg, hpb,
     h1, h2, h3, hc, hkb, hsb, hvb, hrows⟩
 
 /-! ## The escrow fuse: its leg paid, the peer's take invoked on the judged deal (LANG-77) -/
@@ -564,7 +630,7 @@ theorem escrow_fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
         (.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
-      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧
+      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
       o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) ∧
       q.field "payTo" = some (.digest pb) ∧
       digestOf (bytesOf r.self) = some self' ∧ digestOf ab = some asset' ∧ digestOf pb = some payTo' ∧
@@ -617,11 +683,14 @@ theorem escrow_fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
     fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_escrow_fuse _ _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowFuseDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol)
       (offerSessionDecl theta sl) budget = .record fs := ⟨_, rfl⟩
-  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, rfl⟩ :=
-    offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs fwd hbig
+  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, hfair, rfl⟩ :=
+    offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs
+      (fun f e k o kq q ho hq => by cases e; exact Exists.imp (fun _ h => h.1) (escrowFair_eval ho hq rfl rfl))
+      fwd hbig
+  have hlm := escrow_fair_true ho hq rfl rfl (hfair _ rfl)
   obtain ⟨a, b, rfl⟩ := pair_shape hpair
-  obtain ⟨amt, ab, po, ro, ot, hoe, -, -⟩ := escrow_shape ho
-  obtain ⟨amtq, abq, pb, rq', qt, hqe, -, -⟩ := escrow_shape hq
+  obtain ⟨amt, ab, po, ro, ot, _wa, _wb, hoe, -, -⟩ := escrow_shape ho
+  obtain ⟨amtq, abq, pb, rq', qt, _qwa, _qwb, hqe, -, -⟩ := escrow_shape hq
   have hog : o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) := by rw [hoe]; rfl
   have hqp : q.field "payTo" = some (.digest pb) := by rw [hqe]; rfl
   have hM := extract_means _ _ hx
@@ -676,7 +745,7 @@ theorem escrow_fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
       hov, hn, hnv, bind, Except.bind, pure, Except.pure, Except.map] at hc
   rename_i self' asset' payTo' via'
   exact ⟨keys, .record [("a", .digest a), ("b", .digest b)], th, via, k, o, kq, q, amt, ab, pb, self', asset', payTo', pr,
-    db, via', kb, sb, vb, had, hwd, hnk, hok, hog, hqp, rfl, h2, h3, hpeer, hdb, viaReads_of hvia hov, hc.symm, hkb, hsb,
+    db, via', kb, sb, vb, had, hwd, hnk, hok, hlm, hog, hqp, rfl, h2, h3, hpeer, hdb, viaReads_of hvia hov, hc.symm, hkb, hsb,
     hvb, hrows.trans hmap⟩
 
 /-! ## The withdraw -/
@@ -769,7 +838,7 @@ private theorem withdraw_core {D : Type} (bytesOf : D → ByteArray) (digestOf :
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowWithdrawDone (escrowRels theta roles ol sl) (escrowDecl theta roles ol) = .record fs :=
     ⟨_, rfl⟩
   cases bigStep_deterministic hbig (fwd (wd_ok hfs))
-  obtain ⟨amt, ab, po, ro, ot, hoe, -, -⟩ := escrow_shape ho
+  obtain ⟨amt, ab, po, ro, ot, _wa, _wb, hoe, -, -⟩ := escrow_shape ho
   have hog : o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) := by rw [hoe]; rfl
   have hop : o.field "payTo" = some (.digest po) := by rw [hoe]; rfl
   have hM := extract_means _ _ hx
@@ -963,24 +1032,24 @@ theorem escrow_withdraw_run_sound {D : Type} (bytesOf : D → ByteArray) (digest
 /-! ## The post -/
 
 private theorem post_arg_cases {theta roles : List Label} {ad : Data} (h : Conforms ad (escrowPostArg theta roles)) :
-    ∃ amt ab grant n payTo role terms,
+    ∃ amt ab grant n payTo role terms want,
       ad = .record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant),
-        ("n", .nat n), ("payTo", payTo), ("role", role), ("terms", terms)] ∧
+        ("n", .nat n), ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)] ∧
       Conforms (.record [("amount", .nat amt), ("asset", .digest ab)]) escrowLegTy ∧
       Conforms (.digest grant) .digest ∧ Conforms payTo .digest ∧ Conforms role (offerRoleTy roles) ∧
-      Conforms terms (offerTermsTy theta) := by
+      Conforms terms (offerTermsTy theta) ∧ Conforms want escrowLegTy := by
   unfold escrowPostArg at h
   cases h with
   | record hr =>
   cases hr with | cons h1 hr => cases hr with | cons h2 hr => cases hr with | cons h3 hr => cases hr with
-    | cons h4 hr => cases hr with | cons h5 hr => cases hr with | cons h6 hr =>
+    | cons h4 hr => cases hr with | cons h5 hr => cases hr with | cons h6 hr => cases hr with | cons h7 hr =>
   cases hr
   have hg := h1
   have hgr := h2
   unfold escrowLegTy at h1
   cases h1 with | record hg' => cases hg' with | cons ha hg' => cases hg' with | cons hb hg' =>
   cases hg'; cases ha; cases hb; cases h2; cases h3
-  exact ⟨_, _, _, _, _, _, _, rfl, hg, hgr, h4, h5, h6⟩
+  exact ⟨_, _, _, _, _, _, _, _, rfl, hg, hgr, h4, h5, h6, h7⟩
 
 /-- The post's run, all but reading its call off the generator. -/
 private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
@@ -992,10 +1061,10 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
     (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerPostIx args r budget' =
       .ok (s, calls, rows, used)) :
-    ∃ amt ab grant n payTo role terms kb vb,
+    ∃ amt ab grant n payTo role terms want kb vb,
       Wire.decodeData (escrowPostArg theta roles) args = .ok (.record [
         ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
-        ("payTo", payTo), ("role", role), ("terms", terms)]) ∧
+        ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]) ∧
       ((∀ fs, escrowPostBody (escrowRels theta roles ol sl) (escrowDecl theta roles ol) = .record fs →
           Row.find? "calls" fs = some (callsT [someCallT escrowCallTy
             (escrowTransfer (.get (.get (.var 1) "give") "amount")
@@ -1008,7 +1077,7 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
       keyBytes (escrowDecl theta roles ol) (.record [("n", .nat n)]) = some kb ∧
       Wire.encodeData (escrowDecl theta roles ol).val (.record [
         ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("payTo", payTo), ("role", role),
-        ("terms", terms)]) = some vb ∧
+        ("terms", terms), ("want", want)]) = some vb ∧
       rows = [(.row ⟨r.self, 0, kb⟩, .insert 0 vb)] := by
   change (runMeasuredLive bytesOf digestOf rc look rv pkg state offerPostIx args r budget').map _ = _ at h
   rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
@@ -1027,18 +1096,18 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
   have hsig := post_resolve hres
   cases hsig
   simp only at hrun hx hes
-  obtain ⟨amt, ab, grant, n, payTo, role, terms, rfl, hgc, hgrc, h4, h5, h6⟩ :=
+  obtain ⟨amt, ab, grant, n, payTo, role, terms, want, rfl, hgc, hgrc, h4, h5, h6, h7⟩ :=
     post_arg_cases (decodeData_conforms had)
   have hbig := run_bigStep hrun
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowPostBody (escrowRels theta roles ol sl) (escrowDecl theta roles ol) = .record fs :=
     ⟨_, rfl⟩
   have hval : BigStep L.lib [(reqData bytesOf r).toVal, (Data.record [
       ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
-      ("payTo", payTo), ("role", role), ("terms", terms)]).toVal, sd.toVal, wd.toVal]
+      ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]).toVal, sd.toVal, wd.toVal]
       (escrowPostBody (escrowRels theta roles ol sl) (escrowDecl theta roles ol))
       (.ok (.record (suspend [(reqData bytesOf r).toVal, (Data.record [
         ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
-        ("payTo", payTo), ("role", role), ("terms", terms)]).toVal, sd.toVal, wd.toVal] fs))) := by
+        ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]).toVal, sd.toVal, wd.toVal] fs))) := by
     rw [hfs]; exact .record
   cases bigStep_deterministic hbig (apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_post theta roles _ _) hval)
   have hM := extract_means _ _ hx
@@ -1047,7 +1116,7 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
         (activityEdit (escrowRels theta roles ol sl) "offer" (escrowDecl theta roles ol) "insert"
           (.record [("n", .get (.var 1) "n")])
           (.record [("give", .get (.var 1) "give"), ("payTo", .get (.var 1) "payTo"), ("role", .get (.var 1) "role"),
-            ("terms", .get (.var 1) "terms")]))])) := by
+            ("terms", .get (.var 1) "terms"), ("want", .get (.var 1) "want")]))])) := by
     simp only [escrowPostBody, escrowResult, resultT, Term.record.injEq] at hfs
     subst hfs; rfl
   have hwE := BigStep.get (ℓ := "edits") hbig (.field (find_suspend_of hfE) .record)
@@ -1056,19 +1125,19 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
   subst hA
   have harg := BigStep.var (i := 1) rfl (lib := L.lib) (env := [(reqData bytesOf r).toVal, (Data.record [
       ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
-      ("payTo", payTo), ("role", role), ("terms", terms)]).toVal, sd.toVal, wd.toVal])
+      ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]).toVal, sd.toVal, wd.toVal])
   have hED : Means L.lib (.record ((slotLabels "e" 1).map fun l => (l, optTy (editTy (escrowRels theta roles ol sl)))))
       (.record (suspend [(reqData bytesOf r).toVal, (Data.record [
         ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
-        ("payTo", payTo), ("role", role), ("terms", terms)]).toVal, sd.toVal, wd.toVal]
+        ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]).toVal, sd.toVal, wd.toVal]
         ((slotLabels "e" 1).zip [someCallT (editTy (escrowRels theta roles ol sl))
           (activityEdit (escrowRels theta roles ol sl) "offer" (escrowDecl theta roles ol) "insert"
             (.record [("n", .get (.var 1) "n")])
             (.record [("give", .get (.var 1) "give"), ("payTo", .get (.var 1) "payTo"), ("role", .get (.var 1) "role"),
-              ("terms", .get (.var 1) "terms")]))])))
+              ("terms", .get (.var 1) "terms"), ("want", .get (.var 1) "want")]))])))
       (.record [("e0", .inj "some" (.inj "offer" (.inj "insert" (.record [("key", .record [("n", .nat n)]),
         ("val", .record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("payTo", payTo),
-          ("role", role), ("terms", terms)])]))))]) := by
+          ("role", role), ("terms", terms), ("want", want)])]))))]) := by
     simp only [slot_e1, activityEdit, List.map, List.zip, List.zipWith, suspend]
     refine .record .record (.cons (.inj (.inj (.inj .record))) ?_ .nil)
     refine .inj rfl (.inj rfl (.inj (A := rowTy (escrowDecl theta roles ol)) (by simp [Row.find?]) (.record .record
@@ -1078,27 +1147,27 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
       exact .record .record (.cons (get_data harg rfl) .nat .nil)
     · exact .record .record (.cons (get_data harg rfl) (means_toVal hgc)
         (.cons (get_data harg rfl) (means_toVal h4) (.cons (get_data harg rfl) (means_toVal h5)
-          (.cons (get_data harg rfl) (means_toVal h6) .nil))))
+          (.cons (get_data harg rfl) (means_toVal h6) (.cons (get_data harg rfl) (means_toVal h7) .nil)))))
   have he := means_deterministic hmA hED
   subst he
   have i0 : List.findIdx? (fun x => decide (x.fst = "offer"))
       [("offer", escrowDecl theta roles ol), ("session", offerSessionDecl theta sl)] = some 0 := rfl
   have ha : amtOf (escrowDecl theta roles ol) (.record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]),
-      ("payTo", payTo), ("role", role), ("terms", terms)]) = 0 := rfl
+      ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]) = 0 := rfl
   rw [show (offerEscrowPackageOf theta roles ol sl pt budget).rels = escrowRels theta roles ol sl from rfl] at hes
   cases hkb : keyBytes (escrowDecl theta roles ol) (.record [("n", .nat n)]) with
   | none =>
     simp [editsOf, editsOf.go, editOf, relIndex, i0, escrowRels, Row.find?, hkb, bind, Except.bind] at hes
   | some kb =>
   cases hvb : Wire.encodeData (escrowDecl theta roles ol).val (.record [("give", .record [("amount", .nat amt),
-      ("asset", .digest ab)]), ("payTo", payTo), ("role", role), ("terms", terms)]) with
+      ("asset", .digest ab)]), ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]) with
   | none =>
     simp [editsOf, editsOf.go, editOf, relIndex, i0, escrowRels, Row.find?, hkb, hvb, bind, Except.bind] at hes
   | some vb =>
   simp [editsOf, editsOf.go, editOf, relIndex, i0, escrowRels, Row.find?, hkb, hvb, ha, bind, Except.bind, pure,
     Except.pure] at hes
   subst hes
-  refine ⟨amt, ab, grant, n, payTo, role, terms, kb, vb, had, ?_, hkb, hvb, hrows⟩
+  refine ⟨amt, ab, grant, n, payTo, role, terms, want, kb, vb, had, ?_, hkb, hvb, hrows⟩
   intro hcalls
   have hwC := BigStep.get (ℓ := "calls") hbig (.field (find_suspend_of (hcalls fs hfs)) .record)
   obtain ⟨A', hA', hmC⟩ := means_get hbig hM rfl hwC
@@ -1107,7 +1176,7 @@ private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : Byt
   have hgive := get_data (ℓ := "give") harg rfl
   have hreq := BigStep.var (i := 0) rfl (lib := L.lib) (env := [(reqData bytesOf r).toVal, (Data.record [
       ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
-      ("payTo", payTo), ("role", role), ("terms", terms)]).toVal, sd.toVal, wd.toVal])
+      ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]).toVal, sd.toVal, wd.toVal])
   have hce := means_deterministic hmC (transfer_means (vd := .inj "some" (.digest grant))
     (get_data (ℓ := "amount") (x := .nat amt) hgive rfl)
     (get_data (ℓ := "agent") (d := reqData bytesOf r) (x := .digest (bytesOf r.agent)) hreq rfl)
@@ -1138,23 +1207,23 @@ theorem escrow_post_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf :
     (hp : readPackage look pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state offerPostIx args r budget' =
       .ok (s, calls, rows, used)) :
-    ∃ amt ab grant n payTo role terms agent' self' asset' grant' kb vb,
+    ∃ amt ab grant n payTo role terms want agent' self' asset' grant' kb vb,
       Wire.decodeData (escrowPostArg theta roles) args = .ok (.record [
         ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant), ("n", .nat n),
-        ("payTo", payTo), ("role", role), ("terms", terms)]) ∧
+        ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)]) ∧
       digestOf (bytesOf r.agent) = some agent' ∧ digestOf (bytesOf r.self) = some self' ∧
       digestOf ab = some asset' ∧ digestOf grant = some grant' ∧
       calls = [.transfer (.of agent' asset') (.of self' asset') amt (some grant') none] ∧
       keyBytes (escrowDecl theta roles ol) (.record [("n", .nat n)]) = some kb ∧
       Wire.encodeData (escrowDecl theta roles ol).val (.record [
         ("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("payTo", payTo), ("role", role),
-        ("terms", terms)]) = some vb ∧
+        ("terms", terms), ("want", want)]) = some vb ∧
       rows = [(.row ⟨r.self, 0, kb⟩, .insert 0 vb)] := by
-  obtain ⟨amt, ab, grant, n, payTo, role, terms, kb, vb, hd, hcall, hkb, hvb, hrows⟩ := post_core bytesOf digestOf hid hp h
+  obtain ⟨amt, ab, grant, n, payTo, role, terms, want, kb, vb, hd, hcall, hkb, hvb, hrows⟩ := post_core bytesOf digestOf hid hp h
   obtain ⟨agent', self', asset', grant', h1, h2, h3, h4, hc⟩ := hcall (fun fs hfs => by
     simp only [escrowPostBody, escrowResult, resultT, Term.record.injEq] at hfs
     subst hfs; rfl)
-  exact ⟨amt, ab, grant, n, payTo, role, terms, agent', self', asset', grant', kb, vb, hd, h1, h2, h3, h4, hc, hkb,
+  exact ⟨amt, ab, grant, n, payTo, role, terms, want, agent', self', asset', grant', kb, vb, hd, h1, h2, h3, h4, hc, hkb,
     hvb, hrows⟩
 
 /-! ## The linear corollary, over every method -/
@@ -1191,7 +1260,7 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
         digestOf to = some to' ∧ Kernel.Receive.Body.transfer (.of self' asset') (.of to' asset') amt none none ∈ calls := by
   match m, h with
   | 0, h =>
-    obtain ⟨keys, pair, th, via, k, o, kq, q, amt, ab, pb, self', asset', payTo', p, db, via', kb', sb, vb, hd, hm, -, -,
+    obtain ⟨keys, pair, th, via, k, o, kq, q, amt, ab, pb, self', asset', payTo', p, db, via', kb', sb, vb, hd, hm, -, -, -,
       hg, hpb, h1, h2, h3, -, -, -, hcalls, hkb, -, -, hrows⟩ := escrow_fuse_run_sound bytesOf digestOf hR hid hp h
     subst hcalls hrows
     have hk : kb = kb' := by simp at hmem; first | exact hmem | exact hmem.symm
@@ -1199,13 +1268,13 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
     exact ⟨_, _, _, _, k, o, amt, ab, pb, hd, hm, by simp [Data.field, Row.find?], hkb, hg,
       .inr ⟨kq, q, by simp [Data.field, Row.find?], hpb⟩, self', asset', payTo', h1, h2, h3, by simp⟩
   | 1, h =>
-    obtain ⟨_, _, _, _, _, _, _, _, _, -, -, -, -, rfl⟩ := post_core bytesOf digestOf hid hp h
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, -, -, -, -, rfl⟩ := post_core bytesOf digestOf hid hp h
     simp at hmem
   | 2, h =>
     obtain ⟨kb', rfl⟩ := retire_core bytesOf digestOf hid hp h
     simp at hmem
   | 3, h =>
-    obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb', sb, vb, hd, hm, -, -, hg, hpb, hcall, hkb, -, -, rfl⟩ :=
+    obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb', sb, vb, hd, hm, -, -, -, hg, hpb, hcall, hkb, -, -, rfl⟩ :=
       take_core bytesOf digestOf hR hid hp h
     obtain ⟨self', asset', payTo', h1, h2, h3, rfl⟩ := hcall (fun fs hfs => by
       simp only [escrowTakeDone, escrowResult, resultT, Term.record.injEq] at hfs
