@@ -331,76 +331,11 @@ theorem invokeRun_pkg {X : Ctx D} {w : World D} {pins : List (D × D)} {c : Call
 
 /-! ## A retract removes its row -/
 
-/-- One retract touch at a row slot that passes leaves the slot absent. -/
-theorem rowStep_retract_absent {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
-    {key : RowKey D} (hr : Trie.Canon (rowSpec E) 0 r) (h : rowStep E w t r x = .ok r')
-    (hs : x.slot = .row key) (hact : x.act = .retract) : r'.get (rowSpec E) (.row key) = none := by
-  obtain ⟨slot, seen, act⟩ := x
-  simp only at hs hact
-  subst hs hact
-  unfold rowStep rowStepOn at h; simp only [headOfOn_trie, headFloorOn_trie, setHeadOn_trie] at h
-  simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
-  split at h
-  · simp at h
-  · simp only [except_bind_ok] at h
-    obtain ⟨⟨⟩, -, h⟩ := h
-    obtain ⟨⟨⟩, -, ⟨⟩, -, h⟩ := h
-    split at h
-    · rename_i a val u hc
-      simp only [except_bind_ok] at h
-      obtain ⟨⟨⟩, -, h⟩ := h
-      simp only [pure, Except.pure, Except.ok.injEq] at h
-      subst h
-      have hc' : r.get (rowSpec E) (.row key) = some (.row a val u) := hc
-      obtain ⟨-, -, hget⟩ := rowsWeight_retain hr hc' (rowPath E (.row key)) (under_rowPath E (.row key))
-      unfold setHead
-      rw [Trie.get_insert_ne (rowSpec E) _ _ (fun e => by cases e), hget, if_pos rfl]
-    · simp at h
-
-/-- Every row touch of a turn, in order: a retract at a row slot among them (slots distinct) leaves
-the slot absent at the end. -/
-theorem foldRows_retract_absent {E : Env D} {w : World D} {t : Turn D} {τ : RowTouch D} {key : RowKey D}
-    (hs : τ.slot = .row key) (hact : τ.act = .retract) :
-    ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
-      (l.map RowTouch.slot).Nodup → l.foldlM (rowStepFreed E w t) acc = .ok rr → τ ∈ l →
-      rr.1.get (rowSpec E) (.row key) = none
-  | [], _, _, _, _, _, hm => by simp at hm
-  | y :: rest, acc, rr, hc, hn, h, hm => by
-      rw [List.foldlM_cons, except_bind_ok] at h
-      obtain ⟨acc', h1, h2⟩ := h
-      unfold rowStepFreed rowStepFreedOn at h1; simp only [rowStepOn_trie, rowFreedOn_trie] at h1
-      rw [except_bind_ok] at h1
-      obtain ⟨r1, hstep, he⟩ := h1
-      simp only [pure, Except.pure, Except.ok.injEq] at he
-      subst he
-      have hc1 := (rowStep_weight hc hstep).2
-      simp only [List.map_cons, List.nodup_cons] at hn
-      rcases List.mem_cons.mp hm with rfl | hm'
-      · rw [foldRows_get_out rest _ rr hc1 h2 fun x hx _ =>
-          ⟨fun e => hn.1 (by rw [hs, e]; exact List.mem_map_of_mem hx), fun _ _ e => by cases e⟩]
-        exact rowStep_retract_absent hc hstep hs hact
-      · exact foldRows_retract_absent hs hact rest _ rr hc1 hn.2 h2 hm'
-
-/-- **An admitted retract removes its row.** A turn admitted to `w'` from canonical rows, and a row
-touch of it that retracts at a row slot: `w'` holds no row there. -/
+/-- **An admitted retract removes its row**: `Kernel.admit_retract_row`, under the name the offer
+theorems read (`Lang.Proofs.StdOfferFuse`). -/
 theorem admit_retract_absent {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
     (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} (hτ : τ ∈ t.rows)
-    (hs : τ.slot = .row key) (hact : τ.act = .retract) : rowAt E w'.rows (.row key) = none := by
-  obtain ⟨_, hk, hw'⟩ := admit_rows ha
-  have hrun := hk.rows
-  rw [rowsRun_eq] at hrun
-  simp only [except_bind_ok] at hrun
-  obtain ⟨⟨⟩, -, ⟨⟩, -, hrun⟩ := hrun
-  split at hrun
-  · simp at hrun
-  · rename_i hfind
-    rw [except_bind_ok] at hrun
-    obtain ⟨acc, hf, he⟩ := hrun
-    simp only [pure, Except.pure, Except.ok.injEq] at he
-    unfold rowAt
-    rw [hw', ← he, dropHeads_get_out t (fun _ _ _ _ e => by cases e) acc
-      (foldRows_weight t.rows (w.rows, 0) acc hr hf).2]
-    exact foldRows_retract_absent hs hact t.rows (w.rows, 0) acc hr (nodup_of_find_none hfind) hf hτ
+    (hs : τ.slot = .row key) (hact : τ.act = .retract) : rowAt E w'.rows (.row key) = none :=
+  admit_retract_row hr ha hτ hs hact
 
 end Nanodregg.Lang

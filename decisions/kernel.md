@@ -3199,3 +3199,20 @@ Item 3's trigger fired. The trigger was "the first row whose invariant spans two
 **Critique.** The theorem is only as wide as `effect_at_object`: a new Body that writes an object must extend that totality, and this proof then reds at the new case, which is the intent. The nested-invoke case pays the order laws through `firstDup`, though the statement does not need them (`revisited` already excludes a second invoke). Slot-wise equality is weaker than `lawsOf` equality; a consumer reading laws needs `CellsCanon` too.
 
 **Meta-critique.** Bias: trusting a check's NAME for what it protects. The brief named the relaw plant as the package falsifier because the check is called `hasMethods` and sits next to `packageOf`. It guards the laws of a programmed object, not its package; building the named plant alone would have reported "red" for a conjunct the card did not ask about. Second bias: a plant that "reds this theorem by name" is easy to manufacture. The consistent overlay is my construction, so its meaning rests on its upstream restatements dropping only the conjunct the deleted check proves, which is checked by the overlay's diff (logs/kernelpkg-plants/relaw.diffstat), not by a second reader.
+
+## KERNEL-65 · A written row reads back on the World that admits it (CX-BACKLOG, 2026-10-23; cv 01a16821-5828, HOSTING-44's first gap; method R-0069)
+
+**Decision.** The rows had a read-back for a slot no touch names (`foldRows_get_out`) and none for the slot a touch WROTE. HOSTING-44's `answered_row_is_kept_answer` therefore stopped at the run: it could say what the answer call writes, never what the committing World holds. Added to `Kernel/Proofs/Rows.lean`:
+- `foldRows_touch_get`: in a turn's fold (slots distinct), the touch at `.row key` decides the slot. The fold reached it at canonical rows `r0`, its step left `r1`, and the end holds at `.row key` what `r1` does.
+- `admit_row_touch`: the same over `World.admit` (`dropHeads` removes heads, never a row).
+- Per act: `rowStep_upsert_get` / `admit_upsert_row` (the leaf `.row amt v ver`, some version), `rowStep_insert_get` / `admit_insert_row`, and `rowStep_retract_absent` / `admit_retract_row` (the slot absent).
+- `rowStep_retract_absent` moves here from `Lang.Proofs.DispatchRows`, where it was proved from outside the kernel. `Lang.DispatchRows.foldRows_retract_absent` is deleted: `foldRows_touch_get` is its general form. `Lang.admit_retract_absent` is now `admit_retract_row` under the name `StdOfferFuse` reads (FABLE-T's file). It is deleted when that file is next touched (cv 01a16821-581a).
+- The consumer, `Lang.Bell.answer_commits` (`Lang/Proofs/BellCommit.lean`): a signed call invoking a Bell's `answer`, derived and admitted from canonical rows, leaves a World that holds `rings[(k, nb)] = answeredVal x y` and no `pending` row there. This is half of the HOSTING-44 join. The other half is card cv 01a16821-5835: the commit step behind `journalAt (txIdOf c)`.
+
+**Plant (MEASURED, hbox `logs/backlog/plants/C2-upsert-drops-value.build.log`).** The upsert writes `.row amt ByteArray.empty ver` instead of `v`. `Kernel.Proofs.Rows` goes RED at `rowStep_upsert_get` (l.713), and at `rowStep_weight` (l.187: the stored size moved). Reverted byte-identical.
+
+**Critique.**
+- The version is existential. What `ver` is (the old version + 1, or the relation's floor for a fresh row) is in the step and not stated. Nothing reads it yet. A pin over the new row would need it.
+- `answer_commits` premises the package read at the call's PINS (`pinned`), while `answered_row_is_kept_answer` reads it on follow's World (`worldLook`). The two agree only through the commit step that card 3 reconstructs.
+
+**Meta-critique.** The gap was not hard. It was unstated because each consumer (`invitation_once`, the escrow) needed only the retract, and the retract got a Lang-side lemma beside its first use. The general lemma was one fold away. A twin at the consumer is how a kernel fact stays unwritten.

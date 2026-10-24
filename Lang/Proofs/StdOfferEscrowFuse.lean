@@ -92,7 +92,7 @@ private theorem escrow_party {bytesOf : D → ByteArray} {digestOf : ByteArray �
   obtain ⟨sv, dv, hs0, hd0, hs1, hd1⟩ := transfer_reads_back_dispatched hc ha ht
   obtain ⟨τ, hτ, hsτ, haτ⟩ := hcov (.row ⟨P, 0, kb⟩, .retract) (by simp)
   exact ⟨keys, pair, th, hdec, k, o, kq, q, amt, ab, pb, asset, payTo, kb, hm, hn, hj, hg, hpb, h2, h3, hkb,
-    ⟨τ, hτ, hsτ, haτ⟩, admit_retract_absent hrc ha hτ hsτ haτ, sv, dv, hs0, hd0, hs1, hd1⟩
+    ⟨τ, hτ, hsτ, haτ⟩, admit_retract_row hrc ha hτ hsτ haτ, sv, dv, hs0, hd0, hs1, hd1⟩
 
 /-- **A signed escrow fuse that the World admits moves both legs with both retracts** (PROT-8, the
 Turn grain; the escrow twin of `fuse_atomic`, `jointLaw_sound` and `invitation_once`). A signed call
