@@ -61,3 +61,4 @@ script:gates/decls_plants.py	--synthetic {fresh}/syn --lean {fresh}/lean	DECLS P
 script:gates/cbytes.py	vectors {fresh}	CBYTES VECTORS GREEN	vectors {fresh} --harness-control
 script:gates/tcb.py	--plants {fresh}	TCB PLANTS GREEN	--plants {fresh} --harness-control
 script:gates/waste.py	--plants	WASTE PLANTS GREEN	--plants --harness-control
+script:gates/build_peak.py	{fresh}	BUILD PEAKS GREEN	{fresh} --harness-control
