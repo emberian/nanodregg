@@ -40,21 +40,17 @@ theorem admitted_facts {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     (h : judge X w c = .admitted t w') :
     refusedAnswer X w c = none ∧ w.height < c.unsigned.validUntil := by
   have hs := judge_admitted h
-  unfold submit at hs
-  split at hs
-  · cases hs
-  · split at hs
+  obtain ⟨hj, hr, ha⟩ := submit_ok hs
+  have hra : refusedAnswer X w c = none := by
+    unfold submit at hs
+    rw [hj] at hs
+    simp only at hs
+    split at hs
     · cases hs
-    · rename_i hra
-      split at hs
-      · cases hs
-      · rename_i t' hr
-        split at hs
-        · cases hs
-        · rename_i w'' ha
-          have hv := (receive_derived hr).validUntil
-          have hw := (admit_window ha).2
-          exact ⟨hra, by omega⟩
+    · assumption
+  have hv := (receive_derived hr).validUntil
+  have hw := (admit_window ha).2
+  exact ⟨hra, by omega⟩
 
 theorem admitted_no_reply {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {w' : World D} :
     verdictReply X w c (.admitted t w') = none := rfl

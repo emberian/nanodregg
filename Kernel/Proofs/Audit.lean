@@ -3,6 +3,8 @@
 -/
 import Kernel.Receive.Audit
 import Kernel.Proofs.Fold
+import Kernel.Proofs.StaleOnly
+import Kernel.Proofs.Receive
 
 namespace Nanodregg.Kernel.Receive
 
@@ -48,22 +50,27 @@ theorem submit_verified {X : Ctx D} {w : World D} {c : Call D} {v : Verdict D}
   · cases h; simp [Verdict.verified] at hv
   · split at h
     · cases h; simp [Verdict.verified] at hv
-    · split at h
-      · rename_i r hr
-        cases h
-        refine receive_checkSignature (w := w) (fun he => ?_) (fun he => ?_)
-        · rw [hr] at he; cases he; simp [Verdict.verified] at hv
-        · rw [hr] at he; cases he; simp [Verdict.verified] at hv
-      · rename_i t hr
-        refine receive_checkSignature (by rw [hr]; exact fun he => by cases he)
-          (by rw [hr]; exact fun he => by cases he)
+    · -- past `signedBy`, the one verify passed; a `signedBy` refusal with `verified` set came after it
+      cases hs : checkSignature X c with
+      | ok u => rfl
+      | error e =>
+        obtain rfl := checkSignature_error hs
+        exfalso
+        have hsb : signedBy X w c false = .error (if c.unsigned.world = w.origin then .badSignature else .wrongWorld) := by
+          by_cases hwo : c.unsigned.world = w.origin
+          · simp [signedBy, checkSignatureBy, req, hwo, hs, bind, Except.bind]
+          · simp [signedBy, req, hwo, bind, Except.bind]
+        rw [hsb] at h
+        by_cases hwo : c.unsigned.world = w.origin
+        · simp only [hwo, if_true] at h; cases h; simp [Verdict.verified] at hv
+        · simp only [hwo, if_false] at h; cases h; simp [Verdict.verified] at hv
 
 /-- The authentication `judge` makes is `authenticated`, for every verdict `submit` gives. -/
 theorem authenticatedBy_verified {X : Ctx D} {w : World D} {c : Call D} {v : Verdict D}
     (h : submit X w c = .error v) : authenticatedBy X w c v.verified = authenticated X w c := by
   cases hv : v.verified
   · rfl
-  · simp only [authenticated, authenticatedBy, checkSignatureBy, if_true, Bool.false_eq_true,
+  · simp only [authenticated, authenticatedBy, signedBy, checkSignatureBy, if_true, Bool.false_eq_true,
       if_false, submit_verified h hv]
 
 /-- **`judge` decides as the two-verify judge did** (PERF-1): with `authenticated` in place of the
@@ -155,6 +162,89 @@ no budget, whoever signed it. -/
 theorem judge_stale_declined {X : Ctx D} {w : World D} {c : Call D} {v : Verdict D}
     (hs : submit X w c = .error v) (hv : v.isStale = true) : judge X w c = .declined v := by
   simp [judge, judgeBy, hs, hv]
+
+/-! ## The pins before the receivers (KERNEL-66) -/
+
+/-- **A stale call is declined before any receiver runs** (KERNEL-66). A call that is neither journaled
+nor recorded, that is `authenticated` (it names this World and its member holds the signing key), and
+one of whose pins disagrees with the Host's World (`checkPins` fails; by `checkPins_ok_iff` a cell pin,
+a row pin or a range read that is not what the World holds) is refused `stale` by `submit` and declined
+by `judge`: never recorded, never charged to its member's budget, never final, whatever any receiver
+or law would say of the World as it is now (no premise names `receive` or `deriveTurn`). -/
+theorem stale_declined_before_receive {X : Ctx D} {w : World D} {c : Call D}
+    (hj : w.journalAt X.env (txIdOf X c) = none) (hr : refusedAnswer X w c = none)
+    (ha : authenticated X w c = true)
+    (hm : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges ≠ .ok ()) :
+    ∃ y, checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges = .error (.stale y) ∧
+      submit X w c = .error (.rejected (.stale y)) ∧ judge X w c = .declined (.rejected (.stale y)) := by
+  have hsb : signedBy X w c false = .ok () := by
+    unfold authenticated authenticatedBy at ha
+    split at ha
+    · assumption
+    · cases ha
+  cases hp : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges with
+  | ok u => exact absurd hp hm
+  | error e =>
+    obtain ⟨y, rfl⟩ := checkPins_error_stale hp
+    have hs : submit X w c = .error (.rejected (.stale y)) := by
+      unfold submit
+      rw [hj, hr, hsb]
+      simp only [hp]
+    exact ⟨y, rfl, hs, judge_stale_declined hs rfl⟩
+
+/-- **No receiver runs on a stale call** (KERNEL-66): its verdict is the same under ANY program, so no
+method's ticks (up to `Bounds.treeTicksMax` per call) and no law's judgement are spent on it: an
+authenticated call with garbage pins costs the Host its one verify, its key read and its pin lookups. -/
+theorem receive_not_run_on_stale {X : Ctx D} {w : World D} {c : Call D} {y : D}
+    (hj : w.journalAt X.env (txIdOf X c) = none) (hr : refusedAnswer X w c = none)
+    (ha : authenticated X w c = true)
+    (hp : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges = .error (.stale y))
+    (P : Program D) : submit { X with program := P } w c = .error (.rejected (.stale y)) := by
+  have hsb : signedBy X w c false = .ok () := by
+    unfold authenticated authenticatedBy at ha
+    split at ha
+    · assumption
+    · cases ha
+  -- `signedBy` reads the World, the verifier, the call's bytes and `rotate` (no program)
+  have hsb' : signedBy { X with program := P } w c false = .ok () := hsb
+  have hj' : w.journalAt ({ X with program := P } : Ctx D).env (txIdOf { X with program := P } c) = none := hj
+  have hr' : refusedAnswer { X with program := P } w c = none := hr
+  unfold submit
+  rw [hj', hr', hsb']
+  simp only [hp]
+
+/-- **Comparing the pins first only renames** (KERNEL-66): a call whose pins `checkPins` refuses is
+one no order of the checks would admit: whatever `receive` derives from it, `World.admit` takes no
+Turn of it (a cell pin is a touch, a row pin a row touch, a range read the Turn's own:
+`admit_pins`, `admit_row_pins`, `admit_range_pins`). So the pins coming first changes which refusal
+a stale call gets (and that it is declined, not recorded), never whether a call lands. -/
+theorem checkPins_error_never_admitted {X : Ctx D} {w : World D} {c : Call D} {r : Reject D}
+    (hc : w.RowsCanon X.env)
+    (hp : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges = .error r)
+    {t : Turn D} (ht : receive X w c = .ok t) : ∀ w', World.admit X.env w t ≠ .ok w' := by
+  intro w' ha
+  have hd := receive_derived ht
+  obtain ⟨-, d, -, hs⟩ := receiveWith_sealed (receive_ok_with ht).2
+  obtain ⟨rts, hrts, hrows, hranges⟩ := sealTurn_rows hs
+  have hok : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges = .ok () := by
+    refine checkPins_ok_iff.mpr ⟨fun p hp' => ?_, fun p hp' key hk => ?_,
+      fun q hq c' s lim cap width rt l hh hl => ?_⟩
+    · rw [← hd.pinned] at hp'
+      obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hp'
+      exact admit_pins ha x hx
+    · obtain ⟨x, hx, hxs, hxe⟩ := rowTouchesOf_pins hrts p hp'
+      rw [← hrows] at hx
+      exact admit_row_pins hc ha x hx key p.2 (hxs.trans hk) hxe
+    · rw [← hranges] at hq
+      obtain ⟨c₁, s₁, lim₁, cap₁, width₁, rt₁, l₁, hh₁, hl₁, hp₁⟩ := admit_range_pins ha q hq
+      rw [hh] at hh₁
+      simp only [Option.some.injEq, Prod.mk.injEq] at hh₁
+      obtain ⟨-, -, -, -, rfl, -⟩ := hh₁
+      rw [hl] at hl₁
+      cases hl₁
+      exact hp₁
+  rw [hp] at hok
+  cases hok
 
 /-- **What `judge` records is never stale.** -/
 theorem judge_recorded_not_stale {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D} {r : Refused D}

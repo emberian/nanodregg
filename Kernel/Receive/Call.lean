@@ -7,8 +7,10 @@ that Turn (derive-then-admit). There is no intermediate intent type.
 A receiver never sees the World. It sees the `Pinned` view: the live cell at an id the caller
 PINNED, and the refusal `unpinned` for any other id. So a derivation depends only on the cells
 the signer observed (`Kernel.Proofs.Receive.receive_congr`): a member's own follow derives the
-same Turn the Host does whenever their pinned cells agree, and `World.admit`'s pin check refuses
-the Turn when the Host's cells are not what the signer saw.
+same Turn the Host does whenever their pinned cells agree. The view is the Host's CURRENT cell at a
+pinned id, whatever the pin's digest says, so the pins are compared first: `submit` refuses a call
+whose pin the Host's World has moved `stale` before any receiver runs (`checkPins`, KERNEL-66),
+and `World.admit` compares them again for every Turn a log carries.
 
 Identity is a MEMBER cell (its id is stable; its key rotates). A call names its member and the
 key it signs with; the key must be the member's current one (`unknownKey`), except for `rotate`,

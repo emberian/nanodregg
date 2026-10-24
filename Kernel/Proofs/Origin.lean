@@ -238,6 +238,6 @@ theorem admitted_elsewhere_refused {X : Ctx D} {w₁ w₁' w₂ : World D} {c : 
           left
           unfold submit
           rw [hj, hq]
-          simp only [receive_wrongWorld hw]
+          simp [signedBy, req, hw, bind, Except.bind]
 
 end Nanodregg.Kernel.Receive

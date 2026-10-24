@@ -3,8 +3,23 @@
 
 A retry is recognised before anything is derived: the transaction id is the digest of the signed
 call, so a call already in the journal is `replayed` at its height whatever the World is now
-(a retried rotation must not be re-judged against the key it already rotated). Otherwise:
-derive (`receive`), then admit (`World.admit`). The Host commits exactly the returned World.
+(a retried rotation must not be re-judged against the key it already rotated). Otherwise: check its
+signer, compare its pins, derive, then admit (`World.admit`). The Host commits exactly the returned
+World.
+
+Order of the checks `submit` makes (each refuses by name; the first that fails answers):
+1. the journal: an exact retry is `replayed` at its height;
+2. the recorded refusals: a recorded call is `refusedFinal` with its code (KERNEL-44);
+3. its authority to be judged (`signedBy`): the World it names (`wrongWorld`, KERNEL-24), its signature
+   (the one verify, PERF-1), the member's key (`authKey`: the current key, or for a rotation the
+   precommitted next one). A party that holds no key of a member is answered here, before any cell is
+   compared, so the pins are no oracle on the World's cells for it;
+4. the pins (KERNEL-66, `checkPins`): every cell pin, row pin and range read against the Host's World.
+   A moved pin is `stale`, before any receiver or law reads a cell: a stale call is judged by what it
+   observed, never by what the World holds now (`Kernel.Proofs.Audit.stale_declined_before_receive`);
+5. the receivers (`deriveTurn`: authority, laws, programs) on the pinned view;
+6. `World.admit` of the derived Turn, in the order its own header lists.
+Steps 3 and 5 are `receive` with step 4 between them (`Kernel.Proofs.Receive.receive_signed`).
 -/
 import Kernel.Receive.Derive
 
@@ -26,9 +41,31 @@ def refusedAnswer (X : Ctx D) (w : World D) (c : Call D) : Option Nat :=
   | some (.refused _ code _) => some code
   | _ => none
 
+/-- The signer's key, as the receive layer checks it: the member's current key, or for a rotation
+the precommitted next key (`rotate`'s own check: KERNEL-47 amendment 7). -/
+def authKey (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) Unit :=
+  match c.unsigned.body with
+  | .rotate key next => (rotate X look c key next).map fun _ => ()
+  | _ => checkKey look c.unsigned
+
+/-- The signature check, or nothing when it is already known to pass (`verified`): the verify is
+made at most once per judgement. -/
+def checkSignatureBy (X : Ctx D) (c : Call D) (verified : Bool) : Except (Refusal D) Unit :=
+  if verified then .ok () else checkSignature X c
+
+/-- Is the call signed, for THIS World, by a key the member holds (KERNEL-44's class (A))? The World it
+names first (`wrongWorld`, KERNEL-24), then the signature (skipped when `verified` carries a passing
+one: PERF-1), then the key (`authKey`). `submit` judges nothing else of a call until this passes
+(KERNEL-66), and `judge` records only a refusal of a call it passes. -/
+def signedBy (X : Ctx D) (w : World D) (c : Call D) (verified : Bool) : Except (Refusal D) Unit := do
+  req (c.unsigned.world = w.origin) .wrongWorld
+  checkSignatureBy X c verified
+  authKey X (pinned X.env w c.unsigned.pins) c
+
 /-- Judge a signed call: journal first (an exact retry is `replayed`), then the recorded refusals (a
-refused call is `refusedFinal` with its recorded code, never re-derived: KERNEL-44), then derive and
-admit. -/
+refused call is `refusedFinal` with its recorded code, never re-derived: KERNEL-44), then its
+authority to be judged (`signedBy`), then its pins (a moved one is `stale`, before anything is
+derived: KERNEL-66), then derive (`deriveTurn` on the pinned view) and admit. -/
 def submit (X : Ctx D) (w : World D) (c : Call D) : Except (Verdict D) (Turn D × World D) :=
   match w.journalAt X.env (txIdOf X c) with
   | some (h, _) => .error (.rejected (.replayed h))
@@ -36,12 +73,18 @@ def submit (X : Ctx D) (w : World D) (c : Call D) : Except (Verdict D) (Turn D �
       match refusedAnswer X w c with
       | some code => .error (.rejected (.refusedFinal code))
       | none =>
-          match receive X w c with
+          match signedBy X w c false with
           | .error r => .error (.refused r)
-          | .ok t =>
-              match World.admit X.env w t with
+          | .ok () =>
+              match checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges with
               | .error r => .error (.rejected r)
-              | .ok w' => .ok (t, w')
+              | .ok () =>
+                  match deriveTurn X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c with
+                  | .error r => .error (.refused r)
+                  | .ok t =>
+                      match World.admit X.env w t with
+                      | .error r => .error (.rejected r)
+                      | .ok w' => .ok (t, w')
 
 /-! ## Recording a refusal (KERNEL-44, KERNEL-47) -/
 
@@ -100,19 +143,13 @@ def recordOf (X : Ctx D) (c : Call D) (v : Verdict D) (a : ByteArray) : Refused 
 /-- What `World.refuse` records for a call refused with `v`: its record with no cancel signature. -/
 def refusedOf (X : Ctx D) (c : Call D) (v : Verdict D) : Refused D := recordOf X c v ByteArray.empty
 
-/-- The signer's key, as the receive layer checks it: the member's current key, or for a rotation
-the precommitted next key (`rotate`'s own check: KERNEL-47 amendment 7). -/
-def authKey (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) Unit :=
-  match c.unsigned.body with
-  | .rotate key next => (rotate X look c key next).map fun _ => ()
-  | _ => checkKey look c.unsigned
-
 /-- Did `submit` reach verdict `v` only past a signature that VERIFIED (PERF-1)? A refusal `receive`
-made after its signature check (anything but `wrongWorld` and `badSignature`), or any rejection
-`World.admit` made, is reached only through `checkSignature`'s one verify passing (`submit_verified`).
-False for everything decided before that verify or by it: the journal (`replayed`), the recorded
-refusals (`refusedFinal`), the World the call names (`wrongWorld`), and `badSignature`, which a
-program may also name, so it does not say which verify failed. -/
+made after its signature check (anything but `wrongWorld` and `badSignature`), a moved pin (`stale`,
+KERNEL-66: compared only past `signedBy`), or any rejection `World.admit` made, is reached only through
+`checkSignature`'s one verify passing (`submit_verified`). False for everything decided before that
+verify or by it: the journal (`replayed`), the recorded refusals (`refusedFinal`), the World the call
+names (`wrongWorld`), and `badSignature`, which a program may also name, so it does not say which
+verify failed. -/
 def Verdict.verified : Verdict D → Bool
   | .refused .wrongWorld => false
   | .refused .badSignature => false
@@ -121,18 +158,10 @@ def Verdict.verified : Verdict D → Bool
   | .rejected (.refusedFinal _) => false
   | .rejected _ => true
 
-/-- The signature check, or nothing when it is already known to pass (`verified`): the verify is
-made at most once per judgement. -/
-def checkSignatureBy (X : Ctx D) (c : Call D) (verified : Bool) : Except (Refusal D) Unit :=
-  if verified then .ok () else checkSignature X c
-
 /-- Was the call signed, for THIS World, by a key the member holds (KERNEL-44's class (A)), the
-signature check skipped when `verified` already carries its passing (`judge`)? -/
+signature check skipped when `verified` already carries its passing (`judge`)? `signedBy` passed. -/
 def authenticatedBy (X : Ctx D) (w : World D) (c : Call D) (verified : Bool) : Bool :=
-  match (do
-      req (c.unsigned.world = w.origin) .wrongWorld
-      checkSignatureBy X c verified
-      authKey X (pinned X.env w c.unsigned.pins) c : Except (Refusal D) Unit) with
+  match signedBy X w c verified with
   | .ok () => true
   | .error _ => false
 
@@ -143,9 +172,10 @@ def authenticated (X : Ctx D) (w : World D) (c : Call D) : Bool := authenticated
 /-- What the Host does with a signed call (KERNEL-44): admitted; refused and RECORDED (final within
 the window: `submit_refused_final`); or refused and NOT recorded (`declined`: stale (KERNEL-54), unauthenticated, early,
 or over the member's `refusalBudget`, or the World's `refusalsFull` (KERNEL-55 R1), which is the
-verdict then). None of these is final by a
-record; a stale whose pin the fold has moved past (BEHIND) is final by the fold instead
-(`stale_behind_forever`), and an AHEAD stale is not final. -/
+verdict then). None of these is final by a record. A call with a moved pin is `stale` before any
+receiver or law judges it (KERNEL-66, `submit`'s order), so no receiver's refusal of the World as it
+is now is recorded for it: a stale whose pin the fold has moved past (BEHIND) is final by the fold
+instead (`stale_behind_forever`), and an AHEAD stale is not final. -/
 inductive Outcome (D : Type) [Ord D]
   | admitted (t : Turn D) (w' : World D)
   | recorded (v : Verdict D) (r : Refused D) (w' : World D)

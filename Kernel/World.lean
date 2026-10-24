@@ -11,12 +11,17 @@ The kernel is generic over the digest `D` and the hash (`Env`) so that theorems 
 hash collision as an explicit disjunct, and the simulation can run toy parameters through the
 same `admit`. There is one deployed `Env` (CODEC's digest and hash).
 
-Order of the checks (each refuses by name, nothing is written before all pass):
+Order of the checks `checkWith` makes (each refuses by name, nothing is written before all pass):
 bounds → window (an expired retry is `outsideWindow`, whether or not its entry was pruned:
 KERNEL-33) → journal (an exact retry inside its window is `replayed`) → shape → touches
-(ONE lookup per touched cell: its pin, the one staleness refusal, then its write or retirement,
-and a written value cell's decoding and floor) → value (born value cells, then every
-denomination's balance and floor sums: LEDGER-2) → nullifiers → charge → created ids.
+(ONE lookup per touched cell: its cell pin (`stale`), then its write or retirement, and a written
+value cell's decoding and floor) → value (born value cells, then every denomination's balance and
+floor sums: LEDGER-2) → nullifiers → rows remain (a retired parent holds no row) → ranges (each range
+read's relation, width, length and listing pin (`stale`)) → rows (each row touch in order, a pinned
+row's pin (`stale`) among its checks, then a retired parent's heads) → charge → created ids → the
+step counter. On the Host's path `Receive.submit` has already compared every pin before deriving the
+Turn (KERNEL-66, `checkPins`), so there a `stale` from admission is not reached; a log's Turn (the
+follower's fold, the audit) meets these three comparisons here.
 -/
 import Kernel.Check
 import Kernel.Turn
@@ -1387,6 +1392,29 @@ def checkRanges (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit 
         | some l => req (decide (rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l =
             q.seen)) (.stale q.parent))
     t.ranges
+
+/-- The pins a signed call carries, against `w`, BEFORE anything is derived from it (KERNEL-66):
+each cell pin against its cell's entry (`touchCheck`'s comparison), each row pin against its row and
+its relation's floor (`rowStep`'s), each range read against its listing where the relation has a head
+and the listing fits its `most` (`checkRanges`'s). The first that disagrees is `stale`, naming the cell
+or the parent as admission names it: these are exactly the three disagreements
+`Kernel.Proofs.StaleOnly.admit_stale_pin` says a `stale` refusal of admission is. A head pin, a range on
+a relation with no head and a listing past its `most` are not disagreements of a pin with the World
+(admission refuses them `rowShape`, `noRelation`, `rangeTooLong`), so they pass here. -/
+def checkPins (E : Env D) (w : World D) (pins : List (D × D)) (rowPins : List (RowSlot D × D))
+    (ranges : List (RangeRead D)) : Except (Reject D) Unit := do
+  forEx (fun p => req (decide (pinOf E (w.entry E p.1) = p.2)) (.stale p.1)) pins
+  forEx (fun p => match p.1 with
+    | .row key => req (decide (rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) = p.2))
+        (.stale key.parent)
+    | .head .. => .ok ()) rowPins
+  forEx (fun q => match headOf E w.rows q.parent q.rel with
+    | none => .ok ()
+    | some (_, _, _, _, width, _) =>
+        match rangeRows E w.rows q.parent q.rel width q.pre q.most with
+        | none => .ok ()
+        | some l => req (decide (rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l =
+            q.seen)) (.stale q.parent)) ranges
 
 /-- A parent retired by the turn holds no rows (`rowsRemain`): a relation is cleared before its
 object goes. -/

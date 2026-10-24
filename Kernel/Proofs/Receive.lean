@@ -77,6 +77,34 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List
     exact ⟨p, hp, of_decide_eq_true hpe⟩
   · simp at h
 
+/-- A sealed Turn's row touches are what `rowTouchesOf` makes of the caller's row pins and the
+receiver's row effects, and its range reads are the caller's. -/
+theorem sealTurn_rows {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
+    ∃ rts, rowTouchesOf c.unsigned.rowPins rs = .ok rts ∧ t.rows = rts ∧ t.ranges = c.unsigned.ranges := by
+  unfold sealTurn at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, _, rts, hr, h⟩ := h
+  split at h
+  · simp only [Except.ok.injEq] at h
+    subst h
+    exact ⟨rts, hr, rfl, rfl⟩
+  · simp at h
+
+/-- Every row pin is a row touch of the seal, at its slot, with the digest the caller saw. -/
+theorem rowTouchesOf_pins {pins : List (RowSlot D × D)} {rows : List (RowSlot D × RowAct)}
+    {rts : List (RowTouch D)} (h : rowTouchesOf pins rows = .ok rts) :
+    ∀ p ∈ pins, ∃ x ∈ rts, x.slot = p.1 ∧ x.seen = some p.2 := by
+  unfold rowTouchesOf at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, _, h⟩ := h
+  split at h
+  · simp [bind, Except.bind] at h
+  · simp only [pure, Except.pure, bind, Except.bind, Except.ok.injEq] at h
+    subst h
+    intro p hp
+    exact ⟨_, List.mem_append_left _ (List.mem_map_of_mem hp), rfl, rfl⟩
+
 omit [Ord D] [DecidableEq D] in
 /-- A seal bears exactly the receiver's cells, each at its `bornId`. -/
 theorem bornAt_cells {X : Ctx D} {c : Call D} {base : Nat} {cr : List Cell} :
@@ -144,6 +172,33 @@ theorem receiveWith_key {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call
   obtain ⟨⟨⟩, _, ⟨⟩, hk, _⟩ := h
   exact hk
 
+/-- A rotation's key check is its receiver's own: checking the key by `keyRule` (which skips a
+rotation) or by `authKey` (which runs `rotate`) before deriving gives the same derivation, since a
+rotation that `authKey` refuses is refused the same by `deriveTurn`. -/
+theorem keyRule_deriveTurn (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) :
+    (keyRule look c.unsigned >>= fun _ => deriveTurn X look rv c) =
+      (authKey X look c >>= fun _ => deriveTurn X look rv c) := by
+  unfold keyRule authKey
+  cases hb : c.unsigned.body with
+  | rotate key next =>
+    cases hr : rotate X look c key next with
+    | error e =>
+      unfold deriveTurn derive
+      rw [hb]
+      simp [dispatch, stepped, hr, Except.map, bind, Except.bind]
+    | ok d => simp [Except.map, bind, Except.bind, hr]
+  | _ => rfl
+
+/-- **`submit`'s derivation is `receive`** (law 1, KERNEL-66): `receive` is `signedBy` (the World, the
+signature, the member's key) then `deriveTurn` on the pinned view. `submit` runs the same two with the
+pins compared between them. A rotation's key check is its receiver's own (`authKey`), so its refusal
+there is the one `deriveTurn` would give. -/
+theorem receive_signed (X : Ctx D) (w : World D) (c : Call D) :
+    receive X w c = (do signedBy X w c false
+                        deriveTurn X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c) := by
+  unfold receive receiveWith signedBy checkSignatureBy
+  simp only [Bool.false_eq_true, if_false, bind_assoc, keyRule_deriveTurn]
+
 /-- A submission commits exactly `World.admit` of exactly what `receive` derived, for a call not
 yet in the journal. -/
 theorem submit_ok {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
@@ -157,13 +212,20 @@ theorem submit_ok {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     · simp at h
     · split at h
       · simp at h
-      · rename_i t' hr
+      · rename_i hs
         split at h
         · simp at h
-        · rename_i w'' ha
-          simp only [Except.ok.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          exact ⟨hj, hr, ha⟩
+        · split at h
+          · simp at h
+          · rename_i t' hd
+            split at h
+            · simp at h
+            · rename_i w'' ha
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              refine ⟨hj, ?_, ha⟩
+              rw [receive_signed, hs]
+              exact hd
 
 /-- **A retry is never re-judged.** A call already in the journal is `replayed` at its height,
 whatever the World and the call's own derivation would say now. -/

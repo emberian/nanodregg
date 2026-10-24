@@ -33,6 +33,10 @@ def denyAll : ByteArray := "deny-all".toUTF8
 occasion (ID-1) lets a law say, and what LANG-19 needs (deny-all can no longer be adopted). -/
 def freeze : ByteArray := "freeze".toUTF8
 
+/-- A law that reads the OLD state (KERNEL-66's race, `probeRace`): a write must lengthen the first
+state slot. -/
+def grows : ByteArray := "grows".toUTF8
+
 /-- The package of the Sim's programmed objects (the stub's method 0). -/
 def methods : ByteArray := "methods".toUTF8
 
@@ -64,17 +68,23 @@ def stubCalls (digestOf : ByteArray → Option D) (width : Nat) (method : Nat) (
     | _ => []
   | _ => []
 
+/-- The size of a state's first slot (0 when absent): what `grows` compares. -/
+def firstSize (s : Slots) : Nat := ((s.get stateBase).map ByteArray.size).getD 0
+
 /-- The law-program stub both instances run (`deny-all` refuses every act, `freeze` refuses writes
-and invokes, anything else admits; method 0 sets the first state slot, the others make the calls
-of `stubCalls`; method 5 reports one tick more than it was given). Each run uses one tick. LANG's
-real program runs in `lang-journey`. -/
+and invokes, `grows` refuses a write that does not lengthen the first state slot of the OLD state,
+anything else admits; method 0 sets the first state slot, the others make the calls of `stubCalls`;
+method 5 reports one tick more than it was given). Each run uses one tick. LANG's real program runs
+in `lang-journey`. -/
 def program (digestOf : ByteArray → Option D) (width : Nat) : Program D :=
   { checkInstall := fun _ _ => .ok ()
-    judge := fun look _ laws _ _ r =>
+    judge := fun look _ laws old new r =>
       forEx (fun l => match look l with
         | .ok (some cell) =>
             if cell.slots.get 0 = some denyAll then .error (.lawDenied l "deny-all")
             else if cell.slots.get 0 = some freeze ∧ frozenAct r.occasion then .error (.lawDenied l "freeze")
+            else if cell.slots.get 0 = some grows ∧ r.occasion = .write ∧ firstSize new ≤ firstSize old then
+              .error (.lawDenied l "grows")
             else .ok ()
         | .ok none => .error (.missingCell l)
         | .error e => .error e) laws
@@ -1338,7 +1348,9 @@ def act (P : Params D) (st : State D) : State D :=
           match w.journalAt P.env (txIdOf P.ctx c) with
           | some (h, _) => (submit P st c (.rejected "replayed") s!"replay@{h}").1
           | none => st
-  | 7 => -- a stale pin: the owner claims the object is absent
+  | 7 => -- a stale pin: the owner claims the object is absent. `stale` whatever laws the object has
+         -- (KERNEL-66: the pins are compared before any law judges; a frozen object's law would refuse the
+         -- write `lawDenied`, and before KERNEL-66 that refusal was recorded, so this arm skipped lawed objects)
       match st.objects with
       | [] => st
       | o :: _ =>
@@ -1346,10 +1358,7 @@ def act (P : Params D) (st : State D) : State D :=
           let owner := (st.members.find? fun m => m.id = obj.2).getD (founder0 P st)
           let pins := (S.pinsFor P.env w [owner.id]) ++ [(obj.1, pinOf P.env none)]
           let c := signed P st owner owner.key pins (.write obj.1 [(0, nat 7)] none)
-          let laws := match w.live P.env obj.1 with
-            | some cell => (lawSlotsOf cell).filterMap fun (p : Nat × ByteArray) => P.ctx.digestOf p.2
-            | none => []
-          if laws.isEmpty then (submit P st c (.rejected "stale") "stale").1 else st
+          (submit P st c (.rejected "stale") "stale").1
   | 8 => -- rotation: a thief's key is refused; the member's precommitted key is admitted
       let (m, st) := pick st st.members (founder0 P st)
       let (thief, st) := freshKey st "thief"
@@ -1831,6 +1840,53 @@ def signedAt (P : Params D) (st : State D) (m : Member D) (key : ByteArray) (pin
 def arm (st : State D) (name : String) (ok : Bool) (msg : String) : State D :=
   if ok then meet st name else failWith st s!"probe refusals: {msg}"
 
+/-- KERNEL-66's race, on a branch of the Host's World (the deployed `Receive.submit` and `Receive.judge`
+on Worlds it builds from `st.host`, never committed: the Host's World, log and counters, which the
+WASTE rows measure, are left as they were): an object under `grows` (a law that reads the OLD state),
+and two writes signed against ONE observation of it. The first lands ("aa"). The second ("a") is
+refused `stale` by `submit` (`race-loser:stale`) and DECLINED by `judge`: no record, no budget, not
+final (`race-loser-declined:declined`). The tooth (`race-law:lawDenied`): `receive` on the World the
+winner left refuses the loser `lawDenied` ("a" does not lengthen "aa"), which a judge that ran the
+receivers before the pins recorded, charged and made final (the defect KERNEL-66 closes). -/
+def probeRace (P : Params D) (st : State D) : State D :=
+  let X := P.ctx
+  let E := P.env
+  let f := founder0 P st
+  let ci := signed P st f f.key (S.pinsFor E st.host [f.id]) (.install grows)
+  match Receive.submit X st.host ci with
+  | .error v => failWith st s!"probe race: the grows law did not install ({vname v})"
+  | .ok (ti, w1) =>
+  match (createdIds ti).head? with
+  | none => failWith st "probe race: the grows install bore no cell"
+  | some gl =>
+  let cc := signed P st f f.key (S.pinsFor E w1 [f.id, gl]) (.create none [gl] [(stateBase, ByteArray.empty)])
+  match Receive.submit X w1 cc with
+  | .error v => failWith st s!"probe race: the lawed object was not born ({vname v})"
+  | .ok (tc, w2) =>
+  match (createdIds tc).head? with
+  | none => failWith st "probe race: the create bore no cell"
+  | some r =>
+  -- ONE observation; two calls signed against it
+  let seen := S.pinsFor E w2 [f.id, r, gl]
+  let win := signed P st f f.key seen (.write r [(0, some "aa".toUTF8)] none)
+  let lose := signed P st f f.key seen (.write r [(0, some "a".toUTF8)] none)
+  match Receive.submit X w2 win with
+  | .error v => failWith st s!"probe race: the winner was not admitted ({vname v})"
+  | .ok (_, w3) =>
+  let st := match Receive.submit X w3 lose with
+    | .error (.rejected (.stale _)) => meet st "race-loser:stale"
+    | .error v => failWith st s!"probe race: the loser was {vname v}, not rejected stale"
+    | .ok _ => failWith st "probe race: the loser was admitted"
+  let st := match Receive.judge X w3 lose with
+    | .declined (.rejected (.stale _)) => meet st "race-loser-declined:declined"
+    | .recorded v _ _ => failWith st s!"probe race: the loser was RECORDED {vname v}"
+    | .declined v => failWith st s!"probe race: the loser was declined {vname v}, not stale"
+    | .admitted _ _ => failWith st "probe race: judge admitted the loser"
+  match Receive.receive X w3 lose with
+  | .error (.lawDenied _ _) => meet st "race-law:lawDenied"
+  | .error e => failWith st s!"probe race: the law on the winner's state said {e.name}, not lawDenied (the race is blind)"
+  | .ok _ => failWith st "probe race: the law admitted the loser's edit on the winner's state (the race is blind)"
+
 /-- The refusals probe, from the founder's fresh budget (it runs before the random acts):
 * `refusal-aba`: the A→B→A defect KERNEL-44 names, closed by versions (KERNEL-54). A call pinned to A
   is refused `stale` after a write to B and DECLINED (no record, no budget); the object is written back
@@ -1904,6 +1960,7 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
       | .ok _, .error (.refused .staleRecorded) => meet st "refusal-stale-audit:staleRecorded"
       | .error e, _ => failWith st s!"probe refusals: the kernel refused the planted stale record {e.name} (the plant is blind)"
       | .ok _, _ => failWith st "probe refusals: the audit took a recorded stale"
+    let st := probeRace P st
     -- an early call: refused, not recorded, admitted in its window
     let H := st.host.height
     let ce := signedAt P st f f.key (pinsNow st o) (.write o [(2, "early".toUTF8)] none) (H + 3) (H + 50)
@@ -2792,6 +2849,7 @@ def plantedArms : List String :=
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-root", "verify-count:once", "retain:canonical",
    "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
+   "race-loser:stale", "race-loser-declined:declined", "race-law:lawDenied",
    "refusal-aba-stale:stale", "refusal-aba-declined:declined", "refusal-aba-plant:returned",
    "refusal-aba-pin:moved", "refusal-aba:stale", "refusal-stale-fold:stale", "refusal-stale-audit:staleRecorded",
    "refusal-early-refused:outsideWindow", "refusal-early:declined", "refusal-early-kernel:outsideWindow",

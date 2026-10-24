@@ -427,4 +427,117 @@ theorem admit_not_stale {E : Env D} {w : World D} {t : Turn D} (hr : w.RowsCanon
   · exact hne (hrw x hx key s hs hseen)
   · exact hne (hq q hq' c s lim cap width rt l hh hl)
 
+/-! ## The pins compared before anything is derived (KERNEL-66)
+
+`checkPins` is the Host's comparison of a call's pins with its World before `receive` runs. It passes
+exactly when none of the three disagreements `admit_stale_pin` names holds for the call's own pins
+(`checkPins_ok_iff`), and it refuses nothing but `stale` (`checkPins_error_stale`). -/
+
+/-- **What `checkPins` passes is agreement** (KERNEL-66): every cell pin agrees with its entry, every
+row pin at a row slot with its row and its relation's floor, and every range read whose relation has
+a head and whose listing fits its `most` with that listing's pin: `admit_not_stale`'s three premises,
+read off the call's pins. -/
+theorem checkPins_ok_iff {E : Env D} {w : World D} {pins : List (D × D)} {rowPins : List (RowSlot D × D)}
+    {ranges : List (RangeRead D)} :
+    checkPins E w pins rowPins ranges = .ok () ↔
+      (∀ p ∈ pins, pinOf E (w.entry E p.1) = p.2) ∧
+      (∀ p ∈ rowPins, ∀ key, p.1 = .row key →
+        rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) = p.2) ∧
+      (∀ q ∈ ranges, ∀ c s lim cap width rt l,
+        headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) →
+        rangeRows E w.rows q.parent q.rel width q.pre q.most = some l →
+        rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l = q.seen) := by
+  have hcell : ∀ p : D × D, req (decide (pinOf E (w.entry E p.1) = p.2)) (Reject.stale p.1) = .ok () ↔
+      pinOf E (w.entry E p.1) = p.2 := fun p => by rw [req_ok, decide_eq_true_eq]
+  have hrow : ∀ p : RowSlot D × D, (match p.1 with
+      | .row key => req (decide (rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) = p.2))
+          (Reject.stale key.parent)
+      | .head .. => (.ok () : Except (Reject D) Unit)) = .ok () ↔
+      ∀ key, p.1 = .row key → rowPin E (headFloor E w.rows key.parent key.rel) (rowAt E w.rows (.row key)) = p.2 := by
+    intro ⟨slot, d⟩
+    cases slot with
+    | head q rel => simp
+    | row key => simp [req_ok]
+  have hq : ∀ q : RangeRead D, (match headOf E w.rows q.parent q.rel with
+      | none => (.ok () : Except (Reject D) Unit)
+      | some (_, _, _, _, width, _) =>
+          match rangeRows E w.rows q.parent q.rel width q.pre q.most with
+          | none => .ok ()
+          | some l => req (decide (rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l =
+              q.seen)) (Reject.stale q.parent)) = .ok () ↔
+      ∀ c s lim cap width rt l, headOf E w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) →
+        rangeRows E w.rows q.parent q.rel width q.pre q.most = some l →
+        rangePin E q.parent q.rel width q.pre (headFloor E w.rows q.parent q.rel) l = q.seen := by
+    intro q
+    cases hh : headOf E w.rows q.parent q.rel with
+    | none => simp
+    | some hd =>
+      obtain ⟨c, s, lim, cap, width, rt⟩ := hd
+      simp only
+      constructor
+      · intro h c' s' lim' cap' width' rt' l h1 h2
+        simp only [Option.some.injEq, Prod.mk.injEq] at h1
+        obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩ := h1
+        rw [h2] at h
+        exact of_decide_eq_true (req_ok.mp h)
+      · intro h
+        cases hl : rangeRows E w.rows q.parent q.rel width q.pre q.most with
+        | none => rfl
+        | some l => exact req_ok.mpr (decide_eq_true (h c s lim cap width rt l rfl hl))
+  unfold checkPins
+  simp only [except_bind_ok]
+  constructor
+  · rintro ⟨⟨⟩, hc, ⟨⟩, hr, hg⟩
+    exact ⟨fun p hp => (hcell p).mp (forEx_ok.mp hc p hp), fun p hp => (hrow p).mp (forEx_ok.mp hr p hp),
+      fun q hq' => (hq q).mp (forEx_ok.mp hg q hq')⟩
+  · rintro ⟨hc, hr, hg⟩
+    exact ⟨(), forEx_ok.mpr fun p hp => (hcell p).mpr (hc p hp), (), forEx_ok.mpr fun p hp => (hrow p).mpr (hr p hp),
+      forEx_ok.mpr fun q hq' => (hq q).mpr (hg q hq')⟩
+
+omit [Ord D] [DecidableEq D] in
+private theorem forEx_error_stale {α : Type} {f : α → Except (Reject D) Unit}
+    (hf : ∀ a e, f a = .error e → ∃ y, e = .stale y) :
+    ∀ {l : List α} {e : Reject D}, Nanodregg.Kernel.forEx f l = .error e → ∃ y, e = .stale y
+  | [], _, h => by cases h
+  | a :: rest, e, h => by
+      unfold Nanodregg.Kernel.forEx at h
+      split at h
+      · exact forEx_error_stale hf h
+      · rename_i e' he
+        cases h
+        exact hf a _ he
+
+omit [Ord D] [DecidableEq D] in
+private theorem req_error_stale {b : Bool} {y : D} {e : Reject D} (h : req b (Reject.stale y) = .error e) :
+    e = .stale y := by
+  cases b <;> simp [req] at h; exact h.symm
+
+/-- **`checkPins` refuses nothing but `stale`**: a disagreement is the only thing it reads. -/
+theorem checkPins_error_stale {E : Env D} {w : World D} {pins : List (D × D)} {rowPins : List (RowSlot D × D)}
+    {ranges : List (RangeRead D)} {e : Reject D} (h : checkPins E w pins rowPins ranges = .error e) :
+    ∃ y, e = .stale y := by
+  unfold checkPins at h
+  cases h1 : Nanodregg.Kernel.forEx (fun p => req (decide (pinOf E (w.entry E p.1) = p.2)) (Reject.stale p.1)) pins with
+  | error e1 =>
+    rw [h1] at h; cases h
+    exact forEx_error_stale (fun p _ he => ⟨_, req_error_stale he⟩) h1
+  | ok u =>
+    rw [h1] at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · rename_i e2 h2
+      cases h
+      refine forEx_error_stale (fun p e' he => ?_) h2
+      obtain ⟨slot, d⟩ := p
+      cases slot with
+      | head _ _ => cases he
+      | row key => exact ⟨_, req_error_stale he⟩
+    · refine forEx_error_stale (fun q e' he => ?_) h
+      simp only at he
+      split at he
+      · cases he
+      · split at he
+        · cases he
+        · exact ⟨_, req_error_stale he⟩
+
 end Nanodregg.Kernel
