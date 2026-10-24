@@ -558,3 +558,40 @@ no per-path forgery, not that the key is the provider's. The leaf expires 2026-1
 may or may not keep the key; if it changes, every call is refused `pinMismatch` until the operator re-pins
 (RUNBOOK §2a). The shipped file is only the default: the installed /etc/nd/keybroker/pins is the operator's.
 **Status.** landed (this commit); no provider call has been made.
+
+
+## OPS-20 · the re-genesis owed for LANG-76's Bell: no deployed World holds the old Bell (CX-OPS, 2026-10-23; Ember approved the re-genesis)
+
+**Decision.** 231af0e (LANG-76, PROTOCOL-68) re-emitted `world/resident/Bell` and owed a re-genesis of any
+resident World holding the old Bell (RUNBOOK §1). There is none to re-genesis. The inventory, read on
+2026-10-23 at 231af0e:
+- hbox: no `/srv/nd`, `/srv/nd-hosted` or `/etc/nd`; `/srv/nd-members` is empty (the tmpfiles directory of
+  10-19); no `nd*` system or user unit is loaded; no `resident` exe runs. burst5, where deploy/live ran the
+  units as user units, is torn down (OPS-8). The Mac runs no nanodregg process.
+- The only resident Worlds are test fixtures. `launcher/tests/resident_bell.rs` makes a fresh World per run
+  (`World::genesis_following`, a fresh nonce) and installs `world/resident/Bell` from the tree, so every run
+  re-geneses with the Bell of its commit.
+So the §1 procedure (stop by PID file, back up, genesis, install, confirm, restart) had no Store to act on, and
+nothing was stopped, moved or deleted.
+
+**Measured at 231af0e (hbox wt/ops; logs/ops-regenesis/).**
+- The Bell's package id, `nd install` against the real `host serve`, in two fresh plant Worlds of different
+  origins (588113f3…, aba69c53…), the same in both (a ROM id is its content digest, `romIdOf`):
+  OLD (231af0e^, 35,012 text bytes) `22d6d508b3b05d5bcfd84467b3b339b040ad705aec4c8669962611cb5679bcb1`;
+  NEW (231af0e, 45,980 text bytes, `(patience 2048)`) `0b81cfb4b8c126f568d9be15d6b01a814b556ecad0ae46ef84a53925443cce68`.
+- The confirm: both installs exit 0 with `tx` and `id`, i.e. committed and confirmed, not `uncertain` (2). The
+  new Bell is past the 32,760-byte call that PROTOCOL-68 fixed. A second install of the new Bell is
+  `refused idTaken`, and `host check` reads height=2 torn=0.
+- The smoke: `cargo test -p nanodregg-launcher --test resident_bell`, 1 passed in 71 s (`smoke.log`).
+
+**Alternatives.** Genesis a standing resident World on hbox now, so that the next Bell change has something to
+re-genesis. Not taken: a deployed World is the VM deployment's (RUNBOOK §1a, STAND-INS B1), and a plant World
+on hbox would be an object nobody uses.
+
+**CRITIQUE.** The old Bell's id was measured under the new binary: it is the id the old text gets now, not one
+read from an old Store, since no old Store exists. The pre-fix `uncertain` for a >32 KB install is
+CX-DEADLINE's measurement (RED before PROTOCOL-68), not repeated here. hbox carries 328 leaked test-fixture
+processes, 4-5 days old (`nd-supervise`, `host`, `keybroker`, `nd-members` under `~/.cache/nd-t`, from
+`nanodregg-gate-3` and `wt/client` runs). They hold throwaway Worlds, not a deployment, and nothing here
+stopped them: they have no PID file of this lane's.
+**Status.** landed (this commit). Nothing re-emits; nothing refuses to load.
