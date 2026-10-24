@@ -7,16 +7,18 @@ function), and every edge the Host takes on it is one of three kinds:
 * **a step** — `(machine X).step`, one request of a batch, TOTAL over every frame code (the seven
   protocol ops, a hang-up, an unknown code). `host_step_folds`: the World after it is the fold of
   ZERO or ONE kernel steps from the World before it, that list is `Honest` (each step is what
-  `judge` decides of its own signed event, or `cancel` of a member's signed cancel: the follower's
-  audit, `audit_ok`), the staged pairs grow by exactly that list (each with the roots after it), and
+  `judge` decides of its own signed event, or `cancel` of a member's signed cancel: exactly what
+  `host follow`'s `absorbStep` re-derives, `absorbStep_honest`), the staged pairs grow by exactly that list (each with the roots after it), and
   a nonempty list comes only from a frame whose op writes (`Op.effect = .write`: `submit` and
   `cancel`, `Protocol.Op.effect_write_iff`). MEASURED at the definition (`Host.Serve.handle`): those
   two are the only ops whose arms commit, `submit` only through `judge` (`step_submit`, sharper: the
   World is `judge`'s) and `cancel` only through `Receive.cancel` (`step_cancel`, HOST-66);
   `lookup`, `read`, `log`, `command`, `resume`, a hang-up and an unknown code reply or
   defer and leave the World. `host_run_folds` composes a batch from any accumulator;
-  `host_run_audits` says the follower's audit accepts what the Host staged, reaching the World the
-  Host keeps.
+  `host_run_absorbed` says the follower that runs (`host follow`: `Protocol.Command.absorb` over
+  the page events `Page.stepEvent` serves) re-derives exactly what the Host staged, reaching the
+  World the Host keeps; `honest_page_absorbed` says the same of one page through `absorbPage`
+  (HOST-75).
 * **a start** — `host genesis`, genesis `host join` and `host import` (also the carried join's import under its signed origin) (KERNEL's
   carry) each make a fresh World, never a step from one: `host_start_kept` says each is `Kept`
   (the relation's invariant half), so `host_run_kept` applies from the first batch.
@@ -167,6 +169,345 @@ private theorem honest_append {X : Ctx D} :
     cases ha
     exact honest_append (k v hv') hfr h₂
 
+/-! ## The follower that runs: `absorb` over the page events the writer serves (HOST-75)
+
+`host follow` re-derives the writer's log by `Protocol.Command.absorbStep` over the bytes a page
+carries, `Page.stepEvent` of each step: `0 ‖ call` for a Turn, `1 ‖ call` for a judged refusal,
+`2 ‖ nat64 n ‖ sig ‖ call` for a cancel. The completeness direction, for each kind: an honest step
+(`Honest`: what `receive`, `judge` or `cancel` decides of its own event) is absorbed as exactly that
+step to exactly the World the kernel's step reaches. No codec premise: `Honest` names the call
+each event decodes to. -/
+
+/-- A Turn `receive` derives from `c` on `w` and `World.admit` takes is what `submit` returns: the
+admission's journal check is `submit`'s first two arms. -/
+private theorem submit_of_admit {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    (hcr : w.RowsCanon X.env) (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') :
+    submit X w c = .ok (t, w') := by
+  obtain ⟨posts, hc, -⟩ := admit_ok ha
+  have hj := hc.journal
+  have htx := (receive_derived hr).txId
+  unfold checkJournal at hj
+  have hjn : w.journalAt X.env (txIdOf X c) = none := by
+    rw [← htx]
+    cases h1 : w.journalAt X.env t.txId with
+    | some p => obtain ⟨h0, d0⟩ := p; rw [h1] at hj; cases hj
+    | none => rfl
+  have hrf : refusedAnswer X w c = none := by
+    unfold refusedAnswer
+    rw [← htx]
+    have hjt : w.journalAt X.env t.txId = none := by rw [htx]; exact hjn
+    rw [hjt] at hj
+    cases h2 : w.refusalAt X.env (.tx t.txId) with
+    | none => rfl
+    | some x => rw [h2] at hj; cases x <;> first | rfl | cases hj
+  have hr0 := hr
+  rw [receive_signed] at hr
+  cases hs : signedBy X w c false with
+  | error e => rw [hs] at hr; cases hr
+  | ok u =>
+    cases u
+    rw [hs] at hr
+    simp only [bind, Except.bind] at hr
+    have hp : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges = .ok () := by
+      cases hp : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges with
+      | ok u => cases u; rfl
+      | error r => exact absurd ha (checkPins_error_never_admitted hcr hp hr0 w')
+    unfold submit
+    rw [hjn]
+    simp only [hrf, hs, hp, hr, ha]
+
+private theorem tag_size (b : UInt8) : (⟨#[b]⟩ : ByteArray).size = 1 := rfl
+
+private theorem tagged_pos (b : UInt8) (e : ByteArray) : 0 < (⟨#[b]⟩ ++ e : ByteArray).size := by
+  simp only [ByteArray.size_append, tag_size]
+  omega
+
+private theorem tagged_head (b : UInt8) (e : ByteArray) :
+    (⟨#[b]⟩ ++ e : ByteArray)[0]'(tagged_pos b e) = b := by
+  rw [ByteArray.getElem_append_left (by rw [tag_size]; exact Nat.zero_lt_one)]
+  rfl
+
+private theorem tagged_tail (b : UInt8) (e : ByteArray) :
+    (⟨#[b]⟩ ++ e : ByteArray).extract 1 (⟨#[b]⟩ ++ e : ByteArray).size = e :=
+  ByteArray.extract_append_eq_right (tag_size b).symm (by simp only [ByteArray.size_append, tag_size])
+
+/-- **An honest Turn's event is absorbed as that Turn** (the completeness half of the Turn arm):
+a Turn `receive` derives from the call its event decodes to, on `w`, and `World.admit` takes to
+`w'`, is re-derived from `0 ‖ t.event` by follow's `absorbStep` as exactly `t`, to exactly `w'`. -/
+theorem absorbStep_turnEvent {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    (hcr : w.RowsCanon X.env) (hd : X.decodeCall t.event = some c) (hr : receive X w c = .ok t)
+    (ha : World.admit X.env w t = .ok w') :
+    Protocol.Command.absorbStep X w (Page.stepEvent (.turn t)) = .ok (.turn t, w') := by
+  have hs := submit_of_admit hcr hr ha
+  have hne : ¬ Protocol.eventTurn = Protocol.eventCancel := by decide
+  unfold Protocol.Command.absorbStep
+  simp only [Page.stepEvent, tagged_pos, ↓reduceDIte, tagged_head, hne, ↓reduceIte,
+    Protocol.Command.eventCall, tagged_tail, hd, hs]
+
+/-- **An honest judged refusal's event is absorbed as that record** (the completeness half of the
+refusal arm, which a page carries as `1 ‖ call` without the record): a refusal `judge` records of
+the call its event decodes to is re-derived from the event by follow's own `judge` as exactly
+`r`, to exactly the World `judge` reached. -/
+theorem absorbStep_refusalEvent {X : Ctx D} {w w' : World D} {c : Call D} {v : Verdict D}
+    {r : Refused D} (hd : X.decodeCall r.event = some c) (hj : judge X w c = .recorded v r w') :
+    Protocol.Command.absorbStep X w (Page.stepEvent (.refusal r)) = .ok (.refusal r, w') := by
+  have hk : r.cancel.size = 0 := by rw [(judge_recorded hj).2.2.1]; rfl
+  have hne : ¬ Protocol.eventRefusal = Protocol.eventCancel := by decide
+  have hnt : ¬ Protocol.eventRefusal = Protocol.eventTurn := by decide
+  unfold Protocol.Command.absorbStep
+  simp only [Page.stepEvent, hk, ↓reduceIte, tagged_pos, ↓reduceDIte, tagged_head, hne, hnt,
+    Protocol.Command.eventCall, tagged_tail, hd, hj]
+
+/-- **Every honest step's event is absorbed as that step**: the three arms (a cancel by
+`Protocol.Command.absorbStep_cancelEvent`). -/
+theorem absorbStep_honest {X : Ctx D} {w w' : World D} {s : Step D} {rest : List (Step D)}
+    (hcr : w.RowsCanon X.env) (hh : Honest X w (s :: rest)) (hs : World.step X.env w s = .ok w') :
+    Protocol.Command.absorbStep X w (Page.stepEvent s) = .ok (s, w') ∧ Honest X w' rest := by
+  cases s with
+  | turn t =>
+    obtain ⟨c, hd, hr, k⟩ := hh
+    exact ⟨absorbStep_turnEvent hcr hd hr hs, k w' hs⟩
+  | refusal r =>
+    obtain ⟨c, v, u, hd, hrb, k⟩ := hh
+    refine ⟨?_, k w' hs⟩
+    unfold recordedBy at hrb
+    split at hrb
+    · obtain ⟨-, -, -, hru⟩ := judge_recorded hrb
+      have hu : u = w' := by
+        have : World.refuse X.env w r = .ok w' := hs
+        rw [hru] at this; exact Except.ok.inj this
+      subst hu
+      exact absorbStep_refusalEvent hd hrb
+    · rename_i hk
+      obtain ⟨-, -, hro, hru⟩ := cancel_recorded hrb
+      have hu : u = w' := by
+        have : World.refuse X.env w r = .ok w' := hs
+        rw [hru] at this; exact Except.ok.inj this
+      subst hu
+      have hdec : X.decodeCall (X.callBytes c) = some c := by
+        rw [show X.callBytes c = r.event by rw [hro]; rfl]; exact hd
+      rw [Page.stepEvent_cancel hk]
+      exact Protocol.Command.absorbStep_cancelEvent hdec hrb
+
+/-- **The follower absorbs an honest log exactly** (HOST-75): from any accumulator, `absorb` of the
+page events of a rooted run whose steps are `Honest` returns the run's end World and appends exactly
+its (step, roots) pairs: what `host follow` persists is what the writer staged. -/
+theorem absorb_honest {X : Ctx D} :
+    ∀ {w w' : World D} {ps : List (Step D × D)} (acc : Array (Step D × D)),
+      w.RowsCanon X.env → World.RootedFold X.env w ps w' → Honest X w (ps.map Prod.fst) →
+        Protocol.Command.absorb X w acc (ps.map (Page.stepEvent ∘ Prod.fst)) = .ok (w', acc ++ ps.toArray)
+  | w, w', [], acc, _, hf, _ => by
+    simp only [World.RootedFold, Rooted] at hf
+    subst hf
+    simp [Protocol.Command.absorb]
+  | w, w', (s, n) :: ps, acc, hcr, hf, hh => by
+    obtain ⟨w₁, hs, hn, hr⟩ := hf
+    obtain ⟨ha, hh'⟩ := absorbStep_honest hcr hh hs
+    have hcr₁ : w₁.RowsCanon X.env := by
+      cases s with
+      | turn t => exact admit_rowsCanon hcr hs
+      | refusal r => exact refuse_rowsCanon hcr hs
+    have ih := absorb_honest (acc.push (s, World.roots X.env w₁)) hcr₁ hr hh'
+    simp only [List.map_cons, Function.comp, Protocol.Command.absorb, ha]
+    rw [ih, hn]
+    simp
+
+private theorem rooted_split {E : Env D} :
+    ∀ {w w' : World D} {ps : List (Step D × D)} (k : Nat), World.RootedFold E w ps w' →
+      ∃ wb, World.RootedFold E w (ps.take k) wb ∧ World.RootedFold E wb (ps.drop k) w'
+  | w, w', [], k, h => ⟨w, by simp [World.RootedFold, Rooted], by simpa using h⟩
+  | w, w', p :: ps, 0, h => ⟨w, by simp [World.RootedFold, Rooted], by simpa using h⟩
+  | w, w', (s, n) :: ps, k + 1, h => by
+    obtain ⟨w₁, ha, hn, hr⟩ := h
+    obtain ⟨wb, h1, h2⟩ := rooted_split k hr
+    exact ⟨wb, ⟨w₁, ha, hn, h1⟩, by simpa using h2⟩
+
+private theorem honest_split {X : Ctx D} :
+    ∀ {w w₁ : World D} {l₁ l₂ : List (Step D)}, Honest X w (l₁ ++ l₂) → World.fold X.env w l₁ = .ok w₁ →
+      Honest X w l₁ ∧ Honest X w₁ l₂
+  | w, w₁, [], l₂, h, hf => by
+    simp only [World.fold, Except.ok.injEq] at hf
+    subst hf
+    exact ⟨trivial, h⟩
+  | w, w₁, .turn t :: rest, l₂, h, hf => by
+    obtain ⟨c, hd, hr, k⟩ := h
+    obtain ⟨v, hv, hfr⟩ := fold_cons_ok.mp hf
+    have hv' : World.admit X.env w t = .ok v := hv
+    obtain ⟨h1, h2⟩ := honest_split (k v hv') hfr
+    refine ⟨⟨c, hd, hr, fun w' ha => ?_⟩, h2⟩
+    rw [hv'] at ha
+    cases ha
+    exact h1
+  | w, w₁, .refusal r :: rest, l₂, h, hf => by
+    obtain ⟨c, v₀, u, hd, hj, k⟩ := h
+    obtain ⟨v, hv, hfr⟩ := fold_cons_ok.mp hf
+    have hv' : World.refuse X.env w r = .ok v := hv
+    obtain ⟨h1, h2⟩ := honest_split (k v hv') hfr
+    refine ⟨⟨c, v₀, u, hd, hj, fun w' ha => ?_⟩, h2⟩
+    rw [hv'] at ha
+    cases ha
+    exact h1
+
+/-- **`honest_page_absorbed`** (HOST-75): a page holding the events of an honest rooted run, stating
+the run's end step count and chain, is absorbed by follow's `absorbPage`, wherever the writer's
+stated base cuts it: follow reaches the run's end World and keeps exactly its (step, roots) pairs.
+Turns, judged refusals and cancels alike (`absorbStep_honest`). -/
+theorem honest_page_absorbed {X : Ctx D} {w w' : World D} {ps : List (Step D × D)} (base : Nat)
+    (hcr : w.RowsCanon X.env) (hf : World.RootedFold X.env w ps w') (hh : Honest X w (ps.map Prod.fst))
+    (hn : ps.length ≤ Protocol.Bounds.pageStepsMax) :
+    ∃ wb?, Protocol.Command.absorbPage X w (ps.map (Page.stepEvent ∘ Prod.fst)) w'.steps
+      (X.env.bytes w'.chain) base = .ok (w', ps, wb?) := by
+  obtain ⟨wb, h1, h2⟩ := rooted_split (base - w.steps) hf
+  have hsplit : ps.map Prod.fst = (ps.take (base - w.steps)).map Prod.fst ++ (ps.drop (base - w.steps)).map Prod.fst := by
+    rw [← List.map_append, List.take_append_drop]
+  rw [hsplit] at hh
+  obtain ⟨hh1, hh2⟩ := honest_split hh (RootedFold.fold h1)
+  have ha1 := absorb_honest #[] hcr h1 hh1
+  have ha2 := absorb_honest (#[] ++ (ps.take (base - w.steps)).toArray)
+    (fold_rowsCanon hcr (RootedFold.fold h1)) h2 hh2
+  refine ⟨if wb.steps = base then some wb else none, ?_⟩
+  unfold Protocol.Command.absorbPage
+  have hlen : ¬ Protocol.Bounds.pageStepsMax < (ps.map (Page.stepEvent ∘ Prod.fst)).length := by
+    simp only [List.length_map]; omega
+  simp only [hlen, ↓reduceIte, ← List.map_take, ← List.map_drop, ha1, ha2, bind, Except.bind, and_self,
+    pure, Except.pure]
+  simp
+
+private theorem untag {e : ByteArray} (h : 0 < e.size) : e = ⟨#[e[0]]⟩ ++ e.extract 1 e.size := by
+  have h1 : (⟨#[e[0]]⟩ : ByteArray).size = 1 := rfl
+  apply ByteArray.ext_getElem
+  · simp only [ByteArray.size_append, h1, ByteArray.size_extract]; omega
+  · intro i hi hj
+    by_cases hi0 : i = 0
+    · subst hi0
+      rw [ByteArray.getElem_append_left (by rw [h1]; exact Nat.zero_lt_one)]
+      rfl
+    · rw [ByteArray.getElem_append_right (by rw [h1]; omega)]
+      simp only [ByteArray.getElem_extract, h1]
+      congr 1
+      omega
+
+/-- **What the follower absorbs is an honest step, and the page event IS that step's** (HOST-75,
+the soundness half): with the call codec canonical (`hX`; deployed: `deployed_canonical`), an event
+`absorbStep` takes to step `s` is exactly `Page.stepEvent s` (one encoding per step), `s` is
+`World.step`'s on `w`, and `s` is what `receive` / `judge` / `cancel` decides of its own event
+(`Honest`). With `absorbStep_honest` this makes `absorbStep` the follower's re-derivation exactly:
+an event is absorbed iff it is the page event of an honest step. -/
+theorem absorbStep_sound {X : Ctx D} (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
+    {w w' : World D} {e : ByteArray} {s : Step D}
+    (h : Protocol.Command.absorbStep X w e = .ok (s, w')) :
+    World.step X.env w s = .ok w' ∧ Page.stepEvent s = e ∧
+      ∀ rest, Honest X w' rest → Honest X w (s :: rest) := by
+  have hws := Protocol.Command.absorbStep_step h
+  refine ⟨hws, ?_⟩
+  unfold Protocol.Command.absorbStep at h
+  split at h
+  · rename_i hpos
+    split at h
+    · -- a cancel
+      rename_i htag
+      split at h
+      · cases h
+      · rename_i sig cb hp
+        split at h
+        · cases h
+        · rename_i c hc
+          split at h
+          · rename_i v r w₁ hco
+            simp only [Except.ok.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            obtain ⟨ha, -, hro, -⟩ := cancel_recorded hco
+            have hk : r.cancel.size ≠ 0 := by
+              rw [hro]; exact Nat.pos_iff_ne_zero.mp (Protocol.Command.cancelAuth_size ha).1
+            have hcb : X.callBytes c = cb := hX _ _ hc
+            have hev : r.event = X.callBytes c := by rw [hro]; rfl
+            have hsg : r.cancel = sig := by rw [hro]; rfl
+            refine ⟨?_, fun rest hr => ⟨c, v, w₁, by rw [hev, hcb]; exact hc, ?_, fun w'' hw => ?_⟩⟩
+            · rw [Page.stepEvent_cancel hk, hev, hcb, hsg]
+              obtain ⟨he, -, -⟩ := Protocol.Command.cancelParts_some hp hpos
+              rw [he, htag]
+              rfl
+            · unfold recordedBy; rw [if_neg hk, hsg]; exact hco
+            · have : World.refuse X.env w r = .ok w'' := hw
+              rw [(cancel_recorded hco).2.2.2] at this
+              cases this; exact hr
+          · cases h
+    · split at h
+      · cases h
+      · rename_i c hc
+        have hcb : X.callBytes c = e.extract 1 e.size := hX _ _ hc
+        split at h
+        · -- a Turn
+          rename_i htt
+          split at h
+          · rename_i t w₁ hs
+            simp only [Except.ok.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            obtain ⟨-, hr, ha⟩ := submit_ok hs
+            have hev : t.event = e.extract 1 e.size := by rw [(receive_derived hr).event, hcb]
+            refine ⟨?_, fun rest hrest => ⟨c, by rw [hev]; exact hc, hr, fun w'' hw => ?_⟩⟩
+            · show ⟨#[Protocol.eventTurn]⟩ ++ t.event = e
+              rw [hev, ← htt]; exact (untag hpos).symm
+            · rw [ha] at hw; cases hw; exact hrest
+          · cases h
+          · cases h
+        · split at h
+          · -- a judged refusal
+            rename_i _ htr
+            split at h
+            · rename_i v r w₁ hj
+              simp only [Except.ok.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              obtain ⟨-, -, hro, hrf⟩ := judge_recorded hj
+              have hk : r.cancel.size = 0 := by rw [hro]; rfl
+              have hev : r.event = e.extract 1 e.size := by rw [hro, ← hcb]; rfl
+              refine ⟨?_, fun rest hrest => ⟨c, v, w₁, by rw [hev]; exact hc, recordedBy_of_judge hj,
+                fun w'' hw => ?_⟩⟩
+              · show (if r.cancel.size = 0 then ⟨#[Protocol.eventRefusal]⟩ ++ r.event
+                  else Protocol.cancelEvent r.cancel r.event) = e
+                rw [if_pos hk, hev, ← htr]; exact (untag hpos).symm
+              · have : World.refuse X.env w r = .ok w'' := hw
+                rw [hrf] at this; cases this; exact hrest
+            · cases h
+          · cases h
+  · cases h
+
+/-- **What the follower absorbs is an honest rooted run, and the events are its page events**
+(HOST-75, the soundness half over a list; the codec canonical). -/
+theorem absorb_sound {X : Ctx D} (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b) :
+    ∀ {w w' : World D} {acc ts : Array (Step D × D)} {evs : List ByteArray},
+      Protocol.Command.absorb X w acc evs = .ok (w', ts) →
+      ∃ ps : List (Step D × D), ts = acc ++ ps.toArray ∧ World.RootedFold X.env w ps w' ∧
+        Honest X w (ps.map Prod.fst) ∧ evs = ps.map (Page.stepEvent ∘ Prod.fst)
+  | w, w', acc, ts, [], h => by
+    simp only [Protocol.Command.absorb, Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨[], by simp, rfl, trivial, rfl⟩
+  | w, w', acc, ts, e :: es, h => by
+    unfold Protocol.Command.absorb at h
+    split at h
+    · rename_i s w₁ hs
+      obtain ⟨ps, hts, hr, hh, hevs⟩ := absorb_sound hX h
+      obtain ⟨hws, hev, hon⟩ := absorbStep_sound hX hs
+      refine ⟨(s, World.roots X.env w₁) :: ps, by rw [hts]; simp, ⟨w₁, hws, rfl, hr⟩, hon _ hh, ?_⟩
+      simp only [List.map_cons, Function.comp, hev, hevs]
+    · cases h
+
+/-- **The follower absorbs a list of events exactly when they are the page events of an honest
+rooted run** (HOST-75): `absorb` is the re-derivation, both ways, from a World whose rows trie is
+canonical (`RowsCanon`, which every `Kept` World has and every step keeps). `→` is `absorb_sound`
+(the codec canonical); `←` is `absorb_honest`. So the kernel's facts about `Honest` logs (`audit_ok`
+turns them into an `audit` the Kernel's theorems take) are facts about what `host follow` keeps. -/
+theorem absorb_iff {X : Ctx D} (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
+    {w w' : World D} (hcr : w.RowsCanon X.env) {acc ts : Array (Step D × D)} {evs : List ByteArray} :
+    Protocol.Command.absorb X w acc evs = .ok (w', ts) ↔
+      ∃ ps : List (Step D × D), ts = acc ++ ps.toArray ∧ World.RootedFold X.env w ps w' ∧
+        Honest X w (ps.map Prod.fst) ∧ evs = ps.map (Page.stepEvent ∘ Prod.fst) := by
+  constructor
+  · exact absorb_sound hX
+  · rintro ⟨ps, rfl, hr, hh, rfl⟩
+    exact absorb_honest acc hcr hr hh
+
 /-- **`Host ⊑ Kernel`, one step.** Any request, from any batch accumulator: the World the writer's
 machine keeps is the fold of at most one kernel step from the World before it; that step is
 `Honest` (what `judge` decides of its own signed event); the staged pairs grow by exactly it, with
@@ -240,18 +581,23 @@ theorem host_run_folds (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X.
     rw [hs₁]
     simp [Function.comp_def]
 
-/-- **The follower's audit accepts what the Host staged** (`audit_ok` as `host_run_folds`' case): a
-batch from a World stages a log the audit re-derives step by step, reaching the World the Host
-keeps. -/
-theorem host_run_audits (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
-    (w : World D) (qs : List (Request Frame)) :
-    audit X w (((machine X).admitBatch w qs).2.staged.toList.map Prod.fst) =
-      .ok ((machine X).admitBatch w qs).1 := by
-  obtain ⟨l, -, hf, hh, hs⟩ := host_run_folds X hX qs w {}
+/-- **The follower that runs absorbs exactly what the Host staged** (HOST-75): a batch from a World
+stages pairs whose page events (`Page.stepEvent`, what a page serves) `host follow`'s `absorb`
+re-derives step by step from the same World, reaching the World the Host keeps and appending
+exactly the staged (step, roots) pairs. This is the follower `host follow` runs
+(`Protocol.Command.absorbStep`, reached by `Follow.answer` → `Command.step` → `absorbPage`). -/
+theorem host_run_absorbed (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
+    (w : World D) (hcr : w.RowsCanon X.env) (qs : List (Request Frame)) :
+    Protocol.Command.absorb X w #[]
+        (((machine X).admitBatch w qs).2.staged.toList.map (Page.stepEvent ∘ Prod.fst)) =
+      .ok (((machine X).admitBatch w qs).1, ((machine X).admitBatch w qs).2.staged) := by
+  obtain ⟨l, -, -, hh, hs⟩ := host_run_folds X hX qs w {}
   have hs' : ((machine X).admitBatch w qs).2.staged.toList.map Prod.fst = l := by
     simpa using hs
-  rw [hs']
-  exact audit_ok.mpr ⟨hf, hh⟩
+  have hr := (machine X).staged_rooted (machine_commits X) w qs
+  rw [← hs'] at hh
+  have := absorb_honest #[] hcr hr hh
+  simpa using this
 
 /-- **TOOTH (`host_step_folds`, every frame code, every `Ctx`): a step that stages without moving
 the World.** A machine equal to the writer's except that its arm at `q`'s frame code (any of the
@@ -445,19 +791,35 @@ private theorem deployed_canonical : ∀ b c, X.decodeCall b = some c → X.call
   fun _ _ h => (Codec.Deployed.eq_callBytes_of_decodeCall _ h).2.symm
 
 /-- **`Host ⊑ Kernel` at the deployed instance, a batch**: from a `Kept` World, the World the writer
-keeps after any batch is `Kept`, is the fold of the `Honest` log it staged, and the follower's audit
-accepts that log. No premise beyond `Kept`, which every start makes (`host_start_kept`) and every
-reopen returns (`host_reopen_folds`). -/
+keeps after any batch is `Kept`, is the fold of the `Honest` log it staged, and `host follow`'s
+`absorb` of that log's page events reaches it, appending exactly the staged pairs. No premise
+beyond `Kept`, which every start makes (`host_start_kept`) and every reopen returns
+(`host_reopen_folds`). -/
 theorem host_run_kept {w : World D} (hk : Kept w) (qs : List (Request Frame)) :
     Kept ((machine X).admitBatch w qs).1 ∧
       World.fold X.env w (((machine X).admitBatch w qs).2.staged.toList.map Prod.fst) =
         .ok ((machine X).admitBatch w qs).1 ∧
       Honest X w (((machine X).admitBatch w qs).2.staged.toList.map Prod.fst) ∧
-      audit X w (((machine X).admitBatch w qs).2.staged.toList.map Prod.fst) =
-        .ok ((machine X).admitBatch w qs).1 := by
-  have ha := host_run_audits X deployed_canonical w qs
-  obtain ⟨hf, hh⟩ := audit_ok.mp ha
-  exact ⟨kept_fold hk hf, hf, hh, ha⟩
+      Protocol.Command.absorb X w #[]
+          (((machine X).admitBatch w qs).2.staged.toList.map (Page.stepEvent ∘ Prod.fst)) =
+        .ok (((machine X).admitBatch w qs).1, ((machine X).admitBatch w qs).2.staged) := by
+  obtain ⟨l, -, hf, hh, hs⟩ := host_run_folds X deployed_canonical qs w {}
+  have hs' : ((machine X).admitBatch w qs).2.staged.toList.map Prod.fst = l := by
+    simpa using hs
+  rw [← hs'] at hf hh
+  exact ⟨kept_fold hk hf, hf, hh, host_run_absorbed X deployed_canonical w hk.rowsCanon qs⟩
+
+/-- **The deployed follower keeps exactly the honest logs** (HOST-75): at the deployed `Ctx`,
+`host follow`'s `absorb` accepts a list of page events exactly when they are the page events of an
+honest rooted run, and what it keeps is that run; so it passes the kernel's `audit` (`audit_ok`),
+and every kernel theorem stated over `audit` (`audit_rooted`, `audit_object_head`,
+`audit_package_fixed`, …) holds of the log `host follow` persists. -/
+theorem follow_absorbed_audits {w w' : World D} {acc ts : Array (Step D × D)} {evs : List ByteArray}
+    (h : Protocol.Command.absorb X w acc evs = .ok (w', ts)) :
+    ∃ ps : List (Step D × D), ts = acc ++ ps.toArray ∧ evs = ps.map (Page.stepEvent ∘ Prod.fst) ∧
+      audit X w (ps.map Prod.fst) = .ok w' := by
+  obtain ⟨ps, hts, hr, hh, hevs⟩ := absorb_sound deployed_canonical h
+  exact ⟨ps, hts, hevs, audit_ok.mpr ⟨RootedFold.fold hr, hh⟩⟩
 
 /-- **The three starts are `Kept`.** The World `host genesis` makes (`Receive.genesis`), the one
 genesis `host join` accepts (`Protocol.Invite.accept`: the genesis World of the signed inputs), and the one

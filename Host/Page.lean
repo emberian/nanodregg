@@ -7,8 +7,10 @@
 
 A position in the log is a STEP count (KERNEL-47 amendment 1): every step, an admitted Turn or a
 recorded refusal, is one event of a page, `0 ‖ the call` for a Turn (its `event`) and `1 ‖ the call`
-for a recorded refusal (its `event`), PROTOCOL-8's tagged event. The follower re-judges each one and
-takes the same step (`Kernel.Receive.audit`).
+for a recorded refusal (its `event`), PROTOCOL-8's tagged event. The follower (`host follow`)
+re-derives each one by `Protocol.Command.absorbStep` and takes the same step: an honest writer's
+events are absorbed as exactly its steps (`Host.Proofs.Refine`: `host_run_absorbed`,
+`honest_page_absorbed`, HOST-75).
 
 The index (`Host.Base.Entry`, one per record: the newest base's on disk in the index file, the tail's
 in the loop's memory) locates the record holding step `start + 1` by binary search (`locate`),

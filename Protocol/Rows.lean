@@ -332,6 +332,11 @@ inductive Mutation
   /-- `cancel CALL` ends `cancelled TXID` on the writer's `refused cancelled`, never settling it on
   follow's World (follow's phase 10 before PROTOCOL-71) -/
   | trustCancel
+  /-- the writer records a judged refusal under ANOTHER code (the next one) while answering the
+  honest name: a forged refusal record, the lie in the log and not in the reply. A page carries a judged refusal as `1 ‖ call` only, so nothing on
+  the page states the record; the follower re-derives it by its own `judge`, and the page's stated
+  chain (over the writer's record) is what refuses the forgery (HOST-75) -/
+  | forgesRefusal
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -1708,11 +1713,36 @@ def fullPageRow : Row where
     { actor := "sponsor", act := .receiptOf "sponsor", expect := .ok, prints := some "settle committed" },
     { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, prints := some "settle committed" }])
   plant := .caught .perFieldBudget 72 (.refused "pastBound")
+/-- HOST-75: the one re-deriver catches a forged refusal record. The slot is taken, so the
+auditor's forged post is refused `relationFull` and RECORDED; the sponsor's next write catches up
+through that refusal event and reads ok. The plant is a writer that records the refusal under
+another code while answering the honest name (`forgesRefusal`; line 14 reads the same either way):
+a page carries only `1 ‖ call`, the sponsor's follow re-derives the honest record by its own
+`judge`, and the page's stated chain, which the writer computed over its forged record, refuses the
+page at line 15, `chainMismatch`. -/
+def forgedRefusalRow : Row where
+  name := "forgedRefusal"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "invoke"]
+  drive := .members (welcome ++ join "sponsor" "auditor" ++ [
+    okBind "sponsor" ["install", slot] "slotPkg",
+    okBind "sponsor" ["create", "--pkg", "@slotPkg", "(record)"] "slot",
+    okBind "sponsor" ["grant", "@slot", "anyone", "invoke:1"] "spub",
+    ok "sponsor" ["invoke", "@slot", "1", "(record (k 1) (text \"first\"))"],
+    { actor := "auditor", act := .cmd ["read", "@slot", "?"], expect := .ok, bind := some "slot" },
+    -- the slot is taken: the kernel refuses the post `relationFull`, and the writer records it
+    { actor := "auditor", act := .forge ["invoke", "@slot", "@slot.post",
+        "(record (k 2) (text \"second\"))", "--via", "@spub"], expect := .refused "relationFull" },
+    -- the sponsor's follow absorbs the refusal event on its way to the tip
+    ok "sponsor" ["invoke", "@slot", "0", "(record (k 1))"]])
+  plant := .caught .forgesRefusal 15 (.refused "chainMismatch")
 
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
-   fullPageRow, cancelLieRow, staleRefusingRow]
+   fullPageRow, cancelLieRow, staleRefusingRow,
+   forgedRefusalRow]
 
 end Nanodregg.Protocol

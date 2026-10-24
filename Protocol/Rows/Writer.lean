@@ -69,6 +69,9 @@ structure Params (D : Type) [Ord D] where
   /-- every page states its TIP as the newest base, with the sealed base's digest (a plant: a
   writer that lies about where its base is, PROTOCOL-47) -/
   lieBase : Bool := false
+  /-- a judged refusal is recorded under the next code while the client is answered the honest name
+  (a plant: a forged refusal record, the lie in the log and not in the reply, HOST-75) -/
+  forgeRefusal : Bool := false
 
 /-- The run's seal threshold (`Rows.Params.sealMinBytes`); the deployed bounds on size. -/
 def cadence (P : Params D) : Cadence :=
@@ -123,6 +126,13 @@ def machine (P : Params D) : Machine (World D) (Kernel.Step D) Frame D where
     | some a => a
     | none =>
     match Host.handle P.X w f with
+      | .commit (.refusal r) w' st p =>
+        let r' : Kernel.Refused D := { r with code := r.code + 1 }
+        if P.forgeRefusal && r.cancel.size = 0 then
+          match World.refuse P.X.env w r' with
+          | .ok w'' => .commit (.refusal r') w'' st p
+          | .error _ => .commit (.refusal r) w' st p
+        else .commit (.refusal r) w' st p
       | .reply c p =>
         if P.unstatedExpiry && (expiredHeight? p).isSome then .reply c "expired".toUTF8
         else if P.forgottenRefused && c = Status.uncertain.code && p = "forgotten".toUTF8 then

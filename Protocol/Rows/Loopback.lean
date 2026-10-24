@@ -168,6 +168,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .trustCancel => { writer := { R, X := R.ctx }, follow := R.ctx, trustCancel := true }
   | some .perFieldBudget =>
       { writer := { R, X := R.ctx, pageBudget := Bounds.frameBytesMax - 1024 }, follow := R.ctx }
+  | some .forgesRefusal => { writer := { R, X := R.ctx, forgeRefusal := true }, follow := R.ctx }
 
 /-! ## Actors -/
 
