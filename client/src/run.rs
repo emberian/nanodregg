@@ -71,6 +71,8 @@ pub struct Table {
     pub declined: u8,
     /// `CommandExit.ok.code`: the only exit of `receipt CALL` that carries a receipt.
     pub exit_ok: u8,
+    /// `CommandExit.refused.code`: follow's word that a continued attempt is dead (CLIENT-37).
+    pub exit_refused: u8,
     /// `CommandExit.hostContradicted.code` (PROTOCOL-46).
     pub host_contradicted: u8,
 }
@@ -247,9 +249,19 @@ pub fn run(
         Some((n, attempt, state)) => {
             let armed = custody.armed().map_err(RunError::Custody)?.map(|(a, _)| a) == Some(n);
             let outcome = finish(&attempt, state, armed, follow, host, custody, &t)?;
-            follow
+            let dead = outcome.status == Action::Refused.code();
+            match follow
                 .resume(attempt.cont(), &outcome)
                 .map_err(RunError::Follow)?
+            {
+                // follow's own World holds the frozen call refused or expired (step 4 checked the
+                // claim, `ownSettle`): nothing of it can land, so the command is planned afresh
+                // (CLIENT-37 amended: a `declined stale` re-run after a sync plans anew)
+                Step::Done { exit, .. } if dead && exit == t.exit_refused => {
+                    follow.command(argv).map_err(RunError::Follow)?
+                }
+                step => step,
+            }
         }
         None => follow.command(argv).map_err(RunError::Follow)?,
     };

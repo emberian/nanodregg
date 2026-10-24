@@ -34,6 +34,7 @@ pub const RUN: Table = Table {
     uncertain: g::status::UNCERTAIN,
     declined: g::status::DECLINED,
     exit_ok: g::command_exit::OK,
+    exit_refused: g::command_exit::REFUSED,
     host_contradicted: g::command_exit::HOST_CONTRADICTED,
 };
 

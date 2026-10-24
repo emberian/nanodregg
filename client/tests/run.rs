@@ -23,6 +23,7 @@ const T: Table = Table {
     uncertain: 2,
     declined: 5,
     exit_ok: 0,
+    exit_refused: 1,
     host_contradicted: 55,
 };
 
@@ -1113,5 +1114,80 @@ fn a_rerun_of_rotate_continues_the_armed_rotation() {
     assert_eq!(follow.seen[0].0, b"K".to_vec());
     assert_eq!(custody.public_key().unwrap(), next);
     assert!(custody.armed().unwrap().is_none());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// CLIENT-37 amended: an open attempt the member's own follow now holds REFUSED (a `declined stale`
+/// whose pin a later write passed: final by KERNEL-54) is dead, so the re-run, after follow's step 4
+/// says `refused` on its own World, plans the command afresh: THE BAR's stale re-run after a sync.
+/// Without the replan the re-run ends `refused stale` and the member's write never happens.
+#[test]
+fn a_rerun_whose_open_attempt_is_dead_plans_afresh() {
+    use nanodregg_client::attempt::{Attempt, AttemptError, Reply, State};
+    let (d, custody) = setup("dead");
+    let argv = [
+        b"write".to_vec(),
+        b"o".to_vec(),
+        b"1".to_vec(),
+        b"v".to_vec(),
+    ];
+    let key = nanodregg_client::generated::layout::Command {
+        argv: argv.to_vec(),
+    }
+    .encode()
+    .unwrap();
+    let a = Attempt::freeze(&d.join("attempts/0"), b"OLD", &key, b"k4").unwrap();
+    a.drive(State::Signed, 2, |_, _| {
+        Ok::<_, AttemptError>(Reply::Host(
+            nanodregg_client::generated::attempt::Seen::Declined,
+            b"stale".to_vec(),
+        ))
+    })
+    .unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            // step 4 of the old call: follow's own World says refused
+            Step::Done {
+                exit: 1,
+                stdout: Vec::new(),
+                stderr: b"refused stale\n".to_vec(),
+            },
+            // the fresh plan
+            Step::Done {
+                exit: 0,
+                stdout: b"tx 02\n".to_vec(),
+                stderr: Vec::new(),
+            },
+        ]),
+        seen: Vec::new(),
+        receipts: VecDeque::from([receipt("refused 3")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.absent, Vec::new()))]),
+        asked: Vec::new(),
+    };
+    let (exit, out, _) = run::run(
+        &argv,
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!((exit, out), (0, b"tx 02\n".to_vec()), "planned afresh");
+    assert_eq!(host.asked, vec![(T.lookup, b"OLD".to_vec())]);
+    assert_eq!(
+        follow.seen,
+        vec![(
+            b"k4".to_vec(),
+            Outcome {
+                status: Action::Refused.code(),
+                payload: b"refused 3".to_vec()
+            }
+        )],
+        "the dead call's end went to follow first"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
