@@ -20,8 +20,8 @@ proof of its own, and a buggy one cannot mint.
 
 Conservation is not ownership: the kernel judges WHAT a turn does to value, never WHO may do it
 (a forged log that moves A's balance to B is conserved and folds). Authority is the receivers'
-(`Kernel.Proofs.Ledger.transfer_authorized`), and the audit's re-derivation is what refuses a
-forged log (`eventMismatch`).
+(`Kernel.Proofs.Ledger.transfer_authorized`), and the follower's re-derivation (`Receive.rederive`)
+is what refuses a forged log (`eventMismatch`).
 -/
 import Kernel.Proofs.Weight
 import Kernel.Proofs.Rooted

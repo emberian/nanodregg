@@ -12,7 +12,8 @@
 
 `shapes32` is the SHAPE STAMP (D2, HOST-20): the digest of the tags of the base codec (which holds
 CODEC's World codec) and of the batch record codec, and of the index entry layout
-(`entryLayout`), `Base.shapeStamp`. A Store's bytes are judged under the shapes of the binary that
+(`entryLayout`), the segment header layout and the refusal code table (`Kernel.Receive.codeTable`),
+`Base.shapeStamp`. A Store's bytes are judged under the shapes of the binary that
 opens it: a base whose stamp is not the running one is refused `shapeMismatch` by name, after its
 MAC verifies and BEFORE any byte of it is decoded. No segment byte is ever read without its base
 (`openWith` reads the base first and the segment only from the base's offset), so the base's stamp
@@ -53,6 +54,7 @@ import Host.Bounds
 import Codec.Raw
 import Codec.World
 import Codec.Tag
+import Kernel.Receive.Submit
 
 namespace Nanodregg.Host
 
@@ -121,13 +123,15 @@ def domShapes : String := "nanodregg/host/shapes/v1"
 
 /-- The shape stamp of a Store whose bases hold `world` and whose segment holds `record`s: the
 digest of CODEC's content-addressed tags (`Tag.of`) of the base codec and the batch record codec,
-and of the index entry layout by name (`entryLayout`). The base codec's shape contains the World
-codec's, so a change to any of the World, the base, a batch record or an entry changes the stamp
+of the index entry and segment header layouts by name (`entryLayout`, `headerLayout`), and of the
+refusal code table by name (`Kernel.Receive.codeTable`: a recorded refusal holds a code, whose name
+is its index in that table). The base codec's shape contains the World codec's, so a change to any
+of the World, the base, a batch record, an entry, a header or a code's name changes the stamp
 (`Codec.Proofs.Tag.Tag.of_eq`: equal tags mean equal labels and shapes). The codecs' part is
 computed from them, never written as a literal. -/
 def Base.shapeStamp {W R : Type} (world : Stream W) (record : Stream R) : Digest :=
   Hash.digest domShapes ((Tag.of "host/base" (Base.codec world)).bytes ++ (Tag.of "host/batch" record).bytes ++
-    entryLayout.toUTF8 ++ headerLayout.toUTF8)
+    entryLayout.toUTF8 ++ headerLayout.toUTF8 ++ Kernel.Receive.codeTable.toUTF8)
 
 /-- A tag as a digest (every tag is `Log.tagBytes` long). -/
 def tagDigest (s : Log.Sealer) (b : ByteArray) : Digest := ⟨s.tag b, s.tag_size b⟩

@@ -533,9 +533,10 @@ end Bounds
 
 /-! ## A page's step events (PROTOCOL-8, PROTOCOL-41, PROTOCOL-60)
 
-The one source of the tags: `Host.Page.stepEvent` writes them, `Command.absorbStep` reads them. A
-recorded refusal is tag 1 when it carries no cancel signature and tag 2 when it does, the same
-discriminator the kernel's audit uses (`Receive.recordedBy`: the FIELD, never the code). -/
+The one source of the tags: `eventBytes` writes a step's event (`Kernel.Step.event`) behind its tag
+(`Host.Page.stepEvent`), `eventOf` reads it back (`Command.absorbStep`). Which tag a recorded refusal
+takes is the kernel's `Step.event`: tag 1 when it carries no cancel signature, tag 2 when it does
+(the FIELD, never the code). -/
 
 /-- `0 ‖ call`: an admitted Turn. -/
 def eventTurn : UInt8 := 0
@@ -562,5 +563,26 @@ def cancelParts (e : ByteArray) : Option (ByteArray × ByteArray) :=
         some (e.extract j (j + n), e.extract (j + n) e.size)
       else none
   | .error _ => none
+
+/-- The call bytes a logged Turn or refusal event carries: `e[0]` names the event, the rest is the
+call. -/
+def eventCall (e : ByteArray) : ByteArray := e.extract 1 e.size
+
+/-- A step's event on a page: `0 ‖ call` for a Turn, `1 ‖ call` for a judged refusal, THE tag-2
+event (`cancelEvent`) for a cancel. -/
+def eventBytes : Kernel.Event → ByteArray
+  | .turn b => ⟨#[eventTurn]⟩ ++ b
+  | .refusal b => ⟨#[eventRefusal]⟩ ++ b
+  | .cancel sig b => cancelEvent sig b
+
+/-- A page event read back (`eventBytes`' reader): `none` for an empty event, an unknown tag, or a
+tag-2 event `cancelParts` refuses. -/
+def eventOf (e : ByteArray) : Option Kernel.Event :=
+  if h : 0 < e.size then
+    if e[0] = eventCancel then (cancelParts e).map fun p => .cancel p.1 p.2
+    else if e[0] = eventTurn then some (.turn (eventCall e))
+    else if e[0] = eventRefusal then some (.refusal (eventCall e))
+    else none
+  else none
 
 end Nanodregg.Protocol

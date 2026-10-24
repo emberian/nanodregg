@@ -21,7 +21,7 @@ past its base, made of the smallest Turns of that shape, so the most steps.
 
 The counts (marks on stderr, captured, as Bench.Count): the reopen (`foldStep` under countingEnv with
 a counted verify: what `host serve` runs at restart, HOST-22) and the follower's re-derivation of the
-same tail (`auditStep`, what follow pays as it pages). Each counted open must reach the World the
+same tail (`rederiveStep`, what follow pays as it pages). Each counted open must reach the World the
 uncounted reopen reaches (steps, chain, roots digest), or `FAIL replay`.
 
 The tail must fill at least 99 % of tailMax (`FAIL not the worst cut` otherwise); a refusal before it
@@ -42,7 +42,7 @@ import Bench.Count
 namespace Nanodregg.Bench.WorstCut
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Host Nanodregg.Host.Deployed
-open Nanodregg.Bench.Count (captured marks ratio countingX auditRecord)
+open Nanodregg.Bench.Count (captured marks ratio countingX rederiveRecord)
 
 abbrev P : Kernel.Sim.Gen.Params D := Kernel.Sim.Deployed.params
 
@@ -255,7 +255,7 @@ def count (b : Built) (control : Bool) : IO (Except String (Cut × Nat × Nat ×
   let t1 := t0
   let (ro, rerr) ← captured (openWith dir keys foldCounted)
   let t2 ← IO.monoMsNow
-  let (ao, aerr) ← captured (openWith dir keys auditRecord)
+  let (ao, aerr) ← captured (openWith dir keys rederiveRecord)
   let t3 ← IO.monoMsNow
   let (host, th) ← match ← IO.wait hostTask with
     | .ok (.ok o, th) => pure (o, th)
@@ -275,7 +275,7 @@ def count (b : Built) (control : Bool) : IO (Except String (Cut × Nat × Nat ×
       unless tail > tmax do
         return .error s!"harness-control: the cut fills {tail} of tailMax {tmax}, and the control expects more than tailMax"
     let k : Cut := ⟨steps, marks rerr '#', marks rerr '@', marks aerr '#', marks aerr '@'⟩
-    IO.println s!"WORSTCUT {name} reopen (foldStep) trie-hashes {k.reopenHashes} verifies {k.reopenVerifies}; re-derivation (auditStep) trie-hashes {k.auditHashes} verifies {k.auditVerifies}"
+    IO.println s!"WORSTCUT {name} reopen (foldStep) trie-hashes {k.reopenHashes} verifies {k.reopenVerifies}; re-derivation (rederiveStep) trie-hashes {k.auditHashes} verifies {k.auditVerifies}"
     -- at the cut: within one record of tailMax (a floor, so it is this exe's own check, never a
     -- waste ceiling; `withinTail` is the ceiling, by proof)
     unless tail * 100 ≥ tmax * 99 do return .error s!"not the worst cut: the {name} tail fills {tail} of tailMax {tmax}"

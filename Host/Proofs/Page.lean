@@ -339,7 +339,7 @@ theorem stepEvent_size_le {D : Type} {PD : D → Prop} {s : Kernel.Step D}
     have hf : Codec.Kernel.Turn.Fits PD t := h
     have he : t.event.size ≤ Kernel.Bounds.eventBytesMax := hf.2.2.2.2.2.2.2.1
     have hs : (stepEvent (.turn t)).size = t.event.size + 1 := by
-      simp only [stepEvent, ByteArray.size_append]; exact Nat.add_comm _ _
+      simp only [stepEvent, Kernel.Step.event, Protocol.eventBytes, ByteArray.size_append]; exact Nat.add_comm _ _
     omega
   | refusal r =>
     have hf : Codec.Kernel.Refused.Fits PD r := h
@@ -349,17 +349,19 @@ theorem stepEvent_size_le {D : Type} {PD : D → Prop} {s : Kernel.Step D}
       rw [Codec.Stream.nat64_bytes]; rfl
     by_cases h0 : r.cancel.size = 0
     · have hs : (stepEvent (.refusal r)).size = r.event.size + 1 := by
-        simp only [stepEvent, h0, ↓reduceIte, ByteArray.size_append]; exact Nat.add_comm _ _
+        simp only [stepEvent, Kernel.Step.event, h0, ↓reduceIte, Protocol.eventBytes, ByteArray.size_append]
+        exact Nat.add_comm _ _
       omega
     · have hs : (stepEvent (.refusal r)).size = 1 + 8 + r.cancel.size + r.event.size := by
-        simp only [stepEvent, h0, ↓reduceIte, Protocol.cancelEvent, ByteArray.size_append, h8]; rfl
+        simp only [stepEvent, Kernel.Step.event, h0, ↓reduceIte, Protocol.eventBytes, Protocol.cancelEvent,
+          ByteArray.size_append, h8]; rfl
       omega
 
 /-- A recorded refusal that carries a cancel signature is served as THE tag-2 event
 (`Protocol.cancelEvent`), which `Command.absorbStep` reads back (`absorbStep_cancelEvent`). -/
 theorem stepEvent_cancel {D : Type} {r : Kernel.Refused D} (h : r.cancel.size ≠ 0) :
     stepEvent (.refusal r) = Protocol.cancelEvent r.cancel r.event := by
-  simp only [stepEvent, h, ↓reduceIte]
+  simp only [stepEvent, Kernel.Step.event, h, ↓reduceIte, Protocol.eventBytes]
 
 theorem foldl_walkStep_events_ge {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D)
     (budget start : Nat) (ts : List (Kernel.Step D × D)) (st : Acc × D × Nat) :

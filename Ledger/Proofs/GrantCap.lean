@@ -1,14 +1,16 @@
 /-
-# Ledger.Proofs.GrantCap — a grant moves at most what it had left, over every audited history
+# Ledger.Proofs.GrantCap — a grant moves at most what it had left, over every honest history
 
 KERNEL-60's `Right.transfer (cap)` is spent per transfer from the grant's ledger, and KERNEL-30's
 `LedgerContiguous` makes a spend READ BACK (`spend_reads_back_dispatched`, `grant_turn_ledger`). This
 module lifts that to a history, as an instance of LANG's ONE chain scheme (`Std.Chain`, its state a
 `World` and its request a log `Step`):
 
-* `audit_grant_chain`: an audited log from a World whose cells are canonical, whose grants' ledgers
-  are contiguous, and where `g` is a live grant, is a `Std.Chain (GrantStep X g)`: each step the
-  audit's own (`auditStep`), from a World where those three hold (or `g` is already a tombstone).
+* `honest_grant_chain`: an honest folded log (every log the follower takes,
+  `Kernel.Proofs.Rederive.rederiveLog_sound`) from a World whose cells are canonical, whose grants'
+  ledgers are contiguous, and where `g` is a live grant, is a `Std.Chain (GrantStep X g)`: each step
+  a kernel step that is honest (`World.step`, `Honest X o [s]`), from a World where those three hold
+  (or `g` is already a tombstone).
 * `grant_moves_le_cap` (`Std.chain_sum`, through the private scheme `spends_le_left`; its credit twin
   `grant_credits_le_cap` counts credit lines on the credit ledger): along such a log, the amounts of the transfers dispatched
   through `g` (signed, or called by an object's run at any depth), at most one per step, sum to at
@@ -20,12 +22,12 @@ module lifts that to a history, as an instance of LANG's ONE chain scheme (`Std.
   weighs exactly its amount (`move_weight`, from the read-back).
 
 Tooth (`Ledger.Proofs.GrantCapTooth.grant_cap_needs_contiguous`, kernel-evaluated): with every
-other premise met (canonical cells, a live grant with 10 left, an audited log whose steps each
+other premise met (canonical cells, a live grant with 10 left, an honest folded log whose steps each
 dispatched a transfer of 10 through it), a World whose grant's ledger has a gap moves 20: the bound
 fails exactly where `LedgerContiguous` does.
 -/
 import Kernel.Proofs.LedgerNext
-import Kernel.Proofs.Audit
+import Kernel.Proofs.Rederive
 import Kernel.Proofs.Versions
 import Lang.Proofs.Chain
 
@@ -40,10 +42,12 @@ variable {D : Type} [Ord D] [DecidableEq D]
 def GrantOrTomb (E : Env D) (g : D) (w : World D) : Prop :=
   (∃ cell, w.live E g = some cell ∧ cell.kind = kindGrant) ∨ w.entry E g = some .tomb
 
-/-- One audited step of a log around grant `g`, from a World `o` the read-back holds at: the
-audit's own step, over canonical cells and contiguous ledgers, with `g` a live grant or a tombstone. -/
+/-- One honest step of a log around grant `g`, from a World `o` the read-back holds at: a kernel
+step that is what its own event is decided to (`Honest X o [s]`), over canonical cells and
+contiguous ledgers, with `g` a live grant or a tombstone. -/
 def GrantStep (X : Ctx D) (g : D) (s : Step D) (n o : World D) : Prop :=
-  auditStep X o s = .ok n ∧ CellsCanon X.env o ∧ LedgerContiguous X.env o ∧ GrantOrTomb X.env g o
+  (World.step X.env o s = .ok n ∧ Honest X o [s]) ∧ CellsCanon X.env o ∧ LedgerContiguous X.env o ∧
+    GrantOrTomb X.env g o
 
 /-- Step `s` from `o` dispatched a transfer of `a` through grant `g`: the turn's call (the one its
 event decodes to) has, somewhere in its tree, `transfer src dst a (some g) once`. -/
@@ -116,22 +120,23 @@ private theorem live_none_tomb {E : Env D} {w w' : World D} {g : D} {c : Cell} (
 section Lawful
 variable [Std.TransOrd D] [Std.LawfulEqOrd D]
 
-/-- **The invariants carry over an audited step.** -/
+/-- **The invariants carry over an honest step.** -/
 private theorem grant_step_keeps {X : Ctx D} {g : D} {s : Step D} {o n : World D}
     (h : GrantStep X g s n o) :
     CellsCanon X.env n ∧ LedgerContiguous X.env n ∧ GrantOrTomb X.env g n := by
   obtain ⟨hs, hcan, hlc, hinv⟩ := h
   cases s with
   | refusal r =>
-      obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
-      have hrf := (recordedBy_recorded hj).1
+      obtain ⟨hst, -⟩ := hs
+      have hrf : World.refuse X.env o r = .ok n := hst
       refine ⟨fun id cell hl => hcan id cell ((refuse_live hrf id).symm.trans hl),
         fun id cell hl => hlc id cell ((refuse_live hrf id).symm.trans hl), ?_⟩
       rcases hinv with ⟨cell, hl, hk⟩ | ht
       · exact .inl ⟨cell, (refuse_live hrf g).trans hl, hk⟩
       · exact .inr ((refuse_entry hrf g).trans ht)
   | turn t =>
-      obtain ⟨⟨c, -, hr⟩, ha⟩ := auditTurn_ok.mp hs
+      obtain ⟨hst, c, -, hr, -⟩ := hs
+      have ha : World.admit X.env o t = .ok n := hst
       refine ⟨admit_cellsCanon hcan ha, step_ledgerContiguous hcan hlc hr ha, ?_⟩
       rcases hinv with ⟨cell, hl, hk⟩ | ht
       · rcases grant_turn_ledger hr ha hcan hlc hl hk with hn | ⟨cell', hl', hk', -⟩
@@ -139,25 +144,19 @@ private theorem grant_step_keeps {X : Ctx D} {g : D} {s : Step D} {o n : World D
         · exact .inl ⟨cell', hl', hk'⟩
       · exact .inr (tomb_stays ht (admit_estep ha g))
 
-/-- **An audited log is a `Std.Chain` of `GrantStep`s**, from a World where the read-back holds and
-`g` is a live grant (or a tombstone). -/
-theorem audit_grant_chain {X : Ctx D} {g : D} :
+/-- **An honest folded log is a `Std.Chain` of `GrantStep`s**, from a World where the read-back holds
+and `g` is a live grant (or a tombstone). -/
+theorem honest_grant_chain {X : Ctx D} {g : D} :
     ∀ {w w' : World D} {l : List (Step D)}, CellsCanon X.env w → LedgerContiguous X.env w →
-      GrantOrTomb X.env g w → audit X w l = .ok w' →
+      GrantOrTomb X.env g w → World.fold X.env w l = .ok w' → Honest X w l →
       ∃ steps : List (Step D × World D), steps.map Prod.fst = l ∧ Nanodregg.Lang.Std.Chain (GrantStep X g) w steps
-  | w, w', [], _, _, _, _ => ⟨[], rfl, .nil w⟩
-  | w, w', s :: rest, hcan, hlc, hinv, h => by
-      unfold audit at h
-      cases hs : auditStep X w s with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              have hst : GrantStep X g s w₁ w := ⟨hs, hcan, hlc, hinv⟩
-              obtain ⟨hcan₁, hlc₁, hinv₁⟩ := grant_step_keeps hst
-              obtain ⟨steps, hmap, hc⟩ := audit_grant_chain hcan₁ hlc₁ hinv₁ ha
-              exact ⟨(s, w₁) :: steps, by simp [hmap], .cons hst hc⟩
+  | w, w', [], _, _, _, _, _ => ⟨[], rfl, .nil w⟩
+  | w, w', s :: rest, hcan, hlc, hinv, hf, hh => by
+      obtain ⟨w₁, hs, h1, hfr, hhr⟩ := fold_honest_cons hf hh
+      have hst : GrantStep X g s w₁ w := ⟨⟨hs, h1⟩, hcan, hlc, hinv⟩
+      obtain ⟨hcan₁, hlc₁, hinv₁⟩ := grant_step_keeps hst
+      obtain ⟨steps, hmap, hc⟩ := honest_grant_chain hcan₁ hlc₁ hinv₁ hfr hhr
+      exact ⟨(s, w₁) :: steps, by simp [hmap], .cons hst hc⟩
 
 /-- What is left at `g` never rises along a step. -/
 private theorem left_falls {base : Nat} (hb0 : LedgerBase base) {X : Ctx D} {g : D} {s : Step D} {o n : World D}
@@ -166,11 +165,12 @@ private theorem left_falls {base : Nat} (hb0 : LedgerBase base) {X : Ctx D} {g :
   obtain ⟨hs, hcan, hlc, hinv⟩ := h
   cases s with
   | refusal r =>
-      obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
-      have hrf := (recordedBy_recorded hj).1
+      obtain ⟨hst, -⟩ := hs
+      have hrf : World.refuse X.env o r = .ok n := hst
       exact (show leftAt base X.env g n = leftAt base X.env g o by unfold leftAt; rw [refuse_live hrf g]) ▸ Nat.le_refl _
   | turn t =>
-      obtain ⟨⟨c, -, hr⟩, ha⟩ := auditTurn_ok.mp hs
+      obtain ⟨hst, c, -, hr, -⟩ := hs
+      have ha : World.admit X.env o t = .ok n := hst
       rcases hinv with ⟨cell, hl, hk⟩ | ht
       · rcases grant_turn_ledger hr ha hcan hlc hl hk with hn | ⟨cell', hl', -, hkeep | ⟨b', i, left, u, hb, hll, -, hu, hll', hother⟩⟩
         · rw [leftAt_none hn]; exact Nat.zero_le _
@@ -190,7 +190,8 @@ private theorem move_weight {X : Ctx D} {g : D} {s : Step D} {o n : World D} {a 
     a = leftAt transferBase X.env g o - leftAt transferBase X.env g n := by
   obtain ⟨hs, hcan, hlc, -⟩ := h
   obtain ⟨t, c, k, wk, actor, src, dst, once, rfl, hdec, hd⟩ := hm
-  obtain ⟨⟨c', hdec', hr⟩, ha⟩ := auditTurn_ok.mp hs
+  obtain ⟨hst, c', hdec', hr, -⟩ := hs
+  have ha : World.admit X.env o t = .ok n := hst
   rw [hdec] at hdec'
   cases hdec'
   obtain ⟨gc, gc', i, left, hl, hll, hu, hl', hll'⟩ := spend_reads_back_dispatched hr ha hcan hlc hd
@@ -203,7 +204,8 @@ private theorem credit_weight {X : Ctx D} {g : D} {s : Step D} {o n : World D} {
     a = leftAt creditBase X.env g o - leftAt creditBase X.env g n := by
   obtain ⟨hs, hcan, hlc, -⟩ := h
   obtain ⟨t, c, k, wk, actor, well, acct, rfl, hdec, hd⟩ := hm
-  obtain ⟨⟨c', hdec', hr⟩, ha⟩ := auditTurn_ok.mp hs
+  obtain ⟨hst, c', hdec', hr, -⟩ := hs
+  have ha : World.admit X.env o t = .ok n := hst
   rw [hdec] at hdec'
   cases hdec'
   obtain ⟨gc, gc', i, left, hl, hll, hu, hl', hll'⟩ := credit_reads_back_dispatched hr ha hcan hlc hd
@@ -246,40 +248,42 @@ private theorem spends_le_left {base : Nat} (hb0 : LedgerBase base) {X : Ctx D} 
   have := leftAt_lt (base := base) (E := X.env) (g := g) (w := w)
   omega
 
-/-- **A grant moves at most what it had left, over every audited history** (`Std.chain_sum`). From a
+/-- **A grant moves at most what it had left, over every honest history** (`Std.chain_sum`). From a
 World whose cells are canonical and whose grants' ledgers are contiguous (every World a follower
-reaches from genesis: `genesis_cellsCanon`, `genesis_ledgerContiguous`, `audit_ledgerContiguous`),
-where `g` is a live grant whose transfer ledger has `left` left, every audited log is a chain of
+reaches from genesis: `genesis_cellsCanon`, `genesis_ledgerContiguous`, `honest_ledgerContiguous`),
+where `g` is a live grant whose transfer ledger has `left` left, every honest folded log is a chain of
 `GrantStep`s, and any choice `amt` of an amount per step, each either 0 or the amount of a transfer
 the step dispatched through `g` (signed, or called by an object's run at any depth), sums to at most
 `left`: what was left, never more, whatever the log. -/
 theorem grant_moves_le_cap {X : Ctx D} {g : D} {w w' : World D} {l : List (Step D)} {cell : Cell}
     {i left : Nat} (hcan : CellsCanon X.env w) (hlc : LedgerContiguous X.env w)
     (hl : w.live X.env g = some cell) (hk : cell.kind = kindGrant)
-    (hleft : ledgerLeft transferBase g cell = .ok (i, left)) (h : audit X w l = .ok w') :
+    (hleft : ledgerLeft transferBase g cell = .ok (i, left)) (hf : World.fold X.env w l = .ok w')
+    (hh : Honest X w l) :
     ∃ steps : List (Step D × World D), steps.map Prod.fst = l ∧
       Nanodregg.Lang.Std.Chain (GrantStep X g) w steps ∧
       ∀ amt : World D × Step D × World D → Nat,
         (∀ x ∈ (w :: steps.map Prod.snd).zip steps, amt x = 0 ∨ MovesThrough X g x.1 x.2.1 (amt x)) →
         (((w :: steps.map Prod.snd).zip steps).map amt).sum ≤ left := by
-  obtain ⟨steps, hmap, hc⟩ := audit_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) h
+  obtain ⟨steps, hmap, hc⟩ := honest_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) hf hh
   refine ⟨steps, hmap, hc, fun amt hf => ?_⟩
   have := spends_le_left (.inr (.inl rfl)) hc (MovesThrough X g) (fun _ _ _ _ hs hm => move_weight hs hm) amt hf
   rwa [leftAt_of hl hleft] at this
 
-/-- **A grant extends at most the credit it had left, over every audited history**: the credit twin
+/-- **A grant extends at most the credit it had left, over every honest history**: the credit twin
 of `grant_moves_le_cap`, on the grant's credit ledger, counting the credit lines dispatched through
 `g` (`CreditsThrough`). -/
 theorem grant_credits_le_cap {X : Ctx D} {g : D} {w w' : World D} {l : List (Step D)} {cell : Cell}
     {i left : Nat} (hcan : CellsCanon X.env w) (hlc : LedgerContiguous X.env w)
     (hl : w.live X.env g = some cell) (hk : cell.kind = kindGrant)
-    (hleft : ledgerLeft creditBase g cell = .ok (i, left)) (h : audit X w l = .ok w') :
+    (hleft : ledgerLeft creditBase g cell = .ok (i, left)) (hf : World.fold X.env w l = .ok w')
+    (hh : Honest X w l) :
     ∃ steps : List (Step D × World D), steps.map Prod.fst = l ∧
       Nanodregg.Lang.Std.Chain (GrantStep X g) w steps ∧
       ∀ amt : World D × Step D × World D → Nat,
         (∀ x ∈ (w :: steps.map Prod.snd).zip steps, amt x = 0 ∨ CreditsThrough X g x.1 x.2.1 (amt x)) →
         (((w :: steps.map Prod.snd).zip steps).map amt).sum ≤ left := by
-  obtain ⟨steps, hmap, hc⟩ := audit_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) h
+  obtain ⟨steps, hmap, hc⟩ := honest_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) hf hh
   refine ⟨steps, hmap, hc, fun amt hf => ?_⟩
   have := spends_le_left (.inr (.inr rfl)) hc (CreditsThrough X g) (fun _ _ _ _ hs hm => credit_weight hs hm) amt hf
   rwa [leftAt_of hl hleft] at this

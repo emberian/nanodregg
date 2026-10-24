@@ -10,8 +10,9 @@ refusal NAME), restarts the "Host" from a fold of its own log at random points, 
 requires
 
 * the follower (`World.fold` from genesis over the admitted log) to reach the Host's World,
-* the auditor (`Receive.audit`, which decodes every logged event with CODEC's decoder) to accept
-  the same log and reach the same World, and to name a forged write `eventMismatch` at its index,
+* the follower's re-derivation (`Receive.rederiveLog`: each step's event decoded with CODEC's
+  decoder and re-derived by `Receive.rederive`, the step `host follow` takes) to accept the same
+  log and reach the same World, and to name a forged write `eventMismatch` at its index,
 * every planted refusal (`Gen.planted`) to have been met by its name,
 * every revocation to have handed the grant cell's weight back to the budget (KERNEL-19).
 

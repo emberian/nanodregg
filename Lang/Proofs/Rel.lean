@@ -814,7 +814,7 @@ theorem guardEdits_never_stuck {bytesOf : D → ByteArray} {digestOf : ByteArray
 
 /-- **An unpinned upsert or retract has no old row** (LANG-59): with no pin at its slot, an edit
 whose act needs one is refused `rowUnpinned` with its parent, relation and key, the refusal and
-key `rowTouchesOf` gives (`Kernel.Proofs.Audit`). -/
+key `rowTouchesOf` gives (`Kernel.Proofs.Rederive`). -/
 theorem guardOld_unpinned {digestOf : ByteArray → Option D} {rv : RowView D} {self : D} {x : Edit D}
     (hp : pinAt rv self x = none) (ha : x.act.unpinned = false) :
     guardOld digestOf rv self x = .error (.rowUnpinned x.slot.under.1 x.slot.under.2 x.slot.keyBytes) := by

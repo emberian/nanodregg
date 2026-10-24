@@ -16,7 +16,7 @@ Order of the checks `submit` makes (each refuses by name; the first that fails a
    compared, so the pins are no oracle on the World's cells for it;
 4. the pins (KERNEL-66, `checkPins`): every cell pin, row pin and range read against the Host's World.
    A moved pin is `stale`, before any receiver or law reads a cell: a stale call is judged by what it
-   observed, never by what the World holds now (`Kernel.Proofs.Audit.stale_declined_before_receive`);
+   observed, never by what the World holds now (`Kernel.Proofs.Rederive.stale_declined_before_receive`);
 5. the receivers (`deriveTurn`: authority, laws, programs) on the pinned view;
 6. `World.admit` of the derived Turn, in the order its own header lists.
 Steps 3 and 5 are `receive` with step 4 between them (`Kernel.Proofs.Receive.receive_signed`).
@@ -94,10 +94,10 @@ def refusalNames : List String :=
   ["wrongWorld", "badSignature", "unknownKey", "notPrecommitted", "badPossession", "unpinned",
    "missingCell", "wrongKind", "malformedCell", "lawDenied", "program", "stateKey", "tooManyLaws",
    "hasMethods", "noMethods", "noGrant", "grantTarget", "grantRight", "grantWidens", "unrooted",
-   "enrollSpent", "transferSpent", "creditSpent", "rightTarget", "notIssuer", "grantTooDeep", "overPrice", "undecodableEvent", "eventMismatch",
+   "enrollSpent", "transferSpent", "creditSpent", "rightTarget", "notIssuer", "grantTooDeep", "overPrice", "eventMismatch",
    "duplicateEffect", "sameAccount", "zeroAmount", "assetMismatch", "overflow", "notWell",
    "notCallable", "callTooDeep", "revisited", "tooManyCalls", "overTicks", "rowUnpinned", "rangeUnpinned",
-   "rangeTooLong", "rowParent", "duplicateRow", "staleRecorded",
+   "rangeTooLong", "rowParent", "duplicateRow",
    "cancelled", "cancelForged"]
 
 /-- The wire names of the kernel's rejections, in constructor order (checked against `Reject.name`). -/
@@ -127,12 +127,19 @@ def Verdict.isStale : Verdict D → Bool
   | .rejected (.stale _) => true
   | _ => false
 
-/-- The code a stale refusal would carry: what `auditRefusal` refuses by name in a log. -/
+/-- The code a stale refusal would carry: one `judge` never records (`judge_recorded_not_stale`). -/
 def staleCode : Nat := refusalNames.length + rejectNames.idxOf "stale"
 
 /-- The name a recorded code answers with (`lookup`'s and a resubmit's `refused NAME`). -/
 def codeName (k : Nat) : Option String :=
   if k < refusalNames.length then refusalNames[k]? else rejectNames[k - refusalNames.length]?
+
+/-- The code table by name: every recorded code's name, in code order (`codeName`). A record holds
+its code, never its name, so a Store is stamped with this table (`Host.Base.shapeStamp`): a binary
+whose table differs (a refusal added, deleted or reordered moves every code after it) refuses the
+Store `shapeMismatch` rather than reading its codes as other names. -/
+def codeTable : String :=
+  "kernel/refusal-codes/v1: " ++ ",".intercalate (refusalNames ++ rejectNames)
 
 /-- What `World.refuse` records for call `c` with verdict `v` and cancel field `a` (KERNEL-60): the
 call's own transaction id, member, window and bytes, whoever asks for the record. -/

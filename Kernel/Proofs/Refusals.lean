@@ -13,7 +13,7 @@ with no premise but a lawful `Env` (`refusals_separate`); a key without its kind
 -/
 import Kernel.Proofs.Journal
 import Kernel.Proofs.Cells
-import Kernel.Proofs.Audit
+import Kernel.Proofs.Rederive
 
 namespace Nanodregg.Kernel
 

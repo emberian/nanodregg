@@ -8,8 +8,8 @@ canonical only when the cell is. So the write's link rests on a World invariant,
 
 * `CellsCanon E w`: every live cell's slots are strictly ascending (`Slots.ascending`, the form
   `checkShape` demands of a birth). `admit_cellsCanon`: every admitted turn keeps it (a birth is
-  checked `nonCanonicalCell`; a write's `set`/`erase` keep the order); `fold_cellsCanon`,
-  `audit_cellsCanon`; `genesis_cellsCanon`: the founders' cells are `slotsOf`, so genesis has it.
+  checked `nonCanonicalCell`; a write's `set`/`erase` keep the order); `fold_cellsCanon`
+  (along every fold, the follower's too); `genesis_cellsCanon`: the founders' cells are `slotsOf`, so genesis has it.
 * `write_next_slots`: a signed `write` of `obj` derived from `w` and admitted to `w'`, over a
   canonical cell: the laws in force judged the move to `applyEdits (stateOf cell) edits`
   (`write_judged`), and `obj` is live in `w'` with a state that reads that, key by key.
@@ -203,11 +203,6 @@ theorem fold_cellsCanon {E : Env D} {w w' : World D} {l : List (Step D)} (hw : C
   fold_keeps (P := fun v => CellsCanon E v) admit_cellsCanon
     (fun hp hr => fun id cell hl => hp id cell ((refuse_live hr id).symm.trans hl)) hw h
 
-/-- **Every cell stays canonical along an audited log.** -/
-theorem audit_cellsCanon {X : Ctx D} {w w' : World D} {l : List (Step D)} (hw : CellsCanon X.env w)
-    (h : audit X w l = .ok w') : CellsCanon X.env w' :=
-  fold_cellsCanon hw (audit_ok.mp h).1
-
 omit [Ord D] [DecidableEq D] in
 theorem slotsOf_ascending (ps : List (Nat × ByteArray)) : Slots.ascending (slotsOf ps) = true := by
   unfold slotsOf
@@ -281,8 +276,8 @@ private theorem admit_writeOf {X : Ctx D} {w w' : World D} {c : Call D} {t : Tur
       (fun x hx hxc => by rw [hact x hx hxc, if_neg he])
 
 /-- **A write leaves exactly the state its laws judged.** A signed `write` of `obj`, derived from
-`w` and admitted to `w'`, over a canonical cell (`CellsCanon` gives it at every World an audited
-log reaches from genesis): the laws in force judged, on `write`, the move from the cell's state to
+`w` and admitted to `w'`, over a canonical cell (`CellsCanon` gives it at every World a fold
+reaches from genesis): the laws in force judged, on `write`, the move from the cell's state to
 `applyEdits` of it (`write_judged`), and `obj` is live in `w'` with a state that reads that edited
 state at every key, its slots still canonical. -/
 theorem write_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {obj : D}

@@ -1665,7 +1665,7 @@ def cancelLieRow : Row where
 
 /-- A cancel the member never signed, served by the writer (PROTOCOL-63): the sponsor's loose call
 is cancelled; a follower reading the log from genesis through a Host that flipped the cancel's
-signature refuses the log `cancelForged`, the audit's name for it (`Receive.forgedName`), and the
+signature refuses the log `cancelForged`, the re-deriver's name for it (`Receive.rederive`), and the
 honest log reads `ok`. The plant is a follower that accepts any signature: line 8 absorbs the forged
 cancel and is caught only at the page's end, where the writer's chain commits the signature it
 logged: `refused chainMismatch`, not `cancelForged`. -/

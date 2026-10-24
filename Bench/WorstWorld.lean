@@ -26,7 +26,7 @@ import Bench.WorstCut
 namespace Nanodregg.Bench.WorstWorld
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Host Nanodregg.Host.Deployed
-open Nanodregg.Bench.Count (captured marks ratio countingX auditRecord)
+open Nanodregg.Bench.Count (captured marks ratio countingX rederiveRecord)
 open Nanodregg.Bench.WorstCut
 
 /-- `want` against the reopen's roots (`control`: against them with the first byte flipped). -/

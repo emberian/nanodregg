@@ -45,7 +45,7 @@ Store's key, to name the offset of its own record frame, with step counts that n
 entry) does not see and a page sees only when it reads that entry. O(kept segment + kept index),
 off any request path.
 
-It trusts the base: it re-derives nothing (that is `host follow`'s audit). It is integrity, position
+It trusts the base: it re-derives nothing (that is `host follow`'s, `Receive.rederive`). It is integrity, position
 and chain, not lawfulness.
 -/
 import Host.Deployed

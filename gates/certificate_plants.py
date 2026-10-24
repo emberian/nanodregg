@@ -55,9 +55,9 @@ PLANTS = {
             "axiom g2_plant_axiom : True\n\n/-- What is left at `g` never rises along a step. -/", 1),
            ("    leftAt base X.env g n ≤ leftAt base X.env g o := by\n",
             "    leftAt base X.env g n ≤ leftAt base X.env g o := by\n  have _hax := g2_plant_axiom\n", 1)],
-    "P5": [("≤ left := by\n  obtain ⟨steps, hmap, hc⟩ := audit_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) h\n"
+    "P5": [("≤ left := by\n  obtain ⟨steps, hmap, hc⟩ := honest_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) hf hh\n"
             "  refine ⟨steps, hmap, hc, fun amt hf => ?_⟩\n  have := spends_le_left (.inr (.inl rfl))",
-            "≤ left + 0 := by\n  obtain ⟨steps, hmap, hc⟩ := audit_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) h\n"
+            "≤ left + 0 := by\n  obtain ⟨steps, hmap, hc⟩ := honest_grant_chain hcan hlc (.inl ⟨cell, hl, hk⟩) hf hh\n"
             "  refine ⟨steps, hmap, hc, fun amt hf => ?_⟩\n  have := spends_le_left (.inr (.inl rfl))", 1)],
 }
 

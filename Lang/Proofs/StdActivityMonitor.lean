@@ -14,7 +14,7 @@ the guard's grain:
   `run_edits_guarded` (`Lang.Proofs.Rel`: an admitted run's edits passed their guards), the loaded
   closure (`load_top`) and the relation's guard (`runLaw_ref_admits`).
 
-Operationally a follower re-runs the monitor without citing it: `rederive` calls `receive`, which runs
+Operationally a follower re-runs the monitor without citing it: `Receive.rederive` calls `submit`, whose `receive` runs
 `program.run`, which runs `guardEdits`. The theorem it can cite is `activity_program_safe`, for a
 package that meets the premises. This module decides the generated fixture
 (`activity_fixture_monitored`, StdActivityTeeth). The deployed Bell meets them as installed (no

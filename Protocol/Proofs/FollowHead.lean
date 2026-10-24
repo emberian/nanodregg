@@ -120,16 +120,14 @@ theorem absorbStep_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} 
     (h : absorbStep X w e = .ok (s, w')) (hl : w.live X.env obj = some cell) (hk : cell.kind = kindObject) :
     ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
       packageOf X obj cell' = packageOf X obj cell := by
-  unfold absorbStep at h
-  repeat' split at h
-  all_goals (try simp only [Except.ok.injEq, Prod.mk.injEq, reduceCtorEq] at h)
-  all_goals (try (obtain ⟨rfl, rfl⟩ := h))
-  all_goals first
-    | (exact ⟨cell, (refuse_live (cancel_recorded ‹_›).2.2.2 obj).trans hl, hk, rfl⟩)
-    | (exact ⟨cell, (refuse_live (judge_recorded ‹_›).2.2.2 obj).trans hl, hk, rfl⟩)
-    | (obtain ⟨cell', hl', hk', hlo, -⟩ := submit_object_head ‹_› hl hk
-       have hp := hlo slotPackage (by simp [slotPackage, lawBase])
-       exact ⟨cell', hl', hk', by unfold packageOf; rw [hp]⟩)
+  obtain ⟨ev, -, hr⟩ := absorbStep_ok.mp h
+  rcases rederive_ok hr with ⟨b, c, t, -, -, hs, rfl⟩ | ⟨b, c, v, r, -, -, hj, rfl⟩ |
+      ⟨sig, b, c, v, r, -, -, hco, rfl⟩
+  · obtain ⟨cell', hl', hk', hlo, -⟩ := submit_object_head hs hl hk
+    have hp := hlo slotPackage (by simp [slotPackage, lawBase])
+    exact ⟨cell', hl', hk', by unfold packageOf; rw [hp]⟩
+  · exact ⟨cell, (refuse_live (judge_recorded hj).2.2.2 obj).trans hl, hk, rfl⟩
+  · exact ⟨cell, (refuse_live (cancel_recorded hco).2.2.2 obj).trans hl, hk, rfl⟩
 
 /-- **One re-derived event keeps a live ROM cell** (`Frame.admit_rom`; a refusal changes no cell). -/
 theorem absorbStep_rom {X : Ctx D} {w w' : World D} {e : ByteArray} {s : Kernel.Step D} {c : D}

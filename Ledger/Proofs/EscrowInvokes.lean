@@ -14,7 +14,7 @@ the object's state, and each invoke's calls are its run's (`object_history_runs`
   return is a payout, at a lawful `Ctx` whose program is the language over its own codec:
   `payoutCalls_le_one`, `chain_count` of the steps into a settled state. `escrow_invokes_deployed`
   at the node's (`Host.Deployed.X`), premises only the history and its package reading.
-* Completeness: an audited log is such a history (`object_history_of_audit`), and a history files no
+* Completeness: an honest folded log is such a history (`object_history_of_honest`), and a history files no
   invoke of the object as a step that left it alone (`ObjectStep.keep` says "no invoke"; `other`
   and `frame` exclude a touch of it), so the count is of every invoke the log holds.
 

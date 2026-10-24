@@ -21,7 +21,7 @@ read's relation, width, length and listing pin (`stale`)) → rows (each row tou
 row's pin (`stale`) among its checks, then a retired parent's heads) → charge → created ids → the
 step counter. On the Host's path `Receive.submit` has already compared every pin before deriving the
 Turn (KERNEL-66, `checkPins`), so there a `stale` from admission is not reached; a log's Turn (the
-follower's fold, the audit) meets these three comparisons here.
+follower's fold) meets these three comparisons here.
 -/
 import Kernel.Check
 import Kernel.Turn
@@ -232,8 +232,8 @@ abbrev Refusals (D : Type) := Trie.T (RefusalSlot D) (RefusalLeaf D) D
 abbrev Rows (D : Type) := Trie.T (RowSlot D) RowLeaf D
 
 /-- A recorded refusal, as the log carries it (KERNEL-44): the call's transaction id, its signer,
-its window, the refusal's code, and the signed call's bytes (the follower's audit decodes them and
-re-derives the same refusal). -/
+its window, the refusal's code, and the signed call's bytes (the follower decodes them and re-derives
+the same refusal, `Receive.rederive`). -/
 structure Refused (D : Type) where
   txId : D
   member : D
@@ -242,8 +242,8 @@ structure Refused (D : Type) where
   code : Nat
   event : ByteArray
   /-- empty for a judged refusal; for a CANCEL (KERNEL-60, design C1: code `cancelled`, the event the
-  cancelled call's own bytes), the member's signature over `domCancel ‖ txId`, which the follower's
-  audit re-verifies (`cancelForged`) -/
+  cancelled call's own bytes), the member's signature over `domCancel ‖ txId`, which the follower
+  re-verifies (`Receive.rederive`: `cancelForged`) -/
   cancel : ByteArray
   deriving DecidableEq
 
@@ -930,8 +930,8 @@ variable [DecidableEq D]
 /-- A transaction id is admitted at most once; a retry names the height it landed at, and a recorded
 refusal is final (`refusedFinal`, KERNEL-44). On the Host's path `Receive.submit` answers both before it
 derives (its journal and `refusedAnswer` reads), so these two arms are not reached there; they are
-the follower's (`World.fold`, the audit), which admits a log's Turns with nothing before them, and are
-kept for it (KERNEL-67). -/
+a fold's (`World.fold`: a reopen, and every theorem over a log), which admits a log's Turns with
+nothing before them, and are kept for it (KERNEL-67); the follower re-derives through `submit` too. -/
 def checkJournal (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) Unit :=
   match w.journalAt E t.txId with
   | some (h, _) => .error (.replayed h)
@@ -1754,7 +1754,7 @@ transaction id neither journaled (`replayed`) nor already recorded (`refusedFina
 count this window below `Bounds.refusalsPerWindow` (`refusalBudget`); the World's count this
 window, all members together, below `Bounds.refusalsPerWindowMax` (`refusalsFull`, KERNEL-55 R1). Whether the call was
 authenticated and refused with this code is the receive layer's (`Receive.judge`), re-derived by the
-follower's audit; the kernel bounds what a log may record. -/
+follower (`Receive.rederive`); the kernel bounds what a log may record. -/
 def checkRefusal (E : Env D) (w : World D) (r : Refused D) : Except (Reject D) Unit := do
   checkRefusedBounds r
   checkSteps w
@@ -1879,5 +1879,24 @@ input and roots input, the roots input of the World `w₂` the steps `l` reach f
 def headPres (E : Env D) (w : World D) (l : List (Step D)) (w₂ : World D) (prev : D) (g : UInt8)
     (td rd root' jroot' rroot' wroot' : D) : List (String × ByteArray) :=
   linkPre E prev g td rd :: rootsPre E root' jroot' rroot' wroot' :: w₂.rootsPre E :: foldLinks E w l
+
+/-- What a log carries of a step for a follower to re-derive it from (`Receive.rederive`): the
+signed call's bytes, and for a recorded cancel the member's signature. A page writes it behind a
+tag (`Protocol.eventBytes`); the writer's own record is not on it. -/
+inductive Event
+  /-- an admitted Turn: its call -/
+  | turn (call : ByteArray)
+  /-- a judged refusal: its call -/
+  | refusal (call : ByteArray)
+  /-- a member's cancel (KERNEL-60): its signature and the cancelled call -/
+  | cancel (sig call : ByteArray)
+  deriving DecidableEq
+
+/-- A step's event: a recorded refusal is a cancel exactly when it carries a cancel signature (the
+FIELD, never the code: a program refusal spelled `cancelled` is judged). The one place a step's
+kind of re-derivation is decided. -/
+def Step.event {D : Type} : Step D → Event
+  | .turn t => .turn t.event
+  | .refusal r => if r.cancel.size = 0 then .refusal r.event else .cancel r.cancel r.event
 
 end Nanodregg.Kernel

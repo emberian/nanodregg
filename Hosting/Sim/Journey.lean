@@ -28,7 +28,7 @@ grants `start` to).
   nothing, a tick under `tickMs` after the last accepted one moves no clock (a flood of 500 decides
   nothing), and the tick past the window relaunches the grain with no Turn and no exit report.
 * G16 the controller over the removed grain with its child still running: `kill`.
-* G14 the follower (`World.fold`) and the auditor reach the Host's World.
+* G14 the fold (`World.fold`) and the follower's re-derivation (`Receive.rederiveLog`) reach the Host's World.
 
 Plants (each must flip its line, or the run is RED):
 * P1 skip-judge: G3's grain born `running` is ADMITTED, G6's double start is ADMITTED.
@@ -245,9 +245,9 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   match World.fold Kernel.Sim.env g0 r.st.log with
   | .ok w => r := note r s!"G14 the follower reaches the Host's World ({r.st.log.length} turns)" (Kernel.Sim.same w r.st.host)
   | .error (i, e) => r := note r s!"G14 follower refused at {i}: {Kernel.Sim.nameOf e}" false
-  match audit X g0 r.st.log with
-  | .ok w => r := note r "G14 the auditor reaches the Host's World" (Kernel.Sim.same w r.st.host)
-  | .error (i, e) => r := note r s!"G14 auditor refused at {i}: {reprStr e}" false
+  match rederiveLog X g0 r.st.log with
+  | .ok w => r := note r "G14 the re-derivation reaches the Host's World" (Kernel.Sim.same w r.st.host)
+  | .error (i, e) => r := note r s!"G14 the re-derivation refused at {i}: {reprStr e}" false
   return r
 
 /-- G0: the shipped text is the generated one. -/

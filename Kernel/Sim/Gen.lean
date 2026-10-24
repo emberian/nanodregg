@@ -1,13 +1,13 @@
 /-
 # Kernel.Sim.Gen — the seeded generator, generic in its parameters
 
-The generator, the Host stand-in, the follower and auditor checks of `Kernel.Sim`, over any
+The generator, the Host stand-in, the fold and re-derivation checks of `Kernel.Sim`, over any
 digest, hash, encodings and signature scheme (`Params`). Two instances run it: the toy
 (`Kernel.Sim`: UInt64 digests, FNV, a hash "signature") and the deployed (`Kernel.Sim.Deployed`:
 CODEC's digest, cSHAKE256, codecs and RFC 8032 Ed25519), so the pipeline is the same code and only
 the parameters differ.
 -/
-import Kernel.Receive.Audit
+import Kernel.Receive.Rederive
 import Kernel.Receive.Submit
 import Kernel.Receive.Follow
 import Kernel.Sim.Shadow
@@ -397,7 +397,7 @@ structure Marks where
   /-- signature verifies (`@`) of `judge` and of the two-verify plant on recorded refusals (`<G`, `<H`) -/
   verifyOnce : Nat := 0
   verifyTwice : Nat := 0
-  /-- signature verifies (`@`) of the follower's `auditRefusal` on recorded refusals (`<U`) -/
+  /-- signature verifies (`@`) of the follower's re-derivation (`rederiveStep`) of recorded refusals (`<U`) -/
   verifyAudit : Nat := 0
 
 /-- An `S` mark count and its `T` met: the insert's own hashes, kept if the most so far. -/
@@ -633,11 +633,11 @@ def countVerifies (X : Ctx D) (st : State D) (c : Call D) (r : Refused D) : Stat
   let vX := verifyingCtx X
   let once := dbgTrace "<G" fun _ => Receive.judge vX st.host c
   let twice := dbgTrace "<H" fun _ => judgeTwice vX st.host c
-  -- the follower's audit of the same record (`auditRefusal`: decode, then `judge`), in its own bracket
-  let audited := dbgTrace "<U" fun _ => Receive.auditRefusal vX st.host r
+  -- the follower's re-derivation of the same record (`rederiveStep`: decode, then `judge`), in its own bracket
+  let audited := dbgTrace "<U" fun _ => Receive.rederiveStep vX st.host (.refusal r)
   let st := match audited with
     | .ok _ => st
-    | .error _ => failWith st "verify count: the counted audit refused the recorded refusal"
+    | .error _ => failWith st "verify count: the counted re-derivation refused the recorded refusal"
   let st := match once with
     | .recorded _ r' _ => if r' = r then st else failWith st "verify count: the counted judge recorded another refusal"
     | _ => failWith st "verify count: the counted judge did not record the refusal"
@@ -993,8 +993,8 @@ def grantObj (P : Params D) (st : State D) (m : Member D) (target grantee : D) :
 refused past its cap (`transferSpent`); a `mutate` grant moves no value (`grantRight`); a counted
 right off its target (`rightTarget`); and the CANCEL record (design C1): the member's cancel is
 recorded and the call is then `refusedFinal`; another key's cancel is declined `badSignature`; a
-cancel before the call's window opens is declined `outsideWindow`; the follower's audit refuses a
-cancel record with a forged signature `cancelForged`. -/
+cancel before the call's window opens is declined `outsideWindow`; the follower's re-derivation refuses
+a cancel record with a forged signature `cancelForged`. -/
 def capArms (P : Params D) (st : State D) : State D :=
   let X := P.ctx
   let acs := st.accounts.filter fun a => st.members.any (·.id = a.2.1) ∧ balOf st a.1 + floorOfAcct st a.1 ≥ 2
@@ -1069,11 +1069,11 @@ def capArms (P : Params D) (st : State D) : State D :=
         let st := match Receive.cancel X st.host early (P.sign g.key (X.cancelMessage early)) with
           | .declined (.rejected .outsideWindow) => meet st "cancel-early:outsideWindow"
           | _ => failWith st "cancel: an early cancel was not declined outsideWindow"
-        -- a forged cancel record is refused by the follower's audit
+        -- a forged cancel record is refused by the follower's re-derivation
         let forged := cancelOf X call (P.sign o.key (X.cancelMessage call))
-        let st := match Receive.auditRefusal X st.host forged with
+        let st := match Receive.rederiveStep X st.host (.refusal forged) with
           | .error (.refused .cancelForged) => meet st "cancel-forged:cancelForged"
-          | _ => failWith st "cancel: the audit did not refuse a forged cancel cancelForged"
+          | _ => failWith st "cancel: the re-derivation did not refuse a forged cancel cancelForged"
         match Receive.cancel X st.host call sig with
         | .recorded _ r w' =>
             let st := meet { st with host := w', log := st.log ++ [.refusal r] }
@@ -1894,8 +1894,9 @@ def probeRace (P : Params D) (st : State D) : State D :=
   to A, and its pin does NOT return (`refusal-aba-pin:moved`: the version moved), so resubmitted the
   call is `stale` again. PLANT `refusal-aba-plant:returned`: the content did return to A, so the pin
   before KERNEL-54 (a content digest) would have matched. `refusal-stale-fold`: a Host that admits the
-  call anyway is refused `stale` by the follower's fold at that step's index. `refusal-stale-audit`: a
-  log recording a stale refusal is refused `staleRecorded` by the follower's audit.
+  call anyway is refused `stale` by the follower's fold at that step's index. `refusal-stale-rederive`: a
+  log recording a stale refusal is refused `eventMismatch` by the follower's re-derivation (`judge`
+  declines the stale call, so nothing re-derives the record: `rederiveStep_stale`).
 * `refusal-early`: a call whose window has not opened is refused `outsideWindow` and NOT recorded
   (`World.refuse` itself refuses to: `refusal-early-kernel`); in its window it is admitted.
   PLANT `refusal-early-plant`: had it been recorded, its own window would refuse it `refusedFinal`.
@@ -1955,12 +1956,12 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
           | .error (_, r) => failWith st s!"probe refusals: the follower refused the stale call's admission {r.name}"
           | .ok _ => failWith st "probe refusals: the follower admitted a stale call"
       | .error r => failWith st s!"probe refusals: the stale call did not derive ({r.name}): the fold plant is blind"
-    -- a log that records a stale refusal: the kernel takes the record, the follower's audit refuses it
+    -- a log that records a stale refusal: the kernel takes the record, the follower's re-derivation refuses it
     let rs := refusedOf X c (.rejected (.stale o))
-    let st := match World.refuse E st.host rs, Receive.auditRefusal X st.host rs with
-      | .ok _, .error (.refused .staleRecorded) => meet st "refusal-stale-audit:staleRecorded"
+    let st := match World.refuse E st.host rs, Receive.rederiveStep X st.host (.refusal rs) with
+      | .ok _, .error (.refused .eventMismatch) => meet st "refusal-stale-rederive:eventMismatch"
       | .error e, _ => failWith st s!"probe refusals: the kernel refused the planted stale record {e.name} (the plant is blind)"
-      | .ok _, _ => failWith st "probe refusals: the audit took a recorded stale"
+      | .ok _, _ => failWith st "probe refusals: the re-derivation took a recorded stale"
     let st := probeRace P st
     -- an early call: refused, not recorded, admitted in its window
     let H := st.host.height
@@ -2747,7 +2748,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
       else { st with failures := "checkpoint: the rebuilt trie differs (root or listing)" :: st.failures }
     else st) st
   let st := scanWorld P.env st st.host "the Host's World at the seed's end"
-  -- the follower and the auditor, from genesis
+  -- the fold and the follower's re-derivation, from genesis
   let st := match World.fold P.env g st.log with
     | .ok w =>
         if !same P.env w st.host then { st with failures := "follower differs" :: st.failures }
@@ -2761,21 +2762,21 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
                 | none => false
           if ok then st else { st with failures := "follower: a Host proof does not verify at the follower's root" :: st.failures }
     | .error (i, r) => { st with failures := s!"follower refused at {i}: {r.name}" :: st.failures }
-  let st := match audit P.ctx g st.log with
-    | .ok w => if same P.env w st.host then st else { st with failures := "audit differs" :: st.failures }
-    | .error (i, f) => { st with failures := s!"audit refused at {i}: {vname f}" :: st.failures }
+  let st := match rederiveLog P.ctx g st.log with
+    | .ok w => if same P.env w st.host then st else { st with failures := "re-derivation differs" :: st.failures }
+    | .error (i, f) => { st with failures := s!"re-derivation refused at {i}: {vname f}" :: st.failures }
   -- a forged refusal record: its code changed; `fold` keeps it (the kernel cannot see the code was
-  -- not the call's), `audit` re-judges the call and names the step
+  -- not the call's), `rederiveLog` re-judges the call and names the step
   let st := match (st.log.zipIdx.filterMap fun (s, i) => match s with
       | .refusal r => some (r, i) | _ => none).head? with
     | none => failWith st "refusals: the log recorded none"
     | some (r, i) =>
         let bad := st.log.set i (.refusal { r with code := r.code + 1 })
-        match World.fold P.env g bad, audit P.ctx g bad with
+        match World.fold P.env g bad, rederiveLog P.ctx g bad with
         | .ok _, .error (j, .refused .eventMismatch) =>
             arm st "refusal-forged-code:eventMismatch" (i == j) s!"forged refusal at {i} named at {j}"
-        | .ok _, .error (j, v) => failWith st s!"forged refusal at {i}: audit said {vname v} at {j}"
-        | .ok _, .ok _ => failWith st s!"forged refusal at {i}: audit accepted"
+        | .ok _, .error (j, v) => failWith st s!"forged refusal at {i}: the re-derivation said {vname v} at {j}"
+        | .ok _, .ok _ => failWith st s!"forged refusal at {i}: the re-derivation accepted"
         | .error _, _ => failWith st s!"forged refusal at {i}: fold refused it (not a forgery test)"
   let st := probeSigDomain P st
   let st := probeStateOrder P st
@@ -2806,16 +2807,16 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
       { st with failures := "genesis: swapped founders or another nonce gave the same chain" :: st.failures }
     else st
   -- a forged log: the writer changes what the last write of the log wrote (its event, the signed
-  -- call, still says otherwise) and re-prices it, so `fold` accepts it; `audit` must not
+  -- call, still says otherwise) and re-prices it, so `fold` accepts it; `rederiveLog` must not
   match forge st.log with
   | none => st
   | some (i, bad) =>
-      match World.fold P.env g bad, audit P.ctx g bad with
+      match World.fold P.env g bad, rederiveLog P.ctx g bad with
       | .ok _, .error (j, .refused .eventMismatch) =>
           if i = j then { st with refusedAsExpected := st.refusedAsExpected + 1 }
           else { st with failures := s!"forgery at {i} named at {j}" :: st.failures }
-      | .ok _, .error (j, f) => { st with failures := s!"forgery at {i}: audit said {vname f} at {j}" :: st.failures }
-      | .ok _, .ok _ => { st with failures := s!"forgery at {i}: audit accepted" :: st.failures }
+      | .ok _, .error (j, f) => { st with failures := s!"forgery at {i}: the re-derivation said {vname f} at {j}" :: st.failures }
+      | .ok _, .ok _ => { st with failures := s!"forgery at {i}: the re-derivation accepted" :: st.failures }
       | .error _, _ => { st with failures := s!"forgery at {i}: fold refused it (not a forgery test)" :: st.failures }
 
 /-- The refusals the generator plants, each of which a run of 16 or more seeds must meet. Every
@@ -2853,7 +2854,7 @@ def plantedArms : List String :=
    "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
    "race-loser:stale", "race-loser-declined:declined", "race-law:lawDenied",
    "refusal-aba-stale:stale", "refusal-aba-declined:declined", "refusal-aba-plant:returned",
-   "refusal-aba-pin:moved", "refusal-aba:stale", "refusal-stale-fold:stale", "refusal-stale-audit:staleRecorded",
+   "refusal-aba-pin:moved", "refusal-aba:stale", "refusal-stale-fold:stale", "refusal-stale-rederive:eventMismatch",
    "refusal-early-refused:outsideWindow", "refusal-early:declined", "refusal-early-kernel:outsideWindow",
    "refusal-early-plant:refusedFinal", "refusal-early-window:ok", "refusal-rotate-stranger:notPrecommitted",
    "refusal-rotate-kept:declined", "refusal-rotate-plant:authenticated", "refusal-budget:refusalBudget",
@@ -3019,9 +3020,9 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
         { st with seen := "verify-count:once" :: st.seen } else st
     -- exact, per seed: `judge` verifies at least once per recorded refusal (an authenticated call was
     -- verified somewhere), and the plant exactly once more per refusal whose verdict carried it
-    -- the follower audit of each record (decode, then the same judge) verifies exactly as judge does
+    -- the follower's re-derivation of each record (decode, then the same judge) verifies exactly as judge does
     let st := if m.verifyAudit = m.verifyOnce then st
-      else failWith st s!"verify count: the audit {m.verifyAudit} verifies, judge {m.verifyOnce}, over {st.recorded} recorded refusals"
+      else failWith st s!"verify count: the re-derivation {m.verifyAudit} verifies, judge {m.verifyOnce}, over {st.recorded} recorded refusals"
     let st := if m.verifyOnce ≥ st.recorded && m.verifyTwice = m.verifyOnce + st.carried then st
       else failWith st s!"verify count: judge {m.verifyOnce} and the plant {m.verifyTwice} verifies over {st.recorded} recorded refusals, {st.carried} carried"
     verifies := verifies + m.verifyOnce

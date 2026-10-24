@@ -4,8 +4,9 @@
 THE BAR's work counted at deployed parameters, from THE BAR's own Store: the Store the deployed
 `host serve` wrote (scripts/bar.sh hands it over), opened read-only exactly as a follower reopens
 (`openAt`, the one open), but with every record re-derived as a follower re-derives it at follow time:
-`Receive.auditStep` (decode each logged event, `receive` it on its own World, require the very same
-Turn, admit it; a recorded refusal re-judged), under the deployed `Ctx` with two marks added:
+`Receive.rederiveStep` (decode each logged step's event and re-derive it as `host follow` does,
+`Receive.rederive`: a Turn by `submit`, a refusal by `judge` or `cancel`; require the very same
+step), under the deployed `Ctx` with two marks added:
 every trie-domain hash (KERNEL-36's `countingEnv`, `#`) and every signature verify (`@`). The marks
 go to stderr, which this process captures and counts, as kernel-sim's `report` does. Nothing in the
 deployed path changes and no deployed module names this one: the host counts nothing (law 3), this
@@ -29,7 +30,7 @@ requirement, or a requirement refused, is `FAIL required …`), `WASTE bar audit
 -/
 import Host.Deployed
 import Host.Sim.File
-import Kernel.Receive.Audit
+import Kernel.Receive.Rederive
 import Kernel.Sim.Gen
 
 namespace Nanodregg.Bench.Count
@@ -52,15 +53,15 @@ def markRequired (w : World D) (s : Step D) (w' : World D) : Except (Verdict D) 
   | .ok n => dbgTrace ("".pushn '%' (n + Kernel.Sim.Required.emptyRoots w')) fun _ => .ok w'
   | .error _ => dbgTrace "?" fun _ => .ok w'
 
-/-- A follower's re-derivation of one record (`auditStep` per step), its stated roots checked; each
+/-- A follower's re-derivation of one record (`rederiveStep` per step), its stated roots checked; each
 recorded refusal it re-judges is marked `!`, so a verify count is read against its Turns and refusals;
 each step's requirement is marked beside it (`markRequired`). -/
-def auditRecord (w : World D) (r : ByteArray) : Except (Record.Fault (Verdict D)) (World D) :=
+def rederiveRecord (w : World D) (r : ByteArray) : Except (Record.Fault (Verdict D)) (World D) :=
   Record.step Codec.Deployed.digestCodec
     (fun w s =>
       let res := match s with
-        | .refusal _ => dbgTrace "!" fun _ => auditStep countingX w s
-        | _ => auditStep countingX w s
+        | .refusal _ => dbgTrace "!" fun _ => rederiveStep countingX w s
+        | _ => rederiveStep countingX w s
       match res with
       | .ok w' => markRequired w s w'
       | .error e => .error e)
@@ -86,7 +87,7 @@ def toyPlant (dir : System.FilePath) : IO (Option String) := do
   match ← (readKey dir : IO (Except (StoreFault (Record.Fault (Verdict D))) D)) with
   | .error e => IO.println s!"PLANT toy-store refused {e.text}"; return none
   | .ok k =>
-    match ← (·.map Prod.fst) <$> openAt dir (Keys.ofKey k shapes) c world recorder.mark originChain auditRecord with
+    match ← (·.map Prod.fst) <$> openAt dir (Keys.ofKey k shapes) c world recorder.mark originChain rederiveRecord with
     | .error e => IO.println s!"PLANT toy-store refused {e.text}"; return none
     | .ok _ => return some "a toy Store opened as THE BAR's: its work would be counted"
 
@@ -116,7 +117,7 @@ def count (args : List String) : IO UInt32 := do
   let key ← match ← (readKey store : IO (Except (StoreFault (Record.Fault (Verdict D))) D)) with
     | .error e => IO.println s!"FAIL open: {e.text}"; return 1
     | .ok k => pure k
-  let (r, err) ← captured ((·.map Prod.fst) <$> openAt store (Keys.ofKey key shapes) c world recorder.mark originChain auditRecord)
+  let (r, err) ← captured ((·.map Prod.fst) <$> openAt store (Keys.ofKey key shapes) c world recorder.mark originChain rederiveRecord)
   let o ← match r with
     | .error e => IO.println s!"FAIL replay: the re-derivation refused {e.text}"; return 1
     | .ok o => pure o

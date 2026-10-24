@@ -13,12 +13,13 @@ everything from `stateBase` on.
   or an invoke of it some walk dispatched (state keys only: `checkState` of the run's result), and no
   other receiver at any depth has an effect at an object (`effect_at_object`).
 * `submit_object_head`: the same of the Host's `submit`.
-* `audit_object_head`: THE FOLD. Along any log the follower audits (`audit`: each Turn re-derived
-  from its own event, each refusal re-judged), an object live at its start is live at its end, an
-  object, with its package and owner as they were, and a programmed object's whole head as it was.
-* `audit_package_fixed`: the corollary HOSTING's member socket names (HOSTING-42 trigger (ii)): the
-  package slot, and `packageOf`, of a live object are the same at every World the follower's fold
-  reaches from it. `fold_package_fixed`: the same of `World.fold` over an `Honest` log (`audit_ok`).
+* `honest_object_head`: THE FOLD. Along any honest folded log (every log the follower takes:
+  `Kernel.Proofs.Rederive.rederiveLog_sound`; each Turn derived from its own event, each refusal
+  re-judged), an object live at its start is live at its end, an object, with its package and owner
+  as they were, and a programmed object's whole head as it was.
+* `fold_package_fixed`: the corollary HOSTING's member socket names (HOSTING-42 trigger (ii)): the
+  package slot, and `packageOf`, of a live object are the same at every World an honest log folds
+  to from it.
 
 Not over a bare `World.fold`: the writer's fold admits any Turn the kernel's own checks pass, and
 `touchCheck` checks a write's pin and `postWrite` of a RAM cell only its size, so a hand-made Turn may
@@ -27,7 +28,7 @@ a derivation (`receive`): what the follower checks, and what `Honest` says. Not 
 born inside a log is live at the World after its creating turn, and the theorem starts there.
 -/
 import Kernel.Proofs.InvokeTree
-import Kernel.Proofs.Audit
+import Kernel.Proofs.Rederive
 import Kernel.Proofs.WriteNext
 
 namespace Nanodregg.Kernel.Receive
@@ -240,77 +241,63 @@ theorem submit_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w
 
 /-! ## The follower's fold -/
 
-/-- One audited step (a re-derived Turn, or a re-judged refusal) keeps an object's head. -/
-theorem auditStep_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}
+/-- One honest step (a Turn `receive` derives from its own event, or a re-judged refusal) keeps an
+object's head. -/
+theorem step_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}
     {s : Step D} {obj : D} {cell : Cell}
-    (h : auditStep X w s = .ok w') (hl : w.live X.env obj = some cell) (hk : cell.kind = kindObject) :
+    (hs : World.step X.env w s = .ok w') (hh : Honest X w [s]) (hl : w.live X.env obj = some cell)
+    (hk : cell.kind = kindObject) :
     ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
       (∀ k, k < lawBase → cell'.slots.get k = cell.slots.get k) ∧
       (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k) := by
   cases s with
   | refusal r =>
-      obtain ⟨c, v, -, hj⟩ := auditRefusal_ok.mp h
-      exact ⟨cell, (refuse_live (recordedBy_recorded hj).1 obj).trans hl, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
+      have hrf : World.refuse X.env w r = .ok w' := hs
+      exact ⟨cell, (refuse_live hrf obj).trans hl, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
   | turn t =>
-      obtain ⟨⟨c, -, hc⟩, ha⟩ := auditTurn_ok.mp h
-      exact turn_object_head hc ha hl hk
+      obtain ⟨c, -, hc, -⟩ := hh
+      exact turn_object_head hc hs hl hk
 
-/-- **THE FOLD: an object's head is fixed along every audited log.** For any log the follower
-audits from `w` to `w'` (every Turn re-derived from its own event, every refusal re-judged), an object
-live in `w` is live in `w'`, an object, with the package and owner slots it had in `w`; and an
-object that had a package in `w` has, in `w'`, every slot below `stateBase` (package, owner, laws) it
-had. -/
-theorem audit_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} :
-    ∀ {w w' : World D} {l : List (Step D)}, audit X w l = .ok w' →
+/-- **THE FOLD: an object's head is fixed along every honest folded log.** For any log the follower
+takes from `w` to `w'` (every Turn what `receive` derives from its own event, every refusal
+re-judged: `Honest`), an object live in `w` is live in `w'`, an object, with the package and owner
+slots it had in `w`; and an object that had a package in `w` has, in `w'`, every slot below
+`stateBase` (package, owner, laws) it had. -/
+theorem honest_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} :
+    ∀ {w w' : World D} {l : List (Step D)}, World.fold X.env w l = .ok w' → Honest X w l →
       ∀ {cell : Cell}, w.live X.env obj = some cell → cell.kind = kindObject →
         ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
           (∀ k, k < lawBase → cell'.slots.get k = cell.slots.get k) ∧
           (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k)
-  | w, w', [], h, cell, hl, hk => by
-      simp only [audit, Except.ok.injEq] at h
-      subst h
+  | w, w', [], hf, _, cell, hl, hk => by
+      simp only [World.fold, Except.ok.injEq] at hf
+      subst hf
       exact ⟨cell, hl, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
-  | w, w', s :: rest, h, cell, hl, hk => by
-      unfold audit at h
-      cases hs : auditStep X w s with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              simp only [hs, ha, Except.ok.injEq] at h
-              subst h
-              obtain ⟨cell₁, hl₁, hk₁, hlo₁, hst₁⟩ := auditStep_object_head hs hl hk
-              obtain ⟨cell₂, hl₂, hk₂, hlo₂, hst₂⟩ := audit_object_head ha hl₁ hk₁
-              refine ⟨cell₂, hl₂, hk₂, fun k hlt => (hlo₂ k hlt).trans (hlo₁ k hlt), fun hne k hlt => ?_⟩
-              have hne₁ : cell₁.slots.get slotPackage ≠ none := by
-                rw [hlo₁ slotPackage (by simp [slotPackage, lawBase])]; exact hne
-              exact (hst₂ hne₁ k hlt).trans (hst₁ hne k hlt)
+  | w, w', s :: rest, hf, hh, cell, hl, hk => by
+      obtain ⟨w₁, hs, h1, hfr, hhr⟩ := fold_honest_cons hf hh
+      obtain ⟨cell₁, hl₁, hk₁, hlo₁, hst₁⟩ := step_object_head hs h1 hl hk
+      obtain ⟨cell₂, hl₂, hk₂, hlo₂, hst₂⟩ := honest_object_head hfr hhr hl₁ hk₁
+      refine ⟨cell₂, hl₂, hk₂, fun k hlt => (hlo₂ k hlt).trans (hlo₁ k hlt), fun hne k hlt => ?_⟩
+      have hne₁ : cell₁.slots.get slotPackage ≠ none := by
+        rw [hlo₁ slotPackage (by simp [slotPackage, lawBase])]; exact hne
+      exact (hst₂ hne₁ k hlt).trans (hst₁ hne k hlt)
 
 /-- **A live object's package is fixed under the follower's fold** (HOSTING-42's trigger (ii)): at
-every World an audited log reaches from `w`, an object live in `w` is live, with the same
-`slotPackage` bytes and so the same `packageOf` (the same package id, or the same data object, or
-the same malformed-slot refusal). -/
-theorem audit_package_fixed [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} {w w' : World D}
-    {l : List (Step D)} {cell : Cell}
-    (h : audit X w l = .ok w') (hl : w.live X.env obj = some cell) (hk : cell.kind = kindObject) :
-    ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
-      cell'.slots.get slotPackage = cell.slots.get slotPackage ∧ packageOf X obj cell' = packageOf X obj cell := by
-  obtain ⟨cell', hl', hk', hlo, -⟩ := audit_object_head h hl hk
-  have hp := hlo slotPackage (by simp [slotPackage, lawBase])
-  refine ⟨cell', hl', hk', hp, ?_⟩
-  unfold packageOf
-  rw [hp]
-
-/-- **The same over the writer's fold, for an honest log**: `World.fold` of a log every step of which
-is what its own signed event derives or is judged to (`Honest`, which `audit_ok` turns into an
-audit) keeps a live object's package. Over a log that is not `Honest` the fact is not claimed. -/
+every World an honest log folds to from `w` (every log the follower takes), an object live in `w` is
+live, with the same `slotPackage` bytes and so the same `packageOf` (the same package id, or the same
+data object, or the same malformed-slot refusal). Over a log that is not `Honest` the fact is not
+claimed. -/
 theorem fold_package_fixed [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} {w w' : World D}
     {l : List (Step D)} {cell : Cell}
     (h : World.fold X.env w l = .ok w') (hh : Honest X w l) (hl : w.live X.env obj = some cell)
     (hk : cell.kind = kindObject) :
     ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
-      cell'.slots.get slotPackage = cell.slots.get slotPackage ∧ packageOf X obj cell' = packageOf X obj cell :=
-  audit_package_fixed (audit_ok.mpr ⟨h, hh⟩) hl hk
+      cell'.slots.get slotPackage = cell.slots.get slotPackage ∧ packageOf X obj cell' = packageOf X obj cell := by
+  obtain ⟨cell', hl', hk', hlo, -⟩ := honest_object_head h hh hl hk
+  have hp := hlo slotPackage (by simp [slotPackage, lawBase])
+  refine ⟨cell', hl', hk', hp, ?_⟩
+  unfold packageOf
+  rw [hp]
+
 
 end Nanodregg.Kernel.Receive

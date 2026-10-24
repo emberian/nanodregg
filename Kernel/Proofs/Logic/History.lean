@@ -21,8 +21,8 @@ force admitted, for every body kind, proved once.
   judged step's `old` is the live state, the laws in force passed `old → new` (`write_judged`,
   `law_judged`, `invoke_next_judged`, `invoke_tree_slots`), and the next live state reads `new` at
   every key (`write_next_slots`, `law_next_slots`, `invoke_next_slots`, `invoke_tree_slots`).
-* `object_history_of_audit`: THE TOTALITY at the log: an audited log from a canonical World
-  (`CellsCanon`, from genesis by `genesis_cellsCanon`/`audit_cellsCanon`) is an `ObjectHistory` of
+* `object_history_of_honest`: THE TOTALITY at the log: an honest folded log from a canonical World
+  (`CellsCanon`, from genesis by `genesis_cellsCanon`/`fold_cellsCanon`) is an `ObjectHistory` of
   every object live at its start (`object_turn_cases` per turn: no receiver but write, law and
   invoke writes an object). For an object born inside the log, split the log at its birth (the
   object must be live at the history's start).
@@ -226,63 +226,47 @@ private theorem admit_kind {E : Env D} {w w' : World D} {t : Turn D} {obj : D} {
   · rw [hl] at h0; cases h0; rfl
   · rw [hl] at h0; cases h0; exact (postWrite_keeps hp).1
 
-/-- **Every audited log is a history of every object live at its start** (the totality at the
-log). From a World whose cells are canonical (`CellsCanon`: genesis has it, `genesis_cellsCanon`,
-and every audited log keeps it, `audit_cellsCanon`), each logged turn keeps the object, or is the
-signed `write` or `law` of it, or dispatched an invoke of it (`object_turn_cases`); each logged
-refusal keeps it. So the log is an `ObjectHistory`: no step of it moves the object outside one of
-`ObjectStep`'s constructors. -/
-theorem object_history_of_audit [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} :
-    ∀ {w w' : World D} {l : List (Step D)}, audit X w l = .ok w' → CellsCanon X.env w →
+/-- **Every honest folded log is a history of every object live at its start** (the totality at
+the log). From a World whose cells are canonical (`CellsCanon`: genesis has it,
+`genesis_cellsCanon`, and every fold keeps it, `fold_cellsCanon`), each logged turn keeps the
+object, or is the signed `write` or `law` of it, or dispatched an invoke of it
+(`object_turn_cases`); each logged refusal keeps it. So the log is an `ObjectHistory`: no step of it
+moves the object outside one of `ObjectStep`'s constructors. -/
+theorem object_history_of_honest [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} :
+    ∀ {w w' : World D} {l : List (Step D)}, World.fold X.env w l = .ok w' → Honest X w l →
+      CellsCanon X.env w →
       ∀ {cell : Cell}, w.live X.env obj = some cell → cell.kind = kindObject →
         ∃ tr, ObjectHistory X obj w w' tr
-  | w, w', [], h, _, _, _, _ => by
-      simp only [audit, Except.ok.injEq] at h; subst h; exact ⟨[], .nil _⟩
-  | w, w', .refusal r :: rest, h, hcan, cell, hl, hk => by
-      unfold audit at h
-      cases hs : auditStep X w (.refusal r) with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              simp only [hs, ha, Except.ok.injEq] at h
-              subst h
-              obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
-              have hrf := (recordedBy_recorded hj).1
-              have hstep : ObjectStep X obj w w₁ none := .refusal hrf
-              obtain ⟨tr, htr⟩ := object_history_of_audit ha
-                (fun id cl hl' => hcan id cl ((refuse_live hrf id).symm.trans hl'))
-                ((object_step_none hstep).trans hl) hk
-              exact ⟨tr, .cons hstep htr⟩
-  | w, w', .turn t :: rest, h, hcan, cell, hl, hk => by
-      unfold audit at h
-      cases hs : auditStep X w (.turn t) with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              simp only [hs, ha, Except.ok.injEq] at h
-              subst h
-              obtain ⟨⟨c, -, hc⟩, hadm⟩ := auditTurn_ok.mp hs
-              have hcan₁ := admit_cellsCanon hcan hadm
-              rcases object_turn_cases hc hadm hl hk with ⟨hkeep, hnc, hnw, hnl, hni⟩ | ⟨edits, via, hb⟩ |
-                  ⟨laws', via, hb⟩ | ⟨n, wk, a, method, args, budget, via, hd⟩
-              · have hstep : ObjectStep X obj w w₁ none := .keep hc hadm hkeep hnc hnw hnl hni
-                obtain ⟨tr, htr⟩ := object_history_of_audit ha hcan₁ ((object_step_none hstep).trans hl) hk
-                exact ⟨tr, .cons hstep htr⟩
-              · obtain ⟨principal, laws, -, hau, hlw, -, cell', hl', -, -⟩ :=
-                  write_next_slots hc hadm hb hl (hcan _ _ hl)
-                obtain ⟨tr, htr⟩ := object_history_of_audit ha hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
-                exact ⟨_, .cons (.write hc hadm hb hl (hcan _ _ hl) hau hlw) htr⟩
-              · obtain ⟨principal, laws, -, hau, hlw, -, -, cell', hl', -⟩ := law_next_slots hc hadm hb hl
-                obtain ⟨tr, htr⟩ := object_history_of_audit ha hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
-                exact ⟨_, .cons (.law hc hadm hb hl hau hlw) htr⟩
-              · obtain ⟨cell₀, p, r, s, calls, rows, used, laws, hr, hp, hlw, -, cell', hl', -⟩ :=
-                  invoke_tree_slots hc hadm hd
-                obtain ⟨tr, htr⟩ := object_history_of_audit ha hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
-                exact ⟨_, .cons (.nested hc hadm hd hr hp hlw) htr⟩
+  | w, w', [], hf, _, _, _, _, _ => by
+      simp only [World.fold, Except.ok.injEq] at hf; subst hf; exact ⟨[], .nil _⟩
+  | w, w', .refusal r :: rest, hf, hh, hcan, cell, hl, hk => by
+      obtain ⟨w₁, hs, -, hfr, hhr⟩ := fold_honest_cons hf hh
+      have hrf : World.refuse X.env w r = .ok w₁ := hs
+      have hstep : ObjectStep X obj w w₁ none := .refusal hrf
+      obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr
+        (fun id cl hl' => hcan id cl ((refuse_live hrf id).symm.trans hl'))
+        ((object_step_none hstep).trans hl) hk
+      exact ⟨tr, .cons hstep htr⟩
+  | w, w', .turn t :: rest, hf, hh, hcan, cell, hl, hk => by
+      obtain ⟨w₁, hadm, ⟨c, -, hc, -⟩, hfr, hhr⟩ := fold_honest_cons hf hh
+      have hadm : World.admit X.env w t = .ok w₁ := hadm
+      have hcan₁ := admit_cellsCanon hcan hadm
+      rcases object_turn_cases hc hadm hl hk with ⟨hkeep, hnc, hnw, hnl, hni⟩ | ⟨edits, via, hb⟩ |
+          ⟨laws', via, hb⟩ | ⟨n, wk, a, method, args, budget, via, hd⟩
+      · have hstep : ObjectStep X obj w w₁ none := .keep hc hadm hkeep hnc hnw hnl hni
+        obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ ((object_step_none hstep).trans hl) hk
+        exact ⟨tr, .cons hstep htr⟩
+      · obtain ⟨principal, laws, -, hau, hlw, -, cell', hl', -, -⟩ :=
+          write_next_slots hc hadm hb hl (hcan _ _ hl)
+        obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
+        exact ⟨_, .cons (.write hc hadm hb hl (hcan _ _ hl) hau hlw) htr⟩
+      · obtain ⟨principal, laws, -, hau, hlw, -, -, cell', hl', -⟩ := law_next_slots hc hadm hb hl
+        obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
+        exact ⟨_, .cons (.law hc hadm hb hl hau hlw) htr⟩
+      · obtain ⟨cell₀, p, r, s, calls, rows, used, laws, hr, hp, hlw, -, cell', hl', -⟩ :=
+          invoke_tree_slots hc hadm hd
+        obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
+        exact ⟨_, .cons (.nested hc hadm hd hr hp hlw) htr⟩
 
 /-! ## The lift -/
 

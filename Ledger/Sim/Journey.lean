@@ -25,7 +25,7 @@ denomination), B (the beneficiary), Z (a stranger).
 * E11 P releases: admitted; `released`; B holds 30, the escrow 0.
 * E12 TOP-UP: P transfers 30 into the escrow's account (anyone may pay into it): admitted.
 * E13 P releases again: `settled`. E14 B refunds: `settled`. The escrow still holds 30, B 30.
-* E15 the follower (`World.fold`) and the auditor reach the Host's World.
+* E15 the fold (`World.fold`) and the follower's re-derivation (`Receive.rederiveLog`) reach the Host's World.
 
 Plants (each must flip its lines, or the run is RED):
 * skip-judge (the judge admits everything): E3b admitted; E9 is the kernel's `transferSpent` of
@@ -300,13 +300,13 @@ def journey (mode : Mode) : Run := Id.run do
     r := note r s!"E13 release again, calls dropped: {v13}" (deniedWith v13 "settled")
     r := note r s!"E14 refund, calls dropped: {v14}" (deniedWith v14 "settled")
   | .shortCap => pure ()  -- unreachable: the short-cap run ends at E8
-  -- E15 follower and auditor
+  -- E15 the fold and the follower's re-derivation
   match World.fold Kernel.Sim.env g r.st.log with
   | .ok w' => r := note r s!"E15 the follower reaches the Host's World ({r.st.log.length} turns)" (Kernel.Sim.same w' r.st.host)
   | .error (i, e) => r := note r s!"E15 follower refused at {i}: {Kernel.Sim.nameOf e}" false
-  match audit X g r.st.log with
-  | .ok w' => r := note r "E15 the auditor reaches the Host's World" (Kernel.Sim.same w' r.st.host)
-  | .error (i, e) => r := note r s!"E15 auditor refused at {i}: {reprStr e}" false
+  match rederiveLog X g r.st.log with
+  | .ok w' => r := note r "E15 the re-derivation reaches the Host's World" (Kernel.Sim.same w' r.st.host)
+  | .error (i, e) => r := note r s!"E15 the re-derivation refused at {i}: {reprStr e}" false
   return r
 
 def runAll (args : List String) : IO UInt32 := do

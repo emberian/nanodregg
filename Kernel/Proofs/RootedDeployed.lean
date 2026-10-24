@@ -3,7 +3,7 @@
 
 `Kernel.Proofs.Rooted` assumes the digest's bytes are injective and its decoder canonical. CODEC
 proves both for the deployed digest (`Codec.Proofs.Deployed`), so under the deployed `Ctx`: every
-World an audited log reaches from a founders' genesis is rooted, and every enrolment admitted on
+World an honest folded log reaches from a founders' genesis is rooted, and every enrolment admitted on
 it acts for a founder through that founder's own genesis grant. And the phone's reads
 (`Kernel.Proofs.Cells`) hold at the deployed codec for every World a checked genesis and a fold
 reach (`deployed_reach`): `deployed_slot_inclusion_sound`, `deployed_live_inclusion_sound`,
@@ -54,19 +54,21 @@ theorem separates_floor_32 :
     (b := ⟨⟨Array.replicate 32 1⟩, by simp [ByteArray.size]⟩)
     (fun h => absurd (congrArg (fun d : Digest => d.bytes.data[0]!) h) (by decide))
 
-/-- **Deployed: an audited World is rooted at its founders.** -/
-theorem deployed_audit_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
+/-- **Deployed: an honest folded log's World is rooted at its founders.** -/
+theorem deployed_honest_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × Digest)) {w' : World Digest} {l : List (Step Digest)}
-    (h : audit (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l = .ok w') :
+    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders) l = .ok w')
+    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l) :
     WorldRooted (ctx program) (GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders)) w' :=
-  audit_rooted deployed_lawful (genesis_rooted _ name nonce allowance founders) h
+  honest_rooted deployed_lawful (genesis_rooted _ name nonce allowance founders) hf hh
 
-/-- **Deployed: every enrolment is a founder's.** On a World an audited log reached from genesis,
+/-- **Deployed: every enrolment is a founder's.** On a World an honest folded log reached from genesis,
 a derived enrolment's grant chain ends at a founder's live genesis grant, issued by the founder the
 chain acts for. -/
 theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × Digest)) {w : World Digest} {l : List (Step Digest)}
-    (hw : audit (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l = .ok w)
+    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders) l = .ok w)
+    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l)
     {c : Call Digest} {key : ByteArray} {next : Digest} {possession : ByteArray} {via : Digest}
     {base : Nat} {d : Draft Digest}
     (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) c ⟨c.unsigned.member, base⟩ key next possession via
@@ -82,7 +84,7 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
     split at hx
     · simp only [Except.ok.injEq] at hx; exact hx.symm
     · simp at hx
-  obtain ⟨r, cell, hr, hl, hi⟩ := chain_rooted (deployed_audit_rooted program name nonce allowance founders hw)
+  obtain ⟨r, cell, hr, hl, hi⟩ := chain_rooted (deployed_honest_rooted program name nonce allowance founders hf hh)
     hlook (fun _ _ hd => (bytes_of_digestOf hd).symm) hc
   exact ⟨p, r, cell, hr, hl, hi, hc⟩
 

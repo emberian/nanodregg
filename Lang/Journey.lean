@@ -69,7 +69,7 @@ the owner and the owner never changes). Rows:
   layer's `forge`, an insert under another author's name, is refused by it too; LS12' both on a
   CoAuthor whose guard admits any author are admitted. Plant skip-judge: LS6c is
   then ADMITTED.
-* L7 the follower (`World.fold` from genesis) and the auditor reach the Host's World.
+* L7 the fold (`World.fold` from genesis) and the follower's re-derivation (`Receive.rederiveLog`) reach the Host's World.
 * PLANT skip-judge: the same rows against a program whose `judge` admits everything: L4 must be
   ADMITTED there (the row flips), proving the refusal in L4 came from the law, not from elsewhere. LT5 too: its
   refusal came from `cap`.
@@ -2864,13 +2864,13 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
     r := gateRows mode r a
 
   r := callRows mode r a
-  -- L7 follower and auditor
+  -- L7 the fold and the follower's re-derivation
   match World.fold Sim.env g r.st.log with
   | .ok w => r := note r s!"L7 follower reaches the Host's World ({r.st.log.length} turns)" (Sim.same w r.st.host)
   | .error (i, e) => r := note r s!"L7 follower refused at {i}: {Sim.nameOf e}" false
-  match audit (ctxWith prog) g r.st.log with
-  | .ok w => r := note r "L7 auditor reaches the Host's World" (Sim.same w r.st.host)
-  | .error (i, e) => r := note r s!"L7 auditor refused at {i}: {reprStr e}" false
+  match rederiveLog (ctxWith prog) g r.st.log with
+  | .ok w => r := note r "L7 the re-derivation reaches the Host's World" (Sim.same w r.st.host)
+  | .error (i, e) => r := note r s!"L7 the re-derivation refused at {i}: {reprStr e}" false
   return r
 
 /-- Permanent real-Receive regression: declared support and blocker observations

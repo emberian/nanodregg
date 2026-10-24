@@ -1086,7 +1086,7 @@ def cancelOpPlant (failures : IO.Ref Nat) : IO Unit := do
 writer records (`Receive.cancel` over Kernel.Sim's ctx, toy signatures, CODEC's call codec), served
 as the page event `Page.stepEvent` writes (tag 2, `2 ‖ nat64 n ‖ sig ‖ call`), is absorbed by the
 follower's `Command.absorbStep` into the writer's exact record and World (its chain). The teeth, each
-refused by name: a signature flipped is `cancelForged`, the audit's name for the same log (the
+refused by name: a signature flipped is `cancelForged`, the re-deriver's name for it (`Receive.rederive`; the
 follower verifies it, never the writer's word; PROTOCOL-63); refused `eventMismatch` at the event's
 step: the event as tag 1 carried it before PROTOCOL-60 (the signature dropped: the follower's
 `judge` admits the call, so its chain broke on the first cancel), and the three encodings

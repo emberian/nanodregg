@@ -80,14 +80,18 @@ a cancel by `World.refuse`), for any `Q` it keeps, when the event's call bytes a
 theorem absorbStep_journalFrom {X : Ctx D} {Q : World D → Prop} {L : List ByteArray} {w₀ w w' : World D}
     {e : ByteArray} {s : Kernel.Step D} (he : eventCall e ∈ L) (h : absorbStep X w e = .ok (s, w'))
     (hq : Q w') (hp : JournalFrom X Q L w₀ w) : JournalFrom X Q L w₀ w' := by
-  unfold absorbStep at h
-  repeat' split at h
-  all_goals (try simp only [Except.ok.injEq, Prod.mk.injEq, reduceCtorEq] at h)
-  all_goals (try (obtain ⟨rfl, rfl⟩ := h))
-  all_goals first
-    | exact refuse_journalFrom (cancel_recorded ‹_›).2.2.2 hq hp
-    | exact refuse_journalFrom (judge_recorded ‹_›).2.2.2 hq hp
-    | exact submit_journalFrom he ‹_› ‹_› hq hp
+  obtain ⟨ev, hev, hr⟩ := absorbStep_ok.mp h
+  rcases rederive_ok hr with ⟨b, c, t, rfl, hb, hs, rfl⟩ | ⟨b, c, v, r, -, -, hj, rfl⟩ |
+      ⟨sig, b, c, v, r, -, -, hco, rfl⟩
+  · have hbe : b = eventCall e := by
+      rcases eventOf_some hev with ⟨-, h1⟩ | ⟨-, h1⟩ | ⟨-, _, _, -, h1⟩
+      · exact Kernel.Event.turn.inj h1
+      · cases h1
+      · cases h1
+    subst hbe
+    exact submit_journalFrom he hb hs hq hp
+  · exact refuse_journalFrom (judge_recorded hj).2.2.2 hq hp
+  · exact refuse_journalFrom (cancel_recorded hco).2.2.2 hq hp
 
 /-- Absorbing events whose call bytes are in `L` keeps the provenance. -/
 theorem absorb_journalFrom {X : Ctx D} {Q : World D → Prop} {L : List ByteArray} {w₀ : World D}

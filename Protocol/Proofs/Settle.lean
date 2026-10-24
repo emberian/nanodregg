@@ -392,14 +392,12 @@ theorem cancel_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} {w w' : World D
 theorem absorbStep_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} {w w' : World D} {e : ByteArray}
     {s : Kernel.Step D} (hw : WindowedIn X S w) (h : Command.absorbStep X w e = .ok (s, w')) :
     WindowedIn X (S ++ [s]) w' := by
-  unfold Command.absorbStep at h
-  repeat' split at h
-  all_goals (try simp only [Except.ok.injEq, Prod.mk.injEq, reduceCtorEq] at h)
-  all_goals (obtain ⟨rfl, rfl⟩ := h)
-  all_goals first
-    | exact cancel_windowedIn hw ‹_›
-    | exact windowedIn_mono (fun _ hm => by simp [hm]) (admit_windowedIn hw (submit_ok ‹_›).2.2)
-    | exact judge_windowedIn hw ‹_›
+  obtain ⟨ev, -, hr⟩ := Command.absorbStep_ok.mp h
+  rcases rederive_ok hr with ⟨b, c, t, -, -, hs, rfl⟩ | ⟨b, c, v, r, -, -, hj, rfl⟩ |
+      ⟨sig, b, c, v, r, -, -, hco, rfl⟩
+  · exact windowedIn_mono (fun _ hm => by simp [hm]) (admit_windowedIn hw (submit_ok hs).2.2)
+  · exact judge_windowedIn hw hj
+  · exact cancel_windowedIn hw hco
 
 theorem absorb_windowedIn {X : Ctx D} {S : List (Kernel.Step D)} :
     ∀ (evs : List ByteArray) {w w' : World D} {acc ts : Array (Kernel.Step D × D)},

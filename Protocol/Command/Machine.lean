@@ -45,7 +45,7 @@ World at each step and the bytes it signs are compared with the ones custody sig
 so `k` cannot steer what is signed (HOST-9's `resume_rederives`). A plan is offered for signature
 only if follow's own World admits the Turn it derives (consent: `Protocol.Proofs.Command`).
 -/
-import Kernel.Receive.Submit
+import Kernel.Receive.Rederive
 import Protocol.Command.Verb
 import Protocol.Envelope
 import Protocol.Invite
@@ -82,11 +82,11 @@ inductive Refusal (D : Type)
   | reject (r : Reject D)
   /-- the Host refused, by its name -/
   | host (name : String)
-  /-- the logged step at this log position does not re-derive on follow's World: a Turn event that
-  does not derive, a refusal event that `Receive.judge` does not record, or a cancel event that is
-  not one (`cancelParts`, or a call that does not decode) (a kernel rejection of a derived Turn is
-  refused by the kernel's own name, `reject`; a well-formed cancel event that `Receive.cancel` does
-  not record under its signature by the audit's name, `receive cancelForged`) -/
+  /-- the logged step at this log position does not re-derive on follow's World: an event that does
+  not read (`eventOf`), or one `Receive.rederive` refuses `eventMismatch` (a call that does not
+  decode, a Turn event that does not derive, a refusal event that `Receive.judge` does not record)
+  (a kernel rejection of a derived Turn is refused by the kernel's own name, `reject`; a well-formed
+  cancel event that `Receive.cancel` does not record by `receive cancelForged`: `ofVerdict`) -/
   | eventMismatch (step : Nat)
   | badState
   | badResult
@@ -430,47 +430,23 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rd : SignedR
 
 /-! ## Catching up -/
 
-/-- The call bytes a logged Turn or refusal event carries: `e[0]` names the event, the rest is the
-call. -/
-def eventCall (e : ByteArray) : ByteArray := e.extract 1 e.size
+/-- A re-derivation's refusal (`Receive.rederive`) as follow's: the kernel's rejection by its own name
+(a writer that admits a call it recorded refused is `refusedFinal`), `eventMismatch` at the log
+position `pos`, any other by the receive layer's name (a well-formed cancel `Receive.cancel` does
+not record: `cancelForged`). -/
+def ofVerdict (pos : Nat) : Verdict D → Refusal D
+  | .rejected r => .reject r
+  | .refused .eventMismatch => .eventMismatch pos
+  | .refused r => .receive r
 
-/-- Re-derive one logged step on follow's World by the Host's own decision functions: a Turn event
-by `Receive.submit` (receive, then admit), a refusal event by `Receive.judge`, which must RECORD it
-(the follower's `auditRefusal` rule), a cancel event by `Receive.cancel` with the event's signature,
-which must record it too (KERNEL-60; PROTOCOL-60: before tag 2 the page dropped the signature and a
-follower's chain broke on the first cancel). A Turn that derives but the kernel rejects is refused
-by the kernel's name (a writer that admits a call it recorded refused is caught `refusedFinal`); a
-well-formed cancel event that `Receive.cancel` does not record is refused `cancelForged`, the name
-the audit gives the same log (`Receive.forgedName`): one name per fault, follower and audit alike;
-anything else that does not re-derive is `eventMismatch` at its log position. -/
+/-- Re-derive one logged step on follow's World: read the page event back (`eventOf`; an event that
+does not read is `eventMismatch` at its log position) and re-derive it by THE re-deriver,
+`Receive.rederive` (a Turn by `submit`, a refusal by `judge`, a cancel by `cancel` under the
+event's signature; KERNEL-60, PROTOCOL-60), the one kernel-sim, the journeys and the benches run too (`Receive.rederiveLog`). -/
 def absorbStep (X : Ctx D) (w : World D) (e : ByteArray) : Except (Refusal D) (Kernel.Step D × World D) :=
-  let pos := w.steps + 1
-  if h : 0 < e.size then
-    if e[0] = eventCancel then
-      match cancelParts e with
-      | none => .error (.eventMismatch pos)
-      | some (sig, cb) =>
-          match X.decodeCall cb with
-          | none => .error (.eventMismatch pos)
-          | some c =>
-              match Receive.cancel X w c sig with
-              | .recorded _ r w' => .ok (.refusal r, w')
-              | _ => .error (.receive .cancelForged)
-    else
-    match X.decodeCall (eventCall e) with
-    | none => .error (.eventMismatch pos)
-    | some c =>
-        if e[0] = eventTurn then
-          match submit X w c with
-          | .ok (t, w') => .ok (.turn t, w')
-          | .error (.rejected r) => .error (.reject r)
-          | .error (.refused _) => .error (.eventMismatch pos)
-        else if e[0] = eventRefusal then
-          match judge X w c with
-          | .recorded _ r w' => .ok (.refusal r, w')
-          | _ => .error (.eventMismatch pos)
-        else .error (.eventMismatch pos)
-  else .error (.eventMismatch pos)
+  match eventOf e with
+  | none => .error (.eventMismatch (w.steps + 1))
+  | some ev => (Receive.rederive X w ev).mapError (ofVerdict (w.steps + 1))
 
 /-- Absorb logged events, each re-derived (`absorbStep`, PROTOCOL-4). A writer that logged an event
 which does not re-derive is caught here, at that log position. Also returns the steps it took, in

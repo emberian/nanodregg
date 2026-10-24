@@ -21,14 +21,14 @@ theorem that reads the journal after an admission takes it of the World it start
 * `admit_twice_window`: a txId is never admitted twice under one window; `submit_once`: through
   `Receive.submit` a CALL is admitted at most once, ever (`replayed` while journaled, its own
   window afterwards). No collision disjunct: one call has one digest and one window. The
-  follower's path is the audit (`audit_ok`), where every turn is `receive` of its own event, so the
-  same holds there. `reach_submit_once` / `reach_derived_once` / `reach_admit_spacing`: from a
+  follower's path is the re-derivation (`rederive`: every turn `submit`'s, an `Honest` log by
+  `rederiveLog_sound`), so the same holds there. `reach_submit_once` / `reach_derived_once` / `reach_admit_spacing`: from a
   genesis, no premise.
 * `reach_journal_bounded`: the bound for every World a genesis reaches, with no premise.
 * `admit_prune_verdict`: pruning changes no verdict of any turn whose window ends by its
   transaction id's entry height plus `windowMax` (every call-derived retry): the window is
   checked before the journal, so an expired retry is `outsideWindow` with or without its entry.
-* `reach_prune_check_call` (KERNEL-38 (c)): from a genesis, on the log the follower's audit accepts,
+* `reach_prune_check_call` (KERNEL-38 (c)): from a genesis, on every honest folded log (the follower's),
   pruning changed no check of a call's retry, with no window premise, or two of the events
   `retryPres` names collide (`call_retry_window`: the never-pruned entry under a call's transaction
   id is the same call's, or a different call with its digest). Its teeth: `_sep`, an instance where
@@ -37,7 +37,7 @@ theorem that reads the journal after an admission takes it of the World it start
   its `Honest` twin on a `Ctx` whose signatures verify, the retry a real `receive` output
   (`honest_retry_window_needs_honest`).
 -/
-import Kernel.Proofs.Audit
+import Kernel.Proofs.Rederive
 import Kernel.Proofs.Fold
 import Kernel.Proofs.Receive
 import Kernel.Receive.Follow
@@ -383,8 +383,8 @@ theorem admit_spacing {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D
 /-- **One window, one admission.** A transaction id admitted from `w₀` is never admitted again
 by a turn with the same window: by then its entry is pruned (`admit_spacing`), so the window has
 ended. Every deployed path reaches `World.admit` through `receive`: the writer through
-`Receive.submit` (`submit_ok`), the follower through the audit (`audit_ok`: every logged turn is
-what `receive` derives from its own event). Two turns derived from one call carry its digest and
+`Receive.submit` (`submit_ok`), the follower through `Receive.rederive` (`submit` again: every logged turn of
+an `Honest` log is what `receive` derives from its own event). Two turns derived from one call carry its digest and
 its window (`receive_derived`), so on both paths a call is admitted at most once. -/
 theorem admit_twice_window {E : Env D} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon E) (h₁ : World.admit E w₀ t = .ok w₁) (hf : World.fold E w₁ l = .ok w₂)
@@ -634,8 +634,8 @@ theorem submit_once {X : Ctx D} {w₀ w₁ w₂ : World D} {c : Call D} {t : Tur
 
 /-- **One call, one admission, on any path through `receive`.** If call `c` derived the turn
 admitted from `w₀`, no later World of that log admits a turn `c` derives again. This is the
-follower's form: in an `Honest` log (`audit_ok`) every turn is `receive` of its own event's call
-on the World before it, so an audited log never holds one call twice. -/
+follower's form: in an `Honest` log every turn is `receive` of its own event's call
+on the World before it, so an honest folded log never holds one call twice. -/
 theorem derived_once {X : Ctx D} {w₀ w₁ w₂ w₃ : World D} {c : Call D} {t t' : Turn D} {l : List (Step D)}
     (hc : w₀.JournalCanon X.env)
     (hr₁ : receive X w₀ c = .ok t) (h₁ : World.admit X.env w₀ t = .ok w₁)
@@ -738,7 +738,7 @@ transaction id was written by a call with that digest: the retry's own call, who
 retry's, or a DIFFERENT call with the same digest, and then two of the events the theorem names
 (`retryPres`: the retry's event and every event of the log, under `domTx`) collide. A turn is a
 call's turn when its event decodes to that call and it carries the call's bytes, digest and window:
-what the audit re-reads of every logged turn (`rederive_ok`), and what `receive` gives
+what `Honest` says of every logged turn, and what `receive` gives
 (`callTurn_of_receive`). -/
 
 /-- `t` is call `c`'s turn as a follower re-reads it: its event decodes to `c`, and it carries `c`'s
@@ -877,7 +877,7 @@ theorem call_retry_window {X : Ctx D} {w w' : World D} {J : Journal D} {l : List
       t.validUntil ≤ e.1 + Bounds.windowMax) ∨ CollidesAmong X.env.hash (retryPres t l) :=
   shadow_call_window ht _ (fun _ hx => hx) h hl (.inl hJ)
 
-/-- **`hv` on an `Honest` log** (the follower's: `audit_ok`), for a retry `receive` derives from the
+/-- **`hv` on an `Honest` log** (the follower's: `rederiveLog_sound`), for a retry `receive` derives from the
 call its event decodes to (on any World `v`), up to a collision among `retryPres t l`. -/
 theorem honest_retry_window {X : Ctx D} {w w' v : World D} {J : Journal D} {l : List (Step D)}
     {t : Turn D} {c : Call D} (hH : Honest X w l) (h : World.fold X.env w l = .ok w')
@@ -899,20 +899,20 @@ theorem honest_prune_check {X : Ctx D} {w w' v : World D} {J : Journal D} {l : L
   (honest_retry_window hH h hd hr hJ).imp (fold_prune_check hc hj h) id
 
 /-- **From genesis, pruning changed no check of a call's retry: no window premise.** A World `w` the
-follower's audit reaches from a genesis checks a call's retry (a turn `receive` derives, on any
+follower's honest folded log reaches from a genesis checks a call's retry (a turn `receive` derives, on any
 World, from the call its event decodes to) exactly as the same World carrying the journal its log
 never pruned, or two of the events `retryPres t l` names have one `domTx` digest. -/
 theorem reach_prune_check_call {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
-    (h : audit X (genesisWorld X name nonce allowance founders) l = .ok w)
+    (hf : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w)
+    (hh : Honest X (genesisWorld X name nonce allowance founders) l)
     (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t) :
     check X.env w t = check X.env { w with journal := (shadowJournal X.env
       (genesisWorld X name nonce allowance founders).height
       (genesisWorld X name nonce allowance founders).journal l) } t ∨
       CollidesAmong X.env.hash (retryPres t l) :=
   let hg := genesisWorld_journalOk X name nonce allowance founders
-  have hfh := audit_ok.mp h
-  honest_prune_check hg.1 (journalFiltered_self hg) hfh.1 hfh.2 hd hr (fun e he => by
+  honest_prune_check hg.1 (journalFiltered_self hg) hf hh hd hr (fun e he => by
     rw [show (genesisWorld X name nonce allowance founders).journal = .empty from rfl,
       Trie.get_empty] at he
     cases he)
@@ -921,13 +921,14 @@ theorem reach_prune_check_call {X : Ctx D} {name nonce : ByteArray} {allowance :
 pruning changed no check of a call's retry. -/
 theorem reach_prune_check_call_sep {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
-    (h : audit X (genesisWorld X name nonce allowance founders) l = .ok w)
+    (hf : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w)
+    (hh : Honest X (genesisWorld X name nonce allowance founders) l)
     (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t)
     (hsep : Separates X.env.hash (retryPres t l)) :
     check X.env w t = check X.env { w with journal := (shadowJournal X.env
       (genesisWorld X name nonce allowance founders).height
       (genesisWorld X name nonce allowance founders).journal l) } t :=
-  hsep.elim (reach_prune_check_call h hd hr)
+  hsep.elim (reach_prune_check_call hf hh hd hr)
 
 /-! ### Teeth, on a concrete call log
 
@@ -1229,7 +1230,7 @@ carrying member 7's call event under the window `[1, 1]` where the call says `20
 that call's real `receive` output, whose event decodes to the call. The log is not `Honest` (the
 call derives another turn), `hv` fails (`2049 > 1 + windowMax`), and the collision disjunct is false
 (the two events `retryPres` names are one). So the window premise cannot be dropped for a log the
-audit would not accept. -/
+follower would not take. -/
 theorem honest_retry_window_needs_honest :
     ∃ (X : Ctx UInt8) (w w' v : World UInt8) (l : List (Step UInt8)) (t : Turn UInt8) (c : Call UInt8),
       World.fold X.env w l = .ok w' ∧ X.decodeCall t.event = some c ∧ receive X v c = .ok t ∧

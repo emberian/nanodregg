@@ -172,9 +172,9 @@ inductive Refusal (D : Type)
   | notIssuer (grant : D)
   | grantTooDeep
   | overPrice (charge : Nat)
-  /-- a logged event is not a canonical call (the follower's re-derivation, `rederive`) -/
-  | undecodableEvent
-  /-- a logged Turn is not what its own event derives on the World before it -/
+  /-- a logged step is not what its own event derives on the World before it: the event does not
+  decode, the receiver refuses its call, `judge` does not record it, or it derives another step (the
+  follower's re-derivation, `rederive`) -/
   | eventMismatch
   /-- the receivers of one call's tree gave one cell two effects (`effectsPinned`): reached on the
   signed path when a method's run returns two calls that move one account (two transfers out of the
@@ -214,14 +214,11 @@ inductive Refusal (D : Type)
   | rowParent (obj : D)
   /-- a receiver gave one row slot two effects -/
   | duplicateRow (parent : D)
-  /-- a log records a `stale` refusal (KERNEL-54): `judge` never records one (a stale pin observed on
-  the fold is final without a record, `stale_behind_forever`), so the follower's audit refuses it -/
-  | staleRecorded
   /-- the member withdrew the call before it landed (KERNEL-60, design C1): the code of a CANCEL
   record, which carries the member's signature over `domCancel ‖ txId`; no receiver refuses with it -/
   | cancelled
   /-- a log records a cancel whose signature does not verify under the member's key on the World
-  before it, or that is not exactly the cancel of its own event (the follower's audit) -/
+  before it, or that is not exactly the cancel of its own event (the follower's re-derivation) -/
   | cancelForged
   deriving DecidableEq, Repr
 
@@ -255,7 +252,6 @@ def Refusal.name {D : Type} : Refusal D → String
   | .notIssuer _ => "notIssuer"
   | .grantTooDeep => "grantTooDeep"
   | .overPrice _ => "overPrice"
-  | .undecodableEvent => "undecodableEvent"
   | .eventMismatch => "eventMismatch"
   | .duplicateEffect _ => "duplicateEffect"
   | .sameAccount => "sameAccount"
@@ -273,7 +269,6 @@ def Refusal.name {D : Type} : Refusal D → String
   | .rangeTooLong _ => "rangeTooLong"
   | .rowParent _ => "rowParent"
   | .duplicateRow _ => "duplicateRow"
-  | .staleRecorded => "staleRecorded"
   | .cancelled => "cancelled"
   | .cancelForged => "cancelForged"
 

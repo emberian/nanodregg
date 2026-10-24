@@ -11,7 +11,7 @@ keeps reading the old entry, and the cap never falls. Proved here:
 * `GrantContiguous cell` (each counted ledger's keys are `List.range' base length`) and
   `LedgerContiguous E w` (every live grant is). `genesis_ledgerContiguous`; `step_ledgerContiguous`:
   every derive-then-admit step keeps it, given `CellsCanon`; `submit_ledgerContiguous`;
-  `audit_ledgerContiguous` (an audited log keeps both). Births: only `grant` bears a grant, and its
+  `honest_ledgerContiguous` (an honest folded log keeps both). Births: only `grant` bears a grant, and its
   ledgers are contiguous (`derive_born_grant`; one entry per counted kind, at its base, inside
   `grantSlots_contiguous`). Writes: `grant_turn_cell`.
 * `grant_turn_cell` (the totality at the World, from `effect_at_grant`): a derived, admitted turn
@@ -542,40 +542,25 @@ theorem submit_ledgerContiguous {X : Ctx D} {w w' : World D} {c : Call D} {t : T
   obtain ⟨_, hr, ha⟩ := submit_ok h
   exact step_ledgerContiguous hcan hlc hr ha
 
-/-- **Every audited log keeps every grant's ledgers contiguous**, canonical cells carried along: so
-every World a follower reaches from genesis (`genesis_cellsCanon`, `genesis_ledgerContiguous`). -/
-theorem audit_ledgerContiguous {X : Ctx D} :
+/-- **Every honest folded log keeps every grant's ledgers contiguous**, canonical cells carried
+along: so every World a follower reaches from genesis (`genesis_cellsCanon`,
+`genesis_ledgerContiguous`). -/
+theorem honest_ledgerContiguous {X : Ctx D} :
     ∀ {w w' : World D} {l : List (Step D)}, CellsCanon X.env w → LedgerContiguous X.env w →
-      audit X w l = .ok w' → CellsCanon X.env w' ∧ LedgerContiguous X.env w'
-  | w, w', [], hcan, hlc, h => by simp [audit] at h; subst h; exact ⟨hcan, hlc⟩
-  | w, w', .refusal r :: rest, hcan, hlc, h => by
-      unfold audit at h
-      cases hs : auditStep X w (.refusal r) with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              simp only [hs, ha, Except.ok.injEq] at h
-              subst h
-              obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
-              have hrf := (recordedBy_recorded hj).1
-              exact audit_ledgerContiguous
-                (fun id cell hl => hcan id cell ((refuse_live hrf id).symm.trans hl))
-                (fun id cell hl => hlc id cell ((refuse_live hrf id).symm.trans hl)) ha
-  | w, w', .turn t :: rest, hcan, hlc, h => by
-      unfold audit at h
-      cases hs : auditStep X w (.turn t) with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              simp only [hs, ha, Except.ok.injEq] at h
-              subst h
-              obtain ⟨⟨c, -, hr⟩, hadm⟩ := auditTurn_ok.mp hs
-              exact audit_ledgerContiguous (admit_cellsCanon hcan hadm)
-                (step_ledgerContiguous hcan hlc hr hadm) ha
+      World.fold X.env w l = .ok w' → Honest X w l → CellsCanon X.env w' ∧ LedgerContiguous X.env w'
+  | w, w', [], hcan, hlc, hf, _ => by
+      simp only [World.fold, Except.ok.injEq] at hf; subst hf; exact ⟨hcan, hlc⟩
+  | w, w', .refusal r :: rest, hcan, hlc, hf, hh => by
+      obtain ⟨w₁, hs, -, hfr, hhr⟩ := fold_honest_cons hf hh
+      have hrf : World.refuse X.env w r = .ok w₁ := hs
+      exact honest_ledgerContiguous
+        (fun id cell hl => hcan id cell ((refuse_live hrf id).symm.trans hl))
+        (fun id cell hl => hlc id cell ((refuse_live hrf id).symm.trans hl)) hfr hhr
+  | w, w', .turn t :: rest, hcan, hlc, hf, hh => by
+      obtain ⟨w₁, hadm, ⟨c, -, hr, -⟩, hfr, hhr⟩ := fold_honest_cons hf hh
+      exact honest_ledgerContiguous (admit_cellsCanon hcan hadm)
+        (step_ledgerContiguous hcan hlc hr hadm) hfr hhr
+
 
 /-! ## A spend reads back its amount -/
 

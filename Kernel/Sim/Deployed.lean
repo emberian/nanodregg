@@ -3,8 +3,8 @@
 
 The same `Kernel.Sim.Gen` run as the toy, with every parameter the deployment's: digests are
 CODEC's 32-byte `Digest`, the hash is cSHAKE256 with the domain as customization, turns, cells and
-calls are CODEC's codecs, a call is read back by CODEC's canonical `decodeCall` (the auditor
-decodes the bytes the log holds), and signatures are RFC 8032 Ed25519,
+calls are CODEC's codecs, a call is read back by CODEC's canonical `decodeCall` (the follower's
+re-derivation decodes the bytes the log holds), and signatures are RFC 8032 Ed25519,
 signed by `Ed25519.sign` and checked by `Ed25519.verify`. Only the program is the generator's
 two-law stub; LANG's real program runs in `lang-journey`.
 

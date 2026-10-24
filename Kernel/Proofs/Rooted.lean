@@ -5,7 +5,7 @@
 World an honest log reaches: `WorldRooted R w` — every live grant cell is append-only, names a
 target, and, when its target is the World, has a parent or is one of the roots `R` (the founders'
 genesis grants). It holds at genesis (`genesis_rooted`), every derive-then-admit step keeps it
-(`submit_rooted`, `step_rooted`), so every audited log keeps it (`audit_rooted`); and a chain for a
+(`submit_rooted`, `step_rooted`), so every honest folded log keeps it (`honest_rooted`); and a chain for a
 World right through such a World then ends at a root in `R` (`chain_rooted`).
 
 The kernel half is structural: an append-only cell never loses or changes a slot (`postWrite`),
@@ -14,7 +14,7 @@ so a write can neither strip a grant's parent nor retarget it, whoever the recei
 import Kernel.Proofs.Lawful
 import Kernel.Proofs.Authority
 import Kernel.Proofs.Tree
-import Kernel.Proofs.Audit
+import Kernel.Proofs.Rederive
 import Kernel.Proofs.Frame
 import Kernel.Receive.Follow
 
@@ -482,46 +482,20 @@ theorem submit_rooted {X : Ctx D} {R : D → Prop} {w w' : World D} {c : Call D}
   obtain ⟨_, hr, ha⟩ := submit_ok h
   exact step_rooted hE hw hr ha
 
-/-- **Every audited log keeps the World rooted**: the follower's World too. -/
-theorem audit_rooted {X : Ctx D} {R : D → Prop}
+/-- **Every honest folded log keeps the World rooted**: the follower's World too
+(`Kernel.Proofs.Rederive.rederiveLog_sound`, `Host.Proofs.Refine.absorb_sound`). -/
+theorem honest_rooted {X : Ctx D} {R : D → Prop}
     {n : Nat} (hE : X.env.Lawful n) :
-    ∀ {w w' : World D} {l : List (Step D)}, WorldRooted X R w → audit X w l = .ok w' →
-      WorldRooted X R w'
-  | w, w', [], hw, h => by simp [audit] at h; subst h; exact hw
-  | w, w', .refusal r :: rest, hw, h => by
-      unfold audit at h
-      cases hs : auditStep X w (.refusal r) with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              simp only [hs, ha, Except.ok.injEq] at h
-              subst h
-              obtain ⟨c, v, _, hj⟩ := auditRefusal_ok.mp hs
-              have hrf := (recordedBy_recorded hj).1
-              exact audit_rooted hE (fun id cell hl => hw id cell ((refuse_live hrf id).symm.trans hl)) ha
-  | w, w', .turn t :: rest, hw, h => by
-      unfold audit at h
-      cases hs : auditStep X w (.turn t) with
-      | error f => simp [hs] at h
-      | ok w₁ =>
-          cases ha : audit X w₁ rest with
-          | error e => simp [hs, ha] at h
-          | ok w₂ =>
-              simp only [hs, ha, Except.ok.injEq] at h
-              subst h
-              unfold auditStep auditTurn at hs
-              cases hd : rederive X w t with
-              | error r => simp [hd] at hs
-              | ok u =>
-                  cases hadm : World.admit X.env w t with
-                  | error r => simp [hd, hadm] at hs
-                  | ok w₃ =>
-                      simp only [hd, hadm, Except.ok.injEq] at hs
-                      subst hs
-                      obtain ⟨c, _, hr⟩ := rederive_ok.mp hd
-                      exact audit_rooted hE (step_rooted hE hw hr hadm) ha
+    ∀ {w w' : World D} {l : List (Step D)}, WorldRooted X R w → World.fold X.env w l = .ok w' →
+      Honest X w l → WorldRooted X R w'
+  | w, w', [], hw, hf, _ => by simp only [World.fold, Except.ok.injEq] at hf; subst hf; exact hw
+  | w, w', .refusal r :: rest, hw, hf, hh => by
+      obtain ⟨w₁, hs, -, hfr, hhr⟩ := fold_honest_cons hf hh
+      have hrf : World.refuse X.env w r = .ok w₁ := hs
+      exact honest_rooted hE (fun id cell hl => hw id cell ((refuse_live hrf id).symm.trans hl)) hfr hhr
+  | w, w', .turn t :: rest, hw, hf, hh => by
+      obtain ⟨w₁, hs, ⟨c, -, hr, -⟩, hfr, hhr⟩ := fold_honest_cons hf hh
+      exact honest_rooted hE (step_rooted hE hw hr hs) hfr hhr
 
 end Steps
 
@@ -637,7 +611,7 @@ theorem slotDigest_ok {X : Ctx D} {id : D} {cell : Cell} {key : Nat} {d : D}
 
 /-- **A World right is a founder's.** Through a rooted World, a grant chain for a right on the World
 ends at a live root grant in `R` whose issuer is the chain's principal (with `genesis_rooted` and
-`audit_rooted`: a founder's genesis grant, issued by that founder).
+`honest_rooted`: a founder's genesis grant, issued by that founder).
 Needs the digest decoder to be canonical (a slot read back as a digest IS that digest's bytes). -/
 theorem chain_rooted {X : Ctx D} {R : D → Prop} {w : World D} {look : Pinned D}
     (hw : WorldRooted X R w) (hlook : ∀ c v, look c = .ok v → v = w.live X.env c)

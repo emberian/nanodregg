@@ -3,11 +3,11 @@
 
 `grant_moves_le_cap` takes `LedgerContiguous` at the start of the log. This module shows it is the
 premise the bound rests on: a World with canonical cells, holding a grant whose transfer ledger has
-a gap (entries at `transferBase` and `transferBase + 4`, 10 left), audits a log of two signed
+a gap (entries at `transferBase` and `transferBase + 4`, 10 left), folds an honest log of two signed
 transfers of 10 through it (each re-derived from its decoded call by the REAL `receive` and admitted
 by `World.admit`). Every other premise of the theorem holds; the two steps' amounts sum to 20 > 10;
 the balances moved 20. KERNEL-30's `gap_never_falls` is the same fact at one cell; this is it along
-an audited history.
+an honest history.
 
 The instance: one-byte digests (the hash of `b` is `64 + 8·b₀ + b₁`), every signature accepted, a
 call's bytes its window end, a decoder that reads each of the two turns' events back as its call;
@@ -101,7 +101,7 @@ private def c2 : Call UInt8 := callAt w1 6
 private def t2 : Turn UInt8 := ((receive gX0 w1 c2).toOption).getD dummy
 private def w2 : World UInt8 := ((World.admit gEnv w1 t2).toOption).getD w1
 
-/-- The audit's `Ctx`: `gX0` with a decoder that reads each turn's event (its call's bytes, the
+/-- The follower's `Ctx`: `gX0` with a decoder that reads each turn's event (its call's bytes, the
 window end) back as its call. -/
 private def gX : Ctx UInt8 :=
   { gX0 with decodeCall := fun b => if b = ⟨#[5]⟩ then some c1 else if b = ⟨#[6]⟩ then some c2 else none }
@@ -116,26 +116,31 @@ private theorem w0_canon : CellsCanon gX.env w0 := by
   rw [h] at this
   exact this
 
-private theorem w0_audit : audit gX w0 [.turn t1, .turn t2] = .ok w2 := of_isOk (by decide +kernel)
-
-private theorem step1 : auditStep gX w0 (.turn t1) = .ok w1 := by
+private theorem step1 : World.step gX.env w0 (.turn t1) = .ok w1 ∧ Honest gX w0 [.turn t1] := by
   have hr : receive gX w0 c1 = .ok t1 := of_isOkAs (by decide +kernel)
   have ha : World.admit gX.env w0 t1 = .ok w1 := of_isOk (by decide +kernel)
   have hd : gX.decodeCall t1.event = some c1 := by decide +kernel
-  exact auditTurn_ok.mpr ⟨⟨c1, hd, hr⟩, ha⟩
+  exact ⟨ha, c1, hd, hr, fun _ _ => trivial⟩
 
-private theorem step2 : auditStep gX w1 (.turn t2) = .ok w2 := by
+private theorem step2 : World.step gX.env w1 (.turn t2) = .ok w2 ∧ Honest gX w1 [.turn t2] := by
   have hr : receive gX w1 c2 = .ok t2 := of_isOkAs (by decide +kernel)
   have ha : World.admit gX.env w1 t2 = .ok w2 := of_isOk (by decide +kernel)
   have hd : gX.decodeCall t2.event = some c2 := by decide +kernel
-  exact auditTurn_ok.mpr ⟨⟨c2, hd, hr⟩, ha⟩
+  exact ⟨ha, c2, hd, hr, fun _ _ => trivial⟩
+
+private theorem w0_fold : World.fold gX.env w0 [.turn t1, .turn t2] = .ok w2 :=
+  fold_cons_ok.mpr ⟨w1, step1.1, fold_cons_ok.mpr ⟨w2, step2.1, rfl⟩⟩
+
+private theorem w0_honest : Honest gX w0 [.turn t1, .turn t2] :=
+  honest_cons step1.1 step1.2 (honest_cons step2.1 step2.2 trivial)
 
 private def steps : List (Step UInt8 × World UInt8) := [(.turn t1, w1), (.turn t2, w2)]
 
 /-- **Tooth for `grant_moves_le_cap`: without `LedgerContiguous`, the bound fails.** Every other
 premise holds: the cells are canonical, `g` is a live grant whose transfer ledger has `left` left,
-and the log is audited (`audit X w l = .ok w'`, its turns re-derived from their decoded calls). Its
-steps are the audit's own (a chain of `auditStep`s), and each dispatched a signed transfer of 10 through `g` (`MovesThrough`).
+and the log folds and is honest (`World.fold X.env w l = .ok w'`, `Honest X w l`: its turns what the
+real `receive` derives from their decoded calls). Its steps are honest kernel steps (a chain of
+`World.step … ∧ Honest X o [s]`, `GrantStep`'s first conjunct), and each dispatched a signed transfer of 10 through `g` (`MovesThrough`).
 Yet the amounts sum past `left`: 20 moved against 10, as the balances show. The World is not
 `LedgerContiguous` (the grant's ledger has a gap), and that alone is what fails. -/
 theorem grant_cap_needs_contiguous :
@@ -144,15 +149,15 @@ theorem grant_cap_needs_contiguous :
       (src dst : AcctRef UInt8),
       CellsCanon X.env w ∧ ¬ LedgerContiguous X.env w ∧
       w.live X.env g = some cell ∧ cell.kind = kindGrant ∧ ledgerLeft transferBase g cell = .ok (i, left) ∧
-      audit X w l = .ok w' ∧ stp.map Prod.fst = l ∧
-      Nanodregg.Lang.Std.Chain (fun s n o => auditStep X o s = .ok n) w stp ∧
+      World.fold X.env w l = .ok w' ∧ Honest X w l ∧ stp.map Prod.fst = l ∧
+      Nanodregg.Lang.Std.Chain (fun s n o => World.step X.env o s = .ok n ∧ Honest X o [s]) w stp ∧
       (∀ x ∈ (w :: stp.map Prod.snd).zip stp, MovesThrough X g x.1 x.2.1 (amt x)) ∧
       left < (((w :: stp.map Prod.snd).zip stp).map amt).sum ∧
       ((w.live X.env (src.resolve X)).bind Value.ofCell).map Value.balance = some 100 ∧
       ((w'.live X.env (src.resolve X)).bind Value.ofCell).map Value.balance = some 80 ∧
       ((w'.live X.env (dst.resolve X)).bind Value.ofCell).map Value.balance = some 20 := by
   refine ⟨gX, gr, w0, w2, [.turn t1, .turn t2], gapGrant, 2, 10, steps, fun _ => 10, .of own asset, .of mem asset,
-    w0_canon, ?_, by decide +kernel, rfl, of_isOkAs (by decide +kernel), w0_audit, rfl,
+    w0_canon, ?_, by decide +kernel, rfl, of_isOkAs (by decide +kernel), w0_fold, w0_honest, rfl,
     .cons step1 (.cons step2 (.nil w2)), ?_, by decide,
     by decide +kernel, by decide +kernel, by decide +kernel⟩
   · intro h
