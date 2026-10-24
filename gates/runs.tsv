@@ -47,7 +47,7 @@ cargo:client:stdio	host	exit 0	nobin RED
 cargo:client:supervise	host	exit 0	nobin RED
 cargo:attach:attach	host	exit 0	nobin RED
 bench-count	-	PERF-3's counter over THE BAR's Store: scripts/bar.sh runs it on the Store it made (its toy-Store plant, its WASTE lines, its --harness-control under the row's control)	-
-script:scripts/bar.sh	--records 60 --standing --root {fresh}	BAR verdict PASS	--records 60 --standing --root {fresh} --harness-control
+script:scripts/bar.sh	--records 60 --standing --root {fresh} ; --records 1000 --root {fresh}	BAR verdict PASS	--records 60 --standing --root {fresh} --harness-control
 standing:bench-worstcut-writes	{fresh}	BENCH-WORSTCUT writes PASS	{fresh} --harness-control
 standing:bench-worstcut-births	{fresh}	BENCH-WORSTCUT births PASS	{fresh} --harness-control
 standing:bench-worstcut-retires	{fresh}	BENCH-WORSTCUT retires PASS	{fresh} --harness-control
@@ -59,3 +59,4 @@ script:gates/statement_plants.py	{fresh}	STATEMENT PLANTS GREEN	{fresh} --harnes
 script:gates/decls_plants.py	--synthetic {fresh}/syn --lean {fresh}/lean	DECLS PLANTS GREEN	--synthetic {fresh}/syn --lean {fresh}/lean --harness-control
 script:gates/cbytes.py	vectors {fresh}	CBYTES VECTORS GREEN	vectors {fresh} --harness-control
 script:gates/tcb.py	--plants {fresh}	TCB PLANTS GREEN	--plants {fresh} --harness-control
+script:gates/waste.py	--plants	WASTE PLANTS GREEN	--plants --harness-control

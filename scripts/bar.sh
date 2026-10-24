@@ -24,8 +24,9 @@
 # nd is built from (emit-rust --check holds it to the Lean). Full mode meets contention by chance;
 # --standing forces exactly ONE: in the first half, the first write of an actor's own object has its
 # submit frame held by a relay on that actor's host socket while the next planned write of the same
-# object by another member commits, then released. The run must read stale-writes 1, stale-reruns 1,
-# stale-after-sync 0 (RED by name otherwise; also pinned in gates/waste.tsv), so the re-run path is
+# object by another member commits, then released. The run must read exactly the stale-writes,
+# stale-reruns and stale-after-sync gates/waste.tsv pins EXACT (`=1`, `=1`, `=0`, GATES-20x; read from
+# that table, the one place the fact is written, and judged there by waste.py too), so the re-run path is
 # judged on every standing run. The held pair commutes with the writes it moves past (none touch
 # that object), so every other count is the serial run's.
 # Every `nd` is timed from its spawner (exec to exit). Then each follow is synced to the tip and
@@ -44,14 +45,18 @@
 # draw, so their ceiling is the max observed over many runs (ROOT, as kernel-sim's draw-dependent rows;
 # a run above it is red, never a re-pin). Lang ticks: not counted.
 #
-# Wall clock (`BAR write-p99-ms V limit L`, reopen-ms) is reported with the load average beside it
-# and judged only in full mode on a quiet box (load1 < 2 before and after; else UNJUDGED, never
-# PASS). --standing never judges a clock. Limits are gates/bar.tsv `limit` rows.
+# Wall clock (`BAR write-p99-ms V limit L`, reopen-ms) is judged in EVERY run, standing and full, at
+# any load, with the load average printed beside it (GATES-20x). The limits are the charter's (write
+# <= 5 s, cold reopen <= 60 s, gates/bar.tsv `limit` rows) and every recorded run sits 36x and 500x
+# under them at load 6-17 (gates/bar.tsv's run rows: write-p99 70-137 ms, reopen 63-114 ms), so a
+# loaded box cannot reach them and a run that does breaks the spec under the load it had. Until
+# GATES-20x a run was judged only on a quiet box (load1 < 2), which hbox's load floor never gave:
+# every full run read UNJUDGED and --standing never judged a clock, so the limits could not go red.
 #
 # --harness-control (GATES-15's known-red control): every comparator gets one expectation nothing
-# meets: limits 0 (any measured time is over; judged at any load and in --standing), use must be 4 of 3, the
+# meets: limits 0 (any measured time is over), use must be 4 of 3, the
 # follow-at-tip check expects one step more than the writer holds, bench-count runs with its own
-# --harness-control, and (in --standing) the forced stale expects 2 stale writes of the 1 forced. The
+# --harness-control, and (in --standing) the forced stale expects one stale write more than the table pins. The
 # verdict is RED naming `harness-control` only when ALL of them fired; a control in which one stayed quiet prints the pass
 # line and exits 0, so the runner (gates/runs.py) refuses every verdict of this row.
 #
@@ -573,11 +578,19 @@ for m, v in counts:
         print(f"WASTE bar {m} {ratio(v)}")
 print(f"BAR count stale-writes {staled[0]} stale-reruns {stale[0]} stale-after-sync {recur[0]} (writes declined `stale`, KERNEL-54: not recorded, no refusal budget spent; re-runs, each after one nd sync; re-runs stale again)")
 if standing:
-    # the forced contention: exactly one stale, re-run once, committed after its sync (PERF-13)
-    want = (2 if control else 1, 1, 0)
+    # the forced contention: exactly one stale, re-run once, committed after its sync (PERF-13), as gates/waste.tsv
+    # pins it EXACT (GATES-20x): the one statement of the fact, read here and judged by waste.py too
+    exact = {}
+    for l in open(os.path.join(sys.argv[9], "gates", "waste.tsv"), encoding="utf-8"):
+        f = l.rstrip("\n").split("\t")
+        if len(f) == 5 and f[0] == "bar" and f[2].startswith("="):
+            exact[f[1]] = int(float(f[2][1:]))
+    if not all(m in exact for m in ("stale-writes", "stale-reruns", "stale-after-sync")):
+        die("gates/waste.tsv pins no exact bar stale-writes / stale-reruns / stale-after-sync rows")
+    want = (exact["stale-writes"] + (1 if control else 0), exact["stale-reruns"], exact["stale-after-sync"])
     got = (staled[0], stale[0], recur[0])
     if got != want:
-        (fired if control and got == (1, 1, 0) else red).append(
+        (fired if control and got == (want[0] - 1, want[1], want[2]) else red).append(
             f"forced stale: stale-writes {got[0]} stale-reruns {got[1]} stale-after-sync {got[2]}, want {want[0]} {want[1]} {want[2]} (holds {holds[0]})")
     if not control:
         for m, v in zip(("stale-writes", "stale-reruns", "stale-after-sync"), got): print(f"WASTE bar {m} {v}")
@@ -608,7 +621,7 @@ after=$(load)
 grep -E '^(BAR|WASTE) ' "$root/out" | grep -v '^BAR verdict'
 dev=$(df -P "$stores" | awk 'NR==2{print $1}')
 echo "BAR scope three actors (two friends, the hosted-resident stand-in: a hosted-custody member driven by nd argv), one writer, one box, no ssh; OS cache warm at reopen"
-echo "BAR mode $([ $standing = 1 ] && echo "standing (serial; counts judged by gates/waste.tsv, clock reported only)" || echo "full (concurrent)")"
+echo "BAR mode $([ $standing = 1 ] && echo "standing (serial; counts judged by gates/waste.tsv, the clock by the limits)" || echo "full (concurrent)")"
 echo "BAR device $(uname -sm) $dev $( [ "$(uname -s)" = Darwin ] && echo F_FULLFSYNC || echo fdatasync)"
 echo "BAR sha $(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo none)"
 echo "BAR load-before $before ($(getconf _NPROCESSORS_ONLN) cpus)"
@@ -624,7 +637,6 @@ over=$(awk -v w="$wlim" -v r="$rlim" '
   END {print substr(o, 3)}' "$root/out")
 status=$(grep -E '^(RED|OK)' "$root/out" | tail -1)
 fired=$(grep '^FIRED ' "$root/out" | sed 's/^FIRED //')
-quiet() { awk -v a="${before%% *}" -v b="${after%% *}" 'BEGIN{exit !(a < 2 && b < 2)}'; }
 if [ $rc -ne 0 ] || [ -z "$status" ]; then
   verdict="RED $(grep -h 'BAR verdict RED' "$root/out" | head -1 | sed 's/^BAR verdict RED //')"
   [ "$verdict" = "RED " ] && verdict="RED driver-exit-$rc"
@@ -641,9 +653,7 @@ elif [ $control = 1 ]; then
   else  # a planted expectation stayed quiet: the control PASSES, so the runner reads no verdict of this row
     echo "BAR control: a planted expectation stayed quiet:$missed"; echo "BAR verdict PASS"; exit 0
   fi
-elif [ $standing = 1 ]; then verdict=PASS
-elif ! quiet; then verdict="UNJUDGED load1 ${before%% *}/${after%% *} >= 2${over:+ (over: $over)}"
-elif [ -n "$over" ]; then verdict="RED $over"
+elif [ -n "$over" ]; then verdict="RED $over (load1 ${before%% *}/${after%% *})"
 else verdict=PASS
 fi
 if [ $record -eq 1 ]; then
@@ -654,4 +664,4 @@ if [ $record -eq 1 ]; then
     "$(c steps-per-command)" "$(c seg-bytes-per-command)" "$(c writer-supervisor-fds-per-command)" "${verdict}" >> "$here/gates/bar.tsv"
 fi
 echo "BAR verdict $verdict"
-case $verdict in PASS) exit 0 ;; UNJUDGED*) exit 3 ;; *) exit 1 ;; esac
+case $verdict in PASS) exit 0 ;; *) exit 1 ;; esac

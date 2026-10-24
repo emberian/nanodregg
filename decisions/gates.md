@@ -1247,3 +1247,64 @@ On e7c2b13 it read `RED (30)` in 28.3 s: 7 of 19 declared lines shown at least a
 - (d) The syscall rows trust rustix's wrappers to pass arguments the ABI defines. That is a claim about bytes, not a decision. `stdio-leg`'s ORDER-and-SELECT claim (D7's law-2 question) is the HOSTING half of A20 and another lane's.
 
 **Meta-critique.** The pull was to keep the source gate "as a hint" beside the compiled scan, since an early hint is cheap. Kept, it is a second statement of the rule, and readers would trust it. It is the one CODEC-4 measured as wrong on two spellings. The other pull was to call the pins "compared" while comparing only on hbox. I wrote down exactly where each pin is compared, and named the one that is never compared.
+
+## GATES-20x · THE BAR's clock is judged in every run, the charter's 1000 records on every full judge; the forced contention is an exact row (2026-10-24, FIX-GATES; COLLATION-20261024 A23; READ-LEDGER-CENSUS-GATES D8, B4; CROSS-LAYER: PERF)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none. Gates code, PERF's bar script and two tables.
+
+**Finding.**
+- **D8 (READ, scripts/bar.sh:625-648).** In `--standing`, the only gates/runs.tsv row, the verdict was PASS whenever the driver was not RED. `$over` (the write-p99 and reopen limits) was consulted only to prove that the control fires. In full mode the verdict was UNJUDGED when load1 ≥ 2.
+  - **What the record shows.** gates/bar.tsv's recorded full runs read write p99 70–137 ms and reopen 63–114 ms at load 6–17. The limits are 5,000 and 60,000 ms. Every full run reads `UNJUDGED load1 … >= 2`.
+  - **So** the quiet-box rule protected against nothing the margin did not already give (36× and 500×), and its only effect was that no run was ever judged. The charter's spec had a planted comparator and a verdict path never taken.
+- **B4 (READ, gates/waste.tsv:57-59, waste.py:50).** `bar stale-writes 1 1`, `stale-reruns 1 1` and `stale-after-sync 0 0` were CEILINGS. MEASURED: the old table passes a run measuring 0/0/0 (the forced contention not happening) with no red. bar.sh separately required exactly (1, 1, 0) in its own code: two statements of one fact, and the table's could not fail in the direction that matters.
+
+**Decision.**
+1. **Exact waste rows.** A ceiling written `=V` is EXACT (gates/waste.py):
+   - a measurement other than V is RED, in both directions;
+   - the value moved, or the row made a ceiling, needs `WASTE: <op>: <why>`;
+   - a ceiling made exact is not a raise.
+
+   waste.tsv's three stale rows are `=1`, `=1`, `=0`.
+2. **One statement of the fact.** bar.sh reads its forced-contention want from those exact rows, and dies by name if they are absent. The control still expects one stale write more. waste.py judges the same rows from the `WASTE bar stale-…` lines. The number is written once, in the table.
+3. **The clock is judged in every run, standing and full, at any load,** with load1 before and after printed beside the verdict (`RED write-p99-ms V > L (load1 a/b)`). The quiet rule (`quiet()`, UNJUDGED, exit 3) is deleted.
+4. **The charter's scale on every full judge.** THE BAR's runs.tsv row runs both `--records 60 --standing` and `--records 1000` (full mode, concurrent, release build). The charter's scale is now judged on every full judge and every convergence.
+5. **`gates/waste.py --plants`**, a script row, last line `WASTE PLANTS GREEN`.
+
+**Plants** (hbox, MEASURED; the bar on f9657bd in wt/fixgates3 — main 37772b9's own bar is RED for another reason, below):
+- **standing (N=60, dev build, load ~9):** `BAR verdict PASS`, now judged: write p99 430.8 ms (limit 5000), reopen 14.0 ms, follow reopen 26.3 ms (limit 60000). Counts 1/1/0.
+- **standing, control:** `BAR verdict RED harness-control: write-p99-ms 495.929 > 0; …; forced stale: stale-writes 1 stale-reruns 1 stale-after-sync 0, want 2 1 0`. The want is read from the table.
+- **standing with the write limit set to 1 ms (not the control):** `BAR verdict RED write-p99-ms 491.383 > 1 (load1 7.19/6.85)`. The ordinary standing path now consumes the comparison; before, this read PASS.
+- **full (N=1000, release, load 6.7):** `BAR verdict PASS`: write p99 269.1 ms, reopen 71.7 ms, follow reopen 115.8 ms. 34.2 s whole, the release build already done. Before, this read UNJUDGED.
+- **waste.py:** measured 0/0/0 reads `waste bar stale-writes: measured 0.0 != exactly 1.0` and the same for stale-reruns. 1/1/0 reads ok. The OLD table with 0/0/0 reads `[]`.
+- **`waste.py --plants`:** GREEN.
+  - exact-at-value: ok;
+  - exact-off for each of the three rows (0 for the 1s, 1 for the 0): RED by name;
+  - exact-moved: RED; with a WASTE line: ok;
+  - made a ceiling: RED.
+
+  The control reads `WASTE PLANTS RED (1): harness-control`.
+
+**THE BAR is RED on main 37772b9 today, and not by this card.** `scripts/bar.sh --records 60 --standing`, main's own copy, on 37772b9 reads `BAR verdict RED friend1 nd write exit 1: refused stale` (MEASURED, wt/fixgates2). On f9657bd it reads PASS. Between the two, f1839ed (KERNEL-66: "a stale call is declined `stale`") and a7bccd8 (client: the re-run is the open attempt) changed the stale path. Bisecting it is not this lane's work; filed as cv 01a16db5-b18e. This card's plants were run on f9657bd so that they judge this card, not that red.
+
+**Price.**
+- A full judge and a convergence run THE BAR twice: about 30 s standing, 34 s full, plus a release build of nd and nd-supervise the first time a slot needs one.
+- The waste plants: under 1 s.
+
+**What breaks.**
+- A standing or full bar whose write p99 passes 5 s, or whose cold reopen passes 60 s, is RED at any load. Before, it was PASS (standing) or UNJUDGED (full).
+- A forced-contention count other than exactly 1/1/0 is RED in waste.py too.
+- gates/waste.tsv's three stale rows are exact (`=V`).
+- gates/runs.tsv: THE BAR's row gains the N=1000 run; waste.py gains a row.
+- bar.sh no longer exits 3.
+- Nothing re-emits.
+
+**Critique.**
+- (a) **A RED under extreme load can be the box's, not the commit's.** Swap thrash could pass 5 s. A convergence red twice in a row is reverted by name (GATES-22). The margin measured here is 18× at load 7 (full) and 11× (standing, dev build). A load of that order is itself a finding, and the verdict prints the load beside it.
+- (b) **The clock is one device's.** hbox's ZFS fdatasync is not a phone's or a Mac's F_FULLFSYNC. The spec is judged where the judge runs.
+- (c) **The standing N=60 run judges the charter's limits at a smaller scale**, which a fortiori proves nothing about 1000. That is why the full run joins the row.
+
+**Meta-critique.** The brief offered "judged only at the batch's full bar, and remove the pretence" as an exit. I nearly took it before measuring: the clock felt like noise. Measured, it is 18–500× under its limits on a loaded box. The pretence was the quiet rule itself, not the comparison.
+
+The card landed in two halves: gates/waste.py (the `=V` reader and its plants) as 17739d3, then the table, scripts/bar.sh,
+gates/bar.tsv and the runs rows. One landing was refused by its own judge: pre-push runs MAIN's waste.py over the
+candidate's waste.tsv, so a new table form cannot be judged in the landing that introduces it.
