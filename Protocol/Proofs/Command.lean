@@ -248,13 +248,37 @@ theorem sendCancel_ne_submit {X : Ctx D} {w : World D} {argv : List ByteArray} {
   repeat' split at h
   all_goals first | exact refusedAt_ne_submit h | simp [refused] at h
 
-omit [Ord D] [DecidableEq D] in
-theorem cancelAnswer_ne_submit {X : Ctx D} {cb result call k : ByteArray} :
-    cancelAnswer X cb result ≠ .submit call k := by
+omit [DecidableEq D] in
+theorem cancelCatchUp_ne_submit {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {said : Nat} {call k : ByteArray} : cancelCatchUp X me w argv said ≠ .submit call k := by
+  intro h
+  unfold cancelCatchUp next at h
+  dsimp only at h
+  split at h <;> simp [refused] at h
+
+omit [DecidableEq D] in
+theorem cancelAnswer_ne_submit {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {result call k : ByteArray} : cancelAnswer X me w argv result ≠ .submit call k := by
   intro h
   unfold cancelAnswer at h
   repeat' split at h
-  all_goals first | exact refusedAt_ne_submit h | simp [refused, printed, declined] at h
+  all_goals first | exact refusedAt_ne_submit h | exact cancelCatchUp_ne_submit h | simp [refused, declined] at h
+
+theorem cancelSettled_ne_submit {X : Ctx D} {me : Self D} {w : World D} {c : Call D} {said : Bool}
+    {call k : ByteArray} : cancelSettled X me w c said ≠ .submit call k := by
+  intro h
+  unfold cancelSettled attemptContradicted at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_submit h | simp [refused, printed] at h
+
+theorem cancelTip_ne_submit {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {cb t call k : ByteArray} : cancelTip X me w argv cb t ≠ .submit call k := by
+  intro h; unfold cancelTip at h
+  repeat' split at h
+  all_goals first
+    | (simp [refused] at h; done)
+    | (unfold next at h; split at h <;> simp [refused] at h; done)
+    | exact cancelSettled_ne_submit h
 
 theorem settled_ne_submit {X : Ctx D} {me : Self D} {w : World D} {out cb result call k : ByteArray} :
     settled X me w out cb result ≠ .submit call k := by
@@ -263,6 +287,12 @@ theorem settled_ne_submit {X : Ctx D} {me : Self D} {w : World D} {out cb result
   repeat' split at h
   all_goals first | exact refusedAt_ne_submit h | simp [refused, declined] at h
   all_goals (unfold attemptContradicted at h; split at h <;> simp [refused] at h)
+
+theorem settleStep_ne_submit {X : Ctx D} {me : Self D} {w : World D} {cmd : Cmd D}
+    {out cb result call k : ByteArray} : settleStep X me w cmd out cb result ≠ .submit call k := by
+  intro h; unfold settleStep at h; split at h
+  · exact settled_ne_submit h
+  · simp [refused] at h
 
 /-- **Follow answers `ok` to a submitted call only on its own World's word** (R7, E2's T0): whatever
 end the attempt store hands step 4 (nd's loop over `Attempt.next`, which follow does not run),
@@ -314,8 +344,11 @@ theorem step_settled_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World 
       | (exfalso; revert ‹(4 : UInt8) = _›; decide)
       | (simp only [Prod.mk.injEq] at h
          obtain ⟨-, -, h⟩ := h
-         obtain ⟨c, hh, td, hc, hv⟩ := settled_ok h
-         exact ⟨_, c, hh, td, rfl, hc, hv⟩)
+         unfold settleStep at h
+         split at h
+         · obtain ⟨c, hh, td, hc, hv⟩ := settled_ok h
+           exact ⟨_, c, hh, td, rfl, hc, hv⟩
+         · simp [refused, CommandExit.code] at h)
 
 /-- The writer's `unknownKey` states no height, so it is never read as `expired`. -/
 theorem expiredHeight_unknownKey : expiredHeight? ReadRefusal.unknownKey.payload = none := by decide
@@ -417,9 +450,10 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact envelopeRefused_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; (try dsimp only at h); exact envelopeSign_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_submit h))
-  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settled_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settleStep_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact sendCancel_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelAnswer_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelTip_ne_submit h))
   all_goals (try (obtain ⟨h1, h0, h2⟩ := h; injection h2 with h3 h4; subst h1 h0 h3
                   exact ⟨rfl, rfl, _, _, _, _, _, _, ‹body _ _ _ _ _ = _›, ‹signedReads _ _ _ = _›,
                     ‹plan _ _ _ _ _ _ = _›, rfl⟩))
@@ -1363,13 +1397,37 @@ theorem receiptLines_ne_host {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w 
   repeat' split at h
   all_goals simp [refused, printed] at h
 
-omit [Ord D] [DecidableEq D] in
-theorem cancelAnswer_ne_host {X : Ctx D} {cb result : ByteArray} {op : Op} {p k : ByteArray} :
-    cancelAnswer X cb result ≠ .host op p k := by
+omit [DecidableEq D] in
+theorem cancelCatchUp_ne_host {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {said : Nat} {op : Op} {p k : ByteArray} : cancelCatchUp X me w argv said ≠ .host op p k := by
+  intro h
+  unfold cancelCatchUp next at h
+  dsimp only at h
+  split at h <;> simp [refused] at h
+
+omit [DecidableEq D] in
+theorem cancelAnswer_ne_host {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {result : ByteArray} {op : Op} {p k : ByteArray} : cancelAnswer X me w argv result ≠ .host op p k := by
   intro h
   unfold cancelAnswer at h
   repeat' split at h
-  all_goals first | exact refusedAt_ne_host h | simp [refused, printed, declined] at h
+  all_goals first | exact refusedAt_ne_host h | exact cancelCatchUp_ne_host h | simp [refused, declined] at h
+
+theorem cancelSettled_ne_host {X : Ctx D} {me : Self D} {w : World D} {c : Call D} {said : Bool}
+    {op : Op} {p k : ByteArray} : cancelSettled X me w c said ≠ .host op p k := by
+  intro h
+  unfold cancelSettled attemptContradicted at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_host h | simp [refused, printed] at h
+
+theorem cancelTip_ne_host {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {cb t : ByteArray} {op : Op} {p k : ByteArray} : cancelTip X me w argv cb t ≠ .host op p k := by
+  intro h; unfold cancelTip at h
+  repeat' split at h
+  all_goals first
+    | (simp [refused] at h; done)
+    | (unfold next at h; split at h <;> simp [refused] at h; done)
+    | exact cancelSettled_ne_host h
 
 theorem settled_ne_host {X : Ctx D} {me : Self D} {w : World D} {out cb result : ByteArray} {op : Op}
     {p k : ByteArray} : settled X me w out cb result ≠ .host op p k := by
@@ -1378,6 +1436,12 @@ theorem settled_ne_host {X : Ctx D} {me : Self D} {w : World D} {out cb result :
   repeat' split at h
   all_goals first | exact refusedAt_ne_host h | simp [refused, declined] at h
   all_goals (unfold attemptContradicted at h; split at h <;> simp [refused] at h)
+
+theorem settleStep_ne_host {X : Ctx D} {me : Self D} {w : World D} {cmd : Cmd D}
+    {out cb result : ByteArray} {op : Op} {p k : ByteArray} : settleStep X me w cmd out cb result ≠ .host op p k := by
+  intro h; unfold settleStep at h; split at h
+  · exact settled_ne_host h
+  · simp [refused] at h
 
 /-- **Every `cancel` op follow ever relays is a cancel its own World records** (PROTOCOL-63; the
 whole machine, not one phase): if `step` hands the client a `host` step for the `cancel` op, follow's
@@ -1407,11 +1471,129 @@ theorem step_host_cancel {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact envelopeRefused_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; (try dsimp only at h); exact envelopeSign_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_host h))
-  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settled_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settleStep_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelAnswer_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelTip_ne_host h))
   all_goals (try (obtain ⟨h1, h0, h2⟩ := h; subst h1 h0
                   obtain ⟨-, s, c, v, r, w', -, hc, hrec, hp⟩ := sendCancel_host h2
                   exact ⟨rfl, rfl, s, c, v, r, w', _, hc, hrec, hp⟩))
   done
+
+/-! ### `cancel CALL` ends `ok` only on follow's own World (PROTOCOL-71) -/
+
+omit [Ord D] [DecidableEq D] in
+theorem refusedAt_ne_ok {X : Ctx D} {r : Refusal D} {o e : ByteArray} : refusedAt X r ≠ .done CommandExit.ok.code.toUInt8 o e := by
+  unfold refusedAt; split <;> simp [refused, CommandExit.code]
+
+omit [Ord D] [DecidableEq D] in
+theorem custodyEnd_ne_ok {X : Ctx D} {cmd : Cmd D} {st : State} {r : Refusal D} {o e : ByteArray} :
+    custodyEnd X cmd st r ≠ .done CommandExit.ok.code.toUInt8 o e := by
+  intro h; unfold custodyEnd at h; split at h
+  · split at h
+    · unfold unknownKeyEnd at h; split at h
+      · simp [refused, CommandExit.code] at h
+      · exact refusedAt_ne_ok h
+    · simp [refused, CommandExit.code] at h
+  · simp [refused, CommandExit.code] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem envelopeRefused_ne_ok {X : Ctx D} {me : Self D} {argv : List ByteArray} {cmd : Cmd D}
+    {a b c d p o e : ByteArray} : envelopeRefused X me argv cmd a b c d p ≠ .done CommandExit.ok.code.toUInt8 o e := by
+  intro h
+  unfold envelopeRefused next at h
+  repeat' split at h
+  all_goals first
+    | exact refusedAt_ne_ok h
+    | (simp [refused, notServed, CommandExit.code] at h; done)
+    | (unfold unknownKeyEnd at h; split at h
+       · simp [refused, CommandExit.code] at h
+       · exact refusedAt_ne_ok h)
+    | ((try dsimp only at h); unfold envelopeSign at h; split at h <;> simp at h)
+
+theorem sendCancel_ne_ok {X : Ctx D} {w : World D} {argv : List ByteArray} {cb result o e : ByteArray} :
+    sendCancel X w argv cb result ≠ .done CommandExit.ok.code.toUInt8 o e := by
+  intro h
+  unfold sendCancel next at h
+  repeat' split at h
+  all_goals first | exact refusedAt_ne_ok h | simp [refused, CommandExit.code] at h
+
+omit [DecidableEq D] in
+theorem cancelAnswer_ne_ok {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {result o e : ByteArray} : cancelAnswer X me w argv result ≠ .done CommandExit.ok.code.toUInt8 o e := by
+  intro h
+  unfold cancelAnswer at h
+  repeat' split at h
+  all_goals first
+    | exact refusedAt_ne_ok h
+    | (unfold cancelCatchUp next at h; dsimp only at h; split at h <;> simp [refused, CommandExit.code] at h; done)
+    | simp [refused, declined, CommandExit.code] at h
+
+/-- **`cancelSettled` is `ok` only on follow's own settlement**: the writer said cancelled, and the
+World the second catch-up reached settles the call `refused cancelled`. -/
+theorem cancelSettled_ok {X : Ctx D} {me : Self D} {w : World D} {c : Call D} {said : Bool}
+    {o e : ByteArray} (h : cancelSettled X me w c said = .done CommandExit.ok.code.toUInt8 o e) :
+    said = true ∧ settleOf X me w c = .refused (cancelledCode (D := D)) := by
+  unfold cancelSettled at h
+  split at h
+  · rename_i code hv
+    split at h
+    · rename_i hc; exact ⟨rfl, by rw [hv, hc]⟩
+    · unfold attemptContradicted at h; simp [CommandExit.code] at h
+  · exact absurd h refusedAt_ne_ok
+  all_goals (unfold attemptContradicted at h; simp [CommandExit.code] at h)
+
+theorem settleStep_ok {X : Ctx D} {me : Self D} {w : World D} {cmd : Cmd D} {out cb result o e : ByteArray}
+    (h : settleStep X me w cmd out cb result = .done CommandExit.ok.code.toUInt8 o e) :
+    submits cmd = true ∧ settled X me w out cb result = .done CommandExit.ok.code.toUInt8 o e := by
+  unfold settleStep at h
+  split at h
+  · exact ⟨‹_›, h⟩
+  · simp [refused, CommandExit.code] at h
+
+/-- The tip of a cancel's catch-up is `ok` only by `cancelSettled`'s settlement. -/
+theorem cancelTip_ok {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray} {cb t o e : ByteArray}
+    (h : cancelTip X me w argv cb t = .done CommandExit.ok.code.toUInt8 o e) :
+    ∃ c, X.decodeCall cb = some c ∧ settleOf X me w c = .refused (cancelledCode (D := D)) := by
+  unfold cancelTip at h
+  split at h
+  · simp [refused, CommandExit.code] at h
+  · simp [refused, CommandExit.code] at h
+  · rename_i c _ hc _
+    split at h
+    · unfold next at h; split at h <;> simp [refused, CommandExit.code] at h
+    · exact ⟨c, hc, (cancelSettled_ok h).2⟩
+
+/-- **`cancel CALL` exits `ok` only when follow's own World records the cancel** (PROTOCOL-71, the
+class PROTOCOL-64 closed at step 4; readers A7): whatever continuation and result the client hands
+back, a step of a `cancel CALL` command that ends `done ok` has caught follow up to a World (the one
+it answers with) whose settlement of the call is `refused cancelled`: the writer's `refused
+cancelled` is never enough. Under any other phase a cancel's step refuses, asks, or is handed on. -/
+theorem cancel_ok_settled {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f f' : Follow D} {p : Persist D} {kb result o e cb : ByteArray} {st : State}
+    (hst : State.ofBytes kb = some st) (hcmd : parse X.digestOf st.argv = .ok (.cancel cb))
+    (h : step X dc B me f kb result = (f', p, .done CommandExit.ok.code.toUInt8 o e)) :
+    ∃ c, X.decodeCall cb = some c ∧ settleOf X me f'.world c = .refused (cancelledCode (D := D)) := by
+  unfold step at h
+  simp only [hst, Option.map_some, Option.getD_some, hcmd] at h
+  repeat' split at h
+  -- the arms of other verbs
+  all_goals (try contradiction)
+  all_goals (simp only [Prod.mk.injEq] at h; obtain ⟨h1, -, h⟩ := h)
+  all_goals (try (exfalso; first
+    | exact refusedAt_ne_ok h
+    | exact custodyEnd_ne_ok h
+    | exact envelopeRefused_ne_ok h
+    | exact sendCancel_ne_ok h
+    | exact cancelAnswer_ne_ok h
+    | (simp [refused, behind, CommandExit.code] at h; done)
+    | (unfold envelopeSign at h; split at h <;> simp at h; done)
+    | (unfold next at h; split at h
+       · (try dsimp only at h); (try (unfold envelopeSign at h; split at h)) <;> simp at h
+       · simp [refused, CommandExit.code] at h
+       done)))
+  -- phase 4 under a verb that does not submit
+  all_goals (try (exfalso; have := (settleStep_ok h).1; simp [submits] at this; done))
+  -- what is left: the settlement at the second catch-up's tip
+  all_goals (subst h1; exact cancelTip_ok h)
 
 end Nanodregg.Protocol.Command

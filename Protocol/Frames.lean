@@ -26,6 +26,11 @@ def commandFrame :
       (Layout.codec Bounds.argvBytesMax (by decide) commandLayout).size v ≤ Bounds.argvBytesMax } :=
   Stream.within Bounds.argvBytesMax (Layout.codec Bounds.argvBytesMax (by decide) commandLayout)
 
+/-- A frame BODY the transport carries: its op or status byte and `payload`, at most `frameBytesMax`
+bytes AS A WHOLE (`Host.Wire.bodyMax`'s reader, `client/src/frame.rs`'s `read_body`/`write_body`).
+A layout bounds each field by the frame on its own; this is the bound on their sum (PROTOCOL-70). -/
+def bodyFits (payload : ByteArray) : Bool := decide (1 + payload.size ≤ Bounds.frameBytesMax)
+
 def resumeFrame : Stream (Layout.Ty Bounds.frameBytesMax resumeLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) resumeLayout
 

@@ -171,6 +171,9 @@ inductive Fault
   /-- this command's follow starts from genesis, and every cancel event (tag 2) a page carries has
   the first byte of its signature flipped: a Host that serves a cancel the member never signed -/
   | forgeCancel
+  /-- the relay keeps this command's `cancel` op from the writer and answers it `refused cancelled`:
+  a Host that says it recorded a cancel it never saw (PROTOCOL-71) -/
+  | lieCancel
   deriving Repr
 
 /-- One line of a row. -/
@@ -267,8 +270,9 @@ inductive Mutation
   | guessMethod
   /-- the phone believes a receipt's stated answer with its roots matched, never checking the paths -/
   | trustReceipt
-  /-- the attempt store ends an attempt on the Host's status byte, never asking its own follow (the
-  shape before PROTOCOL-46) -/
+  /-- the attempt store ends an attempt on the Host's final REFUSAL (its lookup's `refused NAME`),
+  never asking its own follow (the shape before PROTOCOL-46). Only the refusal is trusted, so the
+  plant bites where the Host lies about one, not at every honest commit -/
   | trustLookup
   /-- the operator's seal is a restart that seals nothing (the rows' seal without `Host.sealNow`,
   HOST-43's tooth) -/
@@ -306,8 +310,10 @@ inductive Mutation
   /-- the client runs every write command twice (PROTOCOL-53: THE BAR's `rowbar frames-per-write`
   and `steps-per-write` must move) -/
   | twiceEach
-  /-- an invoke's `--range` is signed at the listing the actor's follow held at its LAST command, never
-  caught up (item 4: the plan's range pin must be the listing at the World it signs from) -/
+  /-- a relay hides the log from an invoke with `--range` (an empty page at follow's own position,
+  stated as the tip): follow's own machine, its admission included, plans and signs at the listing it
+  held at its LAST command (item 4: only the writer's check is left to refuse the stale range). One
+  change: before Q8's split this plant also skipped follow's admission (`forged`) -/
   | staleRange
   /-- the client drops an invoke's `--range REL K [PREFIX]`: the plan signs no range (item 4, the shape
   before it: the receiver's `rangeUnpinned`) -/
@@ -320,6 +326,12 @@ inductive Mutation
   /-- custody signs a cancel's message without its domain (`domCancel` dropped: the bare transaction
   id), a signature that is no cancel (PROTOCOL-63) -/
   | cancelUndomained
+  /-- the writer pages with `frameBytesMax - 1024`, the budget that bounds the page as one field of
+  the frame and leaves 890 bytes for the continuation beside it (the shape before PROTOCOL-70) -/
+  | perFieldBudget
+  /-- `cancel CALL` ends `cancelled TXID` on the writer's `refused cancelled`, never settling it on
+  follow's World (follow's phase 10 before PROTOCOL-71) -/
+  | trustCancel
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -854,7 +866,8 @@ sixteen recorded `keyTaken` refusals (posts at a taken key of a board), then `de
 and not final (its lookup is `absent`). A thin member then adopts a base whose step count is past its
 height and catches up from its steps. Past the window the journal forgets and the first call's
 lookup is `uncertain forgotten`, never `refused`. The plant is an attempt store that takes the
-Host's decline as final: line 13 is `refused stale`. The counts are heights, so this row is not for
+Host's decline as final: line 13 ends on that claim, and step 4 checks it on follow's World, where the
+decline is no refusal: `hostContradicted refused open`. The counts are heights, so this row is not for
 `rows --times` scaling. -/
 def refusedRow : Row where
   name := "refused"
@@ -1328,7 +1341,9 @@ relay holding the bytes lands them. A second such call, signed for a window of 2
 its window and settles `refused expired`, final. A rotation whose `ok` is lost confirms through
 the ARMED rotation's incoming key (`signIncoming`: the writer refuses the old key `unknownKey`),
 and custody advances on that confirmation, so the next write signs with the new key. The plant is
-a store that takes the Host's status: line 6 reads the lie, `refused stale`. -/
+a store that takes the Host's final refusal as final: line 6, the lying lookup's own line, ends on
+the Host's `refused stale`, and step 4 checks that claim on follow's World, which never caught the
+call up: `hostContradicted refused open`. -/
 def settleRow : Row where
   name := "settle"
   replaces := []
@@ -1352,10 +1367,10 @@ def settleRow : Row where
     { actor := "newcomer", act := .cmd ["rotate"], expect := .ok, fault := .dropReply },
     ok "newcomer" ["write", "@shared", "2", "6", "--via", "@g"],
     ok "operator" ["read", "@shared", "2=6"]])
-  -- the store's `committed` on the Host's word is checked by follow's own World at step 4 (R7):
-  -- with no confirm, follow has not caught up the call, so the first write says
-  -- `hostContradicted committed open`, never ok
-  plant := .caught .trustLookup 1 (.contradicted "committed open")
+  -- the store's `refused` on the Host's word is checked by follow's own World at step 4 (R7): with no
+  -- confirm, follow has not caught up the committed call, so line 6 says `hostContradicted refused
+  -- open`, never `refused stale`; the honest lines before it trust no refusal and keep their outcomes
+  plant := .caught .trustLookup 6 (.contradicted "refused open")
 
 /-- A tally of rings by round whose `take` reads a round's rings as ONE signed range (item 4): `ring`
 inserts its text at key `(round, ringer)` and leaves the state alone (it writes no cell: two rings
@@ -1397,9 +1412,11 @@ def rangeInvokeLines : List Line :=
     ok "newcomer" ["invoke", "@t", "@t.ring", "(record (round 1) (text \"b\"))", "--via", "@tpub"],
     ok "sponsor" ["invoke", "@t", "@t.take", "(record)", "--range", "rings", "8", "(record (round 1))"]]
 
-/-- Item 4's plant (i): the take's range signed at the sponsor's stale listing (one ring, its follow
-before the newcomer's ring) is `declined stale` by the writer, by name, at the last line (KERNEL-54: a
-stale is declined, never recorded; only the range moved, as `ring` writes no cell). -/
+/-- Item 4's plant (i): a relay hides the log from the take, so the sponsor's follow, by its own machine
+and admission, signs the range at its stale listing (one ring, before the newcomer's ring); the
+writer declines it `stale`, by name, at the last line (KERNEL-54: a stale is declined, never
+recorded; only the range moved, as `ring` writes no cell). Follow's admission admits it there (the
+stale World is self-consistent): the writer's check is the tooth. -/
 def rangeInvokeRow : Row where
   name := "rangeInvoke"
   replaces := []
@@ -1599,6 +1616,26 @@ def cancelRow : Row where
     ok "operator" ["read", "@shared", "4=1"]])
   plant := .caught .cancelUndomained 8 (.refused "badSignature")
 
+/-- A Host that says it recorded a cancel it never saw (PROTOCOL-71, readers A7): the sponsor's write
+never reaches the writer (`open`); its cancel is answered `refused cancelled` by a relay that kept the
+cancel from the writer. Follow catches up again, finds the call still open on its own World and ends
+`hostContradicted cancelled open`, the attempt left open; the honest cancel after it is recorded and
+prints `cancelled TXID`, and the attempt's next run settles it `refused cancelled`. The plant is
+follow's old phase 10, `cancelled` on the writer's word: line 7 ends `ok`. -/
+def cancelLieRow : Row where
+  name := "cancelLie"
+  replaces := []
+  ops := settled ++ [.cancel]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    { actor := "sponsor", act := .cmd ["write", "@shared", "3", "1"], expect := .open,
+      fault := .neverForward },
+    { actor := "sponsor", act := .cancelOf "sponsor", expect := .contradicted "cancelled open",
+      fault := .lieCancel },
+    { actor := "sponsor", act := .cancelOf "sponsor", expect := .ok, prints := some "cancelled " },
+    { actor := "sponsor", act := .rerun, expect := .refused "cancelled" }])
+  plant := .caught .trustCancel 7 .ok
+
 /-- A cancel the member never signed, served by the writer (PROTOCOL-63): the sponsor's loose call
 is cancelled; a follower reading the log from genesis through a Host that flipped the cancel's
 signature refuses the log `cancelForged`, the audit's name for it (`Receive.forgedName`), and the
@@ -1618,9 +1655,42 @@ def cancelForgedRow : Row where
     ok "operator" ["read", "@shared"]])
   plant := .caught .followVerifyAll 8 (.refused "chainMismatch")
 
+/-- A law package of `fillerPadBytes` refusal text (`fullPage`'s filler): at the deployed parameters
+its install's call is 4,075 bytes (measured, PROTOCOL-70), so its log event is 4,076 and 64 of them,
+the most one page holds (`recordTurnsMax`), are exactly the old budget, `frameBytesMax - 1024` =
+64 × (4 + 4,076). `i < 100` names it (`f00`…`f63`), each a different package. -/
+def fillerPadBytes : Nat := 3381
+def filler (i : Nat) : String :=
+  lawPackage (if i < 10 then s!"f0{i}" else s!"f{i}")
+    s!"(inj {verdictTy} refused \"{String.ofList (List.replicate fillerPadBytes 'x')}\")"
+
+/-- A follower a full page behind takes the page and its command's continuation back in ONE frame
+(PROTOCOL-70, readers A3). The sponsor installs the queue Bell (a 36,550-byte call at the deployed
+parameters) and the newcomer writes (a 540-byte call); then the operator installs 64 fillers, so each
+of them is a full page behind. `receipt CALL` of each one's last call, the attempt store's confirm
+after time away, pages that log back and settles `committed`. The resume that carries the page also
+carries the continuation, and the continuation holds the argv, the call in hex: 73,316 bytes for the
+install, 1,296 for the write. The plant is the writer paging at `frameBytesMax - 1024`: a full page
+leaves 890 bytes for the continuation, the client's transport refuses the frame (`pastBound`), and
+line 72, the install's receipt, is refused under both parameter sets. At the deployed parameters
+line 73, the ordinary write's, is refused too (64 × 4,080 bytes is that budget exactly). -/
+def fullPageRow : Row where
+  name := "fullPage"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    okBind "sponsor" ["install", "<world/resident/Bell"] "bellPkg",
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"]] ++
+    (List.range 64).map (fun i => ok "operator" ["install", filler i]) ++ [
+    { actor := "sponsor", act := .receiptOf "sponsor", expect := .ok, prints := some "settle committed" },
+    { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, prints := some "settle committed" }])
+  plant := .caught .perFieldBudget 72 (.refused "pastBound")
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
-   uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow]
+   uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
+   fullPageRow, cancelLieRow]
 
 end Nanodregg.Protocol

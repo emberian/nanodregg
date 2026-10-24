@@ -232,6 +232,80 @@ theorem build_events_le {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {d
   · show 0 ≤ recordTurnsMax; exact Nat.zero_le _
   · exact walk_events_le _ _ _ _ _ (Nat.zero_le _) hw
 
+/-! ## A page holds at most its budget (PROTOCOL-70)
+
+`walkStep` serves an event only while `bytes + 4 + |event| ≤ budget`, and `bytes` counts exactly the
+served events' `4 + |event|`. So every page `build` returns carries at most `budget` event bytes, the
+fact `Protocol.Proofs.FrameFit.resume_frame_fits` needs of the deployed writer's pages. -/
+
+/-- The walk's invariant: `bytes` is the events' wire bytes, within the budget. -/
+def WithinBudget (budget : Nat) (a : Acc) : Prop := a.bytes = a.eventBytes ∧ a.bytes ≤ budget
+
+theorem walkStep_within {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (budget start : Nat)
+    (st : Acc × D × Nat) (x : Kernel.Step D × D) (h : WithinBudget budget st.1) :
+    WithinBudget budget (walkStep E budget start st x).1 := by
+  obtain ⟨a, c, k⟩ := st
+  obtain ⟨t, root⟩ := x
+  simp only at h
+  simp only [walkStep]
+  split
+  · exact h
+  · split
+    · exact h
+    · split
+      · exact h
+      · rename_i hfit
+        refine ⟨?_, ?_⟩
+        · simp only [Acc.eventBytes, Array.toList_push, List.map_append, List.sum_append, List.map_cons,
+            List.map_nil, List.sum_cons, List.sum_nil]
+          unfold WithinBudget Acc.eventBytes at h
+          omega
+        · simp only [not_or, Nat.not_lt] at hfit
+          exact hfit.2
+
+theorem walkTurnsAt_within {D : Type} [Ord D] [DecidableEq D] (E : Kernel.Env D) (budget start : Nat)
+    (chain₀ : D) (h₀ : Nat) (ts : List (Kernel.Step D × D)) (acc : Acc) (h : WithinBudget budget acc) :
+    WithinBudget budget (walkTurnsAt E budget start chain₀ h₀ ts acc).1 := by
+  unfold walkTurnsAt
+  exact foldl_inv (fun st : Acc × D × Nat => WithinBudget budget st.1) _
+    (fun st x hb => walkStep_within E budget start st x hb) ts _ h
+
+theorem walk_within {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {s : Log.Sealer} {recordMax budget : Nat} {read : Nat → Nat → Id ByteArray} {endOff start : Nat} :
+    ∀ (fuel off : Nat) (c : D) (acc a : Acc), WithinBudget budget acc →
+      walk E dc s recordMax budget read endOff start fuel off c acc = .ok a → WithinBudget budget a := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro off c acc a hacc h
+    simp only [walk, pure] at h
+    cases h; exact hacc
+  | succ fuel ih =>
+    intro off c acc a hacc h
+    simp only [walk, bind, pure] at h
+    split at h
+    · cases h; exact hacc
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · cases h
+        · exact ih _ _ _ _ (walkTurnsAt_within E budget start c acc.steps _ acc hacc) h
+
+/-- **Every page `build` returns carries at most `budget` event bytes** (PROTOCOL-70): with the
+reply's framing (`Protocol.Bounds.logReplyFramingBytes`) it is the page's whole size. -/
+theorem build_within {D : Type} [Ord D] [DecidableEq D] {E : Kernel.Env D} {dc : Codec.Stream D}
+    {digestOf : ByteArray → Option D} {s : Log.Sealer} {recordMax budget : Nat}
+    {read : Nat → Nat → Id ByteArray} {get : Nat → Id (Except Fault Entry)} {count endOff : Nat}
+    {now : Nat × ByteArray} {start : Nat} {a : Acc}
+    (h : build E dc digestOf s recordMax budget read get count endOff now start = .ok a) :
+    a.eventBytes ≤ budget := by
+  have : WithinBudget budget a := by
+    rcases build_located h with ⟨_, rfl⟩ | ⟨k, e, c, _, _, _, _, hw⟩
+    · exact ⟨rfl, Nat.zero_le _⟩
+    · exact walk_within _ _ _ _ _ ⟨rfl, Nat.zero_le _⟩ hw
+  exact this.1 ▸ this.2
+
 /-! ## A page is never stopped for room before it serves (cv 01a150c0)
 
 `walkStep` marks a page `full` when the next event does not fit its budget. Under a budget of

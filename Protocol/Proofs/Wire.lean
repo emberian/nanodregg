@@ -61,8 +61,11 @@ theorem Reply.ofBytes_bytes {r : Reply} {b : ByteArray} (h : r.bytes = some b) :
   cases hf : r.frame with
   | none => simp [hf] at h
   | some f =>
-      simp only [hf, Option.map_some, Option.some.injEq] at h
-      subst h
-      simp [Reply.ofBytes, Stream.decode_bytes Step.frame_lawful, Reply.ofFrame_frame hf]
+      simp only [hf, Option.bind_some] at h
+      split at h
+      · simp only [Option.some.injEq] at h
+        subst h
+        simp [Reply.ofBytes, Stream.decode_bytes Step.frame_lawful, Reply.ofFrame_frame hf]
+      · cases h
 
 end Nanodregg.Protocol.Command

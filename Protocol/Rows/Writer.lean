@@ -34,6 +34,12 @@ structure Params (D : Type) [Ord D] where
   R : Rows.Params D
   /-- the writer's kernel parameters: `R.ctx`, or a plant's mutation of it -/
   X : Ctx D
+  /-- the page budget the writer pages `log` with: HOST's own `Page.budget` (the deployed writer's,
+  under both parameter sets: PROTOCOL-70 made it the frame less the continuation, so every row's
+  resume is the size the deployed transport carries), or a row's misconfigured writer
+  (`Row.pageBudget`) or a plant's guess (`guessedBudget`). The rows see page ends without a smaller
+  budget: a page holds at most `recordTurnsMax` (64) events -/
+  pageBudget : Nat := Page.budget
   /-- serve `log` only to an envelope `Envelope.check` accepts (HOST's `handle`); `false` is the
   plant that answers a page to any envelope that decodes -/
   gateLog : Bool := true
@@ -150,7 +156,7 @@ def pager (P : Params D) (m : Mem) (r : Resident (World D)) : Deferred → IO (U
   let idx := (← m.bases.get).index
   let X := P.X
   match Id.run (Page.build X.env P.R.dc X.digestOf P.R.keys.segment (cadence P).recordBytesMax
-      P.R.pageBudget (fun off len => pure (seg.extract off (off + len)))
+      P.pageBudget (fun off len => pure (seg.extract off (off + len)))
       (Page.entryAt (P.R.keys.forStore (X.env.bytes (World.genesisChain X.env r.world.origin)))
         (fun off len => pure (idx.extract off (off + len))) r.sealed.index.count r.index)
       (r.sealed.index.count + r.index.size) r.pos.offset

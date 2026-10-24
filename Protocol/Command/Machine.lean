@@ -35,6 +35,11 @@ The log is a list of STEPS (KERNEL-47): admitted Turns and recorded refusals. Lo
 steps, and follow binds on (steps, chain), as the kernel's `fold_reaches_host` does. Envelope windows
 stay in heights: the page states the writer's tip in both units (PROTOCOL-41).
 
+`cancel CALL` (PROTOCOL-63) catches up, checks on follow's World that the cancel records there, has
+custody sign it and relays it; the writer's final answer (`refused cancelled`, or `ok`: the call was
+admitted) is its word, so follow catches up AGAIN and ends by its own settlement of the call
+(`cancelSettled`, PROTOCOL-71): `cancelled TXID` only when its own World records the cancel.
+
 `k` holds only the argv, the phase and the results so far; every plan is RE-DERIVED from follow's
 World at each step and the bytes it signs are compared with the ones custody signed (`planMoved`),
 so `k` cannot steer what is signed (HOST-9's `resume_rederives`). A plan is offered for signature
@@ -877,6 +882,14 @@ def readOnly : Cmd D → Bool
   | .read _ _ | .describe _ | .rangeRead .. | .sync | .receipt _ => true
   | _ => false
 
+/-- The verbs whose step 3 submits a call (`plan` at the log's tip, `rotate` from phase 5): the only
+ones a phase-4 continuation settles. A continuation is the client's bytes, never a witness, so a
+phase-4 state under any other verb is `badState`, never a settlement: `cancel CALL` ends `ok` only by
+its own settlement (`cancelSettled`, PROTOCOL-71). -/
+def submits : Cmd D → Bool
+  | .init _ | .adopt .. | .invite _ | .cancel _ => false
+  | c => !readOnly c
+
 def incomingBit : Nat := 2
 def expiredBit : Nat := 1
 
@@ -1076,17 +1089,20 @@ def settled (X : Ctx D) (me : Self D) (w : World D) (out cb result : ByteArray) 
     | _ => refused (D := D) .badResult
   else refused (D := D) .badResult
 
-/-- What a genesis builds, and nothing else: a founder's member cell or its root World grant
-(`Receive.founderEntries`). -/
+/-- A live member cell or grant cell: the kinds a genesis builds (`Receive.founderEntries`) and the
+only ones a step-0 World holds. Any member or grant passes, not only this lineage's founders'. -/
 def genesisLeaf : Leaf → Bool
   | .entry (.live cell _) => cell.kind == kindMember || cell.kind == kindGrant
   | _ => false
 
-/-- Follow's World is still one a genesis builds: no step folded, and every cell a founder's member
-cell or root World grant. A joiner's World is exactly that before its adopt (`genesisWorld_atGenesis`:
-the founders' cells are there at step 0, so "no cell" refused every honest adopt). It holds no object
-(`atGenesis_object`), so no package fact is about it. An adopt replaces follow's World only then
-(`notAtGenesis`), checked at `start` and again at the step that adopts (PROTOCOL-67). -/
+/-- Follow's World is a step-0 World of members and grants: no step folded, and every cell a member
+cell or a World grant. Two Worlds follow can hold are that: the one a genesis builds, a joiner's
+before its adopt (`genesisWorld_atGenesis`: the founders' cells are there at step 0, so "no cell"
+refused every honest adopt), and one carried at height 0 (`carryWorld_atGenesis`: `carryWorld` sets
+`steps` to the carried height), a re-invited member's. It is NOT "a World this joiner's genesis
+built" (PROTOCOL-67 as amended). Either holds no object (`atGenesis_object`), so no package fact is
+about it. An adopt replaces follow's World only then (`notAtGenesis`), checked at `start` and again at
+the step that adopts (PROTOCOL-67). -/
 def atGenesis (w : World D) : Bool :=
   w.steps == 0 && w.trie.toList.all fun p => genesisLeaf p.2
 
@@ -1114,6 +1130,11 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
       next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
         .sign (envelopeMessage X me w.steps upTo) k
 
+/-- Step 4 of a command that submitted a call: `settled`; under any other verb `badState` (a phase-4
+continuation is the client's bytes, never a witness, `submits`). -/
+def settleStep (X : Ctx D) (me : Self D) (w : World D) (cmd : Cmd D) (out cb result : ByteArray) : Reply :=
+  if submits cmd then settled X me w out cb result else refused (D := D) .badState
+
 /-- `cancel CALL`, phase 9: custody's signature over the call's cancel message, decided on follow's
 own World by the writer's own function (`Receive.cancel`) BEFORE anything is sent. A cancel that
 World records is relayed as the `cancel` op, its payload THE tag-2 encoding (`cancelEvent`, the
@@ -1124,30 +1145,76 @@ def sendCancel (X : Ctx D) (w : World D) (argv : List ByteArray) (cb result : By
   match Signed.ofBytes result, X.decodeCall cb with
   | some s, some c =>
       match Receive.cancel X w c s.signature with
-      | .recorded .. => next (D := D) ⟨argv, 10, [cb]⟩ fun k => .host .cancel (cancelEvent s.signature cb) k
+      | .recorded .. => next (D := D) ⟨argv, 10, []⟩ fun k => .host .cancel (cancelEvent s.signature cb) k
       | .declined (.refused r) => refusedAt X (.receive r)
       | .declined (.rejected r) => refusedAt X (.reject r)
       | .admitted .. => refused (D := D) .badState
   | none, _ => refused (D := D) .badResult
   | _, none => refused (D := D) .badCall
 
-/-- `cancel CALL`, phase 10: the writer's answer to the `cancel` op (HOST-18's Serve arm, the
-attempt's own reading of status bytes). A RECORDED cancel is `refused cancelled` (the call's final
-verdict, `Settle.verdictReply`): it prints `cancelled HEX`, the call's transaction id, and ends `ok`.
-`ok` means the call was already ADMITTED and the cancel did nothing: the command is refused
-`committed`. A decline ends it `declined NAME` (nothing recorded); any other refusal `refused NAME`;
-`uncertain NAME` (the journal no longer answers) ends it `uncertain`. Nothing is handed on. -/
-def cancelAnswer (X : Ctx D) (cb result : ByteArray) : Reply :=
-  match hostReply result, X.decodeCall cb with
-  | some (.refused, p), some c =>
+/-- Bits 2 and 3 of an envelope phase's `tried`, set only on `cancel CALL`'s second catch-up: the
+writer answered the cancel `refused cancelled` (it says it recorded the cancel) or `ok` (it says the
+call was already admitted), and this catch-up is the member's settlement of that answer on its OWN
+World (PROTOCOL-71). Disjoint from `expiredBit` and `incomingBit`, which `envelopeRefused` ORs in. -/
+def saidCancelledBit : Nat := 4
+def saidCommittedBit : Nat := 8
+
+/-- `cancel CALL`'s second catch-up, from follow's own World as `start` begins one, its `tried`
+naming the writer's claim `said` (`saidCancelledBit` or `saidCommittedBit`). -/
+def cancelCatchUp (X : Ctx D) (me : Self D) (w : World D) (argv : List ByteArray) (said : Nat) : Reply :=
+  let upTo := w.height + me.window
+  next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 said]⟩ fun k =>
+    .sign (envelopeMessage X me w.steps upTo) k
+
+/-- `cancel CALL`, phase 10: the writer's answer to the `cancel` op (HOST-18's Serve arm). Its two
+final claims are the writer's word, never the member's (PROTOCOL-46, PROTOCOL-71): `refused
+cancelled` (the cancel recorded) and `ok` (the call already admitted, so the cancel did nothing) each
+start a second catch-up from follow's own World, its `tried` naming the claim (`saidCancelledBit`,
+`saidCommittedBit`), and the command ends at its tip by follow's own settlement (`cancelSettled`).
+A decline ends it `declined NAME` (nothing recorded); any other refusal `refused NAME`; `uncertain
+NAME` (the journal no longer answers) ends it `uncertain`. -/
+def cancelAnswer (X : Ctx D) (me : Self D) (w : World D) (argv : List ByteArray) (result : ByteArray) :
+    Reply :=
+  match hostReply result with
+  | some (.refused, p) =>
       if hostName p = (Receive.Refusal.cancelled : Receive.Refusal D).name then
-        printed s!"cancelled {hex X (txIdOf X c)}\n"
+        cancelCatchUp X me w argv saidCancelledBit
       else refusedAt X (.host (hostName p))
-  | some (.ok, _), _ => refusedAt X (.host "committed")
-  | some (.declined, p), _ => declined (hostName p)
-  | some (.uncertain, p), _ =>
+  | some (.ok, _) => cancelCatchUp X me w argv saidCommittedBit
+  | some (.declined, p) => declined (hostName p)
+  | some (.uncertain, p) =>
       .done CommandExit.uncertain.code.toUInt8 ByteArray.empty s!"uncertain {hostName p}\n".toUTF8
-  | _, _ => refused (D := D) .badResult
+  | _ => refused (D := D) .badResult
+
+/-- The code a recorded cancel carries (`Receive.cancel` records `refused cancelled`). -/
+def cancelledCode : Nat := (Receive.Verdict.refused (Receive.Refusal.cancelled) : Receive.Verdict D).code
+
+/-- `cancel CALL` at the tip of its second catch-up: the writer's claim (`saidCancelled`: the cancel
+recorded; else the call admitted) checked against follow's own settlement of the call on the World it
+just caught up to (PROTOCOL-71, the class PROTOCOL-64 closed at step 4). `ok`, printing `cancelled
+TXID`, only when the writer said cancelled AND that World settles the call `refused cancelled`;
+`refused committed` only when the writer said admitted AND that World settles it committed; anything
+else `hostContradicted CLAIM FOLLOWSAID` (`attemptContradicted`), the call's attempt left open. -/
+def cancelSettled (X : Ctx D) (me : Self D) (w : World D) (c : Call D) (saidCancelled : Bool) : Reply :=
+  match saidCancelled, settleOf X me w c with
+  | true, .refused code =>
+      if code = cancelledCode (D := D) then printed s!"cancelled {hex X (txIdOf X c)}\n"
+      else attemptContradicted X "cancelled" (some (.refused code))
+  | false, .committed .. => refusedAt X (.host "committed")
+  | true, v => attemptContradicted X "cancelled" (some v)
+  | false, v => attemptContradicted X "committed" (some v)
+
+/-- `cancel CALL` at the tip of a catch-up: the first one (no claim in `tried`) asks custody to sign the
+cancel message, phase 9; the second one (`tried` names the writer's claim) ends by follow's own
+settlement (`cancelSettled`, PROTOCOL-71). -/
+def cancelTip (X : Ctx D) (me : Self D) (w : World D) (argv : List ByteArray) (cb triedB : ByteArray) : Reply :=
+  match X.decodeCall cb, Text.ofU64 triedB with
+  | none, _ => refused (D := D) .badCall
+  | some _, none => refused (D := D) .badState
+  | some c, some t =>
+      if t &&& (saidCancelledBit ||| saidCommittedBit) = 0 then
+        next (D := D) ⟨argv, 9, []⟩ fun k => .sign (X.cancelMessage c) k
+      else cancelSettled X me w c (t &&& saidCancelledBit ≠ 0)
 
 /-- Did the state ask custody for `signIncoming`? An envelope phase (1) whose `tried` has the
 incoming bit. It holds EXACTLY when the step that handed the state on asked `signIncoming`:
@@ -1250,11 +1317,10 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       -- and the member's settlement of it (PROTOCOL-46)
                       | .receipt cb, _ => moved w' ts (receiptLines X dc me w' cb)
                       -- cancel: custody signs the cancel message of the call (`domCancel ‖ txId`)
-                      | .cancel cb, _ =>
-                          match X.decodeCall cb with
-                          | none => moved w' ts (refused (D := D) .badCall)
-                          | some c => moved w' ts (again 9 [cb] fun k => .sign (X.cancelMessage c) k)
-                      | .rotate, some _ => moved w' ts (again 5 [startB, signedB] fun k => .precommit k)
+                      -- cancel: custody signs the cancel message of the call (`domCancel ‖ txId`);
+                      -- after the writer's final answer, follow settles it here (`cancelTip`)
+                      | .cancel cb, _ => moved w' ts (cancelTip X me w' st.argv cb triedB)
+                      | .rotate, some _ => moved w' ts (again 5 [] fun k => .precommit k)
                       -- invite: the inputs make this World; pin the newest base follow verified
                       -- itself (`pinOf`), sign with the key the writer just took for this
                       -- member's envelope
@@ -1274,13 +1340,13 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                         | .ok b, .ok rs =>
                           match plan X me w' s.key rs b with
                           | .error r => moved w' ts (refusedAt X r)
-                          | .ok u => moved w' ts (again 3 [startB, signedB, X.callMessage u] fun k =>
+                          | .ok u => moved w' ts (again 3 [signedB, X.callMessage u] fun k =>
                               .sign (X.callMessage u) k)
                       | _, none => moved w' ts (refused (D := D) .badState)
           | some (.refused, p) => same (envelopeRefused X me st.argv cmd startB pagesB upToB triedB p)
           | _ => same (refused (D := D) .badResult)
       -- the call's signature: re-plan, compare with what was signed, check the call reads back, submit
-      | _, 3, [startB, signedB, ub] =>
+      | _, 3, [signedB, ub] =>
           match Signed.ofBytes signedB, Signed.ofBytes result with
           | some s, some s2 => match body X me w s cmd, signedReads X w cmd with
             | .error r, _ => same (refused (D := D) r)
@@ -1296,11 +1362,11 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                   if X.decodeCall (X.callBytes c) ≠ some c then same (refused (D := D) .badCall) else
                   match receive X w c with
                   | .error r => same (refusedAt X (.receive r))
-                  | .ok t => same (again 4 [startB, signedB, ub, (receipt X t).toUTF8, X.callBytes c] fun k =>
+                  | .ok t => same (again 4 [(receipt X t).toUTF8, X.callBytes c] fun k =>
                       .submit (X.callBytes c) k)
           | _, _ => same (refused (D := D) .badResult)
       -- rotate: custody's next and pending keys; plan the rotation to `next`, signed by `next`
-      | .rotate, 5, [startB, _] =>
+      | .rotate, 5, [] =>
           match precommitOf result with
           | none => same (refused (D := D) .badResult)
           | some (nk, pk) =>
@@ -1309,15 +1375,15 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
               | some sb, .ok b =>
                   match plan X me w s.key {} b with
                   | .error r => same (refused (D := D) r)
-                  | .ok u => same (again 3 [startB, sb, X.callMessage u] fun k =>
+                  | .ok u => same (again 3 [sb, X.callMessage u] fun k =>
                       .signNext (X.callMessage u) k)
               | _, _ => same (refused (D := D) .badState)
-      -- the settlement
-      | _, 4, [_, _, _, out, cb] => same (settled X me w out cb result)
+      -- the settlement, of a call this command submitted
+      | cmd, 4, [out, cb] => same (settleStep X me w cmd out cb result)
       -- cancel: custody's signature, decided on follow's own World before it is sent
-      | .cancel _, 9, [cb] => same (sendCancel X w st.argv cb result)
-      -- cancel: the writer's answer
-      | .cancel _, 10, [cb] => same (cancelAnswer X cb result)
+      | .cancel cb, 9, [] => same (sendCancel X w st.argv cb result)
+      -- cancel: the writer's answer; its final claims are settled by a second catch-up
+      | .cancel _, 10, [] => same (cancelAnswer X me w st.argv result)
       -- adopt: the envelope for the page at `off`, signed; ask for the base page
       | .adopt _ _, 6, [offB, pagesB, upToB, triedB] =>
           match Signed.ofBytes result, Text.ofU64 offB, Text.ofU64 upToB with

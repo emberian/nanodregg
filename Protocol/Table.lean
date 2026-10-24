@@ -420,7 +420,10 @@ def frameBytesMax : Nat := 262144
 follow refused the confirm's argv `argvPastBound`, which the attempt reads as `uncertain` (LANG-76,
 the Bell's install at 36,379 call bytes). -/
 def argvBytesMax : Nat := 2 * Kernel.Bounds.eventBytesMax + 1024
-/-- Steps one command may take before follow ends it with a refusal. -/
+/-- Steps one command may take: the CLIENT's bound, not follow's. Follow keeps no step counter (a
+continuation carries no count); `nd`'s run loop ends a command past this many steps
+(`client/src/run.rs`, `StepsExhausted`) and so does the rows' harness (`Rows.Loopback.resume`). A
+table constant Rust consumes (law 2); `Bounds.pages_fit_steps` is why an honest catch-up never meets it. -/
 def stepsPerCommandMax : Nat := 64
 /-- Sends of one frozen call: the first submit and the resends after `absent`. -/
 def sendsMax : Nat := 8
@@ -472,6 +475,43 @@ a cancel signature's eight-byte length and the signature at `cancelBytesMax` (ta
 call at `eventBytesMax`. A page budget of this plus the page's 4-byte length serves every event a
 record decodes to (`Host.Page.budget_fits_event`). -/
 def pageEventBytesMax : Nat := Kernel.Bounds.eventBytesMax + 1 + 8 + Kernel.Bounds.cancelBytesMax
+
+/-! ### The frame as a whole (PROTOCOL-70)
+
+Every byte-string field of a layout is bounded by `frameBytesMax` on its own (`Codec.Layout`); the
+transport bounds the frame's BODY, the op or status byte and every field together, by the same number
+(`Host.Wire.bodyMax`, `client/src/frame.rs`). A `resume` after a `log` carries two big fields, the
+continuation and the Host's page, so the page's room is the frame less the continuation's largest
+size and every byte of framing: `pageBytesMax`, the deployed writer's page budget (`Host.Page.budget`).
+Before PROTOCOL-70 the budget was `frameBytesMax - 1024`: a full page left 890 bytes for the
+continuation, and `receipt CALL` of any call over 337 bytes could not take it back (measured). -/
+
+/-- The deployed custody's public key (`client/src/custody.rs`: Ed25519). -/
+def custodyKeyBytes : Nat := 32
+/-- The deployed custody's signature (Ed25519). -/
+def custodySignatureBytes : Nat := 64
+/-- Custody's `sign` answer at the deployed widths (`signResultLayout`: key, next key, signature,
+each behind a `u32` length): what a page phase's continuation holds as `signed`. -/
+def signedBytes : Nat := (4 + custodyKeyBytes) + (4 + custodyKeyBytes) + (4 + custodySignatureBytes)
+/-- What a `resume` frame spends beside its two fields' bytes: the op byte and the two `u32`
+lengths (`resumeLayout`). -/
+def resumeFramingBytes : Nat := 1 + 4 + 4
+/-- What a `log` reply spends beside its events' bytes: the status byte, the events' `u32` count,
+the four `u64` positions behind their lengths, and the chain and base digest behind theirs
+(`logReplyLayout`). A `read` reply spends less (`readReplyLayout`: two `u64`s and two digests). -/
+def logReplyFramingBytes : Nat := 1 + 4 + 4 * (4 + 8) + 2 * (4 + Host.digestBytes)
+/-- The largest continuation a page-asking step hands out: phase 2's (`log`), the argv at
+`argvBytesMax` (`parse` refuses a longer one), the phase byte, the acc's `u32` count and its five
+fields (`start`, `pages`, `upTo`, `tried` as `u64`s, custody's `signed` answer), each behind its
+length. Phase 7's (`read`) holds four `u64`s and is smaller. -/
+def pageContinuationBytesMax : Nat := argvBytesMax + 1 + 4 + 4 * (4 + 8) + (4 + signedBytes)
+/-- **The page budget**: the event bytes (`Σ (4 + |event|)`) one `log` page carries, and the World
+bytes one `read` page carries. The frame less the resume's framing, the reply's framing and the
+largest continuation, so a page and the continuation that asked for it fit ONE frame
+(`Protocol.Proofs.FrameFit.resume_frame_fits`). It still serves every event the kernel admits
+(`Host.Page.budget_fits_event`: `pageEventBytesMax + 4 ≤ pageBytesMax`). -/
+def pageBytesMax : Nat :=
+  frameBytesMax - resumeFramingBytes - logReplyFramingBytes - pageContinuationBytesMax
 
 end Bounds
 

@@ -5,10 +5,12 @@ Follow's World moves only by the steps its own machine takes (`Command.step`, on
 connection's continuation, any result): a step keeps follow's World, or absorbs a log page (each
 event re-derived on follow's World, `absorbStep`: a Turn by `Receive.submit`, a refusal by
 `Receive.judge` or `Receive.cancel`), or adopts a base, which it does only while follow's World is one
-a genesis builds (`atGenesis`, checked at the step that adopts, HOSTING-43, PROTOCOL-67).
+a step-0 World of members and grants (`atGenesis`, checked at the step that adopts, HOSTING-43,
+PROTOCOL-67).
 
 - `genesisWorld_atGenesis`: every genesis World is one adopt may replace (the honest joiner's,
-  before its adopt); `atGenesis_object`: such a World holds no live object.
+  before its adopt); `carryWorld_atGenesis` / `carry_genesis_atGenesis`: so is a World carried at
+  height 0 (a re-invited member's, readers A21); `atGenesis_object`: such a World holds no live object.
 
 - `absorbStep_object_head`: one re-derived event keeps a live object live, an object, with its
   `packageOf` (KERNEL-64's `submit_object_head`; a refusal changes no cell, `refuse_live`).
@@ -87,6 +89,30 @@ theorem genesisWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance :
   rintro ⟨id, e⟩ hq
   obtain ⟨p, -, ⟨-, he⟩ | ⟨-, he⟩⟩ := Receive.mem_founderEntries hq <;> subst he <;>
     simp [genesisLeaf, Receive.founderMember, Receive.founderRoot]
+
+omit [DecidableEq D] in
+/-- **A World carried at height 0 is one adopt may replace too** (PROTOCOL-67's amendment, readers
+A21): `carryWorld` sets `steps := c.height`, so the carry of a height-0 World of members and grants
+(its trie a genesis's: a height-0 World has folded only refusals, which change no cell) is at step 0
+with the same cells. A member re-invited to such a carried World (`acceptCarry`) holds it, and no
+genesis of this joiner built it: `atGenesis` is "a step-0 World of members and grants", not "a World
+a genesis builds". It still holds no object (`atGenesis_object`). -/
+theorem carryWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) {w : World D}
+    (hh : w.height = 0) (hg : w.trie.toList.all (fun p => genesisLeaf p.2) = true) :
+    atGenesis (carryWorld X name nonce fromOrigin w.carried) = true := by
+  simp only [atGenesis, carryWorld, World.carried, hh, beq_self_eq_true, Bool.true_and]
+  exact hg
+
+/-- The carried-at-0 instance: the carry of any genesis World (a lineage exported before its first
+step) under any new name and nonce. -/
+theorem carry_genesis_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
+    (founders : List (ByteArray × D)) (name' nonce' : ByteArray) :
+    let g := Receive.genesisWorld X name nonce allowance founders
+    atGenesis (carryWorld X name' nonce' g.origin g.carried) = true := by
+  intro g
+  have h := genesisWorld_atGenesis X name nonce allowance founders
+  simp only [atGenesis, Bool.and_eq_true] at h
+  exact carryWorld_atGenesis X name' nonce' g.origin rfl h.2
 
 /-- **One re-derived event keeps a live object's package** (KERNEL-64 at follow's step). -/
 theorem absorbStep_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}

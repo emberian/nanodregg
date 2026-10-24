@@ -3,7 +3,7 @@
 
 `Reply.bytes` is what `host follow` writes for a step (`Step.frame` over Protocol.Table's layouts);
 `Reply.ofBytes` is the client's reading of it, and the only one (CLIENT-10's generated reader is
-the same layout). A reply with a field past `Bounds.frameBytesMax`, or a `host` step whose op is not
+the same layout). A reply with a field past `Bounds.frameBytesMax`, or fields past it together, or a `host` step whose op is not
 relayable (`Op.relayable`: never `submit`, which goes only through the attempt store), has no
 bytes: `none`. Round trip: `Protocol.Proofs.Wire.ofBytes_bytes`.
 -/
@@ -38,7 +38,12 @@ def Reply.ofFrame : Step.Frame → Option Reply
   | ⟨.signNext, (m, k, ())⟩ => some (.signNext m.1 k.1)
   | ⟨.signIncoming, (m, k, ())⟩ => some (.signIncoming m.1 k.1)
 
-def Reply.bytes (r : Reply) : Option ByteArray := r.frame.map Step.frame.bytes
+/-- The step's bytes, when they fit ONE frame as a whole (`bodyFits`: the status byte and every
+field together, PROTOCOL-70); a reply whose fields each fit but whose sum does not has none, and
+`host follow` refuses the step `stepTooLarge` by name instead of writing a frame the client's
+transport refuses. -/
+def Reply.bytes (r : Reply) : Option ByteArray :=
+  r.frame.bind fun f => let b := Step.frame.bytes f; if bodyFits b then some b else none
 
 def Reply.ofBytes (b : ByteArray) : Option Reply :=
   match Step.frame.decode b with

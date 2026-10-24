@@ -70,8 +70,11 @@ structure Sys (D : Type) [Ord D] where
   /-- the attempt store takes the Host's `declined` as final: the attempt settled `refused` (a plant,
   KERNEL-54: a stale is declined, and only follow's fold settles it) -/
   settleDecline : Bool := false
-  /-- the attempt store ends an attempt on the Host's status, never asking follow (a plant) -/
+  /-- the attempt store ends an attempt on the Host's final refusal, never asking follow (a plant) -/
   trustLookup : Bool := false
+  /-- `cancel CALL` ends `cancelled` on the writer's `refused cancelled`, never settling it on
+  follow's World (a plant: follow's phase 10 before PROTOCOL-71) -/
+  trustCancel : Bool := false
   /-- the operator's seal skips `Host.sealNow`: a restart and nothing sealed (a plant) -/
   sealIgnored : Bool := false
   /-- `read OBJ` prints the raw state slots (a plant, PROTOCOL-48) -/
@@ -95,8 +98,8 @@ structure Sys (D : Type) [Ord D] where
   staleBase : Bool := false
   /-- the client runs every write command twice (a plant, PROTOCOL-53) -/
   twiceEach : Bool := false
-  /-- an invoke's range is signed at the listing the actor's follow held before it caught up (a
-  plant, item 4) -/
+  /-- a relay hides the log from an invoke with `--range`: follow plans, by its own machine, at the
+  listing it held before (a plant, item 4) -/
   staleRange : Bool := false
   /-- the client drops an invoke's `--range` (a plant, item 4) -/
   dropRange : Bool := false
@@ -153,7 +156,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .noReadLimit => { writer := { R, X := R.ctx }, follow := R.ctx, noReadLimit := true }
   | some .flatProgram => { writer := { R, X := R.ctx }, follow := R.ctx, flatProgram := true }
   | some .maskIncoming => { writer := { R, X := R.ctx }, follow := R.ctx, maskIncoming := true }
-  | some .guessedBudget => { writer := { R := { R with pageBudget := 16384 }, X := R.ctx }, follow := R.ctx }
+  | some .guessedBudget => { writer := { R, X := R.ctx, pageBudget := 16384 }, follow := R.ctx }
   | some .dropHint => { writer := { R, X := R.ctx }, follow := R.ctx, dropHint := true }
   | some .staleBase => { writer := { R, X := R.ctx }, follow := R.ctx, staleBase := true }
   | some .twiceEach => { writer := { R, X := R.ctx }, follow := R.ctx, twiceEach := true }
@@ -162,6 +165,9 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .actOnBeforeLog => { writer := { R, X := R.ctx }, follow := R.ctx, actOnBeforeLog := true }
   | some .dropDoc => { writer := { R, X := R.ctx }, follow := R.ctx, dropDoc := true }
   | some .cancelUndomained => { writer := { R, X := R.ctx }, follow := R.ctx, cancelUndomained := true }
+  | some .trustCancel => { writer := { R, X := R.ctx }, follow := R.ctx, trustCancel := true }
+  | some .perFieldBudget =>
+      { writer := { R, X := R.ctx, pageBudget := Bounds.frameBytesMax - 1024 }, follow := R.ctx }
 
 /-! ## Actors -/
 
@@ -519,12 +525,18 @@ follow would persist is not modelled here: the actor's state is in memory. -/
 def followAsk (name : String) (self : Self D) (op : Op) (payload : ByteArray) :
     M D (Except String ByteArray) := do
   sawOp op
+  -- the client's transport: a body past the frame, as a whole, is never written (`write_body`'s
+  -- `pastBound frameBytesMax`, PROTOCOL-70); before it the in-process rows passed frames the
+  -- deployed transport refuses
+  if !bodyFits payload then return .error "pastBound"
   let a ← actor name
   let st ← get
   set { st with conn := st.conn + 1 }
   let (fs', _, status, p) :=
     Host.Follow.answer (← X) (← params).dc (base (← params)) self a.follow ⟨UInt32.ofNat st.conn, op.code, payload⟩
   setActor name { a with follow := fs' }
+  -- and a reply past it is never read (`read_body`)
+  if !bodyFits p then return .error "pastBound"
   pure (if status = Status.ok.code then .ok p else .error (Command.hostName p))
 
 /-! ## Transport faults on a log page -/
@@ -559,6 +571,26 @@ def pageFault : Fault → ByteArray → ByteArray
         | none => reply
       | _ => reply
   | _ => id
+
+/-- A relay that hides the writer's log: a `log` page answered as an EMPTY page at follow's own
+position `w`, stated as the writer's tip (the plant `staleRange`: follow is never caught up, and its
+own machine, admission included, plans on the World it holds). -/
+def hideLog (X : Ctx D) (w : World D) (reply : ByteArray) : ByteArray :=
+  match Command.hostReply reply with
+  | some (.ok, p) =>
+      match logReplyFrame.decode p with
+      | .ok (_, _, _, _, _, bs, bd, ()) =>
+          let f := Text.fit Bounds.frameBytesMax
+          let base := match Text.ofU64 bs.1 with
+            | some b => if b ≤ w.steps then bs.1 else Text.u64 0
+            | none => Text.u64 0
+          match Text.fitList Bounds.frameBytesMax [], f (Text.u64 w.steps), f (X.env.bytes w.chain),
+              f (Text.u64 w.steps), f (Text.u64 w.height), f base with
+          | some l, some n, some c, some t, some th, some b =>
+              ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, b, bd, ())
+          | _, _, _, _, _, _ => reply
+      | .error _ => reply
+  | _ => reply
 
 def coldFault : Fault → Bool
   | .flipEvent _ | .dropLastEvent | .cold | .inflateExpired _ | .forgeCancel => true
@@ -692,13 +724,27 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           | true, .error e => pure (.refused e.name, "")
           | _, _ => resume name argv fault depth k r fuel
       | some (.host op p k) =>
-          match ← ask op p with
+          -- `lieCancel`: the relay keeps the cancel from the writer and answers it `refused cancelled`
+          let lie : Option ByteArray := match fault, op with
+            | .lieCancel, .cancel => some (ByteArray.mk #[Status.refused.code] ++
+                (Receive.Refusal.cancelled : Receive.Refusal D).name.toUTF8)
+            | _, _ => none
+          match ← (match lie with | some r => pure (some r) | none => ask op p) with
           | none => pure (.refused "writerStopped", "")
           | some res =>
               let res := match fault with
                 | .pageIo => if op = .log || op = .read then
                     ByteArray.mk #[Host.pageIoReply.1] ++ Host.pageIoReply.2 else res
                 | _ => res
+              let st ← get
+              -- the plant `trustCancel`: follow's old phase 10, `cancelled` on the writer's word
+              if st.sys.trustCancel && op = .cancel &&
+                  Command.hostReply res == some (.refused, (Receive.Refusal.cancelled : Receive.Refusal D).name.toUTF8) then
+                return (.ok, "cancelled\n")
+              -- the plant `staleRange`: a relay that hides the log from an invoke with `--range`
+              let res := if st.sys.staleRange && argv.contains "--range" && op = .log then
+                  hideLog st.sys.follow ((st.actors.lookup name).map (·.follow.world) |>.getD st.genesis) res
+                else res
               resume name argv fault depth k (if op = .log then pageFault fault res else res) fuel
       | some (.submit call k) => do
           sawCall name call
@@ -764,8 +810,8 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
                 (some (hostSaid res)) said
       | .confirm | .probe =>
           let req : Attempt.Request := if a = .confirm then .confirm else .probe
-          if (← get).sys.trustLookup && a = .confirm then
-            -- the plant: the Host's word taken as final
+          if (← get).sys.trustLookup && a = .confirm && (match host with | some .refused => true | _ => false) then
+            -- the plant: the Host's final refusal taken as final, never confirmed by follow
             let s := host.getD .lost
             let txt := match s, reply with
               | .refused, some r => match Command.hostReply r with
@@ -940,7 +986,6 @@ def runAct (l : Line) : M D (Expect × String) := do
       | .error e => pure (.refused e, "")
       | .ok av =>
           -- the plants (item 4): an invoke's range signed at the actor's stale listing; the flag dropped
-          if (← get).sys.staleRange && av.contains "--range" then return ← forged l.actor av
           let av := if (← get).sys.dropRange then dropRangeFlag av else av
           let (o, out) ← command l.actor av l.fault 4
           -- the plant: follow acts on the writer's `beforeLog`, taking its first step (the carried
@@ -1220,8 +1265,12 @@ structure Result where
 
 /-- Run a member row against a fresh deployment under the parameters `R` and the plant `m`;
 `times` scales every repeated line. -/
-def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : Option Nat) : IO Result := do
+def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : Option Nat)
+    (budget : Option Nat := none) : IO Result := do
   let s := sys R m
+  let s := match budget with
+    | some b => { s with writer := { s.writer with pageBudget := b } }
+    | none => s
   let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest s.writer.X (keyOf R n 1))
   let g ← match Receive.genesis s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs with
     | .ok g => pure g

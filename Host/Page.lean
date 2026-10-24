@@ -74,8 +74,10 @@ def Fault.name : Fault → String
   | .beforeLog _ _ => "beforeLog"
   | .checkpointed _ _ => "checkpointed"
 
-/-- The deployed page budget: a reply frame, less room for the counts, the positions and the chain. -/
-def budget : Nat := Protocol.Bounds.frameBytesMax - 1024
+/-- The deployed page budget: PROTOCOL's `pageBytesMax`, the frame less the continuation that
+asked for the page and every byte of framing, so the page and the continuation travel back to
+follow in ONE frame (PROTOCOL-70; it was `frameBytesMax - 1024`, a bound on the page as one field). -/
+def budget : Nat := Protocol.Bounds.pageBytesMax
 
 /-- What the walk has served so far. -/
 structure Acc where
@@ -85,6 +87,10 @@ structure Acc where
   steps : Nat
   chain : ByteArray
   full : Bool := false
+
+/-- The bytes a page's events take on the wire: each one's `u32` length and its bytes (what `bytes`
+counts as the walk serves, `Host.Proofs.Page.build_within`). -/
+def Acc.eventBytes (a : Acc) : Nat := (a.events.toList.map (4 + ·.size)).sum
 
 variable {m : Type → Type} [Monad m]
 

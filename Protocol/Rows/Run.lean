@@ -70,8 +70,8 @@ def runExe (name : String) (args : List String) : IO Ran := do
 
 /-- Run a member row in a task, polling it under the row's deadline. -/
 def runMembers {D : Type} [Ord D] [DecidableEq D] (R : Params D) (m : Option Mutation) (ls : List Line)
-    (times : Option Nat) : IO (Except String Loopback.Result) := do
-  let t ← IO.asTask (prio := .dedicated) (Loopback.run R m ls times)
+    (times : Option Nat) (budget : Option Nat := none) : IO (Except String Loopback.Result) := do
+  let t ← IO.asTask (prio := .dedicated) (Loopback.run R m ls times budget)
   let rec poll : Nat → IO Bool
     | 0 => pure false
     | n + 1 => do
@@ -202,11 +202,10 @@ def barLines (r : Row) (res : Loopback.Result) : IO (Option String) := do
 def drive {D : Type} [Ord D] [DecidableEq D] (R : Params D) (r : Row) (times : Option Nat)
     (control : Bool := false) (measures : Bool := true) : IO Ran :=
   if let some why := r.blockedOn then pure (.pending s!"blocked on {why}") else
-  let R := match r.pageBudget with | some b => { R with pageBudget := b } | none => R
   match r.drive with
   | .exe name args _ => runExe name args
   | .members ls => do
-      match ← runMembers R none ls times with
+      match ← runMembers R none ls times r.pageBudget with
       | .error e => pure (.broken e)
       | .ok res =>
           IO.println s!"COST {r.name} frames {res.frames} steps {res.steps}"
@@ -218,7 +217,7 @@ def drive {D : Type} [Ord D] [DecidableEq D] (R : Params D) (r : Row) (times : O
           let t := String.intercalate "\n" res.log.toList
           match judge r res.observed, r.plant with
           | .pass, .caught m line got =>
-              match ← runMembers R (some m) ls times with
+              match ← runMembers R (some m) ls times r.pageBudget with
               | .error e => pure (.broken s!"plant {repr m}: {e}")
               | .ok pr =>
                   -- `--harness-control` (GATES-15): the plant is read at a line the row does not

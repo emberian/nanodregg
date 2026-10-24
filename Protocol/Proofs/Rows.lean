@@ -4,9 +4,8 @@
 The deletion rule as a theorem: an operation that no row drives is not part of the system. Adding
 an operation to `Op` without a row that exercises it breaks this proof by name.
 
-The rows' writer serves every event the kernel admits (PROTOCOL-55): both parameter sets' budgets
-meet the premise of HOST's `Host.Page.walkTurnsAt_serves` and `Host.Page.walk_serves` (a budget of
-`pageEventBytesMax + 4`; the tooth at `+ 3` is `Host.Page.walkTurnsAt_one_short`).
+The rows' writer pages at HOST's own `Page.budget` under both parameter sets (PROTOCOL-70), so that it
+serves every event the kernel admits is HOST's `Host.Page.budget_fits_event`, not a fact of the rows.
 -/
 import Protocol.Rows
 import Protocol.Rows.Writer
@@ -24,15 +23,3 @@ theorem every_op_has_a_row (op : Op) : ∃ r ∈ rows, op ∈ r.ops := by
 theorem row_names_distinct : (rows.map Row.name).Nodup := by decide
 
 end Nanodregg.Protocol
-
-namespace Nanodregg.Protocol.Rows.Params
-
-/-- The toy rows' budget is `Host.Page.walkTurnsAt_serves`' premise: a record's walk that has
-served nothing serves the first step past its start, whatever event the kernel admitted there. -/
-theorem toy_budget_serves : Protocol.Bounds.pageEventBytesMax + 4 ≤ toy.pageBudget := Nat.le_refl _
-
-/-- The deployed rows' budget is `Host.Page.walkTurnsAt_serves`' premise. -/
-theorem deployed_budget_serves : Protocol.Bounds.pageEventBytesMax + 4 ≤ deployed.pageBudget :=
-  Nat.le_refl _
-
-end Nanodregg.Protocol.Rows.Params
