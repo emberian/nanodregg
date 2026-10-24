@@ -1443,8 +1443,10 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
   let (r8a, v8a, _) := go prog r c8a
   r := note r8a s!"LB8a B answers A's ring at {h1}: {v8a}" (v8a == "admitted")
   let (r8b, v8b, _) := go prog r c8b
-  r := note { r8b with log := r.log, bad := r.bad } s!"LB8b B answers it again over the same view: {v8b}; the answer stays \"first\" (the guard reads the row as it is, so it refuses before the kernel finds the pin stale)"
-    (deniedWith v8b "rung: answered" && ringAnswer obj r.st.host k1 == some (some "first".toUTF8))
+  -- KERNEL-66: the pins are compared before any receiver, so the view the first answer moved is
+  -- declined `stale` before the guard reads the row; LB8 is the guard's own refusal, on a current view
+  r := note { r8b with log := r.log, bad := r.bad } s!"LB8b B answers it again over the same view: {v8b}; the answer stays \"first\" (the view moved: the kernel declines it stale before the guard runs, KERNEL-66)"
+    (v8b == "rejected stale" && ringAnswer obj r.st.host k1 == some (some "first".toUTF8))
   -- LB8t the answer is to the ring as rung: another text sent back is refused by the guard
   let kb := ringKey h1 b
   let (_, v8t, _) := go prog r (call r b 0 (answerArg h1 b "me three" "yes") r.st.host.height (pinBoth r.st.host kb))
@@ -1992,7 +1994,8 @@ retained with the reason it was set aside. A candidate records the FACTS it was 
 post on this object (assumption tokens, `(cell, pin)` as the poster saw it). A `select` point-reads the candidate
 and its facts: a fact re-pinned or withdrawn by its poster refuses the select BY NAME (`support0 moved` /
 `support0 withdrawn`), and the kernel's `stale` stands behind it for a view that no longer holds (the plant that
-removes the method's pin check turns LH7 admitted and LH7b `rejected stale`). The demonstration of the
+removes the method's pin check turns LH7 admitted; a select over a view that moved, LH7b, is `rejected stale` before the
+method runs, KERNEL-66). The demonstration of the
 `Lang/Contextual` closure theory; the text is the `.ob` a resident would write. -/
 
 def hole_supportTy : Ty := .record [("cell", .digest), ("pin", .digest)]
@@ -2200,8 +2203,10 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
   let c7b := call viewBefore a "select" (hole_selectArg c1)
     (pinCand viewBefore.st.host c1 ++ pinFact viewBefore.st.host f1 ++ pinFact viewBefore.st.host f2)
   let (_, v7b, _) := go prog r c7b
-  r := note r s!"LH7b the same select signed over the view before the re-pin: {v7b} (the method reads the row as it is; the kernel's stale stands behind it)"
-    (refusedBy v7b "select" "support0 moved")
+  -- KERNEL-66: the view's row pins moved, so the kernel declines the call `stale` before the method
+  -- runs; LH7 is the method's own `support0 moved`, on a current view
+  r := note r s!"LH7b the same select signed over the view before the re-pin: {v7b} (the view moved: the kernel declines it stale before the method runs, KERNEL-66)"
+    (v7b == "rejected stale")
   -- LH7c a select citing a candidate whose fact row is pinned absent (f1 unposted on a scratch World)
   let (rX, vX, _) := go prog r (call r b "unpost" (hole_unpostArg f1) (pinFact r.st.host f1))
   let cX := call rX a "select" (hole_selectArg c1) (pinCand rX.st.host c1 ++ pinFact rX.st.host f1 ++ pinFact rX.st.host f2)
@@ -2468,10 +2473,10 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
     (.revoke providers[0]!))
   r := note r' s!"P8.2 withdraw provider 0: {vr}" (vr == "admitted")
   let (_, stale, _) := go prog r oldPlan
-  -- The plan signed before the revoke pins g0 at its live version: the commit reads the cell as it
-  -- is (dead) and refuses by name; the kernel's stale stands behind it (as LH7b for a moved row).
+  -- The plan signed before the revoke pins g0 at its live version, which the revoke moved: the kernel
+  -- declines it `stale` before the commit method runs (KERNEL-66; as LH7b for a moved row).
   r := note r s!"P8.2 withdrawn instantiation: {stale}; live authority {p8Live r.st.host supports}"
-    ((refusedBy stale "commit" "support0 dead" || stale.startsWith "rejected stale") &&
+    (stale.startsWith "rejected stale" &&
       p8Live r.st.host supports == [false, true] && headCount r.st.host obj 0 == some 2)
   -- C1 (LANG-75.1, cv 01a16171): a commit that RE-PINS the withdrawn provider's grant at its
   -- TOMBSTONE passes the kernel's pin check; the commit's live read of the facts sees the cited cell
