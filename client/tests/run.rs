@@ -75,6 +75,15 @@ impl Host for ScriptedHost {
     }
 }
 
+/// `rotate`'s argv as the attempt store keys it (the generated `Command` encoding).
+fn rotate_key() -> Vec<u8> {
+    nanodregg_client::generated::layout::Command {
+        argv: vec![b"rotate".to_vec()],
+    }
+    .encode()
+    .unwrap()
+}
+
 fn setup(name: &str) -> (std::path::PathBuf, Custody) {
     let d = nanodregg_devtools::scratch(&format!("nd-run-{}-{name}", std::process::id()));
     nanodregg_devtools::mkdirs(&d.join("attempts")).unwrap();
@@ -284,7 +293,7 @@ fn an_armed_rotation_is_settled_by_its_receipt_before_the_command() {
     let (d, custody) = setup("reconcile");
     let (next, _) = custody.precommit().unwrap();
     let (_, r) = custody.sign_next(b"rotate").unwrap();
-    let a = Attempt::freeze(&d.join("attempts/0"), b"ROTATE").unwrap();
+    let a = Attempt::freeze(&d.join("attempts/0"), b"ROTATE", &rotate_key(), b"K").unwrap();
     custody.arm(0, &r).unwrap();
     // Sent, and its reply lost: uncertain on disk.
     a.drive(State::Signed, 1, |_, _| {
@@ -626,7 +635,7 @@ fn armed(name: &str) -> (std::path::PathBuf, Custody, [u8; 32], [u8; 32]) {
     let old = custody.public_key().unwrap();
     let (next, _) = custody.precommit().unwrap();
     let (_, r) = custody.sign_next(b"rotate").unwrap();
-    let a = Attempt::freeze(&d.join("attempts/0"), b"ROTATE").unwrap();
+    let a = Attempt::freeze(&d.join("attempts/0"), b"ROTATE", &rotate_key(), b"K").unwrap();
     custody.arm(0, &r).unwrap();
     a.drive(State::Signed, 1, |_, _| {
         Ok::<_, AttemptError>(Reply::Lost(Vec::new()))
@@ -926,4 +935,183 @@ fn a_receipt_not_ok_or_asking_to_rotate_settles_nothing() {
         );
         std::fs::remove_dir_all(&d).unwrap();
     }
+}
+
+/// CLIENT-37 (A6): a run that ends `uncertain` leaves its attempt open, and the next run of the SAME
+/// argv is that attempt. Follow is never asked to plan again: the run looks up the frozen bytes,
+/// confirms through the member's own follow, and resumes follow with the FIRST run's continuation
+/// and the committed end. One attempt on disk, one call ever signed.
+#[test]
+fn a_rerun_of_the_same_argv_continues_its_open_attempt_and_signs_nothing() {
+    let (d, custody) = setup("rerun");
+    let argv = [
+        b"write".to_vec(),
+        b"obj".to_vec(),
+        b"1".to_vec(),
+        b"v".to_vec(),
+    ];
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Sign {
+                message: b"plan".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Submit {
+                call: b"CALL".to_vec(),
+                k: b"k2".to_vec(),
+            },
+            Step::Done {
+                exit: 2,
+                stdout: Vec::new(),
+                stderr: b"uncertain\n".to_vec(),
+            },
+        ]),
+        seen: Vec::new(),
+        receipts: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([
+            Err(io::Error::from(io::ErrorKind::ConnectionReset)), // the submit's reply is lost
+            Err(io::Error::from(io::ErrorKind::ConnectionReset)), // and the lookup's
+        ]),
+        asked: Vec::new(),
+    };
+    let at = d.join("attempts");
+    let (exit, _, _) = run::run(&argv, &mut follow, &mut host, &custody, &at, T).unwrap();
+    assert_eq!(exit, 2);
+    assert_eq!(follow.seen[1].1.status, Action::Uncertain.code());
+
+    // The same command again. Follow's only scripted step is the done of step 4: had the run asked
+    // follow to start the command, follow would have answered that done to `command` and seen no
+    // resume at all.
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([Step::Done {
+            exit: 0,
+            stdout: b"tx 01\n".to_vec(),
+            stderr: Vec::new(),
+        }]),
+        seen: Vec::new(),
+        receipts: VecDeque::from([receipt("committed 3 77")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.ok, b"receipt".to_vec()))]),
+        asked: Vec::new(),
+    };
+    let (exit, out, _) = run::run(&argv, &mut follow, &mut host, &custody, &at, T).unwrap();
+    assert_eq!((exit, out), (0, b"tx 01\n".to_vec()));
+    assert_eq!(
+        host.asked,
+        vec![(T.lookup, b"CALL".to_vec())],
+        "a lookup of the frozen bytes: never a new submit"
+    );
+    assert_eq!(
+        follow.seen,
+        vec![(
+            b"k2".to_vec(),
+            Outcome {
+                status: Action::Committed.code(),
+                payload: b"committed 3 77".to_vec()
+            }
+        )],
+        "follow resumed with the first run's continuation and the call's end"
+    );
+    assert_eq!(std::fs::read_dir(&at).unwrap().count(), 1, "one attempt");
+
+    // Settled now: the next run of the same argv plans afresh.
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([done_step()]),
+        seen: Vec::new(),
+        receipts: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    run::run(&argv, &mut follow, &mut host, &custody, &at, T).unwrap();
+    assert!(follow.seen.is_empty(), "a settled attempt is not continued");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// CLIENT-37: an open attempt is the command of the argv it was frozen for, and of no other: a
+/// different command plans afresh beside it, and the open one stays as it is.
+#[test]
+fn an_open_attempt_is_continued_only_by_its_own_argv() {
+    use nanodregg_client::attempt::{Attempt, AttemptError, Reply, State};
+    let (d, custody) = setup("other-argv");
+    let key = nanodregg_client::generated::layout::Command {
+        argv: vec![b"transfer".to_vec()],
+    }
+    .encode()
+    .unwrap();
+    let a = Attempt::freeze(&d.join("attempts/0"), b"CALL", &key, b"K").unwrap();
+    a.drive(State::Signed, 1, |_, _| {
+        Ok::<_, AttemptError>(Reply::Lost(Vec::new()))
+    })
+    .unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([done_step()]),
+        seen: Vec::new(),
+        receipts: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let at = d.join("attempts");
+    run::run(
+        &[b"read".to_vec()],
+        &mut follow,
+        &mut host,
+        &custody,
+        &at,
+        T,
+    )
+    .unwrap();
+    assert!(follow.seen.is_empty() && host.asked.is_empty());
+    assert_eq!(
+        Attempt::load(&at.join("0")).unwrap().1,
+        State::Uncertain { sends: 1 }
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// CLIENT-37 for a rotation: re-running `rotate` after its attempt was left open continues the
+/// ARMED attempt (no second rotation is planned), and custody advances on the member's own verdict.
+#[test]
+fn a_rerun_of_rotate_continues_the_armed_rotation() {
+    let (d, custody, _, next) = armed("rerun-rotate");
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([done_step()]),
+        seen: Vec::new(),
+        receipts: VecDeque::from([receipt("committed 2 aa")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.ok, b"receipt".to_vec()))]),
+        asked: Vec::new(),
+    };
+    let at = d.join("attempts");
+    run::run(
+        &[b"rotate".to_vec()],
+        &mut follow,
+        &mut host,
+        &custody,
+        &at,
+        T,
+    )
+    .unwrap();
+    assert_eq!(host.asked, vec![(T.lookup, b"ROTATE".to_vec())]);
+    assert_eq!(
+        follow.seen.len(),
+        1,
+        "resumed once, with the attempt's continuation"
+    );
+    assert_eq!(follow.seen[0].0, b"K".to_vec());
+    assert_eq!(custody.public_key().unwrap(), next);
+    assert!(custody.armed().unwrap().is_none());
+    std::fs::remove_dir_all(&d).unwrap();
 }

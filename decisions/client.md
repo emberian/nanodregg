@@ -1100,3 +1100,36 @@ E5 had just given range rows its `receipt` column (`receiptRow`, `receiptSeen`).
 **Meta-critique.** "Make range reads live" was in the card as parity. The finding that matters is that `(live)` on a range was SILENTLY DROPPED by the type round trip: a declaration the reader accepted and the checker forgot. The teeth are aimed at that: the round-trip theorem, not only the runtime column.
 
 **Status.** landed (this commit).
+
+## CLIENT-37 · the next run of the same argv IS its open attempt: nothing re-plans beside a call that may still land (2026-10-24, FIX-RUST; readers/COLLATION-20261024 A6, READ-RUST F1)
+
+**The defect (READ at f9657bd).** `attempt.rs:18-21`, `Protocol/Attempt.lean:21-23,38,90,99`, CLIENT-25 and CLIENT-27 promise that an attempt left open (`declined`, `open`, `contradicted`, `uncertain`, `badReply`) is looked up again by the next run. Nothing did: `Attempt::load` had one caller, `reconcile`, and only for an armed rotation. Every other run computed `max+1` and froze a NEW call, which follow planned on its current World. So after `uncertain` (a lost submit reply) the member's or the resident's re-run signed a second call beside the first, and both could commit: the double-effect window `Attempt.lean` names. The tests that "showed" the next run drove `Attempt::load` + `drive` by hand.
+
+**Measured.** `client/tests/real.rs`, on the real `host serve` / `host follow`: a write whose submit reaches the writer and whose reply and lookup are lost (a reply-losing proxy in front of host.sock: the observable of a writer dying after its commit, without the race of killing it) ends `uncertain`; the same argv again. With the reload skipped (the plant), the height moves by TWO (`left: 10, right: 9`, `fixrust-scratch/plant1.log`).
+
+**Decision.**
+- An attempt directory freezes, beside `call`, the command it was signed for (`argv`: the generated `Command` encoding, the bytes follow is sent) and follow's continuation at the submit step (`cont`). `call` is written last, so a directory with `call` is complete; one without it is a crashed freeze, never sent, and is passed over.
+- `run` begins with `Attempt::open_for(attempts, argv)`: the newest attempt frozen for these exact argv bytes that has no `settled`. When there is one, the run IS that attempt: it is driven from where its files say it stands (`Attempt.next`, emitted), and follow is resumed with the attempt's own `cont` and its end, exactly the step-4 resume the run that froze it would have made. Follow's `settled` (Machine.lean) then decides the command's end on its own World (`ownSettle`), as before. Follow is never asked to plan, so custody signs nothing new.
+- A re-run of `rotate` whose armed attempt is open continues it the same way (`reconcile` steps aside for the attempt the run continues; `finish` settles custody on the member's verdict).
+- One function, `finish`, drives an attempt and says its end as follow's result, for a fresh submit and a continued one alike.
+
+**Where the decision lives (law 2).** What each request is, and what the command's end is, stay Lean's (`Attempt.next`, `Command.settled`). Rust looks the attempt up by its stored argv bytes (a key lookup in the member's own workspace) and hands follow back follow's own continuation. The considered alternative was `Command.start` taking the open call and choosing itself. Refused: a frame would carry the argv twice (the continuation holds it), which is A3's whole-frame bound problem again, and the `tx … / id …` text a commit prints comes from the Turn the PLAN derived (`receipt X t`), which cannot be re-derived from the call on a World that has moved. The continuation is follow's own words; re-presenting it is what every step of every command already does. The one Rust branch left ("an open attempt for this argv: resume, else command") is the rule Attempt.lean states in prose; a Lean table of one row for it would move no decision.
+
+**Plants.**
+- `client/tests/real.rs` (above): GREEN with the continuation (height +1, one attempt frozen for the two runs, the read shows one write); RED without it.
+- `client/tests/run.rs a_rerun_of_the_same_argv_continues_its_open_attempt_and_signs_nothing`: the second run's only Host request is a lookup of the frozen bytes; follow is resumed once, with the first run's continuation and `committed`; a third run, after settlement, plans afresh. `an_open_attempt_is_continued_only_by_its_own_argv`; `a_rerun_of_rotate_continues_the_armed_rotation`. Both re-run plants RED under the skipped reload.
+- `client/tests/attempt.rs open_for_finds_the_newest_unsettled_attempt_of_its_argv`: settled, other-argv and crashed-freeze directories passed over; a `call` without `argv` refuses to load.
+
+**Critique.**
+- The intent's identity is its argv bytes. A member who means the same write twice while the first is open gets the first one's outcome, and runs it again after it settles. That is the at-most-once price, and the honest one.
+- An attempt that ends `open` (sends exhausted, window live) now holds its argv until the window passes or `nd cancel CALL`; in a World nobody else writes to, heights do not advance, so that can be long. Before, the re-run signed a second call instead. `open`'s stderr does not name the call to cancel (it is `attempts/<n>/call`).
+- NOT closed: a run that writes `settled committed` and dies before printing, or (F23) an `nd --stdio` command that commits after the resident gave up on it (`replyTimeout`). The attempt is settled, so the resident's retry plans afresh: a second effect. Closing it needs an intent identity the caller holds across its retries, not a property of the attempt store (cv 01a16d4c-4294).
+- `open_for` reads the directory: O(attempts) per run, F15's debt, unchanged in order (`next_dir` already listed it).
+
+**Meta-critique.** The old tests passed because each performed "the next run" itself; the defect was an absence, not a wrong branch, so no unit test of a branch could see it. The plants here run `run::run` twice over one workspace, and the real one counts heights on the writer.
+
+**Flag day.** The attempt directory layout: `argv` and `cont` beside `call`. An older attempt (a `call` without them) refuses to load (`attempt: inconsistent directory`), and `open_for` reaches every unsettled attempt, so a workspace holding one refuses every command: empty `attempts/` (or re-init) after this lands. No wire, no Lean, nothing re-emitted.
+
+**Size.** client library 2528 → 2678 (gates/ceilings.tsv, this commit).
+
+**Status.** landed (this commit).

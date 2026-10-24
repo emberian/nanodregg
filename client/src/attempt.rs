@@ -1,24 +1,30 @@
 //! The life of one signed call, frozen on disk so a crash cannot change what was sent.
 //!
-//! An attempt is a directory. `call` holds the exact signed bytes and is written once. Before
+//! An attempt is a directory. `call` holds the exact signed bytes and is written once, after
+//! `argv` (the command it was signed for, as the generated `Command` encodes it) and `cont`
+//! (follow's continuation at the submit step), so a directory with `call` is complete. Before
 //! each send a marker `sent.<n>` is written. The settlement is one file, `settled`, holding the
 //! three lines the member's OWN follow printed for `receipt CALL` (PROTOCOL-46): the receipt, the
 //! head it was checked against, and the `settle` verdict. Never the Host's reply: the Host's status
 //! byte only steers the loop (when to look up, when to resend the same bytes). The state is which
 //! files exist; any other file refuses to load:
 //!
-//! | files                         | state                 |
+//! | files (beside `argv`, `cont`) | state                 |
 //! |-------------------------------|-----------------------|
 //! | `call`                        | [`State::Signed`]     |
 //! | `call`, `sent.*`              | [`State::Uncertain`]  |
 //! | `call`, `sent.*`, `settled`   | [`State::Settled`]    |
+//! | no `call` (a crashed freeze)  | none: never sent      |
 //!
 //! WHAT to do next is `Protocol.Attempt.next`, emitted as [`crate::generated::attempt::next`];
 //! this module performs the action it names and keeps the files. A Host's claimed final (`ok`,
 //! `refused`) is `confirm`ed, and a lookup's `absent` with no send left is `probe`d, both by the
 //! member's follow; only its `committed` or `refused` writes `settled`. Every other end (declined,
-//! open, contradicted, uncertain, badReply) leaves the attempt open on disk, so the next run looks
-//! it up again. Which verdict a `settle` line names is the generated `settle_seen`, not this crate.
+//! open, contradicted, uncertain, badReply) leaves the attempt open on disk, and the next run of the
+//! SAME argv continues it ([`Attempt::open_for`], CLIENT-37): it drives the frozen call from where
+//! the disk says it stands and hands follow the attempt's own continuation, so the command's end is
+//! that call's, and no second call is signed beside it. Which verdict a `settle` line names is the
+//! generated `settle_seen`, not this crate.
 
 use std::fs;
 use std::io;
@@ -29,6 +35,8 @@ use crate::generated::HINT_BYTES_MAX;
 use crate::generated::attempt::{self as table, Action, Request, Seen};
 
 const CALL: &str = "call";
+const ARGV: &str = "argv";
+const CONT: &str = "cont";
 const SETTLED: &str = "settled";
 const SENT_PREFIX: &str = "sent.";
 
@@ -165,11 +173,15 @@ fn final_of(r: &Receipt) -> Option<bool> {
 pub struct Attempt {
     dir: PathBuf,
     call: Vec<u8>,
+    cont: Vec<u8>,
 }
 
 impl Attempt {
-    /// Freeze `call` into the new directory `dir` (its parent must exist; `dir` must not).
-    pub fn freeze(dir: &Path, call: &[u8]) -> Result<Self, AttemptError> {
+    /// Freeze `call` into the new directory `dir` (its parent must exist; `dir` must not), with
+    /// the command it was signed for (`argv`, the generated `Command` encoding) and follow's
+    /// continuation at the submit step (`cont`). `call` is written last: a crash before it leaves
+    /// a directory [`Attempt::open_for`] passes over, since nothing of it was ever sent.
+    pub fn freeze(dir: &Path, call: &[u8], argv: &[u8], cont: &[u8]) -> Result<Self, AttemptError> {
         fs::create_dir(dir).map_err(|e| match e.kind() {
             io::ErrorKind::AlreadyExists => AttemptError::AlreadyFrozen,
             _ => AttemptError::Io(e),
@@ -177,11 +189,51 @@ impl Attempt {
         if let Some(parent) = dir.parent() {
             fsx::sync_dir(parent)?;
         }
+        fsx::create_once(dir, ARGV, argv)?;
+        fsx::create_once(dir, CONT, cont)?;
         fsx::create_once(dir, CALL, call)?;
         Ok(Self {
             dir: dir.to_path_buf(),
             call: call.to_vec(),
+            cont: cont.to_vec(),
         })
+    }
+
+    /// The newest attempt under `attempts` frozen for `argv` (the generated `Command` encoding)
+    /// that is not settled: what the next run of the same command continues (CLIENT-37). A
+    /// directory without `call` is a crashed freeze, never sent, and is passed over; one with
+    /// `call` but no `argv` (an older layout) refuses to load.
+    pub fn open_for(
+        attempts: &Path,
+        argv: &[u8],
+    ) -> Result<Option<(u64, Self, State)>, AttemptError> {
+        let mut ns = Vec::new();
+        for entry in fs::read_dir(attempts)? {
+            if let Some(n) = entry?
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                ns.push(n);
+            }
+        }
+        ns.sort_unstable_by(|a, b| b.cmp(a));
+        for n in ns {
+            let dir = attempts.join(n.to_string());
+            if !dir.join(CALL).exists() || dir.join(SETTLED).exists() {
+                continue;
+            }
+            let frozen_for = fs::read(dir.join(ARGV)).map_err(|e| match e.kind() {
+                io::ErrorKind::NotFound => AttemptError::Inconsistent,
+                _ => AttemptError::Io(e),
+            })?;
+            if frozen_for != argv {
+                continue;
+            }
+            let (attempt, state) = Self::load(&dir)?;
+            return Ok(Some((n, attempt, state)));
+        }
+        Ok(None)
     }
 
     /// Reopen the attempt in `dir` and read its state from the files present; a settlement is
@@ -189,6 +241,10 @@ impl Attempt {
     pub fn load(dir: &Path) -> Result<(Self, State), AttemptError> {
         let call = fs::read(dir.join(CALL)).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => AttemptError::NotAnAttempt,
+            _ => AttemptError::Io(e),
+        })?;
+        let cont = fs::read(dir.join(CONT)).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => AttemptError::Inconsistent,
             _ => AttemptError::Io(e),
         })?;
         let (sends, settled) = scan(dir)?;
@@ -207,6 +263,7 @@ impl Attempt {
             Self {
                 dir: dir.to_path_buf(),
                 call,
+                cont,
             },
             state,
         ))
@@ -215,6 +272,12 @@ impl Attempt {
     /// The frozen signed bytes.
     pub fn call(&self) -> &[u8] {
         &self.call
+    }
+
+    /// Follow's continuation at the submit step: what follow is resumed with, with this attempt's
+    /// end, by whichever run ends it.
+    pub fn cont(&self) -> &[u8] {
+        &self.cont
     }
 
     /// Advance from `state`, performing what `Attempt.next` names, until it names an end. Each
@@ -304,7 +367,8 @@ impl Attempt {
 }
 
 /// `(sends, settled)`: the markers must be exactly `sent.0 .. sent.(n-1)`, and no file but
-/// `call`, the markers and `settled` may be present (an older layout refuses to load).
+/// `call`, `argv`, `cont`, the markers and `settled` may be present (an older layout refuses to
+/// load).
 fn scan(dir: &Path) -> Result<(u32, bool), AttemptError> {
     let (mut seen, mut settled) = (Vec::new(), false);
     for entry in fs::read_dir(dir)? {
@@ -314,7 +378,7 @@ fn scan(dir: &Path) -> Result<(u32, bool), AttemptError> {
             seen.push(n.parse::<u32>().map_err(|_| AttemptError::Inconsistent)?);
         } else if name == SETTLED {
             settled = true;
-        } else if name != CALL {
+        } else if name != CALL && name != ARGV && name != CONT {
             return Err(AttemptError::Inconsistent);
         }
     }

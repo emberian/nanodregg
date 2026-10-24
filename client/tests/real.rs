@@ -54,6 +54,37 @@ fn lying_host(listen: &Path, upstream: PathBuf) {
     });
 }
 
+/// A Host that loses a reply: the first `submit` reaches the writer, and the connection then
+/// closes without its answer, so nd's lookup on it is lost too. Every later connection passes
+/// through unchanged.
+fn losing_host(listen: &Path, upstream: PathBuf) {
+    use nanodregg_client::{frame, generated as g, table::LIMITS};
+    let l = UnixListener::bind(listen).unwrap();
+    std::thread::spawn(move || {
+        let mut lost = false;
+        for nd in l.incoming() {
+            let (Ok(mut nd), Ok(mut up)) = (nd, UnixStream::connect(&upstream)) else {
+                return;
+            };
+            while let Ok(req) = frame::read(&mut nd, LIMITS) {
+                if frame::write(&mut up, LIMITS, req.op, &req.payload).is_err() {
+                    break;
+                }
+                let Ok(reply) = frame::read(&mut up, LIMITS) else {
+                    break;
+                };
+                if req.op == g::host_op::SUBMIT && !lost {
+                    lost = true;
+                    break;
+                }
+                if frame::write(&mut nd, LIMITS, reply.op, &reply.payload).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+}
+
 #[test]
 fn real_host_create_write_read_rotate_write_read() {
     let host = nanodregg_devtools::lean_bin("host");
@@ -291,6 +322,50 @@ fn real_host_create_write_read_rotate_write_read() {
             && lines[2].starts_with("settle committed "),
         "{settled}"
     );
+
+    // CLIENT-37 (A6): a write that commits at the writer while its submit reply and the lookup are
+    // lost ends `uncertain`. Running the SAME command again continues that attempt (a lookup of
+    // the frozen bytes, confirmed by the member's own follow) and ends ok: ONE call landed, the
+    // height moved by one, and no second attempt was frozen. Without the continuation the re-run
+    // signs a new call and the height moves by two.
+    let height = |o: &str| line(o, "height ").parse::<u64>().unwrap();
+    let before = height(&ok(&["sync"]));
+    let attempts = || std::fs::read_dir(ws.join("attempts")).unwrap().count();
+    let frozen = attempts();
+    let lose = root.join("lose.sock");
+    losing_host(&lose, ws.join("host.sock"));
+    let lost = Command::new(env!("CARGO_BIN_EXE_nd"))
+        .env("ND_WORKSPACE", &ws)
+        .env("ND_HOLDING", &holding)
+        .env("ND_HOST_SOCK", &lose)
+        .args(["write", &obj, "4", "once"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        (
+            lost.status.code(),
+            String::from_utf8_lossy(&lost.stderr).into_owned()
+        ),
+        (
+            Some(i32::from(
+                nanodregg_client::generated::command_exit::UNCERTAIN
+            )),
+            "uncertain\n".to_owned()
+        )
+    );
+    ok(&["write", &obj, "4", "once"]);
+    assert_eq!(
+        height(&ok(&["sync"])),
+        before + 1,
+        "one call landed for the two runs"
+    );
+    assert_eq!(
+        attempts(),
+        frozen + 1,
+        "one attempt frozen for the two runs"
+    );
+    assert_eq!(ok(&["read", &obj]), "1=hello\n2=after\n3=lied\n4=once\n");
+
     drop(_o);
     drop((_h, _f));
     std::fs::remove_dir_all(&root).unwrap();

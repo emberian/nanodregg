@@ -4,7 +4,8 @@
 //! step and hands its result back with the continuation, under two bounds from the table: steps
 //! per command and sends per frozen call. A step is the generated codec's value
 //! ([`crate::generated::layout::Step`], byte for byte `Protocol.Frames`); this module never
-//! sees step bytes.
+//! sees step bytes. A command whose argv has an attempt left open by an earlier run IS that
+//! attempt (CLIENT-37, [`run`]).
 
 use std::fs;
 use std::io;
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::attempt::{Attempt, AttemptError, Receipt, Reply, State};
 use crate::custody::{Custody, CustodyError, Rotation};
 use crate::generated::attempt::{Action, Request, Seen};
-use crate::generated::layout::{CustodyRefused, PrecommitResult, Refusal, Step};
+use crate::generated::layout::{self, CustodyRefused, PrecommitResult, Refusal, Step};
 
 /// What a performed step hands back to follow (PROTOCOL-21): `u8 status ‖ payload`. Custody
 /// answers `ok ‖ SignResult | PrecommitResult` or `refused ‖ CustodyRefused`; a Host reply is
@@ -145,7 +146,6 @@ fn receipt(
         follow,
         host,
         custody,
-        None,
         t,
     ) {
         Ok((exit, stdout, _)) if exit == t.exit_ok => {
@@ -180,10 +180,12 @@ fn drive(
 /// Finish an armed rotation before anything is signed: drive its attempt (CLIENT-3) and hand
 /// custody a settlement only from the member's own receipt (PROTOCOL-46). A Host contradicted by
 /// that receipt ends the run `hostContradicted`; anything else unsettled leaves the rotation armed
-/// and the command goes on under the current key.
+/// and the command goes on under the current key. `except` is the attempt this run continues
+/// itself (a re-run of the `rotate` that armed it): [`finish`] settles custody for it.
 fn reconcile(
     custody: &Custody,
     attempts: &Path,
+    except: Option<u64>,
     follow: &mut impl Follow,
     host: &mut impl Host,
     t: &Table,
@@ -191,6 +193,9 @@ fn reconcile(
     let Some((n, _)) = custody.armed().map_err(RunError::Custody)? else {
         return Ok(None);
     };
+    if except == Some(n) {
+        return Ok(None);
+    }
     let dir = attempts.join(n.to_string());
     let (attempt, state) = Attempt::load(&dir)?;
     match drive(&attempt, state, follow, host, custody, t)? {
@@ -209,7 +214,11 @@ fn reconcile(
     Ok(None)
 }
 
-/// Run one command to follow's `done`, an armed rotation reconciled first.
+/// Run one command to follow's `done`, an armed rotation reconciled first. When an earlier run of
+/// the same argv left its attempt open, this run is that attempt (CLIENT-37): it is driven from
+/// where its files say it stands, and follow is resumed with the attempt's own continuation and
+/// its end, exactly as the run that froze it would have resumed it; follow is never asked to
+/// plan, so nothing new is signed.
 pub fn run(
     argv: &[Vec<u8>],
     follow: &mut impl Follow,
@@ -218,27 +227,117 @@ pub fn run(
     attempts: &Path,
     t: Table,
 ) -> Result<Done, RunError> {
-    match reconcile(custody, attempts, follow, host, &t)? {
-        Some(ended) => Ok(ended),
-        None => command(argv, follow, host, custody, Some(attempts), &t),
+    let key = argv_key(argv)?;
+    let open = Attempt::open_for(attempts, &key)?;
+    if let Some(ended) = reconcile(
+        custody,
+        attempts,
+        open.as_ref().map(|o| o.0),
+        follow,
+        host,
+        &t,
+    )? {
+        return Ok(ended);
     }
+    let fresh = Some(Fresh {
+        attempts,
+        argv: &key,
+    });
+    let first = match open {
+        Some((n, attempt, state)) => {
+            let armed = custody.armed().map_err(RunError::Custody)?.map(|(a, _)| a) == Some(n);
+            let outcome = finish(&attempt, state, armed, follow, host, custody, &t)?;
+            follow
+                .resume(attempt.cont(), &outcome)
+                .map_err(RunError::Follow)?
+        }
+        None => follow.command(argv).map_err(RunError::Follow)?,
+    };
+    steps(first, follow, host, custody, fresh, &t)
 }
 
-/// Perform follow's steps until `done`. Without `attempts` (a `receipt` inside an attempt) follow
-/// may only ask to sign and to read.
+/// The argv as the attempt store keys it: the generated `Command` encoding, the bytes follow is
+/// sent for it.
+fn argv_key(argv: &[Vec<u8>]) -> Result<Vec<u8>, RunError> {
+    layout::Command {
+        argv: argv.to_vec(),
+    }
+    .encode()
+    .map_err(|r| {
+        RunError::Follow(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("argv: {r:?}"),
+        ))
+    })
+}
+
+/// Where a run's submit freezes its attempt: the store, and the argv it is frozen for.
+#[derive(Clone, Copy)]
+struct Fresh<'a> {
+    attempts: &'a Path,
+    argv: &'a [u8],
+}
+
+/// Drive an attempt to its end and say it as follow's step-4 result (PROTOCOL-46): `committed` or
+/// `refused` with follow's verdict, any other end with its payload. `armed`: the attempt is
+/// custody's armed rotation, settled here on the member's own verdict and left armed otherwise.
+fn finish(
+    attempt: &Attempt,
+    state: State,
+    armed: bool,
+    follow: &mut impl Follow,
+    host: &mut impl Host,
+    custody: &Custody,
+    t: &Table,
+) -> Result<Outcome, RunError> {
+    let (end, payload) = match drive(attempt, state, follow, host, custody, t)? {
+        State::Settled { committed, receipt } => {
+            if armed {
+                custody.settle(committed).map_err(RunError::Custody)?;
+            }
+            let end = if committed {
+                Action::Committed
+            } else {
+                Action::Refused
+            };
+            (end, receipt.verdict.into_bytes())
+        }
+        State::Open { end, payload, .. } => (end, payload),
+        State::Signed | State::Uncertain { .. } => (Action::Uncertain, Vec::new()),
+    };
+    Ok(Outcome {
+        status: end.code(),
+        payload,
+    })
+}
+
+/// Perform follow's steps for `argv` until `done` (a `receipt` inside an attempt: no attempt
+/// store, so follow may only ask to sign and to read).
 fn command(
     argv: &[Vec<u8>],
     follow: &mut impl Follow,
     host: &mut impl Host,
     custody: &Custody,
-    attempts: Option<&Path>,
+    t: &Table,
+) -> Result<Done, RunError> {
+    let first = follow.command(argv).map_err(RunError::Follow)?;
+    steps(first, follow, host, custody, None, t)
+}
+
+/// Perform follow's steps from `step` until `done`. Without `fresh` follow may only ask to sign
+/// and to read.
+fn steps(
+    mut step: Step,
+    follow: &mut impl Follow,
+    host: &mut impl Host,
+    custody: &Custody,
+    fresh: Option<Fresh>,
     t: &Table,
 ) -> Result<Done, RunError> {
     // Set by `signNext`; the next `submit` is that rotation's attempt (CLIENT-13).
     let mut rotation: Option<Rotation> = None;
-    let mut step = follow.command(argv).map_err(RunError::Follow)?;
     for _ in 0..t.steps_max {
-        if attempts.is_none() && matches!(step, Step::SignNext { .. } | Step::Precommit { .. }) {
+        if fresh.is_none() && matches!(step, Step::SignNext { .. } | Step::Precommit { .. }) {
             return Err(nested());
         }
         let (k, outcome) = match step {
@@ -278,9 +377,9 @@ fn command(
                 (k, Outcome { status, payload })
             }
             Step::Submit { call, k } => {
-                let attempts = attempts.ok_or_else(nested)?;
-                let (n, dir) = fresh(attempts).map_err(AttemptError::Io)?;
-                let attempt = Attempt::freeze(&dir, &call)?;
+                let at = fresh.ok_or_else(nested)?;
+                let (n, dir) = next_dir(at.attempts).map_err(AttemptError::Io)?;
+                let attempt = Attempt::freeze(&dir, &call, at.argv, &k)?;
                 // Armed after the freeze and before the first send: a crash between the two
                 // leaves an unsent attempt and nothing armed.
                 let armed = rotation.take();
@@ -289,29 +388,16 @@ fn command(
                 }
                 // follow is told the table's end and the member's own verdict (PROTOCOL-46);
                 // custody settles only on that verdict, and stays armed on any other end.
-                let (end, payload) = match drive(&attempt, State::Signed, follow, host, custody, t)?
-                {
-                    State::Settled { committed, receipt } => {
-                        if armed.is_some() {
-                            custody.settle(committed).map_err(RunError::Custody)?;
-                        }
-                        let end = if committed {
-                            Action::Committed
-                        } else {
-                            Action::Refused
-                        };
-                        (end, receipt.verdict.into_bytes())
-                    }
-                    State::Open { end, payload, .. } => (end, payload),
-                    State::Signed | State::Uncertain { .. } => (Action::Uncertain, Vec::new()),
-                };
-                (
-                    k,
-                    Outcome {
-                        status: end.code(),
-                        payload,
-                    },
-                )
+                let outcome = finish(
+                    &attempt,
+                    State::Signed,
+                    armed.is_some(),
+                    follow,
+                    host,
+                    custody,
+                    t,
+                )?;
+                (k, outcome)
             }
         };
         step = follow.resume(&k, &outcome).map_err(RunError::Follow)?;
@@ -350,7 +436,7 @@ fn encoded(r: Result<Vec<u8>, Refusal>) -> Result<Vec<u8>, RunError> {
 }
 
 /// A new attempt `(n, attempts/<n>)`, n one past the largest present.
-fn fresh(attempts: &Path) -> io::Result<(u64, PathBuf)> {
+fn next_dir(attempts: &Path) -> io::Result<(u64, PathBuf)> {
     let mut next = 0u64;
     for entry in fs::read_dir(attempts)? {
         if let Some(n) = entry?

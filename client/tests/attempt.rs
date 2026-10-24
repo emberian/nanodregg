@@ -45,7 +45,7 @@ fn settled(committed: bool, verdict: &str) -> State {
 #[test]
 fn a_host_ok_is_confirmed_and_the_settlement_is_follows_receipt() {
     let d = scratch("commit");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let mut seen = Vec::new();
     let s = a
         .drive(State::Signed, 3, |r, b| -> R {
@@ -78,7 +78,7 @@ fn a_host_ok_is_confirmed_and_the_settlement_is_follows_receipt() {
 #[test]
 fn a_host_ok_for_an_absent_call_is_contradicted_and_stays_open() {
     let d = scratch("lie-ok");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let s = a
         .drive(State::Signed, 3, |r, _| -> R {
             Ok(match r {
@@ -107,7 +107,7 @@ fn a_host_ok_for_an_absent_call_is_contradicted_and_stays_open() {
 #[test]
 fn a_host_refused_for_a_committed_call_settles_committed() {
     let d = scratch("lie-refused");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let s = a
         .drive(State::Signed, 3, |r, _| -> R {
             Ok(match r {
@@ -127,7 +127,7 @@ fn a_host_refused_for_a_committed_call_settles_committed() {
 #[test]
 fn absent_with_sends_exhausted_and_a_live_window_stays_open() {
     let d = scratch("absent");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let mut seen = Vec::new();
     let s = a
         .drive(State::Signed, 2, |r, b| -> R {
@@ -178,7 +178,7 @@ fn absent_with_sends_exhausted_and_a_live_window_stays_open() {
 #[test]
 fn lost_reply_is_uncertain_and_only_looked_up() {
     let d = scratch("lost");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let open = |sends| State::Open {
         sends,
         end: Action::Uncertain,
@@ -212,7 +212,7 @@ fn lost_reply_is_uncertain_and_only_looked_up() {
     assert_eq!(s, settled(true, "committed 1 2"));
     // A confirm that cannot reach follow settles nothing.
     let d2 = scratch("lost-confirm");
-    let a = Attempt::freeze(&d2, b"CALL").unwrap();
+    let a = Attempt::freeze(&d2, b"CALL", b"ARGV", b"K").unwrap();
     let s = a
         .drive(State::Signed, 3, |r, _| -> R {
             Ok(match r {
@@ -245,7 +245,7 @@ fn an_uncertain_end_carries_follows_last_words_within_the_bound() {
     ];
     for (tag, said, want) in cases {
         let d = scratch(&format!("hint-{tag}"));
-        let a = Attempt::freeze(&d, b"CALL").unwrap();
+        let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
         let s = a
             .drive(State::Signed, 3, |r, _| -> R {
                 Ok(match r {
@@ -271,9 +271,9 @@ fn an_uncertain_end_carries_follows_last_words_within_the_bound() {
 #[test]
 fn one_call_per_attempt_and_refusal_is_final() {
     let d = scratch("once");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     assert!(matches!(
-        Attempt::freeze(&d, b"OTHER"),
+        Attempt::freeze(&d, b"OTHER", b"ARGV", b"K"),
         Err(AttemptError::AlreadyFrozen)
     ));
     let s = a
@@ -305,7 +305,7 @@ fn only_this_layout_loads() {
         ("garbled", "settled", b"settle committed 1 2\n".to_vec()),
     ] {
         let d = scratch(name);
-        Attempt::freeze(&d, b"CALL").unwrap();
+        Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
         if name != "gap" {
             fs::write(d.join("sent.0"), []).unwrap();
         }
@@ -319,11 +319,13 @@ fn only_this_layout_loads() {
 }
 
 /// PROTOCOL-41: `declined` is not final. The run ends with nothing written but the send marker, the
-/// attempt reloads as uncertain, and the next run LOOKS IT UP (the same bytes), never resubmits blind.
+/// attempt reloads as uncertain, and a drive from disk LOOKS IT UP (the same bytes), never
+/// resubmits blind. That the next RUN is this drive is `run.rs`'s
+/// `a_rerun_of_the_same_argv_continues_its_open_attempt_and_signs_nothing` (CLIENT-37).
 #[test]
-fn declined_leaves_the_attempt_open_and_the_next_run_looks_up() {
+fn declined_leaves_the_attempt_open_and_a_reload_looks_up() {
     let d = scratch("declined");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let s = a
         .drive(State::Signed, 3, |_, _| -> R {
             Ok(Reply::Host(Seen::Declined, b"unknownKey".to_vec()))
@@ -351,7 +353,7 @@ fn declined_leaves_the_attempt_open_and_the_next_run_looks_up() {
     assert_eq!(
         seen,
         [Request::Lookup, Request::Confirm],
-        "the next run looks up"
+        "a reload looks up"
     );
     done(&d);
 }
@@ -360,7 +362,7 @@ fn declined_leaves_the_attempt_open_and_the_next_run_looks_up() {
 #[test]
 fn a_declined_lookup_is_a_bad_reply() {
     let d = scratch("declined-lookup");
-    let a = Attempt::freeze(&d, b"CALL").unwrap();
+    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
     let s = a
         .drive(State::Signed, 3, |r, _| -> R {
             Ok(match r {
@@ -378,6 +380,42 @@ fn a_declined_lookup_is_a_bad_reply() {
     ));
     assert_eq!(Attempt::load(&d).unwrap().1, State::Uncertain { sends: 1 });
     done(&d);
+}
+
+/// CLIENT-37: the lookup a run starts with. The newest unsettled attempt frozen for the argv is
+/// found; a settled one, another argv's, and a crashed freeze (no `call`: never sent) are passed
+/// over; a `call` without `argv` (an older layout) refuses to load.
+#[test]
+fn open_for_finds_the_newest_unsettled_attempt_of_its_argv() {
+    let at = scratch("open-for");
+    fs::create_dir(&at).unwrap();
+    let a0 = Attempt::freeze(&at.join("0"), b"C0", b"ARGV", b"K0").unwrap();
+    a0.drive(State::Signed, 3, |_, _| -> R {
+        Ok(Reply::Lost(Vec::new()))
+    })
+    .unwrap();
+    Attempt::freeze(&at.join("1"), b"C1", b"OTHER", b"K1").unwrap();
+    let a2 = Attempt::freeze(&at.join("2"), b"C2", b"ARGV", b"K2").unwrap();
+    a2.drive(State::Signed, 3, |r, _| -> R {
+        Ok(match r {
+            Request::Submit => host(Seen::Committed),
+            _ => follow("committed 1 2"),
+        })
+    })
+    .unwrap();
+    fs::create_dir(at.join("3")).unwrap();
+    fs::write(at.join("3/argv"), b"ARGV").unwrap();
+    let (n, a, s) = Attempt::open_for(&at, b"ARGV").unwrap().unwrap();
+    assert_eq!((n, a.call(), a.cont()), (0, &b"C0"[..], &b"K0"[..]));
+    assert_eq!(s, State::Uncertain { sends: 1 });
+    assert!(Attempt::open_for(&at, b"NONE").unwrap().is_none());
+    fs::create_dir(at.join("4")).unwrap();
+    fs::write(at.join("4/call"), b"C4").unwrap();
+    assert!(matches!(
+        Attempt::open_for(&at, b"ARGV"),
+        Err(AttemptError::Inconsistent)
+    ));
+    done(&at);
 }
 
 /// Follow's output reads only as the three lines with a verdict the table names.
