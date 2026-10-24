@@ -6,16 +6,21 @@ the tree), in SCRATCH only:
   plant    a module `StatementPlant.Vacuous` (outside every lib) holding three real vacuous theorems with
            `chain_binds`'s binders and premises, each proved from `E.Lawful` alone by pigeonhole (KERNEL-56's
            logs/kernel21-ver-pigeon.lean): the escape inline, through an alias, and as `∃ S, CollidesAmong hash S`;
-           and a control, the landed `chain_binds` statement over `chainPres`. The census over the tree plus the
-           plant must read `STATEMENT-CENSUS RED (3)` naming exactly the three, with the control's row ok.
+           GATES-20w's five over a map into `Fin 4`, each proved by its left disjunct: a membership of a projection
+           (`forgotten`, cv 01a1654c-543c), `¬ Function.Injective`, a Boolean collision, `¬ … ≠ …`, a disjunction
+           under a `∀` inside an `∃`; and a control, the landed `chain_binds` statement over `chainPres`. The
+           census over the tree plus the plant must read `STATEMENT-CENSUS RED (8)` naming exactly the eight, with
+           the control's row ok.
   control  the census over the tree alone must read `STATEMENT-CENSUS ok`.
-  mutant   a scratch copy of Census/Statements.lean with the two-chosen-sides test disabled must be refused by
-           its own fixtures (`STATEMENT-CENSUS harness:`), so the in-run fixtures are planted too.
+  mutants  a scratch copy of Census/Statements.lean with one rule disabled must be refused by its own fixtures
+           (`STATEMENT-CENSUS harness:`), so the in-run fixtures are planted too: the two-chosen-sides test; and
+           GATES-20w's four (a membership bounds what its element contains, the old rule; no negation pushed; no
+           Boolean equation read; no `∀` walked under an `∃`).
   reach    the fast judge's census (GATES-20v (c): `#axiom_census_in`, `#statement_census_in` over a landing's
            reach): over the plant module alone it must read the plant's `native_decide` theorem, which has no allow
            row, `AXIOM-CENSUS red` by name, and the three vacuous theorems `STATEMENT-CENSUS RED (3)`; over a tree
            module (Kernel.Proofs.Fold) it must read both ok.
---harness-control (GATES-15) adds one expectation nothing meets, a fourth RED the plant does not hold, judged on
+--harness-control (GATES-15) adds one expectation nothing meets, one RED more than the plant holds, judged on
 the same comparison. Last line on success: `STATEMENT PLANTS GREEN`.
 """
 import argparse
@@ -32,7 +37,8 @@ import census  # noqa: E402
 import tree  # noqa: E402
 
 PLANT_ROOT = "StatementPlant"
-VACUOUS = ["chain_binds_inline", "chain_binds_alias", "chain_binds_chosen_list"]
+VACUOUS = ["chain_binds_inline", "chain_binds_alias", "chain_binds_chosen_list",
+           "forgotten", "not_injective", "bool_collision", "not_ne", "forall_in_exists"]
 CONTROL_THM = "chain_binds_named"
 NS = "Nanodregg.Kernel.StatementPlant."
 
@@ -130,6 +136,26 @@ theorem chain_binds_chosen_list [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) 
     let ⟨dom, a, b, hne, h⟩ := lawful_collides hE
     .inr ⟨[(dom, a), (dom, b)], CollidesAmong.pair (fun e => hne (congrArg Prod.snd e)) h⟩
 
+/-- GATES-20w's shapes, over a map into `Fin 4`: each holds by its left disjunct, and its right disjunct holds of any
+map into a finite type by pigeonhole, so it says nothing. -/
+def h4 (a : List Nat) : Fin 4 := ⟨a.length % 4, Nat.mod_lt _ (by decide)⟩
+
+/-- RED: a membership of a PROJECTION bounds nothing (infinitely many lists have length 5; cv 01a1654c-543c). -/
+theorem forgotten : True ∨ ∃ a b : List Nat, a.length ∈ [5] ∧ b.length ∈ [5] ∧ a ≠ b ∧ h4 a = h4 b := .inl trivial
+
+/-- RED: `¬ Function.Injective` is the escape, through a core definition. -/
+theorem not_injective : True ∨ ¬ Function.Injective h4 := .inl trivial
+
+/-- RED: a Boolean collision. -/
+theorem bool_collision : True ∨ ∃ a b : List Nat, a ≠ b ∧ (h4 a == h4 b) = true := .inl trivial
+
+/-- RED: a doubly negated collision. -/
+theorem not_ne : True ∨ ∃ a b : List Nat, a ≠ b ∧ ¬ (h4 a ≠ h4 b) := .inl trivial
+
+/-- RED: the disjunction under a `∀` inside an `∃` (it had no row at all). -/
+theorem forall_in_exists : ∃ n : Nat, ∀ m : Nat, m = n → (True ∨ ∃ a b : List Nat, a ≠ b ∧ h4 a = h4 b) :=
+  ⟨0, fun _ _ => .inl trivial⟩
+
 /-- The reach census's plant (GATES-20v (c)): a `native_decide` theorem with no allow row in gates/axioms-allow.tsv. -/
 theorem plant_native : (2 : Nat) + 2 = 4 := by native_decide
 
@@ -143,9 +169,20 @@ theorem chain_binds_named [Ord D] {E : Env D} {n : Nat} (hE : E.Lawful n) {c : D
 end Nanodregg.Kernel.StatementPlant
 '''
 
-# The two-chosen-sides test of Census/Statements.lean, and its disabled form for the mutant.
-TEST = "&& mentions chosen l && mentions chosen r then"
-DISABLED = "&& mentions chosen l && mentions chosen r && false then"
+# Each rule of Census/Statements.lean a mutant disables (the text, and what replaces it): the census's own fixtures
+# must refuse every one.
+MUTANTS = [
+    ("two-chosen-sides", "&& mentions chosen l && mentions chosen r then",
+     "&& mentions chosen l && mentions chosen r && false then"),
+    ("membership-determines", "return acc ++ (← determined chosen unfoldFuel m.appArg!)",
+     "return acc ++ chosen.filter fun x => m.appArg!.containsFVar x.fvarId!"),
+    ("negation-pushed", "  else if e.isAppOfArity ``Not 1 then\n    match ← pushNot unfoldFuel e.appArg! with\n    | some e' => escape",
+     "  else if e.isAppOfArity ``Not 1 && false then\n    match ← pushNot unfoldFuel e.appArg! with\n    | some e' => escape"),
+    ("boolean-equation", "let (l, r) := sides e.appFn!.appArg! e.appArg!",
+     "let (l, r) := (e.appFn!.appArg!.consumeMData, e.appArg!.consumeMData)"),
+    ("forall-in-exists", "    -- a disjunction under a `∀` (or a premise) inside an `∃` is listed and judged too",
+     "    if true then return #[]\n    -- a disjunction under a `∀` (or a premise) inside an `∃` is listed and judged too"),
+]
 
 
 def write(path: str, text: str) -> None:
@@ -210,7 +247,7 @@ def main() -> int:
     print(out.strip())
     want = len(VACUOUS) + (1 if a.harness_control else 0)
     if code == 0 or f"STATEMENT-CENSUS RED ({want}):" not in out:
-        red.append(f"plant{' (harness-control: a fourth RED expected)' if a.harness_control else ''}: "
+        red.append(f"plant{' (harness-control: one RED more than the plant holds)' if a.harness_control else ''}: "
                    f"wanted `STATEMENT-CENSUS RED ({want}):` with Lean exit 1, read exit {code}")
     for thm in VACUOUS:
         if f"{NS}{thm}: right disjunct:" not in out:
@@ -226,24 +263,28 @@ def main() -> int:
     if code != 0 or "STATEMENT-CENSUS ok:" not in out:
         red.append(f"control: the tree alone must read `STATEMENT-CENSUS ok`, read exit {code}")
 
-    # mutant: the census with the two-chosen-sides test disabled is refused by its own fixtures
+    # mutants: the census with one rule disabled is refused by its own fixtures
     source = open(os.path.join(ROOT, "Census", "Statements.lean"), encoding="utf-8").read()
-    if source.count(TEST) != 1:
-        red.append(f"mutant: the test `{TEST}` occurs {source.count(TEST)} times in Census/Statements.lean, expected 1")
-    else:
-        write(os.path.join(scratch, "mutsrc", "Census", "Statements.lean"), source.replace(TEST, DISABLED))
-        os.makedirs(os.path.join(scratch, "mut", "Census"), exist_ok=True)
-        code, out = lean(scratch, ["-R", "mutsrc", "-o", "mut/Census/Statements.olean", "mutsrc/Census/Statements.lean"],
-                         base, "mutant-compile.out")
+    for name, test, disabled in MUTANTS:
+        if source.count(test) != 1:
+            red.append(f"mutant {name}: the rule `{test[:60]}` occurs {source.count(test)} times in Census/Statements.lean, "
+                       f"expected 1")
+            continue
+        src, lib = f"mutsrc-{name}", f"mut-{name}"
+        write(os.path.join(scratch, src, "Census", "Statements.lean"), source.replace(test, disabled))
+        os.makedirs(os.path.join(scratch, lib, "Census"), exist_ok=True)
+        code, out = lean(scratch, ["-R", src, "-o", f"{lib}/Census/Statements.olean", f"{src}/Census/Statements.lean"],
+                         base, f"mutant-{name}-compile.out")
         if code != 0:
-            red.append(f"mutant: did not compile (exit {code}); see {scratch}/mutant-compile.out")
+            red.append(f"mutant {name}: did not compile (exit {code}); see {scratch}/mutant-{name}-compile.out")
+            continue
+        code, out, _ = run_census(scratch, f"MutantRun_{name.replace('-', '_')}", [], [PLANT_ROOT], [lib] + base)
+        print(out.strip())
+        if code == 0 or "STATEMENT-CENSUS harness:" not in out:
+            red.append(f"mutant {name}: with the rule disabled the fixtures must refuse (`STATEMENT-CENSUS harness:`), "
+                       f"read exit {code}")
         else:
-            code, out, _ = run_census(scratch, "MutantRun", [], [PLANT_ROOT], ["mut"] + base)
-            print(out.strip())
-            if code == 0 or "STATEMENT-CENSUS harness:" not in out:
-                red.append(f"mutant: with the test disabled the fixtures must refuse (`STATEMENT-CENSUS harness:`), read exit {code}")
-            else:
-                print("PLANT RED: the two-chosen-sides test disabled -> the census's own fixtures refuse it")
+            print(f"PLANT RED: the rule {name} disabled -> the census's own fixtures refuse it")
 
     # reach: the fast judge's census commands over a reach (the plant module; then a tree module, the control)
     allow = os.path.join(ROOT, "gates", "axioms-allow.tsv")
@@ -263,7 +304,7 @@ def main() -> int:
                 bad.append(f"reach: `#statement_census_in` over the plant must read RED ({len(VACUOUS)})")
             red += bad
             if not bad:
-                print("PLANT RED: the reach census names the native_decide theorem and the three vacuous ones")
+                print(f"PLANT RED: the reach census names the native_decide theorem and the {len(VACUOUS)} vacuous ones")
         elif code != 0 or "AXIOM-CENSUS ok" not in out or "STATEMENT-CENSUS ok" not in out:
             red.append(f"reach: over a tree module both must read ok, read exit {code}")
 

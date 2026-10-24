@@ -1118,3 +1118,132 @@ On e7c2b13 it read `RED (30)` in 28.3 s: 7 of 19 declared lines shown at least a
 - (e) **The reach census trusts the reach.** It is complete for what a landing can change. An allow row for a deleted declaration waits for convergence.
 
 **Meta-critique.** I built the bottom-up machine first and measured its price: 30 reds and 12 readers on one ordinary landing. The measurement was the argument against it, and I did not make it. I priced the strength check's heartbeats and not its premise, that every theorem must carry its own proof of non-weakening. What survives is the part the measurement said was cheap: one line per edited definition.
+
+## GATES-20w · The statement census reads what a membership determines, pushes negations, reads Boolean equations and walks `∀` (2026-10-24, FIX-GATES; COLLATION-20261024 A22; READ-LEDGER-CENSUS-GATES D3; cv 01a1654c-543c)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none. The census's Lean and its plants only.
+
+**Finding** (the memo's D3, re-measured here with the memo's own six theorems over `h : List Nat → Fin 4`, `sc/` in this lane's scratch).
+- **The miss GATES-20s named (cv 01a1654c-543c) was still in the code.** `forgotten : True ∨ ∃ a b, a.length ∈ [5] ∧ b.length ∈ [5] ∧ a ≠ b ∧ h a = h b` read ok. `leftFreeRounds` let a membership `t ∈ L` bound every chosen variable `t` CONTAINS, and infinitely many lists have length 5. Its fourth plant theorem was never added.
+- These also read ok:
+  - `True ∨ ¬ Function.Injective h`: `Not` was not walked, and a core definition was never unfolded;
+  - `True ∨ ∃ a b, a ≠ b ∧ (h a == h b) = true`: the right side is the constant `true`;
+  - `True ∨ ∃ a b, a ≠ b ∧ ¬ h a ≠ h b`.
+- `∃ n, ∀ m, m = n → (True ∨ ∃ a b, a ≠ b ∧ h a = h b)` produced NO ROW. `disjunctions` stopped at the `∀`.
+- A membership in any collection type bounded, a `Set` included (READ; no landed theorem uses one).
+
+**Decision** (Census/Statements.lean):
+1. **What a membership determines.** A conjunct `t ∈ L`, with `L` free of chosen variables and `L`'s type a `List` or `Array`, bounds the chosen variables `t` DETERMINES:
+   - `t` itself;
+   - or the fields of a constructor application, after unfolding a definition at the head, at most `unfoldFuel` (4) times. A constructor is injective, so finitely many elements determine finitely many fields.
+
+   A projection or any other function determines nothing. `(a, b) ∈ S` still bounds `a` and `b` (fixture 4). `Step.refusal (recordOf X c' v a) ∈ S` (Protocol/Proofs/Settle.lean) bounds `a` (recordOf unfolds to a structure holding `a`) and not `c'` (its fields are projections of `c'`).
+2. **Negation pushed inward, classically (`pushNot`).**
+   - `¬ ¬ P` is `P`;
+   - `¬ (A ∧ B)` is `¬ A ∨ ¬ B`, and `¬ (A ∨ B)` is `¬ A ∧ ¬ B`;
+   - `¬ ∃ x, B` is `∀ x, ¬ B`;
+   - `¬ ∀ x, B` is `∃ x, ¬ B`, which CHOOSES `x`;
+   - `¬ (A → B)` is `A ∧ ¬ B`;
+   - `¬ (a ≠ b)` is `a = b`;
+   - any other head is unfolded (any definition, `Function.Injective` included), at most four times.
+
+   The escape walk and the disjunction walk both push.
+3. **A Boolean equation is the equation it decides.** `(x == y) = true`, `(x != y) = false` and `decide (x = y) = true` compare `x` and `y` (`sides`).
+4. **`∀` and `→` are walked.**
+   - The disjunction walk crosses both. Under a dependent `∀` only what the disjunct itself chooses is chosen: the choices made outside are fixed for every value the `∀` gives. A disjunction under a `∀` inside an `∃` is listed and judged.
+   - The escape walk enters a premise (`A → B`: an escape in `B` is one whatever `A` says), never a dependent `∀`. An equation under `∀ i` between two inputs chosen outside it is a collision of a map into a function space, which pigeonhole does not give.
+   - The disjunction walk does not push negations. Pushing manufactures disjunctions the statement does not state (`¬ (A ∧ B)` → `¬ A ∨ ¬ B`).
+5. **Eleven fixtures** (seven RED, four ok), judged first as before: GATES-20s's four; the five shapes above; `Function.Injective` stated (ok: its `∀` gives the inputs); and `True ∨ ∃ a b : Nat, a ≠ b ∧ ∀ i, a % (i+2) = b % (i+2)` (ok, and false: the `∀` case of 4).
+
+**Plants** (gates/statement_plants.py, MEASURED):
+- **plant.** The plant module gains `forgotten` (the theorem GATES-20s named), `not_injective`, `bool_collision`, `not_ne` and `forall_in_exists`, over `h4 : List Nat → Fin 4`, each proved by its left disjunct. The census over the tree plus the plant reads `STATEMENT-CENSUS RED (8)`, naming each of the eight `…: right disjunct:`; the control `chain_binds_named` is one ok row.
+- **mutants.** One per rule, each a scratch copy of Census/Statements.lean with the rule disabled, each refused by the census's own fixtures (`STATEMENT-CENSUS harness:`):
+  - the two-chosen-sides test (as before);
+  - the membership rule, reverted to "contains";
+  - the negation push in the escape walk;
+  - the Boolean reading;
+  - the `∀` walk in the disjunction walk.
+- **reach.** `#statement_census_in` over the plant module alone reads `RED (8)`.
+- **control (the tree alone, 37772b9).** `STATEMENT-CENSUS ok: 425 disjunctions`. There were 282 before: the `∀` walk lists 143 more, and all read ok.
+- The memo's six over `P.h`: all RED by name. Five read ok or no row before.
+
+**Price** (hbox, MEASURED). The whole census.py: 23.8 s at load ~10 on 37772b9 (21.0 s at load ~9 on f9657bd before). statement_plants: 38–50 s with five mutants (39 s with one).
+
+**What breaks.**
+- A theorem whose conclusion holds one of the five shapes is RED. Landed today: none (the control above).
+- The census lists more disjunctions: those under a `∀` or behind a `¬`.
+- Nothing re-emits.
+
+**Critique.**
+- (a) **Two readings stay conservative.** "Determines" is syntactic: an injective function that is not a constructor bounds nothing, and an unfolding that does not reach a constructor in four steps bounds nothing. Both errors are on the red side.
+- (b) **The push is classical.** A theorem whose disjunct reads `¬ ∀` is read as choosing. That is the pigeonhole question it asks, constructive or not.
+- (c) **Walking `→` is also the red side.** It reads `True ∨ (P → collision)` as an escape though `P` might be unsatisfiable. A premise that refutes itself would make such a theorem vacuous anyway.
+- (d) **Unfolding any definition under `¬` costs time** (the whole census rose from 21.0 to 23.8 s, which mixes load and tree) and could unfold a large definition at a leaf. The fuel is four.
+- (e) **A `Finset`/`Set` membership bounds nothing.** Core has no `Finset`. A future Finset membership would need its own finiteness reading, and until then it reads red.
+
+**The false red I made first.** The first version walked dependent `∀` in the escape walk and pushed negations in the disjunction walk. Over the real tree it read `STATEMENT-CENSUS RED (1)` on `Kernel.Proofs.Refusals.plant_refusals_unseparated : ¬ Trie.Separates (plantRefusalSpec E)` (MEASURED). That theorem is a tooth: the plant's keys share their bits at every depth. Pushed, its `∀ i < depth` became a manufactured disjunction whose right side compared two keys chosen outside the `∀`. Pigeonhole proves that only when the keys outnumber 2^depth, and the landed `refusals_separate` says they do not. The rule was wrong, not the tooth; decision 4 is the corrected rule, and the eleventh fixture holds it.
+
+**Meta-critique.** The memo listed five shapes, and the pull was five special cases. Three are one rule: a negation pushed inward with unfolding gives `¬ Injective`, `¬ ≠` and any future `¬ ∀ … → …` together, and reading `Bool` sides is one more. The projection miss was a soundness error in the bounding rule, not a missing shape. "Contains" was never what bounds a variable. I replaced the rule rather than adding an exception for `.length`.
+
+## GATES-20y · The miscompiled literal is read from the compiled C, a vector per literal class proves which classes break; the TCB table rows the syscall layer and compares its file pins (2026-10-24, FIX-GATES; COLLATION-20261024 A16, A20's gates half; READ-LEDGER-CENSUS-GATES D7)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none. Gates code and tables only.
+
+**Finding.**
+- **A16 (CODEC-4's gate).** `gates/refusals.py` refused the SOURCE spelling `\xHH` followed by a hex digit. The defect is in what the C emitter writes.
+  - **READ.** Lean v4.30.0, `Lean/Compiler/LCNF/EmitC.lean` `quoteString`: a character ≤ 31 other than `\n` `\r` `\t` is written `\xHH`, and C's `\x` is greedy, so a hex digit after it fuses into one escape.
+  - **Other spellings reach the same literal.** `"a\u0000b"` and the gate's own recommended workaround `"\x00" ++ "b"`, which the compiler folds into one literal.
+  - **MEASURED** (below, compiled against interpreted): `"\x00" ++ "b"` runs as `[11, 0]` compiled and `[0, 98]` interpreted. `"a\u0000b"` runs as `[97, 11, 0]` against `[97, 0, 98]`. Neither has a source `\xHH`+hex.
+- **D7 (A20's gates half).**
+  - **Unrowed holders.** `tcb.check` was green with `rustix`, `libc`, `linux-raw-sys`, `errno` and `windows-sys` rowless. rustix =1.1.2 is a direct dependency of client, sandbox and launcher. It is where their forbid-unsafe fs/process/net calls go, which is the UNSAFE_HOLDER class tcb.py defines.
+  - **Pins nothing compared.** The sha256 pins of `cc (hbox)`, `nd-bwrap (hbox)`, `nd-bwrap AppArmor profile (hbox)` and `sandbox-exec (macOS)` were compared by nothing. MEASURED today, the hashes all match their files.
+  - **One false claim.** The AppArmor row said the installed profile is "equal to sandbox/apparmor/nd-bwrap". It is not: tree sha256 `15047263…`, installed `4b9faabc…`. The tree's copy gained five comment lines at 173993d (HOSTING-40), and the diff is only those lines.
+
+**Decision.**
+1. **`gates/cbytes.py scan TREE [--changed FILE]`** reads every `.c` the build emitted for a module of the tree (`.lake/build/ir/<module>.c`, the reach's with `--changed`). It parses each C string literal escape by escape. A `\x` escape directly followed by a hex digit is RED, naming the module, the C line and the literal. A module with no emitted C is RED: it was not built. scripts/pre-push runs it after the build in both modes. It covers every spelling, because it reads what the emitter wrote.
+2. **`gates/cbytes.py vectors FRESH`** is a gates/runs.tsv script row, last line `CBYTES VECTORS GREEN`. A scratch package's exe (built in a temporary directory: the judge's `{fresh}` holds a `:`, which splits lake's LEAN_PATH) prints the UTF-8 bytes of one literal per class the emitter distinguishes. The classes:
+   - printable;
+   - `\n` before a digit; `\r` and `\t` before a hex digit;
+   - a literal backslash before `x41`;
+   - `"` and `?`;
+   - a control character before a non-hex, before a hex digit (spelled `\x01`, `\u0000`, and as the fold `"\x00" ++ "b"`), and at the end;
+   - DEL before a hex digit;
+   - two- and four-byte UTF-8 before a hex digit.
+
+   The compiled exe's bytes are compared with the interpreter's (`lake env lean --run` of the same file). The classes that disagree must be EXACTLY the three the scan refuses, and the scan over the package's own C must refuse exactly those three literals. A toolchain that fixes the class reds the row, and so does one that breaks another; then the rule is re-derived from the new vector. `--harness-control` expects `printable` to break.
+3. **refusals.py's source pattern is deleted** (`STRING`, `GREEDY_X`, `greedy_hex_escapes`, its docstring line). The compiled scan is the gate, and a second, weaker statement of the same refusal would be kept for no reader.
+4. **tcb.py**:
+   - UNSAFE_HOLDERS gains `rustix`, `linux-raw-sys`, `libc`, `errno` and `windows-sys`, and gates/tcb.tsv gains their five rows.
+   - **The pin comparison.** A row whose component names a host in parentheses, and whose pin holds `<absolute path> … sha256 <hex>`, is compared on that host: the hostname, or `macOS` on Darwin. The file must exist and hash to the pin. On another host the row is that host's judge's.
+   - A `sha256` pin in a row that names no host is RED: nothing would ever compare it.
+   - The AppArmor row's pin now states what is true: the installed file's hash, compared on hbox, and the tree copy's own hash with the five comment lines that differ. A path relative to the tree before a `sha256` pins the tree's own copy, so an edit of sandbox/apparmor/nd-bwrap reds until the profile is reinstalled and the row re-pinned.
+   - `gates/tcb.py --plants FRESH` is a script row, last line `TCB PLANTS GREEN`.
+
+**Plants** (hbox, MEASURED):
+- `cbytes.py vectors`: GREEN in 4.7 s. The three disagreeing classes and their bytes:
+
+  | class | literal | compiled | interpreted |
+  |---|---|---|---|
+  | ctrl-hex | `"\x01b"` | `[27, 0]` | `[1, 98]` |
+  | nul-hex-unicode | `"a\u0000b"` | `[97, 11, 0]` | `[97, 0, 98]` |
+  | nul-hex-fold | `"\x00" ++ "b"` | `[11, 0]` | `[0, 98]` |
+
+  The other eleven classes agree. The scan of the vector's own C refuses `"\x01b"`, `"a\x00b"` and `"\x00b"`, and nothing else. The control reads `CBYTES VECTORS RED: printable: … (harness-control)`.
+- `cbytes.py scan` over the built tree (e7c2b13): `cbytes: ok (502 module(s) scanned, 0 refused)`, 3.7 s. No offending literal today, as CODEC said.
+- `tcb.py --plants`: control GREEN; `rustix-unrowed` reads `crate rustix 1.1.2 is in Cargo.lock with no gates/tcb.tsv row`; `pin-wrong` reads `plant-file (hbox): …/pinned.bin has sha256 <real>, the row pins 000…`; `pin-right` GREEN; `pin-absent` reads `pinned file … is absent on hbox`; `pin-no-host` reads `a sha256 pin and no host`. `TCB PLANTS GREEN`; the control reads `TCB PLANTS RED (1): harness-control`.
+- `tcb.check` on the tree: the four host rows compared on hbox, all equal, after the AppArmor row's correction. Before it, the row's text claimed an equality the files do not have. The hash it pins was right.
+
+**What breaks.**
+- A landing whose compiled code holds a control character before a hex digit in a string literal is refused after the build, whatever its spelling. Before, only the source `\xHH`+hex was refused, before the build.
+- The source pattern is gone from refusals.py.
+- tcb.py now reads files outside the tree: on hbox, /usr/bin/cc, /usr/local/libexec/nd-bwrap and /etc/apparmor.d/nd-bwrap. A box rebuild, a gcc upgrade or a reinstalled profile reds the gate by name until the row is re-pinned. That is the point of the pin.
+- gates/runs.tsv gains two script rows. gates/tcb.tsv gains five rows and corrects one.
+- Nothing re-emits.
+
+**Critique.**
+- (a) The scan trusts that the class the vector found is the whole defect. The vector covers the classes `quoteString` distinguishes, as read in the 4.30 source. A class outside its cases (a surrogate, a `\0` inside a `ByteArray` literal: those are emitted as bytes, not strings) is not covered.
+- (b) The scan reads `.lake/build/ir`. Emitted C of a module the judge did not build is RED, not skipped, so a stale or missing `.c` cannot pass silently. A stale `.c` of a module the tree no longer has is not read.
+- (c) Pins are compared only on their own host. `nd-bwrap (burst5)` has no sha256 ("pin NOT measured", unreachable from here by name), so it is not compared and not red. That is the honest state of a box nobody measures, filed below. `sandbox-exec (macOS)` is compared only where a judge runs on a Mac.
+- (d) The syscall rows trust rustix's wrappers to pass arguments the ABI defines. That is a claim about bytes, not a decision. `stdio-leg`'s ORDER-and-SELECT claim (D7's law-2 question) is the HOSTING half of A20 and another lane's.
+
+**Meta-critique.** The pull was to keep the source gate "as a hint" beside the compiled scan, since an early hint is cheap. Kept, it is a second statement of the rule, and readers would trust it. It is the one CODEC-4 measured as wrong on two spellings. The other pull was to call the pins "compared" while comparing only on hbox. I wrote down exactly where each pin is compared, and named the one that is never compared.

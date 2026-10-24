@@ -13,7 +13,6 @@ strings removed), so prose may name them. Red on:
   set_option maxHeartbeats / maxRecDepth / synthInstance.*  a slow proof is fixed, not fed
   set_option autoImplicit / relaxedAutoImplicit / warningAsError / linter.*  lakefile's options hold
   List UInt8 in a def-module        bytes are ByteArray (law 3)
-  "…\\xHH<hex digit>…"             a string literal Lean v4.30's C backend miscompiles (greedy C \\x)
   createTempFile/createTempDir/withTempFile/withTempDir
                                     segfault under a missing TMPDIR (v4.30); name the path
 """
@@ -56,26 +55,9 @@ def native_allow(root: str) -> set[str]:
     return out
 
 
-# Lean v4.30.0's C backend emits a String literal's `\xHH` escape into C unchanged, and C's `\x`
-# escape is greedy: "a\x00b" compiles to the bytes a, 0x0b (two bytes) while the interpreter and the
-# kernel see a, 0x00, b. Measured 10-17 (CODEC-4, CODEC-27 / 23c9530; GATES-2 saw `lean -c` emit the
-# C literal "a\x00b"). So a `\xHH` escape directly followed by a hex digit is refused in every
-# module (tooling compiles too); write the bytes as a ByteArray, or end the literal (`"\x00" ++ "b"`).
-# Lift when a toolchain splits the C literal (re-run the plant in the commit that lifts it).
-STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
-GREEDY_X = re.compile(r"\\(?:(?P<greedy>x[0-9a-fA-F]{2}(?=[0-9a-fA-F]))|.)")
-
-
-def greedy_hex_escapes(m) -> list[str]:
-    red = []
-    code = tree.blank(m.text, strings=False)
-    for lit in STRING.finditer(code):
-        for e in GREEDY_X.finditer(lit.group(0)):
-            if e.group("greedy"):
-                line = code.count("\n", 0, lit.start()) + 1
-                red.append(f"hex escape: {m.path}:{line}: {e.group(0)} followed by a hex digit in {lit.group(0)[:40]} "
-                           f"(Lean v4.30.0's C backend compiles it as one greedy C \\x escape)")
-    return red
+# The string literal Lean v4.30.0's C backend miscompiles (a control character before a hex digit, CODEC-4) is
+# refused from the COMPILED C, after the build, by gates/cbytes.py (GATES-20y): its source spelling does not decide
+# it ("a\u0000b", "\x00" ++ "b" reach the same emitter).
 
 
 def check(t: tree.Tree) -> list[str]:
@@ -86,7 +68,6 @@ def check(t: tree.Tree) -> list[str]:
             for hit in re.finditer(pat, m.code):
                 line = m.code.count("\n", 0, hit.start()) + 1
                 red.append(f"{what}: {m.path}:{line}: {m.text.splitlines()[line - 1].strip()}")
-        red += greedy_hex_escapes(m)
         if m.name not in allowed:
             for hit in NATIVE.finditer(m.code):
                 line = m.code.count("\n", 0, hit.start()) + 1

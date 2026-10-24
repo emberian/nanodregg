@@ -358,6 +358,10 @@ if [ $fast = 1 ]; then
          grep -E '^census \(reach' "$G/step.out" | sed 's/^/  /' || true ;;
     esac
   fi
+  # GATES-20y: the miscompiled string literal, read from the emitted C of the reach (every spelling)
+  if [ -n "$targets" ] && [ "$build" = 1 ]; then
+    case " $fail $killed " in *" build "*) ;; *) step cbytes python3 "$J/cbytes.py" scan "$G/tree" --changed "$G/changed" ;; esac
+  fi
   case $crates in
     "") echo "  cargo: none (no workspace member changed)" ;;
     workspace)
@@ -397,6 +401,8 @@ else
   if [ -n "$killed" ]; then echo "  census: SKIPPED (the build was killed)"
   else compute_keys; keyed_step census wrapped python3 "$G/tree/gates/census.py" "$G/tree"; fi
   [ -n "$killed" ] || decls_judge
+  # GATES-20y: the miscompiled string literal, read from every module's emitted C
+  case " $fail $killed " in *" build "*) ;; *) [ -n "$killed" ] || step cbytes python3 "$J/cbytes.py" scan "$G/tree" ;; esac
   # The verdict runs of every exe whose import closure holds a changed module (gates/runs.py,
   # gates/runs.tsv): a sim is a verdict a build cannot give (ROOT/HOSTING 10-17). Pending rows
   # (exit 3) do not block; a killed run is KILLED(load). A measured waste ratio above its ceiling

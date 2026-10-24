@@ -57,3 +57,5 @@ script:gates/certificate.py	{fresh}	certificate-pin: GREEN	{fresh} --harness-con
 script:gates/certificate_plants.py	{fresh}	CERTIFICATE PLANTS GREEN	{fresh} --harness-control
 script:gates/statement_plants.py	{fresh}	STATEMENT PLANTS GREEN	{fresh} --harness-control
 script:gates/decls_plants.py	--synthetic {fresh}/syn --lean {fresh}/lean	DECLS PLANTS GREEN	--synthetic {fresh}/syn --lean {fresh}/lean --harness-control
+script:gates/cbytes.py	vectors {fresh}	CBYTES VECTORS GREEN	vectors {fresh} --harness-control
+script:gates/tcb.py	--plants {fresh}	TCB PLANTS GREEN	--plants {fresh} --harness-control
