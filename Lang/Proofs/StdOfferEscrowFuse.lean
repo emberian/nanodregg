@@ -99,7 +99,7 @@ Turn grain; the escrow twin of `fuse_atomic`, `jointLaw_sound` and `invitation_o
 invoking the matcher `z.fuse` of the escrow package `offerEscrowPackageOf …`, its arguments naming
 `x` and `y` (digests `x'`, `y'`, each reading back), the three objects of that one package, which
 `receive` turns into `t` and `World.admit` admits from canonical cells and rows to `w'`: the
-forwarded deal decodes to ONE `{keys, pair, theta}`, and on it BOTH parties' legs moved with their
+forwarded deal IS one `{keys, pair, theta}` (a value, LANG-77; the matcher's run encoded it once for both takes), and on it BOTH parties' legs moved with their
 rows (`EscrowLegMoved` of `x'` and of `y'`: each offer row the deal names retracted in `t` and absent
 in `w'`, each leg out of its party's account by exactly its amount and into its peer offer's `payTo`
 account by exactly that amount); and every denomination's sum over the World is unchanged
@@ -107,12 +107,12 @@ account by exactly that amount); and every denomination's sum over the World is 
 `none`) makes `escrow_take_run_sound`, which this proof reads for each party, false: no leg moves. -/
 theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl budget : Nat} {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
-    {z : D} {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {deal : ByteArray} {vX vY : Data}
+    {z : D} {args : ByteArray} {b : Nat} {via : Option D} {pkg : D} {deal : Data} {vX vY : Data}
     {xb yb : ByteArray} {x' y' : D}
     (hX : X.program = Lang.program bytesOf digestOf rc) (hc : receive X w c = .ok t)
     (hb : c.unsigned.body = .invoke z offerFuseIx args b via)
-    (hdec : Wire.decodeData offerFuseArg args =
-      .ok (.record [("deal", .bytes deal), ("viaX", vX), ("viaY", vY), ("x", .digest xb), ("y", .digest yb)]))
+    (hdec : Wire.decodeData (offerFuseArg theta) args =
+      .ok (.record [("deal", deal), ("viaX", vX), ("viaY", vY), ("x", .digest xb), ("y", .digest yb)]))
     (hxd : digestOf xb = some x') (hyd : digestOf yb = some y')
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
     (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerEscrowPackageOf theta roles ol sl budget))
@@ -123,7 +123,7 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
     (hrx : digestOf (bytesOf x') = some x') (hry : digestOf (bytesOf y') = some y')
     (ha : World.admit X.env w t = .ok w') (hcan : w.Canon X.env) (hrc : w.RowsCanon X.env) :
     ∃ keys pair th,
-      Wire.decodeData (offerTakeArg theta) deal = .ok (.record [("keys", keys), ("pair", pair), ("theta", th)]) ∧
+      deal = .record [("keys", keys), ("pair", pair), ("theta", th)] ∧
       EscrowLegMoved bytesOf digestOf rc X w w' c t pkg theta roles ol sl keys pair th x' ∧
       EscrowLegMoved bytesOf digestOf rc X w w' c t pkg theta roles ol sl keys pair th y' ∧
       ∀ d, w'.valueSum d = w.valueSum d := by
@@ -132,10 +132,10 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
   obtain rfl := invokeRun_pkg hirz hz hidK
   have hrunz' := hrunz
   rw [hX] at hrunz'
-  obtain ⟨deal', xb', yb', vx, vy, x'', y'', vx', vy', hdec', hdx, hdy, -, -, hcz, rfl⟩ :=
+  obtain ⟨deal', xb', yb', vx, vy, x'', y'', vx', vy', db, hdec', hdx, hdy, -, -, hdb, hcz, rfl⟩ :=
     fuse_calls bytesOf digestOf (budget := budget) hid hp rfl rfl escrow_fuse_resolve rfl (by simp [Row.find?]) hrunz'
   rw [hdec] at hdec'
-  simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, Data.bytes.injEq,
+  simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq,
     Data.digest.injEq, true_and, and_true] at hdec'
   obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := hdec'
   rw [hxd] at hdx
@@ -147,9 +147,13 @@ theorem escrow_fuse_admitted {bytesOf : D → ByteArray} {digestOf : ByteArray �
   obtain ⟨wky, hdyd⟩ := dispatched_signed_children hc hb hirz hrunz 1 (by simp)
   obtain ⟨keys, pair, th, hdx, hmx⟩ := escrow_party (n := 2) hX hc ha hrc hid hidK hp hR hdxd hx hrx
   obtain ⟨keys', pair', th', hdy, hmy⟩ := escrow_party (n := 2) hX hc ha hrc hid hidK hp hR hdyd hy hry
+  have hdeal : deal = .record [("keys", keys), ("pair", pair), ("theta", th)] := by
+    have h1 := Wire.decodeData_eq_ok_iff.mpr hdb
+    rw [h1] at hdx
+    exact Except.ok.inj hdx
   rw [hdx] at hdy
   simp only [Except.ok.injEq, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] at hdy
   obtain ⟨rfl, rfl, rfl⟩ := hdy
-  exact ⟨keys, pair, th, hdx, hmx, hmy, fun d => admit_value hcan ha d⟩
+  exact ⟨keys, pair, th, hdeal, hmx, hmy, fun d => admit_value hcan ha d⟩
 
 end Nanodregg.Lang.Std

@@ -13,6 +13,7 @@ text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_
     decl    ::= (type N T) | (state T) | (import N "hex") | (layer N) | (doc "text")
               | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)])
               | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] body)
+              kind    ::= account | credit | grant | transfer | (invoke T)   — T the argument the invoke sends (LANG-77)
               | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))
               | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))
               | (activity cursor log [(limits cursorLimit logLimit)] [(patience n)] [(expose m…)]
@@ -355,7 +356,7 @@ def doneSx (c : Ctx) (p : Nat) (st : SExp) (items : List Item) : P SExp := do
       L p [A p "edits", L p (A p "record" :: eSlots)], L p [A p "state", st]])
   | _ => throw (.outOfPlace p "done")
 
-def callKinds : List Label := callArms.map (·.1)
+def callKinds : List Label := (callArms (some (.record []))).map (·.1)
 
 /-- `(with e (f x)…)`: the full state record, each field given or `(. e f)`. -/
 def withSx (c : Ctx) (p : Nat) (e : SExp) (given : List (Label × SExp)) : SExp :=
@@ -568,7 +569,8 @@ def relDecl (c : Ctx) (p : Nat) (xs : List SExp) : P RelDecl := do
 structure MethodHead where
   reads : List (Label × RelRead) := []
   arg : SExp := .list 0 [.atom 0 "rec"]
-  calls : List (List Label) := []
+  /-- each slot: its kinds, and the argument type of its `(invoke T)` kind if it has one (LANG-77) -/
+  calls : List (List Label × Option SExp) := []
   edits : Nat := 0
 
 def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
@@ -603,8 +605,21 @@ def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
     methodHead { h with reads := Row.sort reads } rest
   | .list _ [.atom _ "arg", a] :: rest => methodHead { h with arg := a } rest
   | .list _ (.atom _ "calls" :: ks) :: rest => do
+    -- a slot `(kind…)`: atoms name kinds; `(invoke T)` is the invoke kind with its argument type
+    -- (LANG-77). A bare `invoke` atom names no arm: the slot is then empty and install refuses it.
     let calls ← ks.mapM fun
-      | .list _ kinds => labelsOf kinds
+      | .list p kinds => do
+        let mut labels : List Label := []
+        let mut inv : Option SExp := none
+        for k in kinds do
+          match k with
+          | .atom _ ℓ => labels := labels ++ [ℓ]
+          | .list q [.atom _ "invoke", t] =>
+            if inv.isSome then throw (.duplicate q "invoke")
+            inv := some t
+          | x => throw (.read (.badLabel x.pos))
+        if labels.isEmpty && inv.isNone then throw (.badClause p)
+        pure (labels, inv)
       | x => .error (.badClause x.pos)
     methodHead { h with calls } rest
   | .list _ [.atom _ "edits", .atom q n] :: rest =>
@@ -652,7 +667,10 @@ def methodSx (c : Ctx) (p : Nat) (xs : List SExp) : P (Ty × SExp × Ty × List 
     unless (Row.find? rel c.rels).isSome do throw (.noRel p rel)
   let (A', bounds) ← argTy c Read.depthMax [] h.arg
   let R := readsTy c.rels h.reads
-  let ks := h.calls.map callOf
+  let ks ← h.calls.mapM fun (kinds, inv) => do
+    match inv with
+    | some t => pure (invokeOf (← ty c Read.depthMax t) kinds)
+    | none => pure (callOf kinds)
   let E := editTy c.rels
   let res := resultTy c.state ks E h.edits
   let cm := { c with place := .method res ks h.edits h.reads }

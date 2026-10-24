@@ -197,66 +197,103 @@ theorem rowConforms_length : ∀ {ds : List (Label × Data)} {r : List (Label ×
   | _, _, .nil => rfl
   | _, _, .cons _ h => by simp [rowConforms_length h]
 
-/-- **Liveness**: data conforming to `callTy` reads as a Body, unless some field's bytes are not a
-digest (`bodyOf`'s only refusal the type does not rule out). -/
-theorem bodyOf_live {d : Data} (h : Conforms d callTy) : Live digestOf d (bodyOf digestOf d) := by
+/-- The `invoke` arm's `args`, a value of the slot's argument type, has bytes (`encodeData_of_conforms`,
+LANG-77): the encoder is live at any data. -/
+theorem argsBytes_live {A : Ty} {a : Data} (hA : Wire.dataTy A = true) (h : Conforms a A) :
+    Live digestOf d0 (argsBytes (some A) "args" a) := by
+  obtain ⟨b, hb⟩ := encodeData_of_conforms hA h
+  simp only [argsBytes, hb]
+  exact Live.pure _
+
+/-- The four arms every slot may hold, read at any invoke argument type (they do not read it). -/
+private theorem bodyOf_live_fixed {A : Option Ty} {ℓ : Label} {T : Ty} {d' : Data}
+    (hf : Row.find? ℓ (callArms none) = some T) (hd : Conforms d' T) :
+    Live digestOf (.inj ℓ d') (bodyOf digestOf A (.inj ℓ d')) := by
+  simp only [callArms, accountArm, creditArm, grantArm, transferArm, Row.find?] at hf
+  split at hf
+  · cases hf; subst_vars
+    cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+    cases hr
+    simp only [bodyOf]
+    exact Live.bind (digest_live _ (.one _) h1 (under_field (by simp))) fun _ => Live.bind (digest_live _ (.one _) h2 (under_field (by simp))) fun _ => Live.pure _
+  split at hf
+  · cases hf; subst_vars
+    cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+    cases hr with | cons h3 hr => cases hr with | cons h4 hr =>
+    cases hr
+    simp only [bodyOf]
+    exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (acctRef_live _ h1 (under_field (by simp))) fun _ =>
+      Live.bind (natOf_live _ h2) fun _ => Live.bind (optDigest_live _ _ (.one _) h3 (under_field (by simp))) fun _ => Live.pure _
+  split at hf
+  · cases hf; subst_vars
+    cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+    cases hr with | cons h3 hr => cases hr with | cons h4 hr =>
+    cases hr
+    cases h3 with
+    | record hrs =>
+      have hlen := rowConforms_length hrs
+      simp only [List.length_map, rightLabels, slotLabels, List.length_range] at hlen
+      simp only [bodyOf, hlen, rightsMax, Nat.le_refl, if_true]
+      exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (digest_live _ (.one _) h1 (under_field (by simp))) fun _ =>
+        Live.bind (rights_live hrs) fun _ => Live.bind (optDigest_live _ _ (.one _) h2 (under_field (by simp))) fun _ => Live.pure _
+  split at hf
+  · cases hf; subst_vars
+    cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+    cases hr with | cons h3 hr => cases hr with | cons h4 hr => cases hr with | cons h5 hr =>
+    cases hr
+    simp only [bodyOf]
+    exact Live.bind (acctRef_live _ h4 (under_field (by simp))) fun _ => Live.bind (acctRef_live _ h2 (under_field (by simp))) fun _ =>
+      Live.bind (natOf_live _ h1) fun _ => Live.bind (optDigest_live _ _ (.one _) h5 (under_field (by simp))) fun _ =>
+      Live.bind (optBytes_live _ _ h3) fun _ => Live.pure _
+  cases hf
+
+/-- The arm a value of `callTy (some A')` sits at: one of the four every slot has, or the `invoke`
+arm at `A'`. -/
+private theorem find_some {ℓ : Label} {A' T : Ty} (hf : Row.find? ℓ (callArms (some A')) = some T) :
+    Row.find? ℓ (callArms none) = some T ∨ (ℓ = "invoke" ∧ T = invokeArm A') := by
+  simp only [callArms, Row.find?] at hf ⊢
+  split at hf
+  · cases hf; subst_vars; left; rfl
+  split at hf
+  · cases hf; subst_vars; left; rfl
+  split at hf
+  · cases hf; subst_vars; left; rfl
+  split at hf
+  · cases hf; subst_vars; right; exact ⟨rfl, rfl⟩
+  split at hf
+  · cases hf; subst_vars; left; rfl
+  cases hf
+
+/-- **Liveness**: data conforming to `callTy A` (the slot's invoke arm at `A`, a type the wire
+carries) reads as a Body, unless some field's bytes are not a digest (`bodyOf`'s only refusal the
+type does not rule out: the encoder never refuses a value of `A`, `argsBytes_live`). -/
+theorem bodyOf_live {A : Option Ty} (hA : ∀ A', A = some A' → Wire.dataTy A' = true) {d : Data}
+    (h : Conforms d (callTy A)) : Live digestOf d (bodyOf digestOf A d) := by
   cases h with
   | inj hf hd =>
-    simp only [callArms, Row.find?] at hf
-    split at hf
-    · cases hf; subst_vars
-      cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
-      cases hr
-      simp only [bodyOf]
-      exact Live.bind (digest_live _ (.one _) h1 (under_field (by simp))) fun _ => Live.bind (digest_live _ (.one _) h2 (under_field (by simp))) fun _ => Live.pure _
-    split at hf
-    · cases hf; subst_vars
-      cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
-      cases hr with | cons h3 hr => cases hr with | cons h4 hr =>
-      cases hr
-      simp only [bodyOf]
-      exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (acctRef_live _ h1 (under_field (by simp))) fun _ =>
-        Live.bind (natOf_live _ h2) fun _ => Live.bind (optDigest_live _ _ (.one _) h3 (under_field (by simp))) fun _ => Live.pure _
-    split at hf
-    · cases hf; subst_vars
-      cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
-      cases hr with | cons h3 hr => cases hr with | cons h4 hr =>
-      cases hr
-      cases h3 with
-      | record hrs =>
-        have hlen := rowConforms_length hrs
-        simp only [List.length_map, rightLabels, slotLabels, List.length_range] at hlen
-        simp only [bodyOf, hlen, rightsMax, Nat.le_refl, if_true]
-        exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (digest_live _ (.one _) h1 (under_field (by simp))) fun _ =>
-          Live.bind (rights_live hrs) fun _ => Live.bind (optDigest_live _ _ (.one _) h2 (under_field (by simp))) fun _ => Live.pure _
-    split at hf
-    · cases hf; subst_vars
-      cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
-      cases hr with | cons h3 hr => cases hr with | cons h4 hr => cases hr with | cons h5 hr =>
-      cases hr
-      simp only [bodyOf]
-      exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (natOf_live _ h3) fun _ =>
-        Live.bind (bytesAt_live _ h1) fun _ => Live.bind (natOf_live _ h2) fun _ =>
-        Live.bind (optDigest_live _ _ (.one _) h5 (under_field (by simp))) fun _ => Live.pure _
-    split at hf
-    · cases hf; subst_vars
-      cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
-      cases hr with | cons h3 hr => cases hr with | cons h4 hr => cases hr with | cons h5 hr =>
-      cases hr
-      simp only [bodyOf]
-      exact Live.bind (acctRef_live _ h4 (under_field (by simp))) fun _ => Live.bind (acctRef_live _ h2 (under_field (by simp))) fun _ =>
-        Live.bind (natOf_live _ h1) fun _ => Live.bind (optDigest_live _ _ (.one _) h5 (under_field (by simp))) fun _ =>
-        Live.bind (optBytes_live _ _ h3) fun _ => Live.pure _
-    cases hf
+    cases A with
+    | none => exact bodyOf_live_fixed hf hd
+    | some A' =>
+      rcases find_some hf with hf' | ⟨rfl, rfl⟩
+      · exact bodyOf_live_fixed hf' hd
+      · simp only [invokeArm] at hd
+        cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+        cases hr with | cons h3 hr => cases hr with | cons h4 hr => cases hr with | cons h5 hr =>
+        cases hr
+        simp only [bodyOf]
+        exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (natOf_live _ h3) fun _ =>
+          Live.bind (argsBytes_live (hA A' rfl) h1) fun _ => Live.bind (natOf_live _ h2) fun _ =>
+          Live.bind (optDigest_live _ _ (.one _) h5 (under_field (by simp))) fun _ => Live.pure _
 
 /-- The identity-digest corollary (no real digest codec is total; `bodyOf_live` is the statement):
 under a decoder that accepts every byte string, conforming call data always reads. -/
-theorem bodyOf_ok_of_total (htot : ∀ b, (digestOf b).isSome = true) {d : Data} (h : Conforms d callTy) :
-    ∃ b : Body D, bodyOf digestOf d = .ok b := by
-  cases hb : bodyOf digestOf d with
+theorem bodyOf_ok_of_total (htot : ∀ b, (digestOf b).isSome = true) {A : Option Ty}
+    (hA : ∀ A', A = some A' → Wire.dataTy A' = true) {d : Data} (h : Conforms d (callTy A)) :
+    ∃ b : Body D, bodyOf digestOf A d = .ok b := by
+  cases hb : bodyOf digestOf A d with
   | ok b => exact ⟨b, rfl⟩
   | error e =>
-    obtain ⟨_, _, b, hn, -, -, -⟩ := bodyOf_live h e hb
+    obtain ⟨_, _, b, hn, -, -, -⟩ := bodyOf_live hA h e hb
     have := htot b
     rw [hn] at this; cases this
 
@@ -380,20 +417,38 @@ theorem find?_mem {α : Type} : ∀ {r : List (Label × α)} {ℓ : Label} {a : 
     · rename_i hk; cases h; subst hk; exact List.mem_cons_self ..
     · exact List.mem_cons_of_mem _ (find?_mem h)
 
-/-- A value of a call slot's type is a value of `callTy`, injected at one of the slot's arms. -/
+/-- A value of a call slot's type is a value of `callTy` at the slot's invoke argument, injected
+at one of the slot's arms. -/
 theorem slot_conforms {T : Ty} {d : Data} (hT : callSlotOk T = true) (h : Conforms d T) :
-    Conforms d callTy ∧ ∃ arms ℓ d', T = .sum arms ∧ d = .inj ℓ d' ∧ ℓ ∈ arms.map Prod.fst := by
+    Conforms d (callTy (slotInvokeArg T)) ∧ ∃ arms ℓ d', T = .sum arms ∧ d = .inj ℓ d' ∧ ℓ ∈ arms.map Prod.fst := by
   cases T with
   | sum arms =>
     cases h with
     | inj hf hd =>
       simp only [callSlotOk, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hT
+      obtain ⟨⟨-, -⟩, harms⟩ := hT
       have hm := find?_mem hf
-      exact ⟨.inj (hT.2 _ hm) hd, arms, _, _, rfl, rfl, List.mem_map.2 ⟨_, hm, rfl⟩⟩
+      exact ⟨.inj (harms _ hm) hd, arms, _, _, rfl, rfl, List.mem_map.2 ⟨_, hm, rfl⟩⟩
+  | _ => simp [callSlotOk] at hT
+
+/-- A call slot's invoke argument type is one the wire carries (`callSlotOk` asks `invokeArgOk`,
+LANG-77): what `bodyOf_live` needs of it. -/
+theorem callSlotOk_dataTy {T : Ty} (hT : callSlotOk T = true) :
+    ∀ A, slotInvokeArg T = some A → Wire.dataTy A = true := by
+  intro A hA
+  cases T with
+  | sum arms =>
+    simp only [callSlotOk, Bool.and_eq_true] at hT
+    simp only [slotInvokeArg] at hA
+    rw [hA] at hT
+    have h2 : (some A).all invokeArgOk = true := hT.1.2
+    simp only [Option.all, invokeArgOk, Bool.and_eq_true] at h2
+    exact h2.2
   | _ => simp [callSlotOk] at hT
 
 /-- The Body read from call data is of the kind its arm names. -/
-theorem bodyOf_kind {d : Data} {b : Body D} (h : bodyOf digestOf d = .ok b) : ∃ d', d = .inj b.kindName d' := by
+theorem bodyOf_kind {A : Option Ty} {d : Data} {b : Body D} (h : bodyOf digestOf A d = .ok b) :
+    ∃ d', d = .inj b.kindName d' := by
   unfold bodyOf at h
   split at h
   all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
@@ -430,82 +485,105 @@ theorem Matched.map_right {α β γ : Type} {R : α → β → Prop} {S : α →
 /-- Call `b` is of a kind slot type `t` declares (`t = optTy (sum arms)`, `b`'s kind an arm). -/
 def KindOf (b : Body D) (t : Ty) : Prop := ∃ arms, t = optTy (.sum arms) ∧ b.kindName ∈ arms.map Prod.fst
 
-/-- A calls row's slots: each an option over a call slot type. -/
-def SlotRow (r : List (Label × Ty)) : Prop := ∀ p ∈ r, ∃ k, p.2 = optTy k ∧ callSlotOk k = true
-
 /-- The refusal `callsOf` gives reading calls data `c` when slot `ℓ` holds, at path `p` in its
 call, bytes the digest decoder refuses: the slot and the path by name. -/
 def DigestRefusal (digestOf : ByteArray → Option D) (c : Data) (e : Refusal D) : Prop :=
   ∃ (ℓ : Label) (p : List Label) (f : String) (b : ByteArray), digestOf b = none ∧ DigestAt b (ℓ :: p) c ∧
     Names p f ∧ e = .program s!"calls: {ℓ} {s!"{f}: not a digest"}"
 
-theorem callsOf_go_live : ∀ {fs : List (Label × Data)} {r : List (Label × Ty)}, RowConforms fs r → SlotRow r →
-    ∀ e, callsOf.go digestOf fs = .error e → DigestRefusal digestOf (.record fs) e
-  | _, _, .nil, _, e, h => by simp [callsOf.go] at h
-  | _, _, .cons (ℓ := ℓ) (d := d) (ds := ds) ho hr, hs, e, h => by
-    obtain ⟨k, hk, hok⟩ := hs _ (List.mem_cons_self ..)
-    have hs' : SlotRow _ := fun p hp => hs p (List.mem_cons_of_mem _ hp)
-    have tail : ∀ e, callsOf.go digestOf ds = .error e → DigestRefusal digestOf (.record ((ℓ, d) :: ds)) e := by
-      intro e he
-      obtain ⟨ℓ', p, f, b, hn, hb, hf, rfl⟩ := callsOf_go_live hr hs' e he
-      cases hb with
-      | field hm hb' => exact ⟨ℓ', p, f, b, hn, .field (List.mem_cons_of_mem _ hm) hb', hf, rfl⟩
-    simp only at hk; subst hk
-    rcases conf_opt ho with rfl | ⟨d', rfl, hd⟩
-    · simp only [callsOf.go] at h; exact tail e h
-    · simp only [callsOf.go] at h
-      split at h
-      · rename_i b hb
-        cases hg : callsOf.go digestOf ds with
-        | error e' => rw [hg] at h; cases h; exact tail _ hg
-        | ok bs => rw [hg] at h; cases h
-      · rename_i m hm
-        cases h
-        obtain ⟨p, f, b, hn, hb, hf, rfl⟩ := bodyOf_live (slot_conforms hok hd).1 m hm
-        exact ⟨ℓ, p, f, b, hn, .field (List.mem_cons_self ..) (.inj hb), hf, rfl⟩
+theorem callsOf_go_live : ∀ {ks : List Ty} {ls : List Label} {fs : List (Label × Data)},
+    ls.length = ks.length → RowConforms fs (ls.zip (ks.map optTy)) → (∀ k ∈ ks, callSlotOk k = true) →
+    ∀ e, callsOf.go digestOf ks fs = .error e → DigestRefusal digestOf (.record fs) e
+  | [], [], fs, _, hr, _, e, h => by
+    simp only [List.map_nil, List.zip_nil_right] at hr
+    cases hr; simp [callsOf.go] at h
+  | k :: ks, ℓ :: ls, fs, hl, hr, hks, e, h => by
+    simp only [List.map_cons, List.zip_cons_cons] at hr
+    cases hr with
+    | @cons _ d _ ds _ ho hr =>
+      have hks' : ∀ k ∈ ks, callSlotOk k = true := fun k hk => hks k (List.mem_cons_of_mem _ hk)
+      have hok := hks k (List.mem_cons_self ..)
+      have tail : ∀ e, callsOf.go digestOf ks ds = .error e → DigestRefusal digestOf (.record ((ℓ, d) :: ds)) e := by
+        intro e he
+        obtain ⟨ℓ', p, f, b, hn, hb, hf, rfl⟩ := callsOf_go_live (by simpa using hl) hr hks' e he
+        cases hb with
+        | field hm hb' => exact ⟨ℓ', p, f, b, hn, .field (List.mem_cons_of_mem _ hm) hb', hf, rfl⟩
+      rcases conf_opt ho with rfl | ⟨d', rfl, hd⟩
+      · simp only [callsOf.go] at h; exact tail e h
+      · simp only [callsOf.go] at h
+        split at h
+        · rename_i b hb
+          cases hg : callsOf.go digestOf ks ds with
+          | error e' => rw [hg] at h; cases h; exact tail _ hg
+          | ok bs => rw [hg] at h; cases h
+        · rename_i m hm
+          cases h
+          obtain ⟨p, f, b, hn, hb, hf, rfl⟩ :=
+            bodyOf_live (callSlotOk_dataTy hok) (slot_conforms hok hd).1 m hm
+          exact ⟨ℓ, p, f, b, hn, .field (List.mem_cons_self ..) (.inj hb), hf, rfl⟩
+  | [], _ :: _, _, hl, _, _, _, _ => by simp at hl
+  | _ :: _, [], _, hl, _, _, _, _ => by simp at hl
 
 /-- **The calls a conforming row reads are its filled slots, in order, each of its own slot's
 kinds**: a sublist of the row's slot types, matched one to one. So no slot yields two calls, and a
 method makes at most as many calls as it has slots. -/
-theorem callsOf_go_kinds : ∀ {fs : List (Label × Data)} {r : List (Label × Ty)} {bs : List (Body D)},
-    RowConforms fs r → SlotRow r → callsOf.go digestOf fs = .ok bs →
-    ∃ ts, ts.Sublist (r.map Prod.snd) ∧ Matched KindOf bs ts
-  | _, _, bs, .nil, _, h => by simp [callsOf.go] at h; subst h; exact ⟨[], .slnil, .nil⟩
-  | _, _, bs, .cons (ℓ := ℓ) (T := T) (ds := ds) (r := r) ho hr, hs, h => by
-    obtain ⟨k, hk, hok⟩ := hs _ (List.mem_cons_self ..)
-    have hs' : SlotRow _ := fun p hp => hs p (List.mem_cons_of_mem _ hp)
-    simp only at hk; subst hk
-    rcases conf_opt ho with rfl | ⟨d', rfl, hd⟩
-    · simp only [callsOf.go] at h
-      obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds hr hs' h
-      exact ⟨ts, hts.cons _, hf⟩
-    · simp only [callsOf.go] at h
-      split at h
-      · rename_i b hb
-        cases hg : callsOf.go digestOf ds with
-        | error e' => rw [hg] at h; cases h
-        | ok bs' =>
-          rw [hg] at h; cases h
-          obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds hr hs' hg
-          obtain ⟨-, arms, ℓ', d'', hT, hdd, hmem⟩ := slot_conforms hok hd
-          obtain ⟨d3, hd3⟩ := bodyOf_kind hb
-          rw [hdd] at hd3; cases hd3
-          exact ⟨optTy k :: ts, hts.cons_cons _, .cons ⟨arms, by rw [hT], hmem⟩ hf⟩
-      · cases h
-
-theorem slotRow_callsTy {ks : List Ty} (hks : ∀ k ∈ ks, callSlotOk k = true) :
-    SlotRow ((slotLabels "c" ks.length).zip (ks.map optTy)) := by
-  intro p hp
-  obtain ⟨-, h2⟩ := List.of_mem_zip hp
-  obtain ⟨k, hk, he⟩ := List.mem_map.1 h2
-  exact ⟨k, he.symm, hks k hk⟩
+theorem callsOf_go_kinds : ∀ {ks : List Ty} {ls : List Label} {fs : List (Label × Data)} {bs : List (Body D)},
+    ls.length = ks.length → RowConforms fs (ls.zip (ks.map optTy)) → (∀ k ∈ ks, callSlotOk k = true) →
+    callsOf.go digestOf ks fs = .ok bs →
+    ∃ ts, ts.Sublist ((ls.zip (ks.map optTy)).map Prod.snd) ∧ Matched KindOf bs ts
+  | [], [], fs, bs, _, hr, _, h => by
+    simp only [List.map_nil, List.zip_nil_right] at hr ⊢
+    cases hr; simp [callsOf.go] at h; subst h; exact ⟨[], .slnil, .nil⟩
+  | k :: ks, ℓ :: ls, fs, bs, hl, hr, hks, h => by
+    simp only [List.map_cons, List.zip_cons_cons] at hr ⊢
+    cases hr with
+    | @cons _ d _ ds _ ho hr =>
+      have hks' : ∀ k ∈ ks, callSlotOk k = true := fun k hk => hks k (List.mem_cons_of_mem _ hk)
+      have hok := hks k (List.mem_cons_self ..)
+      rcases conf_opt ho with rfl | ⟨d', rfl, hd⟩
+      · simp only [callsOf.go] at h
+        obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds (by simpa using hl) hr hks' h
+        exact ⟨ts, hts.cons _, hf⟩
+      · simp only [callsOf.go] at h
+        split at h
+        · rename_i b hb
+          cases hg : callsOf.go digestOf ks ds with
+          | error e' => rw [hg] at h; cases h
+          | ok bs' =>
+            rw [hg] at h; cases h
+            obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds (by simpa using hl) hr hks' hg
+            obtain ⟨-, arms, ℓ', d'', hT, hdd, hmem⟩ := slot_conforms hok hd
+            obtain ⟨d3, hd3⟩ := bodyOf_kind hb
+            rw [hdd] at hd3; cases hd3
+            exact ⟨optTy k :: ts, hts.cons_cons _, .cons ⟨arms, by rw [hT], hmem⟩ hf⟩
+        · cases h
+  | [], _ :: _, _, _, hl, _, _, _ => by simp at hl
+  | _ :: _, [], _, _, hl, _, _, _ => by simp at hl
 
 /-- **Liveness of a calls row**: data conforming to `callsTy ks` over call slot types is refused by
-`callsOf` only for a slot field whose bytes are not a digest, named `calls: cI FIELD`. -/
+`callsOf` only for a slot field whose bytes are not a digest, named `calls: cI FIELD`. The encoder
+of an invoke's `args` (LANG-77) never refuses: every slot's argument type is one the wire carries
+(`callSlotOk`) and the datum conforms to it. -/
 theorem callsOf_live {ks : List Ty} {c : Data} (hks : ∀ k ∈ ks, callSlotOk k = true) (h : Conforms c (callsTy ks))
-    (e : Refusal D) (he : callsOf digestOf c = .error e) : DigestRefusal digestOf c e := by
+    (e : Refusal D) (he : callsOf digestOf ks c = .error e) : DigestRefusal digestOf c e := by
   cases h with
-  | record hr => exact callsOf_go_live hr (slotRow_callsTy hks) e he
+  | record hr => exact callsOf_go_live (by simp [slotLabels]) hr hks e he
+
+/-- `callSlotsOf` on a row of two slots of one call type, read off that type's `callSlotOk` (a slot
+type that depends on a package parameter, as `Std.offer`'s does, is not decided: LANG-77). -/
+theorem callSlotsOf_two (T : Ty) :
+    callSlotsOf [("c0", optTy T), ("c1", optTy T)] = if callSlotOk T then some [T, T] else none := by
+  have hl : slotLabels "c" 2 = ["c0", "c1"] := by decide
+  simp only [callSlotsOf, callSlotOf, optTy, List.length_cons, List.length_nil, List.map, hl,
+    Kernel.Bounds.callsMax, List.mapM, List.mapM.loop]
+  split <;> cases h : callSlotOk T <;> simp_all
+
+theorem callSlotsOf_one (T : Ty) :
+    callSlotsOf [("c0", optTy T)] = if callSlotOk T then some [T] else none := by
+  have hl : slotLabels "c" 1 = ["c0"] := by decide
+  simp only [callSlotsOf, callSlotOf, optTy, List.length_cons, List.length_nil, List.map, hl,
+    Kernel.Bounds.callsMax, List.mapM, List.mapM.loop]
+  split <;> cases h : callSlotOk T <;> simp_all
 
 theorem callSlotsOf_ok : ∀ {row : List (Label × Ty)} {ks : List Ty},
     row.mapM (fun e => callSlotOf e.2) = some ks → ∀ k ∈ ks, callSlotOk k = true
@@ -602,7 +680,7 @@ theorem runMeasured_kinds {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
     | cons hcalls _ =>
       cases hcalls with
       | record hcs =>
-        obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds hcs (slotRow_callsTy hks) ‹callsOf.go _ _ = Except.ok _›
+        obtain ⟨ts, hts, hf⟩ := callsOf_go_kinds (by simp [slotLabels]) hcs hks ‹callsOf.go _ _ _ = Except.ok _›
         have hsnd : ((slotLabels "c" sg.calls.length).zip (sg.calls.map optTy)).map Prod.snd = sg.calls.map optTy :=
           List.map_snd_zip (by simp [slotLabels])
         rw [hsnd] at hts

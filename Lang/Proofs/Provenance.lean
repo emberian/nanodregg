@@ -1168,7 +1168,7 @@ private theorem runMeasured_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : 
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
-      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf digestOf c = .ok calls ∧
+      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf digestOf S.calls c = .ok calls ∧
       runMeasured bytesOf digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
@@ -1199,7 +1199,7 @@ private theorem runMeasured_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : 
           cases hst' with
           | record hds =>
             rename_i c e ds
-            cases hc : callsOf digestOf c with
+            cases hc : callsOf digestOf sg.calls c with
             | error err =>
               exfalso
               obtain ⟨ℓ', q, f, b, hn, hb, -, -⟩ := callsOf_live hks hcalls err hc
@@ -1218,7 +1218,7 @@ private theorem runMeasuredLive_past_extraction_of {rc : Lang.ReceiptCheck} (hdi
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
-      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf digestOf c = .ok calls ∧
+      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf digestOf S.calls c = .ok calls ∧
       runMeasuredLive bytesOf digestOf rc look rv pkg state method args r (budget + S.preparation) =
         match stateSlots S.row ds 0 with
         | some slots => do
@@ -1249,7 +1249,7 @@ private theorem runMeasuredLive_past_extraction_of {rc : Lang.ReceiptCheck} (hdi
           cases hst' with
           | record hds =>
             rename_i c e ds
-            cases hc : callsOf digestOf c with
+            cases hc : callsOf digestOf sg.calls c with
             | error err =>
               exfalso
               obtain ⟨ℓ', q, f, b, hn, hb, -, -⟩ := callsOf_live hks hcalls err hc
@@ -1290,7 +1290,7 @@ theorem runMeasured_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
-      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf c = .ok calls ∧
+      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf S.calls c = .ok calls ∧
       runMeasured X.env.bytes X.digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
@@ -1316,7 +1316,7 @@ theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} {X 
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
-      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf c = .ok calls ∧
+      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf S.calls c = .ok calls ∧
       X.program.run look rv pkg state method args r (budget + S.preparation) =
         match stateSlots S.row ds 0 with
         | some slots => do
@@ -1346,7 +1346,7 @@ theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
     (hr : run S.lib Bounds.stackMax budget 0 (State.init S.term S.env) = .value v used)
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body D)),
-      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf c = .ok calls ∧
+      d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧ callsOf X.digestOf S.calls c = .ok calls ∧
       X.program.run look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
@@ -1402,7 +1402,7 @@ theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {rv : RowVi
     (hx : (Machine.mk S.lib).extract S.ty (budget - used) v = .ok (d, left)) :
     ∃ (c e : Data) (ds : List (Label × Data)) (calls : List (Body Kernel.Sim.D)),
       d = .record [("calls", c), ("edits", e), ("state", .record ds)] ∧
-      callsOf Kernel.Sim.digestOf c = .ok calls ∧
+      callsOf Kernel.Sim.digestOf S.calls c = .ok calls ∧
       runMeasured Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do

@@ -145,6 +145,11 @@ def tyRowWire : List (Label × Ty) → Bool
   | (ℓ, t) :: r => labelOk ℓ && tyWire t && tyRowWire r
 end
 
+/-- A canonical type the wire can carry: its data codec (`Lang.Wire.Data`) exists and is canonical.
+Read here, beside `tyWire`, by the install check of a call slot's argument type (`Lang.callSlotOk`)
+and by the codec (`encodeData`/`decodeData`): one predicate (law 1). -/
+def dataTy (T : Ty) : Bool := T.wf && tyWire T
+
 /-! ## Terms -/
 
 mutual

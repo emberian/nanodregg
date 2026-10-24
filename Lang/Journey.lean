@@ -280,41 +280,82 @@ def onlyTo (to : ByteArray) : Package :=
   { imports := [], state := .record [], iface := .record [("onlyTo", lawTy (.record []))],
     body := .record [("onlyTo", law)], methods := [], laws := ["onlyTo"] }
 
-/-! ### Calls (LANG-23, KERNEL-28): a method's calls are derived as the object, at most
-`callDepthMax` deep
+/-! ### Calls (LANG-23, KERNEL-28, LANG-77): a method's calls are derived as the object, at most
+`callDepthMax` deep, and a method COMPOSES a nested call's argument
 
-`Relay` keeps `{hits : nat, me : digest, next : opt digest}`. Its method `go {rest, via}` counts the
-hit, records `req.self` as `me`, and, when `next` is `some n`, invokes `n`'s method 0 through grant
-`via` (a grant naming THIS object) with `rest` as the arguments: bytes it holds, forwarded whole
-(LANG-23 (iii)), so the journey nests each level's encoded arguments inside the previous one. -/
+`Relay` keeps `{hits : nat, me : digest, n : nat, next : opt digest, via : opt digest}`. `arm {via}`
+stores the grant this relay forwards through (a grant naming THIS object on `next`; it exists only
+after both objects do, so it is not a seed). `go {n}` counts the hit, records `req.self` as `me` and
+`n` as `n`, and, when `next` is `some o`, invokes `o`'s `go` through `via` with `{n := n + 1}`: an
+argument it COMPUTED, which the runtime encodes at the slot's declared type (LANG-77). Before
+LANG-77 the invoke arm's `args` were bytes, and a relay could only forward a byte string it held
+(LANG-23 (iii)), so the journey nested each level's pre-encoded arguments inside the previous one. -/
 
-def R : Ty := .record [("hits", .nat), ("me", .digest), ("next", optTy .digest)]
-def RA : Ty := .record [("rest", .bytes), ("via", .digest)]
+def R : Ty := .record [("hits", .nat), ("me", .digest), ("n", .nat), ("next", optTy .digest), ("via", optTy .digest)]
+/-- `go`'s argument. -/
+def GA : Ty := .record [("n", .nat)]
+/-- `arm`'s argument. -/
+def VA : Ty := .record [("via", .digest)]
 
-/-- `go`'s one call slot: an invoke, nothing else. -/
-def K : Ty := callOf ["invoke"]
+/-- The method indices (labels ascending). -/
+def relayArmIx : Nat := 0
+def relayGoIx : Nat := 1
 
-/-- `invoke obj 0 rest 1000 (some via)`, inside `next`'s `some` arm (the next object var 0, req var 1,
-args var 2, state var 3). -/
+/-- `go`'s one call slot: an invoke carrying a value of `GA`, nothing else. -/
+def K : Ty := invokeOf GA
+
+/-- `invoke obj go {n := n + 1} 1000 via`, inside `next`'s `some` arm (the next object var 0, req var 1,
+args var 2, state var 3): the argument is composed from the one received, `via` is the state's. -/
 def relayCallTo (obj : Term) : Term :=
-  .inj K "invoke" (.record [("args", .get (.var 2) "rest"), ("budget", .nat 1000),
-    ("method", .nat 0), ("obj", obj), ("via", .inj (optTy .digest) "some" (.get (.var 2) "via"))])
+  .inj K "invoke" (.record [("args", .record [("n", .prim .add (.get (.var 2) "n") (.nat 1))]), ("budget", .nat 1000),
+    ("method", .nat relayGoIx), ("obj", obj), ("via", .get (.var 3) "via")])
 
 def relayCall : Term := relayCallTo (.var 0)
 
 def relayGoWith (call : Term) : Term :=
-  .lam (.record []) (.lam R (.lam RA (.lam reqTy (resultT
+  .lam (.record []) (.lam R (.lam GA (.lam reqTy (resultT
     (.case (.get (.var 2) "next") [("none", callsT [noCallT K]), ("some", callsT [someCallT K call])])
     (.record [("hits", .prim .add (.get (.var 2) "hits") (.nat 1)), ("me", .get (.var 0) "self"),
-      ("next", .get (.var 2) "next")])))))
+      ("n", .get (.var 1) "n"), ("next", .get (.var 2) "next"), ("via", .get (.var 2) "via")])))))
 
 def relayGo : Term := relayGoWith relayCall
 
+/-- `arm {via}`: keep everything, hold `via`. -/
+def relayArm : Term :=
+  .lam (.record []) (.lam R (.lam VA (.lam reqTy (resultT (callsT [])
+    (.record [("hits", .get (.var 2) "hits"), ("me", .get (.var 2) "me"), ("n", .get (.var 2) "n"),
+      ("next", .get (.var 2) "next"), ("via", .inj (optTy .digest) "some" (.get (.var 1) "via"))])))))
+
 def relayWith (go : Term) : Package :=
-  { imports := [], state := R, iface := .record [("go", methodTy R RA [K])],
-    body := .record [("go", go)], methods := ["go"], laws := [] }
+  { imports := [], state := R, iface := .record [("arm", methodTy R VA []), ("go", methodTy R GA [K])],
+    body := .record [("arm", relayArm), ("go", go)], methods := ["arm", "go"], laws := [] }
 
 def relay : Package := relayWith relayGo
+
+/-- LC7 (LANG-77): a slot whose invoke arm carries a FUNCTION: no value of it has bytes, so the slot
+is not a call slot and install refuses the method `badMethod`. -/
+def fnSlot : Ty := invokeOf (.fn .nat .nat)
+
+def fnCalls : Package :=
+  { imports := [], state := R,
+    iface := .record [("go", methodTy R GA [fnSlot])],
+    body := .record [("go", .lam (.record []) (.lam R (.lam GA (.lam reqTy
+      (resultT (callsT [noCallT fnSlot]) (.var 2))))))],
+    methods := ["go"], laws := [] }
+
+/-- LC8 (LANG-77): `Sink.go {n, note}` takes a wider argument than a relay sends: a relay whose `next`
+is a Sink composes `{n}`, and the Sink's run refuses the bytes at ITS type, `arguments: …`, the one
+place argument bytes are checked (the same refusal a root call with wrong bytes gets). The Sink has
+the Relay's two method indices (`arm` 0, `go` 1), so the relay's `invoke next go` reaches its `go`. -/
+def SA : Ty := .record [("n", .nat), ("note", .bytes)]
+
+def sink : Package :=
+  { imports := [], state := .record [],
+    iface := .record [("arm", methodTy (.record []) (.record []) []), ("go", methodTy (.record []) SA [])],
+    body := .record [
+      ("arm", .lam (.record []) (.lam (.record []) (.lam (.record []) (.lam reqTy (resultT (callsT []) (.var 2)))))),
+      ("go", .lam (.record []) (.lam (.record []) (.lam SA (.lam reqTy (resultT (callsT []) (.var 2))))))],
+    methods := ["arm", "go"], laws := [] }
 
 /-- LD1 (LANG-38): Relay naming its callee by a BYTES literal (eight bytes, a well-formed toy digest
 as bytes): the call's `obj` is typed `digest`, so this is ill-typed at install. -/
@@ -331,23 +372,26 @@ invoke of the SIGNING member (`req.agent`) as an object, through no grant. So th
 the request's own. -/
 def CA : Ty := .record []
 
+/-- `Caller.go`'s slot: an invoke with the empty argument. -/
+def KC : Ty := invokeOf CA
+
 def callerGo : Term :=
   .lam (.record []) (.lam CA (.lam CA (.lam reqTy (resultT
-    (callsT [someCallT K (.inj K "invoke" (.record [("args", .bytes .empty), ("budget", .nat 1000),
+    (callsT [someCallT KC (.inj KC "invoke" (.record [("args", .record []), ("budget", .nat 1000),
       ("method", .nat 0), ("obj", .get (.var 0) "agent"), ("via", .inj (optTy .digest) "none" (.record []))]))])
     (.var 2)))))
 
 def caller : Package :=
-  { imports := [], state := CA, iface := .record [("go", methodTy CA CA [K])],
+  { imports := [], state := CA, iface := .record [("go", methodTy CA CA [KC])],
     body := .record [("go", callerGo)], methods := ["go"], laws := [] }
 
 /-- One call slot more than `callsMax`. -/
 def nineLabels : List Label := slotLabels "c" (Kernel.Bounds.callsMax + 1)
 
 def nineGo : Term :=
-  .lam (.record []) (.lam R (.lam RA (.lam reqTy (resultT (callsT (nineLabels.map fun _ => noCallT K)) (.var 2)))))
+  .lam (.record []) (.lam R (.lam GA (.lam reqTy (resultT (callsT (nineLabels.map fun _ => noCallT K)) (.var 2)))))
 
-def nineTy : Ty := methodTy R RA (nineLabels.map fun _ => K)
+def nineTy : Ty := methodTy R GA (nineLabels.map fun _ => K)
 
 /-- A method whose calls row has one slot more than `callsMax`: its type is not a method's. -/
 def nineCalls : Package :=
@@ -534,30 +578,30 @@ def totalOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat :=
     | none => none
   | none => none
 
-/-- A Relay object's state slot `i` (0 hits, 1 me, 2 next). -/
+/-- A Relay object's state slot `i` (0 hits, 1 me, 2 n, 3 next, 4 via). -/
 def slotOf (E : Kernel.Env D) (w : World D) (obj : D) (i : Nat) : Option ByteArray :=
   (w.live E obj).bind fun cell => cell.slots.get (stateBase + i)
 
-def hitsOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat :=
-  match (slotOf E w obj 0).map (Wire.decodeData .nat) with
+def natSlotOf (E : Kernel.Env D) (w : World D) (obj : D) (i : Nat) : Option Nat :=
+  match (slotOf E w obj i).map (Wire.decodeData .nat) with
   | some (.ok (.nat n)) => some n
   | _ => none
+
+def hitsOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat := natSlotOf E w obj 0
+
+/-- The `n` a relay's `go` received (LC3: the composed argument arrived). -/
+def nOf (E : Kernel.Env D) (w : World D) (obj : D) : Option Nat := natSlotOf E w obj 2
 
 def meOf (E : Kernel.Env D) (w : World D) (obj : D) : Option ByteArray :=
   match (slotOf E w obj 1).map (Wire.decodeData .digest) with
   | some (.ok (.digest b)) => some b
   | _ => none
 
-/-- `go`'s arguments: `rest` forwarded whole, `via` the grant the call goes through. -/
-def relayArgs (rest via : ByteArray) : Option ByteArray :=
-  Wire.encodeData RA (.record [("rest", .bytes rest), ("via", .digest via)])
+/-- `go`'s argument `{n}`. -/
+def goArgs (n : Nat) : Option ByteArray := Wire.encodeData GA (.record [("n", .nat n)])
 
-/-- The arguments of a chain entered at the first of `grants` (grant `i` names object `i` on
-object `i+1`): each level's arguments nest the next level's; the last object, which makes no call,
-gets empty `rest` and `via = z` (an id: an argument typed `digest` must be one, LANG-38). -/
-def chainArgs (z : ByteArray) : List ByteArray → Option ByteArray
-  | [] => relayArgs .empty z
-  | g :: gs => do relayArgs (← chainArgs z gs) g
+/-- `arm`'s argument `{via}` (an id: an argument typed `digest` must be one, LANG-38). -/
+def armArgs (via : ByteArray) : Option ByteArray := Wire.encodeData VA (.record [("via", .digest via)])
 
 /-- A Relay's `next` slot. -/
 def nextSlot (next : Option ByteArray) : Option ByteArray :=
@@ -1765,69 +1809,118 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
       return note r s!"PLANT skip-lits: LD2 an allowlist of a non-digest id must now install: {vd2}" (vd2 == "admitted")
     r := note r s!"LD2 install an allowlist naming a 3-byte id: {vd2}"
       (vd2.startsWith "refused program" && (vd2.splitOn "notDigest").length > 1)
+  -- a Relay's seed: hits 0, me, n 0, next, via none
+  let seed (nextB : ByteArray) : Slots :=
+    [(stateBase, h0), (stateBase + 1, meB), (stateBase + 2, h0), (stateBase + 3, nextB), (stateBase + 4, noneB)]
   let some badNext := nextSlot (some "xyz".toUTF8) | return note r "LD3 no bytes" false
   let (rd3, vd3, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
-    (.create (some rid) [] [(stateBase, h0), (stateBase + 1, meB), (stateBase + 2, badNext)]))
+    (.create (some rid) [] (seed badNext)))
   if mode = .totalDigest then
     r := note rd3 s!"PLANT total-digest: LD3 a seed whose next is not a digest must now be admitted: {vd3}" (vd3 == "admitted")
   else if mode != .skipJudge then
     r := note r s!"LD3 A creates a Relay whose next is not a digest: {vd3}"
       (vd3.startsWith "refused lawDenied" && (vd3.splitOn "state field next: not a digest").length > 1)
   let (rd4, vd4, td4) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
-    (.create (some rid) [] [(stateBase, h0), (stateBase + 1, meB), (stateBase + 2, noneB)]))
+    (.create (some rid) [] (seed noneB)))
   r := note rd4 s!"LD4a A creates a last Relay: {vd4}" (vd4 == "admitted")
   let some lastO := td4.bind fun t => (createdIds t).head? | return note r "LD4 no object id" false
-  let some badArgs := relayArgs .empty "xyz".toUTF8 | return note r "LD4 no arguments" false
+  let some badArgs := armArgs "xyz".toUTF8 | return note r "LD4 no arguments" false
   let (rd4b, vd4b, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid, lastO])
-    (.invoke lastO 0 badArgs 10000 none))
+    (.invoke lastO relayArmIx badArgs 10000 none))
   if mode = .totalDigest then
     return note rd4b s!"PLANT total-digest: LD4b arguments whose via is not a digest must now be admitted: {vd4b}" (vd4b == "admitted")
-  r := note rd4b s!"LD4b A invokes it with a via that is not a digest: {vd4b}"
+  r := note rd4b s!"LD4b A arms it with a via that is not a digest: {vd4b}"
     (vd4b.startsWith "refused program" && (vd4b.splitOn "arguments: not a digest").length > 1)
   let mut objs : List D := []
   for _ in [0:6] do
     let some nextB := nextSlot (objs.head?.map Sim.dc.bytes) | return note r "LC no next bytes" false
     let (rk, vk, tk) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
-      (.create (some rid) [] [(stateBase, h0), (stateBase + 1, meB), (stateBase + 2, nextB)]))
+      (.create (some rid) [] (seed nextB)))
     r := note rk s!"LC1 A creates Relay o{5 - objs.length}: {vk}" (vk == "admitted")
     let some o := tk.bind fun t => (createdIds t).head? | return note r "LC no object id" false
     objs := o :: objs
   let mut grants : List D := []
   for (x, y) in objs.zip objs.tail do
-    let (rk, vk, tk) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, x, y]) (.grant y x [.invoke 0] none))
-    r := note rk s!"LC2 A grants o_k invoke 0 on o_k+1: {vk}" (vk == "admitted")
+    let (rk, vk, tk) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, x, y])
+      (.grant y x [.invoke relayGoIx] none))
+    r := note rk s!"LC2 A grants o_k invoke go on o_k+1: {vk}" (vk == "admitted")
     let some gk := tk.bind fun t => (createdIds t).head? | return note r "LC no grant id" false
     grants := grants ++ [gk]
-  let gBytes := grants.map Sim.dc.bytes
+  -- LC2b each relay holds its grant: `arm {via}` (LANG-77's relay composes the next hop's argument;
+  -- the grant it goes through is state, not an argument it forwards)
+  for (x, g) in objs.zip grants do
+    let some va := armArgs (Sim.dc.bytes g) | return note r "LC2b no arguments" false
+    let (rk, vk, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid, x])
+      (.invoke x relayArmIx va 10000 none))
+    r := note rk s!"LC2b A arms o_k with its grant: {vk}" (vk == "admitted")
   let pinsAll := Sim.S.pinsFor r.st.host ([a.id, rid] ++ objs ++ grants)
   let o0 := objs.headD 0
   let o1 := objs.getD 1 0
   let o5 := objs.getD 5 0
-  -- LC3 entered at o1: o2 … o5 at depths 1 … 4 = callDepthMax, admitted; every object ran once
-  let some args1 := chainArgs aB gBytes.tail | return note r "LC3 no arguments" false
-  let (rc3, vc3, _) := go prog r (Sim.signed r.st a a.key pinsAll (.invoke o1 0 args1 10000 none))
+  let some args0 := goArgs 0 | return note r "LC3 no arguments" false
+  -- LC3 entered at o1 with n = 0: o2 … o5 at depths 1 … 4 = callDepthMax, admitted; every object ran
+  -- once, each composing `{n := n + 1}` for the next, so o5 received n = 4
+  let (rc3, vc3, _) := go prog r (Sim.signed r.st a a.key pinsAll (.invoke o1 relayGoIx args0 10000 none))
   r := { rc3 with log := r.log, bad := r.bad }
   let hit5 := hitsOf Sim.env r.st.host o5
   if mode = .dropCalls then
     r := note r s!"PLANT drop-calls: LC3 the chain's end must now be untouched: {vc3}, o5 hits {hit5}" (vc3 == "admitted" && hit5 == some 0)
   else
-    r := note r s!"LC3 A invokes o1, calls 4 deep: {vc3}; o5 hits {hit5}, o5 sees itself as self {meOf Sim.env r.st.host o5 == some (Sim.dc.bytes o5)}"
+    r := note r s!"LC3 A invokes o1.go \{n 0}, calls 4 deep: {vc3}; o5 hits {hit5}, o5 received n {nOf Sim.env r.st.host o5} (composed by four relays), o5 sees itself as self {meOf Sim.env r.st.host o5 == some (Sim.dc.bytes o5)}"
       (vc3 == "admitted" && hit5 == some 1 && hitsOf Sim.env r.st.host o1 == some 1 &&
+        nOf Sim.env r.st.host o5 == some 4 && nOf Sim.env r.st.host o1 == some 0 &&
         meOf Sim.env r.st.host o5 == some (Sim.dc.bytes o5))
   -- LC4 entered at o0: o5 would be at depth 5, past callDepthMax
-  let some args0 := chainArgs aB gBytes | return note r "LC4 no arguments" false
   let pins4 := Sim.S.pinsFor r.st.host ([a.id, rid] ++ objs ++ grants)
-  let (rc4, vc4, _) := go prog r (Sim.signed r.st a a.key pins4 (.invoke o0 0 args0 10000 none))
+  let (rc4, vc4, _) := go prog r (Sim.signed r.st a a.key pins4 (.invoke o0 relayGoIx args0 10000 none))
   r := { rc4 with log := r.log, bad := r.bad }
   if mode = .dropCalls then
     r := note r s!"PLANT drop-calls: LC4 five deep must now be admitted: {vc4}" (vc4 == "admitted")
   else
-    r := note r s!"LC4 A invokes o0, calls 5 deep: {vc4}" (vc4.startsWith "refused callTooDeep")
+    r := note r s!"LC4 A invokes o0.go, calls 5 deep: {vc4}" (vc4.startsWith "refused callTooDeep")
   -- LC6 a method with more call slots than callsMax is not a method: install refuses it by name
   let some nineBytes := Wire.encodePackage nineCalls | return note r "LC6 NineCalls has no bytes" false
   let (rc6, vc6, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install nineBytes))
   r := note rc6 s!"LC6 install a method with {Kernel.Bounds.callsMax + 1} call slots: {vc6}"
     (vc6.startsWith "refused program" && (vc6.splitOn "badMethod go").length > 1)
+  -- LC7 (LANG-77) a slot whose invoke carries a function: not a call slot, refused by name at install
+  let some fnBytes := Wire.encodePackage fnCalls | return note r "LC7 FnCalls has no bytes" false
+  let (rc7, vc7, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install fnBytes))
+  r := note rc7 s!"LC7 install a method whose invoke slot carries an argument of type (fn nat nat): {vc7}"
+    (vc7.startsWith "refused program" && (vc7.splitOn "badMethod go").length > 1)
+  -- LC8 (LANG-77) a relay composes `{n}` for a Sink that takes `{n, note}`: the Sink's run refuses the
+  -- bytes at ITS argument type, by name, and the whole tree with it
+  let some sinkBytes := Wire.encodePackage sink | return note r "LC8 Sink has no bytes" false
+  let (rc8a, vc8a, tc8a) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install sinkBytes))
+  r := note rc8a s!"LC8a install Sink (go \{n nat, note bytes}): {vc8a}" (vc8a == "admitted")
+  let some sid := tc8a.bind fun t => (createdIds t).head? | return note r "LC8 no Sink id" false
+  let (rc8b, vc8b, tc8b) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, sid])
+    (.create (some sid) [] []))
+  r := note rc8b s!"LC8b A creates a Sink: {vc8b}" (vc8b == "admitted")
+  let some so := tc8b.bind fun t => (createdIds t).head? | return note r "LC8 no Sink object" false
+  let some toSink := nextSlot (some (Sim.dc.bytes so)) | return note r "LC8 no next bytes" false
+  let (rc8c, vc8c, tc8c) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid])
+    (.create (some rid) [] (seed toSink)))
+  r := note rc8c s!"LC8c A creates a Relay whose next is the Sink: {vc8c}" (vc8c == "admitted")
+  let some oS := tc8c.bind fun t => (createdIds t).head? | return note r "LC8 no relay object" false
+  let (rc8d, vc8d, tc8d) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, so, oS])
+    (.grant so oS [.invoke relayGoIx] none))
+  let some gS := tc8d.bind fun t => (createdIds t).head? | return note rc8d s!"LC8d grant: {vc8d}" false
+  let some vaS := armArgs (Sim.dc.bytes gS) | return note r "LC8 no arm arguments" false
+  let (rc8e, vc8e, _) := go prog rc8d (Sim.signed rc8d.st a a.key (Sim.S.pinsFor rc8d.st.host [a.id, rid, oS])
+    (.invoke oS relayArmIx vaS 10000 none))
+  r := note rc8e s!"LC8d A grants the relay invoke go on the Sink ({vc8d}) and arms it ({vc8e})"
+    (vc8d == "admitted" && vc8e == "admitted")
+  let (rc8, vc8, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, rid, sid, oS, so, gS])
+    (.invoke oS relayGoIx args0 10000 none))
+  if mode = .dropCalls then
+    r := note { rc8 with log := r.log, bad := r.bad }
+      s!"PLANT drop-calls: LC8 the relay's call never reaches the Sink, so the tree must now be admitted: {vc8}" (vc8 == "admitted")
+  else
+    r := note { rc8 with log := r.log, bad := r.bad }
+      s!"LC8 A invokes the relay, which composes \{n 1} for the Sink's \{n, note}: {vc8}; the relay's hits {hitsOf Sim.env r.st.host oS} (the tree failed whole)"
+      (vc8.startsWith "refused program" && (vc8.splitOn "arguments:").length > 1 &&
+        hitsOf Sim.env r.st.host oS == some 0)
   return r
 
 /-! ### LR: a method and a law refuse by name (LANG-51)

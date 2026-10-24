@@ -372,7 +372,8 @@ reaches `held`, and both release and refund are `belowFloor`: the escrow wedges.
 no other cell and account ids are born in the Draft, so the escrow cannot check its own account id.
 An argument-supplied `acct` lets a depositor name an account of its own. An account id determined
 by (owner, asset) would make the binding derivable. (iii) a nested invoke's `args` are bytes. Until
-ID-4's bytes primitives, a method forwards only bytes it already holds.
+ID-4's bytes primitives, a method forwards only bytes it already holds. **(iii) is CLOSED by LANG-77 (2026-10-23):
+the invoke arm is typed and the runtime encodes the value the method returned.**
 **Alternatives.** (1) A list type in the core (recursive types): a new Ty constructor and fold
 semantics, which the demand machine's budget theorems would have to reach, to carry at most 8
 items. (2) `calls : bytes` of the kernel's Body codec: the method could not build a call without
@@ -6345,7 +6346,7 @@ Status: landed by CX-PROMO-4 (lang:). Next: E3 + PROT-6 (the fuse), R-0044.
 
 **Finding (JR).** `take` consumes whichever own offer row the CALL pinned. The deal names no offer key. So a party with several standing offers does not bind which one a fuse consumes, unless θ or the box excludes the others. Every consumed offer still passes `offerJoint`. If a row owner wants that binding, the deal gains the two keys (the takes check them against their pinned points); it is a later card.
 
-**LANG-23 (iii) stays open.** Its trigger is rewritten: the first method whose nested invoke argument is not a byte string it already holds. This fuse is not that method: it forwards bytes. T (typed nested-call arguments) is its own card.
+**LANG-23 (iii) stays open.** Its trigger is rewritten: the first method whose nested invoke argument is not a byte string it already holds. This fuse is not that method: it forwards bytes. T (typed nested-call arguments) is its own card — built as LANG-77 (2026-10-23): the matcher's `deal` is a value of `offerTakeArg theta` since then, and the matcher itself goes in LANG-77's second landing.
 
 **Critique.** `take_iff_compliant` is an iff at the term grain and only a soundness at the run grain. The honesty the plan wants, "a party never retracts without judging", is the run-grain direction, and it is the one proved. The converse is liveness, and its absence is a real gap in Lang's metatheory (no completeness at the deployed stack bound), not this card's.
 
@@ -6688,3 +6689,132 @@ Restored. MEASURED green: `lang-journey: GREEN`, RC3 `refused … "notCommitted"
 **Critique.** The deadline is relative to the starter's own `notBefore`. A starter that backdates loses up to one window of its own patience, and nobody else's. A deadline stored in the row would have been absolute, but it would change the log's layout and every activity's bytes for a 1024-height slack the Bell's doc already states. The Bell's 2048 is a choice in heights, not in time. In a quiet World heights move slowly, but the log fills only by rings, and every ring is a height. Liveness (every row eventually answered or retired) is still not stated. `WaitingStep` is safety only. With a patience, the abandon exists, so "eventually leaves" is now statable over a World whose heights advance.
 
 **Meta-critique.** The BIAS was reading the card's guard-grain wording ("the row is retracted") as the whole design. The first build answered it to the letter: the log's arm, plus a separate `timeout` method. Measuring the Bell's methods against the arm showed that its own `retire` would orphan `pending`, so the abandon had to live in `retire` itself, with a read. The same bias nearly hid the Protocol defect. The resident test went red at `install … uncertain`, and "uncertain" reads like the Host. The PROTOCOL-55 precedent (`uncertain` rendered from a refused confirm) is what made me trace it rather than shrink the Bell under the bound.
+
+## LANG-77 Typed nested-call arguments: an `invoke` slot declares its argument type, and the runtime encodes the value the method returned (2026-10-23; FABLE-T; cv 01a16679-198f; design `redregg/work/promo/DESIGN-T.md`; closes LANG-23 (iii); method R-0069)
+
+**The defect (MEASURED, IMPACT-PROT-6 §0.6 and READ-PROT-6b-grok §1).** The `invoke` arm of `callArms` was
+`("args", .bytes)`, `bodyOf` read it with `bytesAt`, and no `Term` or `Prim` produced the wire bytes of a value. A
+method received its argument DECODED (`runSetupWith`, `decodeData sg.arg`) and could send a nested call only
+BYTES it already held: the Relay forwarded `rest`, the fuse's matcher forwarded one `deal`. The runtime already
+encoded a method's state (`stateSlots`) and its row values (`Rel.lean`) at their declared types on the way out;
+calls were the one typed thing it did not encode. Nano's open composition (LANG-21/23) could not compose a call
+from a value a program computed. Open since LANG-23 (2026-10-17) as (iii).
+
+**Decision.**
+- `Lang/Package.lean`: the arms are named (`accountArm`, `creditArm`, `grantArm`, `transferArm`); `invokeArm (A : Ty)`
+  is the `invoke` arm whose `args : A`; `callArms : Option Ty → List (Label × Ty)` lists the arms of a slot whose
+  invoke (if any) is at `A`; `callTy (A : Option Ty)`; `callOf kinds` is the invoke-free slot (an `invoke` in
+  `kinds` is NOT an arm: the slot is then empty and install refuses it `badMethod`); `invokeOf A kinds` is the slot
+  that may invoke with a value of `A`. `callSlotOk` requires an `invoke` arm to be exactly `invokeArm A` with
+  `invokeArgOk A = A.isData && Wire.dataTy A` (`isData` as `methodSig` asks of the method's own argument; `dataTy` as
+  the codec refuses without). `Wire.dataTy` moves from `Lang/Wire/Data.lean` to `Lang/Wire.lean`, beside `tyWire`:
+  the install check and the codec read ONE predicate (law 1).
+- `Lang/Call.lean`: `bodyOf digestOf (A : Option Ty)` encodes the `invoke` arm's `args` with `argsBytes A`
+  (`Wire.encodeData A`, the one data codec; refused by name `args: no invoke arm` / `args: no bytes at the slot's
+  type`, both unreachable past typing); `callData bytesOf (A : Option Ty)` reads `args` back at `A` (`argsData`,
+  `none` when the bytes are not a value); `callsOf digestOf (ks : List Ty)` walks the slots WITH their declared
+  types (`slotInvokeArg`); `callFits` drops the `args.size` clause of its invoke arm (a bound nothing read).
+- `Lang/Program.lean`: `RunSetup.calls : List Ty` (the resolved method's slot types); `runMeasuredWith` reads
+  `callsOf digestOf S.calls c`. The kernel is untouched: `Body.invoke … (args : ByteArray)`, 13 Body kinds, the codec
+  vectors. The callee still decodes at ITS argument type (`runSetupWith`): a caller's `A` and a callee's `A'` agree
+  when their shapes agree (labels are not on the wire); a mismatch is the callee's existing `program "arguments: …"`,
+  the one place argument bytes are checked, for a root call and a nested one alike (LC8).
+- `Lang/Surface.lean`: a slot's kind list may hold `(invoke T)`: `(calls ((invoke TakeArg) transfer) (transfer))`;
+  `T` is read by the one type reader. The bare atom `invoke` names no arm.
+- Journey §LC (`Lang/Journey.lean`): the Relay COMPOSES. `Relay {hits, me, n, next, via}`; `arm {via}` holds the
+  hop's grant in state (it exists only after both objects do); `go {n}` invokes `next.go {n := n + 1}` through it.
+  LC3: o5 received `n = 4`, composed by four relays. LD4b arms with a non-digest via. LC2b arms each relay. LC7: a
+  slot at `(fn nat nat)` is refused `badMethod` at install. LC8: a relay composes `{n}` for a Sink taking
+  `{n, note}`: refused `program arguments: …` at the callee; the tree fails whole (the relay's hits stay 0).
+  `relayArgs`, `chainArgs`, `RA` are deleted (nothing forwards opaque bytes).
+- `Lang/StdOffer.lean`: the matcher's `offerFuseArg theta` carries `deal : offerTakeArg theta` (a VALUE);
+  `offerCallTy theta := invokeOf (offerTakeArg theta)`. The matcher shape is kept in THIS landing and goes in the
+  next (the fuse as two objects, DESIGN-T §3): one `lang!` for the language, one `lang:` for its consumer.
+- `Kernel/Proofs/InvokeTreeWitness.lean` (CROSS-LAYER KERNEL, a proof fixture): its relay's slot is `invokeOf .nat`
+  and its call datum `.nat 4`; the Bodies the witness checks are unchanged (`natBytes 4`).
+
+**Why the runtime encodes (T1), not a `Term` encoder (T2).** T2 adds a constructor to `Term`, a typing rule, a
+machine step, a `BigStep` rule, a `Need` count and a case in every metatheorem, and keeps `args : bytes`: the
+method would still manage encodings itself and its type would still say nothing of what it sends. T1 is the
+pattern the runtime already has for state and rows (typed data out, the runtime encodes at the declared type),
+touches no machine metatheory, and makes a method's type state what it sends: `fuse`'s type says it invokes `take`
+with an `offerTakeArg`.
+
+**Theorems.**
+- `Lang/Proofs/Data.lean` (new): `ofData_of_conforms`, `rowOfData_of_conforms`, `armOfData_of_ofData`,
+  `encodeData_of_conforms`: a datum conforming to a `dataTy` type HAS bytes. `Conforms` bounds exactly what `ofData`
+  requires at every leaf (`n < natLimit = 2^64`, `bytesMax`, `digestBytesMax`), pairs a record's labels as
+  `rowOfData` does and names a sum's first arm as `armOfData` does. This is the answer to the card's refuter ("a
+  partial encoder makes composition a lie"): on checked output the encoder is total.
+- `Lang/Proofs/Call.lean`: `argsBytes_argsData` / `argsData_argsBytes` (the two directions of one codec, by
+  `decodeData_eq_ok_iff`); `bodyOf_callData`, `callData_bodyOf` restated with the slot's `A`; `callData_isSome`
+  gains the ONE honest hypothesis: an invoke's `args` decode at `A` (the power the typed arm takes away is
+  emitting bytes that are not a value); `bodyOf_args` (the converse, from a read-back Body); `callData_conforms`
+  now `Conforms d (callTy A)`; `callsOf_*` over `ks`; `runMeasured*_calls` name `x.2.calls` / `S.calls`.
+- `Lang/Proofs/CallLive.lean`: `argsBytes_live` (the encoder is live on a value of a wire type); `bodyOf_live` at
+  `callTy A` for `A` a wire type (`find_some`, `bodyOf_live_fixed`); `slot_conforms` at `callTy (slotInvokeArg T)`;
+  `callSlotOk_dataTy`; `callsOf_go_live` / `callsOf_go_kinds` walk `ks` with the labels; `callsOf_live` keeps its
+  conclusion (`DigestRefusal` is still the only refusal) with NO new premise: `callSlotOk` carries `dataTy`.
+  `callSlotsOf_two` / `callSlotsOf_one` read a slot row's result off `callSlotOk` (a slot type that depends on a
+  package parameter is not `decide`d). `SlotRow` and `slotRow_callsTy` are deleted.
+- `Lang/Proofs/CallTeeth.lean`: `callsOf_encodes` (an invoke at `.nat` leaves with the bytes of `4`), `callsOf_no_arm`,
+  `slot_bare_invoke` (`callOf ["invoke"]` is the empty slot: `badMethod`), `slot_fn_arg`; the rest at `invokeOf UA`.
+- `Lang/Proofs/StdOfferFuse.lean`: `fuse_calls` returns the ENCODED deal `db` with `encodeData (offerTakeArg theta)
+  deal = some db`; `fuse_atomic`, `jointLaw_sound`, `invitation_once` conclude `deal = {keys, pair, theta}` (an
+  equation on the value, where they concluded a decode of bytes); `fuse_resolve` reads `callSlotOk` off the resolve
+  (the slot's argument type depends on `theta`, so the old `decide` is gone).
+- Past extraction (`Provenance.lean`, six statements), `Extract.runMeasured_means`, `MethodRun.runMeasured_inv`,
+  `Load.runSetupWith_spec` / `runSetup_spec`: `callsOf` with the run's slots; no hypothesis gained.
+  `Std.runMeasured_inv` (`Lang/Proofs/StdOffer.lean`) was a twin of `Lang.runMeasured_inv`: DELETED.
+
+**Price (MEASURED by `gates/decls.py export` on the parent and the candidate over the 25 touched modules; the map
+lines are in the commit message).** 55 RESTATES-MEANING (48 public, among them LANG-75.22's `escrow_fuse_admitted` and `escrow_fuse_resolve`, landed
+while this was built and adapted to the typed deal; 7 private: the Provenance pair, four offer-proof helpers, Ledger's
+`setup_eq`), 7 DELETES (`Journey.RA`, `relayArgs`, `chainArgs`; `SlotRow`, `slotRow_callsTy`; the
+twin `Std.runMeasured_inv`; the private `invokeTy`), 1 moved (`Wire.dataTy`), 49 added. Hypotheses gained by a
+landed theorem: ONE, `callData_isSome`'s invoke clause (§Theorems). Deployed bytes moved: none (§What re-emits).
+
+**Plants (whole tree; hbox `wt/fable-t/logs/fable-t-plant{1,2}-{build,journey}.log`, each restored).**
+- PT1 `callsOf.go` hands `bodyOf` `none` (every slot "has no invoke arm"): RED `Lang.Proofs.CallLive` at
+  `callsOf_go_live` (its dependents CallTeeth, StdOfferFuse, StdOfferEscrow left unbuilt below it) and
+  `Kernel.Proofs.InvokeTreeWitness` at `c1_runA` (the witness computes the Body); `lang-journey: RED (33)`: LC3, LC4,
+  LC8, LD5c and every LF/LE row refused `program "calls: c0 args: no invoke arm"`.
+- PT2 `argsBytes` returns empty bytes (the encoder dropped): RED `Lang.Proofs.Call` at `argsBytes_argsData` and
+  `argsData_argsBytes` (dependents unbuilt) and `Kernel.Proofs.InvokeTreeWitness` at `c1_runA`; `lang-journey: RED
+  (23)`: LC3/LC4 refused at the CALLEE, `program "arguments: decode … truncated 0 8"`, and LF1–LF6, LE1 refused the
+  same way at the takes — the takes saw bytes that are not the value, and the tree failed whole.
+- Rows standing as teeth: LC3 (the composed `n = 4` arrived), LC7 (`badMethod` for a function-typed slot), LC8 (the
+  callee's `arguments:` refusal for a shape the caller's slot does not match).
+
+**What re-emits (`lang!`).** The call-slot language changed: an `invoke` arm's `args` is a value of the slot's
+declared type and the runtime encodes it. The old spellings refuse to load: `callOf ["invoke"]` in Lean is the empty
+slot (`badMethod`, `slot_bare_invoke`); the bare kind `invoke` in a surface `(calls …)` is the same. No deployed
+package declares an invoke slot (MEASURED: `world/` declares `(calls (transfer))` three times and no-call rows
+otherwise), `callOf ["transfer"]` is byte-identical, so `world/escrow/Escrow`'s id does not move and no Store
+re-geneses. Fixtures re-id: `Std.offer`, `Std.offerEscrow`, the LC Relay family, the Kernel witness relay.
+The judge's generated-files and codec-vector gates (the full judge this `lang!` runs) are the control for
+"nothing deployed moves".
+
+**Critique.** A caller's slot type and a callee's argument type agree STRUCTURALLY (labels off the wire): `{x : nat}`
+calls `{n : nat}`; a nominal check would need the callee's package at the caller's install, which does not exist.
+The agreement is checked at the callee one step later inside the same tree, so a mistyped call costs the whole
+tree (LC8) — a second check in `callsOf` would be one fact checked twice. `callSlotOk` re-checks `dataTy A` though
+the iface's `wf`/`tyWire` imply it, as `methodSig` re-checks `isData`: a local premise the theorems use alone, at the
+price of a redundant decide at install. The Relay no longer forwards opaque bytes; a `bytes`-typed slot still can,
+and nothing deployed does. `callData_isSome` gains a hypothesis: the truth of the new language, not a lost theorem.
+The matcher is kept for one more landing: the second landing deletes it (DESIGN-T §3), so for the span of one commit
+the tree holds a consumer the language has outgrown.
+
+**Meta-critique.** The first draft of the consumer (DESIGN-T §3) had `take` refuse a root call by `req.principal ≠
+peer` and claimed "a session row implies a fuse". The BIAS: reading LANG-21's "a callee's principal is the calling
+object" as the kernel's behaviour, when `Authority.principalOf` walks a grant to its ROOT ISSUER, the owner, so a
+nested call and the owner's root call are indistinguishable in `Req` (READ-PROT-6b condition 2 had said so; the code
+said so again when read). The second bias, watched for: pricing T by `git grep callsOf` (12 files, two of them
+homonyms: `Host/Check.callsOf` decodes a journal segment, `Hosting/Proofs/Allowance.callsOf` is a private test
+helper); the real reach was measured by the decls export, not by the name. The third, caught by the build: proving
+`fuse_resolve` by `decide` only worked while the matcher's slot type was closed; with `theta` inside it the truth of
+`callSlotOk` had to be READ off the resolve hypothesis, which is the honest shape (a malformed `theta` does not
+install, and the theorem should not presume it does).
+
+**Status.** L1 landed in the commit that carries this text (`lang!`, FABLE-T, 2026-10-23). L2 (the fuse as two objects: `X.fuse` judges, retracts, logs and invokes `Y.take`
+with the deal it decoded; the matcher deleted) is the next commit of this session (DESIGN-T §3, §4 PT3/PT4).

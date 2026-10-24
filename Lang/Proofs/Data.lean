@@ -311,4 +311,60 @@ theorem decodeData_conforms {T : Ty} {b : ByteArray} {d : Data}
       subst h; exact toData_conforms T hw x
   · simp at h
 
+/-! ## Conforming data has bytes at its type (LANG-77: the call encoder never refuses checked output)
+
+`Conforms` bounds exactly what `ofData` requires at every leaf (`n < natLimit = 2^64`, `bytesMax`,
+`digestBytesMax`), pairs a record's labels in order as `rowOfData` does, and names a sum's FIRST arm
+with its label as `armOfData` does. So `ofData` reads every conforming datum, and `encodeData` has
+bytes for it at every `dataTy` type. -/
+
+theorem armOfData_of_ofData : ∀ {r : List (Label × Ty)} {ℓ : Label} {A : Ty} {d : Data},
+    Row.find? ℓ r = some A → (∃ x, Wire.ofData A d = some x) → ∃ i y, Wire.armOfData r ℓ d = some ⟨i, y⟩
+  | [], _, _, _, hf, _ => by simp [Row.find?] at hf
+  | (k, t) :: r, ℓ, A, d, hf, hx => by
+    simp only [Row.find?] at hf
+    split at hf
+    · rename_i he
+      cases hf
+      subst he
+      obtain ⟨x, hx⟩ := hx
+      refine ⟨⟨0, Nat.succ_pos _⟩, x, ?_⟩
+      simp only [Wire.armOfData, if_true]
+      rw [hx]; rfl
+    · rename_i hne
+      obtain ⟨i, y, hy⟩ := armOfData_of_ofData hf hx
+      refine ⟨i.succ, y, ?_⟩
+      simp only [Wire.armOfData, hne, if_false, hy, Option.map_some]
+
+mutual
+theorem ofData_of_conforms : ∀ {d : Data} {T : Ty}, Conforms d T → ∃ x, Wire.ofData T d = some x
+  | _, _, .nat h => ⟨_, by
+      simp only [Wire.ofData]
+      rw [dif_pos (by simpa [Bounds.natLimit] using h)]⟩
+  | _, _, .bool => ⟨_, rfl⟩
+  | _, _, .bytes h => ⟨_, by simp only [Wire.ofData]; rw [dif_pos h]⟩
+  | _, _, .digest h => ⟨_, by simp only [Wire.ofData]; rw [dif_pos h]⟩
+  | _, _, .record hr => by
+    obtain ⟨x, hx⟩ := rowOfData_of_conforms hr
+    exact ⟨x, by simp only [Wire.ofData]; exact hx⟩
+  | _, _, .inj hf hd => by
+    obtain ⟨i, y, hy⟩ := armOfData_of_ofData hf (ofData_of_conforms hd)
+    exact ⟨⟨i, y⟩, by simp only [Wire.ofData]; exact hy⟩
+
+theorem rowOfData_of_conforms : ∀ {ds : List (Label × Data)} {r : List (Label × Ty)}, RowConforms ds r →
+    ∃ x, Wire.rowOfData r ds = some x
+  | _, _, .nil => ⟨(), rfl⟩
+  | _, _, .cons hd hr => by
+    obtain ⟨x, hx⟩ := ofData_of_conforms hd
+    obtain ⟨y, hy⟩ := rowOfData_of_conforms hr
+    exact ⟨(x, y), by simp only [Wire.rowOfData, if_true, hx, hy]⟩
+end
+
+/-- **The encoder is total on conforming data at a wire type**: what a checked run produces at a
+`dataTy` type has bytes. The reason `callsOf`'s encode arm (LANG-77) is unreachable past typing. -/
+theorem encodeData_of_conforms {T : Ty} (hT : Wire.dataTy T = true) {d : Data} (h : Conforms d T) :
+    ∃ b, Wire.encodeData T d = some b := by
+  obtain ⟨x, hx⟩ := ofData_of_conforms h
+  exact ⟨(Wire.dataStream T).bytes x, by simp [Wire.encodeData, hT, hx]⟩
+
 end Nanodregg.Lang

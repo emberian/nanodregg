@@ -7,12 +7,14 @@
   `Kernel.Bounds.callsMax` of them. `runMeasured_calls_slots`: a run makes at most the resolved
   method's own slots, so `runMeasured_no_slots`: a method with none makes no calls. Together (`run_calls`): KERNEL's
   `notCallable` and `tooManyCalls` are unreachable from `Lang.program`.
-* `bodyOf_callData`: every callable Body (a grant with at most `rightsMax` rights) has call data,
-  and that data reads back as exactly that Body; `callData_bodyOf`: every Body read back has call
-  data reading back to it. `callData_not_callable`: a kind an object may not exercise has none.
-  `callData_conforms`: call data of a Body within the language's bounds (`callFits`) is a value
-  of `callTy`, so a method can return it. The converse (liveness: conforming data is refused only
-  for a field whose bytes are not a digest) and extraction conformance are `Lang.Proofs.CallLive`.
+* `bodyOf_callData`: every callable Body with call data (a grant with at most `rightsMax` rights;
+  an invoke whose `args` are a value of the slot's argument type, LANG-77) reads back as exactly
+  that Body; `callData_bodyOf`: every Body read back has call data reading back to it.
+  `callData_not_callable`: a kind an object may not exercise has none. `callData_conforms`: call
+  data of a Body within the language's bounds (`callFits`) is a value of the slot's call type
+  (`callTy A`, the slot's invoke arm at `A`), so a method can return it. The converse (liveness:
+  conforming data is refused only for a field whose bytes are not a digest) and extraction
+  conformance are `Lang.Proofs.CallLive`.
 -/
 import Lang.Program
 import Lang.Proofs.Load
@@ -27,26 +29,26 @@ variable {D : Type}
 /-! ## Read: every Body read is callable -/
 
 section
-variable {digestOf : ByteArray → Option D} {rc : ReceiptCheck}
+variable {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {A : Option Ty}
 
-theorem bodyOf_callable {d : Data} {b : Body D} (h : bodyOf digestOf d = .ok b) : b.callable = true := by
+theorem bodyOf_callable {d : Data} {b : Body D} (h : bodyOf digestOf A d = .ok b) : b.callable = true := by
   unfold bodyOf at h
   split at h
   all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
   all_goals (repeat' split at h)
   all_goals first | (simp at h; done) | (cases h; rfl)
 
-theorem callsOf_go_callable : ∀ {fs : List (Label × Data)} {bs : List (Body D)},
-    callsOf.go digestOf fs = .ok bs → ∀ b ∈ bs, b.callable = true
-  | [], bs, h => by
+theorem callsOf_go_callable : ∀ {ks : List Ty} {fs : List (Label × Data)} {bs : List (Body D)},
+    callsOf.go digestOf ks fs = .ok bs → ∀ b ∈ bs, b.callable = true
+  | [], [], bs, h => by
     unfold callsOf.go at h; cases h; simp
-  | (ℓ, o) :: fs, bs, h => by
+  | k :: ks, (ℓ, o) :: fs, bs, h => by
     unfold callsOf.go at h
     split at h
     · exact callsOf_go_callable h
     · split at h
       · rename_i b hb
-        cases hg : callsOf.go digestOf fs with
+        cases hg : callsOf.go digestOf ks fs with
         | error e => rw [hg] at h; cases h
         | ok bs' =>
           rw [hg] at h; cases h
@@ -56,34 +58,38 @@ theorem callsOf_go_callable : ∀ {fs : List (Label × Data)} {bs : List (Body D
           | tail _ hx => exact callsOf_go_callable hg x hx
       · cases h
     · cases h
+  | [], _ :: _, bs, h => by unfold callsOf.go at h; cases h
+  | _ :: _, [], bs, h => by unfold callsOf.go at h; cases h
 
-theorem callsOf_callable {d : Data} {bs : List (Body D)} (h : callsOf digestOf d = .ok bs) :
+theorem callsOf_callable {ks : List Ty} {d : Data} {bs : List (Body D)} (h : callsOf digestOf ks d = .ok bs) :
     ∀ b ∈ bs, b.callable = true := by
   unfold callsOf at h
   split at h
   · exact callsOf_go_callable h
   · cases h
 
-theorem callsOf_go_length : ∀ {fs : List (Label × Data)} {bs : List (Body D)},
-    callsOf.go digestOf fs = .ok bs → bs.length ≤ fs.length
-  | [], bs, h => by
+theorem callsOf_go_length : ∀ {ks : List Ty} {fs : List (Label × Data)} {bs : List (Body D)},
+    callsOf.go digestOf ks fs = .ok bs → bs.length ≤ fs.length
+  | [], [], bs, h => by
     unfold callsOf.go at h; cases h; simp
-  | (ℓ, o) :: fs, bs, h => by
+  | k :: ks, (ℓ, o) :: fs, bs, h => by
     unfold callsOf.go at h
     split at h
     · have := callsOf_go_length h; simp; omega
     · split at h
-      · cases hg : callsOf.go digestOf fs with
+      · cases hg : callsOf.go digestOf ks fs with
         | error e => rw [hg] at h; cases h
         | ok bs' =>
           rw [hg] at h; cases h
           have := callsOf_go_length hg; simp; omega
       · cases h
     · cases h
+  | [], _ :: _, bs, h => by unfold callsOf.go at h; cases h
+  | _ :: _, [], bs, h => by unfold callsOf.go at h; cases h
 
 /-- No more calls than the row has slots. -/
-theorem callsOf_length {fs : List (Label × Data)} {bs : List (Body D)}
-    (h : callsOf digestOf (.record fs) = .ok bs) : bs.length ≤ fs.length := by
+theorem callsOf_length {ks : List Ty} {fs : List (Label × Data)} {bs : List (Body D)}
+    (h : callsOf digestOf ks (.record fs) = .ok bs) : bs.length ≤ fs.length := by
   unfold callsOf at h
   exact callsOf_go_length h
 
@@ -148,13 +154,39 @@ theorem rightsOf_length : ∀ {rs : List (Label × Data)} {xs : List Right},
         have := rightsOf_length hxs
         cases r <;> simp <;> omega
 
-section
-variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck}
+/-- An invoke's `args` read back at `A` (`argsData`) are the bytes the encoder writes for that value
+(`argsBytes`): the two directions of one codec (`decodeData_eq_ok_iff`). -/
+theorem argsBytes_argsData {A : Option Ty} {args : ByteArray} {a : Data} (h : argsData A args = some a) :
+    argsBytes A "args" a = .ok args := by
+  simp only [argsData, Option.bind_eq_some_iff] at h
+  obtain ⟨A', rfl, h⟩ := h
+  cases hd : Wire.decodeData A' args with
+  | error e => simp [hd, Except.toOption] at h
+  | ok a' =>
+    simp only [hd, Except.toOption, Option.some.injEq] at h
+    subst h
+    simp [argsBytes, Wire.decodeData_eq_ok_iff.mp hd]
 
-/-- **Every callable Body is expressible**: its call data reads back as exactly it, given that a
-digest's bytes decode to the digest. -/
+/-- The bytes `argsBytes` wrote read back as the value it encoded. -/
+theorem argsData_argsBytes {A : Option Ty} {a : Data} {args : ByteArray} (h : argsBytes A "args" a = .ok args) :
+    argsData A args = some a := by
+  unfold argsBytes at h
+  split at h
+  · cases h
+  · rename_i A'
+    split at h
+    · rename_i b hb
+      cases h
+      simp [argsData, Except.toOption, Wire.decodeData_eq_ok_iff.mpr hb]
+    · cases h
+
+section
+variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {A : Option Ty}
+
+/-- **Every callable Body with call data is expressible**: its call data reads back as exactly it, given
+that a digest's bytes decode to the digest. -/
 theorem bodyOf_callData (hdig : ∀ x, digestOf (bytesOf x) = some x) {b : Body D} {d : Data}
-    (h : callData bytesOf b = some d) : bodyOf digestOf d = .ok b := by
+    (h : callData bytesOf A b = some d) : bodyOf digestOf A d = .ok b := by
   cases b with
   | account asset owner =>
     simp only [callData, Option.some.injEq] at h; subst h
@@ -173,9 +205,11 @@ theorem bodyOf_callData (hdig : ∀ x, digestOf (bytesOf x) = some x) {b : Body 
       simp [bodyOf, digestAt, digestData, optData, optOf, hdig, hlen, rightsOf_fillSlots hrs,
         bind, Except.bind, pure, Except.pure, Except.map]
   | invoke obj method args budget via =>
-    simp only [callData, Option.some.injEq] at h; subst h
+    simp only [callData, Option.map_eq_some_iff] at h
+    obtain ⟨a, ha, rfl⟩ := h
+    have hb := argsBytes_argsData ha
     cases via <;>
-      simp [bodyOf, digestAt, digestData, optData, optOf, natOf, bytesAt, hdig,
+      simp [bodyOf, digestAt, digestData, optData, optOf, natOf, hb, hdig,
         bind, Except.bind, pure, Except.pure, Except.map]
   | transfer src dst amount via once =>
     simp only [callData, Option.some.injEq] at h; subst h
@@ -185,43 +219,62 @@ theorem bodyOf_callData (hdig : ∀ x, digestOf (bytesOf x) = some x) {b : Body 
   | enroll | rotate | install | create | write | law | revoke | issue => simp [callData] at h
 
 /-- A kind an object may not exercise has no call data. -/
-theorem callData_not_callable {b : Body D} (h : b.callable = false) : callData bytesOf b = none := by
+theorem callData_not_callable {b : Body D} (h : b.callable = false) : callData bytesOf A b = none := by
   cases b <;> simp_all [Body.callable, callData]
 
-/-- A callable Body has call data, unless it is a grant with more than `rightsMax` rights. -/
+/-- A callable Body has call data, unless it is a grant with more than `rightsMax` rights or an
+invoke whose `args` are not the bytes of a value of the slot's argument type (LANG-77: the one
+power the typed arm takes away is emitting bytes that are not a value). -/
 theorem callData_isSome {b : Body D} (h : b.callable = true)
-    (hr : ∀ t g rs p, b = .grant t g rs p → rs.length ≤ rightsMax) : (callData bytesOf b).isSome = true := by
+    (hr : ∀ t g rs p, b = .grant t g rs p → rs.length ≤ rightsMax)
+    (hi : ∀ o m args bud v, b = .invoke o m args bud v → (argsData A args).isSome = true) :
+    (callData bytesOf A b).isSome = true := by
   cases b with
   | grant t g rs p =>
     simp only [callData, Option.isSome_map]
     exact fillSlots_isSome (by have := hr t g rs p rfl; simp [rightLabels, slotLabels]; omega)
+  | invoke o m args bud v =>
+    simp only [callData, Option.isSome_map]
+    exact hi o m args bud v rfl
   | _ => simp_all [Body.callable, callData]
 
 /-- A grant read back carries at most `rightsMax` rights. -/
 theorem bodyOf_rights {d : Data} {t g p : _} {rs : List Right}
-    (h : bodyOf digestOf d = .ok (Body.grant t g rs p)) : rs.length ≤ rightsMax := by
+    (h : bodyOf digestOf A d = .ok (Body.grant t g rs p)) : rs.length ≤ rightsMax := by
   unfold bodyOf at h
   split at h
   all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
   all_goals (repeat' split at h)
   all_goals first | (simp at h; done) | (cases h; exact Nat.le_trans (rightsOf_length ‹_›) ‹_›)
 
+/-- An invoke read back carries `args` that are the bytes of a value of the slot's argument type. -/
+theorem bodyOf_args {d : Data} {o : D} {m : Nat} {args : ByteArray} {bud : Nat} {v : Option D}
+    (h : bodyOf digestOf A d = .ok (Body.invoke o m args bud v)) : (argsData A args).isSome = true := by
+  unfold bodyOf at h
+  split at h
+  all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
+  all_goals (repeat' split at h)
+  all_goals first | (simp at h; done) | (cases h; simp [argsData_argsBytes ‹_›])
+
 /-- **Every Body read back has call data reading back to it** (call data is not canonical: an
 option row may leave any slot empty, so the data need not be the one read). -/
 theorem callData_bodyOf (hdig : ∀ x, digestOf (bytesOf x) = some x) {d : Data} {b : Body D}
-    (h : bodyOf digestOf d = .ok b) :
-    ∃ d', callData bytesOf b = some d' ∧ bodyOf digestOf d' = .ok b := by
-  have hs : (callData bytesOf b).isSome = true := by
-    refine callData_isSome (bodyOf_callable h) ?_
-    intro t g rs p hb
-    subst hb
-    exact bodyOf_rights h
+    (h : bodyOf digestOf A d = .ok b) :
+    ∃ d', callData bytesOf A b = some d' ∧ bodyOf digestOf A d' = .ok b := by
+  have hs : (callData bytesOf A b).isSome = true := by
+    refine callData_isSome (bodyOf_callable h) ?_ ?_
+    · intro t g rs p hb
+      subst hb
+      exact bodyOf_rights h
+    · intro o m args bud v hb
+      subst hb
+      exact bodyOf_args h
   obtain ⟨d', hd'⟩ := Option.isSome_iff_exists.mp hs
   exact ⟨d', hd', bodyOf_callData hdig hd'⟩
 
 end
 
-/-! ## Typed: in-bounds call data is a value of `callTy` -/
+/-! ## Typed: in-bounds call data is a value of the slot's call type -/
 
 section
 variable {bytesOf : D → ByteArray}
@@ -263,30 +316,46 @@ theorem conf_rights : ∀ {ls : List Label} {rs : List Right} {fs : List (Label 
     exact .cons (.inj (A := rightTy) rfl (conf_right x (hr x (by simp))))
       (conf_rights h' (fun r hm => hr r (by simp [hm])))
 
-/-- **In-bounds call data is a value of `callTy`**: so a method can return every callable Body
-whose literals are values of the language (`callFits`), given the digest codec's bound. -/
-theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) {b : Body D} {d : Data}
-    (hf : callFits b = true) (h : callData bytesOf b = some d) : Conforms d callTy := by
+/-- The value an invoke's `args` read back as conforms to the slot's argument type. -/
+theorem argsData_conforms {A : Ty} {args : ByteArray} {a : Data} (h : argsData (some A) args = some a) :
+    Conforms a A := by
+  simp only [argsData, Option.bind_some] at h
+  cases hd : Wire.decodeData A args with
+  | error e => simp [hd, Except.toOption] at h
+  | ok a' =>
+    simp only [hd, Except.toOption, Option.some.injEq] at h
+    subst h
+    exact decodeData_conforms hd
+
+/-- **In-bounds call data is a value of the slot's call type**: so a method can return every
+callable Body whose literals are values of the language (`callFits`) and whose invoke argument is a
+value of the slot's type, given the digest codec's bound. -/
+theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) {A : Option Ty} {b : Body D}
+    {d : Data} (hf : callFits b = true) (h : callData bytesOf A b = some d) : Conforms d (callTy A) := by
   cases b with
   | account asset owner =>
     simp only [callData, Option.some.injEq] at h; subst h
-    exact .inj rfl (.record (.cons (conf_digest hb asset) (.cons (conf_digest hb owner) .nil)))
+    cases A <;> exact .inj rfl (.record (.cons (conf_digest hb asset) (.cons (conf_digest hb owner) .nil)))
   | credit well acct amount via =>
     simp only [callData, Option.some.injEq] at h; subst h
     simp only [callFits, decide_eq_true_eq] at hf
-    exact .inj rfl (.record (.cons (conf_acct hb acct) (.cons (.nat hf) (.cons (conf_optDigest hb via)
+    cases A <;> exact .inj rfl (.record (.cons (conf_acct hb acct) (.cons (.nat hf) (.cons (conf_optDigest hb via)
       (.cons (conf_digest hb well) .nil)))))
   | grant target grantee rights parent =>
     simp only [callData, Option.map_eq_some_iff] at h
     obtain ⟨rs, hrs, rfl⟩ := h
     simp only [callFits, List.all_eq_true] at hf
-    exact .inj rfl (.record (.cons (conf_digest hb grantee) (.cons (conf_optDigest hb parent)
+    cases A <;> exact .inj rfl (.record (.cons (conf_digest hb grantee) (.cons (conf_optDigest hb parent)
       (.cons (.record (conf_rights hrs hf)) (.cons (conf_digest hb target) .nil)))))
   | invoke obj method args budget via =>
-    simp only [callData, Option.some.injEq] at h; subst h
+    simp only [callData, Option.map_eq_some_iff] at h
+    obtain ⟨a, ha, rfl⟩ := h
     simp only [callFits, Bool.and_eq_true, decide_eq_true_eq] at hf
-    exact .inj rfl (.record (.cons (.bytes hf.2) (.cons (.nat hf.1.2) (.cons (.nat hf.1.1)
-      (.cons (conf_digest hb obj) (.cons (conf_optDigest hb via) .nil))))))
+    cases A with
+    | none => simp [argsData] at ha
+    | some A =>
+      exact .inj rfl (.record (.cons (argsData_conforms ha) (.cons (.nat hf.2) (.cons (.nat hf.1)
+        (.cons (conf_digest hb obj) (.cons (conf_optDigest hb via) .nil))))))
   | transfer src dst amount via once =>
     simp only [callData, Option.some.injEq] at h; subst h
     simp only [callFits, Bool.and_eq_true, decide_eq_true_eq] at hf
@@ -294,7 +363,7 @@ theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMa
       cases once with
       | none => exact .inj (A := .record []) rfl (.record .nil)
       | some k => exact .inj (A := .bytes) rfl (.bytes (by simpa using hf.2))
-    exact .inj rfl (.record (.cons (.nat hf.1) (.cons (conf_acct hb dst) (.cons ho
+    cases A <;> exact .inj rfl (.record (.cons (.nat hf.1) (.cons (conf_acct hb dst) (.cons ho
       (.cons (conf_acct hb src) (.cons (conf_optDigest hb via) .nil))))))
   | enroll | rotate | install | create | write | law | revoke | issue => simp [callData] at h
 
@@ -377,7 +446,8 @@ theorem resolveMethod_slots {p : Package} {method : Nat} {x : Label × Sig}
   exact (methodSig_spec ‹_›).2.1
 
 /-- The calls `runMeasured` returns are `callsOf` of the calls half of the result extracted at
-the method's own result type: the package the run loaded, the method it resolved, its slots. -/
+the method's own result type, read against the method's own slots: the package the run loaded, the
+method it resolved, its slots. -/
 theorem runMeasuredWith_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
     {charge : Loaded → Nat}
@@ -391,7 +461,7 @@ theorem runMeasuredWith_calls {bytesOf : D → ByteArray} {digestOf : ByteArray 
       L.pkgs[g]? = some p ∧ resolveMethod (D := D) p method = .ok x ∧
       m.extract (resultTy p.state x.2.calls (editTy p.rels) x.2.edits) fuel v =
         .ok (.record [("calls", c), ("edits", e), ("state", st)], left) ∧
-      callsOf digestOf c = .ok calls := by
+      callsOf digestOf x.2.calls c = .ok calls := by
   unfold runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
@@ -440,7 +510,7 @@ theorem runMeasured_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       L.pkgs[g]? = some p ∧ resolveMethod (D := D) p method = .ok x ∧
       m.extract (resultTy p.state x.2.calls (editTy p.rels) x.2.edits) fuel v =
         .ok (.record [("calls", c), ("edits", e), ("state", st)], left) ∧
-      callsOf digestOf c = .ok calls := by
+      callsOf digestOf x.2.calls c = .ok calls := by
   exact runMeasuredWith_calls (loader := load digestOf) (charge := fun _ => 0) h
 
 /-- **A method makes at most its declared calls**: the calls of a run are no more than the call
@@ -481,7 +551,7 @@ theorem runMeasuredWith_extract {bytesOf : D → ByteArray} {digestOf : ByteArra
       setup look rv pkg state method args r = .ok S ∧
       (Machine.mk S.lib).extract S.ty fuel v =
         .ok (.record [("calls", c), ("edits", e), ("state", st)], left) ∧
-      callsOf digestOf c = .ok calls := by
+      callsOf digestOf S.calls c = .ok calls := by
   unfold runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h

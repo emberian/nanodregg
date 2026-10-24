@@ -1,16 +1,23 @@
 /-
-# Lang.Call — a method's calls as KERNEL's `Body` (LANG-23)
+# Lang.Call — a method's calls as KERNEL's `Body` (LANG-23, LANG-77)
 
-A method returns `rec {calls : callsTy, state : S}` (`Lang.resultTy`). `callsOf` reads the calls
-half of the extracted data into the kernel's `List (Body D)`: the slots in label order, `none`
-skipped; a `digest` field must be a digest of the World, or the run is refused by name,
-`program "calls: cI FIELD: not a digest"`. Every Body it returns is of a kind an object may
-exercise (`Lang.Proofs.Call.callsOf_callable`), so KERNEL's `notCallable` is unreachable from
-`Lang.program`; KERNEL still asserts it where calls enter (law 4).
+A method returns `rec {calls : callsTy ks, edits, state : S}` (`Lang.resultTy`). `callsOf ks` reads
+the calls half of the extracted data into the kernel's `List (Body D)`, slot by slot WITH each
+slot's declared type `ks[i]`: `none` skipped; a `digest` field must be a digest of the World, or
+the run is refused by name, `program "calls: cI FIELD: not a digest"`; an `invoke`'s `args` is a
+VALUE of the slot's declared argument type (`slotInvokeArg`), encoded here with the one data codec
+(`Wire.encodeData`, the codec the callee's `runSetupWith` inverts at its own argument type), so a
+method composes a nested call from values it computed (LANG-77; before it, `args` was bytes the
+method had to hold). Every Body it returns is of a kind an object may exercise
+(`Lang.Proofs.Call.callsOf_callable`), so KERNEL's `notCallable` is unreachable from
+`Lang.program`; KERNEL still asserts it where calls enter (law 4). On a checked run the encoder
+never refuses: the extracted datum conforms to the slot's type and the type is one the wire carries
+(`callSlotOk`), so `Lang.Proofs.CallLive.callsOf_live` keeps the digest refusal as the only one.
 
 `callData` is the other direction, over `Body`'s every constructor (a new kernel constructor does
 not build here until it is classified): the data a method returns for that call, `none` for a
-kind an object may not exercise or for a grant with more than `rightsMax` rights. `Lang.Proofs.Call`:
+kind an object may not exercise, for a grant with more than `rightsMax` rights, or for an invoke
+whose `args` are not the bytes of a value of the slot's argument type. `Lang.Proofs.Call`:
 the round trip over data (`bodyOf_callData`, `callData_bodyOf`), and `callData_conforms`: the call
 data of a callable Body within the language's bounds (`callFits`) is a value of `callTy`, so a
 method can return it.
@@ -21,6 +28,7 @@ calls row and in a grant's rights alike, so a method may leave any slot empty.
 import Kernel.Receive.Call
 import Lang.Package
 import Lang.Data
+import Lang.Wire.Data
 
 namespace Nanodregg.Lang
 
@@ -59,9 +67,15 @@ def acctRefData : AcctRef D → Data
   | .of owner asset => .inj "of" (.record [("asset", digestData bytesOf asset), ("owner", digestData bytesOf owner)])
   | .well asset => .inj "well" (digestData bytesOf asset)
 
-/-- The data a method returns to make call `b`, at `callTy`; `none` when an object may not make it
-(`Body.callable` is false) or a grant carries more than `rightsMax` rights. -/
-def callData : Body D → Option Data
+/-- An invoke's `args` bytes read back as a value of the slot's argument type `A`; `none` when the
+slot has no invoke arm or the bytes are not a value of `A`. -/
+def argsData (A : Option Ty) (args : ByteArray) : Option Data :=
+  A.bind fun A => (Wire.decodeData A args).toOption
+
+/-- The data a method returns to make call `b` in a slot whose invoke arm (if any) is at argument
+type `A`, at that slot's call type; `none` when an object may not make it (`Body.callable` is
+false), a grant carries more than `rightsMax` rights, or an invoke's `args` are not a value of `A`. -/
+def callData (A : Option Ty) : Body D → Option Data
   | .account asset owner =>
       some (.inj "account" (.record [("asset", digestData bytesOf asset), ("owner", digestData bytesOf owner)]))
   | .credit well acct amount via =>
@@ -73,8 +87,9 @@ def callData : Body D → Option Data
           ("parent", optData (digestData bytesOf) parent), ("rights", .record rs),
           ("target", digestData bytesOf target)])
   | .invoke obj method args budget via =>
-      some (.inj "invoke" (.record [("args", .bytes args), ("budget", .nat budget), ("method", .nat method),
-        ("obj", digestData bytesOf obj), ("via", optData (digestData bytesOf) via)]))
+      (argsData A args).map fun a =>
+        .inj "invoke" (.record [("args", a), ("budget", .nat budget), ("method", .nat method),
+          ("obj", digestData bytesOf obj), ("via", optData (digestData bytesOf) via)])
   | .transfer src dst amount via once =>
       some (.inj "transfer" (.record [("amount", .nat amount), ("dst", acctRefData bytesOf dst),
         ("once", optData Data.bytes once), ("src", acctRefData bytesOf src),
@@ -85,7 +100,8 @@ def callData : Body D → Option Data
 end
 
 /-- The Body's literal fields are values of the language (naturals below `natLimit`, byte
-strings within `bytesMax`); its digests are bounded by the digest codec (`callData_conforms`). -/
+strings within `bytesMax`); its digests are bounded by the digest codec (`callData_conforms`). An
+invoke's `args` are bounded by their type: `callData` reads them back or has no data. -/
 def rightFits : Right → Bool
   | .enroll n | .invoke n | .transfer n | .credit n => decide (n < Bounds.natLimit)
   | .mutate | .observe => true
@@ -93,8 +109,7 @@ def rightFits : Right → Bool
 def callFits : Body D → Bool
   | .credit _ _ amount _ => decide (amount < Bounds.natLimit)
   | .grant _ _ rights _ => rights.all rightFits
-  | .invoke _ method args budget _ =>
-      decide (method < Bounds.natLimit) && decide (budget < Bounds.natLimit) && decide (args.size ≤ Bounds.bytesMax)
+  | .invoke _ method _ budget _ => decide (method < Bounds.natLimit) && decide (budget < Bounds.natLimit)
   | .transfer _ _ amount _ once =>
       decide (amount < Bounds.natLimit) && once.all fun k => decide (k.size ≤ Bounds.bytesMax)
   | _ => true
@@ -147,8 +162,20 @@ def rightsOf : List (Label × Data) → Except String (List Right)
       let rs ← rightsOf fs
       pure (r.toList ++ rs)
 
-/-- The Body that call data at `callTy` asks for. -/
-def bodyOf : Data → Except String (Body D)
+/-- An invoke's `args` value `a`, as the bytes the callee decodes: `Wire.encodeData` at the slot's
+argument type `A` (LANG-77). Refused by name when the slot has no invoke arm or the value has no
+bytes at `A`; neither is reachable from a checked run (`Lang.Proofs.CallLive.callsOf_live`). -/
+def argsBytes (A : Option Ty) (f : String) (a : Data) : Except String ByteArray :=
+  match A with
+  | none => .error s!"{f}: no invoke arm"
+  | some A =>
+    match Wire.encodeData A a with
+    | some b => .ok b
+    | none => .error s!"{f}: no bytes at the slot's type"
+
+/-- The Body that call data at a slot's call type asks for, the slot's invoke arm (if any) at
+argument type `A`. -/
+def bodyOf (A : Option Ty) : Data → Except String (Body D)
   | .inj "account" (.record [("asset", a), ("owner", o)]) => do
       pure (.account (← digestAt digestOf "asset" a) (← digestAt digestOf "owner" o))
   | .inj "credit" (.record [("acct", ac), ("amount", n), ("via", v), ("well", w)]) => do
@@ -160,29 +187,32 @@ def bodyOf : Data → Except String (Body D)
           (← rightsOf rs) (← optOf (digestAt digestOf "parent") "parent" pa))
       else throw "rights: too many"
   | .inj "invoke" (.record [("args", a), ("budget", b), ("method", m), ("obj", o), ("via", v)]) => do
-      pure (.invoke (← digestAt digestOf "obj" o) (← natOf "method" m) (← bytesAt "args" a)
+      pure (.invoke (← digestAt digestOf "obj" o) (← natOf "method" m) (← argsBytes A "args" a)
         (← natOf "budget" b) (← optOf (digestAt digestOf "via") "via" v))
   | .inj "transfer" (.record [("amount", n), ("dst", d), ("once", k), ("src", s), ("via", v)]) => do
       pure (.transfer (← acctRefOf digestOf "src" s) (← acctRefOf digestOf "dst" d) (← natOf "amount" n)
         (← optOf (digestAt digestOf "via") "via" v) (← optOf (bytesAt "once") "once" k))
   | _ => .error "not a call"
 
-/-- The calls in the calls row a method returned, in slot order, `none` skipped; a slot that does
-not read as a Body refuses the run by name (`program "calls: cI REASON"`). -/
-def callsOf : Data → Except (Refusal D) (List (Body D))
-  | .record fs => go fs
+/-- The calls in the calls row a method returned, read against its declared slot types `ks`, in
+slot order, `none` skipped; a slot that does not read as a Body refuses the run by name
+(`program "calls: cI REASON"`). A row with other than `ks.length` slots is `calls: slots`
+(unreachable: the extracted result conforms to `callsTy ks`). -/
+def callsOf (ks : List Ty) : Data → Except (Refusal D) (List (Body D))
+  | .record fs => go ks fs
   | _ => .error (.program "calls: not a record")
 where
-  go : List (Label × Data) → Except (Refusal D) (List (Body D))
-    | [] => .ok []
-    | (ℓ, o) :: fs =>
+  go : List Ty → List (Label × Data) → Except (Refusal D) (List (Body D))
+    | [], [] => .ok []
+    | k :: ks, (ℓ, o) :: fs =>
       match o with
-      | .inj "none" (.record []) => go fs
+      | .inj "none" (.record []) => go ks fs
       | .inj "some" d =>
-        match bodyOf digestOf d with
-        | .ok b => (go fs).map (b :: ·)
+        match bodyOf digestOf (slotInvokeArg k) d with
+        | .ok b => (go ks fs).map (b :: ·)
         | .error e => .error (.program s!"calls: {ℓ} {e}")
       | _ => .error (.program s!"calls: {ℓ}: not an option")
+    | _, _ => .error (.program "calls: slots")
 
 end
 

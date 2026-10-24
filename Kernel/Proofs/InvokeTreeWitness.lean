@@ -98,12 +98,12 @@ private def counter : Package :=
 
 private def aS : Ty := .record [("m", .nat)]
 
-/-- `go`'s one call slot: an invoke. -/
-private def K : Ty := callOf ["invoke"]
+/-- `go`'s one call slot: an invoke whose argument is a natural (LANG-77: the runtime encodes it). -/
+private def K : Ty := invokeOf .nat
 
-/-- `invoke 5 0 (natBytes 4) 1000 none`, as call data. -/
+/-- `invoke 5 0 4 1000 none`, as call data: the argument is the VALUE `4`, encoded by the run. -/
 private def goCall : Term :=
-  .inj K "invoke" (.record [("args", .bytes (natBytes 4)), ("budget", .nat 1000), ("method", .nat 0),
+  .inj K "invoke" (.record [("args", .nat 4), ("budget", .nat 1000), ("method", .nat 0),
     ("obj", .digest ⟨#[5]⟩), ("via", .inj (optTy .digest) "none" (.record []))])
 
 /-- `go`: `λ rows s a req. {calls = {c0 = some goCall}, edits = {}, state = {m = s.m + 1}}`. -/

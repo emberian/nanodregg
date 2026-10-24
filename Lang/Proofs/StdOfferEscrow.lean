@@ -109,19 +109,23 @@ private theorem post_resolve {D : Type} {theta roles : List Label} {ol sl b : Na
 /-- The escrow package's `fuse` resolves to the generated matcher's signature (`fuse_calls`' premise). -/
 theorem escrow_fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
     (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) offerFuseIx = .ok x) :
-    x = ("fuse", ⟨offerFuseArg, [offerCallTy, offerCallTy], [], 0⟩) := by
-  have hc : callSlotsOf [("c0", optTy offerCallTy), ("c1", optTy offerCallTy)] = some [offerCallTy, offerCallTy] := by
-    decide
-  simp [resolveMethod, offerEscrowPackageOf, offerFuseIx, offerMethods, recordRow, Row.find?, methodSig, methodTy,
-    resultTy, callsTy, slot_c2, hc, empty_rowsOf, pairNamed] at h
-  split at h
-  · rename_i sg hsg
-    simp only [pure, Except.pure, Except.ok.injEq] at h
-    subst h
-    split at hsg
-    · cases hsg; rfl
-    · cases hsg
-  · simp [throw, throwThe, MonadExceptOf.throw] at h
+    x = ("fuse", ⟨offerFuseArg theta, [offerCallTy theta, offerCallTy theta], [], 0⟩) := by
+  have hc := callSlotsOf_two (offerCallTy theta)
+  by_cases hok : callSlotOk (offerCallTy theta) = true
+  · rw [if_pos hok] at hc
+    simp [resolveMethod, offerEscrowPackageOf, offerFuseIx, offerMethods, recordRow, Row.find?, methodSig, methodTy,
+      resultTy, callsTy, slot_c2, hc, empty_rowsOf, pairNamed] at h
+    split at h
+    · rename_i sg hsg
+      simp only [pure, Except.pure, Except.ok.injEq] at h
+      subst h
+      split at hsg
+      · cases hsg; rfl
+      · cases hsg
+    · simp [throw, throwThe, MonadExceptOf.throw] at h
+  · rw [if_neg hok] at hc
+    simp [resolveMethod, offerEscrowPackageOf, offerFuseIx, offerMethods, recordRow, Row.find?, methodSig, methodTy,
+      resultTy, callsTy, slot_c2, hc, empty_rowsOf, throw, throwThe, MonadExceptOf.throw] at h
 
 /-- The package has four methods: no other index resolves. -/
 private theorem resolve_lt {D : Type} {theta roles : List Label} {ol sl b m : Nat} {x : Label × Sig}
@@ -202,7 +206,7 @@ private theorem withdraw_rows_cases {theta roles : List Label} {ol sl : Nat} {wd
 private def transferTy : Ty :=
   .record [("amount", .nat), ("dst", acctRefTy), ("once", optTy .bytes), ("src", acctRefTy), ("via", optTy .digest)]
 
-private theorem find_transfer : Row.find? "transfer" (callArms.filter fun a => ["transfer"].contains a.1) =
+private theorem find_transfer : Row.find? "transfer" ((callArms none).filter fun a => ["transfer"].contains a.1) =
     some transferTy := by decide
 
 private theorem find_of : Row.find? "of" [("of", Ty.record [("asset", .digest), ("owner", .digest)]), ("well", .digest)] =
@@ -235,7 +239,7 @@ private theorem transfer_means {lib : List Term} {env : Env} {amtT assetT srcT d
 /-- The Body a transfer's call data reads as. -/
 private theorem transfer_callsOf {D : Type} {digestOf : ByteArray → Option D} {amt : Nat} {ab sb db : ByteArray}
     {vd : Data} {calls : List (Kernel.Receive.Body D)}
-    (h : callsOf digestOf (.record [("c0", .inj "some" (.inj "transfer" (.record [("amount", .nat amt),
+    (h : callsOf digestOf [escrowCallTy] (.record [("c0", .inj "some" (.inj "transfer" (.record [("amount", .nat amt),
         ("dst", .inj "of" (.record [("asset", .digest ab), ("owner", .digest db)])),
         ("once", .inj "none" (.record [])),
         ("src", .inj "of" (.record [("asset", .digest ab), ("owner", .digest sb)])), ("via", vd)])))]) = .ok calls) :
@@ -829,7 +833,7 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
         digestOf to = some to' ∧ Kernel.Receive.Body.transfer (.of self' asset') (.of to' asset') amt none none ∈ calls := by
   match m, h with
   | 0, h =>
-    obtain ⟨_, _, _, _, _, _, _, _, _, -, -, -, -, -, -, rfl⟩ :=
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, -, -, -, -, -, -, -, rfl⟩ :=
       fuse_calls bytesOf digestOf (budget := budget) hid hp rfl rfl escrow_fuse_resolve rfl (by simp [Row.find?]) h
     simp at hmem
   | 1, h =>

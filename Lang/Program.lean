@@ -420,6 +420,9 @@ structure RunSetup where
   label : Label
   row : List (Label × Ty)
   ty : Ty
+  /-- the method's declared call slot types (LANG-33); `callsOf` reads the calls against them,
+  encoding each invoke's `args` at its slot's argument type (LANG-77) -/
+  calls : List Ty
   state : Data
   args : Data
   /-- the rows argument (LANG-49): what `readsData` built from the caller's view; the env's fourth value -/
@@ -445,7 +448,7 @@ def runSetupWith (loader : Pinned D → Nat → ByteArray → Loaded → Except 
     | .error e => throw (.program s!"arguments: {decodeText e}")
   let rows ← methodReads bytesOf digestOf rc look pkg p.rels rv r.self a sg.reads (p.peerReads ℓ)
   pure { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row,
-         ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := s,
+         ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, calls := sg.calls, state := s,
          args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal], preparation := charge L }
 
 /-- Closed specialization retained for its landed statements. -/
@@ -498,7 +501,7 @@ def runMeasuredWith
     | .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) =>
       match stateSlots S.row ds 0 with
       | some slots => do
-        let calls ← callsOf digestOf c
+        let calls ← callsOf digestOf S.calls c
         let es ← editsOf S.rels r.self e
         guardEdits bytesOf digestOf S rv pkg r es
         pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)

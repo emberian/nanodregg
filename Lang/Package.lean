@@ -105,22 +105,55 @@ def rightLabels : List Label := slotLabels "r" rightsMax
 
 def rightsTy : Ty := .record (rightLabels.map fun l => (l, optTy rightTy))
 
-/-- The arms of `callTy`, one per callable kind, in canonical order. -/
-def callArms : List (Label × Ty) :=
-  [("account", .record [("asset", .digest), ("owner", .digest)]),
-    ("credit", .record [("acct", acctRefTy), ("amount", .nat), ("via", optTy .digest), ("well", .digest)]),
-    ("grant", .record [("grantee", .digest), ("parent", optTy .digest), ("rights", rightsTy),
-      ("target", .digest)]),
-    ("invoke", .record [("args", .bytes), ("budget", .nat), ("method", .nat), ("obj", .digest),
-      ("via", optTy .digest)]),
-    ("transfer", .record [("amount", .nat), ("dst", acctRefTy), ("once", optTy .bytes),
-      ("src", acctRefTy), ("via", optTy .digest)])]
+/-! ### The call arms (LANG-23, LANG-77)
 
-/-- Any call an object may make. -/
-def callTy : Ty := .sum callArms
+One arm per callable kind. The `invoke` arm is TYPED: its `args` is a VALUE of the slot's declared
+argument type `A`, which the runtime encodes with the one data codec (`Wire.encodeData A`, the codec
+the callee's `runSetupWith` inverts at its own argument type) when it reads the method's calls
+(`Lang.callsOf`). So a method composes a nested call from values it computed, and its type says
+what it sends. Before LANG-77 `args` was `bytes` and a method could only forward bytes it held
+(LANG-23 (iii)). -/
 
-/-- A call of one of `kinds` (labels of `callArms`), in canonical order: a slot's call type. -/
-def callOf (kinds : List Label) : Ty := .sum (callArms.filter fun a => kinds.contains a.1)
+def accountArm : Label × Ty := ("account", .record [("asset", .digest), ("owner", .digest)])
+def creditArm : Label × Ty :=
+  ("credit", .record [("acct", acctRefTy), ("amount", .nat), ("via", optTy .digest), ("well", .digest)])
+def grantArm : Label × Ty :=
+  ("grant", .record [("grantee", .digest), ("parent", optTy .digest), ("rights", rightsTy), ("target", .digest)])
+def transferArm : Label × Ty :=
+  ("transfer", .record [("amount", .nat), ("dst", acctRefTy), ("once", optTy .bytes), ("src", acctRefTy),
+    ("via", optTy .digest)])
+
+/-- The `invoke` arm's record at argument type `A`. -/
+def invokeArm (A : Ty) : Ty :=
+  .record [("args", A), ("budget", .nat), ("method", .nat), ("obj", .digest), ("via", optTy .digest)]
+
+/-- The arms a call slot may hold, in canonical order: with an `invoke` arm at argument type `A`
+(`some A`), or without one (`none`). -/
+def callArms : Option Ty → List (Label × Ty)
+  | some A => [accountArm, creditArm, grantArm, ("invoke", invokeArm A), transferArm]
+  | none => [accountArm, creditArm, grantArm, transferArm]
+
+/-- Any call an object may make, its invokes (if `A` names an argument type) carrying a value of `A`. -/
+def callTy (A : Option Ty) : Ty := .sum (callArms A)
+
+/-- A slot of `kinds` other than `invoke`, in canonical order. `invoke` is not an arm here: a slot
+that names only it is empty, and install refuses it `badMethod` (`callSlotOk`). -/
+def callOf (kinds : List Label) : Ty := .sum ((callArms none).filter fun a => kinds.contains a.1)
+
+/-- A slot that may invoke with an argument of type `A`, and may make the other `kinds`. -/
+def invokeOf (A : Ty) (kinds : List Label := []) : Ty :=
+  .sum ((callArms (some A)).filter fun a => a.1 == "invoke" || kinds.contains a.1)
+
+/-- The argument type of an `invoke` arm's record, if it has the arm's shape. -/
+def invokeArgOf : Ty → Option Ty
+  | .record [("args", A), ("budget", .nat), ("method", .nat), ("obj", .digest), ("via", V)] =>
+    if V = optTy .digest then some A else none
+  | _ => none
+
+/-- The argument type of a slot's `invoke` arm, if the slot has one of the arm's shape. -/
+def slotInvokeArg : Ty → Option Ty
+  | .sum arms => (Row.find? "invoke" arms).bind invokeArgOf
+  | _ => none
 
 /-- The calls row over slot call types `ks`: slot `ci` is `optTy (ks[i])`. -/
 def callsTy (ks : List Ty) : Ty := .record ((slotLabels "c" ks.length).zip (ks.map optTy))
@@ -235,10 +268,19 @@ argument and request keep their indices). -/
 def methodTy (S A : Ty) (ks : List Ty := []) (R : Ty := .record []) (E : Ty := .sum []) (es : Nat := 0) : Ty :=
   .fn R (.fn S (.fn A (.fn reqTy (resultTy S ks E es))))
 
-/-- A slot's call type: a sum of at least one of `callArms`, each at its own type (an empty sum
-would be a slot that can never hold a call). -/
+/-- An `invoke` arm's argument type is first-order data the wire can carry: `isData` as `methodSig`
+asks of the method's own argument, `Wire.dataTy` (`wf && tyWire`) as `encodeData`/`decodeData`
+refuse without. The theorems about a checked run take `callSlotOk` alone and get the encoder's
+totality from it (`Lang.Proofs.CallLive`). -/
+def invokeArgOk (A : Ty) : Bool := A.isData && Wire.dataTy A
+
+/-- A slot's call type: a sum of at least one of the call arms (an empty sum would be a slot that
+can never hold a call), each at its own type, the `invoke` arm at an argument type the wire can
+carry (`invokeArgOk`). -/
 def callSlotOk : Ty → Bool
-  | .sum arms => !arms.isEmpty && arms.all fun a => decide (Row.find? a.1 callArms = some a.2)
+  | .sum arms =>
+    let A := (Row.find? "invoke" arms).bind invokeArgOf
+    !arms.isEmpty && A.all invokeArgOk && arms.all fun a => decide (Row.find? a.1 (callArms A) = some a.2)
   | _ => false
 
 /-- A slot type's call type: the slot is an option over a call type. -/

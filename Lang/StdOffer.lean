@@ -160,27 +160,30 @@ def offerRead : List (Label × RelRead) := [("offer", ⟨1, none, false, false�
 /-- `take`'s rows argument: its own offer point and its peer's. -/
 def offerTakeRows (rels : List (Label × RelDecl)) : Ty := rowsTy rels offerRead offerRead
 
-def offerFuseArg : Ty :=
-  .record [("deal", .bytes), ("viaX", optTy .digest), ("viaY", optTy .digest), ("x", .digest), ("y", .digest)]
+/-- The matcher's argument: the deal as a VALUE of the take's argument type (LANG-77: the runtime
+encodes it for each take), the two parties and the grants the two takes go through. -/
+def offerFuseArg (theta : List Label) : Ty :=
+  .record [("deal", offerTakeArg theta), ("viaX", optTy .digest), ("viaY", optTy .digest), ("x", .digest),
+    ("y", .digest)]
 
 def offerPostArg (theta roles : List Label) : Ty :=
   .record [("n", .nat), ("role", offerRoleTy roles), ("terms", offerTermsTy theta)]
 
 def offerWithdrawArg : Ty := .record [("n", .nat)]
 
-/-- A fuse's one call kind. -/
-def offerCallTy : Ty := callOf ["invoke"]
+/-- A fuse's one call kind: an invoke of `take`, its argument a value of `offerTakeArg theta`. -/
+def offerCallTy (theta : List Label) : Ty := invokeOf (offerTakeArg theta)
 
 /-- `invoke obj take deal budget via`. -/
-def offerTakeCall (budget : Nat) (obj via deal : Term) : Term :=
-  .inj offerCallTy "invoke" (.record [("args", deal), ("budget", .nat budget),
+def offerTakeCall (theta : List Label) (budget : Nat) (obj via deal : Term) : Term :=
+  .inj (offerCallTy theta) "invoke" (.record [("args", deal), ("budget", .nat budget),
     ("method", .nat offerTakeIx), ("obj", obj), ("via", via)])
 
 /-- **The matcher** (var 0 req, var 1 arg, var 2 state): both takes, the same `deal`. -/
-def offerFuseBody (budget : Nat) : Term :=
+def offerFuseBody (theta : List Label) (budget : Nat) : Term :=
   let a (l : Label) := Term.get (.var 1) l
-  resultT (callsT [someCallT offerCallTy (offerTakeCall budget (a "x") (a "viaX") (a "deal")),
-      someCallT offerCallTy (offerTakeCall budget (a "y") (a "viaY") (a "deal"))])
+  resultT (callsT [someCallT (offerCallTy theta) (offerTakeCall theta budget (a "x") (a "viaX") (a "deal")),
+      someCallT (offerCallTy theta) (offerTakeCall theta budget (a "y") (a "viaY") (a "deal"))])
     (.var 2) (.record [])
 
 /-- The take's two row edits on `ok`: retract its own pinned offer, insert its session row capturing
@@ -245,8 +248,8 @@ def offerPackageOf (theta roles : List Label) (offerLimit sessionLimit budget : 
   let od := offerDecl theta roles offerLimit
   let sd := offerSessionDecl theta sessionLimit
   let fields : List (Label × Ty × Term) := [
-    ("fuse", methodTy S offerFuseArg [offerCallTy, offerCallTy] (.record []) E 0,
-      activityMethod S offerFuseArg (.record []) (offerFuseBody budget)),
+    ("fuse", methodTy S (offerFuseArg theta) [offerCallTy theta, offerCallTy theta] (.record []) E 0,
+      activityMethod S (offerFuseArg theta) (.record []) (offerFuseBody theta budget)),
     ("offer_guard", guardTy S od, offerGuard theta od),
     ("post", methodTy S (offerPostArg theta roles) [] (.record []) E 1,
       activityMethod S (offerPostArg theta roles) (.record []) (offerPostBody rels od)),

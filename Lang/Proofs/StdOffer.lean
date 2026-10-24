@@ -28,6 +28,7 @@ import Lang.StdOffer
 import Lang.Proofs.StdActivityMonitor
 import Lang.Proofs.Extract
 import Lang.Proofs.Invoke
+import Lang.Proofs.MethodRun
 
 namespace Nanodregg.Lang.Std
 
@@ -839,40 +840,6 @@ theorem apply4_field {lib : List Term} {g : Nat} {f : Nat → Nat} {pb : Term}
   unfold apply4
   exact .app (.app (.app (.app hget (.var rfl) .lam) (.var rfl) .lam) (.var rfl) .lam) (.var rfl) h
 
-/-- `runMeasured`'s do-block inverted, with the calls conjunct (`runMeasuredWith_ok` with `callsOf`). -/
-theorem runMeasured_inv {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
-    {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
-    {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
-    {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
-    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
-    ∃ S v used c e ds left es, runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
-      run S.lib Bounds.stackMax (budget - S.preparation) 0 (State.init S.term S.env) = .value v used ∧
-      (Machine.mk S.lib).extract S.ty (budget - S.preparation - used) v =
-        .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) ∧
-      callsOf digestOf c = .ok calls ∧ editsOf S.rels r.self e = .ok es ∧
-      rows = es.map (fun x => (x.slot, x.act)) := by
-  unfold runMeasured runMeasuredWith at h
-  simp only [bind, Except.bind, pure, Except.pure] at h
-  split at h
-  · cases h
-  rename_i S hS
-  split at h
-  · simp at h
-  split at h
-  · simp at h
-  rename_i v used hrun
-  split at h
-  all_goals first | (simp at h; done) | skip
-  rename_i c e ds left hx
-  repeat' split at h
-  all_goals first | (simp at h; done) | skip
-  simp only [Except.ok.injEq, Prod.mk.injEq] at h
-  obtain ⟨-, rfl, rfl, -, -⟩ := h
-  exact ⟨S, v, used, c, e, ds, left, _, hS, hrun, hx, ‹callsOf _ _ = .ok _›, ‹editsOf _ _ _ = .ok _›, rfl⟩
-
-/-! ### Conforming shapes of what the run decodes and reads -/
-
-/-- The one value of the empty record type. -/
 theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
   cases h with | record hr => cases hr; rfl
 

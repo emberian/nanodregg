@@ -119,9 +119,6 @@ def armOfData : (r : List (Label × Ty)) → Label → Data → Option ((i : Fin
     else (armOfData r ℓ d).map fun ⟨i, y⟩ => ⟨i.succ, y⟩
 end
 
-/-- A canonical type the wire can carry: its data codec exists and is canonical. -/
-def dataTy (T : Ty) : Bool := T.wf && tyWire T
-
 /-- The bytes of data `d` at type `T`; `none` unless `dataTy T` and `d` is a value of `T`. -/
 def encodeData (T : Ty) (d : Data) : Option ByteArray :=
   if dataTy T then (ofData T d).map (dataStream T).bytes else none

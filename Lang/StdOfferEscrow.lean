@@ -127,8 +127,8 @@ def offerEscrowPackageOf (theta roles : List Label) (offerLimit sessionLimit bud
   let od := escrowDecl theta roles offerLimit
   let sd := offerSessionDecl theta sessionLimit
   let fields : List (Label × Ty × Term) := [
-    ("fuse", methodTy S offerFuseArg [offerCallTy, offerCallTy] (.record []) E 0,
-      activityMethod S offerFuseArg (.record []) (offerFuseBody budget)),
+    ("fuse", methodTy S (offerFuseArg theta) [offerCallTy theta, offerCallTy theta] (.record []) E 0,
+      activityMethod S (offerFuseArg theta) (.record []) (offerFuseBody theta budget)),
     ("offer_guard", guardTy S od, offerGuard theta od),
     ("post", methodTy S (escrowPostArg theta roles) [T] (.record []) E 1,
       activityMethod S (escrowPostArg theta roles) (.record []) (escrowPostBody rels od)),

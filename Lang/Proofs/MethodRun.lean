@@ -82,7 +82,7 @@ theorem runMeasured_inv {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
       run S.lib Bounds.stackMax (budget - S.preparation) 0 (State.init S.term S.env) = .value v used ∧
       (Machine.mk S.lib).extract S.ty (budget - S.preparation - used) v =
         .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) ∧
-      callsOf digestOf c = .ok calls ∧ editsOf S.rels r.self e = .ok es ∧
+      callsOf digestOf S.calls c = .ok calls ∧ editsOf S.rels r.self e = .ok es ∧
       rows = es.map (fun x => (x.slot, x.act)) := by
   unfold runMeasured runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
@@ -101,7 +101,7 @@ theorem runMeasured_inv {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteA
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨-, rfl, rfl, -, -⟩ := h
-  exact ⟨S, v, used, c, e, ds, left, _, hS, hrun, hx, ‹callsOf _ _ = .ok _›, ‹editsOf _ _ _ = .ok _›, rfl⟩
+  exact ⟨S, v, used, c, e, ds, left, _, hS, hrun, hx, ‹callsOf _ _ _ = .ok _›, ‹editsOf _ _ _ = .ok _›, rfl⟩
 
 mutual
 /-- Data conforming to a type means itself there. -/

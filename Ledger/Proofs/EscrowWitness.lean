@@ -56,7 +56,7 @@ private theorem setup_eq {look : Pinned D} {rv : RowView D} {pkg : D} {state : S
     (hw : methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd) :
     runSetup bytesOf digestOf rc look rv pkg state method args r = .ok
       { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
-        ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, state := sd, args := ad,
+        ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, calls := sg.calls, state := sd, args := ad,
         reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by
   simp [runSetup, runSetupWith, hq, hl, hp, hm, hs, ha, had, hw, bind, Except.bind, pure, Except.pure]
 

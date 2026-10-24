@@ -375,7 +375,7 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
       BigStep L.lib [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] (apply4 g x.1) (.ok v) ∧
       Means L.lib (resultTy p.state x.2.calls (editTy p.rels) x.2.edits) v
         (.record [("calls", c), ("edits", e), ("state", .record ds)]) ∧
-      callsOf digestOf c = .ok calls ∧ stateSlots (recordRow p.state) ds 0 = some s ∧
+      callsOf digestOf x.2.calls c = .ok calls ∧ stateSlots (recordRow p.state) ds 0 = some s ∧
       RowConforms ds (recordRow p.state) ∧
       ((∀ x, (digestOf (bytesOf x)).isSome = true) →
         readState digestOf (recordRow p.state) s = .ok (.record ds)) := by

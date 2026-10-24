@@ -32,10 +32,10 @@ def lfOpt : Option D → Data
   | some g => .inj "some" (.digest (Sim.dc.bytes g))
   | none => .inj "none" (.record [])
 
-/-- `fuse {deal, x, y, viaX, viaY}`, the deal as its bytes at `offerTakeArg ["price"]`. -/
-def lfFuseArg (deal : Data) (x y : D) (viaX viaY : Option D) : Option ByteArray := do
-  let d ← Wire.encodeData (Std.offerTakeArg ["price"]) deal
-  Wire.encodeData Std.offerFuseArg (.record [("deal", .bytes d), ("viaX", lfOpt viaX), ("viaY", lfOpt viaY),
+/-- `fuse {deal, x, y, viaX, viaY}`, the deal a value of `offerTakeArg ["price"]` (LANG-77: the
+matcher's run encodes it for each take). -/
+def lfFuseArg (deal : Data) (x y : D) (viaX viaY : Option D) : Option ByteArray :=
+  Wire.encodeData (Std.offerFuseArg ["price"]) (.record [("deal", deal), ("viaX", lfOpt viaX), ("viaY", lfOpt viaY),
     ("x", .digest (Sim.dc.bytes x)), ("y", .digest (Sim.dc.bytes y))])
 
 /-- `post {n, role, terms}` with the one term `price` in `[lo, hi]`. -/
