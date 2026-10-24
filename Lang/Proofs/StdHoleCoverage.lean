@@ -78,6 +78,17 @@ theorem holeCoverageOutcome_ok_iff (c0 c1 cb : Bool) :
   cases c0 <;> cases c1 <;> cases cb <;> simp [holeCoverageOutcome,
     collect, Except.map]
 
+/-- **A missing observation is refused `unpinned`, by role, and by nothing else** (LANG-79, law 7):
+the collector's only refusals are `unpinned support0`, `unpinned support1` and `unpinned blocker`,
+never a verdict's name (`support0 withdrawn`, `pruned`, …), so a client that derives its pins from
+the refusal is told it forgot a pin, not that a fact is gone. -/
+theorem holeCoverageOutcome_unpinned (c0 c1 cb : Bool) (e : Fault)
+    (h : holeCoverageOutcome c0 c1 cb = .error e) :
+    e = .refused "unpinned support0".toUTF8 ∨ e = .refused "unpinned support1".toUTF8 ∨
+      e = .refused "unpinned blocker".toUTF8 := by
+  cases c0 <;> cases c1 <;> cases cb <;> simp [holeCoverageOutcome, collect, Except.map] at h <;>
+    (subst h; simp)
+
 /-- The actual self-row key comparison proves presence, independent of whether
 the observed value is absent or has a different version. -/
 theorem holePointCovered_meaning (cell pin : ByteArray) (point : Option HolePoint)

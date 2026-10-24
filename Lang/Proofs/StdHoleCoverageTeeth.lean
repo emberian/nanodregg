@@ -25,19 +25,19 @@ private def check (clause : Bool) (c r : Data) : Option String :=
 
 theorem hole_omitted_support0_refused :
     check true (candidate (dep "a") absent absent) (rows absent absent absent) =
-      some "refused support0 withdrawn" := by decide +kernel
+      some "refused unpinned support0" := by decide +kernel
 
 theorem hole_omitted_support1_refused :
     check true (candidate absent (dep "b") absent) (rows absent absent absent) =
-      some "refused support1 withdrawn" := by decide +kernel
+      some "refused unpinned support1" := by decide +kernel
 
 theorem hole_omitted_blocker_refused :
     check true (candidate absent absent (dep "c")) (rows absent absent absent) =
-      some "refused pruned" := by decide +kernel
+      some "refused unpinned blocker" := by decide +kernel
 
 theorem hole_conflict_requires_observation :
     check false (candidate absent absent (dep "c")) (rows absent absent absent) =
-      some "refused pruned" := by decide +kernel
+      some "refused unpinned blocker" := by decide +kernel
 
 theorem hole_observed_absent_blocker_releases :
     check true (candidate absent absent (dep "c")) (rows (point "c" false) absent absent) =
@@ -58,6 +58,6 @@ theorem hole_coverage_follows_keys :
 
 theorem hole_unrelated_row_is_not_coverage :
     check true (candidate absent absent (dep "c")) (rows (point "other" false) absent absent) =
-      some "refused pruned" := by decide +kernel
+      some "refused unpinned blocker" := by decide +kernel
 
 end Nanodregg.Lang.Std

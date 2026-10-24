@@ -81,14 +81,16 @@ def holeSupportCovered : Term :=
 
 /-- The emitted complete-observation adapter's finite collector. All declared
 supports and blockers must be observed before any verdict, even a conflict.
-Missing observations refuse by role; observed absence still reaches rejudge. -/
+A missing observation refuses `unpinned` with its role (LANG-79, law 7): never a verdict's name,
+since a client derives its pins from the refusal; observed absence still reaches the judge
+(`support0 withdrawn`, recorded by rejudge). -/
 def holeCoverageCheck : Term :=
   (hl "s0" .bool (hl "s1" .bool (hl "blocker" .bool
     (ht (hv "s0")
       (ht (hv "s1")
-        (ht (hv "blocker") (hb true) (hc (.refuse .bool "pruned".toUTF8)))
-        (hc (.refuse .bool "support1 withdrawn".toUTF8)))
-      (hc (.refuse .bool "support0 withdrawn".toUTF8)))))) []
+        (ht (hv "blocker") (hb true) (hc (.refuse .bool "unpinned blocker".toUTF8)))
+        (hc (.refuse .bool "unpinned support1".toUTF8)))
+      (hc (.refuse .bool "unpinned support0".toUTF8)))))) []
 
 /-- Coverage expressions use the candidate's declared keys, not a caller's
 claimed read set. Missing optional dependencies need no observation. -/

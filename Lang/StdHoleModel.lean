@@ -82,7 +82,7 @@ def holeCoverageOutcome (s0 s1 blocker : Bool) : Except Fault Val :=
   (collect
     (fun r : Bool × String => Fault.refused r.2.toUTF8)
     (fun r : Bool × String => if r.1 then some () else none)
-    [(s0, "support0 withdrawn"), (s1, "support1 withdrawn"), (blocker, "pruned")]).map
+    [(s0, "unpinned support0"), (s1, "unpinned support1"), (blocker, "unpinned blocker")]).map
       (fun _ => Val.bool true)
 
 def holeCoveredClosure (env : Env) : Val :=

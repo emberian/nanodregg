@@ -2207,6 +2207,13 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
   let cX := call rX a "select" (hole_selectArg c1) (pinCand rX.st.host c1 ++ pinFact rX.st.host f1 ++ pinFact rX.st.host f2)
   let (_, vX2, _) := go prog rX cX
   r := note r s!"LH7c (scratch) B withdraws f1 ({vX}); A selects c1: {vX2}" (vX == "admitted" && refusedBy vX2 "select" "support0 withdrawn")
+  -- LH7u/LH7v (A11, LANG-79): the same candidate with its support's pin OMITTED is refused
+  -- `unpinned support0` by name, not as the observed absence of LH7c (`support0 withdrawn`); on
+  -- rejudge the omission would otherwise be recorded as a suspension of a fact that stands
+  let (_, vU, _) := go prog r (call r a "select" (hole_selectArg c2) (pinCand r.st.host c2))
+  r := note r s!"LH7u A selects c2 with its support f2's pin omitted: {vU}" (refusedBy vU "select" "unpinned support0")
+  let (_, vUJ, _) := go prog r (call r a "rejudge" (hole_selectArg c2) (pinCand r.st.host c2))
+  r := note r s!"LH7v A rejudges c2 with its support f2's pin omitted: {vUJ}" (refusedBy vUJ "rejudge" "unpinned support0")
   -- LH8 A selects c2: its one support f2@p2 still stands
   let c8 := call r a "select" (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2)
   let (r8, v8, _) := go prog r c8
@@ -2226,15 +2233,15 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
   let (_, omittedBlocker, _) := go prog r (call r a "select" (hole_selectArg c2)
     (pinCand r.st.host c2 ++ pinFact r.st.host f2))
   r := note r s!"hole:omitted-blocker-pin-admits live blocker fact omitted from select pins: {omittedBlocker}"
-    (refusedBy omittedBlocker "select" "pruned")
+    (refusedBy omittedBlocker "select" "unpinned blocker")
   let (_, omittedAccept, _) := go prog r (call r b "accept" (argBytes (.record []) (.record []))
     (pinCand r.st.host c2 ++ pinFact r.st.host f2))
   r := note r s!"hole:omitted-blocker-pin-admits live blocker fact omitted from accept pins: {omittedAccept}"
-    (refusedBy omittedAccept "accept" "pruned")
+    (refusedBy omittedAccept "accept" "unpinned blocker")
   let (omittedRJ, omittedRejudge, _) := go prog r (call r a "rejudge" (hole_selectArg c2)
     (pinCand r.st.host c2 ++ pinFact r.st.host f2))
   r := note r s!"hole:omitted-blocker-pin-admits live blocker fact omitted from rejudge pins: {omittedRejudge}; status {hole_statusOf omittedRJ.st.host obj dC c2}"
-    (refusedBy omittedRejudge "rejudge" "pruned")
+    (refusedBy omittedRejudge "rejudge" "unpinned blocker")
   let (rW, vW, _) := go prog r (call r b "unpost" (hole_unpostArg f1) (pinFact r.st.host f1))
   r := note rW s!"LH8r B withdraws the pruning token: {vW}" (vW == "admitted")
   let (rJ, vJ, _) := go prog r (call r a "rejudge" (hole_selectArg c2)
