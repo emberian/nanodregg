@@ -27,9 +27,14 @@
 #          rows, plants), with the arguments the table gives (kernel-sim --seeds 64: its
 #          planted-refusal coverage gate judges only >= 16 seeds). ok / INCOMPLETE(first pending
 #          run: a row with no driver) / UNJUDGED(first killed or twice-timed-out run) / RED(first red run).
+#   build: GATES-24 (cv 01a16f6d): ok, RED only for a build that FINISHED and failed (lake's exit 1 with an `error:`
+#          line), and ABSENT(killed: …) for one that did not finish (its scope OOM-killed, lake ended by a signal, no
+#          error line): gates/converge.py build reads lake's output, its exit and its scope's journal. A completed
+#          build's memory peak goes to nanodregg-standing/build-peaks.log (scripts/converge's memory floor).
 #   waste: the `WASTE <op> <metric> <ratio>` lines the runs print, against gates/waste.tsv
-#          (gates/waste.py --measured): a pinned row above its ceiling or unmeasured is RED;
-#          no measurement and no row at all is ABSENT (INCOMPLETE)
+#          (gates/waste.py --measured --runs-out): a pinned row above its ceiling is RED; a pinned row nothing
+#          measured is RED when a row that measures it ran ok, ABSENT (`waste-absent …`) when that row did not run
+#          to an ok verdict; no row ran (the build did not finish) or no measurement and no row: ABSENT (INCOMPLETE)
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
 here=0
@@ -55,6 +60,20 @@ T=$G/tree
 log=$G/${sha:0:12}.log
 : > "$log"
 run() { "$@" >> "$log" 2>&1 && echo ok || echo RED; }
+# scoped TOOL CMD…: a build (TOOL lake or cargo) under the build wrapper, read by gates/converge.py build (GATES-24):
+# ok, RED (it finished and failed), ABSENT(killed: …) (its scope OOM-killed, a signal, no failure line). The command
+# writes its cgroup (the swarm-build scope) before it starts, so the scope's journal can say how it ended.
+scoped() {
+  local tool=$1 rc v; shift
+  rm -f "$G/build.cgroup"
+  # shellcheck disable=SC2016
+  wrapped sh -c 'cat /proc/self/cgroup > "$0" 2>/dev/null; exec "$@"' "$G/build.cgroup" "$@" > "$G/build.out" 2>&1
+  rc=$?
+  cat "$G/build.out" >> "$log"
+  v=$(python3 "$T/gates/converge.py" build --tool "$tool" --out "$G/build.out" --rc "$rc" --cgroup "$G/build.cgroup" \
+        --peaks "$G/build-peaks.log" --sha "$sha" --threads "${LEAN_NUM_THREADS:-4}" 2>> "$log")
+  echo "${v:-ABSENT(gates/converge.py build gave no verdict; $tool exit $rc)}"
+}
 daily=${ND_DAILY:-86400}
 t_start=$(date +%s); t_last=$t_start; times=""
 lap() { local now; now=$(date +%s); times="$times $1=$(( now - t_last ))s"; t_last=$now; }
@@ -80,20 +99,30 @@ lap gates
 bkey=$(input_key build); ckey=$(input_key census)
 if ! build=$(carried build "$bkey"); then
   rm -f "$G/build.carry" "$G/census.carry"   # this directory's .lake is about to change
+  # GATES-24: the build writes its cgroup (the swarm-build scope) before lake starts, so the scope's journal can say
+  # whether it was OOM-killed; converge.py build reads ok / RED (finished and failed) / ABSENT(killed: …).
+  bthreads=${LEAN_NUM_THREADS:-4}
   # shellcheck disable=SC2046
-  build=$(run wrapped env -C "$T" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $(lean_targets "$T"))
+  build=$(scoped lake env -C "$T" LEAN_NUM_THREADS="$bthreads" lake build $(lean_targets "$T"))
   [ "$build" = ok ] && echo "$bkey $sha $(date +%s)" > "$G/build.carry"
 fi
 lap build
 census=ABSENT; generated=ABSENT; runs=ABSENT; : > "$G/waste.measured"
+# A runs output is this run's or none: the counters below and converge.py read it (GATES-24: at 2d5056e an unbuilt
+# tree printed the previous run's carried=5 outside=30).
+: > "$G/runs.out"; rm -f "$G/${sha:0:12}.runs.out"
 # The Rust workspace whole (it needs no Lean build): what pre-push judged on every Rust landing until GATES-22.
 cargo=ok
 if [ -f "$T/Cargo.toml" ]; then
   for c in "check --quiet --locked --workspace --all-targets" "clippy --quiet --locked --workspace --all-targets" "fmt --all --check"; do
     # shellcheck disable=SC2086
-    if [ "${c%% *}" = clippy ]; then r=$(run wrapped cargo $c --manifest-path "$T/Cargo.toml" -- -D warnings)
-    else r=$(run wrapped cargo $c --manifest-path "$T/Cargo.toml"); fi
-    [ "$r" = ok ] || { cargo="RED(cargo ${c%% *})"; break; }
+    if [ "${c%% *}" = clippy ]; then r=$(scoped cargo cargo $c --manifest-path "$T/Cargo.toml" -- -D warnings)
+    else r=$(scoped cargo cargo $c --manifest-path "$T/Cargo.toml"); fi
+    case $r in
+      ok) ;;
+      RED*) cargo="RED(cargo ${c%% *})"; break ;;
+      *) cargo="ABSENT(cargo ${c%% *}: ${r#ABSENT(}"; break ;;   # GATES-24: killed, not failed
+    esac
   done
 fi
 lap cargo
@@ -140,8 +169,19 @@ if [ $built = 1 ]; then
 fi
 waste=$(grep -c -v -e '^#' -e '^[[:space:]]*$' "$T/gates/waste.tsv" 2>/dev/null || echo 0)
 wastev=ABSENT
-if [ -s "$G/waste.measured" ] || [ "$waste" -gt 0 ]; then
-  wastev=$(run python3 "$T/gates/waste.py" "$T" --measured "$G/waste.measured")
+if [ $built = 1 ] && { [ -s "$G/waste.measured" ] || [ "$waste" -gt 0 ]; }; then
+  python3 "$T/gates/waste.py" "$T" --measured "$G/waste.measured" --runs-out "$G/runs.out" \
+    --traces "$common/nanodregg-traces" > "$G/waste.out" 2>&1
+  case $? in
+    0) wastev=ok ;;
+    1) wastev=RED ;;
+    3) wastev="ABSENT($(grep -c '^waste-absent ' "$G/waste.out") not measured: their rows did not run ok)" ;;
+    *) wastev=RED ;;   # a waste.py that gives no verdict is red, never a pass
+  esac
+  cat "$G/waste.out" >> "$log"
+elif [ "$waste" -gt 0 ]; then
+  wastev="ABSENT(no row ran)"   # never `stage=` inside a value: converge.py reads the stages by name
+  echo "waste-measured: ABSENT ($waste pinned, none measured: no row ran, build=$build; GATES-24)" >> "$log"
 fi
 lap waste
 carriedn=$(grep -c '^  carry .*: carried ' "$G/runs.out" 2>/dev/null || true)

@@ -2,6 +2,8 @@
 
   converge.py record --repo DIR --sha SHA --line FILE --dir STANDING_DIR --tree TREE --traces DIR [--now EPOCH]
   converge.py owners --repo DIR --commit C
+  converge.py build [--tool lake|cargo] --out FILE --rc N --cgroup FILE [--peaks FILE --sha SHA --threads N]
+  converge.py floor --peaks FILE [--days N]
 
 A CONVERGENCE is scripts/standing.sh on main (every 3 h while landings happen; scripts/converge). Landings between
 two convergences are judged FAST (gates/fast.py): what the standing judges and a fast landing does not (the census,
@@ -40,11 +42,28 @@ not run (ABSENT, INCOMPLETE, UNJUDGED) leaves its units as they were (a stage th
 THE REVERT RULE (Ember via ROOT, 10-21): a unit still red at the NEXT convergence is reverted by name. Its commit is
 the one attributed both at its first sighting and now; exactly one: REVERT (scripts/converge lands it, the owners
 named in CROSS-LAYER, --reverts C); several: REVERT-PENDING naming them, for ROOT. A commit is reverted once.
+The NEXT convergence is one at another main (GATES-24): a re-run at the sha of the last sighting is not a second
+sighting (at 2d5056e two runs a minute apart counted twice and wrote 67 REVERT lines at the first sighting).
+
+THE BUILD'S VERDICT (`build`, GATES-24; cv 01a16f6d): standing.sh's whole-tree `lake build` reads
+  ok      lake exit 0 and its `Build completed successfully (N jobs)` line;
+  RED     the build FINISHED and FAILED: lake's own exit 1 with an `error:` line, nothing killed: what `record`
+          attributes;
+  ABSENT(killed: …)  the build did not finish: its cgroup scope was OOM-killed (the scope's journal, `Failed with
+          result 'oom-kill'`, read by the unit name the build wrote from /proc/self/cgroup), or lake ended by a
+          signal (exit >= 128), or lake wrote no `error:` line: never RED, never attributed (at 2d5056e and at
+          743a4fb a 6 GB scope killed lean with no error line and both read build=RED, 84 reds attributed);
+`--tool cargo` (standing's cargo check, clippy and fmt): ok on exit 0, RED on cargo's failure exits (101: a compile
+error or a lint under -D warnings; 1: fmt's diff), ABSENT(killed: …) otherwise. A completed lake build's scope
+memory peak is appended to --peaks (`sha12 epoch peak_bytes threads jobs`).
+`floor` prints the whole-tree build's memory floor from that record: 1.25 x the largest peak of the last --days
+(default 14) days, rounded up to a GiB, `FLOOR_BYTES text`; scripts/converge refuses a SWARM_MEM_MAX below it.
 """
 import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -343,7 +362,9 @@ def record(a) -> int:
         e = state.get(u)
         if e is None:
             e = state[u] = {"first": now, "first_sha": sha, "commits": now_c, "seen": 0, "reverted": []}
-        e["seen"] += 1
+        if e.get("last_sha", e["first_sha"] if e["seen"] else None) != sha:
+            e["seen"] += 1   # GATES-24: a sighting per main, never per re-run at the same main
+        e["last_sha"] = sha
         h = (now - e["first"]) / 3600
         who = " | ".join(f"{c.label()} ({why})" for c, why in att) or "no commit of the range (ROOT)"
         out.append(f"RED {u} (red at {e['seen']} convergence(s) since {e['first_sha'][:12]}, {h:.1f} h): attributed to {who}")
@@ -371,6 +392,117 @@ def record(a) -> int:
     return 0
 
 
+UNITS = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40}
+
+
+def size_bytes(t: str) -> int | None:
+    """`6G`, `13.2G`, `664.1M`, `24G`, `25769803776` -> bytes (systemd's and swarm-build's binary units)."""
+    m = re.fullmatch(r"\s*([\d.]+)\s*([KMGT]?)i?B?\s*", t or "")
+    return int(float(m.group(1)) * UNITS.get(m.group(2), 1)) if m else None
+
+
+def gib(n: int) -> str:
+    return f"{n / (1 << 30):.1f}G"
+
+
+def scope_journal(unit: str, wait: float = 10.0) -> str:
+    """The user journal of a finished transient scope, once systemd has written its `Consumed …` line."""
+    end = time.monotonic() + wait
+    while True:
+        r = subprocess.run(["journalctl", "--user", "-u", unit, "-o", "cat", "--no-pager"],
+                           capture_output=True, text=True)
+        if "Consumed " in r.stdout or time.monotonic() >= end:
+            return r.stdout
+        time.sleep(1)
+
+
+def build_cmd(a) -> int:
+    out = open(a.out, encoding="utf-8", errors="replace").read() if os.path.exists(a.out) else ""
+    try:
+        cg = open(a.cgroup, encoding="utf-8").read().strip().splitlines()
+    except OSError:
+        cg = []
+    unit = next((p.rsplit("/", 1)[-1] for p in cg if p.rstrip().endswith(".scope")), None)
+    journal = scope_journal(unit) if unit and shutil.which("journalctl") else ""
+    peak = re.search(r"Consumed .*?, ([\d.]+[KMGT]?) memory peak", journal)
+    peak_b = size_bytes(peak.group(1)) if peak else None
+    cap = os.environ.get("SWARM_MEM_MAX") or ("96G (swarm-build's default)" if unit else "none")
+    jobs = re.search(r"Build completed successfully \((\d+) jobs?\)", out)
+    last = None
+    if a.peaks and os.path.exists(a.peaks):
+        for l in open(a.peaks, encoding="utf-8"):
+            f = l.split()
+            if len(f) >= 5 and not l.startswith("#") and f[4].isdigit():
+                last = f[4]
+    oom = "oom-kill" in journal or "killed by the OOM killer" in journal
+    where = f"scope {unit}, peak {peak.group(1) if peak else '?'} of SWARM_MEM_MAX {cap}" if unit else "no cgroup scope"
+    plan = f"; the last completed build ran {last} jobs" if last else ""
+    errs = [l for l in out.splitlines() if l.startswith("error:") or (a.tool == "cargo" and l.startswith("error"))]
+    if a.tool == "cargo":
+        # cargo check/clippy exit 101 on a compile error, fmt --check exits 1 on a diff: finished and failed
+        if a.rc == 0 and not oom:
+            print("ok")
+            return 0
+        if not oom and a.rc in (1, 101):
+            print("RED")
+            print(f"cargo: RED (exit {a.rc}; {where})", file=sys.stderr)
+            return 0
+        v = (f"ABSENT(killed: cgroup OOM, {where})" if oom else
+             f"ABSENT(killed: cargo ended by signal {a.rc - 128}, {where})" if a.rc >= 128 else
+             f"ABSENT(cargo exit {a.rc}, not a failure exit, {where})")
+        print(v)
+        print(f"cargo: {v} (never RED: GATES-24)", file=sys.stderr)
+        return 0
+    if a.rc == 0 and jobs and not oom:
+        if a.peaks and peak_b:
+            with open(a.peaks, "a", encoding="utf-8") as fh:
+                fh.write(f"{(a.sha or '?')[:12]} {int(time.time())} {peak_b} {a.threads or '?'} {jobs.group(1)}\n")
+        print("ok")
+        print(f"build: ok ({jobs.group(1)} jobs; {where})", file=sys.stderr)
+        return 0
+    if oom:
+        v = f"ABSENT(killed: cgroup OOM, {where}{plan})"
+    elif a.rc >= 128:
+        v = f"ABSENT(killed: lake ended by signal {a.rc - 128}, {where}{plan})"
+    elif a.rc == 0:
+        v = f"ABSENT(lake exit 0 without its completion line, {where})"
+    elif not errs:
+        v = f"ABSENT(the build did not finish: lake exit {a.rc} with no error line, {where}{plan})"
+    elif any(re.search(r"exited with code (13[4-9]|14[0-3])|signal|Killed", l) for l in errs):
+        v = f"ABSENT(killed: a lean process ended by a signal, {where}: {errs[0][:120]})"
+    else:
+        print("RED")
+        print(f"build: RED (lake exit {a.rc}, {len(errs)} error line(s), first: {errs[0][:160]}; {where})",
+              file=sys.stderr)
+        return 0
+    print(v)
+    print(f"build: {v} (never RED: a build that did not finish proves nothing; GATES-24)", file=sys.stderr)
+    return 0
+
+
+def floor_cmd(a) -> int:
+    now = time.time()
+    best = None
+    try:
+        for l in open(a.peaks, encoding="utf-8"):
+            f = l.split()
+            if l.startswith("#") or len(f) < 3 or not f[1].isdigit() or not f[2].isdigit():
+                continue
+            if now - int(f[1]) <= a.days * 86400 and (best is None or int(f[2]) > best[0]):
+                best = (int(f[2]), f[0], int(f[1]))
+    except OSError:
+        pass
+    if best is None:
+        fl = 16 << 30
+        print(f"{fl} {gib(fl)} (no completed build recorded in {a.days} days in {a.peaks}: the fallback, from "
+              f"FIX-CONVERGE's 10-24 journal measurement of 13.7G, the largest whole-tree build peak that day)")
+        return 0
+    fl = -(-int(best[0] * 1.25) // (1 << 30)) << 30
+    print(f"{fl} {gib(fl)} (1.25 x the largest completed build peak recorded in {a.days} days, {gib(best[0])} at "
+          f"{best[1]} {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(best[2]))}; {a.peaks})")
+    return 0
+
+
 def owners_cmd(a) -> int:
     """The layers owning C's paths, and C's subject layer: what a revert of C names in CROSS-LAYER."""
     c = Commit(a.repo, a.commit)
@@ -391,8 +523,19 @@ def main() -> int:
     o = sub.add_parser("owners")
     o.add_argument("--repo", required=True)
     o.add_argument("--commit", required=True)
+    b = sub.add_parser("build")
+    b.add_argument("--tool", choices=("lake", "cargo"), default="lake")
+    b.add_argument("--out", required=True)
+    b.add_argument("--rc", type=int, required=True)
+    b.add_argument("--cgroup", required=True)
+    b.add_argument("--peaks")
+    b.add_argument("--sha")
+    b.add_argument("--threads")
+    f = sub.add_parser("floor")
+    f.add_argument("--peaks", required=True)
+    f.add_argument("--days", type=int, default=14)
     a = ap.parse_args()
-    return record(a) if a.cmd == "record" else owners_cmd(a)
+    return {"record": record, "owners": owners_cmd, "build": build_cmd, "floor": floor_cmd}[a.cmd](a)
 
 
 if __name__ == "__main__":

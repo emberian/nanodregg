@@ -16,6 +16,15 @@
 # --scheduled (the timer, every 3 h): skipped when main has not moved since the last convergence, or when one
 #   is running. On demand (ROOT, Ember): waits up to 2 h for a running one.
 # --install: the systemd user timer nanodregg-converge.timer on this box (every 3 h).
+# GATES-24 (cv 01a16f6d: 84 false reds, twice in one day, from builds that never finished):
+#   - it never starts beside a live lander: while a scripts/commit lander is live on main (its pid directory under
+#     <common>/nanodregg-landers/ or nanodregg-commit-main/, the pid alive and running scripts/commit), it says which
+#     and waits, re-reading every 30 s, at most ND_CONVERGE_LANDER_WAIT s (default 3600); then exit 75, not run;
+#   - it refuses a build budget below the floor its own whole-tree build needs: SWARM_MEM_MAX (unset: swarm-build's
+#     96G) below `gates/converge.py floor` (1.25 x the largest completed build peak of the last 14 days, from
+#     nanodregg-standing/build-peaks.log, which standing.sh appends) is REFUSED by name, exit 2;
+#   - a build that did not finish reads build=ABSENT(killed: …), never RED, and nothing is attributed to it; a
+#     pinned waste row nothing measured is RED only when the row that measures it ran ok (scripts/standing.sh).
 # Run detached: nohup bash -c 'exec scripts/converge' > LOG 2>&1 & echo $! > job.pid
 set -uo pipefail
 . "$(dirname "$0")/gate-lib.sh"
@@ -60,6 +69,40 @@ EOF
   exit $?
 fi
 
+# live_landers: one line per live scripts/commit lander on this clone, by its PID directory (scripts/commit keeps
+# nanodregg-landers/p<pid> (fast) or nanodregg-landers/<seq>.<pid> (full) for its whole life, and
+# nanodregg-commit-main/<pid> for each attempt): the pid is alive and its command line runs scripts/commit (a reused
+# pid running something else is not a lander). Never a kill: only read.
+live_landers() {
+  local d p seen=" "
+  for d in "$common"/nanodregg-landers/* "$common"/nanodregg-commit-main/*; do
+    [ -d "$d" ] || continue
+    p=${d##*/}; p=${p#p}; p=${p##*.}
+    case $p in ''|*[!0-9]*) continue ;; esac
+    case $seen in *" $p "*) continue ;; esac
+    [ -r "/proc/$p/cmdline" ] || continue
+    tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'scripts/commit' || continue
+    seen="$seen$p "
+    echo "pid $p ($d): $(tr '\0' ' ' < "/proc/$p/cmdline" | cut -c1-160)"
+  done
+}
+
+# mem_floor_or_refuse: the build budget this run will have against the floor its whole-tree build needs.
+mem_floor_or_refuse() {
+  local fl cap capb
+  case " ${wrap[*]:-} " in *swarm-build*) ;; *) echo "converge: no swarm-build wrapper on this clone; no memory cap to judge"; return 0 ;; esac
+  fl=$(python3 "$repo/gates/converge.py" floor --peaks "$common/nanodregg-standing/build-peaks.log") ||
+    { echo "converge: REFUSED — gates/converge.py floor could not read the memory floor"; return 1; }
+  cap=${SWARM_MEM_MAX:-96G}
+  capb=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[2]); import converge; print(converge.size_bytes(sys.argv[1]) or 0)' "$cap" "$repo/gates")
+  if [ "${capb:-0}" -lt "${fl%% *}" ]; then
+    echo "converge: REFUSED — SWARM_MEM_MAX=$cap is below the whole-tree build's memory floor ${fl#* }. A build under it is"
+    echo "  OOM-killed and proves nothing (cv 01a16f6d: at 6G, twice). Run with SWARM_MEM_MAX at or above the floor, or unset (96G)."
+    return 1
+  fi
+  echo "converge: memory: SWARM_MEM_MAX=$cap, floor ${fl#* }"
+}
+
 # One convergence at a time, box-wide. fd 5 is inherited by the re-exec below and by nothing it backgrounds.
 if [ -z "${ND_CONVERGE_INNER:-}" ]; then
   flock_or_refuse || exit 2
@@ -68,6 +111,20 @@ if [ -z "${ND_CONVERGE_INNER:-}" ]; then
     flock -n 5 || { echo "converge: a convergence is running; this scheduled one is skipped"; exit 0; }
   else
     flock -w 7200 5 || { echo "converge: a convergence held the lock for 2 h; not run"; exit 76; }
+  fi
+  if [ $mode != revert ]; then
+    wstart=$(date +%s); wmax=${ND_CONVERGE_LANDER_WAIT:-3600}; said=
+    while ll=$(live_landers) && [ -n "$ll" ]; do
+      if [ $(( $(date +%s) - wstart )) -ge "$wmax" ]; then
+        echo "converge: NOT RUN — a scripts/commit lander was live on main for all of ${wmax} s; still live:"
+        printf '%s\n' "$ll" | sed 's/^/  /'
+        exit 75
+      fi
+      [ -n "$said" ] || { echo "converge: waiting (at most ${wmax} s) for the live lander(s) to finish, by their pid directories:"
+                          printf '%s\n' "$ll" | sed 's/^/  /'; said=1; }
+      sleep 30
+    done
+    [ -z "$said" ] || echo "converge: no live lander after $(( $(date +%s) - wstart )) s; starting"
   fi
   # The converge worktree is this script's own: reset to main, then run main's copy of this script.
   [ -d "$W" ] || git -C "$repo" worktree add -q --detach "$W" refs/heads/main || exit 2
@@ -117,6 +174,8 @@ if [ $mode = revert ]; then
   c=$(git -C "$repo" rev-parse --verify "$revert^{commit}") || exit 2
   revert_landing "$c" "${why:-ROOT: --revert}"; exit $?
 fi
+# GATES-24: main's own copy judges the budget (the floor reader is main's gates/converge.py)
+mem_floor_or_refuse || exit 2
 
 sha=$(git -C "$repo" rev-parse refs/heads/main)
 if [ $mode = scheduled ] && grep -qE "^CONVERGENCE ${sha:0:12} .* => (GREEN|RED) " "$SD/convergence.log" 2>/dev/null; then
