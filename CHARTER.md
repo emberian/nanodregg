@@ -170,8 +170,11 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
   first `.lean` file; a glob over a directory missing from the commit breaks everyone's build. A conflict in a shared file (lakefile, DECISIONS.md, SIZE.md) is resolved by reading
   both sides. Talk to the owner of a layer you need something from (SendMessage); do not build
   your own copy of their thing.
-- Tests are theorems, plants and rows. A plant is a mutation that must go red by name; record the
-  plant line in the commit. No unfiltered test suites.
+- Tests are theorems, plants and rows. A plant is a mutation that goes red by name: a vacuity check
+  on a theorem or a gate, run when it is cheap. It is not required of every theorem, it is not a
+  landing gate, and a plant line in a commit is a courtesy, not a rule (Ember, 2026-10-24). A
+  landing goes when its builder's build and tests are green; the whole system is re-judged by a
+  convergence per batch. No unfiltered test suites.
 - Process rules from minidregg still apply: PID file or nothing for kills; every loop sleeps and
   has a deadline; disk pressure is Ember's (stop and report, delete nothing).
 - Report to ROOT ("main") on events only: first signatures committed, a decision that another
