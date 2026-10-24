@@ -17,7 +17,7 @@ a genesis builds (`atGenesis`, checked at the step that adopts, HOSTING-43, PROT
   `atGenesis` refutes, is kept by every step of follow's machine.
 - `PackageAt`/`step_packageAt`: the instance HOSTING's member socket reads (HOSTING-42 trigger (ii)):
   a live object with package `P`, whose package cell is live and ROM, stays so, the same cell, across
-  every step follow takes.
+  every step follow takes (`absorbStep_packageAt` per event, `packageAt_atGenesis` for the adopt).
 
 What is not claimed: anything over a bare `World.fold` (KERNEL-64: a hand-made Turn may write slot
 0), nor across a process restart (follow reopens its Store by the writer's own fold, HOST-22: the
@@ -160,20 +160,29 @@ def PackageAt (X : Ctx D) (w : World D) (obj P : D) (pc : Cell) : Prop :=
   (∃ cell, w.live X.env obj = some cell ∧ cell.kind = kindObject ∧ packageOf X obj cell = .ok (some P)) ∧
     w.live X.env P = some pc ∧ pc.discipline = .rom
 
+/-- One re-derived event keeps `PackageAt` (`absorbStep_object_head`, `absorbStep_rom`). -/
+theorem absorbStep_packageAt [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}
+    {e : ByteArray} {s : Kernel.Step D} {obj P : D} {pc : Cell} (hp : PackageAt X w obj P pc)
+    (hs : absorbStep X w e = .ok (s, w')) : PackageAt X w' obj P pc := by
+  obtain ⟨⟨cell, hl, hk, hpk⟩, hpl, hrom⟩ := hp
+  obtain ⟨cell', hl', hk', hpk'⟩ := absorbStep_object_head hs hl hk
+  exact ⟨⟨cell', hl', hk', hpk'.trans hpk⟩, absorbStep_rom hs hpl hrom, hrom⟩
+
+/-- A World holding a live object is not one adopt may replace. -/
+theorem packageAt_atGenesis {X : Ctx D} {w : World D} {obj P : D} {pc : Cell}
+    (hp : PackageAt X w obj P pc) : atGenesis w = false := by
+  obtain ⟨⟨cell, hl, hk, -⟩, -, -⟩ := hp
+  cases hg : atGenesis w
+  · rfl
+  · exact absurd hk (atGenesis_object hg hl)
+
 /-- **Follow's World keeps an object's package, and the package's ROM cell, across every step it
 takes** (HOSTING-42 trigger (ii), at follow's own machine). -/
 theorem step_packageAt [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {dc : Codec.Stream D}
     {B : Thin.Base (World D)} {me : Self D} {f f' : Follow D} {p : Persist D} {kb result : ByteArray}
     {r : Reply} {obj P : D} {pc : Cell}
     (h : step X dc B me f kb result = (f', p, r)) (hp : PackageAt X f.world obj P pc) :
-    PackageAt X f'.world obj P pc := by
-  refine step_keeps (P := fun w => PackageAt X w obj P pc) ?_ ?_ h hp
-  · rintro w w' e s ⟨⟨cell, hl, hk, hpk⟩, hpl, hrom⟩ hs
-    obtain ⟨cell', hl', hk', hpk'⟩ := absorbStep_object_head hs hl hk
-    exact ⟨⟨cell', hl', hk', hpk'.trans hpk⟩, absorbStep_rom hs hpl hrom, hrom⟩
-  · rintro w ⟨⟨cell, hl, hk, -⟩, -, -⟩
-    cases hg : atGenesis w
-    · rfl
-    · exact absurd hk (atGenesis_object hg hl)
+    PackageAt X f'.world obj P pc :=
+  step_keeps (P := fun w => PackageAt X w obj P pc) absorbStep_packageAt packageAt_atGenesis h hp
 
 end Nanodregg.Protocol.Command

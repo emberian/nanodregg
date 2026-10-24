@@ -108,7 +108,9 @@ inductive Refusal (D : Type)
   /-- the writer refused the envelope `expired` at `height` after follow's one re-signed envelope
   of this command, or stated a height that a re-signed envelope would not cover (PROTOCOL-19) -/
   | expired (height : Nat)
-  /-- `receipt CALL` whose bytes do not decode as a signed call -/
+  /-- a call's bytes that do not read back as the call: `receipt CALL` whose bytes do not decode as
+  a signed call, or step 3's signed call whose canonical bytes do not decode to itself (the World
+  would judge the call they decode to, not the one follow derived) -/
   | badCall
   /-- `read OBJ REL K`: the object's package declares no relation REL (a data object declares none) -/
   | unknownRelation (rel : String)
@@ -1271,7 +1273,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       | _, none => moved w' ts (refused (D := D) .badState)
           | some (.refused, p) => same (envelopeRefused X me st.argv cmd startB pagesB upToB triedB p)
           | _ => same (refused (D := D) .badResult)
-      -- the call's signature: re-plan, compare with what was signed, submit
+      -- the call's signature: re-plan, compare with what was signed, check the call reads back, submit
       | _, 3, [startB, signedB, ub] =>
           match Signed.ofBytes signedB, Signed.ofBytes result with
           | some s, some s2 => match body X me w s cmd, signedReads X w cmd with
@@ -1284,6 +1286,8 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
               | .ok u =>
                   if X.callMessage u ≠ ub then same (refused (D := D) .planMoved) else
                   let c : Call D := ⟨u, s2.signature⟩
+                  -- the bytes submitted read back as THIS call, or the World would judge another
+                  if X.decodeCall (X.callBytes c) ≠ some c then same (refused (D := D) .badCall) else
                   match receive X w c with
                   | .error r => same (refusedAt X (.receive r))
                   | .ok t => same (again 4 [startB, signedB, ub, (receipt X t).toUTF8, X.callBytes c] fun k =>

@@ -37,8 +37,8 @@ This module states what an `ok` one MEANS on the member's side, under ONE premis
 
 NOT claimed here. The bell's ROW: what the compiled Bell's `answer` writes is
 `Lang.Proofs.Bell.answer_run`, joined to the strong form in `BellRow.answered_row_is_kept_answer`
-(HOSTING-44) at the run grain; that the committing World then HOLDS that row is not stated anywhere, so
-LITP's "the join stays a journey row" stands for it. A commit whose reply is LOST (follow appends, then dies before
+(HOSTING-44) at the run grain, and taken to the World that commits the call by
+`BellRow.answered_row_committed` (`Committed.journal_committed`). A commit whose reply is LOST (follow appends, then dies before
 `port.send`; the resident sees `.error` or exit `client`) is PROT-5's at-most-once and out of this card:
 nothing here claims the converse of ok ⇒ journaled. Nor: that an ok reply's stdout is the receipt, who
 else holds the resident's key, liveness, or that nd's attempt loop implements `Attempt.next`.
@@ -76,7 +76,8 @@ theorem step_cont {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {m
     (hk : r.cont = some k) (hs' : State.ofBytes k = some st') :
     st'.argv = st.argv ∧ (st'.phase = 4 → ∃ cmd s rs b u sig, Command.parse X.digestOf st.argv = .ok cmd ∧
       Command.body X me f.world s cmd = .ok b ∧ Command.signedReads X f.world cmd = .ok rs ∧
-      Command.plan X me f.world s.key rs b = .ok u ∧ st'.acc.getLast? = some (X.callBytes ⟨u, sig⟩)) := by
+      Command.plan X me f.world s.key rs b = .ok u ∧ st'.acc.getLast? = some (X.callBytes ⟨u, sig⟩) ∧
+      X.decodeCall (X.callBytes ⟨u, sig⟩) = some ⟨u, sig⟩) := by
   obtain ⟨argv, phase, acc⟩ := st
   unfold Command.step at h
   simp only [hst, Option.map_some, Option.getD_some] at h
@@ -107,7 +108,7 @@ theorem step_cont {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {m
   rw [hs0] at hs'
   cases hs'
   exact ⟨rfl, fun _ => ⟨_, _, _, _, _, _, hp, ‹body _ _ _ _ _ = _›, ‹signedReads _ _ _ = _›,
-    ‹Command.plan _ _ _ _ _ _ = _›, rfl⟩⟩
+    ‹Command.plan _ _ _ _ _ _ = _›, rfl, Decidable.of_not_not ‹¬(_ ≠ _)›⟩⟩
 
 /-- `start` hands on only an envelope (phase 1) or an adopt (phase 6) state, over the argv it was given. -/
 theorem start_cont {X : Ctx D} {me : Self D} {f : Follow D} {argv : List ByteArray} {k : ByteArray}
@@ -323,7 +324,8 @@ def Planned (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Se
     (argv : List ByteArray) (acc : List ByteArray) : Prop :=
   ∃ (w : World D), Reach X dc B me w₀ w ∧ ∃ cmd s rs b u sig, Command.parse X.digestOf argv = .ok cmd ∧
     Command.body X me w s cmd = .ok b ∧ Command.signedReads X w cmd = .ok rs ∧
-    Command.plan X me w s.key rs b = .ok u ∧ acc.getLast? = some (X.callBytes ⟨u, sig⟩)
+    Command.plan X me w s.key rs b = .ok u ∧ acc.getLast? = some (X.callBytes ⟨u, sig⟩) ∧
+    X.decodeCall (X.callBytes ⟨u, sig⟩) = some ⟨u, sig⟩
 
 /-- Every continuation a reply carries is a state of `argv`, and a phase-4 one is `Planned`. -/
 def ContOf (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) (w₀ : World D)
@@ -367,7 +369,8 @@ theorem run_invoke_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)
     ∀ {f : Follow D} {r : Command.Reply} {fe : Follow D} {fin : UInt8 × ByteArray × ByteArray},
       FollowRun X dc B me f r fe fin → Reach X dc B me w₀ f.world → ContOf X dc B me w₀ argv r →
       (∀ o e, r ≠ .done CommandExit.ok.code.toUInt8 o e) → fin.1 = CommandExit.ok.code.toUInt8 →
-      ∃ (g : Follow D), ∃ acc, Planned X dc B me w₀ argv acc ∧ ∃ cb c hh td, acc.getLast? = some cb ∧
+      ∃ (g : Follow D), Reach X dc B me w₀ g.world ∧ ∃ acc, Planned X dc B me w₀ argv acc ∧
+        ∃ cb c hh td, acc.getLast? = some cb ∧
         X.decodeCall cb = some c ∧ settleOf X me g.world c = .committed hh td := by
   intro f r fe fin hrun
   induction hrun with
@@ -388,7 +391,7 @@ theorem run_invoke_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)
         simp only at h4 harg
         subst h4
         obtain ⟨cb, c, hh, td, hcb, hdc, hv⟩ := step_settled_ok hst hs
-        exact ⟨g, acc, hpl rfl, cb, c, hh, td, hcb, hdc, hv⟩
+        exact ⟨g, hwg, acc, hpl rfl, cb, c, hh, td, hcb, hdc, hv⟩
     · exact ih (hwg.step hs) (contOf_step hc hk hwg hs) (fun o e h => hd ⟨o, e, h⟩) he
 
 theorem start_contOf {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
@@ -591,7 +594,7 @@ theorem delivered_answer_committed {X : Ctx D} {dc : Codec.Stream D} {B : Thin.B
       intro cmd hp
       obtain ⟨o, g, -, -, rfl⟩ := invokeArgv_parse hp
       exact ⟨_, _, _, _, _, rfl⟩
-    obtain ⟨gf, acc, ⟨wp, -, cmd, s, rs, b, u, sig, hp, hb, hr, hpl, hacc⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
+    obtain ⟨gf, -, acc, ⟨wp, -, cmd, s, rs, b, u, sig, hp, hb, hr, hpl, hacc, -⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
       run_invoke_ok (w₀ := f₀.world) hinv hrun (.refl _) start_contOf (fun _ _ => start_ne_ok) (by simp [hok])
     rw [hacc] at hcb
     cases hcb

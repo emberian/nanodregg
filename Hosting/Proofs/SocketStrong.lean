@@ -449,10 +449,12 @@ a ROM cell, has at `sh.answer` a method `answer` of type `answerArgTy` (`describ
 (`StdioLeg`'s one follower), each of which keeps the bell's package and the package's cell
 (`reach_packageAt`, `Protocol.Command.step_packageAt`, KERNEL-64: trigger (ii)); so the invoke read
 the text at `answerArgTy` (`answer_args_at_answerArgTy`), and the ring and answer are within Lang's
-bounds (`Lifetime.lifetime_bounds`). The last conjunct names the method the call runs: on the World
-`wp` follow planned the call on, the bell holds package `P` in a ROM cell (`PackageAt`), `P` reads as
-`pk`, and `pk`'s method at `sh.answer` is labelled `answer` (what `BellRow.answered_row_is_kept_answer`
-runs, HOSTING-44). -/
+bounds (`Lifetime.lifetime_bounds`). The last conjunct names the method the call runs and where its
+commit is to be found: the call's canonical bytes read back as itself (step 3 checks it before it
+submits); on the World `wb` the invoke's run started at, from which follow's own frames reach the
+settling World `wf`, the bell holds package `P` in a ROM cell (`PackageAt`), `P` reads as `pk`, and
+`pk`'s method at `sh.answer` is labelled `answer` (what `BellRow.answered_row_is_kept_answer` runs,
+and what `BellRow.answered_row_committed` takes to the commit, HOSTING-44). -/
 theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
     {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D} {w : Resident.Where} {m : Resident.Mem}
     {es : List Resident.Ev}
@@ -467,8 +469,10 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
       u.member = me.member ∧ u.body = .invoke o sh.answer args invokeBudget (some g) ∧
       Lang.Wire.encodeData Resident.answerArgTy (Resident.answerDatum r t) = some args ∧
       wf.journalAt X.env (txIdOf X ⟨u, sig⟩) = some (hh, td) ∧
-      ∃ (wp : World D) (P : D) (pc : Cell) (pk : Lang.Package) (sg : Lang.Sig), PackageAt X wp o P pc ∧
-        Lang.readPackage (worldLook X.env wp) P = .ok pk ∧ Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) := by
+      X.decodeCall (X.callBytes ⟨u, sig⟩) = some ⟨u, sig⟩ ∧
+      ∃ (wb : World D) (P : D) (pc : Cell) (pk : Lang.Package) (sg : Lang.Sig), Reach X dc B me wb wf ∧
+        PackageAt X wb o P pc ∧
+        Lang.readPackage (worldLook X.env wb) P = .ok pk ∧ Lang.resolveMethod (D := D) pk sh.answer = .ok ("answer", sg) := by
   -- (i): the shape came from an earlier describe in this process
   rcases Lifetime.shape_provenance h hi with hsh | ⟨y, pre, mid, post, hc, hy⟩
   · rw [hm] at hsh; cases hsh
@@ -515,7 +519,7 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
     intro cmd hp
     obtain ⟨o, g, -, -, rfl⟩ := invokeArgv_parse hp
     exact ⟨_, _, _, _, _, rfl⟩
-  obtain ⟨gf, acc, ⟨wp, hrp', cmd, s, rs, b, u, sig, hp, hb, hrs, hpl, hacc⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
+  obtain ⟨gf, hgf, acc, ⟨wp, hrp', cmd, s, rs, b, u, sig, hp, hb, hrs, hpl, hacc, hrt⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
     run_invoke_ok (w₀ := fi₀.world) hinv hri (.refl _) start_contOf (fun _ _ => start_ne_ok) (by simp [hok])
   rw [hacc] at hcb
   cases hcb
@@ -539,7 +543,8 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
   have htx : txIdOf X c = txIdOf X ⟨u, sig⟩ := by unfold txIdOf; rw [hX _ _ hdc]
   have hj := Protocol.Settle.settle_committed hset
   rw [htx] at hj
-  exact ⟨od, g, gf.world, u, sig, hh, td, args, hbd, hg, hmem, hbody, henc harg, hj, wp, _, pc, pk, sg, hpat',
-    (readPackage_live (hpat'.2.1.trans hpat.2.1.symm)).trans hrp, hres⟩
+  have hpatB := reach_packageAt (hr₂.trans hr₃) hpat
+  exact ⟨od, g, gf.world, u, sig, hh, td, args, hbd, hg, hmem, hbody, henc harg, hj, hrt, fi₀.world, _, pc, pk,
+    sg, hgf, hpatB, (readPackage_live (hpatB.2.1.trans hpat.2.1.symm)).trans hrp, hres⟩
 
 end Nanodregg.Hosting.Proofs.Socket
