@@ -579,6 +579,22 @@ theorem audit_ledgerContiguous {X : Ctx D} :
 
 /-! ## A spend reads back its amount -/
 
+/-- A write the call's tree derived is THE act at its cell (`duplicateEffect`: effects name distinct
+cells), so the admitted World holds there what `postWrite` makes of the cell the turn observed. -/
+private theorem effect_written {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
+    {cr : List (D × Cell)} {efs : List (D × Act)} {ns : List D} {rs : List (RowSlot D × RowAct)}
+    (hs : sealTurn X c cr efs ns rs = .ok t) (ha : World.admit X.env w t = .ok w')
+    {k : D} {ops : List Op} (he : (k, Act.write ops) ∈ efs) :
+    ∃ cell post, w.live X.env k = some cell ∧ postWrite k cell ops = .ok post ∧ w'.live X.env k = some post := by
+  obtain ⟨-, -, htouch, -, -, -, -, -, -, hpins⟩ := sealTurn_ok hs
+  have hnd := firstDup_none (sealTurn_firstDup hs)
+  obtain ⟨q, hq, hqe⟩ := hpins _ he
+  have hx : ({ cell := q.1, seen := q.2, act := actFor efs q.1 } : Touch D) ∈ t.touches := by
+    rw [htouch]; exact List.mem_map_of_mem hq
+  have hqe' : q.1 = k := hqe
+  rw [hqe', actFor_of_nodup hnd he] at hx
+  exact admit_written ha hx rfl
+
 /-- An append the call's tree derived at a grant is THE act at it (`duplicateEffect`), and reads back
 as `(i + 1, left - u)`. -/
 private theorem effect_reads_back {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
@@ -590,17 +606,9 @@ private theorem effect_reads_back {X : Ctx D} {w w' : World D} {c : Call D} {t :
     (hi : i ≤ ledgerSpendsMax) (hu : u ≤ left)
     (he : (g, Act.write [.set (base + i) (countBytes (left - u))]) ∈ efs) :
     ∃ gc', w.live X.env g = some gc ∧ w'.live X.env g = some gc' ∧ ledgerLeft base g gc' = .ok (i + 1, left - u) := by
-  obtain ⟨-, -, htouch, -, -, -, -, -, -, hpins⟩ := sealTurn_ok hs
-  have hnd := firstDup_none (sealTurn_firstDup hs)
-  obtain ⟨q, hq, hqe⟩ := hpins _ he
-  have hx : ({ cell := q.1, seen := q.2, act := actFor efs q.1 } : Touch D) ∈ t.touches := by
-    rw [htouch]; exact List.mem_map_of_mem hq
-  simp only at hqe
-  rw [hqe, actFor_of_nodup hnd he] at hx
-  obtain ⟨cell1, post, hc1, hp, hl'⟩ := admit_written ha hx rfl
+  obtain ⟨cell1, post, hc1, hp, hl'⟩ := effect_written hs ha he
   have hlg := pinned_live (readKind_ok hg).1
   have hkg := (readKind_ok hg).2
-  simp only at hc1 hp hl'
   obtain rfl : gc = cell1 := Option.some.inj (hlg.symm.trans hc1)
   refine ⟨_, hlg, hl', ?_⟩
   rw [postWrite_eq hp]
@@ -693,6 +701,43 @@ theorem credit_reads_back_dispatched {X : Ctx D} {w w' : World D} {c : Call D} {
         rw [hl]; simp
       obtain ⟨gc', hlg, hl', hback⟩ := effect_reads_back hs ha hcan hlc (.inr (.inr rfl)) hgc hll hi hu he
       exact ⟨gc, gc', i, left, hlg, hll, hu, hl', hback⟩
+
+/-- **A transfer moves exactly its amount, at any depth** (the balance half of `transfer_exact`, for a
+transfer the walk dispatched: the signed one, or one an object's run called). A signed call derived
+from `w` and admitted to `w'`: the source account's value falls by `amount` and the destination's
+rises by it, each keeping its denomination and floor. Each write is THE act at its cell
+(`duplicateEffect`), so no other receiver of the same tree moved either balance in this turn. -/
+theorem transfer_reads_back_dispatched {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {n : Nat}
+    {wk : Walk D} {actor : D} {srcR dstR : AcctRef D} {amount : Nat} {via : Option D} {once : Option ByteArray}
+    (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
+    (hd : Dispatched X w c n wk actor (.transfer srcR dstR amount via once)) :
+    ∃ sv dv, (w.live X.env (srcR.resolve X)).bind Value.ofCell = some sv ∧
+      (w.live X.env (dstR.resolve X)).bind Value.ofCell = some dv ∧
+      (w'.live X.env (srcR.resolve X)).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧
+      (w'.live X.env (dstR.resolve X)).bind Value.ofCell = some { dv with balance := dv.balance + amount } := by
+  obtain ⟨R, hR, hs⟩ := receive_top hr
+  obtain ⟨r, hr', l₁, l₂, hl⟩ := dispatched_ok hR hd
+  simp only [dispatch] at hr'
+  have hdr := stepped_draft hr'
+  generalize r.1 = d at hdr hl
+  obtain ⟨scell, sv, dcell, dv, _, _, hsr, hdr', -, -, -, -, hfs, hfd, -, rfl⟩ := transfer_ok hdr
+  obtain ⟨-, hsr, -⟩ := readRef_ok hsr
+  obtain ⟨-, hdr', -⟩ := readRef_ok hdr'
+  obtain ⟨hks, hvs⟩ := readAccount_ok hsr
+  obtain ⟨hkd, hvd⟩ := readAccount_ok hdr'
+  have hls := pinned_live (readKind_ok hks).1
+  have hld := pinned_live (readKind_ok hkd).1
+  have hes : (srcR.resolve X, Act.write [.set Value.balanceKey (Value.balanceBytes (sv.balance - amount))]) ∈
+      R.1.effects := by rw [hl]; simp [setBalance]
+  have hed : (dstR.resolve X, Act.write [.set Value.balanceKey (Value.balanceBytes (dv.balance + amount))]) ∈
+      R.1.effects := by rw [hl]; simp [setBalance]
+  obtain ⟨c1, p1, hc1, hw1, hl1⟩ := effect_written hs ha hes
+  obtain ⟨c2, p2, hc2, hw2, hl2⟩ := effect_written hs ha hed
+  rw [hls] at hc1; cases hc1
+  rw [hld] at hc2; cases hc2
+  refine ⟨sv, dv, by rw [hls]; exact hvs, by rw [hld]; exact hvd, ?_, ?_⟩
+  · rw [hl1, postWrite_eq hw1]; exact ofCell_setBalance hvs hfs
+  · rw [hl2, postWrite_eq hw2]; exact ofCell_setBalance hvd hfd
 
 /-- **A signed credit line through a grant reads back its amount.** -/
 theorem credit_reads_back {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {well : D}

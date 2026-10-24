@@ -107,7 +107,8 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let pinOffer (w : World D) (obj : D) (n : Nat) := hole_pinAt obj w 0 od (lfOfferKey n)
   let cells := [oz, ox, oy, gX, gY, α, β, acct ox α, acct b.id α, acct oy β, acct a.id β]
   let arg1 := lfFuseArg (lfDeal ox oy 9 0 0) ox oy (some gX) (some gY)
-  -- LE1 the fuse moves both legs: X's 5 α to B, Y's 7 β to A; both offers gone
+  -- LE1 the fuse moves both legs: X's 5 α to B, Y's 7 β to A; both offers gone (an instance of
+  -- `Std.escrow_fuse_admitted`, Lang.Proofs.StdOfferEscrowFuse)
   let (rf1, vf1) := fuse r0' cells (pinOffer w0 ox 0 ++ pinOffer w0 oy 0) arg1
   let w1 := rf1.st.host
   r := note rf1 s!"LE1 A invokes Z.fuse (theta price 9) pinning both offers 0: {vf1}; X's offer 0 present {present w1 ox 0}, Y's offer 0 present {present w1 oy 0}; X holds {bal w1 ox α} α (was 5), B holds {bal w1 b.id α} α (was 0); Y holds {bal w1 oy β} β (was 8), A holds {bal w1 a.id β} β (was 0); α outstanding in accounts {bal w1 a.id α + bal w1 ox α + bal w1 b.id α} (was 20)"

@@ -14,8 +14,9 @@ Facts about the kernel's definitions, proved from outside it (PROT-6's `fuse_ato
 * `dispatched_invoke_children`: each call the run of a dispatched invoke at level `m + 1` returned
   was dispatched, as the invoked object, at level `m`; `dispatched_signed_children`: the signed
   invoke's children live at `Bounds.callDepthMax - 1`.
-* `invokeRun_ok`, `invokeRun_req`: what `invokeRun` hands the run: the cell it read as an object,
-  the package its package slot names, and a request whose `self` is the invoked object.
+* `invokeRun_ok`, `invokeRun_req`, `invokeRun_pkg`: what `invokeRun` hands the run: the cell it read
+  as an object, the package its package slot names (the live cell's, `invokeRun_pkg`), and a request
+  whose `self` is the invoked object.
 * `admit_retract_absent`: an admitted turn's retract touch at a row slot leaves the slot absent.
 -/
 import Kernel.Proofs.InvokeTree
@@ -311,6 +312,22 @@ theorem invokeRun_req {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D}
     rq.self = obj ∧ rq.occasion = .invoke method ∧ rq.agent = c.unsigned.member := by
   obtain ⟨-, -, pr, -, rfl⟩ := invokeRun_ok h
   exact ⟨rfl, rfl, rfl⟩
+
+/-- **An invoke of an object whose live cell names package `pkg` runs `pkg`.** -/
+theorem invokeRun_pkg {X : Ctx D} {w : World D} {pins : List (D × D)} {c : Call D} {actor obj : D}
+    {method : Nat} {via : Option D} {cell : Cell} {p : D} {rq : Req D} {pkg : D}
+    (h : invokeRun X (pinned X.env w pins) c actor obj method via = .ok (cell, p, rq))
+    (ho : ∃ cl, w.live X.env obj = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
+    (hk : X.digestOf (X.env.bytes pkg) = some pkg) : p = pkg := by
+  obtain ⟨hrk, hpk, -⟩ := invokeRun_ok h
+  have hl := (readKind_pinned hrk).1
+  obtain ⟨cl, hcl, hsl⟩ := ho
+  rw [hl] at hcl
+  cases hcl
+  unfold packageOf at hpk
+  rw [hsl] at hpk
+  simp only [hk, Except.ok.injEq, Option.some.injEq] at hpk
+  exact hpk.symm
 
 /-! ## A retract removes its row -/
 

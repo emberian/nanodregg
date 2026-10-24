@@ -106,7 +106,8 @@ private theorem post_resolve {D : Type} {theta roles : List Label} {ol sl b : Na
     · cases hsg
   · simp [throw, throwThe, MonadExceptOf.throw] at h
 
-private theorem fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
+/-- The escrow package's `fuse` resolves to the generated matcher's signature (`fuse_calls`' premise). -/
+theorem escrow_fuse_resolve {D : Type} {theta roles : List Label} {ol sl b : Nat} {x : Label × Sig}
     (h : resolveMethod (D := D) (offerEscrowPackageOf theta roles ol sl b) offerFuseIx = .ok x) :
     x = ("fuse", ⟨offerFuseArg, [offerCallTy, offerCallTy], [], 0⟩) := by
   have hc : callSlotsOf [("c0", optTy offerCallTy), ("c1", optTy offerCallTy)] = some [offerCallTy, offerCallTy] := by
@@ -829,7 +830,7 @@ theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestO
   match m, h with
   | 0, h =>
     obtain ⟨_, _, _, _, _, _, _, _, _, -, -, -, -, -, -, rfl⟩ :=
-      fuse_calls bytesOf digestOf (budget := budget) hid hp rfl rfl fuse_resolve rfl (by simp [Row.find?]) h
+      fuse_calls bytesOf digestOf (budget := budget) hid hp rfl rfl escrow_fuse_resolve rfl (by simp [Row.find?]) h
     simp at hmem
   | 1, h =>
     obtain ⟨_, _, _, _, _, _, _, _, _, -, -, -, -, rfl⟩ := post_core bytesOf digestOf hid hp h
