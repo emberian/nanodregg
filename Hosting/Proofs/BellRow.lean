@@ -21,18 +21,20 @@ are the run's argument (`Lang.Bell.answer_run`); the method at `sh.answer` is la
 (`describe_shape`, carried by the strong theorem); the guard is the waiting guard
 (`Lang.Bell.bell_monitored`).
 
-* `answered_row_committed` (premise form, over those conclusions): the journal entry at the call's id
-  is the base World's, or the call was received and admitted at a World holding the bell's package,
-  and the World it left HOLDS `rings` at the ring's key `answeredVal` and no `pending` row there
-  (`Lang.Bell.answer_commits`, through `Committed.journal_committed`), or another decodable byte
-  string has the call's id (a second preimage of `X.env.hash domTx` at the call's bytes).
+* `answered_row_committed` (premise form, over those conclusions; HOSTING-47): when the frames `S`
+  follow was handed took its World from a base that held no entry at the call's id to one that
+  journals it, the call's bytes are among the calls those frames carried and the call was received
+  and admitted at a World holding the bell's package, and the World it left HOLDS `rings` at the
+  ring's key `answeredVal` and no `pending` row there (`Lang.Bell.answer_commits`, through
+  `Committed.journal_committed`); or two different inputs among the call's bytes and the frames'
+  calls share one `domTx` digest (`CollidesAmong` over that explicit list).
 
 That `pk` is the Bell is the resident's own check, not a premise: `Resident.bellCore` refuses
 `notBell` at the first describe unless the description's `core` line (the package cell's bytes)
 decodes to a package with `Lang.Bell.shapeOk` (HOSTING-45), and `describe_shape` carries it.
 
 Not claimed, and named: that follow's base World lacked the entry, or is canonical (premises of
-`answered_row_committed`); that every `answered` row of the bell came from the resident's socket (a
+`answered_row_committed`; the freshness premise is what makes the base's own entry no answer); that every `answered` row of the bell came from the resident's socket (a
 converse: another holder of the resident's key could invoke `answer`, the custody question,
 HOSTING-32). The composite, the resident's own call taken to its commit inside one statement, is not
 stated: there the call is chosen by the conclusion, and a hash disjunct over a chosen target is a
@@ -197,34 +199,35 @@ theorem answered_row_is_kept_answer [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ct
 /-! ## The commit -/
 
 /-- **The answered row is on the World that committed the call** (HOSTING-44's commit half, cv
-01a16821-5835). Premise form, over what `answered_row_is_kept_answer` concludes: follow's frames
-reach the settling World `wf` from `wb`, where the bell `o` holds package `P` in a ROM cell, `P`
-reads as a Bell `pk` labelling `m` `answer`; `c` invokes `o` at `m` with `args`, its canonical
-bytes read back as itself, and `wf` journals `e` at its id. Then `wb` already held that entry, or
-`c` was received at a World `v` where the bell still holds `P` and admitted from canonical rows to
-`v'`, the entry being `(v.height + 1, turnDigest)` of its Turn, and `v'` holds at `rings` of `o`, at
-the ring's key, `answeredVal x y` and no `pending` row there (`Lang.Bell.answer_commits`), the
-arguments decoding to that ring's `answerData`; or some other decodable byte string, admitted at a
-World holding the bell's package, has `c`'s id: a second preimage of `X.env.hash domTx` at
-`X.callBytes c`.
+01a16821-5835; restated HOSTING-47). Premise form, over what `answered_row_is_kept_answer`
+concludes: follow's frames, with results `S`, take the World from `wb`, which held NO journal entry
+at `c`'s id, to the settling World `wf`, which does; at `wb` the bell `o` holds package `P` in a ROM
+cell, `P` reads as a Bell `pk` labelling `m` `answer`; `c` invokes `o` at `m` with `args`, its
+canonical bytes read back as itself. Then `c`'s bytes are among the calls those frames carried
+(`pathCalls S`) and `c` was received at a World `v` where the bell still holds `P` and admitted
+from canonical rows to `v'`, the entry being `(v.height + 1, turnDigest)` of its Turn, and `v'` holds
+at `rings` of `o`, at the ring's key, `answeredVal x y` and no `pending` row there
+(`Lang.Bell.answer_commits`), the arguments decoding to that ring's `answerData`; or two different
+inputs among `c`'s bytes and the frames' calls share one `domTx` digest (`CollidesAmong` over that
+explicit list).
 
 Stated over the call as a premise, not inside `answered_row_is_kept_answer`'s existential: there
-the call is one the statement chooses, and the hash disjunct would be a collision it may pick.
-Canonical journal and rows at `wb` are premises (follow's base is not proved canonical here). -/
+the call is one the statement chooses. Canonical journal and rows at `wb` are premises (follow's
+base is not proved canonical here). -/
 theorem answered_row_committed [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {dc : Codec.Stream D}
     {B : Thin.Base (World D)} {me : Self D} {rc : Lang.ReceiptCheck}
     (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
     (hXp : X.program = Lang.program X.env.bytes X.digestOf rc)
-    {wb wf : World D} (hr : Reach X dc B me wb wf) {o P : D} {pc : Cell} (hpat : PackageAt X wb o P pc)
-    (hjc : wb.JournalCanon X.env) (hrc : wb.RowsCanon X.env)
+    {S : List ByteArray} {wb wf : World D} (hr : ReachOn X dc B me S wb wf) {o P : D} {pc : Cell}
+    (hpat : PackageAt X wb o P pc) (hjc : wb.JournalCanon X.env) (hrc : wb.RowsCanon X.env)
     (hid : X.digestOf (X.env.bytes P) = some P) {pk : Lang.Package}
     (hrp : Lang.readPackage (worldLook X.env wb) P = .ok pk) (hs : Lang.Bell.shapeOk pk = true)
     {m : Nat} {sg : Lang.Sig} (hres : Lang.resolveMethod (D := D) pk m = .ok ("answer", sg))
     {c : Call D} {args : ByteArray} {budget : Nat} {via : Option D}
     (hb : c.unsigned.body = .invoke o m args budget via) (hc : X.decodeCall (X.callBytes c) = some c)
+    (hfresh : wb.journalAt X.env (txIdOf X c) = none)
     {e : Nat × D} (hj : wf.journalAt X.env (txIdOf X c) = some e) :
-    wb.journalAt X.env (txIdOf X c) = some e ∨
-      (∃ (v v' : World D) (t : Turn D), ∃ nb x k y kb vb ver,
+    (X.callBytes c ∈ pathCalls S ∧ ∃ (v v' : World D) (t : Turn D), ∃ nb x k y kb vb ver,
         PackageAt X v o P pc ∧ receive X v c = .ok t ∧ World.admit X.env v t = .ok v' ∧
         e = (v.height + 1, turnDigest X.env t) ∧
         Lang.Wire.decodeData Lang.Bell.answerArg args = .ok (Lang.Bell.answerData nb x k y) ∧
@@ -232,19 +235,16 @@ theorem answered_row_committed [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} 
         Lang.Wire.encodeData Lang.Bell.rings.val (Lang.Bell.answeredVal x y) = some vb ∧
         rowAt X.env v'.rows (.row ⟨o, 1, kb⟩) = some (.row 0 vb ver) ∧
         rowAt X.env v'.rows (.row ⟨o, 0, kb⟩) = none) ∨
-      ∃ (v v' : World D) (bs : ByteArray) (c' : Call D) (t : Turn D), PackageAt X v o P pc ∧
-        X.decodeCall bs = some c' ∧ receive X v c' = .ok t ∧ World.admit X.env v t = .ok v' ∧
-        bs ≠ X.callBytes c ∧ X.env.hash domTx bs = txIdOf X c := by
-  rcases journal_committed hX absorbStep_packageAt packageAt_atGenesis hr hpat hjc hrc hc hj with
-    h0 | ⟨v, v', t, hqv, hrv, hrcv, ha, rfl⟩ | h2
-  · exact .inl h0
+      CollidesAmong X.env.hash ((X.callBytes c :: pathCalls S).map (domTx, ·)) := by
+  rcases journal_committed hX absorbStep_packageAt packageAt_atGenesis hr hpat hjc hrc hc hfresh hj with
+    ⟨hbS, v, v', t, hqv, hrv, hrcv, ha, rfl⟩ | h2
   · have hqv' := hqv
     obtain ⟨⟨cl, hl, -, hpo⟩, hpl, -⟩ := hqv'
     have hrp' : Lang.readPackage (worldLook X.env v) P = .ok pk :=
       (readPackage_live (hpl.trans hpat.2.1.symm)).trans hrp
     obtain ⟨nb, x, k, y, kb, vb, ver, h1, h2, h3, h4, h5⟩ :=
       Lang.Bell.answer_commits hXp hrcv hb ⟨cl, hl, hpo⟩ hid rfl hrp' hs hres ha hrv
-    exact .inr (.inl ⟨v, v', t, nb, x, k, y, kb, vb, ver, hqv, hrcv, ha, rfl, h1, h2, h3, h4, h5⟩)
-  · exact .inr (.inr h2)
+    exact .inl ⟨hbS, v, v', t, nb, x, k, y, kb, vb, ver, hqv, hrcv, ha, rfl, h1, h2, h3, h4, h5⟩
+  · exact .inr h2
 
 end Nanodregg.Hosting.Proofs.Socket

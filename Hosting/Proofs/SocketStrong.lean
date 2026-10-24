@@ -37,11 +37,12 @@ trigger (ii), `Protocol.Command.step_packageAt`). -/
 theorem reach_packageAt [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {dc : Codec.Stream D}
     {B : Thin.Base (World D)} {me : Self D} {obj P : D} {pc : Cell} {w w' : World D}
     (h : Reach X dc B me w w') (hp : PackageAt X w obj P pc) : PackageAt X w' obj P pc := by
+  obtain ⟨S, h⟩ := h
   induction h with
   | refl => exact hp
   | tail _ hm ih =>
-    obtain ⟨f, f', kb, res, p, r, rfl, hs, rfl⟩ := hm
-    exact step_packageAt hs ih
+    obtain ⟨f, f', kb, p, r, rfl, hs, rfl⟩ := hm
+    exact step_packageAt hs (ih hp)
 
 /-! ## The describe: what a description that reads as a shape says (HOSTING-42 trigger (iii)) -/
 
@@ -636,7 +637,7 @@ settling World `wf`, the bell holds package `P` in a ROM cell (`PackageAt`), `P`
 `pk`'s method at `sh.answer` is labelled `answer`, and `pk` IS the Bell (`Lang.Bell.shapeOk`: the
 resident's own check of the description's `core` line, HOSTING-45), which is what
 `BellRow.answered_row_is_kept_answer` runs and `BellRow.answered_row_committed` takes to the commit
-(HOSTING-44). -/
+(HOSTING-44; over the frames' results `S` of `Reach`, an entry absent at `wb`, HOSTING-47). -/
 theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D}
     {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D} {w : Resident.Where} {m : Resident.Mem}
     {es : List Resident.Ev}

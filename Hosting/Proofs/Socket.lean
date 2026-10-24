@@ -6,8 +6,9 @@ The resident (`Hosting.Resident.Run`) reaches its member's follower through ONE 
 command's `done`. Every theorem over `ResidentRun.Runs` already covers every reply that socket could give.
 This module states what an `ok` one MEANS on the member's side, under ONE premise about bytes:
 
-- `Moves`/`Reach`: follow's World moves only by the frames follow answers (`Command.step` on any
-  continuation, any result, any connection's: the deployed `Host.Follow.loop`), HOSTING-43.
+- `Moves`/`ReachOn`/`Reach`: follow's World moves only by the frames follow answers (`Command.step` on
+  any continuation, any result, any connection's: the deployed `Host.Follow.loop`), HOSTING-43;
+  `ReachOn S` names the frames' results, `Reach` is some `ReachOn` (HOSTING-47).
 - `FollowRun`: one command of follow's machine as the leg drives it: `start` on the argv, `step` on each
   continuation follow handed out with SOME result (the attempt store's, custody's, the Host's: chosen,
   never trusted), follow's World `Reach`ed between frames (other commands' frames), ending in a `done`
@@ -38,7 +39,9 @@ This module states what an `ok` one MEANS on the member's side, under ONE premis
 NOT claimed here. The bell's ROW: what the compiled Bell's `answer` writes is
 `Lang.Proofs.Bell.answer_run`, joined to the strong form in `BellRow.answered_row_is_kept_answer`
 (HOSTING-44) at the run grain, and taken to the World that commits the call by
-`BellRow.answered_row_committed` (`Committed.journal_committed`). A commit whose reply is LOST (follow appends, then dies before
+`BellRow.answered_row_committed` (`Committed.journal_committed`): over the frames follow was handed
+(`ReachOn S`), an entry they added at the call's id is that call's commit, its bytes among the calls
+those frames carried, or a collision among those inputs (HOSTING-47). A commit whose reply is LOST (follow appends, then dies before
 `port.send`; the resident sees `.error` or exit `client`) is PROT-5's at-most-once and out of this card:
 nothing here claims the converse of ok ⇒ journaled. Nor: that an ok reply's stdout is the receipt, who
 else holds the resident's key, liveness, or that nd's attempt loop implements `Attempt.next`.
@@ -271,30 +274,51 @@ theorem body_invoke {X : Ctx D} {me : Self D} {w : World D} {s : Signed} {o : D}
 
 /-! ## Follow's run of one command, as the stdio leg drives it -/
 
-/-- **Follow's World moves by its own frames.** `Moves w w'`: one frame follow answers, from a state
-whose World is `w` to one whose World is `w'`: `Command.step` on ANY continuation with ANY result,
-any connection's (the deployed loop, `Host.Follow.loop`: `answer`'s `Command.step`; `start` moves
-nothing). A process restart reopens the World follow's steps persisted (HOST-22). -/
-def Moves (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) (w w' : World D) : Prop :=
-  ∃ (f f' : Follow D) (kb res : ByteArray) (p : Persist D) (r : Command.Reply),
+/-- **Follow's World moves by its own frames.** `Moves res w w'`: one frame follow answers, handed the
+result `res`, from a state whose World is `w` to one whose World is `w'`: `Command.step` on ANY
+continuation, any connection's (the deployed loop, `Host.Follow.loop`: `answer`'s `Command.step`;
+`start` moves nothing). A process restart reopens the World follow's steps persisted (HOST-22). -/
+def Moves (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) (res : ByteArray)
+    (w w' : World D) : Prop :=
+  ∃ (f f' : Follow D) (kb : ByteArray) (p : Persist D) (r : Command.Reply),
     f.world = w ∧ Command.step X dc B me f kb res = (f', p, r) ∧ f'.world = w'
 
-/-- Follow's World, after any number of frames. -/
-inductive Reach (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) :
-    World D → World D → Prop
-  | refl (w : World D) : Reach X dc B me w w
-  | tail {w w₁ w₂ : World D} : Reach X dc B me w w₁ → Moves X dc B me w₁ w₂ → Reach X dc B me w w₂
+/-- Follow's World after the frames whose results are `S`, in order: the path is a premise a
+statement can name, so what follow absorbed on it is bounded by `S` (`frameCalls`, HOSTING-47). -/
+inductive ReachOn (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) :
+    List ByteArray → World D → World D → Prop
+  | refl (w : World D) : ReachOn X dc B me [] w w
+  | tail {S : List ByteArray} {res : ByteArray} {w w₁ w₂ : World D} :
+      ReachOn X dc B me S w w₁ → Moves X dc B me res w₁ w₂ → ReachOn X dc B me (S ++ [res]) w w₂
+
+/-- Follow's World, after some frames. -/
+def Reach (X : Ctx D) (dc : Codec.Stream D) (B : Thin.Base (World D)) (me : Self D) (w w' : World D) : Prop :=
+  ∃ S, ReachOn X dc B me S w w'
+
+theorem Reach.refl {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    (w : World D) : Reach X dc B me w w := ⟨[], .refl w⟩
+
+theorem ReachOn.trans {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {S₁ : List ByteArray} {w₁ w₂ : World D} (h₁ : ReachOn X dc B me S₁ w₁ w₂) :
+    ∀ {S₂ w₃}, ReachOn X dc B me S₂ w₂ w₃ → ReachOn X dc B me (S₁ ++ S₂) w₁ w₃
+  | _, _, .refl _ => by simpa using h₁
+  | _, _, .tail h hm => by rw [← List.append_assoc]; exact .tail (h₁.trans h) hm
 
 theorem Reach.trans {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
-    {w₁ w₂ : World D} (h₁ : Reach X dc B me w₁ w₂) : ∀ {w₃}, Reach X dc B me w₂ w₃ → Reach X dc B me w₁ w₃
-  | _, .refl _ => h₁
-  | _, .tail h hm => .tail (h₁.trans h) hm
+    {w₁ w₂ w₃ : World D} (h₁ : Reach X dc B me w₁ w₂) (h₂ : Reach X dc B me w₂ w₃) : Reach X dc B me w₁ w₃ :=
+  let ⟨_, h₁⟩ := h₁; let ⟨_, h₂⟩ := h₂; ⟨_, h₁.trans h₂⟩
+
+theorem ReachOn.step {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {S : List ByteArray} {w : World D} {f f' : Follow D} {kb res : ByteArray} {p : Persist D}
+    {r : Command.Reply} (h : ReachOn X dc B me S w f.world) (hs : Command.step X dc B me f kb res = (f', p, r)) :
+    ReachOn X dc B me (S ++ [res]) w f'.world :=
+  .tail h ⟨f, f', kb, p, r, rfl, hs, rfl⟩
 
 theorem Reach.step {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     {w : World D} {f f' : Follow D} {kb res : ByteArray} {p : Persist D} {r : Command.Reply}
     (h : Reach X dc B me w f.world) (hs : Command.step X dc B me f kb res = (f', p, r)) :
     Reach X dc B me w f'.world :=
-  .tail h ⟨f, f', kb, res, p, r, rfl, hs, rfl⟩
+  let ⟨_, h⟩ := h; ⟨_, h.step hs⟩
 
 /-- **One command of follow's machine as the leg drives it**: `start` on the argv, then `step` on each
 continuation follow handed out, with SOME result (the attempt store's, custody's, the Host's: chosen,

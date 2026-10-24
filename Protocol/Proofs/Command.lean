@@ -677,7 +677,7 @@ theorem absorbStep_refusedFinal {X : Ctx D} {w : World D} {e : ByteArray} {c : C
   have hs : submit X w c = .error (.rejected (.refusedFinal code)) := by
     unfold submit; rw [hj, hr]
   have hne : ¬ eventTurn = eventCancel := by decide
-  unfold absorbStep
+  unfold absorbStep eventCall
   simp only [hpos, ↓reduceDIte, hdec, htag, hne, ↓reduceIte, hs]
 
 /-- What `World.refuse` recorded for `c`'s record (`recordOf`, any cancel field) is in the World it

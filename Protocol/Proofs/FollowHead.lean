@@ -13,6 +13,8 @@ a genesis builds (`atGenesis`, checked at the step that adopts, HOSTING-43, PROT
 - `absorbStep_object_head`: one re-derived event keeps a live object live, an object, with its
   `packageOf` (KERNEL-64's `submit_object_head`; a refusal changes no cell, `refuse_live`).
 - `absorbStep_rom`: one re-derived event keeps a live ROM cell, identical (`Frame.admit_rom`).
+- `step_world`: one frame leaves follow's World as it was, or `absorbPage`s events its result
+  carries (`frameEvents`, a function of the frame's bytes), or adopts at a World `atGenesis`.
 - `step_keeps`: any property of follow's World that every re-derived event keeps, and that
   `atGenesis` refutes, is kept by every step of follow's machine.
 - `PackageAt`/`step_packageAt`: the instance HOSTING's member socket reads (HOSTING-42 trigger (ii)):
@@ -24,6 +26,7 @@ What is not claimed: anything over a bare `World.fold` (KERNEL-64: a hand-made T
 World it persisted, which these steps produced).
 -/
 import Protocol.Proofs.Command
+import Protocol.Command.Frames
 import Kernel.Proofs.ObjectHead
 import Kernel.Proofs.Frame
 import Kernel.Proofs.Rooted
@@ -108,6 +111,49 @@ theorem absorbStep_rom {X : Ctx D} {w w' : World D} {e : ByteArray} {s : Kernel.
     (hrom : cell.discipline = .rom) : w'.live X.env c = some cell :=
   fold_rom hrom (fold_cons_ok (rest := []).mpr ⟨w', absorbStep_step h, rfl⟩) hl
 
+omit [Ord D] [DecidableEq D] in
+theorem stepResult_ok {isInit : Bool} {phase : UInt8} {res r : ByteArray}
+    (h : stepResult (D := D) isInit phase res = .ok r) : r = res ∨ hostReply res = some (.ok, r) := by
+  unfold stepResult custodyResult at h
+  split at h
+  · split at h
+    · rename_i p hp; cases h; exact .inr hp
+    · split at h <;> (try split at h) <;> cases h
+    · cases h
+  · cases h; exact .inl rfl
+
+omit [Ord D] [DecidableEq D] in
+theorem frameEvents_mem {isInit : Bool} {phase : UInt8} {res r p : ByteArray} {pg : LogPage}
+    (h₁ : stepResult (D := D) isInit phase res = .ok r) (h₂ : hostReply r = some (.ok, p))
+    (h₃ : logPage p = some pg) : ∀ e ∈ pg.events, e ∈ frameEvents res := by
+  intro e he
+  unfold frameEvents
+  rcases stepResult_ok h₁ with rfl | hr
+  · exact List.mem_append_left _ (by simp [pageEvents, h₂, h₃, he])
+  · exact List.mem_append_right _ (by simp [hr, pageEvents, h₂, h₃, he])
+
+/-- **What one frame does to follow's World**: nothing; or `absorbPage` of events the frame's result
+carries (`frameEvents`: every event is the result's to name); or an adopt, only from a World a genesis
+builds (`atGenesis`). Any continuation, any result. -/
+theorem step_world {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
+    {f f' : Follow D} {p : Persist D} {kb result : ByteArray} {r : Reply}
+    (h : step X dc B me f kb result = (f', p, r)) :
+    f'.world = f.world ∨
+      (∃ (evs : List ByteArray) (steps : Nat) (chain : ByteArray) (base : Nat)
+          (ts : List (Kernel.Step D × D)) (wb : Option (World D)),
+        (∀ e ∈ evs, e ∈ frameEvents result) ∧ absorbPage X f.world evs steps chain base = .ok (f'.world, ts, wb)) ∨
+      atGenesis f.world = true := by
+  unfold step at h
+  repeat' split at h
+  all_goals (try simp only [Prod.mk.injEq] at h)
+  all_goals (repeat' split at h)
+  all_goals (try simp only [Prod.mk.injEq] at h)
+  all_goals (try (obtain ⟨rfl, -, -⟩ := h))
+  all_goals first
+    | exact .inl rfl
+    | exact .inr (.inl ⟨_, _, _, _, _, _, frameEvents_mem ‹_› ‹_› ‹_›, ‹_›⟩)
+    | exact .inr (.inr (by simpa using ‹¬(!atGenesis _) = true›))
+
 section keeps
 variable {X : Ctx D} {P : World D → Prop}
 
@@ -141,16 +187,10 @@ theorem step_keeps {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     (hA : ∀ {w w' e s}, P w → absorbStep X w e = .ok (s, w') → P w')
     (hG : ∀ {w}, P w → atGenesis w = false)
     (h : step X dc B me f kb result = (f', p, r)) (hp : P f.world) : P f'.world := by
-  unfold step next at h
-  repeat' split at h
-  all_goals (try simp only [Prod.mk.injEq] at h)
-  all_goals (repeat' split at h)
-  all_goals (try simp only [Prod.mk.injEq] at h)
-  all_goals (try (obtain ⟨rfl, -, -⟩ := h))
-  all_goals first
-    | exact hp
-    | exact absorbPage_keeps hA ‹_› hp
-    | (exfalso; rename_i hg _; rw [hG hp] at hg; exact hg rfl)
+  rcases step_world h with hw | ⟨_, _, _, _, _, _, -, ha⟩ | hg
+  · rw [hw]; exact hp
+  · exact absorbPage_keeps hA ha hp
+  · rw [hG hp] at hg; cases hg
 
 end keeps
 

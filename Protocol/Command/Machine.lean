@@ -425,6 +425,10 @@ def plan (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rd : SignedR
 
 /-! ## Catching up -/
 
+/-- The call bytes a logged Turn or refusal event carries: `e[0]` names the event, the rest is the
+call. -/
+def eventCall (e : ByteArray) : ByteArray := e.extract 1 e.size
+
 /-- Re-derive one logged step on follow's World by the Host's own decision functions: a Turn event
 by `Receive.submit` (receive, then admit), a refusal event by `Receive.judge`, which must RECORD it
 (the follower's `auditRefusal` rule), a cancel event by `Receive.cancel` with the event's signature,
@@ -448,7 +452,7 @@ def absorbStep (X : Ctx D) (w : World D) (e : ByteArray) : Except (Refusal D) (K
               | .recorded _ r w' => .ok (.refusal r, w')
               | _ => .error (.receive .cancelForged)
     else
-    match X.decodeCall (e.extract 1 e.size) with
+    match X.decodeCall (eventCall e) with
     | none => .error (.eventMismatch pos)
     | some c =>
         if e[0] = eventTurn then
