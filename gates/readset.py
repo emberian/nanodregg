@@ -32,7 +32,8 @@ Every verdict run executes under
   W = the waste rows (`op<TAB>metric`) the run MEASURED (its `WASTE` lines; runs.py adds it): no trace
       shows gates/waste.tsv, because the JUDGE reads it, not the run, yet its ceilings decide the row's
       verdict (GATES-20e, PERF-4's finding at 41e041f). The key holds each W row's ceiling and measured.
-Excluded: .lake/runs/ (the run's own scratch, made fresh per run), .lake/cargo-target/ (cargo's
+Excluded: .lake/runs/ (the run's own scratch, made fresh per run), the run's own TMPDIR (GATES-25: made per
+run by runs.py, so no fixed name under it, such as rustix's build probe, is shared), .lake/cargo-target/ (cargo's
 cache: derived, and a source change reaches it only through T, which cargo stats), and everything under
 a directory the run itself created (mkdir = 0: its own output, e.g. host-file-sim's
 .lake/host-file-sim/run-<random>, which the standing re-trace check read as nondeterminism).
@@ -54,7 +55,7 @@ import shutil
 import subprocess
 import threading
 
-VERSION = b"GATES-20 traced key v7 (GATES-20o: proved pre-bind child exits)"
+VERSION = b"GATES-20 traced key v8 (GATES-25: a run's own TMPDIR is its scratch)"
 WASTE = "gates/waste.tsv"
 EXCL = (".lake/runs/", ".lake/cargo-target/")
 BIN = ".lake/build/bin/"
@@ -139,11 +140,13 @@ PAIR = re.compile(r'(?:AT_FDCWD|-?\d+)<((?:[^>\\]|\\.)*)>,\s*"((?:[^"\\]|\\.)*)"
 SUN = re.compile(r'sun_path="((?:[^"\\]|\\.)*)"')
 
 
-def write_key(path: str, root: str) -> str | None:
+def write_key(path: str, root: str, scratch: str | None = None) -> str | None:
     """A written absolute path as WR/O hold it: tree-relative inside the tree, absolute under /tmp, /var/tmp or the
-    home directory; None for the run's own {fresh} (.lake/runs/), cargo's cache (.lake/cargo-target/, under
-    cargo's own lock), the toolchain and the system."""
+    home directory; None for the run's own {fresh} (.lake/runs/), the run's own TMPDIR (`scratch`, GATES-25),
+    cargo's cache (.lake/cargo-target/, under cargo's own lock), the toolchain and the system."""
     path = os.path.normpath(path)
+    if scratch and under(path, scratch):
+        return None
     if path == root or path.startswith(root + "/"):
         r = os.path.relpath(path, root)
         return None if r == "." or r.startswith(EXCL) or r + "/" in EXCL else r
@@ -155,10 +158,12 @@ def under(p: str, d: str) -> bool:
     return p == d or p.startswith(d.rstrip("/") + "/")
 
 
-def reduce(trace: str, root: str) -> dict | None:
+def reduce(trace: str, root: str, scratch: str | None = None) -> dict | None:
     """The read-set of one trace file, or None when there is none to trust (missing, empty, not
     strace output, or a name strace had to escape): the caller then holds no read-set for the row,
     and the static rules apply.
+    `scratch` is the run's own TMPDIR (GATES-25: runs.py makes one per run and removes it after): as for
+    .lake/runs/, nothing under it is a read, a write or an outside path, since no other run can reach it.
     Paths are placed with strace -y's annotations: a `*at` call's directory fd prints its path
     (`AT_FDCWD</cwd>`, `3</dir>`), so a name relative to a directory fd or to a chdir'd cwd lands
     where it was opened. A relative name with no annotation is resolved against the last cwd that
@@ -210,7 +215,7 @@ def reduce(trace: str, root: str) -> dict | None:
 
     def place(s: str, pid: str) -> str | None:
         s = host_path(pid, s)
-        if s is None:
+        if s is None or (scratch and under(s, scratch)):
             return None
         if s != root and not s.startswith(root + "/"):
             c = _class(s)
@@ -358,7 +363,7 @@ def reduce(trace: str, root: str) -> dict | None:
             if sp and rest.rstrip().endswith("= 0") and not sp.group(1).startswith("@") and pid not in ns:
                 if "\\" in sp.group(1):
                     return _none(f"an escaped name: {sp.group(1)[:60]}")
-                wk = write_key(os.path.join(base, sp.group(1)), root)
+                wk = write_key(os.path.join(base, sp.group(1)), root, scratch)
                 if wk is not None:
                     wrote.add(wk)
             continue
@@ -389,7 +394,7 @@ def reduce(trace: str, root: str) -> dict | None:
             for w in ws:
                 if "\\" in w:
                     return _none(f"an escaped name: {w[:60]}")
-                wk = write_key(w, root)
+                wk = write_key(w, root, scratch)
                 if wk is not None:
                     (madew if mk else wrote).add(wk)
                     if w is ws[0] and call in ("unlink", "unlinkat", "rmdir", "rename", "renameat", "renameat2"):

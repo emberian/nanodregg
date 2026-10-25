@@ -1308,3 +1308,65 @@ On e7c2b13 it read `RED (30)` in 28.3 s: 7 of 19 declared lines shown at least a
 The card landed in two halves: gates/waste.py (the `=V` reader and its plants) as 17739d3, then the table, scripts/bar.sh,
 gates/bar.tsv and the runs rows. One landing was refused by its own judge: pre-push runs MAIN's waste.py over the
 candidate's waste.tsv, so a new table form cannot be judged in the landing that introduces it.
+
+## GATES-25 · Every run has a TMPDIR of its own; a row run again alone is checked on what both of its runs wrote (2026-10-24, FIX-TMPRACE; cv 01a17007-bdbe; the convergence at 743a4fb)
+
+**Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none. Gates code only (gates/runs.py, gates/readset.py); no row, test or table changes.
+
+**Finding.**
+- **The red (READ, logs/root-converge-readers3.log:2, 8-9).** The convergence at 743a4fb read `run concurrency cargo:devtools:workspace + script:scripts/bar.sh: RED(shared scratch: cargo:devtools:workspace removes /tmp/rustix_test_can_compile, which holds script:scripts/bar.sh's /tmp/rustix_test_can_compile …)`. It attributed both rows to four commits (743a4fb, 3794975, 2d5056e, 1ab410e), none of which caused it. The next convergence at another main could have written REVERT for them.
+- **The writer (READ, ~/.cargo/registry/src/…/rustix-1.1.2/build.rs, `can_compile`).** rustix's build script probes the compiler with `rustc … -o std::env::temp_dir().join("rustix_test_can_compile")`. That is one fixed name under TMPDIR. Nothing turns the probe off. Three probes run unconditionally on every target, before and whatever the backend choice: `use_static_assertions`, `has_lower_upper_exp_for_non_zero` and `#[diagnostic::on_unimplemented]`. `CARGO_CFG_RUSTIX_USE_LIBC` and the other `CARGO_CFG_*` reads choose only the backend.
+  - INFERRED: a probe whose output is clobbered by a concurrent build can fail. Then rustix is built without that cfg, silently: a nondeterministic build, not a red. Every cargo build whose rustix build-script run is cold writes and removes that path: dev and release are separate runs, so devtools' dev build and THE BAR's release build both write it.
+- **Why only sometimes (MEASURED, below).** The collision check read only the read-set of a row's verdict run. A row that entered a mount namespace beside others is run again alone. Both of these do: `NS: true` in both stored read-sets (MEASURED); the processes are bwrap under the host and nd-supervise (INFERRED). and the warm cache of its second run does not run the build script. So the check saw the probe only when both rows were cold in the runs it read. That happened at 743a4fb because both rows were scheduled alone from the start (`_walls.json` ns), each cold.
+- **The other fixed /tmp paths (READ, `git grep` over scripts/, gates/, every `*/tests/*.rs`, `*/src/*.rs`, build.rs and `.lean`).** No other row writes a fixed name under /tmp:
+  - client/tests/{supervise,stdio}.rs name `/tmp/nd-never.sock` and `ND_WORKSPACE=/tmp` only as arguments that are refused before any file is touched;
+  - every test that uses `std::env::temp_dir()` (attach, client mux/sockets/supervise, devtools workspace, sandbox confine) names its path by its pid;
+  - devtools::scratch is `$HOME/.cache/nd-t/<pid-named>`, which custody requires: it refuses /tmp's sticky, world-writable chain;
+  - launcher's `CARGO_TARGET_TMPDIR` names are pid-named;
+  - bar.sh and the gates/*.py plants use mktemp/mkdtemp;
+  - sandbox/tests/custody.rs reads /tmp as the object refused.
+  
+  Under a shared /tmp all of these were safe only by naming. The compilers were not: cc's `/tmp/cc*.res`/`.cdtor.o` and rustc's temporaries were 219 and 239 tmp-class paths per row.
+
+**Decision.**
+1. **One TMPDIR per run (gates/runs.py `run`).** The runner makes a directory with `tempfile.mkdtemp(prefix="nd-runtmp-")`, mode 0700, under the judge's own temp directory. It sets `TMPDIR` to that directory for every run of every row kind: exe, cargo, cargo-untraced, script and standing, controls included. It removes the directory after the run. A fixed name under the temp directory (rustix's probe, or any later build script's) is then never shared:
+   - not by two rows of one judge;
+   - not by two judges of one box (four gate slots, the convergence, standing), which no collision check can see.
+   
+   It is not under `{fresh}`: a test that binds a socket under `temp_dir()` must fit sun_path (108 bytes). The longest such path today is `nd-sup-exposed-<pid>.sock`, which is 51 bytes under `/tmp/nd-runtmp-XXXXXXXX/` and over 120 under a gate tree's `.lake/runs/cargo:client:supervise-0…`.
+2. **The read-set excludes it (gates/readset.py `reduce(…, scratch)`, `write_key(…, scratch)`)** as it excludes `.lake/runs/`:
+   - nothing under it is a read, a write or an outside path, since no other run can reach it;
+   - the traced key version is v8.
+3. **A row run again alone is compared on the union of both runs' read-sets** (Row.beside). What the first run's cold build wrote is what that row writes. Reading only the warm alone run made the check depend on the cache.
+4. **Pinning the probe off, the other option, does not exist.** The three probes above run whatever the cfg. Even `--cfg rustix_use_libc` in the workspace config, which would change the backend of every binary we ship, leaves them running. The next build script with a fixed temp name would bring the class back in any case. The runner's environment is the one definition of where a run's temporaries go.
+
+**Plants** (hbox, MEASURED; one tree, a copy of the standing tree at 743a4fb, `wt/fixtmprace-plant`; its cargo cache the standing one with rustix's dev build-script run removed and release cold, restored before each plant; the two real rows judged by `gates/runs.py --slots 2` in a private slots dir; driver logs/fixtmprace-plant.sh, outputs logs/fixtmprace-plant-*.out):
+
+| runner | schedule | verdict |
+|---|---|---|
+| main's (shared /tmp, verdict-run check) | together, `1 on a borrowed judge slot` | `runs: ok`: **blind**; both stored read-sets' first runs hold WR+RM `/tmp/rustix_test_can_compile` |
+| main's | alone from the start (the 743a4fb schedule) | `RED(shared scratch: cargo:devtools:workspace removes /tmp/rustix_test_can_compile, which holds script:scripts/bar.sh's …)`: the convergence's line, reproduced |
+| this card's union check, shared /tmp (TMPDIR lines removed) | together | the same `RED(shared scratch …)`, under concurrency |
+| this card's | together | `runs: ok`, no concurrency line; tmp-class paths 219 → 2 and 239 → 24 (bwrap's /tmp/newroot, /tmp/oldroot); `/tmp/rustix_test_can_compile`'s mtime unchanged; no `nd-runtmp-*` left |
+| this card's | alone from the start | `runs: ok`, the same |
+
+In every plant both rows pass, controls included: devtools 4 runs, THE BAR's 60-record standing and 1000-record full runs, `BAR verdict PASS`.
+
+A different TMPDIR does not re-key cargo: the alone re-run of devtools took 1 s, warm. The new runner was also run over every non-standing row of the plant tree: logs/fixtmprace-all-rows.out.
+
+**Price.**
+- One mkdtemp and one rmtree per run.
+- Every stored read-set re-keys once: the runner's bytes are in the key, and VERSION v8 says so. Every row re-runs at the first judge or convergence after this lands.
+
+**What breaks.**
+- A run's TMPDIR is no longer /tmp. A test that expects /tmp itself must name it; sandbox/tests/custody.rs does.
+- A temporary a run leaves behind is removed with its directory. Before, it accumulated in /tmp.
+- The collision check can read RED where it read ok: a row that ran beside others and again alone is compared on both runs' writes.
+- Nothing re-emits.
+
+**Critique.**
+- (a) **The private directory sits in /tmp, so its chain is still sticky and world-writable.** That is no change for the tests: they used /tmp before. custody's owner-only chain (devtools::scratch) stays under $HOME.
+- (b) **An exclusion is a place to hide a write.** It excludes only the directory the runner itself made for that one run and removed after. A row cannot name another row's directory: it is random, 0700, and gone when that run ends.
+- (c) **The union check can red a row on a write its verdict run did not make.** It made that write in this judge, beside another row, and so would the next cold judge. That is the class.
+
+**Meta-critique.** The card offered two fixes: per-row TMPDIR, or pin the probe off in the workspace config. The second looked like the "one definition" answer until the source showed the probe has no switch. The only lever was a backend `--cfg` for every shipped binary, which trades a production property for a harness one. Reading the convergence line, I first took the red as a real concurrent clobber. The plants showed these two rows never overlap in one judge: they enter mount namespaces and run alone. The red was the static check doing its job, and only when the cache was cold. That moved half of this card into the check itself. A fix with the private TMPDIR alone would have left the check blind to the next cold-only shared write.

@@ -95,6 +95,8 @@ nanodregg-slot-wait/<its pid> while it waits), so a lander that arrives waits at
 current row to end; the box never runs more judges' work than its N slots plus standing, as before. A row's own
 runs stay in order, one at a time; its lines are printed in row order whatever order the rows finished in, each
 row followed by `  time ROW: N s (own|borrowed slot K|alone)` read by this runner's own clock.
+Every run has a TMPDIR of its own (GATES-25), made by this runner and removed after, which the read-set excludes as
+it does {fresh}: a fixed name under the temp directory (rustix's build-script probe) is never a shared scratch.
 Concurrency needs the tracer, which shows what each row WROTE (readset WR and O): two rows that share a scratch
 are RED (`run concurrency A + B: RED(shared scratch …)`): one writes a path the other writes, removes or renames
 the other's, or writes inside a directory the other made; or one writes a path the other reads (touched or
@@ -105,7 +107,8 @@ now and every carried row whose record holds what it wrote. A row whose writes c
 `cargo-untraced:` row, every row of an untraced judge, and a row whose last run entered a mount namespace of its
 own (readset NS: its writes still lack a host mapping) run alone after the rest; a row that ran beside others
 and turned out unseen (no read-set, or NS), and every row that ran beside it, are run again alone, and those runs
-are their verdicts (`  alone ROW: …`). A concurrent red is a red like any other.
+are their verdicts (`  alone ROW: …`); the collision check reads the union of what both of its runs wrote (GATES-25:
+the alone run's cache is warm, so a cold build's writes are only in the first). A concurrent red is a red like any other.
 THE CARRY (GATES-20l; standing: --reuse the previous standing's record, --record this one's, --daily SECONDS):
 a row whose stored record's traced key is byte-identical on this tree (every path it read, stat'ed, listed or
 exec'd, its row line, its waste rows, the runner and the tools) is not run; its lines and WASTE lines are carried
@@ -125,6 +128,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 
@@ -386,6 +390,12 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         argv = [os.path.join(bindir, name)] + [x.replace("{host}", host).replace("{fresh}", fresh) for x in args]
         if not os.path.isfile(argv[0]):
             return "", "ABSENT(no binary: " + name + ")"
+    # GATES-25: every run has a TMPDIR of its own, made here (mode 0700) and removed after, so a fixed name under
+    # the temp directory (rustix's build probe writes TMPDIR/rustix_test_can_compile; cv 01a17007) is never
+    # shared by two rows, nor by two judges of one box. It sits under the judge's own temp directory, not under
+    # {fresh}: a socket a test binds in it must fit sun_path (108 bytes), which a tree path does not leave room for.
+    tmp = os.path.realpath(tempfile.mkdtemp(prefix="nd-runtmp-"))
+    env = dict(os.environ if env is None else env, TMPDIR=tmp)
     tr = fresh.rstrip("/") + ".trace"
     traced = TRACING["strace"] and not exe.startswith("cargo-untraced:")
     if traced:
@@ -428,9 +438,10 @@ def run(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bind
         if sk:
             v = f"{'RED' if STANDING_RUN['on'] else 'INCOMPLETE'}(skipped: {len(sk)}, first: {sk[0][:200]})"
     shutil.rmtree(fresh, ignore_errors=True)
+    shutil.rmtree(tmp, ignore_errors=True)
     sets = [] if sets is None else sets
     if traced:
-        sets.append(readset.reduce(tr, t.root))
+        sets.append(readset.reduce(tr, t.root, tmp))
         try:
             os.remove(tr)
         except FileNotFoundError:
@@ -633,6 +644,9 @@ class Row:
         self.exe, self.out, self.err, self.results, self.lines = exe, [], [], [], []
         self.waste, self.record, self.sets, self.rs = [], [], [], None
         self.ran, self.wall, self.start, self.end, self.where = False, 0.0, 0.0, 0.0, "own"
+        # GATES-25: the read-set of this row's run beside others, when it was run again alone: what it wrote
+        # there is what it writes (a cold cache's build writes run once), so the collision check reads both
+        self.beside = None
 
     def say(self, line: str) -> None:
         self.out.append(line)
@@ -1024,7 +1038,9 @@ def main() -> int:
                      f"it ran beside {', '.join(sorted(b for b in blind if met(b, e)))}, whose writes are unknown")
                  for e in sorted(set(blind) | {x for b in blind for x in together if met(b, x)})}
         for e, why in again.items():
+            beside = done[e].rs
             o = judge_row(e)
+            o.beside = beside
             o.out.insert(0, f"  alone {e}: re-run with no other row running ({why}); this run is its verdict")
             o.where = "alone"
             done[e] = o
@@ -1052,7 +1068,11 @@ def main() -> int:
         record and record.write("".join(o.record))
     # GATES-20g: two rows that share a scratch, or one writing what the other reads, are RED: every pair of rows
     # run now, and each row run now against every carried row whose record says what it wrote.
-    wr = {e: done[e].rs for e in todo if done[e].rs is not None}
+    # GATES-25: a row run again alone is compared on the union of both runs' writes. Its alone run's cache is the
+    # one its first run warmed, so a write only a cold build makes (rustix's build probe, cv 01a17007) is in the
+    # first run's read-set alone; reading the verdict run's only, the check saw it only when a row was cold twice.
+    wr = {e: (done[e].rs if done[e].beside is None else readset.union([done[e].rs, done[e].beside]) or done[e].rs)
+          for e in todo if done[e].rs is not None}
     pairs = collisions({**wr, **{e: prev[e][1].get("readset") for e in reused}})
     for x, y, what in pairs:
         if x in wr or y in wr:
