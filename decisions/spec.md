@@ -197,3 +197,48 @@ lemma that `ObjectHistory` over a one-step audited log has exactly the judged st
 lemma KERNEL does not have), filed as owed.
 
 **Status.** open; the law-chain floor owed.
+
+## SPEC-8 C(ii)'s cancel arm and C(iii)'s stale arm are claims; C(ii) and C(iii) are inhabited at the Store's digest (2026-10-26)
+
+**Decision.** `Consent.cancelOk` (a `cancel CALL` step ending `done ok` leaves follow at a World whose
+`S.settle` of the call is `refused cancelled`), proved of `deployed` by `cancel_ok_settled`
+(PROTOCOL-71) and refused of `hostWord` (`floor_consent_cancelOk`: the continuation parses as
+`cancel` of the run's call, and at the genesis World follow does not settle it cancelled,
+`run_cancel_state`). `Consent.staleFinal` (a call follow planned at `w₀` and settles `refused stale`
+at a later World of its fold is admitted at no World the fold reaches, or the hash collides among
+`behindPres`), proved by splitting the settlement: a recorded `stale` refusal is final by
+`settle_final_never_admits`, follow's own `staleBehind` by `staleBehind_final`. The inhabited runs
+are at `deployed storeDigest`: `Spec.storeDigest` is `Host.Keys.ofKey`'s `worldDigest`, which reads
+no key, so it is the digest of every deployed Store and the runs are deployed runs, not one Store's.
+
+**Alternatives.** Inhabit at `∃ d` (weaker: says nothing of the deployment's digest). Prove the
+settle-phase step independent of `B` (it is, by inspection) so the run holds at every `d`: an
+unfolding of `Command.step` at a concrete continuation, which is the elaboration bomb measured here
+(two OOMs at 6 GB, one kernel deterministic timeout: a `show`/eta conversion between
+`(deployed d).follow` and `Command.step`, and Prod eta over a concrete step, each made the kernel
+evaluate `step`).
+
+**Why.** The claims are the PROTOCOL theorems, stated over the System's fields, so a follower field
+replaced by the Host's word is refused; the runs reach the premises of C(ii) and C(iii) at the
+digest the binaries use.
+
+`floor_consent_staleFinal` refuses `staleOnWord` (every call settled `refused stale`): the founder's
+`issue 1000` as `Command.plan` plans it at the genesis World (`run_plan`), which the writer admits
+there, with no collision among its pin inputs (`run_planned`; the genesis World's `CellsFit` from
+`checkGenesis_ok` and `genesis_cellsFit`).
+
+**CRITIQUE.** `cancelOk` is not inhabited: a deployed World holding a recorded cancel is a two-call run
+(the call, then its cancel) not built. `inhabited_final` uses `expired`; a final `refused NAME`
+(a recorded refusal) is not run.
+
+**META-CRITIQUE.** The inhabited runs reuse the one founder and its rotate because every new deployed
+run cost an OOM to shape; the lesson (state native facts over the System's own field at a fixed `d`,
+generalize every concrete constant before the closing `exact`, never let a conversion meet a
+concrete `step`) is in the continuation so the next run costs one build.
+
+Two more runs at the deployed `Ctx` (any `d`: neither `handle` nor the kernel reads it):
+`inhabited_shown` (G2: `Host.handle` defers the founder's `log` frame, its envelope under the
+founder's root grant, `run_shown`) and `inhabited_value` (B2's non-trivial case: issue, account,
+transfer 10, re-derived, the account holds 10, `run_value`).
+
+**Status.** open; the cancel run and B3's law-judged run owed.

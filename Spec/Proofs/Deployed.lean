@@ -12,6 +12,7 @@ import Kernel.Proofs.RootedDeployed
 import Codec.Proofs.Digest
 import Protocol.Proofs.Settle
 import Protocol.Proofs.Command
+import Protocol.Proofs.Behind
 
 namespace Nanodregg.Spec
 
@@ -70,5 +71,24 @@ theorem top_shown (d : ByteArray → ByteArray) : Shown.onlyFollowers (deployed 
     | (cases h; done)
     | exact ⟨_, ‹_›, ‹_›⟩
     | (simp at h)
+
+/-- **C(ii), cancel, of the deployed system**: `cancel_ok_settled` (PROTOCOL-71). -/
+theorem top_consent_cancelOk (d : ByteArray → ByteArray) : Consent.cancelOk (deployed d) :=
+  fun _ _ _ _ _ _ _ _ _ _ hst hcmd h => Command.cancel_ok_settled hst hcmd h
+
+/-- **C(iii), stale, of the deployed system**: a `refused stale` settlement is either the receipt's
+recorded refusal (final by `settle_final_never_admits`) or follow's own `staleBehind`
+(`staleBehind_final`, at the deployed `Env`). -/
+theorem top_consent_staleFinal (d : ByteArray → ByteArray) : Consent.staleFinal (deployed d) := by
+  intro me w₀ w w' l₁ l₂ key cmd rs b u c hfit hrc hok hrs hplan hcu hrfc hjc h₁ h₂ hv
+  rw [fold_eq_world _ rfl rfl] at h₁ h₂
+  change Settle.ofReceipt (journalForgets w.height c.unsigned.notBefore)
+    (Command.staleBehind Host.Deployed.X me w c) w.height c.unsigned.validUntil
+    (Receipt.build Host.Deployed.X.env w (txIdOf Host.Deployed.X c)).answer = .refused staleCode at hv
+  cases hb : Command.staleBehind Host.Deployed.X me w c with
+  | true => exact Command.staleBehind_final deployed_lawful hfit hrc hok hrs hplan hcu h₁ h₂ hb
+  | false =>
+    rw [hb] at hv
+    exact .inl fun out => Settle.settle_final_never_admits hrfc hjc (.inr ⟨_, hv⟩) h₂ out
 
 end Nanodregg.Spec

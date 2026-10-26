@@ -95,4 +95,8 @@ def rawReceive (w : World Digest) (c : Call Digest) : Except (Refusal Digest) (T
 /-- **The raw writer**: a kernel whose `write` lets the owner rewrite every slot of its object. -/
 def rawWriter (d : ByteArray → ByteArray) : System Digest := { deployed d with receive := rawReceive }
 
+/-- **The stale-on-its-word settlement**: every call is `refused stale`, whatever follow's World says. -/
+def staleOnWord (d : ByteArray → ByteArray) : System Digest :=
+  { deployed d with settle := fun _ _ _ => .refused staleCode }
+
 end Nanodregg.Spec

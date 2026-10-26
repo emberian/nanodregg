@@ -22,6 +22,7 @@ import Kernel.Proofs.Logic.History
 import Kernel.Proofs.WriteNext
 import Lang.Proofs.Chain
 import Lang.Proofs.Receiver
+import Protocol.Proofs.Behind
 
 namespace Nanodregg.Spec
 
@@ -150,6 +151,29 @@ def Consent.final (S : System D) : Prop :=
     w.RefusalsCanon S.X.env → w.JournalCanon S.X.env →
     (S.settle me w c = .expired ∨ ∃ code, code ≠ staleCode ∧ S.settle me w c = .refused code) →
     S.fold w l = .ok w' → ∀ out, S.submit w' c ≠ .ok out
+
+/-- **C(ii), cancel. `ok` means cancelled on the member's own World.** A follow step of a
+`cancel CALL` command that ends `done ok` leaves follow at a World whose settlement of the call is
+`refused cancelled`: the writer's word that it recorded the cancel is never enough (collation A7). -/
+def Consent.cancelOk (S : System D) : Prop :=
+  ∀ (me : Command.Self D) (f f' : Command.Follow D) (kb res o e : ByteArray) (p : Command.Persist D)
+    (st : Command.State) (cb : ByteArray), Command.State.ofBytes kb = some st →
+    Command.parse S.X.digestOf st.argv = .ok (Command.Cmd.cancel cb) →
+    S.follow me f kb res = (f', p, .done CommandExit.ok.code.toUInt8 o e) →
+    ∃ c, S.X.decodeCall cb = some c ∧ S.settle me f'.world c = .refused (Command.cancelledCode (D := D))
+
+/-- **C(iii), stale. `refused stale` is final for the member's own call.** A call the member's
+follower planned at a World `w₀` of its fold (`signedReads`, `plan`), that a later World `w` of the
+fold settles `refused stale`, is admitted by no `submit` at any World the fold reaches from `w` —
+or the hash collides among the call's pin inputs at `w₀` and there (`behindPres`, an explicit list). -/
+def Consent.staleFinal (S : System D) : Prop :=
+  ∀ (me : Command.Self D) {w₀ w w' : World D} {l₁ l₂ : List (Step D)} {key : ByteArray}
+    {cmd : Command.Cmd D} {rs : Command.SignedReads D} {b : Body D} {u : Unsigned D} (c : Call D),
+    w₀.CellsFit Codec.Kernel.Cell.Fits S.X.env → w₀.RowsCanon S.X.env → w₀.RowsOk S.X.env →
+    Command.signedReads S.X w₀ cmd = .ok rs → Command.plan S.X me w₀ key rs b = .ok u → c.unsigned = u →
+    w.RefusalsCanon S.X.env → w.JournalCanon S.X.env →
+    S.fold w₀ l₁ = .ok w → S.fold w l₂ = .ok w' → S.settle me w c = .refused staleCode →
+    (∀ out, S.submit w' c ≠ .ok out) ∨ CollidesAmong S.X.env.hash (Command.behindPres S.X.env w₀ w' u)
 
 /-! ## §8 WHAT A NON-MEMBER IS SHOWN -/
 

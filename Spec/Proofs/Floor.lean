@@ -448,4 +448,333 @@ theorem floor_integrity_law (d : ByteArray → ByteArray) : ¬ Integrity.law (ra
           | error _ => intro h₁; cases h₁
           | ok o => cases o <;> intro h₁ h₂ <;> cases h₁ <;> cases h₂
 
+/-! ## §4 CONSENT, inhabited: a command settled `ok`, a settlement final -/
+
+private def wMe : Command.Self Digest := ⟨oneDigest, oneDigest, oneDigest, 0⟩
+
+/-- A `rotate` command at its settle phase, carrying the run's call. -/
+private def wKbS : ByteArray := (Command.State.bytes ⟨["rotate".toUTF8], 4, ["out".toUTF8, wCb]⟩).getD .empty
+
+/-- The writer's word: `committed`. -/
+private def wRes : ByteArray := ⟨#[Attempt.Action.committed.code]⟩
+
+/-- A reply that ends its command `ok`. -/
+private def okDone : Command.Reply → Bool
+  | .done code _ _ => decide (code = CommandExit.ok.code.toUInt8)
+  | _ => false
+
+private theorem okDone_eq {r : Command.Reply} (h : okDone r = true) :
+    ∃ o e, r = .done CommandExit.ok.code.toUInt8 o e := by
+  cases r <;> simp_all [okDone]
+
+/-- **The settled run**: follow, holding the World THE re-deriver reaches on the run's log, steps the
+settle phase of the rotate that submitted it and ends `done ok`. -/
+theorem run_settled :
+    ((match Command.State.ofBytes wKbS with | some st => decide (st.phase = 4) | none => false) &&
+      match rederiveLog Xd wGenesis wLog with
+      | .ok w =>
+          okDone ((deployed storeDigest).follow wMe ⟨w, none, none⟩ wKbS wRes).2.2
+      | .error _ => false) = true := by
+  native_decide
+
+/-- **INHABITED (C(ii)).** The deployed follower ends a command `done ok` at the settle phase. -/
+theorem inhabited_okCommitted :
+    ∃ (me : Command.Self Digest) (f f' : Command.Follow Digest) (kb res o e : ByteArray)
+      (p : Command.Persist Digest) (argv acc : List ByteArray),
+      Command.State.ofBytes kb = some ⟨argv, 4, acc⟩ ∧
+        (deployed storeDigest).follow me f kb res = (f', p, .done CommandExit.ok.code.toUInt8 o e) := by
+  have hr := run_settled
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨hk, hr⟩ := hr
+  cases hs : Command.State.ofBytes wKbS with
+  | none => rw [hs] at hk; cases hk
+  | some st =>
+    rw [hs] at hk
+    obtain ⟨argv, ph, acc⟩ := st
+    have hph : ph = 4 := of_decide_eq_true hk
+    subst hph
+    cases hw : rederiveLog Xd wGenesis wLog with
+    | error e => rw [hw] at hr; cases hr
+    | ok w =>
+      rw [hw] at hr
+      dsimp only at hr
+      revert hs hr
+      generalize wKbS = kb
+      generalize wRes = res
+      intro hs hr
+      cases hR : (deployed storeDigest).follow wMe ⟨w, none, none⟩ kb res with
+      | mk f' rest =>
+        obtain ⟨p, rp⟩ := rest
+        rw [hR] at hr
+        obtain ⟨o, e, hd⟩ := okDone_eq hr
+        subst hd
+        exact ⟨wMe, ⟨w, none, none⟩, f', kb, res, o, e, p, argv, acc, hs, hR⟩
+
+/-- The founder's other rotation with a one-height window: admissible at the genesis World. -/
+private def cExp : Call Digest :=
+  let u : Unsigned Digest := { wCall2.unsigned with validUntil := 1 }
+  ⟨u, Ed25519.sign (wSeed "f0-next") (Xd.callMessage u)⟩
+
+/-- **The expired run**: the writer would admit `cExp` at the genesis World; after the run's one
+step, follow settles it `expired`. -/
+theorem run_expired :
+    ((match submit Xd wGenesis cExp with | .ok _ => true | .error _ => false) &&
+      match rederiveLog Xd wGenesis wLog with
+      | .ok w => (match Command.settleOf Xd wMe w cExp with | .expired => true | _ => false)
+      | .error _ => false) = true := by
+  native_decide
+
+/-- **INHABITED (C(iii)).** On a World an audited fold reaches, follow settles `expired` a call the
+writer would have admitted at the fold's start: the claim's premise is reached by a call that was
+not final before. -/
+theorem inhabited_final (d : ByteArray → ByteArray) :
+    ∃ (me : Command.Self Digest) (g : World Digest) (l : List (Step Digest)) (w : World Digest)
+      (c : Call Digest) (out : Turn Digest × World Digest),
+      Audited (deployed d) g l w ∧ (deployed d).submit g c = .ok out ∧
+        w.RefusalsCanon Xd.env ∧ w.JournalCanon Xd.env ∧ (deployed d).settle me w c = .expired := by
+  have hrc : wGenesis.RefusalsCanon Xd.env := by unfold wGenesis; exact genesisWorld_refusalsCanon Xd _ _ _ _ _
+  have hjc : wGenesis.JournalCanon Xd.env := by unfold wGenesis; exact genesisWorld_journalCanon Xd _ _ _ _ _
+  have hr := run_expired
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨hs, hr⟩ := hr
+  cases hsub : submit Xd wGenesis cExp with
+  | error e => rw [hsub] at hs; cases hs
+  | ok out =>
+    cases hw : rederiveLog Xd wGenesis wLog with
+    | error e => rw [hw] at hr; cases hr
+    | ok w =>
+      rw [hw] at hr
+      dsimp only at hr
+      have hfh := rederiveLog_sound hw
+      cases hv : Command.settleOf Xd wMe w cExp
+      all_goals rw [hv] at hr
+      all_goals first | (cases hr; done) | skip
+      revert hrc hjc hsub hfh hv
+      generalize wGenesis = g
+      generalize cExp = c
+      generalize wLog = l
+      intro hrc hjc hsub hfh hv
+      exact ⟨wMe, g, l, w, c, out, audited_deployed.mpr hfh, hsub,
+        fold_refusalsCanon hrc hfh.1, fold_journalCanon hjc hfh.1, hv⟩
+
+/-! ## §4 CONSENT (cancel): the follower that says ok on the writer's word -/
+
+/-- A `cancel CALL` command of the run's call. -/
+private def wKbC : ByteArray :=
+  (Command.State.bytes ⟨["cancel".toUTF8, (Text.toHex wCb).toUTF8], 10, []⟩).getD .empty
+
+/-- The continuation parses as `cancel` of the run's call, and at the genesis World follow does not
+settle that call `refused cancelled`. -/
+theorem run_cancel_state :
+    ((match Command.State.ofBytes wKbC with
+      | some st => (match Command.parse (D := Digest) Xd.digestOf st.argv with
+          | .ok (.cancel cb) => decide (cb = wCb)
+          | _ => false)
+      | none => false) &&
+      match Command.settleOf Xd wMe wGenesis wCall with
+      | .refused code => decide (code ≠ Command.cancelledCode (D := Digest))
+      | _ => true) = true := by
+  native_decide
+
+/-- **FLOOR (C(ii), cancel).** The claim refuses a follower that ends a cancel `ok` without settling
+it on its own World (the pre-PROTOCOL-71 `cancelAnswer`): at the genesis World, the run's call is not
+cancelled. -/
+theorem floor_consent_cancelOk (d : ByteArray → ByteArray) : ¬ Consent.cancelOk (hostWord d) := by
+  intro h
+  have hr := run_cancel_state
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨hk, hv⟩ := hr
+  cases hs : Command.State.ofBytes wKbC with
+  | none => rw [hs] at hk; cases hk
+  | some st =>
+    rw [hs] at hk
+    dsimp only at hk
+    cases hp : Command.parse (D := Digest) Xd.digestOf st.argv with
+    | error e => rw [hp] at hk; cases hk
+    | ok cmd =>
+      rw [hp] at hk
+      cases cmd
+      all_goals dsimp only at hk
+      all_goals first | (cases hk; done) | skip
+      rename_i cb
+      have hcb : cb = wCb := of_decide_eq_true hk
+      subst hcb
+      obtain ⟨c, hd, hset⟩ := h wMe ⟨wGenesis, none, none⟩ _ wKbC .empty .empty .empty _ st _ hs hp rfl
+      have hd' : Xd.decodeCall wCb = some c := hd
+      rw [run_call_decodes] at hd'
+      cases hd'
+      revert hset hv
+      generalize wGenesis = g
+      generalize wCall = c
+      intro hv hset
+      have hset' : Command.settleOf Xd wMe g c = .refused Command.cancelledCode := hset
+      rw [hset'] at hv
+      simp at hv
+
+/-! ## §8 SHOWN, inhabited: a page served past a passing envelope -/
+
+/-- The founder's envelope for the log from height 0, under its own root grant, signed by its key. -/
+private def wEnvelope : Envelope Digest :=
+  let grant := founderGrantId Xd wGenesis.origin 0
+  { world := wGenesis.origin, member := wMember, grant, start := 0, notBefore := 0, validUntil := 10,
+    key := wKey,
+    signature := Ed25519.sign (wSeed "f0") (Envelope.message Xd wGenesis.origin wMember grant 0 0 10) }
+
+private def wFrame : Host.Frame := ⟨0, Protocol.Op.log.code, (Envelope.bytes Xd wEnvelope).getD .empty⟩
+
+/-- The writer, at the genesis World, defers the founder's `log` frame (a page of the log). -/
+theorem run_shown : (match Host.handle Xd wGenesis wFrame with | .defer _ => true | _ => false) = true := by
+  native_decide
+
+/-- **INHABITED (G2).** The deployed writer serves a page: the claim's premise is reached by a
+frame whose envelope passes. -/
+theorem inhabited_shown (d : ByteArray → ByteArray) :
+    ∃ (w : World Digest) (f : Host.Frame) (dd : Host.Deferred), (deployed d).handle w f = .defer dd := by
+  have hr := run_shown
+  cases hh : Host.handle Xd wGenesis wFrame
+  all_goals rw [hh] at hr
+  all_goals first | (cases hr; done) | skip
+  revert hh
+  generalize wGenesis = g
+  generalize wFrame = fr
+  intro hh
+  exact ⟨g, fr, _, hh⟩
+
+/-! ## §3 INTEGRITY (B2), inhabited: value moved -/
+
+/-- A call of the founder (current key) against `w`, pinning `pins`. -/
+private def fCall (w : World Digest) (pins : List Digest) (b : Body Digest) : Call Digest :=
+  let u : Unsigned Digest :=
+    { world := w.origin, member := wMember, key := wKey, notBefore := 0, validUntil := 101,
+      pins := (wMember :: pins).map fun c => (c, pinOf Xd.env (w.entry Xd.env c)), maxCharge := 1000000,
+      body := b }
+  ⟨u, Ed25519.sign (wSeed "f0") (Xd.callMessage u)⟩
+
+/-- The World and Turn the writer stages for a call (the World unchanged if it refuses). -/
+private def staged (w : World Digest) (c : Call Digest) : World Digest × List (Step Digest) :=
+  match submit Xd w c with
+  | .ok (t, w') => (w', [.turn t])
+  | .error _ => (w, [])
+
+/-- The founder issues a well of 1000. -/
+private def vIssue : Call Digest := fCall wGenesis [] (.issue 1000)
+private def vWell : Digest := cellIdOf Xd.env (txIdOf Xd vIssue) 0
+private def vW1 : World Digest := (staged wGenesis vIssue).1
+
+/-- The founder opens its own account of the well's denomination. -/
+private def vAccount : Call Digest := fCall vW1 [] (.account vWell wMember)
+private def vAcct : Digest := accountId Xd wMember vWell
+private def vW2 : World Digest := (staged vW1 vAccount).1
+
+/-- The founder transfers 10 out of the well into the account. -/
+private def vTransfer : Call Digest := fCall vW2 [vWell, vAcct] (.transfer (.well vWell) (.of wMember vWell) 10 none none)
+
+private def vLog : List (Step Digest) :=
+  (staged wGenesis vIssue).2 ++ (staged vW1 vAccount).2 ++ (staged vW2 vTransfer).2
+
+/-- **The value run**: THE re-deriver accepts the three calls from genesis, and the account holds 10. -/
+theorem run_value :
+    (match rederiveLog Xd wGenesis vLog with
+     | .ok w => decide (w.height = 3) &&
+         match w.live Xd.env vAcct with
+         | some cell => (Value.ofCell cell).map (·.balance) == some 10
+         | none => false
+     | .error _ => false) = true := by
+  native_decide
+
+/-- **INHABITED (B2).** An audited log from a genesis World moves value: at its end a value cell
+holds a balance, though the genesis World holds no value cell (so another holds its negation). -/
+theorem inhabited_value (d : ByteArray → ByteArray) :
+    ∃ (g : World Digest) (l : List (Step Digest)) (w : World Digest) (id : Digest) (cell : Cell),
+      Audited (deployed d) g l w ∧ w.live Xd.env id = some cell ∧ (Value.ofCell cell).map (·.balance) = some 10 := by
+  have hr := run_value
+  cases hw : rederiveLog Xd wGenesis vLog with
+  | error e => rw [hw] at hr; cases hr
+  | ok w =>
+    rw [hw] at hr
+    dsimp only at hr
+    simp only [Bool.and_eq_true] at hr
+    obtain ⟨-, hr⟩ := hr
+    have hfh := rederiveLog_sound hw
+    cases hl : w.live Xd.env vAcct with
+    | none => rw [hl] at hr; cases hr
+    | some cell =>
+      rw [hl] at hr
+      dsimp only at hr
+      have hb : (Value.ofCell cell).map (·.balance) = some 10 := by simpa using hr
+      revert hfh hl
+      generalize wGenesis = g
+      generalize vLog = l
+      generalize vAcct = id
+      intro hfh hl
+      exact ⟨g, l, w, id, cell, audited_deployed.mpr hfh, hl, hb⟩
+
+/-! ## §4 CONSENT (stale): the settlement that says stale on its own word -/
+
+/-- The founder as a member of the genesis World. -/
+private def sMe : Command.Self Digest := ⟨wGenesis.origin, wMember, founderGrantId Xd wGenesis.origin 0, 10⟩
+
+/-- What follow plans at the genesis World for the founder's `issue 1000` (no signed reads). -/
+private def sU : Unsigned Digest :=
+  match Command.plan Xd sMe wGenesis wKey {} (.issue 1000) with
+  | .ok u => u
+  | .error _ => wCall.unsigned
+
+theorem run_plan :
+    (match Command.plan Xd sMe wGenesis wKey {} (.issue 1000) with
+     | .ok u => decide (u = sU)
+     | .error _ => false) = true := by
+  native_decide
+
+/-- The genesis checks pass; the writer admits the planned call at the World it was planned on; and
+no two of its pin inputs there collide. -/
+theorem run_planned :
+    ((match checkGenesis Xd "spec".toUTF8 "spec-0".toUTF8 100000000 [(wKey, nextKeyDigest Xd wNext)]
+        Authority.none with | .ok () => true | .error _ => false) &&
+      (match submit Xd wGenesis ⟨sU, Ed25519.sign (wSeed "f0") (Xd.callMessage sU)⟩ with
+        | .ok _ => true | .error _ => false) &&
+      collisionFree Xd.env.hash (Command.behindPres Xd.env wGenesis wGenesis sU)) = true := by
+  native_decide
+
+/-- **FLOOR (C(iii), stale).** The claim refuses a settlement that calls `refused stale` a call the
+writer then admits: the founder's planned call, at the genesis World, on the empty extension. -/
+theorem floor_consent_staleFinal (d : ByteArray → ByteArray) : ¬ Consent.staleFinal (staleOnWord d) := by
+  intro h
+  have hr := run_planned
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨⟨hg, hs⟩, hc⟩ := hr
+  have hfit : wGenesis.CellsFit Codec.Kernel.Cell.Fits Xd.env := by
+    cases hgc : checkGenesis Xd "spec".toUTF8 "spec-0".toUTF8 100000000 [(wKey, nextKeyDigest Xd wNext)] Authority.none with
+    | error e => rw [hgc] at hg; cases hg
+    | ok u =>
+      unfold wGenesis
+      exact genesis_cellsFit (checkGenesis_ok.mp hgc) deployed_bytes_fit
+  have hrc : wGenesis.RowsCanon Xd.env := by unfold wGenesis; exact receive_genesis_rowsCanon Xd _ _ _ _ _
+  have hok : wGenesis.RowsOk Xd.env := by unfold wGenesis; exact receive_genesis_rowsOk Xd _ _ _ _ _
+  have hrfc : wGenesis.RefusalsCanon Xd.env := by unfold wGenesis; exact genesisWorld_refusalsCanon Xd _ _ _ _ _
+  have hjc : wGenesis.JournalCanon Xd.env := by unfold wGenesis; exact genesisWorld_journalCanon Xd _ _ _ _ _
+  have hpb := run_plan
+  have hrs : Command.signedReads Xd wGenesis (Command.Cmd.rotate (D := Digest)) = .ok {} := rfl
+  revert hs hc hfit hrc hok hrfc hjc hpb hrs
+  generalize Ed25519.sign (wSeed "f0") (Xd.callMessage sU) = sig
+  generalize wGenesis = g
+  generalize sMe = me
+  generalize wKey = key
+  generalize sU = u
+  intro hc hs hfit hrc hok hrfc hjc hpb hrs
+  cases hpl : Command.plan Xd me g key {} (.issue 1000) with
+  | error e => rw [hpl] at hpb; cases hpb
+  | ok u' =>
+  rw [hpl] at hpb
+  have hu : u = u' := (of_decide_eq_true hpb).symm
+  subst hu
+  have hp := hpl
+  cases hsub : submit Xd g ⟨u, sig⟩ with
+  | error e => rw [hsub] at hs; cases hs
+  | ok out =>
+    have hset : (staleOnWord d).settle me g ⟨u, sig⟩ = .refused staleCode := rfl
+    rcases h me (l₁ := []) (l₂ := []) ⟨u, sig⟩ hfit hrc hok hrs hp rfl hrfc hjc rfl rfl hset with hn | hcol
+    · exact hn out hsub
+    · exact not_collides hc hcol
+
 end Nanodregg.Spec

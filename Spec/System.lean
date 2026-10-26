@@ -18,6 +18,7 @@ import Kernel.Receive.Follow
 import Protocol.Command.Machine
 import Host.Serve
 import Host.Deployed
+import Host.Keys
 
 namespace Nanodregg.Spec
 
@@ -87,5 +88,10 @@ def deployed (worldDigest : ByteArray → ByteArray) : System Digest where
     ⟨Host.Deployed.world, World.steps, worldDigest, Host.Deployed.c.worldBytesMax⟩
   settle := Command.settleOf Host.Deployed.X
   handle := Host.handle Host.Deployed.X
+
+/-- The digest a Store pins a World's bytes by: `Host.Keys.ofKey`'s `worldDigest`, which does not
+depend on the Store's key (an unkeyed digest under `domBaseDigest`, HOST-15). `deployed storeDigest`
+is the system every deployed Store runs. -/
+def storeDigest (b : ByteArray) : ByteArray := (Codec.Hash.digest Host.domBaseDigest b).bytes
 
 end Nanodregg.Spec
