@@ -165,6 +165,8 @@ def loadAll (look : Pinned D) (fuel : Nat) (ds : List ByteArray) (acc : Loaded) 
 def SupportPin.cellIds : SupportPin → List ByteArray
   | .row .. => []
   | .cell id => [id]
+  | .cellLaw id law => [id, law]
+  | .cellPackage id pkg => [id, pkg]
 
 /-- Every cell id a ROM names, in its supports, hypotheses and guard pin. -/
 def HoleROM.cellIds (h : HoleROM) : List ByteArray :=

@@ -117,6 +117,12 @@ def boundaryRows : List (String × Bool) := Id.run do
   let tomb : Pinned Sim.D := fun id => if id = 77 then .ok none else L id
   let cellCode (id : Sim.D) : HoleROM :=
     { h with code := [⟨.var 1, [factPinAt 2, .cell (Sim.dc.bytes id)]⟩] }
+  let contractCode (pin : SupportPin) : HoleROM := { h with code := [⟨.var 1, [factPinAt 2, pin]⟩] }
+  let (lawA, lawB, pkgX) := (Sim.dc.bytes 91, Sim.dc.bytes 92, Sim.dc.bytes 93)
+  -- an object cell: package `pkgX` at `slotPackage`, owner at `slotOwner`, one law `lawA` at `lawBase`
+  let governed : Pinned Sim.D := fun id =>
+    if id = 76 then .ok (some ⟨kindObject, .ram, [(slotPackage, pkgX), (slotOwner, Sim.dc.bytes 1), (lawBase, lawA)]⟩)
+    else tomb id
   let chosen : Ty := .record [("hole", .nat), ("index", .nat)]
   let choice := Data.record [("hole", .nat 0), ("index", .nat 0)]
   let extraKey := (keyBytes Std.codeSelection (.record [("hole", .nat 1)])).getD .empty
@@ -145,6 +151,17 @@ def boundaryRows : List (String × Bool) := Id.run do
       | .error why => decide (why = .supportDead 0 [.cell (Sim.dc.bytes 77)]) | .ok _ => false),
     ("cell-support-unpinned", match selectHole Sim.digestOf tomb good (3 : Sim.D) (cellCode 78) with
       | .error why => decide (why = .unpinned [.cell (Sim.dc.bytes 78)]) | .ok _ => false),
+    -- contract pins (S2, LANG-84): 76 is an object cell governed by law `lawA` and running package `pkgX`
+    ("cell-law-governed", (selectHole Sim.digestOf governed good (3 : Sim.D) (contractCode (.cellLaw (Sim.dc.bytes 76) lawA))).isOk),
+    ("cell-law-ungoverned", match selectHole Sim.digestOf governed good (3 : Sim.D) (contractCode (.cellLaw (Sim.dc.bytes 76) lawB)) with
+      | .error why => decide (why = .supportDead 0 [.cellLaw (Sim.dc.bytes 76) lawB]) | .ok _ => false),
+    ("cell-law-dead", match selectHole Sim.digestOf governed good (3 : Sim.D) (contractCode (.cellLaw (Sim.dc.bytes 77) lawA)) with
+      | .error why => decide (why = .supportDead 0 [.cellLaw (Sim.dc.bytes 77) lawA]) | .ok _ => false),
+    ("cell-package-runs", (selectHole Sim.digestOf governed good (3 : Sim.D) (contractCode (.cellPackage (Sim.dc.bytes 76) pkgX))).isOk),
+    ("cell-package-other", match selectHole Sim.digestOf governed good (3 : Sim.D) (contractCode (.cellPackage (Sim.dc.bytes 76) lawA)) with
+      | .error why => decide (why = .supportDead 0 [.cellPackage (Sim.dc.bytes 76) lawA]) | .ok _ => false),
+    ("cell-law-unpinned", match selectHole Sim.digestOf governed good (3 : Sim.D) (contractCode (.cellLaw (Sim.dc.bytes 78) lawA)) with
+      | .error why => decide (why = .unpinned [.cellLaw (Sim.dc.bytes 78) lawA]) | .ok _ => false),
     ("management-bootstrap", (invoke b p blocked "choose_code" choice chosen).isOk),
     ("management-authority", (invoke b p blocked "choose_code" choice chosen 2 |> resultName) != "ok"),
     ("management-accepted", (invoke b p blocked "choose_code" choice chosen 1 true |> resultName) != "ok"),

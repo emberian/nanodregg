@@ -222,6 +222,8 @@ def docSx (w : ByteArray) : Option SExp :=
 def supportPinSx : SupportPin → SExp
   | .row rel key ver => list [atom "pin", atom (Nat.repr rel), digestSx key, atom (Nat.repr ver)]
   | .cell id => list [atom "cell", digestSx id]
+  | .cellLaw id law => list [atom "cell-law", digestSx id, digestSx law]
+  | .cellPackage id pkg => list [atom "cell-package", digestSx id, digestSx pkg]
 
 def supportOptPinSx : Option SupportPin → SExp
   | none => list [atom "structural"]

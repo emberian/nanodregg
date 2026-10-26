@@ -69,12 +69,12 @@ def docOk (w : ByteArray) : Bool :=
 
 /-- The package wire's version (LANG-60): the first byte of every package's bytes. Bumped by every
 `lang!` that changes what package bytes mean, so a package written at another version is refused
-`lang/package-version/6` by name, never read as a different package. The package codec's label is
+`lang/package-version/7` by name, never read as a different package. The package codec's label is
 `lang/package/N` at version N (`Lang.Proofs.Wire.packageCodec_label`), so the bump moves the vectors'
 tag too. 3: LANG-60 (a doc, and this byte); the unversioned wires before it were `lang/package` and
 `lang/package/2` (LANG-59), each a node-0 tree whose first byte is 0, which no version may be. 4: the
 contextual ROM section (d7989d9). 5: a ROM pin may name a kernel CELL (`SupportPin.cell`, E1, LANG-75.1).
-6: the three payload writers `u64be`, `sized`, `dsized` are primitive codes 12–14 (LANG-87). -/
-def packageWireVersion : UInt8 := 6
+6: the three payload writers `u64be`, `sized`, `dsized` are primitive codes 12–14 (LANG-87). 7: a ROM pin may demand the cell's LAW or PACKAGE (`SupportPin.cellLaw`/`cellPackage`, LANG-84). -/
+def packageWireVersion : UInt8 := 7
 
 end Nanodregg.Lang.Bounds

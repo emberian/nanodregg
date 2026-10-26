@@ -31,6 +31,11 @@ def wireRows : List (String × Bool) :=
    ("wire-pin-version-width", !Wire.supportPinWire (.row 2 (factKeyAt 1) (2^64))),
    ("wire-cell-pin-reads", Wire.supportPinOf (Wire.supportPinTree (.cell (factKeyAt 1))) == some (.cell (factKeyAt 1))),
    ("wire-cell-pin-children", (Wire.supportPinOf (.node 1 (factKeyAt 1) [.node 0 .empty []])).isNone),
-   ("wire-pin-unknown-tag", (Wire.supportPinOf (.node 2 (factKeyAt 1) [])).isNone)]
+   ("wire-cell-law-pin-reads", Wire.supportPinOf (Wire.supportPinTree (.cellLaw (factKeyAt 1) (factKeyAt 2))) ==
+     some (.cellLaw (factKeyAt 1) (factKeyAt 2))),
+   ("wire-cell-package-pin-reads", Wire.supportPinOf (Wire.supportPinTree (.cellPackage (factKeyAt 1) (factKeyAt 2))) ==
+     some (.cellPackage (factKeyAt 1) (factKeyAt 2))),
+   ("wire-cell-law-pin-children", (Wire.supportPinOf (.node 2 (factKeyAt 1) [])).isNone),
+   ("wire-pin-unknown-tag", (Wire.supportPinOf (.node 4 (factKeyAt 1) [])).isNone)]
 
 end Nanodregg.Lang.Journey.Contextual

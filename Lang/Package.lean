@@ -798,9 +798,9 @@ def packageWire (p : Package) : Bool :=
 def treeStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
 
 /-- The version byte (LANG-60): exactly `Bounds.packageWireVersion`; any other byte is refused
-`lang/package-version/6` by name, so bytes written at another version are never read as a package. -/
+`lang/package-version/7` by name, so bytes written at another version are never read as a package. -/
 def packageVersion : Stream Unit :=
-  Stream.refine "lang/package-version/6" Stream.u8
+  Stream.refine "lang/package-version/7" Stream.u8
     (fun v => if v = Bounds.packageWireVersion then some () else none) (fun _ => Bounds.packageWireVersion)
 
 /-- The one stream of a package: its version byte, then its tree. -/
@@ -813,12 +813,12 @@ def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
 /-- The package codec: the version byte and the tree stream, refined by `packageOf`, refused
-`lang/package/6` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
+`lang/package/7` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
 new term, type or primitive tag turns a refused boundary row into a read one, and the version must
 move, and with it this label, `lang/package/N` at version N: `Lang.Proofs.Wire.packageCodec_label`
 fails the build otherwise; cv 01a14e58-1586, LANG-60). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package/6" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
+  Stream.refine "lang/package/7" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -828,7 +828,7 @@ def encodePackage (p : Package) : Option ByteArray :=
     else none
   else none
 
-/-- The version byte (any other refused `lang/package-version/6`), then exactly one package tree, which reads as
+/-- The version byte (any other refused `lang/package-version/7`), then exactly one package tree, which reads as
 a package. `packageCodec`'s reading, with the tree
 stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
 packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
@@ -838,7 +838,7 @@ def decodePackage (b : ByteArray) : Except Refusal Package :=
   | .ok t =>
     match packageOf t.2.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package/6")
+    | none => .error (.rejected 0 "lang/package/7")
 
 end Wire
 end Nanodregg.Lang

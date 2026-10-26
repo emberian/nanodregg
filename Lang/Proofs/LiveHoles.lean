@@ -84,6 +84,42 @@ theorem selectHole_cell_support {D : Type} {digestOf : ByteArray → Option D} {
     · exact ⟨g, _, rfl, ‹_›⟩
     · cases hl
 
+/-- **A selected candidate's contract supports hold** (S2, LANG-84; DESIGN-CTX §2.5a): every `.cellLaw id law`
+support of the selected candidate names a cell the caller pinned, live, with `law` among its law slots
+(`lawBase ≤ k < stateBase`), and every `.cellPackage id pkg` one a live cell whose `slotPackage` is `pkg`. Under
+the mutation `supportLive (.cellLaw ..) := cellLive` (a contract read as mere liveness) `selectHole_origin` and
+`selectHole_cell_support` still hold and this fails. -/
+theorem selectHole_contract_support {D : Type} {digestOf : ByteArray → Option D} {look : Pinned D}
+    {rv : RowView D} {self : D} {h : HoleROM} {s : HoleSelection}
+    (hs : selectHole digestOf look rv self h = .ok s) :
+    ∃ c, h.code[s.index]? = some c ∧
+      (∀ id law, SupportPin.cellLaw id law ∈ c.supports → ∃ g cell, digestOf id = some g ∧ look g = .ok (some cell) ∧
+        cell.slots.any (fun p => decide (lawBase ≤ p.1 ∧ p.1 < stateBase) && p.2 == law) = true) ∧
+      (∀ id pkg, SupportPin.cellPackage id pkg ∈ c.supports → ∃ g cell, digestOf id = some g ∧ look g = .ok (some cell) ∧
+        (cell.slots.get slotPackage == some pkg) = true) := by
+  obtain ⟨c, _, _, _, _, hc, _, hall⟩ := selectHole_origin hs
+  refine ⟨c, hc, fun id law hid => ?_, fun id pkg hid => ?_⟩
+  · have hl := List.all_eq_true.mp hall _ hid
+    simp only [supportLive] at hl
+    cases hd : digestOf id with
+    | none => simp [hd] at hl
+    | some g =>
+      simp only [hd, Option.any_some] at hl
+      unfold cellGoverned at hl
+      split at hl
+      · exact ⟨g, _, rfl, ‹_›, hl⟩
+      · cases hl
+  · have hl := List.all_eq_true.mp hall _ hid
+    simp only [supportLive] at hl
+    cases hd : digestOf id with
+    | none => simp [hd] at hl
+    | some g =>
+      simp only [hd, Option.any_some] at hl
+      unfold cellRuns at hl
+      split at hl
+      · exact ⟨g, _, rfl, ‹_›, hl⟩
+      · cases hl
+
 /-- **A revoked support refuses by itself** (B1 at ROM grain, LANG-75.1): when the selection row
 picks a candidate that cites a kernel cell the caller pinned at its tombstone (or absence), no
 selection exists, the hole resolves blocked (no receipt), and demanding it faults with its named

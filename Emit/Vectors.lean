@@ -647,12 +647,12 @@ def rowLeafHashedVecs : G (List ByteArray) := do
 One row per term tag (0–18; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
 6, a row's field, rides in the record type), per primitive code (0–14), and per package section
 (imports, a relation with every option and one with none, methods and laws, a doc). Then the boundary:
-the first unused term tag (19), type tag (8) and primitive code (15), each refused `lang/package/6` by
+the first unused term tag (19), type tag (8) and primitive code (15), each refused `lang/package/7` by
 name. A Lang change that gives one of them a meaning flips its row from refused to read under an
 unchanged tag: the gate goes red, and `Bounds.packageWireVersion` moves (LANG-60). Then the doc's
-bound (a doc of `docMax` bytes read, one byte past it refused `lang/package/6`, a doc holding `"`
+bound (a doc of `docMax` bytes read, one byte past it refused `lang/package/7`, a doc holding `"`
 refused, a doc holding a line feed and one that is not UTF-8 each refused), and the version: the current tree at the previous version byte, and a LANG-59-era
-package's bytes as they were written (no version byte), each refused `lang/package-version/6`. -/
+package's bytes as they were written (no version byte), each refused `lang/package-version/7`. -/
 
 open Lang in
 /-- The empty package around a body and a state type. -/
@@ -868,9 +868,9 @@ def sites : List Site :=
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
     site "host/base/retained" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc)) baseVecs printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
-    ⟨"lang/package/6", Tag.of "lang/package/6" Lang.Wire.packageCodec, pure packageVecs,
+    ⟨"lang/package/7", Tag.of "lang/package/7" Lang.Wire.packageCodec, pure packageVecs,
       print Lang.Wire.packageCodec text⟩,
-    ⟨"lang/package-version/6", Tag.of "lang/package-version/6" Lang.Wire.packageVersion,
+    ⟨"lang/package-version/7", Tag.of "lang/package-version/7" Lang.Wire.packageVersion,
       pure [ByteArray.mk #[Lang.Bounds.packageWireVersion], ByteArray.mk #[Lang.Bounds.packageWireVersion - 1]],
       print Lang.Wire.packageVersion fun () => "()"⟩,
     ⟨"lang/key", Tag.of "lang/key" (Lang.Wire.dataStream keyVecTy), pure keyVecs,

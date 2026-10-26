@@ -363,6 +363,8 @@ def holeBytes : SExp → P ByteArray
 def supportPin : SExp → P SupportPin
   | .list _ [.atom _ "pin", r, k, v] => do pure (.row (← holeNat r) (← holeBytes k) (← holeNat v))
   | .list _ [.atom _ "cell", k] => do pure (.cell (← holeBytes k))
+  | .list _ [.atom _ "cell-law", k, l] => do pure (.cellLaw (← holeBytes k) (← holeBytes l))
+  | .list _ [.atom _ "cell-package", k, q] => do pure (.cellPackage (← holeBytes k) (← holeBytes q))
   | x => .error (.badEntry x.pos)
 
 def supportOptPin : SExp → P (Option SupportPin)

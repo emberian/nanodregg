@@ -82,7 +82,23 @@ def holeRow {D : Type} (rv : RowView D) (self : D) (rel : Nat) (key : ByteArray)
   | none => .error (.unpinnedRow rel key)
   | some (_, leaf) => .ok leaf
 
-/-- Whether a ROM pin holds: a row support at exactly its version; a cell support live. -/
+/-- The cell `g` is live in the caller's pinned view AND `law` is among its laws in force: the law
+slots an object cell holds at `lawBase ≤ k < stateBase` (`Kernel.Receive.lawSlotsOf`'s range), each
+the digest bytes of a law package (DESIGN-CTX §2.5a). A tombstone, an absence and an unpinned cell
+are `false`, as `cellLive`. -/
+def cellGoverned {D : Type} (look : Pinned D) (g : D) (law : ByteArray) : Bool :=
+  match look g with
+  | .ok (some c) => c.slots.any fun p => decide (lawBase ≤ p.1 ∧ p.1 < stateBase) && p.2 == law
+  | _ => false
+
+/-- The cell `g` is live AND runs package `pkg`: its `slotPackage` holds `pkg`'s digest bytes. -/
+def cellRuns {D : Type} (look : Pinned D) (g : D) (pkg : ByteArray) : Bool :=
+  match look g with
+  | .ok (some c) => c.slots.get slotPackage == some pkg
+  | _ => false
+
+/-- Whether a ROM pin holds: a row support at exactly its version; a cell support live; a contract
+support live and governed by its law / running its package. -/
 def supportLive {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
     (self : D) : SupportPin → Bool
   | .row rel key ver =>
@@ -90,27 +106,37 @@ def supportLive {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D)
     | .ok (some (.row _ _ v)) => v == ver
     | _ => false
   | .cell id => (digestOf id).any (cellLive look)
+  | .cellLaw id law => (digestOf id).any fun g => cellGoverned look g law
+  | .cellPackage id pkg => (digestOf id).any fun g => cellRuns look g pkg
+
+/-- The cell id a pin names, if it names one (every arm but a row's). -/
+def SupportPin.cellOf : SupportPin → Option ByteArray
+  | .row .. => none
+  | .cell id | .cellLaw id _ | .cellPackage id _ => some id
 
 /-- Whether a ROM pin's cell was observed: a cell support must be pinned (a pinned tombstone is
 observed, an unpinned cell is not); a row support is checked by `holeRow`. -/
-def supportObserved {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) : SupportPin → Bool
-  | .row .. => true
-  | .cell id =>
+def supportObserved {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (p : SupportPin) : Bool :=
+  match p.cellOf with
+  | none => true
+  | some id =>
     match digestOf id with
     | some g => match look g with | .ok _ => true | .error _ => false
     | none => false
 
 /-- A row pin holds; a cell pin is not judged here (`supportLive` on its own arm). -/
 def rowSupportHolds {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
-    (self : D) : SupportPin → Bool
-  | p@(.row ..) => supportLive digestOf look rv self p
-  | .cell _ => true
+    (self : D) (p : SupportPin) : Bool :=
+  match p with
+  | .row .. => supportLive digestOf look rv self p
+  | _ => true
 
 /-- The caller observed the pin: its row under `self` (absent and unpinned differ) or its cell. -/
 def supportPinned {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
-    (self : D) : SupportPin → Except HoleRefusal Unit
+    (self : D) (p : SupportPin) : Except HoleRefusal Unit :=
+  match p with
   | .row rel key _ => (holeRow rv self rel key).map fun _ => ()
-  | p@(.cell _) => if supportObserved digestOf look p then .ok () else .error (.unpinned [p])
+  | _ => if supportObserved digestOf look p then .ok () else .error (.unpinned [p])
 
 /-- One hex digit. -/
 def hexDigit (n : UInt8) : Char :=
@@ -127,6 +153,8 @@ coordinate). -/
 def SupportPin.wire : SupportPin → String
   | .row rel key ver => s!"row:{rel}:{hexOf key}:{ver}"
   | .cell id => s!"cell:{hexOf id}"
+  | .cellLaw id law => s!"cellLaw:{hexOf id}:{hexOf law}"
+  | .cellPackage id pkg => s!"cellPackage:{hexOf id}:{hexOf pkg}"
 
 /-- The pins of one refusal, space-separated. -/
 def pinsWire (ps : List SupportPin) : String := " ".intercalate (ps.map SupportPin.wire)

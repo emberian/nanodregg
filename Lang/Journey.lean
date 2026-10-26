@@ -21,7 +21,7 @@ the owner and the owner never changes). Rows:
   space has no bytes.
 * L1 founder A installs `Owned` (a ROM cell, id `romIdOf`) — admitted.
 * LV (LANG-60) the package wire's version: `Owned`'s LANG-59 bytes (a fixture, no version byte) and
-  its current bytes at the previous version are refused `lang/package-version/6` at install and at decode.
+  its current bytes at the previous version are refused `lang/package-version/N` (N = `Bounds.packageWireVersion`) at install and at decode.
 * L2 A creates an object owned by A, seed `{owner = A, total = 0}`, judged by both laws — admitted.
 * L3 A invokes `set 50` — admitted; the object's `total` slot decodes to 50.
 * L4 A invokes `set 101` — refused `lawDenied` by `bounded`, nothing written.
@@ -2729,18 +2729,18 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   let (r6, v6, _) := go prog r c6
   r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
   -- LV (LANG-60) the package wire's version: Owned's LANG-59 bytes (no version byte) and Owned's
-  -- current bytes at the previous version are each refused `lang/package-version/6` at install and at decode,
+  -- current bytes at the previous version are each refused `lang/package-version/N` at install and at decode,
   -- where the old bytes used to be read; the current bytes begin with the current version
-  let versionRefused (v : String) : Bool := v.startsWith "refused program" && (v.splitOn "lang/package-version/6").length > 1
+  let versionRefused (v : String) : Bool := v.startsWith "refused program" && (v.splitOn s!"lang/package-version/{Bounds.packageWireVersion}").length > 1
   let (rv1, vv1, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install owned59))
   r := note rv1 s!"LV1 install Owned's LANG-59 bytes ({owned59.size} bytes): {vv1}" (owned59.size == 1788 && versionRefused vv1)
   let prev := ownedBytes.set! 0 (Bounds.packageWireVersion - 1)
   let (rv2, vv2, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install prev))
   r := note rv2 s!"LV2 install Owned's bytes at version {Bounds.packageWireVersion - 1}: {vv2}" (versionRefused vv2)
   let byName := fun (b : ByteArray) => match Wire.decodePackage b with
-    | .error (.rejected 0 "lang/package-version/6") => true
+    | .error (.rejected 0 l) => l == s!"lang/package-version/{Bounds.packageWireVersion}"
     | _ => false
-  r := note r s!"LV3 decode refuses both lang/package-version/6; Owned's bytes begin with version {Bounds.packageWireVersion} and decode"
+  r := note r s!"LV3 decode refuses both lang/package-version/{Bounds.packageWireVersion}; Owned's bytes begin with version {Bounds.packageWireVersion} and decode"
     (byName owned59 && byName prev && ownedBytes[0]! == Bounds.packageWireVersion &&
       (Wire.decodePackage ownedBytes).toBool)
   r := installRows mode r a pkg

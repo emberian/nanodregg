@@ -5,7 +5,9 @@ import Lang.Subst
 namespace Nanodregg.Lang
 
 /-- What a ROM support, hypothesis or guard pin asserts (E1, LANG-75.1): a row of the hole object at
-one exact version, or a kernel cell that is LIVE in the caller's pinned view. A cell is never pinned
+one exact version, a kernel cell that is LIVE in the caller's pinned view, or a live cell GOVERNED
+by a named law / RUNNING a named package (contract-by-identity, DESIGN-CTX §2.5a: what a candidate
+that links to another member's object may demand of it, read off the cell the kernel holds). A cell is never pinned
 "at a version": a grant's slots move on every spend (KERNEL-60), so the assumption is the fact that
 the cell stands, which a revoke contradicts (de Kleer 1986 §4.9).
 
@@ -19,6 +21,14 @@ with card F (3), the first row that needs a hole to cite a hole. -/
 inductive SupportPin where
   | row (rel : Nat) (key : ByteArray) (ver : Nat)
   | cell (id : ByteArray)
+  /-- a CONTRACT by law identity (DESIGN-CTX §2.5a, S2): the cell is live AND the law `law` (a package
+  id) is among its laws in force — a data object's `relaw` that drops the law withdraws every
+  justification that cited it; for a programmed object, whose laws never change, it is a permanent
+  contract -/
+  | cellLaw (id law : ByteArray)
+  /-- a contract by program identity: the cell is live AND runs package `pkg` (its ROM link); fixed for
+  ever today (`audit_package_fixed`), defeasible once the package is a slot (DESIGN-CTX §2.5c) -/
+  | cellPackage (id pkg : ByteArray)
   deriving Inhabited, DecidableEq
 
 /-- A code candidate and the derivation supports required independently of its variables. -/

@@ -1,14 +1,19 @@
-/- The ROM signature section (version 4; a cell pin since version 5). All numbers retain the existing u32/u64 bounds. -/
+/- The ROM signature section (version 4; a cell pin since version 5; a contract pin, `cellLaw`/`cellPackage`,
+since version 6: LANG-84). All numbers retain the existing u32/u64 bounds. -/
 import Lang.Wire
 import Lang.HoleROM
 
 namespace Nanodregg.Lang.Wire
 open Nanodregg.Codec
 
-/-- A row pin is `node 0 key [rel ver]` (its version-4 bytes); a cell pin `node 1 id []` (version 5, E1). -/
+/-- A row pin is `node 0 key [rel ver]` (its version-4 bytes); a cell pin `node 1 id []` (version 5, E1);
+a law contract `node 2 id [node 0 law []]` and a package contract `node 3 id [node 0 pkg []]` (version 6,
+LANG-84). -/
 def supportPinTree : SupportPin → Tree
   | .row rel key ver => .node 0 key [.node 0 (u32Bytes rel) [], .node 0 (u64Bytes ver) []]
   | .cell id => .node 1 id []
+  | .cellLaw id law => .node 2 id [.node 0 law []]
+  | .cellPackage id pkg => .node 3 id [.node 0 pkg []]
 
 def supportPinOf : Tree → Option SupportPin
   | .node 0 key [.node 0 r [], .node 0 v []] =>
@@ -16,11 +21,13 @@ def supportPinOf : Tree → Option SupportPin
       | some rel, some ver => some (.row rel key ver)
       | _, _ => none
   | .node 1 id [] => some (.cell id)
+  | .node 2 id [.node 0 law []] => some (.cellLaw id law)
+  | .node 3 id [.node 0 pkg []] => some (.cellPackage id pkg)
   | _ => none
 
 def supportPinWire : SupportPin → Bool
   | .row rel _ ver => decide (rel < 2^32) && decide (ver < 2^64)
-  | .cell _ => true
+  | _ => true
 
 def supportOptPinTree : Option SupportPin → Tree
   | none => .node 0 .empty []
