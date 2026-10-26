@@ -299,7 +299,7 @@ theorem mem_of_head {α : Type} {l : List α} {a : α} (h : l.head? = some a) : 
 /-- A ring within Lang's bounds: what `Lang.Read.readData` reads at a pending row's type. -/
 def RingOk (r : Ring) : Prop :=
   r.notBefore < Lang.Bounds.natLimit ∧ r.text.size ≤ Lang.Bounds.bytesMax ∧
-    r.ringer.size ≤ Lang.Bounds.digestBytesMax
+    r.ringer.size ≤ Lang.Bounds.digestBytesMax ∧ Nanodregg.Hosting.Proofs.Resident.AimOk r.to
 
 /-- A kept answer within Lang's bounds. -/
 def KeptOk (k : Option (Ring × ByteArray)) : Prop :=
@@ -340,6 +340,21 @@ theorem conforms_inj {ℓ : Lang.Label} {d : Lang.Data} {T : Lang.Ty} (h : Lang.
   cases h with
   | inj _ h => exact ⟨_, h⟩
 
+/-- An aim's record conforming to any type is within bounds. -/
+private theorem aimOk_of_conforms {c o v : ByteArray} {m : Nat} {T : Lang.Ty}
+    (h : Lang.Conforms (.record [("cand", .digest c), ("method", .nat m), ("target", .digest o), ("via", .digest v)]) T) :
+    Nanodregg.Hosting.Proofs.Resident.AimOk (some ⟨c, m, o, v⟩) := by
+  obtain ⟨Ac, hc⟩ := conforms_record_mem h _ (List.mem_cons_self ..)
+  obtain ⟨Am, hm⟩ := conforms_record_mem h _ (List.mem_cons_of_mem _ (List.mem_cons_self ..))
+  obtain ⟨Ao, ho⟩ := conforms_record_mem h _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_self ..)))
+  obtain ⟨Av, hv⟩ := conforms_record_mem h _
+    (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_self ..))))
+  intro a ha
+  cases ha
+  exact ⟨conforms_digest hc, conforms_nat hm, conforms_digest ho, conforms_digest hv⟩
+
+private theorem aimOk_none : Nanodregg.Hosting.Proofs.Resident.AimOk none := fun _ h => by cases h
+
 /-- A ring the resident reads is within bounds: `Ring.read` is `readData` at the row type. -/
 theorem ring_read_ok {sh : Shape} {line : String} {r : Ring} (h : Ring.read sh line = .ok r) : RingOk r := by
   unfold Ring.read at h
@@ -357,7 +372,19 @@ theorem ring_read_ok {sh : Shape} {line : String} {r : Ring} (h : Ring.read sh l
       obtain ⟨Ac, hcap⟩ := conforms_record_mem hv' _ (List.mem_cons_self ..)
       obtain ⟨Aa, ha⟩ := conforms_inj hcap
       obtain ⟨Ax, hx⟩ := conforms_record_mem ha _ (List.mem_cons_self ..)
-      exact ⟨conforms_nat hn, conforms_bytes hx, conforms_digest hg⟩
+      exact ⟨conforms_nat hn, conforms_bytes hx, conforms_digest hg, aimOk_none⟩
+    · rename_i g n t c m o v
+      cases h
+      obtain ⟨Ak, hk⟩ := conforms_record_mem hc _ (List.mem_cons_self ..)
+      obtain ⟨Av, hv'⟩ := conforms_record_mem hc _ (List.mem_cons_of_mem _ (List.mem_cons_self ..))
+      obtain ⟨Ag, hg⟩ := conforms_record_mem hk _ (List.mem_cons_self ..)
+      obtain ⟨An, hn⟩ := conforms_record_mem hk _ (List.mem_cons_of_mem _ (List.mem_cons_self ..))
+      obtain ⟨Ac, hcap⟩ := conforms_record_mem hv' _ (List.mem_cons_self ..)
+      obtain ⟨Aa, ha⟩ := conforms_inj hcap
+      obtain ⟨Ax, hx⟩ := conforms_record_mem ha _ (List.mem_cons_self ..)
+      obtain ⟨At, hto⟩ := conforms_record_mem ha _ (List.mem_cons_of_mem _ (List.mem_cons_self ..))
+      obtain ⟨Aai, hai⟩ := conforms_inj hto
+      exact ⟨conforms_nat hn, conforms_bytes hx, conforms_digest hg, aimOk_of_conforms hai⟩
     · cases h
   · cases h
 
@@ -537,7 +564,24 @@ theorem seed_ok {held : Option (Option String)} {k : Option (Ring × ByteArray)}
               | cons hg hrow =>
                 cases hrow with
                 | cons hx _ =>
-                  exact ⟨⟨conforms_nat hn, conforms_bytes hx, conforms_digest hg⟩, conforms_bytes ht⟩
+                  exact ⟨⟨conforms_nat hn, conforms_bytes hx, conforms_digest hg, aimOk_none⟩, conforms_bytes ht⟩
+      · rename_i tt n g x c m o v hv
+        cases hs
+        have hc := readData_conforms hv
+        cases hc with
+        | record hrow =>
+          cases hrow with
+          | cons ht hrow =>
+            cases hrow with
+            | cons hn hrow =>
+              cases hrow with
+              | cons hg hrow =>
+                cases hrow with
+                | cons hx hrow =>
+                  cases hrow with
+                  | cons hto _ =>
+                    obtain ⟨Aai, hai⟩ := conforms_inj hto
+                    exact ⟨⟨conforms_nat hn, conforms_bytes hx, conforms_digest hg, aimOk_of_conforms hai⟩, conforms_bytes ht⟩
       · cases hs
 
 end Nanodregg.Hosting.Proofs.Lifetime

@@ -1254,18 +1254,26 @@ def asOptBytes : Option Data → Option (Option ByteArray)
 /-- An argument record's bytes at its type. -/
 def argBytes (T : Ty) (d : Data) : ByteArray := (Wire.encodeData T d).getD .empty
 
-/-- `ring`'s argument. -/
-def bellArg (s : String) : ByteArray := argBytes (.record [("text", .bytes)]) (.record [("text", .bytes s.toUTF8)])
+/-- `ring`'s argument: an unaimed ring. -/
+def bellArg (s : String) : ByteArray :=
+  argBytes Bell.ringArg (.record [("text", .bytes s.toUTF8), ("to", Bell.toData none)])
+
+/-- `ring`'s argument: a ring aimed at `target`'s method `method` through the Bell's grant `via`,
+its candidate `cand`. -/
+def aimedBellArg (s : String) (cand : ByteArray) (method : Nat) (target via : ByteArray) : ByteArray :=
+  argBytes Bell.ringArg (.record [("text", .bytes s.toUTF8), ("to", Bell.toData (some (Bell.aimData cand method target via)))])
 
 /-- A ring's key: its signed `notBefore` and its ringer. -/
 def ringKey (nb : Nat) (ringer : Sim.Member) : Data :=
   .record [("agent", .digest (Sim.dc.bytes ringer.id)), ("notBefore", .nat nb)]
 
-/-- `answer`'s argument: the ring's key, the ring's text sent back, and the answer's text. -/
+/-- `answer`'s argument: the ring's key, the ring's text and aim sent back, and the answer's text. -/
+def answerArgTo (nb : Nat) (ringer : Sim.Member) (ringText s : String) (to : Option Data) : ByteArray :=
+  argBytes Bell.answerArg (Bell.answerData nb ringText.toUTF8 (Sim.dc.bytes ringer.id) s.toUTF8 to)
+
+/-- `answer`'s argument for an unaimed ring. -/
 def answerArg (nb : Nat) (ringer : Sim.Member) (ringText s : String) : ByteArray :=
-  argBytes (.record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)])
-    (.record [("notBefore", .nat nb), ("ringText", .bytes ringText.toUTF8), ("ringer", .digest (Sim.dc.bytes ringer.id)),
-      ("text", .bytes s.toUTF8)])
+  answerArgTo nb ringer ringText s none
 
 /-- `retire`'s argument: the ring's key. -/
 def retireArg (nb : Nat) (ringer : Sim.Member) : ByteArray :=
@@ -1281,23 +1289,27 @@ def bellTakeover (superHex : String) : String := s!"
 (package
   (import bell \"{superHex}\")
   (layer bell)
-  (method answer (arg (rec (notBefore nat) (ringText bytes) (ringer digest) (text bytes))) (edits 2)
+  (type Aim (rec (cand digest) (method nat) (target digest) (via digest)))
+  (type Support (rec (cell digest) (pin digest)))
+  (type Proposal (rec (cand digest) (s0 (option Support)) (s1 (option Support)) (value bytes)))
+  (method answer (arg (rec (notBefore nat) (ringText bytes) (ringer digest) (text bytes) (to (option Aim))))
+    (calls ((invoke Proposal))) (edits 2)
     (done state
       (upsert rings (record (agent arg.ringer) (notBefore arg.notBefore))
         (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
-          (captured (inj (sum (ask (rec (text bytes)))) ask (record (text arg.ringText))))))
+          (captured (inj (sum (ask (rec (text bytes) (to (option Aim))))) ask (record (text arg.ringText) (to arg.to))))))
       (retract pending (record (agent arg.ringer) (notBefore arg.notBefore)))))
   (method drop (arg (rec (notBefore nat) (ringer digest))) (edits 2)
     (done state (retract rings (record (agent arg.ringer) (notBefore arg.notBefore)))
       (retract pending (record (agent arg.ringer) (notBefore arg.notBefore)))))
-  (method rewrite (arg (rec (notBefore nat) (ringText bytes) (ringer digest) (text bytes))) (edits 1)
+  (method rewrite (arg (rec (notBefore nat) (ringText bytes) (ringer digest) (text bytes) (to (option Aim)))) (edits 1)
     (done state (upsert rings (record (agent arg.ringer) (notBefore arg.notBefore))
       (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
-          (captured (inj (sum (ask (rec (text bytes)))) ask (record (text arg.ringText))))))))
+          (captured (inj (sum (ask (rec (text bytes) (to (option Aim))))) ask (record (text arg.ringText) (to arg.to))))))))
   (method say (arg (rec (text bytes))) (edits 1)
     (done state (insert rings (record (agent req.agent) (notBefore req.notBefore))
       (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
-          (captured (inj (sum (ask (rec (text bytes)))) ask (record (text arg.text))))))))
+          (captured (inj (sum (ask (rec (text bytes) (to (option Aim))))) ask (record (text arg.text) (to (none Aim)))))))))
   (method seize (done (with state (resident req.agent)))))
 "
 
@@ -1557,7 +1569,9 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
     let (r3, k3, w3) := ring r a "never mind"
     let t3 := if w3 != "admitted" then s!"the ring: {w3}" else
       (byL r3 ids lobj gid a 5 (retireArg (nbOf k3) a) (both r3.st.host k3)).2
-    let t4 := (byL r ids lobj gid b 7 (bellArg "asked and answered") []).2
+    -- the layer's own `say` takes `(rec (text bytes))`: a text alone, no aim
+    let sayArg := argBytes (.record [("text", .bytes)]) (.record [("text", .bytes "asked and answered".toUTF8)])
+    let t4 := (byL r ids lobj gid b 7 sayArg []).2
     [t1, t2, t3, t4]
   let (rL, ids, lobj, gid) ← match layered p (some pkg) r with
     | .ok x => pure x

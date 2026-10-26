@@ -1,22 +1,41 @@
 ; Bell is an activity instance. Its public wrappers preserve the established
 ; argument bounds and refusal names; continuation guards apply to every layer.
 ; The declared key is time first, then signer, so the resident reads in ring order.
+; HOSTING-53: the Bell is the resident's INBOX. A ring captures its text AND an optional AIM (to): a
+; target object, a method of it, a grant the Bell holds on it (via) and a candidate id. The captured
+; value is immutable with the ring (the rung guard compares it), so the resident echoes the aim it
+; read and cannot drop it. answer records the text in rings as before AND, when the ring was aimed,
+; returns one typed nested call to the target in the same Turn (LANG-77): answered is delivered. The
+; forward's support is the grant itself (cell = pin = via, the doc row's own shape), so revoking the
+; grant withdraws the candidate by name.
 (package
-  (doc "A ring is answered once, by the resident, with its text sent back; a ringer can backdate by at most the kernel's window (1024 heights); ties at one height go by ringer digest; an unanswered ring may be retired by anyone from its notBefore + 2048.")
+  (doc "A ring is answered once by the resident, its text sent back; a ringer may backdate by the kernel's window (1024 heights); ties go by ringer digest; anyone retires an unanswered ring from notBefore + 2048; an aimed ring is delivered by its answer.")
   (state (rec (open bool) (resident digest)))
+  (type Aim (rec (cand digest) (method nat) (target digest) (via digest)))
+  (type Support (rec (cell digest) (pin digest)))
+  (type Proposal (rec (cand digest) (s0 (option Support)) (s1 (option Support)) (value bytes)))
   (activity pending rings (limits 64 1024) (patience 2048)
     (expose) (guards queued rung) (refusals "notResident" "unrung" "text")
     (resumer (deq req.agent state.resident))
-    (plan ask (arg (rec (text bytes))) (resp bytes)
+    (plan ask (arg (rec (text bytes) (to (option Aim)))) (resp bytes)
       (start state) (resume state)))
-  (method answer (arg (rec (notBefore nat) (ringText (bytes 1 2000)) (ringer digest) (text (bytes 1 2000))))
-    (edits 2)
+  (method answer
+    (arg (rec (notBefore nat) (ringText (bytes 1 2000)) (ringer digest) (text (bytes 1 2000)) (to (option Aim))))
+    (calls ((invoke Proposal))) (edits 2)
     (check ((deq req.agent state.resident) "notResident")
-      (done state
-        (upsert rings (record (agent arg.ringer) (notBefore arg.notBefore))
-          (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
-            (captured (inj (sum (ask (rec (text bytes)))) ask (record (text arg.ringText))))))
-        (retract pending (record (agent arg.ringer) (notBefore arg.notBefore))))))
+      (case arg.to
+        (none _ (done state
+          (upsert rings (record (agent arg.ringer) (notBefore arg.notBefore))
+            (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
+              (captured (inj (sum (ask (rec (text bytes) (to (option Aim))))) ask (record (text arg.ringText) (to arg.to))))))
+          (retract pending (record (agent arg.ringer) (notBefore arg.notBefore)))))
+        (some t (done state
+          (upsert rings (record (agent arg.ringer) (notBefore arg.notBefore))
+            (record (answered (some (sum (ask bytes)) (inj (sum (ask bytes)) ask arg.text)))
+              (captured (inj (sum (ask (rec (text bytes) (to (option Aim))))) ask (record (text arg.ringText) (to arg.to))))))
+          (retract pending (record (agent arg.ringer) (notBefore arg.notBefore)))
+          (invoke (args (record (cand t.cand) (s0 (some Support (record (cell t.via) (pin t.via)))) (s1 (none Support)) (value arg.text)))
+                  (budget 100000) (method t.method) (obj t.target) (via (some digest t.via))))))))
   (method close (done (with state (open false))))
   (method open (done (with state (open true))))
   (method retire (reads (rings (points 1))) (arg (rec (notBefore nat) (ringer digest))) (edits 2)
@@ -26,7 +45,7 @@
           (case q.answered
             (none _ (done state (retract rings p.key) (retract pending p.key)))
             (some _ (done state (retract rings p.key))))))))))
-  (method ring (arg (rec (text (bytes 1 2000)))) (edits 2)
+  (method ring (arg (rec (text (bytes 1 2000)) (to (option Aim)))) (edits 2)
     (check (state.open "closed")
       ((activity-code start_ask) (record) state arg req)))
   (law bell (on invoke m (all ((deq new.resident old.resident) "resident"))) (else ok)))

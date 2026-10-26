@@ -765,9 +765,9 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
   obtain rfl := invokedPackage_at hpat' hpk'
   -- the invoke read the text at `answerArgTy`
   obtain ⟨hrk, hbt⟩ := Lifetime.lifetime_bounds h hk hi
-  obtain ⟨hn, hx, hgr⟩ := hrk
+  obtain ⟨hn, hx, hgr, hai⟩ := hrk
   obtain ⟨pk'', ℓ, sg', hrp'', hres'', henc⟩ :=
-    answer_args_at_answerArgTy hn hx hgr hbt htxt hargs
+    answer_args_at_answerArgTy hn hx hgr hai hbt htxt hargs
   rw [readPackage_live (hpat'.2.1.trans hpat.2.1.symm), hrp] at hrp''
   cases hrp''
   rw [hres] at hres''

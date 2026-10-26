@@ -112,13 +112,38 @@ theorem decide_answer {p : List Ring} {k : Option (Ring × ByteArray)} {r : Ring
       | [], h => simp at h
       | _ :: _, h => simp at h
 
-theorem ofRow_row (r : Ring) : Ring.ofRow r.row = .ok r := rfl
+/-- `toDatum` is the witness's `toData` of the aim's data. -/
+theorem toDatum_eq (o : Option Aim) : toDatum o = Lang.Bell.toData (o.map Aim.data) := by
+  cases o <;> rfl
+
+theorem ofRow_row (r : Ring) : Ring.ofRow r.row = .ok r := by
+  obtain ⟨n, g, t, to⟩ := r
+  cases to with
+  | none => rfl
+  | some a => obtain ⟨c, m, o, v⟩ := a; rfl
 
 theorem ofRow_eq {v : Data} {r : Ring} (h : Ring.ofRow v = .ok r) : v = r.row := by
   unfold Ring.ofRow at h
   split at h
   · cases h; rfl
+  · cases h; rfl
   · cases h
+
+/-- An aim within Lang's bounds: its digests and its method index. -/
+def AimOk (o : Option Aim) : Prop := ∀ a, o = some a →
+  a.cand.size ≤ Lang.Bounds.digestBytesMax ∧ a.method < Lang.Bounds.natLimit ∧
+    a.target.size ≤ Lang.Bounds.digestBytesMax ∧ a.via.size ≤ Lang.Bounds.digestBytesMax
+
+theorem toDatum_conforms {o : Option Aim} (h : AimOk o) : Lang.Conforms (toDatum o) (optTy Lang.Bell.aimTy) := by
+  cases o with
+  | none => exact .inj rfl (.record .nil)
+  | some a =>
+    obtain ⟨hc, hm, ht, hv⟩ := h a rfl
+    exact .inj rfl (.record (.cons (.digest hc) (.cons (.nat hm) (.cons (.digest ht) (.cons (.digest hv) .nil)))))
+
+theorem toData_conforms {o : Option Aim} (h : AimOk o) :
+    Lang.Conforms (Lang.Bell.toData (o.map Aim.data)) (optTy Lang.Bell.aimTy) :=
+  toDatum_eq o ▸ toDatum_conforms h
 
 /-- The resident's ring for a line is exactly the row datum the line reads to at `pending`'s row
 type: by `Protocol.Proofs.Command.rangeLines_reads` that is the row the range read listed in that
@@ -130,7 +155,7 @@ theorem read_iff_row (sh : Shape) (s : String) (r : Ring) :
   | error e => simp
   | ok v =>
     simp only [Except.ok.injEq]
-    exact ⟨fun h => by rw [ofRow_eq h], fun h => by rw [h]; rfl⟩
+    exact ⟨fun h => by rw [ofRow_eq h], fun h => by rw [h]; exact ofRow_row r⟩
 
 theorem utf8Prefix_go_size (t : ByteArray) : ∀ k, (utf8Prefix.go t k).size ≤ k
   | 0 => by simp [utf8Prefix.go]
@@ -168,24 +193,35 @@ theorem textMax_le_bytesMax : textMax ≤ Lang.Bounds.bytesMax := by decide
 /-- The printed `answer` argument reads back to exactly the picked ring's key and the decided text. -/
 theorem answerArg_reads {r : Ring} {t : ByteArray} {s : String} (hn : r.notBefore < Lang.Bounds.natLimit)
     (hx : r.text.size ≤ Lang.Bounds.bytesMax) (hg : r.ringer.size ≤ Lang.Bounds.digestBytesMax)
-    (ht : t.size ≤ Lang.Bounds.bytesMax)
+    (ha : AimOk r.to) (ht : t.size ≤ Lang.Bounds.bytesMax)
     (h : answerArg r t = some s) : Read.readData answerArgTy s = .ok (answerDatum r t) :=
   Print.readData_data
-    (.record (.cons (.nat hn) (.cons (.bytes hx) (.cons (.digest hg) (.cons (.bytes ht) .nil))))) (by decide) h
+    (.record (.cons (.nat hn) (.cons (.bytes hx) (.cons (.digest hg) (.cons (.bytes ht) (.cons (toData_conforms ha) .nil))))))
+    (by decide) h
 
-/-- What the volume keeps reads back to the same ring (key and text) and answer. -/
+/-- What the volume keeps reads back to the same ring (key, text and aim) and answer. -/
 theorem kept_reads {r : Ring} {t : ByteArray} {s : String} (hn : r.notBefore < Lang.Bounds.natLimit)
     (hx : r.text.size ≤ Lang.Bounds.bytesMax) (hg : r.ringer.size ≤ Lang.Bounds.digestBytesMax)
-    (ht : t.size ≤ Lang.Bounds.bytesMax) (h : keptText r t = some s) : keptRead s = some (r, t) := by
+    (ha : AimOk r.to) (ht : t.size ≤ Lang.Bounds.bytesMax) (h : keptText r t = some s) :
+    keptRead s = some (r, t) := by
   have := Print.readData_data (T := keptTy)
-    (.record (.cons (.bytes ht) (.cons (.nat hn) (.cons (.digest hg) (.cons (.bytes hx) .nil))))) (by decide) h
-  simp [keptRead, this]
+    (.record (.cons (.bytes ht) (.cons (.nat hn) (.cons (.digest hg) (.cons (.bytes hx) (.cons (toDatum_conforms ha) .nil))))))
+    (by decide) h
+  obtain ⟨n, g, x, to⟩ := r
+  cases to with
+  | none => simp [keptRead, this, toDatum]
+  | some a => obtain ⟨c, m, o, v⟩ := a; simp [keptRead, this, toDatum, Aim.data, Lang.Bell.aimData]
 
 theorem bytesSx_flat (t : ByteArray) : Print.need (Print.bytesSx t) = 1 ∧ Print.width (Print.bytesSx t) = 0 := by
   unfold Print.bytesSx
   split
   · split <;> simp [Print.need, Print.width, Print.atom]
   · simp [Print.need, Print.width, Print.atom]
+
+/-- The labels of the printed aim and `to` field are labels. -/
+private theorem aim_labels : Wire.labelOk "to" = true ∧ Wire.labelOk "none" = true ∧ Wire.labelOk "some" = true ∧
+    Wire.labelOk "cand" = true ∧ Wire.labelOk "method" = true ∧ Wire.labelOk "target" = true ∧
+    Wire.labelOk "via" = true := by decide
 
 /-- The `answer` argument always prints: the resident's `answer unprintable` end is unreachable. -/
 theorem answerArg_some (r : Ring) (t : ByteArray) : (answerArg r t).isSome = true := by
@@ -195,11 +231,24 @@ theorem answerArg_some (r : Ring) (t : ByteArray) : (answerArg r t).isSome = tru
   have h2 : Wire.labelOk "notBefore" = true := by decide
   have h3 : Wire.labelOk "ringer" = true := by decide
   have h4 : Wire.labelOk "ringText" = true := by decide
-  simp only [answerArg, answerDatum, Print.data, Print.dataSx, Print.dataFieldsSx, Print.label, h1, h2, h3, h4]
-  simp [Print.fits, Print.fitsB]
-  unfold Print.list Print.digestSx Print.atom
-  simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw, hn', hw']
-  constructor <;> simp [Read.depthMax, Read.listMax, Wire.depthMax, Wire.rowMax]
+  obtain ⟨h5, h6, h7, h8, h9, h10, h11⟩ := aim_labels
+  obtain ⟨n, g, x, to⟩ := r
+  cases to with
+  | none =>
+    simp only [answerArg, answerDatum, Lang.Bell.answerData, Lang.Bell.toData, Option.map_none, Print.data, Print.dataSx,
+      Print.dataFieldsSx, Print.label, h1, h2, h3, h4, h5, h6]
+    simp [Print.fits, Print.fitsB]
+    unfold Print.list Print.digestSx Print.atom
+    simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw, hn', hw']
+    constructor <;> simp [Read.depthMax, Read.listMax, Wire.depthMax, Wire.rowMax]
+  | some a =>
+    obtain ⟨c, m, o, v⟩ := a
+    simp only [answerArg, answerDatum, Lang.Bell.answerData, Lang.Bell.toData, Option.map_some, Aim.data,
+      Lang.Bell.aimData, Print.data, Print.dataSx, Print.dataFieldsSx, Print.label, h1, h2, h3, h4, h5, h7, h8, h9, h10, h11]
+    simp [Print.fits, Print.fitsB]
+    unfold Print.list Print.digestSx Print.atom
+    simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw, hn', hw']
+    constructor <;> simp [Read.depthMax, Read.listMax, Wire.depthMax, Wire.rowMax]
 
 /-- What the volume keeps always prints. -/
 theorem keptText_some (r : Ring) (t : ByteArray) : (keptText r t).isSome = true := by
@@ -209,11 +258,24 @@ theorem keptText_some (r : Ring) (t : ByteArray) : (keptText r t).isSome = true 
   have h2 : Wire.labelOk "answer" = true := by decide
   have h3 : Wire.labelOk "ringer" = true := by decide
   have h4 : Wire.labelOk "notBefore" = true := by decide
-  simp only [keptText, keptDatum, Print.data, Print.dataSx, Print.dataFieldsSx, Print.label, h1, h2, h3, h4]
-  simp [Print.fits, Print.fitsB]
-  unfold Print.list Print.digestSx Print.atom
-  simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw, hn', hw']
-  constructor <;> simp [Read.depthMax, Read.listMax, Wire.depthMax, Wire.rowMax]
+  obtain ⟨h5, h6, h7, h8, h9, h10, h11⟩ := aim_labels
+  obtain ⟨n, g, x, to⟩ := r
+  cases to with
+  | none =>
+    simp only [keptText, keptDatum, toDatum, Print.data, Print.dataSx, Print.dataFieldsSx, Print.label,
+      h1, h2, h3, h4, h5, h6]
+    simp [Print.fits, Print.fitsB]
+    unfold Print.list Print.digestSx Print.atom
+    simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw, hn', hw']
+    constructor <;> simp [Read.depthMax, Read.listMax, Wire.depthMax, Wire.rowMax]
+  | some a =>
+    obtain ⟨c, m, o, v⟩ := a
+    simp only [keptText, keptDatum, toDatum, Aim.data, Lang.Bell.aimData, Print.data, Print.dataSx, Print.dataFieldsSx,
+      Print.label, h1, h2, h3, h4, h5, h7, h8, h9, h10, h11]
+    simp [Print.fits, Print.fitsB]
+    unfold Print.list Print.digestSx Print.atom
+    simp only [Print.need, Print.needs, Print.width, Print.widths, hn, hw, hn', hw']
+    constructor <;> simp [Read.depthMax, Read.listMax, Wire.depthMax, Wire.rowMax]
 
 theorem exit_codes_nodup : (Exit.all.map Exit.code).Nodup := by decide
 

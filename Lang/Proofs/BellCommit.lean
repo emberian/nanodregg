@@ -2,13 +2,15 @@
 # Lang.Proofs.BellCommit — the World that commits an answer holds the answered ring (HOSTING-44)
 
 `Lang.Proofs.Bell.answer_run` states the run: a returned `answer` writes exactly the upsert of
-`rings` at the ring's key to `answeredVal x y` and the retract of `pending` there. This module states
+`rings` at the ring's key to `answeredVal x y to` and the retract of `pending` there (and forwards
+the answer when the ring was aimed, HOSTING-53; the forward is a nested call of the same Turn, not a
+row of this object). This module states
 what the World holds after the kernel commits such a call:
 
 * `answer_commits`: a signed call invoking a Bell's `answer` (its object's live cell names a package
   whose live cell reads as a Bell), derived by `receive` and admitted by `World.admit` from
   canonical rows: the World it leaves holds at `rings` of the object, at the ring's key, the row
-  `answeredVal x y` (amount 0, some version), and no `pending` row there.
+  `answeredVal x y to` (amount 0, some version), and no `pending` row there.
 
 * `program_run_reads`, `pinned_read_live`: the run read its package through the call's pins, so
   the pinned read is the live cell's and is the package the caller read on its own look.
@@ -89,8 +91,8 @@ theorem pinned_read_live {E : Kernel.Env D} {w : World D} {pins : List (D × D)}
 `P` (`packageOf`), `P`'s live cell reads as a Bell `pk` (through any look that reads `P`'s cell on
 `w`: follow's `worldLook`, the call's pins) and labels `m` `answer`, which `receive` turns into
 `t` and `World.admit` admits from canonical rows to `w'`: its arguments decode to
-`answerData nb x k y`, and `w'` holds at `rings` (relation 1) of `o`, at the ring's key `(k, nb)`,
-the row with value `answeredVal x y` (`answered (some (ask y))`, captured `ask {text := x}`; amount
+`answerData nb x k y to`, and `w'` holds at `rings` (relation 1) of `o`, at the ring's key `(k, nb)`,
+the row with value `answeredVal x y to` (`answered (some (ask y))`, captured `ask {text := x, to}`; amount
 0, some version), and no `pending` row (relation 0) at that key. The run read `P` through the call's
 pins (`program_run_reads`), so that read is the live cell's (`pinned_read_live`) and is `pk`. -/
 theorem answer_commits {rc : Lang.ReceiptCheck} {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
@@ -103,8 +105,8 @@ theorem answer_commits {rc : Lang.ReceiptCheck} {X : Ctx D} {w w' : World D} {c 
     (hlook : look P = .ok (w.live X.env P)) (hp : readPackage look P = .ok pk) (hs : shapeOk pk = true)
     (hres : resolveMethod (D := D) pk m = .ok ("answer", sg))
     (ha : World.admit X.env w t = .ok w') (hr : w.RowsCanon X.env) :
-    ∃ nb x k y kb vb ver, Wire.decodeData answerArg args = .ok (answerData nb x k y) ∧
-      keyBytes rings (keyData nb k) = some kb ∧ Wire.encodeData rings.val (answeredVal x y) = some vb ∧
+    ∃ nb x k y to kb vb ver, Wire.decodeData answerArg args = .ok (answerData nb x k y to) ∧
+      keyBytes rings (keyData nb k) = some kb ∧ Wire.encodeData rings.val (answeredVal x y to) = some vb ∧
       rowAt X.env w'.rows (.row ⟨o, 1, kb⟩) = some (.row 0 vb ver) ∧
       rowAt X.env w'.rows (.row ⟨o, 0, kb⟩) = none := by
   obtain ⟨cell, p, rq, new, calls, rows, used, hir, hrun, -, hcov⟩ :=
@@ -119,7 +121,7 @@ theorem answer_commits {rc : Lang.ReceiptCheck} {X : Ctx D} {w w' : World D} {c 
   obtain ⟨p', hp'⟩ := program_run_reads hid hrun
   have hpin : readPackage (pinned X.env w c.unsigned.pins) P = .ok pk := by
     rw [readPackage_look ((pinned_read_live hp').trans hlook.symm), hp]
-  obtain ⟨nb, x, k, y, kb, vb, hdec, -, -, -, -, hkb, -, hvb, hrows⟩ :=
+  obtain ⟨nb, x, k, y, to, kb, vb, hdec, -, -, -, -, hkb, -, hvb, hrows⟩ :=
     answer_run X.env.bytes X.digestOf hid hpin hs hres hrun
   obtain ⟨hself, -, -⟩ := invokeRun_req hir
   rw [hself] at hrows
@@ -127,6 +129,6 @@ theorem answer_commits {rc : Lang.ReceiptCheck} {X : Ctx D} {w w' : World D} {c 
   obtain ⟨τ1, h1, hs1, ha1⟩ := hcov (.row ⟨o, 1, kb⟩, .upsert 0 vb) (by simp)
   obtain ⟨τ0, h0, hs0, ha0⟩ := hcov (.row ⟨o, 0, kb⟩, .retract) (by simp)
   obtain ⟨ver, hv⟩ := admit_upsert_row hr ha h1 hs1 ha1
-  exact ⟨nb, x, k, y, kb, vb, ver, hdec, hkb, hvb, hv, admit_retract_row hr ha h0 hs0 ha0⟩
+  exact ⟨nb, x, k, y, to, kb, vb, ver, hdec, hkb, hvb, hv, admit_retract_row hr ha h0 hs0 ha0⟩
 
 end Nanodregg.Lang.Bell

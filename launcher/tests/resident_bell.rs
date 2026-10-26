@@ -234,7 +234,7 @@ fn answered(out: &str) -> Vec<Row> {
 /// `answer`'s argument for the ring `r` (its key and its text, re-sent as `ringText`).
 fn answer_arg(r: &Row, text: &str) -> String {
     format!(
-        "(record (notBefore {}) (ringText \"{}\") (ringer #{}) (text \"{text}\"))",
+        "(record (notBefore {}) (ringText \"{}\") (ringer #{}) (text \"{text}\") (to none))",
         r.not_before, r.text, r.ringer
     )
 }
@@ -388,7 +388,12 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
         );
     };
     let ring_op = |o: &str, text: &str| {
-        w.run(&["invoke", o, "4", &format!("(record (text \"{text}\"))")]);
+        w.run(&[
+            "invoke",
+            o,
+            "4",
+            &format!("(record (text \"{text}\") (to none))"),
+        ]);
     };
     let state = |o: &str| {
         format!(
@@ -411,7 +416,7 @@ fn the_resident_answers_every_ring_lowest_first_once_and_nothing_else() {
                     "invoke",
                     &b,
                     "4",
-                    "(record (text \"from-c\"))",
+                    "(record (text \"from-c\") (to none))",
                     "--via",
                     &gc,
                 ],

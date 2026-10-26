@@ -6,6 +6,7 @@ import Lang.Journey.Offer
 import Lang.Journey.OfferEscrow
 import Lang.Journey.Claims
 import Lang.Journey.Doc
+import Lang.Journey.Inbox
 
 open Nanodregg.Lang.Journey
 
@@ -27,4 +28,6 @@ def main (args : List String) : IO UInt32 := do
   let accept ← try IO.FS.readFile acceptSourcePath catch _ => pure ""
   let timelock ← try IO.FS.readFile timelockSourcePath catch _ => pure ""
   let shipped ← Doc.readShipped
-  runAll args [offerSession, offerEscrowSession, headSession accept timelock, Doc.session shipped, claimSession, genSession]
+  let bell ← try IO.FS.readFile bellSourcePath catch _ => pure ""
+  runAll args [offerSession, offerEscrowSession, headSession accept timelock, Doc.session shipped, claimSession, genSession,
+    Inbox.session bell]

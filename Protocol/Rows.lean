@@ -1510,14 +1510,14 @@ def bellLines : List Line :=
     okBind "sponsor" ["create", "--pkg", "@bellPkg", "(record (open true) (resident #{@newcomer}))"] "bell",
     okBind "sponsor" ["grant", "@bell", "@newcomer", "invoke:0"] "ga",
     { actor := "newcomer", act := .cmd ["read", "@bell", "?"], expect := .ok, bind := some "bell",
-      prints := some "doc \"A ring is answered once, by the resident, with its text sent back;" },
+      prints := some "doc \"A ring is answered once by the resident, its text sent back;" },
     { actor := "sponsor", act := .cmd ["invoke", "@bell", "@bell.answer",
-        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"me\"))"],
+        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"me\") (to none))"],
       expect := .refused "program", prints := some "refused notResident" },
     { actor := "newcomer", act := .cmd ["invoke", "@bell", "@bell.answer",
-        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"nobody rang\"))", "--via", "@ga"],
+        "(record (notBefore 1) (ringText \"hi\") (ringer #{@sponsor}) (text \"nobody rang\") (to none))", "--via", "@ga"],
       expect := .refused "lawDenied", prints := some "rung: unrung" },
-    ok "sponsor" ["invoke", "@bell", "@bell.ring", "(record (text \"hello\"))"],
+    ok "sponsor" ["invoke", "@bell", "@bell.ring", "(record (text \"hello\") (to none))"],
     { actor := "newcomer", act := .cmd ["read", "@bell", "pending", "64"], expect := .ok,
       prints := some "hello" }]
 

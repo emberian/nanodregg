@@ -12,10 +12,12 @@ What the installed Bell (`world/resident/Bell`) does, at every package `Lang.Bel
   imports and no holes, and its body is a record, so the closed monitor applies as installed.
 * `resumes_resident`: the Bell's resumer admits exactly a request whose signer is the state's
   resident, so the `answer` step of that machine is the resident's.
-* `answer_run`: a run of the method labelled `answer` that returned decoded `answerData nb x k y`
-  (within its bounds), was signed by the resident, makes no calls, and its row acts are exactly the
-  upsert of `rings` at `(k, nb)` to `answeredVal x y` (`answered (some (ask y))`, captured
-  `ask {text := x}`) and the retract of `pending` there.
+* `answer_run`: a run of the method labelled `answer` that returned decoded `answerData nb x k y to`
+  (within its bounds), was signed by the resident, its row acts are exactly the upsert of `rings` at
+  `(k, nb)` to `answeredVal x y to` (`answered (some (ask y))`, captured `ask {text := x, to}`) and
+  the retract of `pending` there; and its calls are, by the aim `to` it echoed: none, no call; some
+  `{cand, method, target, via}`, exactly one `invoke target method args 100000 (some via)` whose
+  `args` encode `proposalData cand via y` (HOSTING-53: answered is delivered).
 -/
 import Lang.Bell
 import Lang.Proofs.StdActivityMonitor
@@ -97,22 +99,24 @@ theorem resumes_resident {lib : List Term} {req state : Data} (h : Resumes lib r
 /-! ## The `answer` method, run -/
 
 private theorem slot_e2 : slotLabels "e" 2 = ["e0", "e1"] := by decide
+private theorem slot_c1 : slotLabels "c" 1 = ["c0"] := by decide
+private theorem slotInvokeArg_callK : slotInvokeArg callK = some proposalTy := by decide
 
-/-- `answer` resolves to its declared signature: argument `answerArg`, no calls, no reads, two
-edits. -/
+/-- `answer` resolves to its declared signature: argument `answerArg`, one call slot `callK`, no
+reads, two edits. -/
 theorem answer_sig {D : Type} {p : Package} (hs : shapeOk p = true) {m : Nat} {sg : Sig}
-    (h : resolveMethod (D := D) p m = .ok ("answer", sg)) : sg = ⟨answerArg, [], [], 2⟩ := by
+    (h : resolveMethod (D := D) p m = .ok ("answer", sg)) : sg = ⟨answerArg, [callK], [], 2⟩ := by
   obtain ⟨mty, hf, hsig⟩ := resolveMethod_spec h
   obtain ⟨-, -, hS, hr, ha, -⟩ := shape_parts hs
   rw [ha] at hf
   cases hf
   rw [hS, hr] at hsig
-  have : methodSig S rels answerTy = some ⟨answerArg, [], [], 2⟩ := by decide
+  have : methodSig S rels answerTy = some ⟨answerArg, [callK], [], 2⟩ := by decide
   rw [this] at hsig
   exact (Option.some.inj hsig).symm
 
-private theorem answerArg_cases {ad : Data} (h : Conforms ad answerArg) :
-    ∃ nb x k y, ad = answerData nb x k y := by
+private theorem aim_cases {ad : Data} (h : Conforms ad aimTy) :
+    ∃ c m t v, ad = aimData c m t v := by
   cases h with
   | record hr =>
     cases hr with
@@ -122,6 +126,42 @@ private theorem answerArg_cases {ad : Data} (h : Conforms ad answerArg) :
           | cons h4 hr =>
             cases hr; cases h1; cases h2; cases h3; cases h4
             exact ⟨_, _, _, _, rfl⟩
+
+/-- A value of `optTy aimTy` is `none` or `some` an aim. -/
+private theorem to_cases {td : Data} (h : Conforms td (optTy aimTy)) :
+    td = toData none ∨ ∃ c m t v, td = toData (some (aimData c m t v)) := by
+  cases h with
+  | inj hf hc =>
+    rename_i ℓ A d
+    by_cases hn : ℓ = "none"
+    · subst hn
+      simp only [Row.find?, if_true, Option.some.injEq] at hf
+      subst hf
+      cases hc with
+      | record hr => cases hr; exact .inl rfl
+    · by_cases hs : ℓ = "some"
+      · subst hs
+        simp only [Row.find?, if_true, Option.some.injEq, String.reduceEq, if_false] at hf
+        subst hf
+        obtain ⟨c, m, t, v, rfl⟩ := aim_cases hc
+        exact .inr ⟨c, m, t, v, rfl⟩
+      · simp [Row.find?, hn, hs] at hf
+
+private theorem answerArg_cases {ad : Data} (h : Conforms ad answerArg) :
+    ∃ nb x k y to, ad = answerData nb x k y to ∧ Conforms (toData to) (optTy aimTy) ∧
+      (to = none ∨ ∃ c m t v, to = some (aimData c m t v)) := by
+  cases h with
+  | record hr =>
+    cases hr with
+    | cons h1 hr => cases hr with
+      | cons h2 hr => cases hr with
+        | cons h3 hr => cases hr with
+          | cons h4 hr => cases hr with
+            | cons h5 hr =>
+              cases hr; cases h1; cases h2; cases h3; cases h4
+              rcases to_cases h5 with h5' | ⟨c, m, t, v, h5'⟩ <;> subst h5'
+              · exact ⟨_, _, _, _, none, rfl, h5, .inl rfl⟩
+              · exact ⟨_, _, _, _, some (aimData c m t v), rfl, h5, .inr ⟨c, m, t, v, rfl⟩⟩
 
 private theorem state_cases {sd : Data} (h : Conforms sd S) :
     ∃ b a, sd = .record [("open", .bool b), ("resident", .digest a)] := by
@@ -154,45 +194,40 @@ private theorem bound_eval {lib : List Term} {env : Env} {f : Label} {s : ByteAr
     have h0' : decide (s.size ≤ 0) = false := by simp [h0]
     exact .iteF (h0' ▸ hle 0) (hle 2000)
 
-/-- The edits row of `answer`'s success term. -/
-private abbrev editsT : Term :=
-  .record [
-    ("e0", someCallT E (.inj E "rings" (.inj (relEditTy rings) "upsert" (.record [("key", ringKey),
-      ("val", .record [
-        ("answered", someCallT (activityResponses plans) (.inj (activityResponses plans) "ask" (.get (.var 1) "text"))),
-        ("captured", .inj (activityCaptured plans) "ask" (.record [("text", .get (.var 1) "ringText")]))])])))),
-    ("e1", someCallT E (.inj E "pending" (.inj (relEditTy pending) "retract" (.record [("key", ringKey)]))))]
-
-private theorem editsT_means {lib : List Term} {req state rows : Val} {nb : Nat} {x k y : ByteArray} {W : Val}
-    (hW : BigStep lib [req, (answerData nb x k y).toVal, state, rows] editsT (.ok W)) :
-    Means lib (.record [("e0", optTy E), ("e1", optTy E)]) W (answerEdits nb x k y) := by
-  let env : Env := [req, (answerData nb x k y).toVal, state, rows]
-  have hg : ∀ (ℓ : Label) (d : Data), (answerData nb x k y).field ℓ = some d →
-      BigStep lib env (.get (.var 1) ℓ) (.ok d.toVal) :=
-    fun ℓ d hd => get_data (BigStep.var (i := 1) rfl) hd
-  have hkey : Means lib (keyTy rings) (.record (suspend env [("agent", .get (.var 1) "ringer"),
-      ("notBefore", .get (.var 1) "notBefore")])) (keyData nb k) :=
+/-- The edits row of `answer`'s success term, in an arm's environment (the arm's payload at 0, the
+argument at 2), means `answerEdits`. -/
+private theorem editsT_means {lib : List Term} {pay req state rows : Val} {nb : Nat} {x k y : ByteArray}
+    {to : Option Data} (hto : Conforms (toData to) (optTy aimTy)) {W : Val}
+    (hW : BigStep lib [pay, req, (answerData nb x k y to).toVal, state, rows] (answerEditsT 2) (.ok W)) :
+    Means lib (.record [("e0", optTy E), ("e1", optTy E)]) W (answerEdits nb x k y to) := by
+  let env : Env := [pay, req, (answerData nb x k y to).toVal, state, rows]
+  have hg : ∀ (ℓ : Label) (d : Data), (answerData nb x k y to).field ℓ = some d →
+      BigStep lib env (.get (.var 2) ℓ) (.ok d.toVal) :=
+    fun ℓ d hd => get_data (BigStep.var (i := 2) rfl) hd
+  have hkey : Means lib (keyTy rings) (.record (suspend env [("agent", .get (.var 2) "ringer"),
+      ("notBefore", .get (.var 2) "notBefore")])) (keyData nb k) :=
     .record .record (.cons (hg "ringer" (.digest k) rfl) .digest (.cons (hg "notBefore" (.nat nb) rfl) .nat .nil))
   cases hW
   refine .record .record (.cons (.inj (.inj (.inj .record))) ?_ (.cons (.inj (.inj (.inj .record))) ?_ .nil))
   · refine .inj rfl (.inj rfl (.inj rfl (.record .record (.cons .record hkey (.cons .record ?_ .nil)))))
     refine .record .record (.cons (.inj (.inj (hg "text" (.bytes y) rfl))) (.inj rfl (.inj rfl .bytes))
-      (.cons (.inj .record) (.inj rfl (.record .record (.cons (hg "ringText" (.bytes x) rfl) .bytes .nil))) .nil))
+      (.cons (.inj .record) (.inj rfl (.record .record (.cons (hg "ringText" (.bytes x) rfl) .bytes
+        (.cons (hg "to" (toData to) rfl) (means_toVal hto) .nil)))) .nil))
   · exact .inj rfl (.inj rfl (.inj rfl (.record .record (.cons .record hkey .nil))))
 
-private theorem answer_editsOf {D : Type} {self : D} {nb : Nat} {x k y : ByteArray} {es : List (Edit D)}
-    (h : editsOf rels self (answerEdits nb x k y) = .ok es) :
+private theorem answer_editsOf {D : Type} {self : D} {nb : Nat} {x k y : ByteArray} {to : Option Data}
+    {es : List (Edit D)} (h : editsOf rels self (answerEdits nb x k y to) = .ok es) :
     ∃ kb vb, keyBytes rings (keyData nb k) = some kb ∧ keyBytes pending (keyData nb k) = some kb ∧
-      Wire.encodeData rings.val (answeredVal x y) = some vb ∧
+      Wire.encodeData rings.val (answeredVal x y to) = some vb ∧
       es.map (fun e => (e.slot, e.act)) =
         [(Kernel.RowSlot.row ⟨self, 1, kb⟩, Kernel.RowAct.upsert 0 vb), (Kernel.RowSlot.row ⟨self, 0, kb⟩, Kernel.RowAct.retract)] := by
   have hpk : keyBytes pending (keyData nb k) = keyBytes rings (keyData nb k) := rfl
   have i0 : relIndex [("pending", pending), ("rings", rings)] "pending" = some 0 := rfl
   have i1 : relIndex [("pending", pending), ("rings", rings)] "rings" = some 1 := rfl
-  have ha : amtOf rings (answeredVal x y) = 0 := rfl
+  have ha : amtOf rings (answeredVal x y to) = 0 := rfl
   have hr : pending.retract = true := rfl
   rw [hpk]
-  cases hk : keyBytes rings (keyData nb k) <;> cases hv : Wire.encodeData rings.val (answeredVal x y) <;>
+  cases hk : keyBytes rings (keyData nb k) <;> cases hv : Wire.encodeData rings.val (answeredVal x y to) <;>
     simp [editsOf, editsOf.go, editOf, answerEdits, i0, i1, rels, Row.find?, hk, hv, hpk, hr, ha, bind,
       Except.bind, pure, Except.pure] at h
   subst h
@@ -200,18 +235,21 @@ private theorem answer_editsOf {D : Type} {self : D} {nb : Nat} {x k y : ByteArr
 
 private theorem noRef_answer : NoRef answer := by
   simp [answer, answerBody, answerBounds, Surface.boundCheck, Surface.Bound.cond, Surface.pathT, NoRef, NoRefRow,
-    resultT, someCallT, ringKey]
+    resultT, someCallT, noCallT, callsT, forwardT, answerEditsT, ringKeyAt, natT, slot_c1]
 
 section
 variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
 
-/-- **The edits of the Bell's `answer`** (the deployed run, `Lang.program`'s `run`, of the method a
-Bell labels `answer`): a run that returned decoded its argument as `answerData nb x k y`, with the
-ring's text `x` and the answer `y` inside their bounds; the request was signed by the state's
-resident; it makes no calls; and its row acts are exactly the upsert of `rings` (relation 1) at the
-ring's key `(k, nb)` to `answeredVal x y` (`answered (some (ask y))`, captured `ask {text := x}`), and
-the retract of `pending` (relation 0) at the same key. The answer written is the argument's `text`,
-not the ring's. -/
+/-- **The edits and the calls of the Bell's `answer`** (the deployed run, `Lang.program`'s `run`, of
+the method a Bell labels `answer`): a run that returned decoded its argument as `answerData nb x k y
+to`, with the ring's text `x` and the answer `y` inside their bounds; the request was signed by the
+state's resident; its row acts are exactly the upsert of `rings` (relation 1) at the ring's key
+`(k, nb)` to `answeredVal x y to` (`answered (some (ask y))`, captured `ask {text := x, to}`), and the
+retract of `pending` (relation 0) at the same key; and its calls are, by the aim it echoed: `to =
+none`, no call; `to = some {cand, method, target, via}`, exactly one `invoke target method args
+100000 (some via)` (the target and the grant as the digests `digestOf` reads) whose `args` are the
+bytes of `proposalData cand via y`. The answer written and forwarded is the argument's `text`, not
+the ring's. -/
 theorem answer_run {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D}
     {pkg : D} {state : Kernel.Slots} {m : Nat} {args : ByteArray} {r : Kernel.Receive.Req D}
     {budget : Nat} {s : Kernel.Slots} {calls : List (Kernel.Receive.Body D)}
@@ -219,12 +257,15 @@ theorem answer_run {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p) (hs : shapeOk p = true)
     (hres : resolveMethod (D := D) p m = .ok ("answer", sg))
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state m args r budget = .ok (s, calls, rows, used)) :
-    ∃ nb x k y kb vb, Wire.decodeData answerArg args = .ok (answerData nb x k y) ∧
+    ∃ nb x k y to kb vb, Wire.decodeData answerArg args = .ok (answerData nb x k y to) ∧
       (1 ≤ x.size ∧ x.size ≤ 2000) ∧ (1 ≤ y.size ∧ y.size ≤ 2000) ∧
       (∃ b, readState digestOf (recordRow S) state = .ok (.record [("open", .bool b), ("resident", .digest (bytesOf r.agent))])) ∧
-      calls = [] ∧
+      ((to = none ∧ calls = []) ∨
+        ∃ c mt t v tD vD ab, to = some (aimData c mt t v) ∧ digestOf t = some tD ∧ digestOf v = some vD ∧
+          Wire.encodeData proposalTy (proposalData c v y) = some ab ∧
+          calls = [.invoke tD mt ab 100000 (some vD)]) ∧
       keyBytes rings (keyData nb k) = some kb ∧ keyBytes pending (keyData nb k) = some kb ∧
-      Wire.encodeData rings.val (answeredVal x y) = some vb ∧
+      Wire.encodeData rings.val (answeredVal x y to) = some vb ∧
       rows = [(.row ⟨r.self, 1, kb⟩, .upsert 0 vb), (.row ⟨r.self, 0, kb⟩, .retract)] := by
   obtain ⟨hi, hh, hS, hR, -, fs, hb, hfa, -⟩ := shape_parts hs
   have hsg := answer_sig hs hres
@@ -246,21 +287,21 @@ theorem answer_run {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv
   rw [hres] at hres'
   cases hres'
   simp only at hrun hx hes
-  obtain ⟨nb, x, k, y, rfl⟩ := answerArg_cases (decodeData_conforms had)
+  obtain ⟨nb, x, k, y, to, rfl, hto, hcases⟩ := answerArg_cases (decodeData_conforms had)
   have hsdc := readState_conforms hsd
   rw [hS] at hsdc
   obtain ⟨bo, a, rfl⟩ := state_cases hsdc
   have hbig := run_bigStep hrun
-  let env : Env := [(reqData bytesOf r).toVal, (answerData nb x k y).toVal,
+  let env : Env := [(reqData bytesOf r).toVal, (answerData nb x k y to).toVal,
     (Data.record [("open", .bool bo), ("resident", .digest a)]).toVal, wd.toVal]
   have fwd : ∀ {r' : Except Fault Val},
       BigStep L.lib env (Surface.boundCheck answerRes answerBounds answerBody) r' →
       BigStep L.lib env (apply4 g "answer") r' :=
     fun hb' => apply4_method hlib hb hfa noRef_answer hb'
   have c1 := bound_eval (lib := L.lib) (env := env) (f := "ringText") (s := x)
-    (get_data (d := answerData nb x k y) (x := .bytes x) (BigStep.var (i := 1) rfl) rfl)
+    (get_data (d := answerData nb x k y to) (x := .bytes x) (BigStep.var (i := 1) rfl) rfl)
   have c2 := bound_eval (lib := L.lib) (env := env) (f := "text") (s := y)
-    (get_data (d := answerData nb x k y) (x := .bytes y) (BigStep.var (i := 1) rfl) rfl)
+    (get_data (d := answerData nb x k y to) (x := .bytes y) (BigStep.var (i := 1) rfl) rfl)
   by_cases hx0 : ¬(1 ≤ x.size ∧ x.size ≤ 2000)
   · rw [decide_eq_false hx0] at c1
     cases bigStep_deterministic hbig (fwd (.iteF c1 .refuse))
@@ -283,32 +324,87 @@ theorem answer_run {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv
   have hA' := Decidable.not_not.mp hA
   subst hA'
   rw [decide_eq_true rfl] at hdq
-  have hok := fwd (.iteT c1 (.iteT c2 (.iteT hdq .record)))
-  cases bigStep_deterministic hbig hok
+  have hget : BigStep L.lib env (.get (.var 1) "to") (.ok (toData to).toVal) :=
+    get_data (d := answerData nb x k y to) (BigStep.var (i := 1) rfl) rfl
   have hM := extract_means _ _ hx
   rw [hS, hR] at hM
-  have hwE := BigStep.get (ℓ := "edits") hbig (.field (find_suspend_of (t := editsT) rfl) .record)
-  obtain ⟨A, hA, hmA⟩ := means_get hbig hM rfl hwE
-  simp [slot_e2, Row.find?] at hA
-  subst hA
-  have hED := editsT_means (lib := L.lib) (req := (reqData bytesOf r).toVal)
-    (state := (Data.record [("open", .bool bo), ("resident", .digest (bytesOf r.agent))]).toVal)
-    (rows := wd.toVal) (nb := nb) (x := x) (k := k) (y := y) .record
-  have he := means_deterministic hmA hED
-  subst he
-  have hwC := BigStep.get (ℓ := "calls") hbig (.field (find_suspend_of (t := .record []) rfl) .record)
-  obtain ⟨A', hA', hmC⟩ := means_get hbig hM rfl hwC
-  simp [Row.find?] at hA'
-  subst hA'
-  have hc0 : Means L.lib (callsTy []) (.record []) (.record []) := .record .record .nil
-  have hce := means_deterministic hmC hc0
-  subst hce
-  simp [callsOf, callsOf.go] at hc
-  subst hc
+  have hst : ∃ b, readState digestOf (recordRow S) state =
+      .ok (.record [("open", .bool b), ("resident", .digest (bytesOf r.agent))]) := ⟨bo, by rw [← hS]; exact hsd⟩
   rw [hR] at hes
-  obtain ⟨kb, vb, hkb, hpb, hvb, hmap⟩ := answer_editsOf hes
-  refine ⟨nb, x, k, y, kb, vb, had, hx1, hy1, ⟨bo, ?_⟩, rfl, hkb, hpb, hvb, hrows.trans hmap⟩
-  rw [← hS]; exact hsd
+  rcases hcases with rfl | ⟨c, mt, t, v, rfl⟩
+  · -- the unaimed answer: the two edits, no call
+    have hok := fwd (.iteT c1 (.iteT c2 (.iteT hdq (.case hget rfl .record))))
+    cases bigStep_deterministic hbig hok
+    have hwE := BigStep.get (ℓ := "edits") hbig (.field (find_suspend_of (t := answerEditsT 2) rfl) .record)
+    obtain ⟨A, hA, hmA⟩ := means_get hbig hM rfl hwE
+    simp [slot_e2, Row.find?] at hA
+    subst hA
+    have hED := editsT_means (lib := L.lib) (pay := (Data.record []).toVal) (req := (reqData bytesOf r).toVal)
+      (state := (Data.record [("open", .bool bo), ("resident", .digest (bytesOf r.agent))]).toVal)
+      (rows := wd.toVal) (nb := nb) (x := x) (k := k) (y := y) (to := none) hto .record
+    have he := means_deterministic hmA hED
+    subst he
+    have hwC := BigStep.get (ℓ := "calls") hbig (.field (find_suspend_of (t := callsT [noCallT callK]) rfl) .record)
+    obtain ⟨A', hA', hmC⟩ := means_get hbig hM rfl hwC
+    simp [Row.find?] at hA'
+    subst hA'
+    have hc0 : Means L.lib (callsTy [callK])
+        (.record (suspend ((Data.record []).toVal :: env) ((slotLabels "c" 1).zip [noCallT callK]))) noCalls := by
+      rw [slot_c1]
+      exact .record .record (.cons (.inj .record) (.inj rfl (.record .record .nil)) .nil)
+    have hce := means_deterministic hmC hc0
+    subst hce
+    simp [callsOf, callsOf.go, noCalls] at hc
+    subst hc
+    obtain ⟨kb, vb, hkb, hpb, hvb, hmap⟩ := answer_editsOf hes
+    exact ⟨nb, x, k, y, none, kb, vb, had, hx1, hy1, hst, .inl ⟨rfl, rfl⟩, hkb, hpb, hvb, hrows.trans hmap⟩
+  · -- the aimed answer: the two edits, and the forward
+    have hok := fwd (.iteT c1 (.iteT c2 (.iteT hdq (.case hget rfl .record))))
+    cases bigStep_deterministic hbig hok
+    let env' : Env := (aimData c mt t v).toVal :: env
+    have hwE := BigStep.get (ℓ := "edits") hbig (.field (find_suspend_of (t := answerEditsT 2) rfl) .record)
+    obtain ⟨A, hA, hmA⟩ := means_get hbig hM rfl hwE
+    simp [slot_e2, Row.find?] at hA
+    subst hA
+    have hED := editsT_means (lib := L.lib) (pay := (aimData c mt t v).toVal) (req := (reqData bytesOf r).toVal)
+      (state := (Data.record [("open", .bool bo), ("resident", .digest (bytesOf r.agent))]).toVal)
+      (rows := wd.toVal) (nb := nb) (x := x) (k := k) (y := y) (to := some (aimData c mt t v)) hto .record
+    have he := means_deterministic hmA hED
+    subst he
+    have hwC := BigStep.get (ℓ := "calls") hbig (.field (find_suspend_of (t := callsT [forwardT]) rfl) .record)
+    obtain ⟨A', hA', hmC⟩ := means_get hbig hM rfl hwC
+    simp [Row.find?] at hA'
+    subst hA'
+    have ha : ∀ (ℓ : Label) (d : Data), (aimData c mt t v).field ℓ = some d →
+        BigStep L.lib env' (.get (.var 0) ℓ) (.ok d.toVal) :=
+      fun ℓ d hd => get_data (BigStep.var (i := 0) rfl) hd
+    have hy : BigStep L.lib env' (.get (.var 2) "text") (.ok (Data.bytes y).toVal) :=
+      get_data (d := answerData nb x k y (some (aimData c mt t v))) (BigStep.var (i := 2) rfl) rfl
+    have hcS : Means L.lib (callsTy [callK]) (.record (suspend env' ((slotLabels "c" 1).zip [forwardT])))
+        (forwardCalls c mt t v y) := by
+      rw [slot_c1]
+      exact .record .record (.cons (.inj (.inj .record)) (.inj rfl (.inj rfl (.record .record
+        (.cons .record (.record .record
+          (.cons (ha "cand" (.digest c) rfl) .digest
+          (.cons (.inj .record) (.inj rfl (.record .record
+            (.cons (ha "via" (.digest v) rfl) .digest (.cons (ha "via" (.digest v) rfl) .digest .nil))))
+          (.cons (.inj .record) (.inj rfl (.record .record .nil))
+          (.cons hy .bytes .nil)))))
+        (.cons .nat .nat
+        (.cons (ha "method" (.nat mt) rfl) .nat
+        (.cons (ha "target" (.digest t) rfl) .digest
+        (.cons (.inj (ha "via" (.digest v) rfl)) (.inj rfl .digest) .nil)))))))) .nil)
+    have hce := means_deterministic hmC hcS
+    subst hce
+    simp only [callsOf, callsOf.go, forwardCalls, forwardData, bodyOf, slotInvokeArg_callK,
+      digestAt, natOf, optOf, argsBytes, bind, Except.bind, pure, Except.pure, Except.map] at hc
+    cases htD : digestOf t <;> cases hvD : digestOf v <;>
+      cases hab : Wire.encodeData proposalTy (proposalData c v y) <;> simp [htD, hvD, hab] at hc
+    rename_i tD vD ab
+    subst hc
+    obtain ⟨kb, vb, hkb, hpb, hvb, hmap⟩ := answer_editsOf hes
+    exact ⟨nb, x, k, y, some (aimData c mt t v), kb, vb, had, hx1, hy1, hst,
+      .inr ⟨c, mt, t, v, tD, vD, ab, rfl, htD, hvD, hab, rfl⟩, hkb, hpb, hvb, hrows.trans hmap⟩
 
 end
 

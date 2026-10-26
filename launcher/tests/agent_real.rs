@@ -197,7 +197,12 @@ fn a_real_model_answers_the_bell_once_within_its_budget() {
             .count()
     };
     let ring = |text: &str| {
-        w.run(&["invoke", &b, "4", &format!("(record (text \"{text}\"))")]);
+        w.run(&[
+            "invoke",
+            &b,
+            "4",
+            &format!("(record (text \"{text}\") (to none))"),
+        ]);
         w.run(&["sync"]);
     };
     let window = |t: u64| t / WINDOW_MS_REAL;

@@ -8,6 +8,7 @@ counts and prints.
 -/
 import Bench.WorstCut
 import Lang.Surface
+import Lang.Bell
 import Lang.Read
 import Lang.Print
 import Lang.Rel
@@ -66,12 +67,11 @@ def rowsCall (rc : RowsCtx) (a : Who) (w : World D) (j ring : Nat) : Call D × N
   match j % 3 with
   | 0 =>
     (call w a [a.id, rc.obj, rc.pkg]
-      (.invoke rc.obj 4 (argOf (.record [("text", .bytes)]) (.record [("text", .bytes "r".toUTF8)])) 100000 none), w.height)
+      (.invoke rc.obj 4 (argOf Lang.Bell.ringArg (.record [("text", .bytes "r".toUTF8), ("to", Lang.Bell.toData none)])) 100000 none), w.height)
   | 1 =>
     (call w rc.b [rc.b.id, rc.obj, rc.pkg, rc.gr]
-      (.invoke rc.obj 0 (argOf (.record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)])
-        (.record [("notBefore", .nat ring), ("ringText", .bytes "r".toUTF8), ("ringer", .digest (X.env.bytes a.id)),
-          ("text", .bytes "a".toUTF8)])) 100000 (some rc.gr))
+      (.invoke rc.obj 0 (argOf Lang.Bell.answerArg
+        (Lang.Bell.answerData ring "r".toUTF8 (X.env.bytes a.id) "a".toUTF8 none)) 100000 (some rc.gr))
       (pinRow rc w 0 rc.dP (activityRowKey ring a.id) ++ pinRow rc w 1 rc.dR (activityRowKey ring a.id)), ring)
   | _ =>
     (call w a [a.id, rc.obj, rc.pkg]

@@ -16,10 +16,16 @@ member socket:
   limit the lines are ALL the pending rings (`Protocol.Proofs.Command.rangeLines_reads`), in
   ascending key order, which is ring order (`Lang.Proofs.KeyOrder.range_keys_ascend_read`).
 - It answers the lowest pending ring: `invoke OBJ <answer> ARG`, ARG `Lang.Print.data` of
-  `(record (notBefore N) (ringText X) (ringer #H) (text T))`, X the ring's text as the pending row
-  holds it. The bell (LANG-59) upserts `rings[k]` to an `answered (some (ask T))` with immutable `captured (ask (text X))` and retracts
-  `pending[k]`; its `rings` guard refuses the upsert unless the ring is unanswered and X is the
-  ring's own text (`rung: answered`, `rung: text`), so exactly-once is a check on the row as it is.
+  `(record (notBefore N) (ringText X) (ringer #H) (text T) (to A))`, X the ring's text and A its
+  optional AIM (HOSTING-53: `(none)`, or `(some (record (cand #C) (method M) (target #O) (via #G)))`) as
+  the pending row holds them. The bell (LANG-59) upserts `rings[k]` to an `answered (some (ask T))`
+  with immutable `captured (ask (record (text X) (to A)))` and retracts `pending[k]`; its `rings`
+  guard refuses the upsert unless the ring is unanswered and the capture echoed is the ring's own
+  (`rung: answered`, `rung: text`), so exactly-once is a check on the row as it is, and an aim cannot
+  be dropped or altered by the resident. For an aimed ring the bell's `answer` also makes ONE nested
+  call, the forward of T to the aim's target (`Lang.Proofs.Bell.answer_run`): answered is delivered,
+  in the same Turn. The resident neither reads nor pins the target: the aim it echoes is judged by
+  the guard, the forward by the kernel's authority on the Bell object's grant (`via`).
 
 Everything it reads and writes is Lang's one reader and one printer. It holds no copy of either.
 
@@ -72,17 +78,18 @@ def Conf.read (text : String) : Option Conf :=
 
 /-! ## The description -/
 
-/-- The argument type of the bell's `answer` (LANG-59): the ring's key, the ring's own text as the
-resident read it (`ringText`: the bell's guard refuses the answer unless it equals the ring's), and
-the answer text. Labels ascending, as every Lang row (`"ringText" < "ringer"`). -/
-def answerArgTy : Ty :=
-  .record [("notBefore", .nat), ("ringText", .bytes), ("ringer", .digest), ("text", .bytes)]
+/-- The argument type of the bell's `answer` (LANG-59, HOSTING-53): the ring's key, the ring's own
+text and aim as the resident read them (`ringText`, `to`: the bell's guard refuses the answer unless
+they equal the ring's), and the answer text. The witness's own (`Lang.Bell.answerArg`): one
+definition, read back from the description and compared by name (`Shape.ofLines`). -/
+def answerArgTy : Ty := Lang.Bell.answerArg
 
 /-- The key of the bell's `pending`, in declared order (key bytes follow it, LANG-49/57). -/
 def pendingKey : List (Label × Ty) := [("notBefore", .nat), ("agent", .digest)]
 
-/-- The value of the bell's `pending`: the ring's text, held beside the key so a tick is one read. -/
-def pendingVal : Ty := .record [("captured", .sum [("ask", .record [("text", .bytes)])])]
+/-- The value of the bell's `pending`: the ring's capture (its text and its optional aim,
+`Lang.Bell.askCaptured`), held beside the key so a tick is one read. -/
+def pendingVal : Ty := .record [("captured", .sum [("ask", Lang.Bell.askCaptured)])]
 
 /-- What the resident needs from the description: `answer`'s index and `pending` as declared,
 with the key and value it reads at (so every theorem over a shape has them without a premise). -/
@@ -186,25 +193,50 @@ line names `bell` or the description is refused `wrongObject`; then `Shape.read`
 def Shape.ofDescription (bell : ByteArray) (out : String) : Except String Shape :=
   if objectNamed bell (splitLines out.toList) then Shape.read out else .error "wrongObject"
 
+/-! ## An aim (HOSTING-53) -/
+
+/-- An AIM, as a ring's capture holds it (`Lang.Bell.aimTy`): where the ring's answer is delivered.
+The target object, the index of its method, the grant the Bell object holds on it (`via`), and the
+candidate id the ringer chose. The resident carries it from the pending row to its answer unread. -/
+structure Aim where
+  cand : ByteArray
+  method : Nat
+  target : ByteArray
+  via : ByteArray
+  deriving DecidableEq
+
+def Aim.data (a : Aim) : Data := Lang.Bell.aimData a.cand a.method a.target a.via
+
+/-- An optional aim as the `to` field's datum (`Lang.Bell.toData` of the aim's data; `toDatum_eq`). -/
+def toDatum : Option Aim → Data
+  | none => .inj "none" (.record [])
+  | some a => .inj "some" a.data
+
 /-! ## A ring -/
 
-/-- A pending ring: its key (the signed notBefore it rang at, who rang) and its text. -/
+/-- A pending ring: its key (the signed notBefore it rang at, who rang), its text and its aim. -/
 structure Ring where
   notBefore : Nat
   ringer : ByteArray
   text : ByteArray
+  to : Option Aim
   deriving DecidableEq
 
-/-- A ring as the activity cursor row: key agent/notBefore, captured ask/text.
+/-- A ring as the activity cursor row: key agent/notBefore, captured ask/{text, to}.
 The declared key order remains notBefore then agent; the record labels are canonical. -/
 def Ring.row (r : Ring) : Data :=
   .record [("key", .record [("agent", .digest r.ringer), ("notBefore", .nat r.notBefore)]),
-    ("val", .record [("captured", .inj "ask" (.record [("text", .bytes r.text)]))])]
+    ("val", .record [("captured", .inj "ask" (.record [("text", .bytes r.text), ("to", toDatum r.to)]))])]
 
 /-- The ring in a row datum, or why the datum is not a pending row. -/
 def Ring.ofRow : Data → Except String Ring
   | .record [("key", .record [("agent", .digest g), ("notBefore", .nat n)]),
-      ("val", .record [("captured", .inj "ask" (.record [("text", .bytes t)]))])] => .ok ⟨n, g, t⟩
+      ("val", .record [("captured", .inj "ask" (.record [("text", .bytes t), ("to", .inj "none" (.record []))]))])] =>
+    .ok ⟨n, g, t, none⟩
+  | .record [("key", .record [("agent", .digest g), ("notBefore", .nat n)]),
+      ("val", .record [("captured", .inj "ask" (.record [("text", .bytes t), ("to", .inj "some" (.record
+        [("cand", .digest c), ("method", .nat m), ("target", .digest o), ("via", .digest v)]))]))])] =>
+    .ok ⟨n, g, t, some ⟨c, m, o, v⟩⟩
   | _ => .error "rowFields"
 
 /-- One line of `read OBJ pending K`, read at `pending`'s row type. -/
@@ -279,11 +311,10 @@ def answerText : Broker.Answer → ByteArray
   | .refused why => fit (named s!"refused {why.name}")
   | .status c => fit (named s!"status {c}")
 
-/-- The `answer` argument's datum, at `answerArgTy`: the ring's key, the ring's text re-sent, the
-answer text. -/
+/-- The `answer` argument's datum, at `answerArgTy`: the ring's key, the ring's text and aim re-sent,
+the answer text (the witness's `Lang.Bell.answerData`). -/
 def answerDatum (r : Ring) (t : ByteArray) : Data :=
-  .record [("notBefore", .nat r.notBefore), ("ringText", .bytes r.text), ("ringer", .digest r.ringer),
-    ("text", .bytes t)]
+  Lang.Bell.answerData r.notBefore r.text r.ringer t (r.to.map Aim.data)
 
 /-- The `answer` argument for ring `r`, through Lang's one printer. -/
 def answerArg (r : Ring) (t : ByteArray) : Option String := Print.data (answerDatum r t)
@@ -294,20 +325,24 @@ def askOf (c : Conf) (r : Ring) : Broker.Ask :=
 
 /-! ## What the volume keeps: a ring and its decided answer -/
 
-/-- One kept record: the ring (key and text) and the answer decided for it. -/
+/-- One kept record: the ring (key, text and aim) and the answer decided for it. -/
 def keptTy : Ty :=
-  .record [("answer", .bytes), ("notBefore", .nat), ("ringer", .digest), ("text", .bytes)]
+  .record [("answer", .bytes), ("notBefore", .nat), ("ringer", .digest), ("text", .bytes), ("to", optTy Lang.Bell.aimTy)]
 
 def keptDatum (r : Ring) (t : ByteArray) : Data :=
   .record [("answer", .bytes t), ("notBefore", .nat r.notBefore), ("ringer", .digest r.ringer),
-    ("text", .bytes r.text)]
+    ("text", .bytes r.text), ("to", toDatum r.to)]
 
 def keptText (r : Ring) (t : ByteArray) : Option String := Print.data (keptDatum r t)
 
 def keptRead (s : String) : Option (Ring × ByteArray) :=
   match Read.readData keptTy s with
-  | .ok (.record [("answer", .bytes t), ("notBefore", .nat n), ("ringer", .digest g), ("text", .bytes x)]) =>
-    some (⟨n, g, x⟩, t)
+  | .ok (.record [("answer", .bytes t), ("notBefore", .nat n), ("ringer", .digest g), ("text", .bytes x),
+      ("to", .inj "none" (.record []))]) =>
+    some (⟨n, g, x, none⟩, t)
+  | .ok (.record [("answer", .bytes t), ("notBefore", .nat n), ("ringer", .digest g), ("text", .bytes x),
+      ("to", .inj "some" (.record [("cand", .digest c), ("method", .nat m), ("target", .digest o), ("via", .digest v)]))]) =>
+    some (⟨n, g, x, some ⟨c, m, o, v⟩⟩, t)
   | _ => none
 
 /-! ## The member commands (`nd --stdio`'s argv) -/

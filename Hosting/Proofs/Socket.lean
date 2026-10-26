@@ -656,7 +656,8 @@ the wire encoding of `answerDatum r t`, the ring's key, its text, and the answer
 theorem answer_args_at_answerArgTy {digestOf : ByteArray → Option D} {look : Pinned D} {pkg : D} {m : Nat}
     {r : Resident.Ring} {t : ByteArray} {txt : String} {args : ByteArray}
     (hn : r.notBefore < Lang.Bounds.natLimit) (hx : r.text.size ≤ Lang.Bounds.bytesMax)
-    (hg : r.ringer.size ≤ Lang.Bounds.digestBytesMax) (ht : t.size ≤ Lang.Bounds.bytesMax)
+    (hg : r.ringer.size ≤ Lang.Bounds.digestBytesMax) (ha : Nanodregg.Hosting.Proofs.Resident.AimOk r.to)
+    (ht : t.size ≤ Lang.Bounds.bytesMax)
     (htxt : Resident.answerArg r t = some txt) (h : Lang.argsOf digestOf look pkg m txt = .ok args) :
     ∃ pk ℓ sg, Lang.readPackage look pkg = .ok pk ∧ Lang.resolveMethod (D := D) pk m = .ok (ℓ, sg) ∧
       (sg.arg = Resident.answerArgTy → Lang.Wire.encodeData Resident.answerArgTy (Resident.answerDatum r t) = some args) := by
@@ -669,7 +670,7 @@ theorem answer_args_at_answerArgTy {digestOf : ByteArray → Option D} {look : P
   rename_i x hres
   obtain ⟨ℓ, sg⟩ := x
   refine ⟨pk, ℓ, sg, hpk, hres, fun hty => ?_⟩
-  have hrd := Nanodregg.Hosting.Proofs.Resident.answerArg_reads hn hx hg ht htxt
+  have hrd := Nanodregg.Hosting.Proofs.Resident.answerArg_reads hn hx hg ha ht htxt
   dsimp only at h
   rw [hty] at h
   simp only [Lang.readAt, hrd] at h
