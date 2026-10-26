@@ -13,11 +13,11 @@ import os
 import re
 
 # subject prefix -> the layers whose paths it may change. LEDGER has its own prefix `ledger:` (ROOT
-# 10-17, replacing the `kernel:`-owns-LEDGER mapping of 5be0d98).
+# 10-17, replacing the `kernel:`-owns-LEDGER mapping of 5be0d98). SPEC (`Spec/`, the top-level claims) has `spec:` (ROOT 10-26).
 SUBJECT = {"kernel": {"KERNEL"}, "ledger": {"LEDGER"}, "codec": {"CODEC"}, "emit": {"CODEC"}, "host": {"HOST"},
            "protocol": {"PROTOCOL"}, "rows": {"PROTOCOL"}, "client": {"CLIENT"}, "sandbox": {"CLIENT"},
            "lang": {"LANG"}, "hosting": {"HOSTING"}, "ops": {"OPS"}, "perf": {"PERF"},
-           "transport": {"TRANSPORT"}, "gates": {"GATES"}, "build": {"GATES"}, "charter": {"ROOT"},
+           "transport": {"TRANSPORT"}, "spec": {"SPEC"}, "gates": {"GATES"}, "build": {"GATES"}, "charter": {"ROOT"},
            "root": {"ROOT"}}
 
 

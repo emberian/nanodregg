@@ -72,5 +72,7 @@ scripts/bar.sh	PERF
 gates/bar.tsv	PERF
 decisions/perf.md	PERF
 decisions/transport.md	TRANSPORT
+Spec/	SPEC
+decisions/spec.md	SPEC
 README.md	ROOT
 LICENSE	ROOT
