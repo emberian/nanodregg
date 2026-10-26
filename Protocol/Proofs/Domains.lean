@@ -1,16 +1,18 @@
 /-
 # Protocol.Proofs.Domains — every message a member key signs begins with its own domain (KERNEL-42)
 
-A member key signs six shapes: a call (`Receive.Ctx.callMessage`, `domCall`), a possession
+A member key signs seven shapes: a call (`Receive.Ctx.callMessage`, `domCall`), a possession
 proof (`Receive.possessionMessage`, `tagPossession`), a read envelope (`Envelope.message`,
 `domEnvelope`), `init`'s identity probe (`Command.whoami`, a constant), an invitation
-(`Invite.message`, `domInvite`, PROTOCOL-42) and a cancel (`Receive.Ctx.cancelMessage`,
-`domCancel`, KERNEL-60; PROTOCOL-60). Each pair of domains
+(`Invite.message`, `domInvite`, PROTOCOL-42), a cancel (`Receive.Ctx.cancelMessage`,
+`domCancel`, KERNEL-60; PROTOCOL-60) and a head attestation (`Head.message`, `Head.domHead`,
+PROTOCOL-74). Each pair of domains
 differs at a byte both hold, so no message of one shape is a message of another, whatever follows
 the domain: a signature made for one is never one over another, with no hash premise. An observer
 custody that signs only messages beginning with `domEnvelope` (HOSTING-17 §7, CLIENT-22) therefore
-never signs a call, a possession proof, a probe, an invitation or a cancel (`call_not_envelope`,
-`possession_not_envelope`, `whoami_not_envelope`, `invite_not_envelope`, `cancel_not_envelope`), and
+never signs a call, a possession proof, a probe, an invitation, a cancel or an attestation
+(`call_not_envelope`, `possession_not_envelope`, `whoami_not_envelope`, `invite_not_envelope`,
+`cancel_not_envelope`, `head_not_envelope`), and
 a cancel signature is never a call's (`cancel_not_call`): a member's cancel of one call cannot be
 replayed as a signed call, nor a signed call as a cancel.
 -/
@@ -163,5 +165,51 @@ theorem cancel_not_whoami (X : Ctx D) (c : Call D) : X.cancelMessage c ≠ Comma
 
 theorem cancel_not_invite (X : Ctx D) (c : Call D) (u : ByteArray) : X.cancelMessage c ≠ Invite.message u :=
   fun h => cancel_invite_disjoint _ u h
+
+/-! ## The head attestation's domain against the other six (PROTOCOL-74; byte 10 or 19 differs) -/
+
+theorem head_call_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ domCall ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem head_possession_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ tagPossession ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem head_cancel_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ domCancel ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem head_envelope_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ domEnvelope ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+theorem head_whoami_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ Command.whoami ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+theorem head_invite_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ Invite.domInvite ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+/-- **No attestation message begins with the envelope domain**: an envelope-only custody never
+attests a head. -/
+theorem head_not_envelope (u r : ByteArray) : domEnvelope ++ r ≠ Head.message u :=
+  fun h => head_envelope_disjoint u r h.symm
+
+/-- **An attestation's message is never a call's**: a signed head is never a signed call. -/
+theorem head_not_call (X : Ctx D) (v : Unsigned D) (u : ByteArray) : Head.message u ≠ X.callMessage v :=
+  head_call_disjoint u (X.unsignedBytes v)
+
+theorem head_not_possession (X : Ctx D) (sponsor next : D) (key u : ByteArray) :
+    Head.message u ≠ possessionMessage X sponsor next key := by
+  unfold possessionMessage
+  simp only [ByteArray.append_assoc]
+  exact head_possession_disjoint _ _
+
+theorem head_not_whoami (u : ByteArray) : Head.message u ≠ Command.whoami := by
+  intro h
+  exact head_whoami_disjoint u ByteArray.empty (by rw [ByteArray.append_empty]; exact h)
+
+theorem head_not_invite (u v : ByteArray) : Head.message u ≠ Invite.message v :=
+  head_invite_disjoint u v
+
+theorem head_not_cancel (X : Ctx D) (c : Call D) (u : ByteArray) : Head.message u ≠ X.cancelMessage c := by
+  unfold Ctx.cancelMessage
+  exact head_cancel_disjoint _ _
 
 end Nanodregg.Protocol

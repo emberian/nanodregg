@@ -102,6 +102,8 @@ theorem step_cont {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {m
   all_goals (try (rw [describe_cont] at hk; cases hk; done))
   all_goals (try (rw [rangeRender_cont] at hk; cases hk; done))
   all_goals (try (rw [receiptLines_cont] at hk; cases hk; done))
+  all_goals (try (rw [attestDone_cont] at hk; cases hk; done))
+  all_goals (try (obtain ⟨_, hs0, -⟩ := syncTip_cont hk; rw [hs0] at hs'; cases hs'; simp; done))
   all_goals (try (rw [settled_cont] at hk; cases hk; done))
   all_goals (try (rw [settleStep_cont] at hk; cases hk; done))
   all_goals (try (obtain ⟨hs0, -⟩ := cancelTip_cont hk; rw [hs0] at hs'; cases hs'; simp; done))

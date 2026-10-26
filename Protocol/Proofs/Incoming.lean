@@ -268,6 +268,52 @@ theorem cancelTip_cont {X : Ctx D} {me : Self D} {w : World D} {argv : List Byte
       exact ⟨hs, _, hn⟩
     · rw [cancelSettled_cont] at h; cases h
 
+/-- The `sync` tip (PROTOCOL-74) hands on only `sync --attest`'s phase 11 (the envelope's signature and
+the attestation's unsigned bytes), by a plain `sign`. -/
+theorem syncTip_cont {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray} {sb k : ByteArray}
+    {mode : SyncMode} (h : (syncTip X me w argv sb mode).cont = some k) :
+    ∃ u, State.ofBytes k = some ⟨argv, 11, [sb, u]⟩ ∧ ∃ m, syncTip X me w argv sb mode = .sign m k := by
+  cases mode with
+  | tip => simp [syncTip, printed, Reply.cont] at h
+  | to steps chain => simp [syncTip, printed, Reply.cont] at h
+  | check b =>
+      simp only [syncTip] at h
+      repeat' split at h
+      all_goals simp [refused, printed, Reply.cont] at h
+  | attest =>
+      simp only [syncTip] at h ⊢
+      unfold attestTip at h ⊢
+      split at h
+      · simp [refused, Reply.cont] at h
+      · rename_i s hs
+        split at h
+        · simp [refused, Reply.cont] at h
+        · rename_i u hu
+          obtain ⟨hn, hst⟩ := next_spec (fun _ => rfl) h
+          first
+            | exact ⟨u, hst, _, hn⟩
+            | (simp only [hs, hu]; exact ⟨u, hst, _, hn⟩)
+
+theorem syncTip_ne_signIncoming {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {sb m k : ByteArray} {mode : SyncMode} : syncTip X me w argv sb mode ≠ .signIncoming m k := by
+  intro h
+  obtain ⟨_, _, _, h'⟩ := syncTip_cont (congrArg Reply.cont h ▸ rfl : (syncTip X me w argv sb mode).cont = some k)
+  rw [h'] at h; cases h
+
+omit [Ord D] [DecidableEq D] in
+/-- Phase 11 of `sync --attest` ends the command: no continuation. -/
+theorem attestDone_cont {sb u result : ByteArray} : (attestDone (D := D) sb u result).cont = none := by
+  unfold attestDone
+  repeat' split
+  all_goals simp [refused, printed, Reply.cont]
+
+omit [Ord D] [DecidableEq D] in
+theorem attestDone_ne_signIncoming {sb u result m k : ByteArray} :
+    attestDone (D := D) sb u result ≠ .signIncoming m k := by
+  intro h
+  have hc := congrArg Reply.cont h
+  rw [attestDone_cont] at hc; cases hc
+
 omit [Ord D] [DecidableEq D] in
 /-- **The writer's refusal of an envelope, once the incoming key is in use, is answered by the
 incoming key**: if the refused envelope's `tried` has `incomingBit`, a continuation `envelopeRefused`
@@ -346,6 +392,8 @@ theorem step_incoming_kept {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wor
   all_goals (try (rw [describe_cont] at hk; cases hk; done))
   all_goals (try (rw [rangeRender_cont] at hk; cases hk; done))
   all_goals (try (rw [receiptLines_cont] at hk; cases hk; done))
+  all_goals (try (rw [attestDone_cont] at hk; cases hk; done))
+  all_goals (try (obtain ⟨_, hs0, -⟩ := syncTip_cont hk; rw [hs0] at hs'; cases hs'; simp; done))
   all_goals (try (rw [settled_cont] at hk; cases hk; done))
   all_goals (try (rw [settleStep_cont] at hk; cases hk; done))
   all_goals (try (obtain ⟨hs0, -⟩ := cancelTip_cont hk; rw [hs0] at hs'; cases hs'; simp; done))
@@ -443,6 +491,8 @@ theorem step_signIncoming_asked {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base
                   | (rw [describe_cont] at hc; cases hc)
                   | (rw [rangeRender_cont] at hc; cases hc)
                   | (rw [receiptLines_cont] at hc; cases hc)
+                  | (rw [attestDone_cont] at hc; cases hc)
+                  | (obtain ⟨_, -, _, hr⟩ := syncTip_cont hc; rw [hr] at h; cases h)
                   | (rw [settled_cont] at hc; cases hc)
                   | (rw [settleStep_cont] at hc; cases hc)
                   | (obtain ⟨-, _, hr⟩ := cancelTip_cont hc; rw [hr] at h; cases h)
@@ -536,6 +586,8 @@ theorem step_asked_signIncoming {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base
                   | (rw [describe_cont] at hk; cases hk)
                   | (rw [rangeRender_cont] at hk; cases hk)
                   | (rw [receiptLines_cont] at hk; cases hk)
+                  | (rw [attestDone_cont] at hk; cases hk)
+                  | (obtain ⟨_, hs0, -⟩ := syncTip_cont hk; rw [hs0] at hs'; cases hs'; simp [askedIncoming] at hin)
                   | (rw [settled_cont] at hk; cases hk)
                   | (rw [settleStep_cont] at hk; cases hk)
                   | (obtain ⟨hs0, -⟩ := cancelTip_cont hk; rw [hs0] at hs'; cases hs'; simp [askedIncoming] at hin)

@@ -305,6 +305,29 @@ fn join_from_a_signed_invitation_refuses_forgeries_and_serves_a_write() {
         format!("{steps} {digest}"),
         "the thin joiner adopts the base the operator sealed: {sealed}"
     );
+    // PROTOCOL-74 (DESIGN-TRUST T1): members compare heads. The founder attests its head at the
+    // tip; the thin joiner, behind it, catches up THROUGH that position and finds the chain on its
+    // own fold (`shared STEPS MEMBER`); a position stated with another chain is refused
+    // `forkedWorld` by name on the way; a member already past a position is refused `ahead`; bytes that are
+    // no attestation are `badAttestation`. Every verdict is Lean's (`Protocol.Head`).
+    a.ok(&["write", &obj, "3", "attested"]);
+    let attest = line(&a.ok(&["sync", "--attest"]), "attest ").to_owned();
+    let checked = d.ok(&["sync", "--check", &attest]);
+    let shared = line(&checked, "shared ").to_owned();
+    let steps = shared.split_whitespace().next().unwrap().to_owned();
+    assert_eq!(shared.split_whitespace().nth(1), Some(member), "{checked}");
+    // B's follow last caught up before the seal: behind, it passes the founder's position on the
+    // way and refuses a chain no fold has there (the page refused, B still behind); the honest
+    // check then passes it (`shared`), and a position B is past is refused `ahead`.
+    let forged = format!("{steps}:00");
+    let o = b.nd(&["sync", "--to", &forged]);
+    assert_eq!(o.status.code(), Some(i32::from(command_exit::REFUSED)));
+    assert_eq!(err(&o), "refused forkedWorld\n");
+    assert!(b.ok(&["sync", "--check", &attest]).starts_with("shared "));
+    let o = b.nd(&["sync", "--to", &forged]);
+    assert_eq!(err(&o), "refused ahead\n");
+    let o = a.nd(&["sync", "--check", "00"]);
+    assert_eq!(err(&o), "refused badAttestation\n");
     drop(writer);
     std::fs::remove_dir_all(&root).unwrap();
 }

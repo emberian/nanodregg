@@ -110,6 +110,9 @@ structure Sys (D : Type) [Ord D] where
   dropDoc : Bool := false
   /-- custody signs a cancel's message with `domCancel` dropped (a plant, PROTOCOL-63) -/
   cancelUndomained : Bool := false
+  /-- the client drops `sync --to`'s anchor: a catch-up that compares with nobody (a plant,
+  PROTOCOL-74) -/
+  ignoreAnchor : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -166,6 +169,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .dropDoc => { writer := { R, X := R.ctx }, follow := R.ctx, dropDoc := true }
   | some .cancelUndomained => { writer := { R, X := R.ctx }, follow := R.ctx, cancelUndomained := true }
   | some .trustCancel => { writer := { R, X := R.ctx }, follow := R.ctx, trustCancel := true }
+  | some .ignoreAnchor => { writer := { R, X := R.ctx }, follow := R.ctx, ignoreAnchor := true }
   | some .perFieldBudget =>
       { writer := { R, X := R.ctx, pageBudget := Bounds.frameBytesMax - 1024 }, follow := R.ctx }
   | some .forgesRefusal => { writer := { R, X := R.ctx, forgeRefusal := true }, follow := R.ctx }
@@ -447,6 +451,7 @@ def boundToken (out : String) : Option String :=
     | ["join", h] => some h
     | ["invite", h] => some h
     | ["receipt", h] => some h
+    | ["attest", h] => some h
     | _ => none
 
 /-! ## Custody and the writer's socket -/
@@ -952,6 +957,11 @@ def dropRangeFlag : List String → List String
   | "--range" :: rest => rest.dropWhile (· ≠ "--via")
   | a :: rest => a :: dropRangeFlag rest
 
+/-- An argv with `sync --to`'s anchor dropped: the bare catch-up (PROTOCOL-74's plant). -/
+def dropAnchor : List String → List String
+  | ["sync", "--to", _] => ["sync"]
+  | av => av
+
 /-- The actor's command planned on its follow's World as it stands (no catching up: the World of its
 last command), signed and submitted WITHOUT follow's own admission (`planUnchecked`, with the range
 reads `signedReads` lists there). The outcome is the writer's answer. -/
@@ -988,6 +998,8 @@ def runAct (l : Line) : M D (Expect × String) := do
       | .ok av =>
           -- the plants (item 4): an invoke's range signed at the actor's stale listing; the flag dropped
           let av := if (← get).sys.dropRange then dropRangeFlag av else av
+          -- the plant (PROTOCOL-74): a client that compares with nobody
+          let av := if (← get).sys.ignoreAnchor then dropAnchor av else av
           let (o, out) ← command l.actor av l.fault 4
           -- the plant: follow acts on the writer's `beforeLog`, taking its first step (the carried
           -- World) as the base on the writer's word, and reads again

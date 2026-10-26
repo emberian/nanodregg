@@ -175,7 +175,7 @@ theorem step_world {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {
   all_goals (try (obtain ⟨rfl, -, -⟩ := h))
   all_goals first
     | exact .inl rfl
-    | exact .inr (.inl ⟨_, _, _, _, _, _, frameEvents_mem ‹_› ‹_› ‹_›, ‹_›⟩)
+    | exact .inr (.inl ⟨_, _, _, _, _, _, frameEvents_mem ‹_› ‹_› ‹_›, absorbSync_ok ‹_›⟩)
     | exact .inr (.inr (by simpa using ‹¬(!atGenesis _) = true›))
 
 section keeps

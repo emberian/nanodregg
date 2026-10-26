@@ -70,7 +70,14 @@ inductive Verb
   base's World bytes hash to the pin (thin consent, PROTOCOL-14; PROTOCOL-42) -/
   | adopt
   /-- `sync`: catch up to the writer's tip and print the height and chain reached (a follower driven
-  by a timer, HOSTING-17 §7; it signs envelopes only) -/
+  by a timer, HOSTING-17 §7; it signs envelopes only). `sync --to STEPS:CHAIN`: catch up THROUGH
+  another member's stated position and compare (PROTOCOL-74): `shared STEPS` when follow's own fold
+  holds that chain at that step count, `refused forkedWorld` when it holds another (the page refused),
+  `refused ahead` when follow was already past it, `unreached STEPS` when the writer's tip is below it.
+  `sync --attest`: catch up, then sign follow's own head (`Protocol.Head`) and print `attest HEX`.
+  `sync --check ATTEST`: `--to` at the attested position, with the attestation's signature, World
+  and signer checked by name (`badAttestation`, `otherWorld`, `badHeadSignature`, `notMember`,
+  `staleKey`); prints `shared STEPS MEMBER` -/
   | sync
   /-- `issue CAP`: bear a new denomination; its WELL is a value account owned by the signer whose
   id is the denomination, with floor `-CAP` (LEDGER-2) -/
@@ -142,6 +149,16 @@ structure InvokeReads where
   points : List (String × String) := []
   deriving DecidableEq, Repr
 
+/-- What `sync` relates follow's fold to (PROTOCOL-74): the writer's tip alone; another member's
+stated position (its step count and chain bytes, as a page states them); follow's own head, to
+attest; or another member's attestation, its bytes decoded by the machine (`Protocol.Head`). -/
+inductive SyncMode
+  | tip
+  | to (steps : Nat) (chain : ByteArray)
+  | attest
+  | check (attestation : ByteArray)
+  deriving DecidableEq, Repr
+
 /-- A parsed command. -/
 inductive Cmd (D : Type)
   | init (sponsor : D)
@@ -166,7 +183,7 @@ inductive Cmd (D : Type)
   | rotate
   /-- the invitation's bytes and the sponsor key the member trusts -/
   | adopt (invite key : ByteArray)
-  | sync
+  | sync (mode : SyncMode)
   | issue (cap : Nat)
   /-- `owner = none` is the signer -/
   | account (asset : D) (owner : Option D)
@@ -223,7 +240,8 @@ def usage : Verb → String
   | .invoke => "invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--pin REL KEY]... [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...] | read OBJ ? | read OBJ REL K [PREFIX]" | .rotate => "rotate"
-  | .adopt => "adopt INVITE KEY" | .sync => "sync" | .issue => "issue CAP"
+  | .adopt => "adopt INVITE KEY" | .sync => "sync [--to STEPS:CHAIN | --attest | --check ATTEST]"
+  | .issue => "issue CAP"
   | .account => "account ASSET [--owner OWNER]"
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
   | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
@@ -388,7 +406,21 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
         | _ => bad
   | .read, o :: es => do pure (.read (← digestArg digestOf o) (← mapEx expectArg es))
   | .rotate, [] => .ok .rotate
-  | .sync, [] => .ok .sync
+  | .sync, [] => .ok (.sync .tip)
+  | .sync, ["--attest"] => .ok (.sync .attest)
+  -- `STEPS:CHAIN`: a step count and the chain's hex, as `sync` prints them
+  | .sync, ["--to", a] =>
+      match a.splitOn ":" with
+      | [s, c] =>
+          match s.toNat?, Text.ofHex c with
+          | some n, some cb => .ok (.sync (.to n cb))
+          | none, _ => .error (.badNumber s)
+          | _, none => .error (.badToken c)
+      | _ => .error (.badToken a)
+  | .sync, ["--check", h] =>
+      match Text.ofHex h with
+      | some b => .ok (.sync (.check b))
+      | none => .error (.badToken h)
   | .adopt, [i, k] =>
       match Text.ofHex i, Text.ofHex k with
       | some inv, some key => .ok (.adopt inv key)

@@ -329,6 +329,9 @@ inductive Mutation
   /-- the writer pages with `frameBytesMax - 1024`, the budget that bounds the page as one field of
   the frame and leaves 890 bytes for the continuation beside it (the shape before PROTOCOL-70) -/
   | perFieldBudget
+  /-- the client drops `sync`'s `--to STEPS:CHAIN`: a catch-up that compares its fold with nobody's
+  position, the shape before PROTOCOL-74 (members never compared heads) -/
+  | ignoreAnchor
   /-- `cancel CALL` ends `cancelled TXID` on the writer's `refused cancelled`, never settling it on
   follow's World (follow's phase 10 before PROTOCOL-71) -/
   | trustCancel
@@ -1738,11 +1741,39 @@ def forgedRefusalRow : Row where
     ok "sponsor" ["invoke", "@slot", "0", "(record (k 1))"]])
   plant := .caught .forgesRefusal 15 (.refused "chainMismatch")
 
+/-- PROTOCOL-74 (DESIGN-TRUST T1: members compare heads). The sponsor attests its head at the tip
+(`sync --attest`, bound to `att`); the operator, cold (its follow from genesis), catches up THROUGH
+that position under `sync --check @att` and finds the sponsor's chain on its own fold: `shared`. A
+position stated with another chain (`sync --to 2:00`: step 2 with a chain no fold has) is refused
+`forkedWorld` by name on the way, the page refused. The operator, past the sponsor's head, is refused
+`ahead` (its World holds only the current chain). A byte that is no attestation is `badAttestation`.
+After the sponsor rotates, its earlier attestation names a key that is no longer its current one:
+`staleKey`, on the World the checker caught up to. The plant is a client that drops `--to`'s anchor
+(`ignoreAnchor`): line 10, the forged position, ends `ok`. -/
+def forkRow : Row where
+  name := "fork"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write", "rotate"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    okBind "sponsor" ["sync", "--attest"] "att",
+    { actor := "operator", act := .cmd ["sync", "--check", "@att"], expect := .ok, fault := .cold,
+      prints := some "shared" },
+    no "operator" ["sync", "--check", "@att"] "ahead",
+    { actor := "operator", act := .cmd ["sync", "--to", "2:00"], expect := .refused "forkedWorld",
+      fault := .cold },
+    no "operator" ["sync", "--check", "00"] "badAttestation",
+    ok "sponsor" ["rotate"],
+    { actor := "operator", act := .cmd ["sync", "--check", "@att"], expect := .refused "staleKey",
+      fault := .cold }])
+  plant := .caught .ignoreAnchor 10 .ok
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow]
+   forgedRefusalRow, forkRow]
 
 end Nanodregg.Protocol

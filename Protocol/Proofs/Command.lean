@@ -241,6 +241,48 @@ theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {
   repeat' split at h
   all_goals simp [refused, printed] at h
 
+/-- What `absorbSync` accepted, `absorbPage` accepted (PROTOCOL-74: the walk only refuses). -/
+theorem absorbSync_ok {X : Ctx D} {me : Self D} {cmd : Cmd D} {w : World D} {evs : List ByteArray}
+    {steps base : Nat} {chain : ByteArray} {x : World D × List (Kernel.Step D × D) × Option (World D)}
+    (h : absorbSync X me cmd w evs steps chain base = .ok x) : absorbPage X w evs steps chain base = .ok x := by
+  unfold absorbSync at h
+  split at h
+  · cases h
+  · rename_i w' ts wb hp
+    split at h
+    · split at h
+      · cases h
+      · cases h; exact hp
+    · cases h; exact hp
+
+omit [DecidableEq D] in
+theorem attestTip_ne_submit {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {sb call k : ByteArray} : attestTip X me w argv sb ≠ .submit call k := by
+  intro h
+  unfold attestTip next at h
+  repeat' split at h
+  all_goals simp [refused] at h
+
+/-- The `sync` tip (PROTOCOL-74) prints, refuses or asks for the attestation's signature: never a submit. -/
+theorem syncTip_ne_submit {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {sb call k : ByteArray} {mode : SyncMode} : syncTip X me w argv sb mode ≠ .submit call k := by
+  intro h
+  cases mode with
+  | attest => exact attestTip_ne_submit h
+  | tip => simp [syncTip, printed] at h
+  | to steps chain => simp [syncTip, printed] at h
+  | check b =>
+      simp only [syncTip] at h
+      repeat' split at h
+      all_goals simp [refused, printed] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem attestDone_ne_submit {sb u result call k : ByteArray} : attestDone (D := D) sb u result ≠ .submit call k := by
+  intro h
+  unfold attestDone at h
+  repeat' split at h
+  all_goals simp [refused, printed] at h
+
 theorem sendCancel_ne_submit {X : Ctx D} {w : World D} {argv : List ByteArray} {cb result call k : ByteArray} :
     sendCancel X w argv cb result ≠ .submit call k := by
   intro h
@@ -450,6 +492,8 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact envelopeRefused_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; (try dsimp only at h); exact envelopeSign_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact syncTip_ne_submit h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact attestDone_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settleStep_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact sendCancel_ne_submit h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelAnswer_ne_submit h))
@@ -796,7 +840,7 @@ theorem step_persists_admitted {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base 
   all_goals (try simp only [Prod.mk.injEq, Persist.steps.injEq, reduceCtorEq, false_and,
     and_false] at h)
   all_goals first
-    | (obtain ⟨rfl, rfl, -⟩ := h; dsimp only; exact absorbPage_admits (by assumption))
+    | (obtain ⟨rfl, rfl, -⟩ := h; dsimp only; exact absorbPage_admits (absorbSync_ok (by assumption)))
     | (obtain ⟨rfl, rfl, -⟩ := h; rfl)
 
 /-- HOST-22's consumer: what follow persists folds, with `World.fold`, to follow's next World. -/
@@ -825,7 +869,7 @@ theorem step_verified {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)
   all_goals first
     | (left; rfl)
     | (right; left; rfl)
-    | (right; right; exact ⟨_, _, _, _, _, _, _, by assumption, rfl⟩)
+    | (right; right; exact ⟨_, _, _, _, _, _, _, absorbSync_ok (by assumption), rfl⟩)
 
 /-! ## A recorded refusal, as the follower meets it (KERNEL-44, PROTOCOL-41) -/
 
@@ -1356,6 +1400,8 @@ theorem hintNames_complete (r : Refusal D) (h : ∀ n, r ≠ .host n) : r.name �
       cases i with
       | inputs g => cases g <;> simp [Refusal.name, Invite.Refusal.name, GenesisRefusal.name, hintNames, hintReps]
       | _ => simp [Refusal.name, Invite.Refusal.name, hintNames, hintReps]
+  | attest a =>
+      cases a <;> simp [Refusal.name, Head.Refusal.name, Head.Refusal.all, hintNames, hintReps]
   | _ => simp [Refusal.name, hintNames, hintReps]
 
 /-- **The hint is read iff** the payload is at most `Bounds.hintBytesMax` bytes and its first line
@@ -1566,6 +1612,34 @@ theorem cancelSettled_ne_host {X : Ctx D} {me : Self D} {w : World D} {c : Call 
   repeat' split at h
   all_goals first | exact refusedAt_ne_host h | simp [refused, printed] at h
 
+omit [DecidableEq D] in
+theorem attestTip_ne_host {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {sb : ByteArray} {op : Op} {p k : ByteArray} : attestTip X me w argv sb ≠ .host op p k := by
+  intro h
+  unfold attestTip next at h
+  repeat' split at h
+  all_goals simp [refused] at h
+
+theorem syncTip_ne_host {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
+    {sb : ByteArray} {mode : SyncMode} {op : Op} {p k : ByteArray} : syncTip X me w argv sb mode ≠ .host op p k := by
+  intro h
+  cases mode with
+  | attest => exact attestTip_ne_host h
+  | tip => simp [syncTip, printed] at h
+  | to steps chain => simp [syncTip, printed] at h
+  | check b =>
+      simp only [syncTip] at h
+      repeat' split at h
+      all_goals simp [refused, printed] at h
+
+omit [Ord D] [DecidableEq D] in
+theorem attestDone_ne_host {sb u result : ByteArray} {op : Op} {p k : ByteArray} :
+    attestDone (D := D) sb u result ≠ .host op p k := by
+  intro h
+  unfold attestDone at h
+  repeat' split at h
+  all_goals simp [refused, printed] at h
+
 theorem cancelTip_ne_host {X : Ctx D} {me : Self D} {w : World D} {argv : List ByteArray}
     {cb t : ByteArray} {op : Op} {p k : ByteArray} : cancelTip X me w argv cb t ≠ .host op p k := by
   intro h; unfold cancelTip at h
@@ -1617,6 +1691,8 @@ theorem step_host_cancel {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact envelopeRefused_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; (try dsimp only at h); exact envelopeSign_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact receiptLines_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact syncTip_ne_host h))
+  all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact attestDone_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact settleStep_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelAnswer_ne_host h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact cancelTip_ne_host h))

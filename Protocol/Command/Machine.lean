@@ -35,6 +35,14 @@ The log is a list of STEPS (KERNEL-47): admitted Turns and recorded refusals. Lo
 steps, and follow binds on (steps, chain), as the kernel's `fold_reaches_host` does. Envelope windows
 stay in heights: the page states the writer's tip in both units (PROTOCOL-41).
 
+`sync --to STEPS:CHAIN` / `--attest` / `--check ATTEST` (PROTOCOL-74, `Protocol.Head`): the catch-up
+compares follow's own fold with another member's stated position as it passes it (`Head.anchorCheck`
+on each page's steps, re-derived from the argv at every step like every plan: `syncAnchor`), and
+refuses `forkedWorld STEPS` by name when the chain there is another; `--attest` has custody sign
+follow's own head at the tip (`attestTip`: the message is `Head.message` of follow's OWN World,
+never a result's) and prints `attest HEX`; `--check` verifies the attestation's signature and World
+before anything is sent and its signer's current key at the tip (`Head.signer`).
+
 `cancel CALL` (PROTOCOL-63) catches up, checks on follow's World that the cancel records there, has
 custody sign it and relays it; the writer's final answer (`refused cancelled`, or `ok`: the call was
 admitted) is its word, so follow catches up AGAIN and ends by its own settlement of the call
@@ -49,6 +57,7 @@ import Kernel.Receive.Rederive
 import Protocol.Command.Verb
 import Protocol.Envelope
 import Protocol.Invite
+import Protocol.Head
 import Protocol.Command.Describe
 import Protocol.Receipt
 import Protocol.Settle
@@ -125,6 +134,17 @@ inductive Refusal (D : Type)
   | badPrefix
   /-- `invoke … --pin REL KEY`: KEY does not read at the relation's key type (CLIENT-35) -/
   | badKey
+  /-- `sync --to` / `--check`: follow's own fold reached the anchor's step count with ANOTHER chain
+  (`Head.anchorCheck`): this member and the member whose head that is hold two histories of one
+  World (PROTOCOL-74; `Proofs.Head.forked_not_on_fold`). The page is refused and nothing of it
+  kept, as a `chainMismatch` page is -/
+  | forkedWorld (steps : Nat)
+  /-- `sync --to` / `--check`: follow was already past the position when the command began. Its
+  World holds only the current chain, so the comparison on the way cannot be made: the member
+  BEHIND does it, or `host check STORE --anchor` on this member's own Store (PROTOCOL-74) -/
+  | ahead (steps : Nat)
+  /-- `sync --check`: the attestation refused by `Protocol.Head`'s name -/
+  | attest (r : Head.Refusal)
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -172,6 +192,9 @@ def Refusal.name : Refusal D → String
   | .rangePastLimit _ => "rangePastLimit"
   | .badPrefix => "badPrefix"
   | .badKey => "badKey"
+  | .forkedWorld _ => "forkedWorld"
+  | .ahead _ => "ahead"
+  | .attest r => r.name
 
 def refused (r : Refusal D) : Reply :=
   .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
@@ -281,7 +304,8 @@ only (its possession signature; every other verb's phase 2 is a `log` reply), 3 
 signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature), 8 (an
 invitation's signature). -/
 def custodyPhase (isInit : Bool) (phase : UInt8) : Bool :=
-  phase == 1 || phase == 3 || phase == 5 || phase == 6 || phase == 8 || phase == 9 || (isInit && phase == 2)
+  phase == 1 || phase == 3 || phase == 5 || phase == 6 || phase == 8 || phase == 9 || phase == 11 ||
+    (isInit && phase == 2)
 
 /-- Custody's result (`u8 status ‖ payload`): ok hands on the payload, refused carries one of
 `CustodyRefusal` by `custodyRefusalLayout`; anything else is `badResult`. -/
@@ -355,7 +379,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
-  | .init _ | .read _ _ | .describe _ | .rangeRead .. | .adopt _ _ | .sync | .invite _ | .receipt _ | .cancel _ =>
+  | .init _ | .read _ _ | .describe _ | .rangeRead .. | .adopt _ _ | .sync _ | .invite _ | .receipt _ | .cancel _ =>
       .error .badState
 
 /-- The row pin follow states for a row slot of its World (KERNEL-54): the leaf's digest, or absence
@@ -855,7 +879,7 @@ incoming key signed; it ends `refused unknownKey` with the hint to sync. -/
 
 /-- The verbs that sign no call: the only ones whose envelope may be signed by the incoming key. -/
 def readOnly : Cmd D → Bool
-  | .read _ _ | .describe _ | .rangeRead .. | .sync | .receipt _ => true
+  | .read _ _ | .describe _ | .rangeRead .. | .sync _ | .receipt _ => true
   | _ => false
 
 /-- The verbs whose step 3 submits a call (`plan` at the log's tip, `rotate` from phase 5): the only
@@ -969,6 +993,78 @@ def receiptLines (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (cb : B
       | some t => printed t
       | none => refused (D := D) .badState
 
+/-! ## `sync` (PROTOCOL-74) -/
+
+/-- What `sync` prints at the tip: follow's World's height, chain and roots. -/
+def syncLines (X : Ctx D) (w : World D) : String :=
+  s!"height {w.height}\nchain {hex X w.chain}\nroots {hex X (w.roots X.env)}\n"
+
+/-- The anchor a `sync` compares against, re-derived from the argv at every step (the continuation
+cannot steer it): `--to`'s stated pair, or the attested head of a `--check` whose bytes verify
+(`Head.verified`; one that does not is refused at `start`, and again here if a continuation names
+it); `none` for every other command. -/
+def syncAnchor (X : Ctx D) (me : Self D) : Cmd D → Option (Nat × ByteArray)
+  | .sync (.to steps chain) => some (steps, chain)
+  | .sync (.check b) => (Head.verified X me.world b).toOption.map fun a => (a.head.steps, X.env.bytes a.head.chain)
+  | _ => none
+
+/-- A page absorbed (`absorbPage`), then, for `sync --to` / `--check`, walked against the anchor from
+follow's position before it (`Head.anchorCheck`): another chain at the anchor's step count is
+`forkedWorld`, the page refused and nothing of it kept, as a `chainMismatch` page is (PROTOCOL-74:
+the fork is evidence, and follow does not walk onto it under this command; a plain `sync` does). -/
+def absorbSync (X : Ctx D) (me : Self D) (cmd : Cmd D) (w : World D) (evs : List ByteArray) (steps : Nat)
+    (chain : ByteArray) (base : Nat) :
+    Except (Refusal D) (World D × List (Kernel.Step D × D) × Option (World D)) :=
+  match absorbPage X w evs steps chain base with
+  | .error r => .error r
+  | .ok (w', ts, wb) =>
+    match syncAnchor X me cmd with
+    | some (s, c) =>
+        if Head.anchorCheck X.env s c w.steps w.chain ts = .forked then .error (.forkedWorld s)
+        else .ok (w', ts, wb)
+    | none => .ok (w', ts, wb)
+
+/-- `shared` or `unreached` at the tip: the anchor's step count against follow's. `start` refused to
+begin past the anchor (`ahead`), and every page on the way compared the chain there
+(`forkedWorld` otherwise), so reaching the anchor's step count at the tip means follow's fold
+passed it with the anchor's chain. -/
+def anchorLine (steps : Nat) (w : World D) (who : String) : String :=
+  (if steps ≤ w.steps then s!"shared {steps}" else s!"unreached {steps}") ++ who ++ "\n"
+
+/-- The `sync` tip. `--attest`: the message custody signs is `Head.message` of follow's OWN World's
+head, with the member and the key the writer took for this command's envelope
+(`Proofs.Head.attestTip_sign`); the result is printed at phase 11. -/
+def attestTip (X : Ctx D) (me : Self D) (w : World D) (argv : List ByteArray) (signedB : ByteArray) : Reply :=
+  match Signed.ofBytes signedB with
+  | none => refused (D := D) .badState
+  | some s =>
+      match Head.unsignedBytes X.env (Head.headOf X.env w) me.member s.key with
+      | none => refused (D := D) .badState
+      | some u => next (D := D) ⟨argv, 11, [signedB, u]⟩ fun k => .sign (Head.message u) k
+
+def syncTip (X : Ctx D) (me : Self D) (w : World D) (argv : List ByteArray) (signedB : ByteArray) :
+    SyncMode → Reply
+  | .tip => printed (syncLines X w)
+  | .to steps _ => printed (anchorLine steps w "" ++ syncLines X w)
+  | .check b =>
+      match Head.verified X me.world b with
+      | .error r => refused (D := D) (.attest r)
+      | .ok a =>
+          match Head.signer X w a with
+          | .error r => refused (D := D) (.attest r)
+          | .ok () => printed (anchorLine a.head.steps w s!" {hex X a.member}" ++ syncLines X w)
+  | .attest => attestTip X me w argv signedB
+
+/-- Phase 11: custody's signature over the attestation; printed `attest HEX`. -/
+def attestDone (signedB u result : ByteArray) : Reply :=
+  match Signed.ofBytes signedB, Signed.ofBytes result with
+  | some s, some s2 =>
+      if s2.key ≠ s.key then refused (D := D) .badResult else
+      match Head.bytes u s2.signature with
+      | some b => printed s!"attest {Text.toHex b}\n"
+      | none => refused (D := D) .badState
+  | _, _ => refused (D := D) .badResult
+
 /-- The name a settled refusal prints: the recorded code's (`settle refused CODE`), or the one word
 the settlement is (`expired`). -/
 def settledName (txt : String) : String :=
@@ -983,7 +1079,8 @@ instead (`hintNames`). Arguments are placeholders; a name drops them. -/
 def hintReps : List (Refusal Nat) :=
   [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
    .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
-   .rangePastLimit 0, .badPrefix, .badKey] ++
+   .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0] ++
+  Head.Refusal.all.map Refusal.attest ++
   ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
     .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :
     List ParseRefusal).map Refusal.parse ++
@@ -1090,6 +1187,11 @@ def atGenesis (w : World D) : Bool :=
 
 def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Reply :=
   let w := f.world
+  -- every verb but `init` and `adopt`: the envelope, signed for follow's own height + window
+  let catchUp : Reply :=
+    let upTo := w.height + me.window
+    next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
+      .sign (envelopeMessage X me w.steps upTo) k
   match parse X.digestOf argv with
   | .error r => refused (D := D) (.parse r)
   | .ok (.init _) => next (D := D) ⟨argv, 1, []⟩ fun k => .sign whoami k
@@ -1107,10 +1209,16 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
       let upTo := me.window
       next (D := D) ⟨argv, 6, [Text.u64 off, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
         .sign (adoptEnvelope X me upTo off) k
-  | .ok _ =>
-      let upTo := w.height + me.window
-      next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
-        .sign (envelopeMessage X me w.steps upTo) k
+  -- `sync --to` / `--check`: a position follow is already past cannot be compared on the way (its
+  -- World holds only the current chain): refused `ahead`, and nothing is sent. A `--check` whose
+  -- bytes do not verify is refused by name before anything is sent
+  | .ok (.sync (.to steps _)) =>
+      if steps ≤ w.steps then refused (D := D) (.ahead steps) else catchUp
+  | .ok (.sync (.check b)) =>
+      match Head.verified X me.world b with
+      | .error r => refused (D := D) (.attest r)
+      | .ok a => if a.head.steps ≤ w.steps then refused (D := D) (.ahead a.head.steps) else catchUp
+  | .ok _ => catchUp
 
 /-- Step 4 of a command that submitted a call: `settled`; under any other verb `badState` (a phase-4
 continuation is the client's bytes, never a witness, `submits`). -/
@@ -1268,7 +1376,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
               | some pg, some pages =>
                   -- a page short of the tip that carries nothing would be asked for again forever
                   if pg.events.isEmpty && pg.steps < pg.tipSteps then same (refused (D := D) .badResult) else
-                  match absorbPage X w pg.events pg.steps pg.chain pg.baseSteps with
+                  match absorbSync X me cmd w pg.events pg.steps pg.chain pg.baseSteps with
                   | .error r => same (refused (D := D) r)
                   | .ok (w', ts, wb) =>
                       -- follow's own World at the writer's stated base, its digest by the one
@@ -1293,8 +1401,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       | .read obj ex, _ => moved w' ts (render X w' obj ex)
                       | .describe obj, _ => moved w' ts (describe X w' obj)
                       | .rangeRead obj rel k pre, _ => moved w' ts (rangeRender X w' obj rel k pre)
-                      | .sync, _ => moved w' ts (printed
-                          s!"height {w'.height}\nchain {hex X w'.chain}\nroots {hex X (w'.roots X.env)}\n")
+                      | .sync mode, _ => moved w' ts (syncTip X me w' st.argv signedB mode)
                       -- the receipt for a signed call, against the World follow just caught up to,
                       -- and the member's settlement of it (PROTOCOL-46)
                       | .receipt cb, _ => moved w' ts (receiptLines X dc me w' cb)
@@ -1360,6 +1467,8 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                   | .ok u => same (again 3 [sb, X.callMessage u] fun k =>
                       .signNext (X.callMessage u) k)
               | _, _ => same (refused (D := D) .badState)
+      -- `sync --attest`: custody's signature over follow's own head; printed `attest HEX`
+      | .sync .attest, 11, [signedB, u] => same (attestDone (D := D) signedB u result)
       -- the settlement, of a call this command submitted
       | cmd, 4, [out, cb] => same (settleStep X me w cmd out cb result)
       -- cancel: custody's signature, decided on follow's own World before it is sent
