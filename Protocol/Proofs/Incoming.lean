@@ -24,6 +24,7 @@ Remark (prose, not a theorem): only a `readOnly` command ever gets the bit (`env
 `receiptLines`: no continuation). A write's continuations past phase 2 carry no `tried`.
 -/
 import Protocol.Command.Machine
+import Protocol.Proofs.PostOr
 import Protocol.Proofs.Frames
 import Protocol.Proofs.Wire
 import Protocol.Proofs.Page
@@ -385,6 +386,8 @@ theorem step_incoming_kept {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wor
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq] at h)
   all_goals (obtain ⟨-, -, rfl⟩ := h)
+  -- a page's self-head posts (PROTOCOL-75): the continuation survives only when none fired
+  all_goals (try (obtain ⟨hpo, hk⟩ := postOr_cont_elim hk; rw [hpo]))
   all_goals (try (simp [refused, printed, behind, notServed, Reply.cont] at hk; done))
   all_goals (try (rw [refusedAt_cont] at hk; cases hk; done))
   all_goals (try (rw [custodyEnd_cont] at hk; cases hk; done))
@@ -481,6 +484,7 @@ theorem step_signIncoming_asked {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base
   all_goals (repeat' (first | split at h | (revert h; split <;> intro h)))
   all_goals (try simp only [Prod.mk.injEq] at h)
   all_goals (try (obtain ⟨-, -, h⟩ := h))
+  all_goals (try (replace h := postOr_signIncoming_elim h))
   all_goals (try (simp [refused, printed, behind, notServed] at h; done))
   all_goals (try (have hc := congrArg Reply.cont h
                   rw [show (Reply.signIncoming m k).cont = some k from rfl] at hc
@@ -578,6 +582,8 @@ theorem step_asked_signIncoming {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base
   all_goals (repeat' (first | split at h | (revert h; split <;> intro h)))
   all_goals (try simp only [Prod.mk.injEq] at h)
   all_goals (obtain ⟨-, -, rfl⟩ := h)
+  -- a page's self-head posts (PROTOCOL-75): the continuation survives only when none fired
+  all_goals (try (obtain ⟨hpo, hk⟩ := postOr_cont_elim hk; rw [hpo]))
   all_goals (try (simp [refused, printed, behind, notServed, Reply.cont] at hk; done))
   all_goals (try (first
                   | (rw [refusedAt_cont] at hk; cases hk)

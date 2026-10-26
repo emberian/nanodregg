@@ -26,9 +26,21 @@ with the same chain is `shared`: their logs agree up to that step, or two listed
 passes through the other's position on its way to the tip. One already past it answers `ahead` (its
 World holds only the current chain; `host check STORE --anchor` on its own Store compares a past
 position), and one whose writer's tip is below the anchor answers `unreached`.
+
+A SELF-HEAD POST (PROTOCOL-75; DESIGN-TRUST T2) is the comparison made automatic, through the
+writer: a member posts its own head into a `Std.head` object of THIS World (`nd sync --post OBJ`:
+`headText` of follow's own World, planned as `invoke OBJ post` at the tip, `Command.body`), and
+every follow that absorbs the page carrying that post reads the object (`selfPosts`: a head object
+whose `world` is this World's origin, touched by a step of the page) and walks the page against the
+posted `(steps, chain)` exactly as `sync --to` walks (`forkedSelfPost`). A post at a position the
+page reaches with ANOTHER chain is `forkedPost`, the page kept (it is lawful on follow's fold) and
+the command ended by name: the poster's signed call is the witness. A post at a position follow was
+already past is not compared here: its chain is in follow's own Store (cv task T2b', the follow loop
+through its index), as `host check --anchor` reads it.
 -/
 import Protocol.Envelope
 import Protocol.Command.Text
+import Protocol.Foreign
 
 namespace Nanodregg.Protocol.Head
 
@@ -163,5 +175,47 @@ def anchorCheck (E : Env D) (steps : Nat) (chain : ByteArray) : Nat → D → Li
       let c' := stepLink E c t r
       if s + 1 = steps then (if E.bytes c' = chain then .shared else .forked)
       else anchorCheck E steps chain (s + 1) c' rest
+
+/-! ## Self-heads through the writer (PROTOCOL-75) -/
+
+/-- `Std.headPackage`'s `post`: method 1 (methods by label, ascending: `fork`, `post`). -/
+def postMethod : Nat := 1
+
+/-- The text `sync --post` hands the head object's `post`: follow's own World's head at
+`Std.headAtTy` (labels ascending: chain, height, roots, steps), as `nd invoke` would be given it. -/
+def headText (X : Ctx D) (w : World D) : String :=
+  s!"(record (chain #{Text.toHex (X.env.bytes w.chain)}) (height {w.height}) (roots #{Text.toHex (X.env.bytes (w.roots X.env))}) (steps {w.steps}))"
+
+/-- The cells a step wrote or made: where a head object can have changed. -/
+def stepCells : Kernel.Step D → List D
+  | .turn t => t.touches.map (·.cell) ++ createdIds t
+  | .refusal _ => []
+
+/-- A self-head post: on `w'` (the World after the page), cell `c`, touched by step `s` of the page,
+is a head object of THIS World (`Lang.headView` at `Foreign.headPackageId`, its `world` the World's
+origin) holding an `at` head: its `(steps, chain)`, and the member whose call the step was. -/
+def selfPost (X : Ctx D) (w' : World D) (s : Kernel.Step D) (c : D) : Option (Nat × ByteArray × Option D) := do
+  let cell ← w'.live X.env c
+  match Lang.headView X.digestOf (X.env.bytes (Foreign.headPackageId X.env)) cell with
+  | some (.at world chain _ _ steps) =>
+      if world = X.env.bytes w'.origin then
+        some (steps, chain, match s with
+          | .turn t => (X.decodeCall t.event).map (·.unsigned.member)
+          | .refusal _ => none)
+      else none
+  | _ => none
+
+/-- Every self-head post a page carries, in log order. -/
+def selfPosts (X : Ctx D) (w' : World D) (ts : List (Kernel.Step D × D)) : List (Nat × ByteArray × Option D) :=
+  ts.flatMap fun p => (stepCells p.1).filterMap (selfPost X w' p.1)
+
+/-- The first self-head post whose position follow's fold reached ON THIS PAGE with another chain
+(`anchorCheck` from follow's position before the page, as `sync --to` walks): its step count and
+the poster. A post at a position follow was already past, or past the page, is `unreached` from here
+and not compared. -/
+@[irreducible] def forkedSelfPost (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D) :
+    Option (Nat × Option D) :=
+  (selfPosts X w' ts).findSome? fun p =>
+    if anchorCheck X.env p.1 p.2.1 w.steps w.chain ts = .forked then some (p.1, p.2.2) else none
 
 end Nanodregg.Protocol.Head

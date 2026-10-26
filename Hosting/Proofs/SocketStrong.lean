@@ -83,6 +83,7 @@ theorem step_describe_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World
   repeat' split at h
   all_goals (try simp only [Prod.mk.injEq] at h)
   all_goals (try (obtain ⟨rfl, -, h⟩ := h))
+  all_goals (try (replace h := postOr_done_ok_elim h))
   all_goals (try (exfalso; obtain ⟨_, hc⟩ := hd _ hp; cases hc; done))
   all_goals (try contradiction)
   all_goals (try (simp [refused, behind, CommandExit.code] at h; done))

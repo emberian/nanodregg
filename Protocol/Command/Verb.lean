@@ -77,7 +77,9 @@ inductive Verb
   `sync --attest`: catch up, then sign follow's own head (`Protocol.Head`) and print `attest HEX`.
   `sync --check ATTEST`: `--to` at the attested position, with the attestation's signature, World
   and signer checked by name (`badAttestation`, `otherWorld`, `badHeadSignature`, `notMember`,
-  `staleKey`); prints `shared STEPS MEMBER` -/
+  `staleKey`); prints `shared STEPS MEMBER`. `sync --post OBJ`: catch up, then post follow's own
+  World's head (chain, height, roots, steps) to the member's head object OBJ (`Std.head`, PROTOCOL-75:
+  `invoke OBJ post`, planned at the tip; every follow that absorbs it compares) -/
   | sync
   /-- `issue CAP`: bear a new denomination; its WELL is a value account owned by the signer whose
   id is the denomination, with floor `-CAP` (LEDGER-2) -/
@@ -184,6 +186,9 @@ inductive Cmd (D : Type)
   /-- the invitation's bytes and the sponsor key the member trusts -/
   | adopt (invite key : ByteArray)
   | sync (mode : SyncMode)
+  /-- `sync --post OBJ` (PROTOCOL-75): `invoke OBJ post` with follow's OWN World's head
+  (`Protocol.Head.headText`), planned at the tip -/
+  | post (obj : D)
   | issue (cap : Nat)
   /-- `owner = none` is the signer -/
   | account (asset : D) (owner : Option D)
@@ -240,7 +245,7 @@ def usage : Verb → String
   | .invoke => "invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--pin REL KEY]... [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...] | read OBJ ? | read OBJ REL K [PREFIX]" | .rotate => "rotate"
-  | .adopt => "adopt INVITE KEY" | .sync => "sync [--to STEPS:CHAIN | --attest | --check ATTEST]"
+  | .adopt => "adopt INVITE KEY" | .sync => "sync [--to STEPS:CHAIN | --attest | --check ATTEST | --post OBJ]"
   | .issue => "issue CAP"
   | .account => "account ASSET [--owner OWNER]"
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
@@ -408,6 +413,7 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .rotate, [] => .ok .rotate
   | .sync, [] => .ok (.sync .tip)
   | .sync, ["--attest"] => .ok (.sync .attest)
+  | .sync, ["--post", o] => do pure (.post (← digestArg digestOf o))
   -- `STEPS:CHAIN`: a step count and the chain's hex, as `sync` prints them
   | .sync, ["--to", a] =>
       match a.splitOn ":" with

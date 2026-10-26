@@ -9,12 +9,13 @@ with `Lang.program` as the kernel's `Program`, instantiated with the deployed re
 deployed ones. A row passes only when its verdict is the expected one.
 
 * HD0 B installs `Std.head` (its id is `Protocol.Foreign.headPackageId`), creates a head object
-  holding A's head at `{height 10, steps 20}`, and posts an honest advance `{height 11, steps 21}`.
+  holding A's head at `{height 10, steps 20}`, and posts an honest advance `{height 11, steps 21}`
+  (each with a chain, DESIGN-TRUST T2).
 * HD1 `otherWorld`: `Std.head`'s methods never write `world`, so a change of it is reached through a
   DATA object judged by the head law (`create none [Std.head]`): a write of its `world` is refused
   by the law; HD1c the write of an honest advance to the same object is admitted.
 * HD2 `staleHead` (a post below the held step count), HD3 `forkedHead` (a post at the held step
-  count with other roots), HD4 `badHead` (a higher step count at a lower height), HD5 `badFork` (a
+  count with other roots; HD3b with the held roots and another CHAIN), HD4 `badHead` (a higher step count at a lower height), HD5 `badFork` (a
   fork naming the held roots as the other's), each judged on the World after HD0; HD5c the honest
   fork is admitted and the head reads back forked; HD6 a post to the forked head is refused
   `forkedHead` (frozen).
@@ -64,15 +65,15 @@ def releasedOf (w : World D) (obj : D) : Option Bool :=
 
 def hdDig (n : D) : ByteArray := Sim.dc.bytes n
 
-def hdAtArg (h : Nat) (roots : ByteArray) (s : Nat) : Option ByteArray :=
-  Wire.encodeData Std.headAtTy (Std.atRec h roots s)
+def hdAtArg (c : ByteArray) (h : Nat) (roots : ByteArray) (s : Nat) : Option ByteArray :=
+  Wire.encodeData Std.headAtTy (Std.atRec c h roots s)
 
 def hdForkArg (other : ByteArray) (s : Nat) : Option ByteArray :=
   Wire.encodeData Std.forkArgTy (.record [("other", .digest other), ("steps", .nat s)])
 
 /-- A head object's state slots, holding `at {h, roots, s}` of World `w`. -/
-def hdSeed (h : Nat) (roots : ByteArray) (s : Nat) (w : ByteArray) : Option Slots :=
-  stateSlots (recordRow Std.headStateTy) [("head", .inj "at" (Std.atRec h roots s)), ("world", .digest w)] 0
+def hdSeed (c : ByteArray) (h : Nat) (roots : ByteArray) (s : Nat) (w : ByteArray) : Option Slots :=
+  stateSlots (recordRow Std.headStateTy) [("head", .inj "at" (Std.atRec c h roots s)), ("world", .digest w)] 0
 
 /-- A refusal of the run's program whose reason names `why`. -/
 def programRefused (v why : String) : Bool :=
@@ -125,43 +126,49 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let R2 := hdDig 102
   let R3 := hdDig 103
   let R4 := hdDig 104
+  let C1 := hdDig 201
+  let C2 := hdDig 202
+  let C3 := hdDig 203
+  let C4 := hdDig 204
   -- HD0 the head object and an honest advance (Std.head: method 0 `fork`, method 1 `post`)
-  let (r2, v2, H?) := create r (some hpkg) [] (hdSeed 10 R1 20 worldA)
+  let (r2, v2, H?) := create r (some hpkg) [] (hdSeed C1 10 R1 20 worldA)
   let some H := H? | return note r2 s!"HD0 B creates a head object: {v2}" false
-  let (r3, v3) := invoke r2 H [hpkg] 1 (hdAtArg 11 R2 21)
+  let (r3, v3) := invoke r2 H [hpkg] 1 (hdAtArg C2 11 R2 21)
   r := note r3 s!"HD0 B installs Std.head ({v1}; its id is Foreign.headPackageId {hpkg == Protocol.Foreign.headPackageId Sim.env}), creates H holding A's head at \{height 10, steps 20} ({v2}) and posts the advance \{height 11, steps 21} with other roots: {v3}"
     (v1 == "admitted" && v2 == "admitted" && v3 == "admitted" && hpkg == Protocol.Foreign.headPackageId Sim.env &&
-      held r2 H == some (.at worldA 10 R1 20) && held r3 H == some (.at worldA 11 R2 21))
+      held r2 H == some (.at worldA C1 10 R1 20) && held r3 H == some (.at worldA C2 11 R2 21))
   let w0 := r
   -- HD1 / HD1c otherWorld, through a data object judged by the head law
-  let (rj, vj, J?) := create w0 none [hpkg] (hdSeed 10 R1 20 worldA)
+  let (rj, vj, J?) := create w0 none [hpkg] (hdSeed C1 10 R1 20 worldA)
   let some J := J? | return note rj s!"HD1 B creates a data object under the head law: {vj}" false
   let some otherW := Wire.encodeData .digest (.digest (hdDig 7)) | return note r "HD1 no bytes" false
   let (_, v1w, _) := go prog rj (Sim.signed rj.st b b.key (Sim.S.pinsFor rj.st.host [b.id, J, hpkg])
     (.write J [(1, some otherW)] none))
   r := note r s!"HD1 a data object J judged by the head law ({vj}); a write of its world to another World's: {v1w}"
     (vj == "admitted" && deniedWith v1w "head: otherWorld")
-  let some adv := Wire.encodeData Std.headTy (.inj "at" (Std.atRec 11 R2 21)) | return note r "HD1c no bytes" false
+  let some adv := Wire.encodeData Std.headTy (.inj "at" (Std.atRec C2 11 R2 21)) | return note r "HD1c no bytes" false
   let (rjc, v1c, _) := go prog rj (Sim.signed rj.st b b.key (Sim.S.pinsFor rj.st.host [b.id, J, hpkg])
     (.write J [(0, some adv)] none))
   r := note r s!"HD1c control: a write of J's head to the advance \{height 11, steps 21}: {v1c}"
     (v1c == "admitted" && (rjc.st.host.live Sim.env J).isSome)
   -- HD2–HD5 the law's refusals of a post and a fork, each on the World after HD0
-  let (_, v4) := invoke w0 H [hpkg] 1 (hdAtArg 12 R3 19)
+  let (_, v4) := invoke w0 H [hpkg] 1 (hdAtArg C3 12 R3 19)
   r := note r s!"HD2 a post at \{height 12, steps 19}, below the held 21 steps: {v4}" (deniedWith v4 "head: staleHead")
-  let (_, v5) := invoke w0 H [hpkg] 1 (hdAtArg 11 R3 21)
+  let (_, v5) := invoke w0 H [hpkg] 1 (hdAtArg C2 11 R3 21)
   r := note r s!"HD3 a post at the held step count 21 with other roots: {v5}" (deniedWith v5 "head: forkedHead")
-  let (_, v6) := invoke w0 H [hpkg] 1 (hdAtArg 9 R3 22)
+  let (_, v5c) := invoke w0 H [hpkg] 1 (hdAtArg C3 11 R2 21)
+  r := note r s!"HD3b a post at the held step count 21 with the held roots and another chain: {v5c}" (deniedWith v5c "head: forkedHead")
+  let (_, v6) := invoke w0 H [hpkg] 1 (hdAtArg C3 9 R3 22)
   r := note r s!"HD4 a post at \{height 9, steps 22}: more steps, a lower height: {v6}" (deniedWith v6 "head: badHead")
   let (_, v7) := invoke w0 H [hpkg] 0 (hdForkArg R2 21)
   r := note r s!"HD5 a fork naming the held roots as the other poster's: {v7}" (deniedWith v7 "head: badFork")
-  r := note r s!"HD2–HD5 left the head as HD0 posted it: {held w0 H == some (.at worldA 11 R2 21)}"
-    (held w0 H == some (.at worldA 11 R2 21))
+  r := note r s!"HD2–HD5 left the head as HD0 posted it: {held w0 H == some (.at worldA C2 11 R2 21)}"
+    (held w0 H == some (.at worldA C2 11 R2 21))
   -- HD5c / HD6 the honest fork, then the frozen head
   let (rf, v8) := invoke w0 H [hpkg] 0 (hdForkArg R3 21)
   r := note r s!"HD5c control: a fork naming other roots at the held step count: {v8}; H reads back forked"
     (v8 == "admitted" && held rf H == some (.forked worldA))
-  let (_, v9) := invoke rf H [hpkg] 1 (hdAtArg 12 R4 22)
+  let (_, v9) := invoke rf H [hpkg] 1 (hdAtArg C4 12 R4 22)
   r := note r s!"HD6 a post to the forked head \{height 12, steps 22}: {v9}" (deniedWith v9 "head: forkedHead")
   -- RC: the deployed acceptor, over B's head object holding A's real head
   let acc ← match Surface.readPackage acceptText with
@@ -176,7 +183,7 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let some apkg := ta1.bind fun t => (createdIds t).head? | return note r s!"RC0 install the acceptor: {va1}" false
   let (ra2, va2, Acc?) := create ra1 (some apkg) [] (some [])
   let some Acc := Acc? | return note r s!"RC0 B creates the acceptor: {va2}" false
-  let (ra3, va3, HA?) := create ra2 (some hpkg) [] (hdSeed wA.height (hdDig (wA.roots Sim.env)) wA.steps worldA)
+  let (ra3, va3, HA?) := create ra2 (some hpkg) [] (hdSeed (hdDig wA.chain) wA.height (hdDig (wA.roots Sim.env)) wA.steps worldA)
   let some HA := HA? | return note r s!"RC0 B creates the head object of A's head: {va3}" false
   -- a retired cell: B's grant on the acceptor, revoked
   let (ra4, va4, tg) := go prog ra3 (Sim.signed ra3.st b b.key (Sim.S.pinsFor ra3.st.host [b.id, Acc, HA])

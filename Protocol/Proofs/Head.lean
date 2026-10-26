@@ -16,7 +16,12 @@
   follow's log up to there;
 * `attestTip_sign`: the message follow offers custody under `sync --attest` is `Head.message` of
   follow's OWN World's head (consent, in the shape of `step_submit_planned`);
-* `verified_ok`, `signer_ok`: what the two checks on an attestation establish.
+* `verified_ok`, `signer_ok`: what the two checks on an attestation establish;
+* `forkedSelfPost_forked` / `forkedSelfPost_none` (PROTOCOL-75): a `forkedPost` names a post the page
+  carries whose position follow's own fold reached with another chain (never free); no `forkedPost`
+  means every post the page reaches is reached with the posted chain;
+* `body_post`: the body follow plans for `sync --post OBJ` is `invoke OBJ post` of `headText` of the
+  World it plans on: follow's OWN head (consent, the shape of `attestTip_sign`).
 -/
 import Protocol.Command.Machine
 import Kernel.Proofs.RootedFold
@@ -197,5 +202,65 @@ theorem attestTip_sign {X : Ctx D} {me : Command.Self D} {w : World D} {argv : L
       · simp only [Command.Reply.sign.injEq] at h
         exact ⟨s, u, hs, hu, h.1.symm⟩
       · simp [Command.refused] at h
+
+/-! ## Self-heads through the writer (PROTOCOL-75) -/
+
+/-- **A `forkedPost` is never free**: the post it names is one the page carries (`selfPosts`), and
+follow's own fold holds, at the post's step count, a prefix of the page whose chain is NOT the posted
+one (`forked_on_fold`). -/
+theorem forkedSelfPost_forked {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)} {s : Nat}
+    {m : Option D} (hr : World.RootedFold X.env w ts w') (h : forkedSelfPost X w ts w' = some (s, m)) :
+    ∃ c, (s, c, m) ∈ selfPosts X w' ts ∧
+      ∃ pre post v, ts = pre ++ post ∧ World.fold X.env w (pre.map Prod.fst) = .ok v ∧ v.steps = s ∧
+        X.env.bytes v.chain ≠ c := by
+  unfold forkedSelfPost at h
+  obtain ⟨p, hp, hf⟩ := List.exists_of_findSome?_eq_some h
+  obtain ⟨s', c, m'⟩ := p
+  simp only at hf
+  split at hf
+  · rename_i hk
+    simp only [Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    exact ⟨c, hp, forked_on_fold hr hk⟩
+  · cases hf
+
+/-- **No `forkedPost`: every post on the fold.** When the walk refuses nothing, every self-head post
+the page carries is at a position the page does not reach from follow's position (`unreached`: before
+it, compared through follow's Store, or past it), or is reached with the posted chain
+(`shared_on_fold`). -/
+theorem forkedSelfPost_none {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
+    (hr : World.RootedFold X.env w ts w') (h : forkedSelfPost X w ts w' = none) :
+    ∀ s c m, (s, c, m) ∈ selfPosts X w' ts →
+      anchorCheck X.env s c w.steps w.chain ts = .unreached ∨
+      ∃ pre post v, ts = pre ++ post ∧ World.fold X.env w (pre.map Prod.fst) = .ok v ∧ v.steps = s ∧
+        X.env.bytes v.chain = c := by
+  intro s c m hm
+  unfold forkedSelfPost at h
+  have hz := List.findSome?_eq_none_iff.mp h _ hm
+  simp only at hz
+  cases hk : anchorCheck X.env s c w.steps w.chain ts with
+  | shared => exact .inr (shared_on_fold hr hk)
+  | unreached => exact .inl rfl
+  | forked => simp [hk] at hz
+
+/-- **Consent: `sync --post` posts follow's OWN head.** The body follow plans for `sync --post OBJ` is
+`invoke OBJ post` with the arguments read, at the head package's argument type, from `headText` of
+the World it plans on: the chain, height, roots and step count of follow's own fold, never a
+continuation's or a result's (the body is re-derived from the argv at phases 2 and 3). -/
+theorem body_post {X : Ctx D} {me : Command.Self D} {w : World D} {s : Command.Signed} {o : D}
+    {b : Body D} (h : Command.body X me w s (.post o) = .ok b) :
+    ∃ p args, Command.invokedPackage X w o = .ok p ∧
+      Lang.argsOf X.digestOf (Command.worldLook X.env w) p postMethod (headText X w) = .ok args ∧
+      b = .invoke o postMethod args Command.invokeBudget none := by
+  unfold Command.body at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+  · rename_i p hp
+    split at h
+    · rename_i args ha
+      cases h
+      exact ⟨p, args, hp, ha, rfl⟩
+    · cases h
 
 end Nanodregg.Protocol.Head

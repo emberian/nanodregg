@@ -95,6 +95,8 @@ theorem step_cont {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {m
   repeat' split at h
   all_goals (try simp only [Prod.mk.injEq] at h)
   all_goals (obtain ⟨-, -, rfl⟩ := h)
+  -- a page with self-head posts (PROTOCOL-75): the continuation survives postOr only when none fired
+  all_goals (try (rw [postOr_cont_some] at hk; replace hk := hk.2))
   all_goals (try (simp [refused, printed, behind, notServed, Reply.cont] at hk; done))
   all_goals (try (rw [refusedAt_cont] at hk; cases hk; done))
   all_goals (try (rw [custodyEnd_cont] at hk; cases hk; done))
@@ -196,6 +198,7 @@ theorem step_invoke_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D
   repeat' split at h
   all_goals (try simp only [Prod.mk.injEq] at h)
   all_goals (try (obtain ⟨-, -, h⟩ := h))
+  all_goals (try (replace h := postOr_done_ok_elim h))
   all_goals (try contradiction)
   all_goals (try (simp [refused, behind, CommandExit.code] at h; done))
   all_goals (try (exact absurd h refusedAt_ne_ok))

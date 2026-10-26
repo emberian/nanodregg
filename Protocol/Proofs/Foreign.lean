@@ -29,9 +29,9 @@ variable {D : Type} [Ord D] [DecidableEq D]
 omit [Ord D] in
 theorem check_committed_of {E : Env D} {dc : Stream D} {cell : Cell} {rb : ByteArray} {s : Lang.Seen}
     (hk : check E dc cell rb = .ok s) :
-    ∃ w h₀ rootsB s₀ roots r td,
+    ∃ w c₀ h₀ rootsB s₀ roots r td,
       Lang.headView (fun b => (dc.decode b).toOption) (E.bytes (headPackageId E)) cell =
-        some (.at w h₀ rootsB s₀) ∧
+        some (.at w c₀ h₀ rootsB s₀) ∧
       (dc.decode rootsB).toOption = some roots ∧ Receipt.ofBytes E dc rb = some r ∧
       Receipt.check E h₀ roots r.txId 0 r = .ok (.committed s.height td) ∧
       s.turn = E.bytes td ∧ s.tx = E.bytes r.txId := by
@@ -41,7 +41,7 @@ theorem check_committed_of {E : Env D} {dc : Stream D} {cell : Cell} {rb : ByteA
   | some hv' =>
     cases hv' with
     | forked w => simp [hv] at hk
-    | «at» w h₀ rootsB s₀ =>
+    | «at» w c₀ h₀ rootsB s₀ =>
       cases hro : (dc.decode rootsB).toOption with
       | none => simp [hv, hro] at hk
       | some roots =>
@@ -55,7 +55,7 @@ theorem check_committed_of {E : Env D} {dc : Stream D} {cell : Cell} {rb : ByteA
             | committed h td =>
               simp [hv, hro, hrb, hc] at hk
               subst hk
-              exact ⟨w, h₀, rootsB, s₀, roots, r, td, rfl, hro, rfl, hc, rfl, rfl⟩
+              exact ⟨w, c₀, h₀, rootsB, s₀, roots, r, td, rfl, hro, rfl, hc, rfl, rfl⟩
             | refused => simp [hv, hro, hrb, hc] at hk
             | absent => simp [hv, hro, hrb, hc] at hk
 
@@ -76,9 +76,9 @@ theorem foreign_receipt_sound {dc : Stream D} {name nonce : ByteArray} {a : Nat}
     (hA : World.fold X.env (genesisWorld X name nonce a fs) l = .ok wA)
     {cell : Cell} {rb : ByteArray} {s : Lang.Seen}
     (hk : check X.env dc cell rb = .ok s)
-    (hr : ∀ w h₀ rootsB s₀,
+    (hr : ∀ w c₀ h₀ rootsB s₀,
       Lang.headView (fun b => (dc.decode b).toOption) (X.env.bytes (headPackageId X.env)) cell =
-        some (.at w h₀ rootsB s₀) → (dc.decode rootsB).toOption = some (wA.roots X.env))
+        some (.at w c₀ h₀ rootsB s₀) → (dc.decode rootsB).toOption = some (wA.roots X.env))
     {r : Receipt D} {td : D} (hrb : Receipt.ofBytes X.env dc rb = some r) (htd : s.turn = X.env.bytes td) :
     s.tx = X.env.bytes r.txId ∧
       ((∃ l₁ t l₂ v v', l = l₁ ++ Kernel.Step.turn t :: l₂ ∧
@@ -86,13 +86,13 @@ theorem foreign_receipt_sound {dc : Stream D} {name nonce : ByteArray} {a : Nat}
           t.txId = r.txId ∧ s.height = v.height + 1 ∧ td = turnDigest X.env t) ∨
         CollidesAmong X.env.hash ([rootsPre X.env r.root r.jroot r.rroot r.rowsroot, wA.rootsPre X.env] ++
           inclPres (journalSpec X.env) (journalPre X.env) r.txId (s.height, td) r.jpath wA.journal)) := by
-  obtain ⟨w, h₀, rootsB, s₀, roots, r', td', hv, hro, hrb', hc, hturn, htx⟩ := check_committed_of hk
+  obtain ⟨w, c₀, h₀, rootsB, s₀, roots, r', td', hv, hro, hrb', hc, hturn, htx⟩ := check_committed_of hk
   have hrr : r' = r := Option.some.inj (hrb'.symm.trans hrb)
   subst hrr
   have htt : td' = td := hE.bytes_inj (hturn.symm.trans htd)
   subst htt
   have hroots : roots = wA.roots X.env := by
-    have := hr w h₀ rootsB s₀ hv; rw [hro] at this; exact Option.some.inj this
+    have := hr w c₀ h₀ rootsB s₀ hv; rw [hro] at this; exact Option.some.inj this
   subst hroots
   have hjo := fold_journalOk (genesisWorld_journalOk X name nonce a fs) hA
   refine ⟨htx, ?_⟩
@@ -111,9 +111,9 @@ and states a committed entry the World does not hold is refused by its path, or 
 among the listed inputs: a relay that keeps the roots cannot change the entry. -/
 theorem forged_receipt_refused {dc : Stream D} {wA : World D} (hjc : wA.JournalCanon X.env)
     (hfit : ∀ k e, wA.journalAt X.env k = some e → e.1 < 2 ^ 64)
-    {cell : Cell} {rb : ByteArray} {r : Receipt D} {w : ByteArray} {h₀ : Nat} {rootsB : ByteArray} {s₀ : Nat}
+    {cell : Cell} {rb : ByteArray} {r : Receipt D} {w c₀ : ByteArray} {h₀ : Nat} {rootsB : ByteArray} {s₀ : Nat}
     (hv : Lang.headView (fun b => (dc.decode b).toOption) (X.env.bytes (headPackageId X.env)) cell =
-      some (.at w h₀ rootsB s₀))
+      some (.at w c₀ h₀ rootsB s₀))
     (hro : (dc.decode rootsB).toOption = some (wA.roots X.env))
     (hrb : Receipt.ofBytes X.env dc rb = some r)
     (hroots : rootsDigest X.env r.root r.jroot r.rroot r.rowsroot = wA.roots X.env)
@@ -160,9 +160,9 @@ the listed inputs (`check_refused_sound`, the receipt and the World the theorem'
 theorem refused_receipt_notCommitted {dc : Stream D} {name nonce : ByteArray} {a : Nat}
     {fs : List (ByteArray × D)} {l : List (Kernel.Step D)} {wA : World D}
     (hA : World.fold X.env (genesisWorld X name nonce a fs) l = .ok wA)
-    {cell : Cell} {rb : ByteArray} {r : Receipt D} {w : ByteArray} {h₀ : Nat} {rootsB : ByteArray} {s₀ : Nat}
+    {cell : Cell} {rb : ByteArray} {r : Receipt D} {w c₀ : ByteArray} {h₀ : Nat} {rootsB : ByteArray} {s₀ : Nat}
     (hv : Lang.headView (fun b => (dc.decode b).toOption) (X.env.bytes (headPackageId X.env)) cell =
-      some (.at w h₀ rootsB s₀))
+      some (.at w c₀ h₀ rootsB s₀))
     (hro : (dc.decode rootsB).toOption = some (wA.roots X.env))
     (hrb : Receipt.ofBytes X.env dc rb = some r) {h code : Nat} {m : D}
     (hk : Receipt.check X.env h₀ (wA.roots X.env) r.txId 0 r = .ok (.refused h code m)) :

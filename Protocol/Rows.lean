@@ -1769,11 +1769,44 @@ def forkRow : Row where
       fault := .cold }])
   plant := .caught .ignoreAnchor 10 .ok
 
+/-- A self-head object's seed: an `at` head at step 0 (the law judges a seed's shape only) of THIS
+World (`world` its origin, bound by the harness). -/
+def selfHeadSeed : String :=
+  "(record (head (at (record (chain #{@sponsor}) (height 0) (roots #{@sponsor}) (steps 0)))) (world #{@world}))"
+
+/-- PROTOCOL-75 (DESIGN-TRUST T2: self-heads through the writer). The sponsor installs `Std.head`
+(`world/head/Head`), creates its own head object of THIS World and posts its head at the tip
+(`sync --post @hs`: `invoke @hs post` with follow's own chain, height, roots and step count). The
+operator, cold, catches up through the post and finds its position on its own fold (nothing to
+refuse). The sponsor then creates a second head object and FORGES a post naming step 2 with a chain
+no fold has (a hostile client; its own follow posts only its own head, `Proofs.Head.body_post`); the
+writer admits it (the head law judges the head's monotony only). The operator, cold again, reaches
+step 2 with another chain on the same page and is refused `forkedPost` by name; the page is kept
+and its next `sync` proceeds. The plant is measured (no cheap mutation reaches follow's walk: the
+harness's plants are a client's or the writer's): with `Head.forkedSelfPost` answering `none`, line
+12 ends `ok`. -/
+def selfHeadRow : Row where
+  name := "selfHead"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "invoke"]
+  drive := .members (welcome ++ [
+    okBind "sponsor" ["install", "<world/head/Head"] "head",
+    okBind "sponsor" ["create", "--pkg", "@head", selfHeadSeed] "hs",
+    ok "sponsor" ["sync", "--post", "@hs"],
+    { actor := "operator", act := .cmd ["sync"], expect := .ok, fault := .cold },
+    okBind "sponsor" ["create", "--pkg", "@head", selfHeadSeed] "h2",
+    { actor := "sponsor", act := .forge ["invoke", "@h2", "1",
+        "(record (chain #{@sponsor}) (height 1) (roots #{@sponsor}) (steps 2))"], expect := .ok },
+    { actor := "operator", act := .cmd ["sync"], expect := .refused "forkedPost", fault := .cold },
+    ok "operator" ["sync"]])
+  plant := .measured "Head.forkedSelfPost := none: line 12 ends ok (MEASURED on hbox, PROTOCOL-75)"
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow, forkRow]
+   forgedRefusalRow, forkRow, selfHeadRow]
 
 end Nanodregg.Protocol

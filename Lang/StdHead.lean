@@ -2,7 +2,7 @@
 # Lang.StdHead — a foreign World's head, held in this World (E5, plan §2(a))
 
 An object of `headPackage` holds ONE head of another World A: A's origin (`world`, fixed at birth)
-and either `at {height, roots, steps}` (the head a member of this World that follows A posted) or
+and either `at {chain, height, roots, steps}` (the head a member of this World that follows A posted) or
 `forked {held, other, steps}` (two posters disagreed at one step count: the object is frozen).
 
 The head is keyed by STEPS, not height: a recorded refusal advances A's `steps` and changes its
@@ -11,11 +11,13 @@ refusals root at one height (`Kernel.World.steps`), so two honest heads at one h
 The methods decide nothing: `post` writes `at arg`, `fork` writes `forked` naming the held roots.
 The law `head` is the one decision (every change, whatever method wrote it):
 * `world` changed: `otherWorld`;
-* `at s` → `at s'`: `s' < s` is `staleHead`; `s' = s` with another height or roots is `forkedHead`;
+* `at s` → `at s'`: `s' < s` is `staleHead`; `s' = s` with another chain, height or roots is `forkedHead`
+  (the chain is what `fold_head_binds` binds: one `(steps, chain)` is one log, DESIGN-TRUST T2);
   a lower height at a higher step count is `badHead` (an honest fold never lowers its height);
 * `at` → `forked`: only naming the held roots at the held step count, with other roots (`badFork`);
 * `forked` → anything else: `forkedHead` (frozen).
-A receipt is checked against an `at` head (`Protocol.Foreign.check`); a forked head checks none.
+A receipt is checked against an `at` head (`Protocol.Foreign.check`, by its height and roots; the
+chain is for comparing folds, PROTOCOL-75); a forked head checks none.
 -/
 import Lang.Std
 import Lang.StdData
@@ -23,8 +25,9 @@ import Lang.Program
 
 namespace Nanodregg.Lang.Std
 
-/-- A posted head: what `receipt CALL`'s `head STEPS HEIGHT ROOTS` line prints. -/
-def headAtTy : Ty := .record [("height", .nat), ("roots", .digest), ("steps", .nat)]
+/-- A posted head: what `receipt CALL`'s `head STEPS HEIGHT ROOTS CHAIN` line prints, and what
+`sync --post` posts of follow's own World (`Protocol.Head.headText`). -/
+def headAtTy : Ty := .record [("chain", .digest), ("height", .nat), ("roots", .digest), ("steps", .nat)]
 
 /-- A recorded disagreement: the held roots, the other poster's, at one step count. -/
 def headForkTy : Ty := .record [("held", .digest), ("other", .digest), ("steps", .nat)]
@@ -91,8 +94,8 @@ def headFork : Term :=
 /-- A head object's state as data. -/
 def headSt (hd : Data) (w : ByteArray) : Data := .record [("head", hd), ("world", .digest w)]
 
-def atRec (h : Nat) (r : ByteArray) (s : Nat) : Data :=
-  .record [("height", .nat h), ("roots", .digest r), ("steps", .nat s)]
+def atRec (c : ByteArray) (h : Nat) (r : ByteArray) (s : Nat) : Data :=
+  .record [("chain", .digest c), ("height", .nat h), ("roots", .digest r), ("steps", .nat s)]
 
 def forkRec (held other : ByteArray) (s : Nat) : Data :=
   .record [("held", .digest held), ("other", .digest other), ("steps", .nat s)]
@@ -109,7 +112,7 @@ namespace Nanodregg.Lang
 
 /-- What a receipt is checked against: a head object's state, read from its cell. -/
 inductive HeadView
-  | at (world : ByteArray) (height : Nat) (roots : ByteArray) (steps : Nat)
+  | at (world chain : ByteArray) (height : Nat) (roots : ByteArray) (steps : Nat)
   | forked (world : ByteArray)
   deriving DecidableEq, Repr
 
@@ -121,8 +124,8 @@ def headView {D : Type} (digestOf : ByteArray → Option D) (pkg : ByteArray) (c
   else if c.slots.get Kernel.Receive.slotPackage ≠ some pkg then none
   else
     match readState digestOf (recordRow Std.headStateTy) (c.slots.filter fun p => Kernel.Receive.stateBase ≤ p.1) with
-    | .ok (.record [("head", .inj "at" (.record [("height", .nat h), ("roots", .digest r), ("steps", .nat s)])),
-          ("world", .digest w)]) => some (.at w h r s)
+    | .ok (.record [("head", .inj "at" (.record [("chain", .digest c), ("height", .nat h), ("roots", .digest r),
+          ("steps", .nat s)])), ("world", .digest w)]) => some (.at w c h r s)
     | .ok (.record [("head", .inj "forked" _), ("world", .digest w)]) => some (.forked w)
     | _ => none
 

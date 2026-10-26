@@ -1310,7 +1310,7 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
   let binds := founders.zipIdx.flatMap (fun (n, i) =>
     [(n, hex (founderId s.writer.X g.origin i)),
      (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]) ++
-    [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other)] ++
+    [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other), ("world", hex g.origin)] ++
     (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf R n 0))
   let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, first := g, binds, invitation }
   let steps := match ← st.host.stop with

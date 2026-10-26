@@ -3,7 +3,8 @@
 
 `check E dc` is the deployed `Lang.ReceiptCheck` (`Host.Deployed.X` passes it to `Lang.program`): the
 point's cell must be an object of `Std.headPackage` (`Lang.headView`, else `notHead`) holding an
-`at` head (a `forked` one checks nothing: `forkedHead`); the receipt's bytes must decode
+`at` head (a `forked` one checks nothing: `forkedHead`; the head's chain is for comparing folds,
+PROTOCOL-75, and the check ignores it); the receipt's bytes must decode
 (`badReceipt`); `Receipt.check` against the head's height and roots must answer `committed`
 (`headMismatch` / `pathMismatch` / `forgotten` by the check's own names; `refused` and `absent`
 are `notCommitted`: acting on them needs the call's window, which the receipt does not carry).
@@ -35,7 +36,7 @@ def check (E : Env D) (dc : Stream D) : Lang.ReceiptCheck := fun cell rb =>
   match Lang.headView digestOf (E.bytes (headPackageId E)) cell with
   | none => .error "notHead"
   | some (.forked _) => .error "forkedHead"
-  | some (.at _ height rootsB _) =>
+  | some (.at _ _ height rootsB _) =>
     match digestOf rootsB, Receipt.ofBytes E dc rb with
     | none, _ => .error "notHead"
     | _, none => .error "badReceipt"

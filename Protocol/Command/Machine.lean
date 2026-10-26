@@ -143,6 +143,12 @@ inductive Refusal (D : Type)
   World holds only the current chain, so the comparison on the way cannot be made: the member
   BEHIND does it, or `host check STORE --anchor` on this member's own Store (PROTOCOL-74) -/
   | ahead (steps : Nat)
+  /-- a page carried a member's post of ITS head of this World (`Std.head` with `world` this World's
+  origin, `Head.selfPosts`) at a position follow's own fold reached on this page with ANOTHER chain
+  (PROTOCOL-75; `Proofs.Head.forkedSelfPost_forked`). The page is KEPT (it is lawful on follow's
+  fold), the command ends by name, and the post is the witness: its poster signed that head
+  (`Proofs.Head.body_post`) -/
+  | forkedPost (steps : Nat) (member : Option D)
   /-- `sync --check`: the attestation refused by `Protocol.Head`'s name -/
   | attest (r : Head.Refusal)
 
@@ -194,6 +200,7 @@ def Refusal.name : Refusal D → String
   | .badKey => "badKey"
   | .forkedWorld _ => "forkedWorld"
   | .ahead _ => "ahead"
+  | .forkedPost .. => "forkedPost"
   | .attest r => r.name
 
 def refused (r : Refusal D) : Reply :=
@@ -379,6 +386,13 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
   | .account a o => .ok (.account a (o.getD me.member))
   | .transfer src dst n via once => .ok (.transfer src dst n via once)
   | .credit wl acct n via => .ok (.credit wl acct n via)
+  -- `sync --post OBJ` (PROTOCOL-75): `post` of follow's OWN World's head on the member's head object,
+  -- the head read off `w` here as it is re-read at every phase (`Proofs.Head.body_post`)
+  | .post o => do
+      let p ← invokedPackage X w o
+      match Lang.argsOf X.digestOf (worldLook X.env w) p Head.postMethod (Head.headText X w) with
+      | .ok args => .ok (.invoke o Head.postMethod args invokeBudget none)
+      | .error r => .error (.receive r)
   | .init _ | .read _ _ | .describe _ | .rangeRead .. | .adopt _ _ | .sync _ | .invite _ | .receipt _ | .cancel _ =>
       .error .badState
 
@@ -977,12 +991,13 @@ def settleOf (X : Ctx D) (me : Self D) (w : World D) (c : Call D) : Settle.Verdi
   Settle.ofReceipt (journalForgets w.height c.unsigned.notBefore) (staleBehind X me w c)
     w.height c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer
 
-/-- The `receipt CALL` lines: the receipt, the head it was built at, and the settlement. -/
+/-- The `receipt CALL` lines: the receipt, the head it was built at (`head STEPS HEIGHT ROOTS CHAIN`:
+what a foreign World posts into `Std.head`, PROTOCOL-75), and the settlement. -/
 def receiptText (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (c : Call D) : Option String :=
   let r := Receipt.build X.env w (txIdOf X c)
   let v := settleOf X me w c
   (Receipt.bytes X.env dc r).map fun b =>
-    s!"{Attempt.receiptWord} {Text.toHex b}\n{Attempt.headWord} {w.steps} {w.height} {hex X (w.roots X.env)}\n" ++
+    s!"{Attempt.receiptWord} {Text.toHex b}\n{Attempt.headWord} {w.steps} {w.height} {hex X (w.roots X.env)} {hex X w.chain}\n" ++
       s!"{Attempt.settleWord} {v.text X.env.bytes}\n"
 
 def receiptLines (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (cb : ByteArray) : Reply :=
@@ -1023,6 +1038,19 @@ def absorbSync (X : Ctx D) (me : Self D) (cmd : Cmd D) (w : World D) (evs : List
         if Head.anchorCheck X.env s c w.steps w.chain ts = .forked then .error (.forkedWorld s)
         else .ok (w', ts, wb)
     | none => .ok (w', ts, wb)
+
+/-- The reply a page's self-head posts force, else `r` (PROTOCOL-75): `forkedPost` when a member's
+post of its head of this World sits at a position follow's fold reached on this page with another
+chain (`Head.forkedSelfPost`). The page itself is kept by the caller (`moved`: it is lawful on
+follow's fold; the fork is the poster's or the writer's), the command ends by name, and the next
+command proceeds past the post. A top-level function, not a match in `step`: `step_world`'s blanket
+split pays per match of `step`'s body; irreducible, so no reply-shape proof over `step` unifies
+through it (two stuck matchers cost what a constructor mismatch does not): they read it by
+`postOr_cases` and the elims beside it. -/
+@[irreducible] def postOr (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D) (r : Reply) : Reply :=
+  match Head.forkedSelfPost X w ts w' with
+  | some (s, m) => refused (D := D) (.forkedPost s m)
+  | none => r
 
 /-- `shared` or `unreached` at the tip: the anchor's step count against follow's. `start` refused to
 begin past the anchor (`ahead`), and every page on the way compared the chain there
@@ -1079,7 +1107,7 @@ instead (`hintNames`). Arguments are placeholders; a name drops them. -/
 def hintReps : List (Refusal Nat) :=
   [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
    .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
-   .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0] ++
+   .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0, .forkedPost 0 none] ++
   Head.Refusal.all.map Refusal.attest ++
   ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
     .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :
@@ -1386,7 +1414,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                         | none => f.verified
                       let moved (w' : World D) (ts : List (Kernel.Step D × D)) (r : Reply) :
                           Follow D × Persist D × Reply :=
-                        ({ f with world := w', verified := v }, .steps ts, r)
+                        ({ f with world := w', verified := v }, .steps ts, postOr X w ts w' r)
                       if pg.steps < pg.tipSteps then
                         if Bounds.pagesPerCommandMax ≤ pages + 1 then
                           moved w' ts (behind pg.steps pg.tipSteps)

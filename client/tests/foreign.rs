@@ -219,7 +219,7 @@ fn joiner(root: &Path, w: &World, name: &str, sock: &Path) -> (Member, String, S
 }
 
 /// `receipt CALL` on a follower of A: the receipt and the head it was built at.
-fn receipt(m: &Member, call: &str) -> (String, String, String, String) {
+fn receipt(m: &Member, call: &str) -> (String, String, String, String, String) {
     let out = m.ok(&["receipt", call]);
     let head: Vec<&str> = line(&out, "head ").split_whitespace().collect();
     (
@@ -227,11 +227,12 @@ fn receipt(m: &Member, call: &str) -> (String, String, String, String) {
         head[0].to_owned(),
         head[1].to_owned(),
         head[2].to_owned(),
+        head[3].to_owned(),
     )
 }
 
-fn head_text(steps: &str, height: &str, roots: &str) -> String {
-    format!("(record (height {height}) (roots #{roots}) (steps {steps}))")
+fn head_text(steps: &str, height: &str, roots: &str, chain: &str) -> String {
+    format!("(record (chain #{chain}) (height {height}) (roots #{roots}) (steps {steps}))")
 }
 
 /// Where the receipt's cells-root bytes start, in hex digits: the answer byte, two u64s, then the
@@ -275,7 +276,7 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     // A second call of A, never accepted in B: X2r's forged-roots receipt is about it.
     a.founder.ok(&["write", &offer, "3", "a-second-offer"]);
     let call2 = a.founder.last_call();
-    let (r, steps, height, roots) = receipt(&ba, &call);
+    let (r, steps, height, roots, roots_chain) = receipt(&ba, &call);
     let (r2, steps2, ..) = receipt(&ba, &call2);
     assert_eq!(steps, steps2, "both receipts at one head of A");
 
@@ -292,7 +293,7 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     .to_owned();
     let seed = format!(
         "(record (head (at {})) (world #{a_origin}))",
-        head_text(&steps, &height, &roots)
+        head_text(&steps, &height, &roots, &roots_chain)
     );
     let h = line(&bf.ok(&["create", "--pkg", &head_pkg, &seed]), "id ").to_owned();
     let acc = line(&bf.ok(&["create", "--pkg", &acc_pkg, "(record)"]), "id ").to_owned();
@@ -352,7 +353,7 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     );
     // X2h: A moves on; a receipt built at A's NEW head does not open B's held one.
     a.founder.ok(&["write", &offer, "2", "later"]);
-    let (r_later, s2, h2, roots2) = receipt(&ba, &call);
+    let (r_later, s2, h2, roots2, roots2_chain) = receipt(&ba, &call);
     let o = accept(bf, &r_later);
     assert!(
         !o.status.success() && both(&o).contains("headMismatch"),
@@ -361,7 +362,12 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     );
     // ... and once B's head advances to it, it checks: the first acceptance already stands, so it is
     // refused as a second acceptance (`keyTaken`), not as a receipt (`headMismatch`).
-    bf.ok(&["invoke", &h, "1", &head_text(&s2, &h2, &roots2)]);
+    bf.ok(&[
+        "invoke",
+        &h,
+        "1",
+        &head_text(&s2, &h2, &roots2, &roots2_chain),
+    ]);
     let o = accept(bf, &r_later);
     assert!(
         !o.status.success() && both(&o).contains("keyTaken") && !both(&o).contains("headMismatch"),
@@ -372,7 +378,14 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     // X3: `cb` (granted post and fork) posts a head at the SAME step count with other roots.
     let g = line(&bf.ok(&["grant", &h, &cb_id, "invoke:0,invoke:1"]), "id ").to_owned();
     let fake = "00".repeat(roots2.len() / 2);
-    let o = cb.refused(&["invoke", &h, "1", &head_text(&s2, &h2, &fake), "--via", &g]);
+    let o = cb.refused(&[
+        "invoke",
+        &h,
+        "1",
+        &head_text(&s2, &h2, &fake, &roots2_chain),
+        "--via",
+        &g,
+    ]);
     assert!(
         o.contains("lawDenied") && o.contains("forkedHead"),
         "X3: {o}"
@@ -393,14 +406,19 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
         "X3b accept: {}",
         both(&o)
     );
-    let o = bf.refused(&["invoke", &h, "1", &head_text(&s2, &h2, &roots2)]);
+    let o = bf.refused(&[
+        "invoke",
+        &h,
+        "1",
+        &head_text(&s2, &h2, &roots2, &roots2_chain),
+    ]);
     assert!(o.contains("forkedHead"), "X3b post: {o}");
 
     // X5: a second head object for A, trusted; the owner withdraws the anchor: `untrusted`.
-    let (r5, s5, h5, roots5) = receipt(&ba, &call);
+    let (r5, s5, h5, roots5, roots5_chain) = receipt(&ba, &call);
     let seed5 = format!(
         "(record (head (at {})) (world #{a_origin}))",
-        head_text(&s5, &h5, &roots5)
+        head_text(&s5, &h5, &roots5, &roots5_chain)
     );
     let h5id = line(&bf.ok(&["create", "--pkg", &head_pkg, &seed5]), "id ").to_owned();
     let anchor5 = format!("(record (cell #{h5id}))");
@@ -425,10 +443,10 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     // X6 (DESIGN-OBS §2.3): a time-lock on A's clock. The fact a receipt states is the HEIGHT A admitted
     // a call at; the lock releases only on a receipt at or past its `deadline`. A head object of A's
     // current head; a lock whose deadline is one past that height.
-    let (r6, s6, h6, roots6) = receipt(&ba, &call);
+    let (r6, s6, h6, roots6, roots6_chain) = receipt(&ba, &call);
     let seed6 = format!(
         "(record (head (at {})) (world #{a_origin}))",
-        head_text(&s6, &h6, &roots6)
+        head_text(&s6, &h6, &roots6, &roots6_chain)
     );
     let h6id = line(&bf.ok(&["create", "--pkg", &head_pkg, &seed6]), "id ").to_owned();
     let tl_pkg = line(
@@ -474,7 +492,7 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     // A's clock advances: one more call of A, admitted at the deadline
     a.founder.ok(&["write", &offer, "4", "tick"]);
     let tick = a.founder.last_call();
-    let (r7, s7, h7, roots7) = receipt(&ba, &tick);
+    let (r7, s7, h7, roots7, roots7_chain) = receipt(&ba, &tick);
     assert_eq!(
         h7.parse::<u64>().unwrap(),
         deadline,
@@ -488,7 +506,12 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
         both(&o)
     );
     // B posts A's new head; the tick's receipt releases the lock
-    bf.ok(&["invoke", &h6id, "1", &head_text(&s7, &h7, &roots7)]);
+    bf.ok(&[
+        "invoke",
+        &h6id,
+        "1",
+        &head_text(&s7, &h7, &roots7, &roots7_chain),
+    ]);
     let o = release(&r7);
     assert!(o.status.success(), "X6 release: {}", both(&o));
     let state = bf.ok(&["read", &tl]);

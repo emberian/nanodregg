@@ -4,7 +4,7 @@
 Over the reference semantics, never by evaluating the term. An admitted write or invoke of a
 `Std.headPackage` object:
 * keeps `world` (`head_world_fixed`, L6);
-* from `at` to `at`: the step count never falls, an equal step count keeps the height and roots,
+* from `at` to `at`: the step count never falls, an equal step count keeps the chain, height and roots,
   the height never falls (`head_at_at`: L2 `forkedHead`, L4 `staleHead` / `badHead`);
 * from `at` to `forked`: names the held roots at the held step count, with other roots
   (`head_at_fork`, L5);
@@ -22,12 +22,12 @@ open Nanodregg.Lang
 variable {lib : List Term}
 
 /-- The scalars of an `at` head are in the language's bounds. -/
-def AtOk (h : Nat) (r : ByteArray) (s : Nat) : Prop :=
-  h < Bounds.natLimit ∧ r.size ≤ Bounds.digestBytesMax ∧ s < Bounds.natLimit
+def AtOk (c : ByteArray) (h : Nat) (r : ByteArray) (s : Nat) : Prop :=
+  c.size ≤ Bounds.digestBytesMax ∧ h < Bounds.natLimit ∧ r.size ≤ Bounds.digestBytesMax ∧ s < Bounds.natLimit
 
-theorem atRec_conforms {h : Nat} {r : ByteArray} {s : Nat} (hk : AtOk h r s) :
-    Conforms (atRec h r s) headAtTy :=
-  .record (.cons (.nat hk.1) (.cons (.digest hk.2.1) (.cons (.nat hk.2.2) .nil)))
+theorem atRec_conforms {c : ByteArray} {h : Nat} {r : ByteArray} {s : Nat} (hk : AtOk c h r s) :
+    Conforms (atRec c h r s) headAtTy :=
+  .record (.cons (.digest hk.1) (.cons (.nat hk.2.1) (.cons (.digest hk.2.2.1) (.cons (.nat hk.2.2.2) .nil))))
 
 theorem case_scrut {env : Env} {i : Nat} {d : Data} {f : Label} {ℓ : Label} {w : Val}
     (hi : env[i]? = some d.toVal) (h : BigStep lib env (.get (.var i) f) (.ok (.inj ℓ w))) :
@@ -64,13 +64,13 @@ theorem head_world_fixed {rq occ : Data} {hd hd' : Data} {w w' : ByteArray}
   rw [h1, h2]
 
 /-- **L2 + L4**: from an `at` head to an `at` head, an admitted change never lowers the step count
-(`staleHead`), keeps the head at an equal step count (`forkedHead`), and never lowers the height
+(`staleHead`), keeps the head (chain, height, roots) at an equal step count (`forkedHead`), and never lowers the height
 (`badHead`). -/
-theorem head_at_at {rq occ : Data} {h h' s s' : Nat} {r r' w w' : ByteArray}
-    (hA : Admits lib headLaw rq (headSt (.inj "at" (atRec h' r' s')) w') (headSt (.inj "at" (atRec h r s)) w))
+theorem head_at_at {rq occ : Data} {h h' s s' : Nat} {c c' r r' w w' : ByteArray}
+    (hA : Admits lib headLaw rq (headSt (.inj "at" (atRec c' h' r' s')) w') (headSt (.inj "at" (atRec c h r s)) w))
     (ho : rq.field "occasion" = some occ) (hc : IsChange occ)
-    (hk : AtOk h r s) (hk' : AtOk h' r' s') :
-    s ≤ s' ∧ (s = s' → h = h' ∧ r = r') ∧ h ≤ h' := by
+    (hk : AtOk c h r s) (hk' : AtOk c' h' r' s') :
+    s ≤ s' ∧ (s = s' → c = c' ∧ h = h' ∧ r = r') ∧ h ≤ h' := by
   obtain ⟨-, env, v, h2, h3, hcase⟩ := head_change_case hA ho hc
   simp only [headCase, At.oldF, At.old, At.under, At.newF, At.new] at hcase
   obtain ⟨ℓ, u, body, hs, hf, hb⟩ := bigStep_case_ok hcase
@@ -80,7 +80,7 @@ theorem head_at_at {rq occ : Data} {h h' s s' : Nat} {r r' w w' : ByteArray}
   simp only [Row.find?, if_true, Option.some.injEq] at hf
   subst hf
   obtain ⟨ℓ2, u2, body2, hs2, hf2, hb2⟩ := bigStep_case_ok hb
-  obtain ⟨y2, hy2, rfl⟩ := case_scrut (i := 3) (d := headSt (.inj "at" (atRec h' r' s')) w') (by simpa using h2) hs2
+  obtain ⟨y2, hy2, rfl⟩ := case_scrut (i := 3) (d := headSt (.inj "at" (atRec c' h' r' s')) w') (by simpa using h2) hs2
   simp [headSt, Data.field, Row.find?] at hy2
   obtain ⟨rfl, rfl⟩ := hy2
   simp only [Row.find?, if_true, Option.some.injEq] at hf2
@@ -94,28 +94,28 @@ theorem head_at_at {rq occ : Data} {h h' s s' : Nat} {r r' w w' : ByteArray}
   -- steps
   obtain ⟨a1, b1, ha1, hb1, hp1⟩ := bigStep_prim_ok g1
   obtain ⟨m1, n1, rfl, rfl, hle1⟩ := primEval_le_true hp1
-  have e1 := getVar_nat (d := atRec h r s) (i := 1) rfl ha1
-  have e1' := getVar_nat (d := atRec h' r' s') (i := 0) rfl hb1
+  have e1 := getVar_nat (d := atRec c h r s) (i := 1) rfl ha1
+  have e1' := getVar_nat (d := atRec c' h' r' s') (i := 0) rfl hb1
   simp [atRec, Data.field, Row.find?] at e1 e1'
   subst e1 e1'
   -- height
   obtain ⟨a3, b3, ha3, hb3, hp3⟩ := bigStep_prim_ok g3
   obtain ⟨m3, n3, rfl, rfl, hle3⟩ := primEval_le_true hp3
-  have e3 := getVar_nat (d := atRec h r s) (i := 1) rfl ha3
-  have e3' := getVar_nat (d := atRec h' r' s') (i := 0) rfl hb3
+  have e3 := getVar_nat (d := atRec c h r s) (i := 1) rfl ha3
+  have e3' := getVar_nat (d := atRec c' h' r' s') (i := 0) rfl hb3
   simp [atRec, Data.field, Row.find?] at e3 e3'
   subst e3 e3'
   refine ⟨by omega, fun hss => ?_, by omega⟩
   -- an equal step count: the comparison ran and returned true
   rcases bigStep_ite_ok g2 with ⟨_, heq⟩ | ⟨hf, -⟩
-  · have hd := (eqData_true (T := headAtTy) (dx := atRec h r s) (dy := atRec h' r' s') (by decide)
+  · have hd := (eqData_true (T := headAtTy) (dx := atRec c h r s) (dy := atRec c' h' r' s') (by decide)
       (.var rfl) (.var rfl) heq (atRec_conforms hk) (atRec_conforms hk')).mp rfl
     simp [atRec] at hd
-    exact ⟨hd.1, hd.2.1⟩
+    exact ⟨hd.1, hd.2.1, hd.2.2.1⟩
   · obtain ⟨a2, b2, ha2, hb2', hp2⟩ := bigStep_prim_ok hf
     obtain ⟨m2, n2, rfl, rfl, hd2⟩ := primEval_eq_bool hp2
-    have e2 := getVar_nat (d := atRec h r s) (i := 1) rfl ha2
-    have e2' := getVar_nat (d := atRec h' r' s') (i := 0) rfl hb2'
+    have e2 := getVar_nat (d := atRec c h r s) (i := 1) rfl ha2
+    have e2' := getVar_nat (d := atRec c' h' r' s') (i := 0) rfl hb2'
     simp [atRec, Data.field, Row.find?] at e2 e2'
     subst e2 e2'
     simp [hss] at hd2
@@ -147,8 +147,8 @@ theorem head_forked_frozen {rq occ : Data} {f hd' : Data} {w w' : ByteArray}
     heq hf hn).mp rfl).symm
 
 /-- **L5**: a recorded fork names the held roots at the held step count, with other roots. -/
-theorem head_at_fork {rq occ : Data} {h s s' : Nat} {r held other w w' : ByteArray}
-    (hA : Admits lib headLaw rq (headSt (.inj "forked" (forkRec held other s')) w') (headSt (.inj "at" (atRec h r s)) w))
+theorem head_at_fork {rq occ : Data} {h s s' : Nat} {c r held other w w' : ByteArray}
+    (hA : Admits lib headLaw rq (headSt (.inj "forked" (forkRec held other s')) w') (headSt (.inj "at" (atRec c h r s)) w))
     (ho : rq.field "occasion" = some occ) (hc : IsChange occ) :
     held = r ∧ s' = s ∧ other ≠ r := by
   obtain ⟨-, env, v, h2, h3, hcase⟩ := head_change_case hA ho hc
@@ -174,18 +174,18 @@ theorem head_at_fork {rq occ : Data} {h s s' : Nat} {r held other w w' : ByteArr
   obtain ⟨a1, b1, ha1, hb1, hp1⟩ := bigStep_prim_ok g1
   obtain ⟨x1, y1, rfl, rfl, hd1⟩ := primEval_deq_bool hp1
   have e1 := getVar_digest (d := forkRec held other s') (i := 0) rfl ha1
-  have e1' := getVar_digest (d := atRec h r s) (i := 1) rfl hb1
+  have e1' := getVar_digest (d := atRec c h r s) (i := 1) rfl hb1
   simp [forkRec, atRec, Data.field, Row.find?] at e1 e1'
   obtain ⟨a2, b2, ha2, hb2', hp2⟩ := bigStep_prim_ok g2
   obtain ⟨x2, y2', rfl, rfl, hd2⟩ := primEval_eq_bool hp2
   have e2 := getVar_nat (d := forkRec held other s') (i := 0) rfl ha2
-  have e2' := getVar_nat (d := atRec h r s) (i := 1) rfl hb2'
+  have e2' := getVar_nat (d := atRec c h r s) (i := 1) rfl hb2'
   simp [forkRec, atRec, Data.field, Row.find?] at e2 e2'
   have g3' := notT_true g3
   obtain ⟨a3, b3, ha3, hb3, hp3⟩ := bigStep_prim_ok g3'
   obtain ⟨x3, y3, rfl, rfl, hd3⟩ := primEval_deq_bool hp3
   have e3 := getVar_digest (d := forkRec held other s') (i := 0) rfl ha3
-  have e3' := getVar_digest (d := atRec h r s) (i := 1) rfl hb3
+  have e3' := getVar_digest (d := atRec c h r s) (i := 1) rfl hb3
   simp [forkRec, atRec, Data.field, Row.find?] at e3 e3'
   subst e1 e1' e2 e2' e3 e3'
   simp at hd1 hd2 hd3

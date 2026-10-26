@@ -68,16 +68,19 @@ def genRows (r0 : Run) (b : Sim.Member) : Run := Id.run do
   let worldA := hdDig 7
   let R1 := hdDig 101
   let R2 := hdDig 102
-  let (r3, v3, t3) := match hdSeed 10 R1 20 worldA with
+  -- each head with a chain (DESIGN-TRUST T2, LANG-95): the generated package is Std.head byte for byte
+  let C1 := hdDig 201
+  let C2 := hdDig 202
+  let (r3, v3, t3) := match hdSeed C1 10 R1 20 worldA with
     | none => (r, "no seed bytes", none)
     | some seed => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, hid]) (.create (some hid) [] seed))
   let some H := bornOf t3 | return note r3 s!"GN2 B creates a head object of the generated package: {v3}" false
-  let (r4, v4, _) := match hdAtArg 11 R2 21 with
+  let (r4, v4, _) := match hdAtArg C2 11 R2 21 with
     | none => (r3, "no bytes", none)
     | some x => go prog r3 (Sim.signed r3.st b b.key (Sim.S.pinsFor r3.st.host [b.id, H, hid]) (.invoke H 1 x 1000000 none))
   let held := (r4.st.host.live Sim.env H).bind (headView Sim.digestOf (hdDig hid))
-  r := note r4 s!"GN2 B creates a head object H of the generated package ({v3}) and posts the advance \{height 11, steps 21} ({v4}); H holds it: {held == some (.at worldA 11 R2 21)}"
-    (v3 == "admitted" && v4 == "admitted" && held == some (.at worldA 11 R2 21))
+  r := note r4 s!"GN2 B creates a head object H of the generated package ({v3}) and posts the advance \{height 11, steps 21} ({v4}); H holds it: {held == some (.at worldA C2 11 R2 21)}"
+    (v3 == "admitted" && v4 == "admitted" && held == some (.at worldA C2 11 R2 21))
   -- GN3 idempotent up to refusal
   let (_, v5, _) := generate w1 gpkg G
   r := note r s!"GN3 B generates again: {v5}" ((v5.splitOn "idTaken").length > 1)

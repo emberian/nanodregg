@@ -8,6 +8,7 @@ So a member is never asked to submit a call its own fold refuses.
 -/
 import Kernel.Proofs.RootedFold
 import Protocol.Command.Machine
+import Protocol.Proofs.PostOr
 import Protocol.Proofs.Table
 import Kernel.Proofs.Receive
 import Kernel.Proofs.Fold
@@ -482,6 +483,9 @@ theorem step_submit_planned {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Wo
   all_goals (try simp only [refused, printed, behind, notServed, Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false] at h)
+  -- a page's self-head posts (PROTOCOL-75): a submit survives `postOr` only when none fired
+  all_goals (try (obtain ⟨h1, h0, h2⟩ := h; have h := And.intro h1 (And.intro h0 (postOr_submit_elim h2))))
+  all_goals (try (simp only [reduceCtorEq, and_false] at h; done))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
                   all_goals simp [refused, printed] at h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact custodyEnd_ne_submit h))
@@ -1681,6 +1685,8 @@ theorem step_host_cancel {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World
   all_goals (try simp only [refused, printed, behind, notServed, Prod.mk.injEq, reduceCtorEq, and_false] at h)
   all_goals (repeat' split at h)
   all_goals (try simp only [Prod.mk.injEq, reduceCtorEq, and_false, Reply.host.injEq, false_and] at h)
+  all_goals (try (obtain ⟨h1, h0, h2⟩ := h; have h := And.intro h1 (And.intro h0 (postOr_host_elim h2))))
+  all_goals (try (simp only [reduceCtorEq, and_false] at h; done))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; unfold render at h; repeat' split at h
                   all_goals simp [refused, printed] at h))
   all_goals (try (exfalso; obtain ⟨_, _, h⟩ := h; exact custodyEnd_ne_host h))
@@ -1801,6 +1807,7 @@ theorem cancel_ok_settled {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (Worl
   -- the arms of other verbs
   all_goals (try contradiction)
   all_goals (simp only [Prod.mk.injEq] at h; obtain ⟨h1, -, h⟩ := h)
+  all_goals (try (replace h := postOr_done_ok_elim h))
   all_goals (try (exfalso; first
     | exact refusedAt_ne_ok h
     | exact custodyEnd_ne_ok h
