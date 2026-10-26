@@ -1,11 +1,13 @@
 /-
-The authority a genesis World carries reads back as the authority it was made from (KERNEL-69's
-honest-carrier theorem; cv 01a177f3-2293; DESIGN-TRUST T3b). `authorityOf` finds the one live
-`kindAuthority` cell and decodes it; this file proves that on every genesis World it finds exactly
-the authority cell and decodes exactly the genesis authority, and that every World a fold reaches
-from it still holds that cell (ROM is forever).
+The authority a World carries is the authority its genesis was made from, on every World an honest
+fold reaches (KERNEL-69's honest-carrier theorem; KERNEL-69.1, KERNEL-69.2; cv 01a177f3-2293,
+01a179ea-85e3; DESIGN-TRUST T3b). `authorityOf` finds the one live `kindAuthority` cell and decodes
+it. No receiver bears a cell of that kind (`derive_born_not_authority`), no write reaches a ROM cell,
+so the genesis authority cell stays the only one (`AuthorityOnly`, kept by every honest step) and
+`authorityOf` answers it (`authorityOf_honest_fold`).
 -/
 import Kernel.Proofs.Rooted
+import Kernel.Proofs.Cells
 import Kernel.Proofs.LedgerNext
 import Kernel.Proofs.Origin
 
@@ -126,6 +128,210 @@ theorem authorityOfCell_authorityCell {a : Authority} (ht : a.threshold < 2 ^ 64
 
 end Cell
 
+
+section Births
+
+omit [Ord D] in
+/-- **No receiver bears an authority cell**, anywhere in a call's tree: `enroll` bears a member,
+`install` a package, `create` an object, `grant` a grant, `issue` and `account` an account; the rest
+bear nothing. -/
+theorem derive_born_not_authority {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {d : Draft D}
+    (h : derive X look rv c = .ok d) : ∀ p ∈ d.creates, p.2.kind ≠ kindAuthority := by
+  have one : ∀ (cell : Cell) (base : Nat), cell.kind ≠ kindAuthority →
+      ∀ p ∈ bornAt X c base [cell], p.2.kind ≠ kindAuthority := by
+    intro cell base hk p hp
+    have := mem_bornAt_cell hp
+    simp only [List.mem_singleton] at this
+    rw [this]; exact hk
+  refine derive_all (P := fun d => ∀ p ∈ d.creates, p.2.kind ≠ kindAuthority) ?_ ?_ ?_ h
+  · intro a b ha hb p hp
+    rcases List.mem_append.mp hp with hp | hp
+    · exact ha p hp
+    · exact hb p hp
+  · intro _ _ _ _ p hp; simp at hp
+  · intro sub wk actor b r hb h
+    cases b with
+    | invoke => simp [Body.isInvoke] at hb
+    | enroll key next possession via =>
+        have hd := stepped_draft h
+        simp only [enroll, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        exact one _ _ (by simp [kindMember, kindAuthority])
+    | rotate key next =>
+        have hd := stepped_draft h
+        simp only [rotate, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | install pkg =>
+        have hd := stepped_draft h
+        simp only [install, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        exact one _ _ (by simp [kindPackage, kindAuthority])
+    | create pkg laws state =>
+        have hd := stepped_draft h
+        simp only [create, except_bind_ok, pure, Except.pure] at hd
+        obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        have hc : r.1.creates = bornAt X c wk.born [objectCell X actor pkg laws state] := by
+          cases pkg <;>
+          · simp only [except_bind_ok, Except.ok.injEq] at hr
+            obtain ⟨_, _, hr⟩ := hr
+            rw [← hr]
+        rw [hc]
+        exact one _ _ (by simp [objectCell, kindObject, kindAuthority])
+    | write obj edits via =>
+        have hd := stepped_draft h
+        simp only [write, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | law obj laws via =>
+        have hd := stepped_draft h
+        simp only [law, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, _, _, ⟨⟩, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | grant target grantee rights parent =>
+        have hd := stepped_draft h
+        simp only [grant, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, ⟨⟩, _, _, _, hr⟩ := hd
+        rw [← hr]
+        exact one _ _ (by simp [kindGrant, kindAuthority])
+    | revoke g =>
+        have hd := stepped_draft h
+        simp only [revoke, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, ⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | issue cap =>
+        have hd := stepped_draft h
+        simp only [issue, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨⟨⟩, _, hr⟩ := hd
+        rw [← hr]
+        exact one _ _ (by simp [accountCell, kindAccount, kindAuthority])
+    | account asset owner =>
+        have hd := stepped_draft h
+        simp only [account, pure, Except.pure, Except.ok.injEq] at hd
+        rw [← hd]
+        intro p hp
+        simp only [List.mem_singleton] at hp
+        rw [hp]
+        simp [accountCell, kindAccount, kindAuthority]
+    | transfer src dst amount via once =>
+        have hd := stepped_draft h
+        simp only [transfer, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, _, _, hr⟩ := hd
+        rw [← hr]
+        simp
+    | credit well acct amount via =>
+        have hd := stepped_draft h
+        simp only [credit, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+        obtain ⟨_, _, _, _, _, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, _, _, hr⟩ := hd
+        rw [← hr]
+        simp
+
+/-- What a derived Turn bears is never an authority cell. -/
+theorem receive_born_not_authority {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
+    (hr : receive X w c = .ok t) : ∀ cell ∈ t.born, cell.kind ≠ kindAuthority := by
+  obtain ⟨d, hd, hc⟩ := receiveWith_born (receive_ok_with hr).2
+  intro cell hcell
+  rw [Turn.born, hc] at hcell
+  obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hcell
+  exact derive_born_not_authority hd p hp
+
+/-- Every live `kindAuthority` cell of the World is the authority cell of `auth` at its content id,
+and every nullifier slot holds `spent`: with the cell live, `authorityOf` reads exactly `auth`
+(`authorityOf_of_only`). -/
+def AuthorityOnly (X : Ctx D) (auth : Authority) (w : World D) : Prop :=
+  (∀ id cell, w.live X.env id = some cell → cell.kind = kindAuthority →
+    id = authorityId X auth ∧ cell = authorityCell auth) ∧
+  ∀ n l, w.trie.get (trieSpec X.env) (.nullifier n) = some l → l = .spent
+
+/-- An admitted Turn that bears no authority cell keeps `AuthorityOnly`: what it leaves live it
+bore, kept, or wrote, and a write of the authority cell is refused (ROM). -/
+theorem admit_authorityOnly {X : Ctx D} {auth : Authority} {w w' : World D} {t : Turn D}
+    (hw : AuthorityOnly X auth w) (hb : ∀ c ∈ t.born, c.kind ≠ kindAuthority)
+    (h : World.admit X.env w t = .ok w') : AuthorityOnly X auth w' := by
+  refine ⟨fun id c' hl hk => ?_, fun n l hg => ?_⟩
+  · rcases admit_live h hl with hc | ⟨cell, hold, rfl | ⟨ops, hp⟩⟩
+    · exact absurd hk (hb c' (List.mem_map_of_mem (f := Prod.snd) hc))
+    · exact hw.1 id _ hold hk
+    · obtain ⟨hkind, -, -⟩ := postWrite_keeps hp
+      obtain ⟨-, rfl⟩ := hw.1 id cell hold (hkind ▸ hk)
+      have hd : (authorityCell auth).discipline = .rom := rfl
+      unfold postWrite at hp
+      rw [hd] at hp
+      cases hp
+  · obtain ⟨posts, _, rfl⟩ := admit_ok h
+    rw [show (commit X.env w t posts).trie = commitTrie X.env w t posts from rfl, commitTrie_nul] at hg
+    split at hg
+    · exact (Option.some.inj hg).symm
+    · exact hw.2 n l hg
+
+theorem refuse_authorityOnly {X : Ctx D} {auth : Authority} {w w' : World D} {r : Refused D}
+    (hw : AuthorityOnly X auth w) (h : World.refuse X.env w r = .ok w') : AuthorityOnly X auth w' :=
+  ⟨fun id cell hl => hw.1 id cell ((refuse_live h id).symm.trans hl),
+    fun n l hg => hw.2 n l (by rw [refuse_trie h] at hg; exact hg)⟩
+
+/-- **Every honest folded log keeps `AuthorityOnly`**: no honest step bears an authority cell. -/
+theorem honest_authorityOnly {X : Ctx D} {auth : Authority} :
+    ∀ {w w' : World D} {l : List (Step D)}, AuthorityOnly X auth w → World.fold X.env w l = .ok w' →
+      Honest X w l → AuthorityOnly X auth w'
+  | w, w', [], hw, hf, _ => by simp only [World.fold, Except.ok.injEq] at hf; subst hf; exact hw
+  | w, w', .refusal r :: rest, hw, hf, hh => by
+      obtain ⟨w₁, hs, -, hfr, hhr⟩ := fold_honest_cons hf hh
+      have hrf : World.refuse X.env w r = .ok w₁ := hs
+      exact honest_authorityOnly (refuse_authorityOnly hw hrf) hfr hhr
+  | w, w', .turn t :: rest, hw, hf, hh => by
+      obtain ⟨w₁, hs, ⟨c, -, hr, -⟩, hfr, hhr⟩ := fold_honest_cons hf hh
+      exact honest_authorityOnly (admit_authorityOnly hw (receive_born_not_authority hr) hs) hfr hhr
+
+/-- **`authorityOf` reads the one authority cell**: on a canonical World where the authority cell
+of `auth` is live and is the only live cell of its kind, `authorityOf` answers `auth`. -/
+theorem authorityOf_of_only {X : Ctx D} {auth : Authority} {w : World D} (hc : w.Canon X.env)
+    (ho : AuthorityOnly X auth w) (hl : w.live X.env (authorityId X auth) = some (authorityCell auth))
+    (ht : auth.threshold < 2 ^ 64) (hn : auth.certifiers.length < 2 ^ 64) : authorityOf w = some auth := by
+  have hr : Trie.Routed (trieSpec X.env) 0 w.trie := hc.1
+  obtain ⟨v, hg⟩ := live_get hl
+  let F : Slot D × Leaf → Option Cell := fun p => match p.2 with
+    | .entry (.live c _) => if c.kind = kindAuthority then some c else none
+    | _ => none
+  let x : Slot D × Leaf := (.cell (authorityId X auth), .entry (.live (authorityCell auth) v))
+  have hx : x ∈ w.trie.toList := (Trie.mem_toList (trieSpec X.env) 0 w.trie hr _ _).mpr hg
+  have hFx : F x = some (authorityCell auth) := by simp [F, x, authorityCell]
+  have hall : ∀ p ∈ w.trie.toList, ∀ c', F p = some c' → p = x := by
+    rintro ⟨s, l⟩ hp c' hF
+    have hg' := (Trie.mem_toList (trieSpec X.env) 0 w.trie hr s l).mp hp
+    cases l with
+    | spent => simp [F] at hF
+    | entry e =>
+      cases e with
+      | tomb => simp [F] at hF
+      | live c'' v' =>
+        have hk : c''.kind = kindAuthority := by
+          by_cases hne : c''.kind = kindAuthority
+          · exact hne
+          · simp [F, hne] at hF
+        have hg' : w.trie.get (trieSpec X.env) s = some (.entry (.live c'' v')) := hg'
+        cases s with
+        | nullifier n => exact absurd (ho.2 n _ hg') (by simp)
+        | cell k =>
+          obtain ⟨rfl, rfl⟩ := ho.1 k c'' (get_live hg') hk
+          rw [hg] at hg'
+          simp only [Option.some.injEq, Leaf.entry.injEq, Entry.live.injEq, true_and] at hg'
+          simp [x, hg']
+  have hf : w.trie.toList.filterMap F = [authorityCell auth] :=
+    filterMap_eq_singleton (key := Prod.fst) (Trie.toList_nodup (trieSpec X.env) 0 w.trie hr) hx hFx hall
+  show (match w.trie.toList.filterMap F with
+    | [c] => authorityOfCell c
+    | _ => none) = some auth
+  rw [hf]
+  exact authorityOfCell_authorityCell ht hn
+
+end Births
+
 section Genesis
 
 omit [Ord D] in
@@ -160,6 +366,41 @@ theorem insertAll_append_get {E : Env D} (m : Cells D) (ps : List (D × Entry)) 
   rw [List.foldl_append]
   simp [Trie.get_insert]
 
+/-- A genesis World holds one `kindAuthority` cell, the authority's, and no nullifier. -/
+theorem genesis_authorityOnly (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
+    (founders : List (ByteArray × D)) (auth : Authority) :
+    AuthorityOnly X auth (genesisWorld X name nonce allowance founders auth) := by
+  let o := originOf X name nonce allowance founders auth
+  refine ⟨fun id cell hl hk => ?_, fun n l hg => ?_⟩
+  · obtain ⟨v, hg⟩ := live_get hl
+    rcases insertAll_get_slot (m := Trie.T.empty) (ps := genesisEntries X o founders auth) hg with
+      ⟨k, e, hs, he, hm⟩ | hm
+    · simp only [Slot.cell.injEq, Leaf.entry.injEq] at hs he
+      subst hs he
+      rcases mem_genesisEntries hm with hm | ⟨rfl, he⟩
+      · exfalso
+        obtain ⟨p, _, ⟨_, h⟩ | ⟨_, h⟩⟩ := mem_founderEntries hm
+        · simp only [Entry.live.injEq] at h
+          rw [h.1] at hk
+          simp [founderMember, kindMember, kindAuthority] at hk
+        · simp only [Entry.live.injEq] at h
+          rw [h.1] at hk
+          simp [founderRoot, kindGrant, kindAuthority] at hk
+      · simp only [Entry.live.injEq] at he
+        exact ⟨rfl, he.1⟩
+    · exact absurd (hm.symm.trans (Trie.get_empty _ _)) (by simp)
+  · rcases insertAll_get_slot (m := Trie.T.empty) (ps := genesisEntries X o founders auth) hg with
+      ⟨k, e, hs, -, -⟩ | hm
+    · cases hs
+    · exact absurd (hm.symm.trans (Trie.get_empty _ _)) (by simp)
+
+/-- The authority cell is live in the genesis World, at its content id. -/
+theorem genesis_authority_live (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
+    (founders : List (ByteArray × D)) (auth : Authority) :
+    (genesisWorld X name nonce allowance founders auth).live X.env (authorityId X auth) =
+      some (authorityCell auth) :=
+  get_live (insertAll_append_get _ (founderEntries X _ founders) _ _)
+
 /-- **The authority a genesis World carries is its genesis authority** (KERNEL-69): `authorityOf`
 finds exactly one live `kindAuthority` cell in every genesis World, the authority cell at its
 content id, and decodes the authority the genesis was made from. Premise: the authority's counts fit
@@ -168,37 +409,10 @@ written last, so a founder id equal to its content id is overwritten by it, not 
 theorem authorityOf_genesisWorld (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) {auth : Authority} (ht : auth.threshold < 2 ^ 64)
     (hn : auth.certifiers.length < 2 ^ 64) :
-    authorityOf (genesisWorld X name nonce allowance founders auth) = some auth := by
-  let o := originOf X name nonce allowance founders auth
-  let w := genesisWorld X name nonce allowance founders auth
-  have hr : Trie.Routed (trieSpec X.env) 0 w.trie := insertAll_routed _ trivial
-  let F : Slot D × Leaf → Option Cell := fun p => match p.2 with
-    | .entry (.live c _) => if c.kind = kindAuthority then some c else none
-    | _ => none
-  let x : Slot D × Leaf := (.cell (authorityId X auth), .entry (.live (authorityCell auth) 0))
-  have hx : x ∈ w.trie.toList := by
-    refine (Trie.mem_toList (trieSpec X.env) 0 w.trie hr _ _).mpr ?_
-    exact insertAll_append_get _ (founderEntries X o founders) _ _
-  have hFx : F x = some (authorityCell auth) := by simp [F, x, authorityCell]
-  have hall : ∀ p ∈ w.trie.toList, ∀ c', F p = some c' → p = x := by
-    rintro ⟨s, l⟩ hp c' hF
-    have hg := (Trie.mem_toList (trieSpec X.env) 0 w.trie hr s l).mp hp
-    rcases insertAll_get_slot (m := Trie.T.empty) (ps := genesisEntries X o founders auth) hg with
-      ⟨k, e, rfl, rfl, hm⟩ | hm
-    · rcases mem_genesisEntries hm with hm | ⟨rfl, rfl⟩
-      · exfalso
-        obtain ⟨p, _, ⟨_, rfl⟩ | ⟨_, rfl⟩⟩ := mem_founderEntries hm
-        · simp [F, founderMember, kindMember, kindAuthority] at hF
-        · simp [F, founderRoot, kindGrant, kindAuthority] at hF
-      · rfl
-    · exact absurd (hm.symm.trans (Trie.get_empty _ _)) (by simp)
-  have hf : w.trie.toList.filterMap F = [authorityCell auth] :=
-    filterMap_eq_singleton (key := Prod.fst) (Trie.toList_nodup (trieSpec X.env) 0 w.trie hr) hx hFx hall
-  show (match w.trie.toList.filterMap F with
-    | [c] => authorityOfCell c
-    | _ => none) = some auth
-  rw [hf]
-  exact authorityOfCell_authorityCell ht hn
+    authorityOf (genesisWorld X name nonce allowance founders auth) = some auth :=
+  authorityOf_of_only (receive_genesis_canon X name nonce allowance founders auth)
+    (genesis_authorityOnly X name nonce allowance founders auth)
+    (genesis_authority_live X name nonce allowance founders auth) ht hn
 
 /-- **Every checked genesis carries its authority** (`GenesisFits`, the premise `genesis` checks). -/
 theorem authorityOf_genesis {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
@@ -210,20 +424,29 @@ theorem authorityOf_genesis {X : Ctx D} {name nonce : ByteArray} {allowance : Na
 
 /-- **The authority cell outlives every turn**: every World a fold reaches from a genesis World
 holds the genesis authority cell, live and unchanged, at its content id (`fold_rom`: ROM is
-forever). What it does not yet say: that no turn births a second `kindAuthority` cell, which
-`authorityOf` would read as `none` (no receiver names the kind; not yet a theorem). -/
+forever), honest or not. -/
 theorem fold_genesis_authority {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {auth : Authority} {l : List (Step D)} {w' : World D}
     (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w') :
-    w'.live X.env (authorityId X auth) = some (authorityCell auth) := by
-  have hg : (genesisWorld X name nonce allowance founders auth).trie.get (trieSpec X.env)
-      (.cell (authorityId X auth)) = some (.entry (.live (authorityCell auth) 0)) :=
-    insertAll_append_get _ _ _ _
-  have hl : (genesisWorld X name nonce allowance founders auth).live X.env (authorityId X auth) =
-      some (authorityCell auth) := by
-    unfold World.live World.entry
-    rw [hg]
-  exact fold_rom rfl h hl
+    w'.live X.env (authorityId X auth) = some (authorityCell auth) :=
+  fold_rom rfl h (genesis_authority_live X name nonce allowance founders auth)
+
+/-- **Every World an honest fold reaches carries the genesis authority** (KERNEL-69.2; cv
+01a179ea-85e3): from a checked genesis, along any honest log (every Turn what `receive` derives,
+every refusal what its re-judge records: the follower's and the writer's Worlds), `authorityOf`
+answers the authority the genesis was made from. No receiver bears a `kindAuthority` cell, so the
+genesis cell stays the only one. -/
+theorem authorityOf_honest_fold {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
+    {founders : List (ByteArray × D)} {auth : Authority} {l : List (Step D)} {w' : World D}
+    (hf : GenesisFits X name nonce allowance founders auth)
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w')
+    (hh : Honest X (genesisWorld X name nonce allowance founders auth) l) :
+    authorityOf w' = some auth := by
+  obtain ⟨-, -, -, -, ⟨hlen, -, -, hthr, -⟩, -⟩ := hf
+  have : Bounds.slotsPerCellMax = 1024 := rfl
+  exact authorityOf_of_only (fold_canon (receive_genesis_canon X name nonce allowance founders auth) h)
+    (honest_authorityOnly (genesis_authorityOnly X name nonce allowance founders auth) h hh)
+    (fold_genesis_authority h) (by omega) (by omega)
 
 end Genesis
 
