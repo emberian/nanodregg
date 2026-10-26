@@ -3,6 +3,7 @@ import Lang.Journey.ContextualWire
 import Lang.Journey.Head
 import Lang.Journey.Offer
 import Lang.Journey.OfferEscrow
+import Lang.Journey.Claims
 import Lang.Journey.Doc
 
 open Nanodregg.Lang.Journey
@@ -24,4 +25,4 @@ def main (args : List String) : IO UInt32 := do
   if let ["--write", d] := args then return ← Doc.write d
   let accept ← try IO.FS.readFile acceptSourcePath catch _ => pure ""
   let shipped ← Doc.readShipped
-  runAll args [offerSession, offerEscrowSession, headSession accept, Doc.session shipped]
+  runAll args [offerSession, offerEscrowSession, headSession accept, Doc.session shipped, claimSession]

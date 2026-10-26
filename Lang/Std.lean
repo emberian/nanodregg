@@ -411,5 +411,13 @@ def lawBody : Term → Term
 /-- What every law's statement below assumes of its environment: request, new, old as data. -/
 abbrev LawEnv (rq n o : Data) (E : Env) : Env := rq.toVal :: n.toVal :: o.toVal :: E
 
+/-! ## Invariants kept: the certifying shape of a `keeps` claim (LANG-83, `Lang.Claim`) -/
+
+/-- `keeps S inv`: every birth, adoption, write and invoke is refused `invariant` unless `inv new`
+(`inv` a closed `fn S bool`); a law change admits (the state is unchanged, KERNEL-27). In certifying
+shape for the claim `keeps` (`Term.guardedBy`; `Lang.Proofs.Claim.keeps_guarded`). -/
+def keeps (S : Ty) (inv : Term) : Term :=
+  let c (a : At) := guard (.app inv a.new) "invariant" okT
+  lawOf S c c (fun _ => okT) c
 
 end Nanodregg.Lang.Std
