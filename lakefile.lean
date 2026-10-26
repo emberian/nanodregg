@@ -45,6 +45,10 @@ package nanodregg where
 @[default_target] lean_lib Ledger where
   globs := #[.submodules `Ledger]
 
+-- SPEC: the top-level claims over the deployed entry points, their floors and their proofs.
+@[default_target] lean_lib Spec where
+  globs := #[.submodules `Spec]
+
 -- HOSTING's grain lifecycle through KERNEL's receivers, with its plants (standing's sim stage).
 @[default_target] lean_exe «hosting-sim» where
   root := `Hosting.Sim.Main

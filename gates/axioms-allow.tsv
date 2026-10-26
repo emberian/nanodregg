@@ -1,3 +1,16 @@
 # decl	axiom	reason
 Nanodregg.Hosting.Proofs.invoke_slots	Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	the grain package on the deployed path (Lang.program run then judge on slots, both kinds x every phase x event); the slot codecs do not reduce in the kernel (decisions/hosting.md HOSTING-5)
 Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	Nanodregg.Hosting.Proofs.invoke_slots._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for invoke_slots
+Nanodregg.Spec.run_rederives	Nanodregg.Spec.run_rederives._native.native_decide.ax_1_1	the deployed run (Spec.Proofs.Floor): THE re-deriver accepts a founder rotate at Host.Deployed.X; cSHAKE256 and Ed25519 do not reduce in the kernel (decisions/spec.md SPEC-5)
+Nanodregg.Spec.run_rederives._native.native_decide.ax_1_1	Nanodregg.Spec.run_rederives._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for run_rederives
+Nanodregg.Spec.run_continuation	Nanodregg.Spec.run_continuation._native.native_decide.ax_1_1	the deployed run: a settle-phase continuation decodes to the run call (the state codec at the deployed frame bound; SPEC-5)
+Nanodregg.Spec.run_continuation._native.native_decide.ax_1_1	Nanodregg.Spec.run_continuation._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for run_continuation
+Nanodregg.Spec.run_call_decodes	Nanodregg.Spec.run_call_decodes._native.native_decide.ax_1_1	the deployed run: the run call decodes from its own bytes under the deployed call codec (SPEC-5)
+Nanodregg.Spec.run_call_decodes._native.native_decide.ax_1_1	Nanodregg.Spec.run_call_decodes._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for run_call_decodes
+Nanodregg.Spec.run_call_admits	Nanodregg.Spec.run_call_admits._native.native_decide.ax_1_1	the deployed run: submit admits the run call on its genesis World (Ed25519 verify, cSHAKE256; SPEC-5)
+Nanodregg.Spec.run_call_admits._native.native_decide.ax_1_1	Nanodregg.Spec.run_call_admits._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for run_call_admits
+Nanodregg.Spec.deployed_run	Nanodregg.Spec.run_rederives._native.native_decide.ax_1_1	built on run_rederives, a fact about the deployed run (decisions/spec.md SPEC-5)
+Nanodregg.Spec.inhabited_audited	Nanodregg.Spec.run_rederives._native.native_decide.ax_1_1	built on run_rederives, a fact about the deployed run (decisions/spec.md SPEC-5)
+Nanodregg.Spec.floor_consent_final	Nanodregg.Spec.run_call_admits._native.native_decide.ax_1_1	built on run_call_admits, a fact about the deployed run (decisions/spec.md SPEC-5)
+Nanodregg.Spec.floor_consent_okCommitted	Nanodregg.Spec.run_call_decodes._native.native_decide.ax_1_1	built on run_call_decodes, a fact about the deployed run (decisions/spec.md SPEC-5)
+Nanodregg.Spec.floor_consent_okCommitted	Nanodregg.Spec.run_continuation._native.native_decide.ax_1_1	built on run_continuation, a fact about the deployed run (decisions/spec.md SPEC-5)
