@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nanodregg testground</title>
+<meta name="description" content="A nanodregg World running in your browser tab: the kernel compiled to WebAssembly, every verdict Lean's.">
+<link rel="stylesheet" href="testground.css">
+</head>
+<body>
+<div id="desktop" aria-label="desktop">
+  <div id="icons"></div>
+  <div id="boot" class="window boot" role="status">
+    <div class="titlebar"><span class="title">Starting nanodregg</span></div>
+    <div class="body"><p id="boot-line">Loading the kernel (WebAssembly)…</p></div>
+  </div>
+</div>
+<div id="taskbar">
+  <button id="start" class="start" title="the World">&#9670; nanodregg</button>
+  <div id="tasks"></div>
+  <div id="tray"><span id="tray-height">—</span></div>
+</div>
+<script type="module" src="testground.js"></script>
+</body>
+</html>

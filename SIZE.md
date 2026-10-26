@@ -8,7 +8,7 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | metric | now | ceiling |
 |---|---|---|
 | Lean modules in the Host closure | 95 | 150 |
-| Lean modules | 527 | — |
+| Lean modules | 528 | — |
 | Lean proof-modules | 286 | — |
 | Lean lines (Bench) | 966 | — |
 | Lean lines (Census) | 1211 | — |
@@ -22,15 +22,16 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Ops) | 2558 | — |
 | Lean lines (Protocol) | 15186 | — |
 | Lean lines (Spec) | 632 | — |
+| Lean lines (Web) | 204 | — |
 | Lean lines (deployed) | 31968 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 23835 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 24039 | — |
 | foundation modules | 7 | 8 |
-| max dependents of a non-foundation module | 415 | — |
+| max dependents of a non-foundation module | 416 | — |
 | theorems | 6672 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 12 | 12 |
-| C lines | 315 | 315 |
+| C lines | 384 | 384 |
 | Rust lines | 24093 | — |
 | Rust lines (nd) | 99 | 100 |
 | Rust lines (nd-supervise) | 164 | 164 |

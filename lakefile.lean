@@ -75,6 +75,10 @@ package nanodregg where
   root := `Hosting.Resident.Main
 
 
+-- TESTGROUND: a World in a browser tab (the rows system compiled to WebAssembly; testground/ is its page).
+@[default_target] lean_lib Web where
+  globs := #[.submodules `Web]
+
 -- The Rust copy of the protocol table (client/src/generated.rs). Imports Protocol; nothing imports it.
 @[default_target] lean_lib Emit where
   globs := #[.submodules `Emit]
@@ -131,6 +135,19 @@ extern_lib «ndhost» pkg := do
     buildO o (← inputTextFile src) #["-I", leanInc] #["-fPIC", "-O2", "-Wall", "-Wextra", "-Werror"]
       "cc" getLeanTrace
   buildStaticLib (pkg.staticLibDir / nameToStaticLib "ndhost") objs
+
+-- The testground kernel's byte ABI (Web/c/glue.c): built here like Host/c so the one C rule holds; an
+-- archive member no native executable references, and testground/build/build.sh's wasm link uses it.
+extern_lib «webglue» pkg := do
+  let dir := pkg.dir / "Web" / "c"
+  let srcs := (← dir.readDir).filter (·.path.extension == some "c") |>.map (·.path)
+    |>.qsort (·.toString < ·.toString)
+  let leanInc := (← getLeanIncludeDir).toString
+  let objs ← srcs.mapM fun src => do
+    let o := pkg.buildDir / "c" / ((src.withExtension "o").fileName.getD "x.o")
+    buildO o (← inputTextFile src) #["-I", leanInc] #["-fPIC", "-O2", "-Wall", "-Wextra", "-Werror"]
+      "cc" getLeanTrace
+  buildStaticLib (pkg.staticLibDir / nameToStaticLib "webglue") objs
 
 -- The Host's loop end to end over the in-memory disk, with the crash plants (standing: seeds 1 2 3).
 @[default_target] lean_exe «host-sim» where

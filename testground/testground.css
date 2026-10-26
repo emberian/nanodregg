@@ -1,0 +1,69 @@
+/* testground.css — a net OS of the early 2000s: bevelled grey windows, navy title bars, a taskbar. */
+:root {
+  --desk: #3a6ea5; --face: #d4d0c8; --hi: #ffffff; --lo: #808080; --dk: #404040;
+  --title-a: #0a246a; --title-b: #a6caf0; --title-off-a: #808080; --title-off-b: #c0c0c0;
+  --text: #000000; --field: #ffffff; --mono: "Lucida Console", "Courier New", monospace;
+  --ui: Tahoma, Verdana, "Segoe UI", sans-serif; --ok: #006400; --bad: #a00000; --warn: #8a5a00;
+  --link: #0000c0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --desk: #1d2f45; --face: #3b3b3b; --hi: #5a5a5a; --lo: #1f1f1f; --dk: #0e0e0e;
+    --title-a: #1c3d7a; --title-b: #4a6fa8; --title-off-a: #444; --title-off-b: #666;
+    --text: #e8e8e8; --field: #1b1b1b; --ok: #6fd36f; --bad: #ff7a7a; --warn: #ffc266; --link: #8ab4ff;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--desk); color: var(--text); font: 12px var(--ui); }
+#desktop { position: absolute; inset: 0 0 32px 0; overflow: hidden; }
+#icons { position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 14px; }
+.icon { width: 76px; text-align: center; color: #fff; cursor: default; user-select: none; background: none; border: 0; font: 12px var(--ui); padding: 2px; }
+.icon .glyph { display: block; width: 36px; height: 36px; margin: 0 auto 4px; border: 2px outset var(--face); background: var(--face); color: var(--title-a); font: bold 18px/32px var(--ui); }
+.icon:focus .label, .icon:hover .label { background: var(--title-a); outline: 1px dotted #fff; }
+.window { position: absolute; min-width: 260px; background: var(--face); border: 2px solid; border-color: var(--hi) var(--dk) var(--dk) var(--hi); box-shadow: 1px 1px 0 var(--lo) inset, 2px 2px 6px rgba(0,0,0,.35); display: flex; flex-direction: column; max-width: calc(100vw - 16px); }
+.titlebar { display: flex; align-items: center; gap: 6px; padding: 3px 3px 3px 6px; background: linear-gradient(90deg, var(--title-off-a), var(--title-off-b)); color: #fff; font-weight: bold; cursor: move; user-select: none; }
+.window.focused .titlebar { background: linear-gradient(90deg, var(--title-a), var(--title-b)); }
+.titlebar .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.titlebar button { width: 18px; height: 16px; padding: 0; font: bold 11px/12px var(--ui); background: var(--face); color: var(--text); border: 2px outset var(--face); cursor: pointer; }
+.body { padding: 8px; overflow: auto; flex: 1; }
+.boot { left: 50%; top: 40%; transform: translate(-50%, -50%); }
+button.btn { font: 12px var(--ui); color: var(--text); background: var(--face); border: 2px outset var(--face); padding: 3px 10px; cursor: pointer; }
+button.btn:active { border-style: inset; }
+.sunken { background: var(--field); border: 2px inset var(--face); }
+.term { display: flex; flex-direction: column; height: 100%; }
+.term .out { font: 12px var(--mono); white-space: pre-wrap; word-break: break-all; padding: 6px; height: 230px; overflow: auto; }
+.term .line { display: flex; gap: 4px; margin-top: 6px; align-items: center; }
+.term input { flex: 1; font: 12px var(--mono); padding: 3px 4px; color: var(--text); }
+.term .prompt { font: 12px var(--mono); }
+.ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); } .dim { opacity: .65; }
+a.hex, a.cmd { color: var(--link); cursor: pointer; text-decoration: underline; }
+.props { border-collapse: collapse; width: 100%; font: 12px var(--mono); }
+.props td { padding: 2px 6px; vertical-align: top; border-bottom: 1px solid var(--lo); word-break: break-all; }
+.props td:first-child { font-family: var(--ui); font-weight: bold; white-space: nowrap; word-break: normal; }
+.tabs { display: flex; gap: 2px; margin-bottom: -2px; }
+.tabs button { font: 12px var(--ui); background: var(--face); color: var(--text); border: 2px outset var(--face); border-bottom: 0; padding: 2px 10px; }
+.tabs button.on { position: relative; top: -2px; }
+.pane { border: 2px outset var(--face); padding: 6px; }
+.log { font: 11px var(--mono); }
+.log .row { display: grid; grid-template-columns: 4em 6em 5.5em 5em 1fr; gap: 6px; padding: 1px 4px; cursor: pointer; }
+.log .row:hover, .log .row.sel { background: var(--title-a); color: #fff; }
+.scrub { width: 100%; }
+.dialog { z-index: 9000 !important; }
+.dialog .body > div { display: grid; grid-template-columns: 40px 1fr; gap: 10px; align-items: start; }
+.dialog .mark { width: 32px; height: 32px; border-radius: 50%; background: var(--bad); color: #fff; font: bold 22px/32px var(--ui); text-align: center; }
+.dialog .mark.warn { background: #c08000; }
+.dialog .name { font: bold 15px var(--mono); margin: 2px 0 6px; }
+.dialog .actions { grid-column: 1 / -1; text-align: right; }
+#taskbar { position: fixed; left: 0; right: 0; bottom: 0; height: 32px; background: var(--face); border-top: 2px solid var(--hi); display: flex; align-items: center; gap: 4px; padding: 2px 4px; }
+.start { font: bold 12px var(--ui); color: var(--text); background: var(--face); border: 2px outset var(--face); padding: 3px 8px; }
+#tasks { flex: 1; display: flex; gap: 3px; overflow: hidden; }
+#tasks button { font: 11px var(--ui); color: var(--text); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--face); border: 2px outset var(--face); padding: 3px 6px; }
+#tasks button.on { border-style: inset; }
+#tray { border: 1px inset var(--face); padding: 3px 8px; font: 11px var(--mono); white-space: nowrap; }
+.tour ol { margin: 0; padding-left: 18px; } .tour li { margin: 6px 0; } .tour li.done { opacity: .55; }
+.tour code { font: 11px var(--mono); }
+@media (max-width: 640px) {
+  .window { left: 8px !important; right: 8px; width: auto !important; }
+  #icons { flex-direction: row; flex-wrap: wrap; }
+  .log .row { grid-template-columns: 3em 5em 1fr; } .log .row .x { display: none; }
+}
