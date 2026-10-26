@@ -10,7 +10,13 @@ namespace Nanodregg.Lang
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 /-- Why live contextual preparation refuses: one constructor per refusal (law 7). `wire` is the one printer;
-its text is what the kernel's `Refusal.program` and a blocked hole's `.refuse` carry. -/
+its text is what the kernel's `Refusal.program` and a blocked hole's `.refuse` carry.
+
+A refusal about a justification NAMES THE JUSTIFICATION (DESIGN-CTX §2.3, the why-not half of CONTEXTUAL
+INTEGRITY): the row the caller did not pin (`unpinnedRow`: its relation and key), every cell support the caller
+did not pin (`unpinned`), every support whose row moved or whose cell is not live (`derivationMoved`,
+`supportDead`), the hypothesis position AND its pin (`supportMoved`). The lists are never empty when thrown
+(each is the filter of a failed `all`); a client re-plans from them without guessing. -/
 inductive HoleRefusal where
   | type (hole : Nat)
   | context (hole : Nat)
@@ -21,46 +27,28 @@ inductive HoleRefusal where
   | signatureBound
   | duplicate
   | bodyType (e : TypeErr)
-  | unpinned
-  | supportMoved (hole position : Nat)
+  /-- a row of the hole object the caller did not pin: the selection row, a row support of a hypothesis, the
+  guard pin's row (absent and unpinned differ: `holeRow`) -/
+  | unpinnedRow (rel : Nat) (key : ByteArray)
+  /-- the cell supports of the selected candidate (or the one cell pin of a hypothesis or the guard) the caller
+  did not pin -/
+  | unpinned (pins : List SupportPin)
+  /-- a hypothesis the selected code USES whose pin does not hold: the position and the pin -/
+  | supportMoved (hole position : Nat) (pin : SupportPin)
   | guardBlocked (hole : Nat)
   | guardFault (hole : Nat)
   | selectionAbsent (hole : Nat)
   | selectionType (hole : Nat)
   | selectionIndex (hole : Nat)
-  | derivationMoved (hole : Nat)
-  /-- a selected candidate's cell support is not live in the caller's pinned view (E1) -/
-  | supportDead (hole : Nat)
+  /-- the selected candidate's row supports that are not at their ROM version -/
+  | derivationMoved (hole : Nat) (pins : List SupportPin)
+  /-- the selected candidate's cell supports that are not live in the caller's pinned view (E1) -/
+  | supportDead (hole : Nat) (pins : List SupportPin)
   | expansion (b : ExpansionBound)
   | provenance
   | instanceRecheck
   | instanceType (e : TypeErr)
   deriving DecidableEq
-
-def HoleRefusal.wire : HoleRefusal → String
-  | .type n => s!"holeType {n}"
-  | .context n => s!"holeContext {n}"
-  | .candidates n => s!"holeCandidates {n}"
-  | .guardType n => s!"holeGuardType {n}"
-  | .candidateType n i => s!"holeCandidateType {n} {i}"
-  | .package e => e.wire
-  | .signatureBound => "holeSignatureBound"
-  | .duplicate => "holeDuplicate"
-  | .bodyType e => s!"holeBodyType {e.text}"
-  | .unpinned => "holeUnpinned"
-  | .supportMoved n i => s!"holeSupportMoved {n} {i}"
-  | .guardBlocked n => s!"holeGuardBlocked {n}"
-  | .guardFault n => s!"holeGuardFault {n}"
-  | .selectionAbsent n => s!"holeSelectionAbsent {n}"
-  | .selectionType n => s!"holeSelectionType {n}"
-  | .selectionIndex n => s!"holeSelectionIndex {n}"
-  | .derivationMoved n => s!"holeDerivationMoved {n}"
-  | .supportDead n => s!"holeSupportDead {n}"
-  | .expansion .work => "holeWorkBound"
-  | .expansion .size => "holeSizeBound"
-  | .provenance => "holeProvenance"
-  | .instanceRecheck => "holeInstanceType"
-  | .instanceType e => s!"holeInstanceType {e.text}"
 
 /-- Signature validation checks every candidate at exactly its declared context,
 including candidates not currently selected. A candidate cannot introduce another hole. -/
@@ -91,7 +79,7 @@ No ambient store is read by this module. -/
 def holeRow {D : Type} (rv : RowView D) (self : D) (rel : Nat) (key : ByteArray) :
     Except HoleRefusal (Option RowLeaf) :=
   match (rv.points self rel).find? (fun p => decide (p.1 = key)) with
-  | none => .error .unpinned
+  | none => .error (.unpinnedRow rel key)
   | some (_, leaf) => .ok leaf
 
 /-- Whether a ROM pin holds: a row support at exactly its version; a cell support live. -/
@@ -122,7 +110,52 @@ def rowSupportHolds {D : Type} (digestOf : ByteArray → Option D) (look : Pinne
 def supportPinned {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
     (self : D) : SupportPin → Except HoleRefusal Unit
   | .row rel key _ => (holeRow rv self rel key).map fun _ => ()
-  | p@(.cell _) => if supportObserved digestOf look p then .ok () else .error .unpinned
+  | p@(.cell _) => if supportObserved digestOf look p then .ok () else .error (.unpinned [p])
+
+/-- One hex digit. -/
+def hexDigit (n : UInt8) : Char :=
+  if n < 10 then Char.ofNat (48 + n.toNat) else Char.ofNat (87 + n.toNat)
+
+/-- Bytes as lowercase hex, two digits a byte: the text of a key or a cell id inside a refusal. Two pushes a
+byte, no list (law 4). -/
+def hexOf (b : ByteArray) : String :=
+  b.foldl (fun s x => (s.push (hexDigit (x >>> 4))).push (hexDigit (x &&& 15))) ""
+
+/-- A pin's coordinates in a refusal: `row:REL:KEYHEX:VER` or `cell:IDHEX`. A client that is refused re-reads
+exactly this (DESIGN-CTX §2.3: a refusal is the negative literal of the assumption that failed, with its
+coordinate). -/
+def SupportPin.wire : SupportPin → String
+  | .row rel key ver => s!"row:{rel}:{hexOf key}:{ver}"
+  | .cell id => s!"cell:{hexOf id}"
+
+/-- The pins of one refusal, space-separated. -/
+def pinsWire (ps : List SupportPin) : String := " ".intercalate (ps.map SupportPin.wire)
+
+def HoleRefusal.wire : HoleRefusal → String
+  | .type n => s!"holeType {n}"
+  | .context n => s!"holeContext {n}"
+  | .candidates n => s!"holeCandidates {n}"
+  | .guardType n => s!"holeGuardType {n}"
+  | .candidateType n i => s!"holeCandidateType {n} {i}"
+  | .package e => e.wire
+  | .signatureBound => "holeSignatureBound"
+  | .duplicate => "holeDuplicate"
+  | .bodyType e => s!"holeBodyType {e.text}"
+  | .unpinnedRow rel key => s!"holeUnpinnedRow {rel} {hexOf key}"
+  | .unpinned ps => s!"holeUnpinned {pinsWire ps}"
+  | .supportMoved n i p => s!"holeSupportMoved {n} {i} {p.wire}"
+  | .guardBlocked n => s!"holeGuardBlocked {n}"
+  | .guardFault n => s!"holeGuardFault {n}"
+  | .selectionAbsent n => s!"holeSelectionAbsent {n}"
+  | .selectionType n => s!"holeSelectionType {n}"
+  | .selectionIndex n => s!"holeSelectionIndex {n}"
+  | .derivationMoved n ps => s!"holeDerivationMoved {n} {pinsWire ps}"
+  | .supportDead n ps => s!"holeSupportDead {n} {pinsWire ps}"
+  | .expansion .work => "holeWorkBound"
+  | .expansion .size => "holeSizeBound"
+  | .provenance => "holeProvenance"
+  | .instanceRecheck => "holeInstanceType"
+  | .instanceType e => s!"holeInstanceType {e.text}"
 
 /-- A successful invocation receipt retains the selected code index, exact
 selection version, and the hypothesis positions removed by strengthening.
@@ -158,7 +191,7 @@ def hypothesisStep {D : Type} (digestOf : ByteArray → Option D) (look : Pinned
   | some pin => do
     supportPinned digestOf look rv self pin
     if supportLive digestOf look rv self pin then .ok removed
-    else if Term.usesVar pi.2 c.body then .error (.supportMoved h.name pi.2)
+    else if Term.usesVar pi.2 c.body then .error (.supportMoved h.name pi.2 pin)
     else .ok (removed ++ [pi.2])
 
 /-- Positions whose support moved. Only genuinely unused variables may be
@@ -197,7 +230,8 @@ def reembed (embedding : List Nat) (filling : Term) : Term :=
 /-- Selection is fresh on each invocation. Its bytes contain a code index,
 never a filling supplied by the caller. All derivation supports and used
 contextual assumptions must still have the ROM-pinned versions; every cell support must be pinned
-(`unpinned`) and live (`supportDead`).
+(`unpinned`) and live (`supportDead`). Each refusal carries EVERY support that failed its check (the filter of
+the failed `all`), so the caller learns its whole missing read set in one refusal (DESIGN-CTX §2.3).
 
 Each invocation judges only the index its selection row names. The hole's LIVE LABEL, the indices that would select
 at this view, is not computed: nothing reads it (no resident's tick reads a ROM hole's candidates). The row
@@ -209,9 +243,12 @@ def selectHole {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) 
   let some (.row _ bytes version) := leaf | throw (.selectionAbsent h.name)
   let .ok (.nat i) := Wire.decodeData .nat bytes | throw (.selectionType h.name)
   let some c := h.code[i]? | throw (.selectionIndex h.name)
-  unless c.supports.all (supportObserved digestOf look) do throw .unpinned
-  unless c.supports.all (rowSupportHolds digestOf look rv self) do throw (.derivationMoved h.name)
-  unless c.supports.all (supportLive digestOf look rv self) do throw (.supportDead h.name)
+  unless c.supports.all (supportObserved digestOf look) do
+    throw (.unpinned (c.supports.filter fun p => !supportObserved digestOf look p))
+  unless c.supports.all (rowSupportHolds digestOf look rv self) do
+    throw (.derivationMoved h.name (c.supports.filter fun p => !rowSupportHolds digestOf look rv self p))
+  unless c.supports.all (supportLive digestOf look rv self) do
+    throw (.supportDead h.name (c.supports.filter fun p => !supportLive digestOf look rv self p))
   let removed ← changedHypotheses digestOf look rv self h c
   let used ← runHoleGuard digestOf look rv self h
   let (ctx, filling, embedding) := factorHole h c removed

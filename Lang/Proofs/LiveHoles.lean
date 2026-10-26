@@ -178,7 +178,7 @@ private theorem changed_fold (h : HoleROM) (c : HoleCode) :
         | false =>
           cases huse : Term.usesVar x c.body with
           | true =>
-            have : hypothesisStep digestOf look rv self h c acc (some pin, x) = .error (.supportMoved h.name x) := by
+            have : hypothesisStep digestOf look rv self h c acc (some pin, x) = .error (.supportMoved h.name x pin) := by
               simp [hypothesisStep, hpin, hlive, huse, bind, Except.bind]
             rw [this] at hf; cases hf
           | false =>

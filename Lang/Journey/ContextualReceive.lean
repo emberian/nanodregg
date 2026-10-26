@@ -140,7 +140,9 @@ def contextualRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let (rr, v, _) := go prog r (withdraw r 2)
   r := note rr s!"LP withdraw first derivation: {v}" (v == "admitted")
   let (_, v, _) := go prog r (exec r)
-  r := note r s!"LP stale derivation blocked: {v}" (refusedBy v "execute" "holeDerivationMoved 0")
+  -- the refusal names the moved support (its relation, key and ROM version), through the real receivers
+  r := note r s!"LP stale derivation blocked: {v}"
+    (refusedBy v "execute" s!"holeDerivationMoved 0 {(SupportPin.row 2 (Contextual.factKeyAt 2) 0).wire}")
   let (rr, v, _) := go prog r (choose r 1)
   r := note rr s!"LP management selects surviving derivation: {v}" (v == "admitted")
   let (rr, v, _) := go prog r (exec r)
@@ -156,12 +158,13 @@ def contextualRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r s!"LP E8 reissued fact cannot reactivate old pin ({v}, {vc}): {old}"
     (v == "admitted" && vc == "admitted" && refusedBy old "execute" "holeDerivationMoved 0")
   let (_, v, _) := go prog r (call r "execute" (argBytes .nat (.nat 7)) true)
-  r := note r s!"LP omitted blocker pin: {v}" (refusedBy v "execute" "holeUnpinned")
+  r := note r s!"LP omitted blocker pin: {v}"
+    (refusedBy v "execute" s!"holeUnpinnedRow 2 {hexOf (Contextual.factKeyAt 5)}")
   let (rr, v, _) := go prog r (withdraw r 4)
   r := note rr s!"LP withdraw used nat hypothesis: {v}" (v == "admitted")
   let (_, v, _) := go prog r (exec r)
   r := note r s!"LP suspension preserves used hypothesis refusal: {v}"
-    (refusedBy v "execute" "holeSupportMoved 0 1")
+    (refusedBy v "execute" s!"holeSupportMoved 0 1 {(SupportPin.row 2 (Contextual.factKeyAt 4) 0).wire}")
   let (rr, v, _) := go prog r (choose r 2)
   r := note rr s!"LP chooser offers replacement while old code blocked: {v}" (v == "admitted")
   let (rr, v, _) := go prog r (exec r)

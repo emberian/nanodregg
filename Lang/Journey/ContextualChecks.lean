@@ -90,7 +90,7 @@ def gateRows : List (String × Bool) := Id.run do
     ("selection-data-type", refusedAs (selectHole Sim.digestOf noCells wrongData (3 : Sim.D) h) (.selectionType 0)),
     ("selection-code-index", refusedAs (selectHole Sim.digestOf noCells (view (some 99) (some 1)) (3 : Sim.D) h) (.selectionIndex 0)),
     ("selection-support-version", refusedAs (selectHole Sim.digestOf noCells (view (some 0) (some 1) (left := some 2)) (3 : Sim.D) h)
-      (.derivationMoved 0)),
+      (.derivationMoved 0 [factPinAt 2])),
     ("guard-budget", refusedAs (selectHole Sim.digestOf noCells good (3 : Sim.D) { h with guard := longGuard }) (.guardFault 0)),
     ("expansion-work-bound", refusedAs (Term.fillBounded 1 1 (fun _ => none) (.nat 1)) .work),
     ("expansion-size-bound", refusedAs (Term.fillBounded 64 3 (fun _ => some duplicate) nested) .size),

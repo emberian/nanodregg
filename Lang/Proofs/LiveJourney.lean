@@ -93,7 +93,7 @@ It cannot be strengthened as though the variable were unused. -/
 theorem used_hypothesis_suspends :
     selectHole Kernel.Sim.digestOf noCells (view (some 0) (some 1) (used := none)) (3 : Kernel.Sim.D)
       { declaration with selectionRel := 5, selectionKey := key } =
-      .error (.supportMoved 0 1) := by
+      .error (.supportMoved 0 1 (factPinAt 4)) := by
   rfl
 
 /-- A pinned view of three cells: 76 live, 77 at its tombstone; every other cell unpinned. -/
@@ -116,13 +116,13 @@ support pinned at its tombstone (`look g = .ok none`) refuses `supportDead`, by 
 mutation `supportLive (.cell _) := true` this candidate selects and the theorem is false. -/
 theorem cell_support_dead_refused :
     (selectHole Kernel.Sim.digestOf cells (view (some 0) (some 1)) (3 : Kernel.Sim.D) (withCell 77)).map
-      (·.index) = .error (.supportDead 0) := by
+      (·.index) = .error (.supportDead 0 [.cell (Nanodregg.Kernel.Sim.dc.bytes 77)]) := by
   rfl
 
 /-- An unpinned cell support is not absence: it refuses `unpinned`, by name. -/
 theorem cell_support_unpinned_refused :
     (selectHole Kernel.Sim.digestOf cells (view (some 0) (some 1)) (3 : Kernel.Sim.D) (withCell 78)).map
-      (·.index) = .error .unpinned := by
+      (·.index) = .error (.unpinned [.cell (Nanodregg.Kernel.Sim.dc.bytes 78)]) := by
   rfl
 
 end DeployedContextual

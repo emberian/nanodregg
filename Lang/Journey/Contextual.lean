@@ -142,9 +142,9 @@ def boundaryRows : List (String × Bool) := Id.run do
     ("blocked-not-selected", (resolveHole Sim.digestOf L blocked (3 : Sim.D) h).receipt.isNone),
     ("cell-support-live", (selectHole Sim.digestOf tomb good (3 : Sim.D) (cellCode 99)).isOk),
     ("cell-support-dead", match selectHole Sim.digestOf tomb good (3 : Sim.D) (cellCode 77) with
-      | .error why => decide (why = .supportDead 0) | .ok _ => false),
+      | .error why => decide (why = .supportDead 0 [.cell (Sim.dc.bytes 77)]) | .ok _ => false),
     ("cell-support-unpinned", match selectHole Sim.digestOf tomb good (3 : Sim.D) (cellCode 78) with
-      | .error why => decide (why = .unpinned) | .ok _ => false),
+      | .error why => decide (why = .unpinned [.cell (Sim.dc.bytes 78)]) | .ok _ => false),
     ("management-bootstrap", (invoke b p blocked "choose_code" choice chosen).isOk),
     ("management-authority", (invoke b p blocked "choose_code" choice chosen 2 |> resultName) != "ok"),
     ("management-accepted", (invoke b p blocked "choose_code" choice chosen 1 true |> resultName) != "ok"),
@@ -153,18 +153,19 @@ def boundaryRows : List (String × Bool) := Id.run do
       (.record [("hole", .nat 1), ("index", .nat 0)]) chosen |> resultName) != "ok"),
     ("management-candidate-index", (invoke b p blocked "choose_code"
       (.record [("hole", .nat 0), ("index", .nat 99)]) chosen |> resultName) != "ok"),
+    -- the refusal names the row the caller did not pin: the hypothesis's fact row (DESIGN-CTX §2.3)
     ("omitted-context-pin", (invoke b p (view (some 0) none false) "execute" (.nat 7) .nat |> resultName) ==
-      "execute: refused holeUnpinned"),
+      s!"execute: refused holeUnpinnedRow 2 {hexOf (factKeyAt 1)}"),
     ("wrong-context", (match wrong.checkContextual (b.libraries.map (·.iface)) with
       | .error why => decide (why = .candidateType 0 0) | .ok () => false)),
     ("guard-blocked", (invoke b p (view (some 0) (some 1) (blocker := some 1))
       "execute" (.nat 7) .nat |> resultName) == "execute: refused holeGuardBlocked 0"),
     ("omitted-blocker-pin", (invoke b p (view (some 0) (some 1) (coverBlocker := false))
-      "execute" (.nat 7) .nat |> resultName) == "execute: refused holeUnpinned"),
+      "execute" (.nat 7) .nat |> resultName) == s!"execute: refused holeUnpinnedRow 2 {hexOf (factKeyAt 5)}"),
     ("used-hypothesis-withdrawn", (invoke b p (view (some 0) (some 1) (used := none))
-      "execute" (.nat 7) .nat |> resultName) == "execute: refused holeSupportMoved 0 1"),
+      "execute" (.nat 7) .nat |> resultName) == s!"execute: refused holeSupportMoved 0 1 {(factPinAt 4).wire}"),
     ("derivation-withdrawn", (invoke b p (view (some 0) (some 1) (left := none))
-      "execute" (.nat 7) .nat |> resultName) == "execute: refused holeDerivationMoved 0"),
+      "execute" (.nat 7) .nat |> resultName) == s!"execute: refused holeDerivationMoved 0 {(factPinAt 2).wire}"),
     ("alternative-same-filling", (invoke b p (view (some 1) (some 1) (left := none))
       "execute" (.nat 7) .nat |> outputNat) == some 7),
     ("clause-conflict", (invoke b p good "execute" (.nat 11) .nat |> resultName) ==
