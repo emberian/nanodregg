@@ -7170,6 +7170,44 @@ quorum-gated generator (laws on a generator object, no new machinery). Rung 2, s
 bounded sequence type (`Ty.seq`, axis 7, TYPES's column): then `code` over it (DESIGN-META §6.2) replaces bytes as
 the type of what a generator emits.
 
+## LANG-88 A generator whose output names its invoker: `Std.ownerGenerator` takes no argument and installs the one-member allowlist of the member who generated, read from the Turn's request (2026-10-26; FABLE-META-2, axis 1; DESIGN-META §8; a `lang:`, no wire change)
+
+**What.** `Std.allowlistWith S idT` is the one-member allowlist with its member a TERM at the law clause's depth
+(`allowlistLaw S [i] = allowlistWith S (digest i)`, rfl). `Std.ownedPackageWith r idT` is a record state `r` under
+that law (`owner`) with `set`; `ownedPackage r i` its instance. `Std.ownerGenerator r` has one method, `generate {}`,
+whose body quotes the template at the free variable `var 4` with the parameter `agentParam = ⟨digest, get (var 0)
+"agent"⟩` — the generator's own REQUEST's `agent`, the signer of the generating Turn — written into the law by the
+`dsized` writer (LANG-87) as a digest literal, which `checkInstall` re-checks against the World (`checkLits`).
+`generate_owner_sound` (`Lang/Proofs/StdGen.lean`): every admitted run by request `rq` returns `[install B]` with
+`encodePackage (ownedPackage r (bytesOf rq.agent)) = some B` (within `bytesMax`). The proof is `generate_bounded_sound`'s
+with the parameter read from `reqData` instead of the argument (`sel_toVal` on the request's `agent` field) and
+`fill_ownedPackage` (the template at `i` is `ownedPackage r i`, by `simp`).
+
+**Why it matters.** DESIGN-META §2.3 said a generator CAN bake the signer's id into a law — authority by naming — and
+that `checkLits` keeps it honest. This is that, with the receipt as the ONLY input: a member invokes `generate` with
+no argument and gets a package that admits them by id and no one else; the Turn's journal row (the signer) is the
+whole provenance of who the package names. The `dsized` writer gets its deployed use; three writers, three
+generators' worth of parameter kinds remain (`bytes`, `bool`) for a later card.
+
+**Journey (`Lang.Journey.Gen`, in `lake exe lang-journey`; the session gains a second founder A).** GN9 B installs
+`Std.ownerGenerator {n : nat}` and generates with no argument: admitted; the Turn bears one package cell, the cell of
+`encodePackage (ownedPackage {n : nat} B)` (1613 bytes) — B's id read from the Turn's request. GN10 B creates an
+object O of it and sets n = 7: admitted. GN11 B grants A invoke on O; A sets n = 9 through the grant: refused
+`lawDenied owner: not on the allowlist` by name (a stranger never reaches a law; the grant makes A reach it, and the
+generated law refuses A by name).
+
+**Price.** No statement moves, no premise is added; no wire byte moves; nothing re-emits.
+
+**Critique.** `fill_ownedPackage` is the second `simp`-per-template proof (LANG-87's critique named it); the general
+lemma — a template whose free variables sit at the clause depth fills to the Lean generator at the literals — is now
+owed by the third template. `generate_owner_sound`'s proof duplicates `generate_bounded_sound`'s 60 lines with one
+parameter changed; a `generate_sound` over any `(template, params, fill)` triple is the refactor the third generator
+should land instead of a third copy.
+
+**Next.** `createOf` (generate and instantiate in one Turn, DESIGN-META §6.3; a KERNEL receiver arm: coordinate with
+TRUST's column); a quorum-gated generator (`Std.quorum` over a generator object: k of n members approve a
+generation); rung 2 over TYPES's `Ty.seq`.
+
 ## LANG-83 The document: a section is a `Std.hole` at `bytes` whose candidates are members' posts, justified by their grants, selected by an editor, withdrawn by name on revocation; its refusals name the justification that failed (2026-10-26; FABLE-CTX; design `redregg/work/promo/DESIGN-CTX.md` §2.3, §4, S0 + S1; method R-0069)
 
 **Ember's ask.** "Elaborating the contextual theory thoroughly into the most powerful possible instantiation of itself seems reasonable." The design memo answers it (what the theory is: justified instantiation of contextual types inside a replicated state machine; the SLOT as the one object the ROM hole, the activity's waiting row, the offer, the law list and the package link all inhabit; the top clause CONTEXTUAL INTEGRITY ∧ REPAIR as a clause of INTEGRITY with its floor). The first two steps of its sequence land here, because together they make the top clause inhabited by a run a member can see, and neither needs the kernel.

@@ -242,4 +242,130 @@ theorem generate_bounded_sound {D : Type} (bytesOf : D → ByteArray) (digestOf 
   subst hrows
   exact ⟨rfl, rfl⟩
 
+
+/-! ## The owner generator installs the allowlist of its invoker (LANG-88) -/
+
+/-- The one-member allowlist is the template at that member. -/
+theorem allowlistLaw_one (S : Ty) (i : ByteArray) : allowlistLaw S [i] = allowlistWith S (.digest i) := rfl
+
+theorem ownerGenerator_resolve {D : Type} (r : List (Label × Ty)) :
+    resolveMethod (D := D) (ownerGenerator r) 0 = .ok ("generate", ⟨.record [], [installSlot], [], 0⟩) := rfl
+
+theorem ownerGenerator_body (r : List (Label × Ty)) :
+    (ownerGenerator r).body = .record [("generate", ownerGenerateMethod r)] := rfl
+
+theorem noRef_ownerGenerate (r : List (Label × Ty)) : NoRef (ownerGenerateMethod r) := by
+  simp only [ownerGenerateMethod, resultT, callsT_one, installOf, someCallT, NoRef, NoRefRow, and_true]
+  exact Quote.noRef_quotePackage (fun q hq => by simp only [List.mem_singleton] at hq; subst hq; simp [agentParam, NoRef])
+    (by simp [NoRef]) _
+
+/-- **The template at a member is `ownedPackage` at that member.** -/
+theorem fill_ownedPackage (r : List (Label × Ty)) (i : ByteArray) :
+    fillPackage [.digest i] (ownedPackageWith r (.var 4)) = ownedPackage r i := by
+  simp [fillPackage, ownedPackageWith, ownedPackage, allowlistWith, lawOf, lawCase, lawCase5, allOf, guards,
+    guard, okT, refusedT, anyOf, At.reqF, At.req, setMethod, resultT, callsT, Term.fill, Term.fillFields,
+    Val.lit?, fillFields_getArg]
+
+/-- **The owner generator's run installs the allowlist of its invoker.** For `ownerGenerator r` read
+at `pkg`, every admitted run of `generate` by the request `rq` returns `[install B]` where `B` is
+`encodePackage (ownedPackage r (bytesOf rq.agent))`: the package names the SIGNER of the generating
+Turn, and nobody else, by id — authority by naming, with the receipt as the only input. -/
+theorem generate_owner_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+    {rc : Lang.ReceiptCheck} {r : List (Label × Ty)} {B : ByteArray}
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
+    {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (hid : digestOf (bytesOf pkg) = some pkg)
+    (hp : readPackage look pkg = .ok (ownerGenerator r))
+    (hB : Wire.encodePackage (ownedPackage r (bytesOf rq.agent)) = some B) (hsz : B.size ≤ Bounds.bytesMax)
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state 0 args rq budget = .ok (s, calls, rows, used)) :
+    calls = [.install B] ∧ rows = [] := by
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state 0 args rq budget).map _ = _ at h
+  rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state 0 args rq budget with
+  | error e => rw [hm] at h; cases h
+  | ok x =>
+  rw [hm] at h
+  obtain ⟨s', calls', rows', t', n'⟩ := x
+  simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+  obtain ⟨S, v, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, hpg, hres, -, -, -, -, rfl⟩ := runSetup_spec hS
+  obtain ⟨hpg', f', hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
+  rw [hpg'] at hpg
+  cases hpg
+  rw [ownerGenerator_resolve] at hres
+  cases hres
+  simp only at hrun hx hes hc
+  have hbig := run_bigStep hrun
+  -- the parameter: the signer, in the method's environment `[req, arg, state, rows]`
+  have hagent : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (.get (.var 0) "agent") (.ok (.digest (bytesOf rq.agent))) :=
+    .get (.var rfl) (sel_toVal (d := reqData bytesOf rq) (x := .digest (bytesOf rq.agent)) rfl)
+  have hps : Quote.Params L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      [agentParam] [.digest (bytesOf rq.agent)] := by
+    intro j
+    cases j with
+    | zero => exact ⟨hagent, trivial⟩
+    | succ j => simp only [List.getElem?_cons_succ, List.getElem?_nil, Quote.ParamAt]
+  have hQ : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4))) (.ok (.bytes B)) := by
+    have := Quote.quotePackage_sound hps (p := ownedPackageWith r (.var 4))
+      (by rw [fill_ownedPackage]; exact hB) (.bytes .empty) ByteArray.empty .bytes
+      (by simpa [ByteArray.empty_append] using hsz)
+    simpa [ByteArray.empty_append] using this
+  have fwd : ∀ {r' : Except Fault Val}, BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (resultT (callsT [installOf (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4)))])
+        (.var 2)) r' →
+      BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal] (apply4 g "generate") r' :=
+    fun hb => apply4_method hlib (ownerGenerator_body r) (by simp [Row.find?, ownerGenerateMethod])
+      (noRef_ownerGenerate r) hb
+  have hbody : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (resultT (callsT [installOf (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4)))])
+        (.var 2))
+      (.ok (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("calls", callsT [installOf (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4)))]),
+         ("edits", .record []), ("state", .var 2)]))) :=
+    .record
+  have hM := extract_means _ _ hx
+  cases bigStep_deterministic hbig (fwd hbody)
+  have hwC := BigStep.get (ℓ := "calls") (fwd hbody)
+    (.field (find_suspend_of (t := callsT [installOf (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4)))]) rfl) .record)
+  obtain ⟨A, hA, hmC⟩ := means_get (fwd hbody) hM rfl hwC
+  simp only [Row.find?] at hA
+  cases hA
+  have hBig : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (installOf (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4))))
+      (.ok (.inj "some" (.inj "install" (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("pkg", Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4)))]))))) :=
+    .inj (.inj .record)
+  have hMeans : Means L.lib (optTy installSlot)
+      (.inj "some" (.inj "install" (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("pkg", Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4)))]))))
+      (.inj "some" (.inj "install" (.record [("pkg", .bytes B)]))) :=
+    .inj rfl (.inj rfl (.record .record (.cons hQ .bytes .nil)))
+  have hC : Means L.lib (callsTy [installSlot])
+      (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("c0", installOf (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4))))]))
+      (.record [("c0", .inj "some" (.inj "install" (.record [("pkg", .bytes B)])))]) :=
+    .record .record (.cons hBig hMeans .nil)
+  have hcEq := means_deterministic hmC hC
+  subst hcEq
+  have hwE := BigStep.get (ℓ := "edits") (fwd hbody) (.field (find_suspend_of (t := .record []) rfl) .record)
+  obtain ⟨A', hA', hmE⟩ := means_get (fwd hbody) hM rfl hwE
+  simp only [Row.find?] at hA'
+  cases hA'
+  have hE : Means L.lib (.record []) (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal] []))
+      (.record []) := .record .record .nil
+  have heEq := means_deterministic hmE hE
+  subst heEq
+  have hc' : callsOf digestOf [installSlot]
+      (.record [("c0", .inj "some" (.inj "install" (.record [("pkg", .bytes B)])))]) = .ok [.install B] := rfl
+  rw [hc'] at hc
+  have he' : editsOf (D := D) (ownerGenerator r).rels rq.self (.record []) = .ok [] := rfl
+  rw [he'] at hes
+  cases hc
+  cases hes
+  subst hrows
+  exact ⟨rfl, rfl⟩
+
 end Nanodregg.Lang.Std

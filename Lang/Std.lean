@@ -148,6 +148,14 @@ def allowlistLaw (S : Ty) (ids : List ByteArray) : Term :=
   let c (a : At) := allOf [(listed a, "not on the allowlist")]
   lawOf S c c c c
 
+/-- The one-member allowlist with its member a TERM at the clause's depth (4), so a GENERATOR can
+write it from a digest it holds — its own invoker's id (`Std.ownerGenerator`, LANG-88).
+`allowlistLaw S [i] = allowlistWith S (.digest i)` (`allowlistLaw_one`). -/
+def allowlistWith (S : Ty) (idT : Term) : Term :=
+  let listed (a : At) := anyOf [.prim .deq (a.reqF "agent") idT]
+  let c (a : At) := allOf [(listed a, "not on the allowlist")]
+  lawOf S c c c c
+
 /-- The most ids an allowlist names. -/
 def idsMax : Nat := 256
 

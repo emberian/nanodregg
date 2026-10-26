@@ -23,6 +23,13 @@ kernel's `Program` (the deployed receipt check at the Sim's parameters, as `Lang
 * GN7 the generated package runs: B creates an object O of THAT id with n = 0 and sets n = 50.
 * GN8 the generated law holds at the generated bound: n = 101 is refused `lawDenied bounded: n over
   the bound` by name.
+* GN9 (LANG-88) B installs `Std.ownerGenerator {n : nat}`, a generator with NO argument whose output
+  names its INVOKER, and generates: the Turn bears the cell of `encodePackage (ownedPackage {n : nat}
+  B)` — the package's allowlist is B's id, read from the generating Turn's request
+  (`generate_owner_sound`, run).
+* GN10 B creates an object O of it and sets n = 7: admitted (B is on the list).
+* GN11 B grants A invoke on O; A sets n = 9 through the grant: refused `lawDenied owner: not on the
+  allowlist` — the package B generated admits B by name and no one else.
 -/
 import Lang.Journey.Head
 import Lang.StdGen
@@ -37,7 +44,7 @@ def genArg : Option ByteArray := Wire.encodeData (.record []) (.record [])
 /-- The first cell a Turn bore, if it bore one. -/
 def bornOf (t : Option (Turn D)) : Option D := t.bind fun t => (createdIds t).head?
 
-def genRows (r0 : Run) (b : Sim.Member) : Run := Id.run do
+def genRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
   let prog := headProgram
   let mut r := r0
   -- a generator object of package `p`, installed and created by B: its package id and object id
@@ -134,16 +141,45 @@ def genRows (r0 : Run) (b : Sim.Member) : Run := Id.run do
   let (r14, v14, _) := setN r 101
   r := note r14 s!"GN8 B sets n = 101: {v14}"
     (v14.startsWith "refused lawDenied" && (v14.splitOn "bounded: n over the bound").length > 1)
+  -- GN9 the owner generator (LANG-88): no argument; the output names the invoker
+  let (r15, v15, g15?) := generator r "GN9" (Std.ownerGenerator rty)
+  let some (gpkg15, G15) := g15? | return note r15 s!"GN9 {v15}" false
+  let owned := (Wire.encodePackage (Std.ownedPackage rty (Sim.dc.bytes b.id))).getD .empty
+  let oid := romIdOf Sim.env { kind := kindPackage, discipline := .rom, slots := [(0, owned)] }
+  let (r16, v16, t16) := generate r15 gpkg15 G15
+  let born16 := (t16.map createdIds).getD []
+  r := note r16 s!"GN9 B installs Std.ownerGenerator \{n : nat} ({v15}) and generates with no argument: {v16}; the Turn bears {born16.length} cell(s), the package cell of encodePackage (ownedPackage \{n : nat} B) ({owned.size} bytes), B's id read from the Turn's request: {born16 == [oid]}"
+    (v16 == "admitted" && born16 == [oid] && owned.size > 0)
+  -- GN10 B uses it
+  let (r17, v17, t17) := match stateSlots (recordRow (.record rty)) [("n", .nat 0)] 0 with
+    | none => (r, "no seed bytes", none)
+    | some seed => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, oid]) (.create (some oid) [] seed))
+  let some O2 := bornOf t17 | return note r17 s!"GN10 B creates an object of the generated package: {v17}" false
+  let (r18, v18, _) := match setArg 7 with
+    | none => (r17, "no argument bytes", none)
+    | some x => go prog r17 (Sim.signed r17.st b b.key (Sim.S.pinsFor r17.st.host [b.id, O2, oid]) (.invoke O2 0 x 1000000 none))
+  r := note r18 s!"GN10 B creates an object O of the generated package ({v17}) and sets n = 7: {v18}"
+    (v17 == "admitted" && v18 == "admitted")
+  -- GN11 A, granted, is not on the list
+  let (r19, v19, t19) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, a.id, O2]) (.grant O2 a.id [.invoke 0] none))
+  let some gr := bornOf t19 | return note r19 s!"GN11 B grants A invoke: {v19}" false
+  let (r20, v20, _) := match setArg 9 with
+    | none => (r19, "no argument bytes", none)
+    | some x => go prog r19 (Sim.signed r19.st a a.key (Sim.S.pinsFor r19.st.host [a.id, O2, oid, gr]) (.invoke O2 0 x 1000000 (some gr)))
+  r := note r20 s!"GN11 B grants A invoke on O ({v19}); A sets n = 9 through the grant: {v20}"
+    (v19 == "admitted" && v20.startsWith "refused lawDenied" && (v20.splitOn "owner: not on the allowlist").length > 1)
   return r
 
 /-- A fresh session for the GN rows. -/
 def genSession : Run :=
   let X := ctxWith headProgram
   let empty : Run := { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
-  match genesis X Sim.worldName (Sim.nonceOf 13) 100000000 [("gn-b".toUTF8, nextKeyDigest X "gn-b-next".toUTF8)] with
+  match genesis X Sim.worldName (Sim.nonceOf 13) 100000000
+      [("gn-b".toUTF8, nextKeyDigest X "gn-b-next".toUTF8), ("gn-a".toUTF8, nextKeyDigest X "gn-a-next".toUTF8)] with
   | .error e => note empty s!"GN genesis: {e.name}" false
   | .ok g =>
     let m : Sim.Member := ⟨founderId X g.origin 0, "gn-b".toUTF8, "gn-b-next".toUTF8⟩
-    genRows { st := { rng := ⟨1⟩, host := g, members := [m] } } m
+    let a : Sim.Member := ⟨founderId X g.origin 1, "gn-a".toUTF8, "gn-a-next".toUTF8⟩
+    genRows { st := { rng := ⟨1⟩, host := g, members := [m, a] } } m a
 
 end Nanodregg.Lang.Journey
