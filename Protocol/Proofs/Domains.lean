@@ -1,7 +1,7 @@
 /-
 # Protocol.Proofs.Domains — every message a member key signs begins with its own domain (KERNEL-42)
 
-A member key signs seven shapes: a call (`Receive.Ctx.callMessage`, `domCall`), a possession
+A member key signs seven shapes, and a World's certifier an eighth (`Head.certifyMessage`, `Head.domCertify`, PROTOCOL-76, never a member's): a call (`Receive.Ctx.callMessage`, `domCall`), a possession
 proof (`Receive.possessionMessage`, `tagPossession`), a read envelope (`Envelope.message`,
 `domEnvelope`), `init`'s identity probe (`Command.whoami`, a constant), an invitation
 (`Invite.message`, `domInvite`, PROTOCOL-42), a cancel (`Receive.Ctx.cancelMessage`,
@@ -211,5 +211,60 @@ theorem head_not_invite (u v : ByteArray) : Head.message u ≠ Invite.message v 
 theorem head_not_cancel (X : Ctx D) (c : Call D) (u : ByteArray) : Head.message u ≠ X.cancelMessage c := by
   unfold Ctx.cancelMessage
   exact head_cancel_disjoint _ _
+
+/-! ## The certificate's domain against the other seven (PROTOCOL-76; byte 10 or 19 differs) -/
+
+theorem certify_call_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ domCall ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem certify_possession_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ tagPossession ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem certify_cancel_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ domCancel ++ s :=
+  append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
+
+theorem certify_envelope_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ domEnvelope ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+theorem certify_whoami_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ Command.whoami ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+theorem certify_invite_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ Invite.domInvite ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+theorem certify_head_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ Head.domHead ++ s :=
+  append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
+
+/-- **No certificate message begins with the envelope domain**: an envelope-only custody never
+certifies a head. -/
+theorem certify_not_envelope (u r : ByteArray) : domEnvelope ++ r ≠ Head.certifyMessage u :=
+  fun h => certify_envelope_disjoint u r h.symm
+
+/-- **A certificate is never a member's attestation, nor an attestation a certificate**: what the
+World's certifier signs and what one member signs never share a message, whatever key signs. -/
+theorem certify_not_head (u v : ByteArray) : Head.certifyMessage u ≠ Head.message v :=
+  certify_head_disjoint u v
+
+theorem certify_not_call (X : Ctx D) (v : Unsigned D) (u : ByteArray) :
+    Head.certifyMessage u ≠ X.callMessage v :=
+  certify_call_disjoint u (X.unsignedBytes v)
+
+theorem certify_not_possession (X : Ctx D) (sponsor next : D) (key u : ByteArray) :
+    Head.certifyMessage u ≠ possessionMessage X sponsor next key := by
+  unfold possessionMessage
+  simp only [ByteArray.append_assoc]
+  exact certify_possession_disjoint _ _
+
+theorem certify_not_whoami (u : ByteArray) : Head.certifyMessage u ≠ Command.whoami := by
+  intro h
+  exact certify_whoami_disjoint u ByteArray.empty (by rw [ByteArray.append_empty]; exact h)
+
+theorem certify_not_invite (u v : ByteArray) : Head.certifyMessage u ≠ Invite.message v :=
+  certify_invite_disjoint u v
+
+theorem certify_not_cancel (X : Ctx D) (c : Call D) (u : ByteArray) :
+    Head.certifyMessage u ≠ X.cancelMessage c := by
+  unfold Ctx.cancelMessage
+  exact certify_cancel_disjoint _ _
 
 end Nanodregg.Protocol

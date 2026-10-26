@@ -218,4 +218,146 @@ and not compared. -/
   (selfPosts X w' ts).findSome? fun p =>
     if anchorCheck X.env p.1 p.2.1 w.steps w.chain ts = .forked then some (p.1, p.2.2) else none
 
+/-! ## Certified heads (PROTOCOL-76; DESIGN-TRUST §1.2, §4.3: T3's unsigned half)
+
+An attestation says what ONE MEMBER holds. A CERTIFICATE says what the WORLD is at: a head with
+`threshold` signatures by the World's CERTIFIERS, the authority a World is given at its genesis.
+Every World today has `Authority.none` (no certifier, threshold 0: the writer's page is its bare
+word and members audit, as before); one key at threshold 1 is the lock writer with a signature; `3f+1`
+keys at threshold `2f+1` is the committee. The object, its domain (`domCertify`, the eighth a key
+signs under) and its one verification path (`certified`: `threshold` DISTINCT listed certifiers,
+each signature verifying over the certified bytes) land here, with refusals by name. No deployed
+path PRODUCES a certificate yet (a Store holds no certify seed: cv 01a1769d, Ember's), and none
+consumes one until the authority reaches the genesis input (`GenesisInput` + `Carried`, the
+`log`/`read` reply field, `Thin.accept`, the head law's `uncertified`: the next flag day, `host!` +
+`protocol!`). What a verifier learns from `certified = .ok` is `Proofs.Head.certified_ok`; what two
+certificates at one step count mean under a quorum is `certified_intersect` and
+`certified_equivocation` there, the committee row of DESIGN-TRUST §1.3's table as a theorem over
+the object alone. -/
+
+/-- Who may certify a position as the World's, and how many of them must. -/
+structure Authority where
+  certifiers : List ByteArray
+  threshold : Nat
+  deriving DecidableEq, Repr
+
+/-- Nobody certifies: every World today. -/
+def Authority.none : Authority := ⟨[], 0⟩
+
+/-- The domain every certificate message begins with (byte 19 differs from `domHead`). -/
+def domCertify : ByteArray := "nanodregg/protocol/certify/v1".toUTF8
+
+/-- The certified part: the head's five fields. No member, no key: a certificate is the World's
+statement, and who made it is the authority's list, not the bytes. -/
+def certifiedLayout : Layout :=
+  [.bytes "origin", .u64 "steps", .u64 "height", .bytes "roots", .bytes "chain"]
+
+/-- A certificate on the wire: the certified bytes as carried, then the signers (each an index into
+the authority's list, as u64 bytes) and their signatures, two lists read in step. -/
+def certificateLayout : Layout := [.bytes "certified", .list "signers", .list "signatures"]
+
+def certifiedFrame : Stream (Layout.Ty Bounds.frameBytesMax certifiedLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) certifiedLayout
+
+def certificateFrame : Stream (Layout.Ty Bounds.frameBytesMax certificateLayout) :=
+  Layout.codec Bounds.frameBytesMax (by decide) certificateLayout
+
+/-- The bytes a certifier signs over, or `none` past the frame bound. -/
+def certifiedBytes (E : Env D) (h : Head D) : Option ByteArray := do
+  let f := Text.fit Bounds.frameBytesMax
+  pure (certifiedFrame.bytes (← f (E.bytes h.origin), h.steps.toUInt64, h.height.toUInt64,
+    ← f (E.bytes h.roots), ← f (E.bytes h.chain), ()))
+
+/-- What a certifier signs. -/
+def certifyMessage (certified : ByteArray) : ByteArray := domCertify ++ certified
+
+/-- A certificate's wire bytes, or `none` past the frame bounds. -/
+def certificateBytes (certified : ByteArray) (sigs : List (Nat × ByteArray)) : Option ByteArray := do
+  let f := Text.fit Bounds.frameBytesMax
+  let l := Text.fitList Bounds.frameBytesMax
+  pure (certificateFrame.bytes (← f certified, ← l (sigs.map fun p => Text.u64 p.1),
+    ← l (sigs.map (·.2)), ()))
+
+/-- A decoded certificate. -/
+structure Certificate (D : Type) where
+  head : Head D
+  /-- the certified bytes exactly as carried (`certifiedFrame`) -/
+  certified : ByteArray
+  /-- the signers (indices into the authority's list) and their signatures, as carried -/
+  sigs : List (Nat × ByteArray)
+  deriving DecidableEq
+
+/-- Why a certificate is not taken (law 7). -/
+inductive CertRefusal
+  /-- the bytes are not a certificate (either frame, a digest field, or lists of two lengths) -/
+  | badCertificate
+  /-- it names another World -/
+  | otherWorld
+  /-- signer `index` is not in the authority's list -/
+  | unlisted (index : Nat)
+  /-- certifier `index` signs twice -/
+  | repeated (index : Nat)
+  /-- certifier `index`'s signature does not verify over the certified bytes -/
+  | badCertifySignature (index : Nat)
+  /-- fewer distinct listed certifiers than the authority's threshold -/
+  | belowThreshold (signers threshold : Nat)
+  deriving DecidableEq, Repr
+
+def CertRefusal.name : CertRefusal → String
+  | .badCertificate => "badCertificate" | .otherWorld => "otherWorld" | .unlisted _ => "unlisted"
+  | .repeated _ => "repeated" | .badCertifySignature _ => "badCertifySignature"
+  | .belowThreshold .. => "belowThreshold"
+
+/-- The constructor's index, the thing a name must determine (`Proofs.Head.CertRefusal.name_injective`). -/
+def CertRefusal.tag : CertRefusal → Nat
+  | .badCertificate => 0 | .otherWorld => 1 | .unlisted _ => 2 | .repeated _ => 3
+  | .badCertifySignature _ => 4 | .belowThreshold .. => 5
+
+/-- Decode the certified bytes, checking nothing they state. -/
+def certifiedSaid (X : Ctx D) (u : ByteArray) : Option (Head D) :=
+  match certifiedFrame.decode u with
+  | .error _ => none
+  | .ok (o, s, h, r, c, ()) => do
+      pure ⟨← X.digestOf o.1, s.toNat, h.toNat, ← X.digestOf r.1, ← X.digestOf c.1⟩
+
+/-- Decode a certificate, checking nothing it states. -/
+def certificateOfBytes (X : Ctx D) (b : ByteArray) : Option (Certificate D) :=
+  match certificateFrame.decode b with
+  | .error _ => none
+  | .ok (u, ss, sg, ()) =>
+      match certifiedSaid X u.1, (Text.unlist ss).mapM Text.ofU64 with
+      | some h, some signers =>
+          if signers.length = (Text.unlist sg).length then
+            some { head := h, certified := u.1, sigs := signers.zip (Text.unlist sg) }
+          else none
+      | _, _ => none
+
+/-- Walk the signatures from the signers `seen`: each signer listed, not seen, verifying over `msg`.
+Returns every signer accepted. -/
+def certifySigners (X : Ctx D) (auth : Authority) (msg : ByteArray) :
+    List (Nat × ByteArray) → List Nat → Except CertRefusal (List Nat)
+  | [], seen => .ok seen
+  | (i, s) :: rest, seen =>
+      match auth.certifiers[i]? with
+      | none => .error (.unlisted i)
+      | some k =>
+          if i ∈ seen then .error (.repeated i)
+          else if !X.verify k msg s then .error (.badCertifySignature i)
+          else certifySigners X auth msg rest (i :: seen)
+
+/-- Decode and verify under `auth`: the certificate is for `origin`, and at least `auth.threshold`
+distinct listed certifiers each signed its certified bytes under `domCertify`. The one path every
+party that trusts a head without a World (a thin joiner, a foreign World, a phone) will run. -/
+def certified (X : Ctx D) (auth : Authority) (origin : D) (b : ByteArray) :
+    Except CertRefusal (Certificate D) :=
+  match certificateOfBytes X b with
+  | none => .error .badCertificate
+  | some c =>
+    if c.head.origin ≠ origin then .error .otherWorld
+    else match certifySigners X auth (certifyMessage c.certified) c.sigs [] with
+      | .error r => .error r
+      | .ok signers =>
+          if signers.length < auth.threshold then .error (.belowThreshold signers.length auth.threshold)
+          else .ok c
+
 end Nanodregg.Protocol.Head
