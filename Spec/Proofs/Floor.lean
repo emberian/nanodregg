@@ -122,6 +122,72 @@ theorem floor_oneHistory_member (d : ByteArray → ByteArray) :
     rw [ho] at this
     exact absurd (congrArg (fun x : Digest => x.bytes.data) this) (by decide)
 
+/-! ## §2 ONE HISTORY (A2): the chain that binds nothing -/
+
+/-- The run's call with another next-key digest: the founder could have rotated either way. -/
+private def wCall2 : Call Digest :=
+  let u : Unsigned Digest :=
+    { wCall.unsigned with body := .rotate wNext (nextKeyDigest Xd (Ed25519.publicKey (wSeed "f0-other"))) }
+  ⟨u, Ed25519.sign (wSeed "f0-next") (Xd.callMessage u)⟩
+
+private def wLog2 : List (Step Digest) :=
+  match submit Xd wGenesis wCall2 with
+  | .ok (t, _) => [.turn t]
+  | .error _ => []
+
+/-- No two distinct preimages in the list hash alike: `CollidesAmong`'s negation, as a computation. -/
+private def collisionFree (hash : String → ByteArray → Digest) (S : List (String × ByteArray)) : Bool :=
+  S.all fun p => S.all fun q => decide (p = q ∨ hash p.1 p.2 ≠ hash q.1 q.2)
+
+private theorem not_collides {hash : String → ByteArray → Digest} {S : List (String × ByteArray)}
+    (h : collisionFree hash S = true) : ¬ CollidesAmong hash S := by
+  rintro ⟨p, hp, q, hq, hne, he⟩
+  have := List.all_eq_true.mp (List.all_eq_true.mp h p hp) q hq
+  simp only [decide_eq_true_eq] at this
+  rcases this with h' | h'
+  · exact hne h'
+  · exact h' he
+
+/-- **The two rotations**: each admits at the genesis World; the first's World journals the first
+call and the second's does not; and no two of the two folds' link inputs collide. -/
+theorem run_two_rotations :
+    (match wLog, wLog2 with
+     | [.turn t₁], [.turn t₂] =>
+        match World.admit Xd.env wGenesis t₁, World.admit Xd.env wGenesis t₂ with
+        | .ok w₁, .ok w₂ =>
+            (w₁.journalAt Xd.env (txIdOf Xd wCall)).isSome && (w₂.journalAt Xd.env (txIdOf Xd wCall)).isNone &&
+              collisionFree Xd.env.hash (foldPres Xd.env wGenesis wLog ++ foldPres Xd.env wGenesis wLog2)
+        | _, _ => false
+     | _, _ => false) = true := by
+  native_decide
+
+/-- **FLOOR (A2).** The claim refuses a kernel whose chain does not move: two different rotations
+reach two Worlds of one step count and one chain, with no collision among the link inputs. -/
+theorem floor_oneHistory_pair (d : ByteArray → ByteArray) : ¬ OneHistory.pair (chainless d) := by
+  intro h
+  have hr := run_two_rotations
+  revert hr
+  generalize wLog = L₁
+  generalize wLog2 = L₂
+  intro hr
+  split at hr
+  · rename_i t₁ t₂
+    split at hr
+    · rename_i w₁ w₂ ha₁ ha₂
+      simp only [Bool.and_eq_true] at hr
+      obtain ⟨⟨hj₁, hj₂⟩, hc⟩ := hr
+      have hf₁ : (chainless d).fold wGenesis [.turn t₁] = .ok { w₁ with chain := wGenesis.chain } := by
+        simp [System.fold, System.step, chainless, deployed, ha₁, Except.map]
+      have hf₂ : (chainless d).fold wGenesis [.turn t₂] = .ok { w₂ with chain := wGenesis.chain } := by
+        simp [System.fold, System.step, chainless, deployed, ha₂, Except.map]
+      rcases h hf₁ hf₂ (by simp [admit_steps ha₁, admit_steps ha₂]) rfl with he | hcol
+      · have := congrArg (fun w : World Digest => (w.journalAt Xd.env (txIdOf Xd wCall)).isSome) he
+        simp only [World.journalAt] at this hj₁ hj₂
+        simp_all
+      · exact not_collides hc hcol
+    · cases hr
+  · cases hr
+
 /-! ## §4 CONSENT: the follower that reports the Host's word, the settlement that is always final -/
 
 private def wCb : ByteArray := Xd.callBytes wCall

@@ -6,15 +6,15 @@ entry points as fields). It has a top theorem `top_* : Claim (deployed d)`, a fl
 claims owe a vacuity argument; a lemma under a top theorem means what the claim says it means
 (TOPLEVEL-SPEC §1.3). Design: `redregg/work/promo/TOPLEVEL-SPEC.md`; decisions: `decisions/spec.md`.
 
-**The trusted reading** is `System.lean` + `Proofs/Claims.lean` + `Proofs/Floor.lean` (≈ 520 lines).
-`Proofs/Bridge.lean` and `Proofs/Deployed.lean` are proofs: checked, not read.
+**The trusted reading** is `System.lean` + `Trivial.lean` + `Proofs/Claims.lean` + `Proofs/Floor.lean` (≈ 620 lines).
+`Proofs/Bridge.lean`, `Proofs/Member.lean` and `Proofs/Deployed.lean` are proofs: checked, not read.
 
 ## The claims
 
 | § | claim | one sentence | top theorem | floor (the system it refuses) |
 |---|---|---|---|---|
-| 2 A1 | `OneHistory.member` | whatever frames follow is fed, the member's World is an audited fold from a start it consented to | **premised, not yet proved** | `floor_oneHistory_member`: the follower that takes the World it is told |
-| 2 A2 | `OneHistory.pair` | two folds from one World that agree on step count and chain are one World, up to a collision among their link inputs | `top_oneHistory_pair` | not yet |
+| 2 A1 | `OneHistory.member` | whatever frames follow is fed, the member's World is an audited fold from a start it consented to | `top_oneHistory_member` (under `keyFaithful`; `Proofs/Member.lean`) | `floor_oneHistory_member`: the follower that takes the World it is told |
+| 2 A2 | `OneHistory.pair` | two folds from one World that agree on step count and chain are one World, up to a collision among their link inputs | `top_oneHistory_pair` | `floor_oneHistory_pair`: the kernel whose chain does not move |
 | 3 B2 | `Integrity.value` | along any fold, every denomination's balance sum is unchanged, and its floor sum unless the log created its well | `top_integrity_value` | not yet |
 | 3 B3 | `Integrity.law` | along an audited log an object's package never changes and its states are a chain its `NoRef` laws' reference meaning admits | `top_integrity_law` | not yet |
 | 4 C(ii) | `Consent.okCommitted` | a command that ends `done ok` at the settle phase means follow's own World journals the call | `top_consent_okCommitted` | `floor_consent_okCommitted`: the follower that says ok on the Host's word |
@@ -34,6 +34,9 @@ everything makes every log `Decided`, which A1 cannot see and B2/B3 refuse.
 * **`NoRef`** (B3): the chain lift exists for laws without holes only (TOPLEVEL-SPEC §11.6).
 * **Canonical tries** (B2: `w.Canon`; B3: `CellsCanon`; C(iii): `RefusalsCanon`, `JournalCanon`): true of
   every World a Store opens to (`Kept`), carried as premises because the claims are generic in `D`.
+
+Owed floors (cv 01a17a38-9802): B2 (every World reachable from genesis has value sum 0, so the
+refuting World is a non-reachable canonical one) and B3 (a deployed package with a `NoRef` law).
 
 ## Inhabited
 

@@ -35,4 +35,10 @@ def alwaysFinal (d : ByteArray → ByteArray) : System Digest :=
 def openHost (d : ByteArray → ByteArray) : System Digest :=
   { deployed d with handle := fun _ _ => .defer (.log 0) }
 
+/-- **The chainless kernel**: it admits as the kernel does but never extends the log chain, so the
+chain binds nothing that was folded. -/
+def chainless (d : ByteArray → ByteArray) : System Digest :=
+  { deployed d with
+    admit := fun w t => (World.admit Host.Deployed.X.env w t).map fun w' => { w' with chain := w.chain } }
+
 end Nanodregg.Spec

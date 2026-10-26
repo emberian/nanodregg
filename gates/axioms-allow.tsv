@@ -14,3 +14,6 @@ Nanodregg.Spec.inhabited_audited	Nanodregg.Spec.run_rederives._native.native_dec
 Nanodregg.Spec.floor_consent_final	Nanodregg.Spec.run_call_admits._native.native_decide.ax_1_1	built on run_call_admits, a fact about the deployed run (decisions/spec.md SPEC-5)
 Nanodregg.Spec.floor_consent_okCommitted	Nanodregg.Spec.run_call_decodes._native.native_decide.ax_1_1	built on run_call_decodes, a fact about the deployed run (decisions/spec.md SPEC-5)
 Nanodregg.Spec.floor_consent_okCommitted	Nanodregg.Spec.run_continuation._native.native_decide.ax_1_1	built on run_continuation, a fact about the deployed run (decisions/spec.md SPEC-5)
+Nanodregg.Spec.run_two_rotations	Nanodregg.Spec.run_two_rotations._native.native_decide.ax_1_1	the deployed run: the founder two possible rotations admit at genesis, differ, and their link inputs do not collide at cSHAKE256 (decisions/spec.md SPEC-5)
+Nanodregg.Spec.run_two_rotations._native.native_decide.ax_1_1	Nanodregg.Spec.run_two_rotations._native.native_decide.ax_1_1	the auxiliary axiom native_decide declares for run_two_rotations
+Nanodregg.Spec.floor_oneHistory_pair	Nanodregg.Spec.run_two_rotations._native.native_decide.ax_1_1	built on run_two_rotations, a fact about the deployed run (SPEC-5)

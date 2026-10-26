@@ -134,3 +134,25 @@ moved) or B3 (a law judged a step). Those need a run with a well and an object; 
 the witness should be chosen by which case it inhabits.
 
 **Status.** open; richer run owed (value, law, a deferred envelope, a settled command).
+
+## SPEC-6 A1's proof sharpens `step_world` inside Spec; B2's floor must be a non-reachable World (2026-10-26)
+
+**Decision.** `top_oneHistory_member` rests on `step_world_start` (`Spec/Proofs/Member.lean`): the
+third arm of `Protocol.Proofs.FollowHead.step_world` ("an adopt, from a World `atGenesis`") with the
+adopt's evidence carried (the continuation's parsed `adopt INV KEY`, `adoptPin`, `Thin.accept`, the
+origin check). It lives in Spec, not Protocol, because Spec is its only consumer today.
+
+**Found (INFERRED from `admit_value`, `refuse_sumOf`).** Every World a fold reaches from a genesis
+World has value sum 0 in every denomination: the system is closed. So B2's floor cannot use a
+reachable World on either side; its refuting start must be a canonical World no fold reaches (or the
+trivial kernel must be a copy of `World.admit` without `checkValue` with an unbalanced Turn).
+
+**Alternatives.** Land `step_world_start` in Protocol beside `step_world` (cross-layer, and two
+statements of one fact until `step_world` is restated as its corollary).
+
+**CRITIQUE.** A Protocol reader extending the adopt arm will not see the Spec lemma that pins it;
+the next change to `Command.step` breaks Spec, which is the point, but far from the change.
+
+**META-CRITIQUE.** Kept in my own directory to avoid a cross-layer landing: convenience.
+
+**Status.** open; `step_world` restated as a corollary is PROTOCOL's to take.
