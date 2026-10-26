@@ -1,0 +1,5 @@
+# build outputs of testground/build/build.sh: the kernel re-emits on every change to its closure,
+# and world/ is copied from the tree's own world/ beside the page
+kernel.mjs
+kernel.wasm
+world/

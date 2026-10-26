@@ -52,6 +52,13 @@ a.hex, a.cmd { color: var(--link); cursor: pointer; text-decoration: underline; 
 .dialog .body > div { display: grid; grid-template-columns: 40px 1fr; gap: 10px; align-items: start; }
 .dialog .mark { width: 32px; height: 32px; border-radius: 50%; background: var(--bad); color: #fff; font: bold 22px/32px var(--ui); text-align: center; }
 .dialog .mark.warn { background: #c08000; }
+.dialog .mark.okm { background: var(--ok); }
+.log .lied { color: var(--bad); }
+.log .row.sel .lied { color: #ffb0b0; }
+fieldset.writer { margin: 8px 0 0; border: 2px groove var(--face); padding: 6px 8px; display: grid; gap: 6px; }
+fieldset.writer legend { font-weight: bold; padding: 0 4px; }
+fieldset.writer select { font: 12px var(--ui); color: var(--text); background: var(--field); }
+fieldset.writer button.btn { padding: 1px 6px; margin: 1px; }
 .dialog .name { font: bold 15px var(--mono); margin: 2px 0 6px; }
 .dialog .actions { grid-column: 1 / -1; text-align: right; }
 #taskbar { position: fixed; left: 0; right: 0; bottom: 0; height: 32px; background: var(--face); border-top: 2px solid var(--hi); display: flex; align-items: center; gap: 4px; padding: 2px 4px; }

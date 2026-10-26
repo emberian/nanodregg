@@ -24,8 +24,15 @@ export async function loadKernel(factory) {
     try { return out(f(...flat)); } finally { ptrs.forEach((p) => K._free(p)); }
   };
   const table = JSON.parse(dec.decode(out(K._w_table())));
+  const lies = JSON.parse(dec.decode(out(K._w_lies())));
   return {
-    table,
+    table, lies,
+    // the lying writer (Web.Sim.Testground: the rows' own plants), a cold follow, a hostile client
+    lie: (name) => call(K._w_lie, enc.encode(name)),
+    lied: () => K._w_lied() === 1,
+    cold: (i) => call(K._w_cold, i),
+    forge: (i, argv, seed, next) => call(K._w_forge, i, argv, seed, next),
+    text: (name) => call(K._w_text, enc.encode(name)),
     genesis: (b) => call(K._w_genesis, b),
     host: (op, p) => call(K._w_host, op, p),
     follow: (i, op, p) => call(K._w_follow, i, op, p),
@@ -99,7 +106,7 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null } = {}) {
   const C = codec(K.table), N = names(K.table), T = K.table;
   const ok = N.status.ok;
   const reply = (b) => ({ status: b[0], payload: b.slice(1) });
-  const sendHost = (who, op, p) => { const r = K.host(op, p); onFrame({ who, to: 'writer', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]], payload: r.slice(1) }); return r; };
+  const sendHost = (who, op, p) => { const r = K.host(op, p); onFrame({ who, to: 'writer', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]], payload: r.slice(1), lied: K.lied ? K.lied() : false }); return r; };
   const sendFollow = (who, i, op, p) => { const r = K.follow(i, op, p); onFrame({ who, to: 'follow', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]] }); return r; };
   const signResult = (cu, keyI, nextI, msg) => cat(Uint8Array.of(ok), C.write(T.signResult, { key: cu.pub(keyI), next: cu.pub(nextI), signature: cu.sign(keyI, msg) }));
 
@@ -127,6 +134,7 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null } = {}) {
         case 'signIncoming': st = await resume(m, st.k, signResult(m.custody, 1, 2, st.message)); break;
         case 'host': st = await resume(m, st.k, sendHost(m.name, st.op, st.payload)); break;
         case 'submit': {
+          m.last = st.call;   // the attempt store's frozen bytes: what `cancel CALL` names
           if (beforeSubmit) await beforeSubmit(m, argv, st.call);
           st = await resume(m, st.k, await drive(m, st.call, depth));
           break;
@@ -174,7 +182,19 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null } = {}) {
     const hit = T.settleSeen.find(([w]) => w === text.split(' ')[0]);
     return hit ? { seen: hit[1], text } : null;
   }
-  return { run };
+  // a hostile client (Protocol.Rows.Loopback.forgedCall in the kernel): the argv planned on the
+  // member's World WITHOUT its follow's admission, signed with its own seed, sent once; the writer's
+  // word is the outcome
+  function forge(m, argv) {
+    const argvB = argv.map((a) => (a instanceof Uint8Array ? a : enc.encode(a)));
+    const r = K.forge(m.index, C.write(T.command, { argv: argvB }, T.bounds.argvBytesMax), m.custody.seeds[0], m.custody.seeds[1]);
+    if (r[0] !== ok) return { exit: 'refused', stdout: '', stderr: `refused ${dec.decode(r.slice(1))}\n` };
+    m.last = r.slice(1);
+    const h = sendHost(m.name, N.op.submit, m.last);
+    const said = N.statusName[h[0]];
+    return { exit: said === 'ok' ? 'ok' : said, stdout: '', stderr: said === 'ok' ? '' : `${said} ${dec.decode(h.slice(1))}\n`, forged: true };
+  }
+  return { run, forge };
 }
 
 // ---- a World in the tab: genesis with fresh founders ----

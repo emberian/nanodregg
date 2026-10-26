@@ -602,6 +602,31 @@ def coldFault : Fault → Bool
   | .flipEvent _ | .dropLastEvent | .cold | .inflateExpired _ | .forgeCancel => true
   | _ => false
 
+/-- `lieCancel`: the relay keeps a `cancel` from the writer and answers it `refused cancelled` itself
+(PROTOCOL-71); `none` for any other fault or op (the frame goes to the writer). -/
+def cancelLie (fault : Fault) (op : Op) : Option ByteArray :=
+  match fault, op with
+  | .lieCancel, .cancel => some (ByteArray.mk #[Status.refused.code] ++
+      (Receive.Refusal.cancelled : Receive.Refusal D).name.toUTF8)
+  | _, _ => none
+
+/-- Whether the relay forwards a submit to the writer (`neverForward`: it never does). -/
+def forwards : Fault → Bool
+  | .neverForward => false
+  | _ => true
+
+/-- The faults under which the writer commits an attempt's FIRST submit and its reply is lost. -/
+def losesFirstReply : Fault → Bool
+  | .dropReply | .lieLookup => true
+  | _ => false
+
+/-- `lieLookup`: the Host's lookup `ok` for a committed call rewritten as `refused stale`
+(PROTOCOL-46: the Host hints, follow settles); any other reply as it is. -/
+def lookupLie (fault : Fault) (reply : ByteArray) : ByteArray :=
+  match fault, Command.hostReply reply with
+  | .lieLookup, some (.ok, _) => ByteArray.mk #[Status.refused.code] ++ "stale".toUTF8
+  | _, _ => reply
+
 /-! ## The attempt store -/
 
 /-- A reply, as the attempt decision sees it (its status byte; no reply at all is `lost`). -/
@@ -731,10 +756,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           | _, _ => resume name argv fault depth k r fuel
       | some (.host op p k) =>
           -- `lieCancel`: the relay keeps the cancel from the writer and answers it `refused cancelled`
-          let lie : Option ByteArray := match fault, op with
-            | .lieCancel, .cancel => some (ByteArray.mk #[Status.refused.code] ++
-                (Receive.Refusal.cancelled : Receive.Refusal D).name.toUTF8)
-            | _, _ => none
+          let lie : Option ByteArray := cancelLie (D := D) fault op
           match ← (match lie with | some r => pure (some r) | none => ask op p) with
           | none => pure (.refused "writerStopped", "")
           | some res =>
@@ -794,24 +816,20 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
       let a := Attempt.next (decide (sends < Bounds.sendsMax)) last
       match a with
       | .submit =>
-          match fault with
-          | .neverForward => drive name call fault depth fuel (sends + 1) (some (.submit, .lost)) reply host said
-          | _ =>
+          if !forwards fault then drive name call fault depth fuel (sends + 1) (some (.submit, .lost)) reply host said
+          else
               match ← ask .submit call with
               | none => pure (.error "writerStopped")
               | some res =>
-                  match fault, sends with
-                  | .dropReply, 0 | .lieLookup, 0 =>
+                  if losesFirstReply fault && sends = 0 then
                       drive name call fault depth fuel (sends + 1) (some (.submit, .lost)) reply host said
-                  | _, _ =>
+                  else
                       drive name call fault depth fuel (sends + 1) (some (.submit, hostSaid res)) (some res) (some (hostSaid res)) said
       | .lookup =>
           match ← ask .lookup call with
           | none => pure (.error "writerStopped")
           | some res =>
-              let res := match fault, Command.hostReply res with
-                | .lieLookup, some (.ok, _) => ByteArray.mk #[Status.refused.code] ++ "stale".toUTF8
-                | _, _ => res
+              let res := lookupLie fault res
               drive name call fault depth fuel sends (some (.lookup, hostSaid res)) (some res)
                 (some (hostSaid res)) said
       | .confirm | .probe =>
@@ -962,23 +980,29 @@ def dropAnchor : List String → List String
   | ["sync", "--to", _] => ["sync"]
   | av => av
 
+/-- A hostile client's call: `av` parsed and planned on the World `w` as it stands, under the member
+`self` whose current and next public keys are `key` and `next`, and signed by `sign`, WITHOUT follow's
+own admission (`planUnchecked`, the range reads `signedReads` lists); `refused NAME`'s name otherwise. -/
+def forgedCall (X : Ctx D) (self : Self D) (w : World D) (key next : ByteArray)
+    (sign : ByteArray → ByteArray) (av : List String) : Except String ByteArray :=
+  match parse (D := D) X.digestOf (av.map String.toUTF8) with
+  | .error r => .error r.name
+  | .ok cmd =>
+    match body X self w ⟨key, next, ByteArray.empty⟩ cmd >>= fun b =>
+        signedReads X w cmd >>= fun rs => planUnchecked X self w key rs b with
+    | .error r => .error r.name
+    | .ok (u, _) => .ok (X.callBytes ⟨u, sign (X.callMessage u)⟩)
+
 /-- The actor's command planned on its follow's World as it stands (no catching up: the World of its
 last command), signed and submitted WITHOUT follow's own admission (`planUnchecked`, with the range
 reads `signedReads` lists there). The outcome is the writer's answer. -/
 def forged (who : String) (av : List String) : M D (Expect × String) := do
   let a ← actor who
-  let X ← X
-  let w := a.follow.world
   let R ← params
-  let key := R.pub (a.key who)
-  match parse (D := D) X.digestOf (av.map String.toUTF8) with
-  | .error r => pure (.refused r.name, "")
-  | .ok cmd =>
-    match body X a.self w ⟨key, R.pub (a.next who), ByteArray.empty⟩ cmd >>= fun b =>
-        signedReads X w cmd >>= fun rs => planUnchecked X a.self w key rs b with
-    | .error r => pure (.refused r.name, "")
-    | .ok (u, _) =>
-      let call := X.callBytes ⟨u, R.sign (a.key who) (X.callMessage u)⟩
+  match forgedCall (← X) a.self a.follow.world (R.pub (a.key who)) (R.pub (a.next who))
+      (R.sign (a.key who)) av with
+  | .error r => pure (.refused r, "")
+  | .ok call =>
       sawCall who call
       -- the forged call is the actor's last: `retry` looks it up, `resubmit` sends it again
       setActor who { a with last := some call }

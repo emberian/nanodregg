@@ -17,6 +17,12 @@ extern lean_object* tg_pub(lean_object*);
 extern lean_object* tg_sign(lean_object*, lean_object*);
 extern lean_object* tg_table(lean_object*);
 extern uint8_t tg_attempt(uint8_t, uint8_t, uint8_t);
+extern lean_object* tg_lie(lean_object*);
+extern lean_object* tg_lied(lean_object*);
+extern lean_object* tg_lies(lean_object*);
+extern lean_object* tg_cold(uint32_t);
+extern lean_object* tg_forge(uint32_t, lean_object*, lean_object*, lean_object*);
+extern lean_object* tg_text(lean_object*);
 lean_object* initialize_nanodregg_Web_Sim_Testground(uint8_t builtin);
 void lean_initialize_runtime_module(void);
 void lean_io_mark_end_initialization(void);
@@ -58,8 +64,20 @@ EMSCRIPTEN_KEEPALIVE int32_t w_follow(uint32_t i, uint32_t op, const uint8_t* p,
 EMSCRIPTEN_KEEPALIVE int32_t w_pub(const uint8_t* p, size_t n) { return take(tg_pub(ba(p, n))); }
 EMSCRIPTEN_KEEPALIVE int32_t w_sign(const uint8_t* s, size_t sn, const uint8_t* m, size_t mn) { return take(tg_sign(ba(s, sn), ba(m, mn))); }
 EMSCRIPTEN_KEEPALIVE int32_t w_attempt(uint32_t left, uint32_t req, uint32_t seen) { return tg_attempt((uint8_t)left, (uint8_t)req, (uint8_t)seen); }
-EMSCRIPTEN_KEEPALIVE int32_t w_table(void) {
-  lean_object* s = tg_table(lean_box(0));
+EMSCRIPTEN_KEEPALIVE int32_t w_lie(const uint8_t* p, size_t n) { return io_take(tg_lie(ba(p, n))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_lied(void) {
+  lean_object* r = tg_lied(lean_box(0));
+  if (lean_io_result_is_error(r)) { lean_dec(r); return -1; }
+  int32_t v = (int32_t)lean_unbox(lean_io_result_get_value(r));
+  lean_dec(r);
+  return v;
+}
+EMSCRIPTEN_KEEPALIVE int32_t w_cold(uint32_t i) { return io_take(tg_cold(i)); }
+EMSCRIPTEN_KEEPALIVE int32_t w_forge(uint32_t i, const uint8_t* a, size_t an, const uint8_t* s, size_t sn, const uint8_t* x, size_t xn) {
+  return io_take(tg_forge(i, ba(a, an), ba(s, sn), ba(x, xn)));
+}
+EMSCRIPTEN_KEEPALIVE int32_t w_text(const uint8_t* p, size_t n) { return take(tg_text(ba(p, n))); }
+static int32_t take_string(lean_object* s) {
   free(out_buf);
   out_len = lean_string_size(s) - 1;
   out_buf = malloc(out_len + 1);
@@ -67,3 +85,5 @@ EMSCRIPTEN_KEEPALIVE int32_t w_table(void) {
   lean_dec(s);
   return (int32_t)out_len;
 }
+EMSCRIPTEN_KEEPALIVE int32_t w_lies(void) { return take_string(tg_lies(lean_box(0))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_table(void) { return take_string(tg_table(lean_box(0))); }
