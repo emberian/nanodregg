@@ -70,13 +70,19 @@ structure Frame (E : Env D) (w w' : World D) (t : Turn D) : Prop where
       then (w.journalAt E k).filter (kept (w.height + 1)) else w.journalAt E k
   refusals : w.RefusalsCanon E → ∀ k,
     w'.refusalAt E k = if (w.height + 1) % Bounds.windowMax = 0
-      then (w.refusalAt E k).filter (keptRefusal (w.height + 1) k) else w.refusalAt E k
+      then (w.refusalAt E k).filter (keptRefusal (w.height + 1) (.refusal k)) else w.refusalAt E k
+  /-- the meter (KERNEL-68): every meter leaf but the turn's own — its member's, in the window it
+  lands in, which is in its footprint as its cells are — as before up to the prune (at a multiple of
+  `windowMax` a leaf of any other window is gone) -/
+  meter : w.RefusalsCanon E → ∀ m win, MeterSlot.ticks m win ≠ .ticks t.member (refusalWindow (w.height + 1)) →
+    w'.meterAt E (.ticks m win) = if (w.height + 1) % Bounds.windowMax = 0 ∧ win ≠ refusalWindow (w.height + 1)
+      then none else w.meterAt E (.ticks m win)
 
 /-- **The frame rule.** Every admitted turn frames its footprint. -/
 theorem admit_Frame {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E w t = .ok w') :
     Frame E w w' t := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
-  refine ⟨fun s hs => ?_, fun hr s hs => ?_, fun hc k hne => ?_, fun hc k => ?_⟩
+  refine ⟨fun s hs => ?_, fun hr s hs => ?_, fun hc k hne => ?_, fun hc k => ?_, fun hc m win hk => ?_⟩
   · show (commitTrie E w t posts).get _ _ = _
     cases s with
     | cell c =>
@@ -108,8 +114,8 @@ theorem admit_Frame {E : Env D} {w w' : World D} {t : Turn D} (h : World.admit E
             fun key hs' e => hs (by rw [e]; exact .head hx hne hs')⟩)]
   · rw [commit_journalAt hc, if_neg hne]
   · unfold World.refusalAt
-    rw [commit_refusals]
-    exact pruneRefusals_get hc k
+    rw [commit_refusals, pruneRefusals_get (commitMeter_canon hc), commitMeter_get_refusal]
+  · exact commit_meterAt_ne hc m win hk
 
 /-! ## The read set: what `check` reads (the locality half, `Kernel.Proofs.Local.check_local`) -/
 
@@ -155,6 +161,10 @@ structure Agree (E : Env D) (w w' : World D) (t : Turn D) : Prop where
   allowance : w'.allowance = w.allowance
   journal : w'.journalAt E t.txId = w.journalAt E t.txId
   refusal : w'.refusalAt E (.tx t.txId) = w.refusalAt E (.tx t.txId)
+  /-- the turn's member's meter leaf in the window it lands in (`checkTicks`, KERNEL-68): the read
+  set grew by the one leaf `check` now reads -/
+  meter : w'.meterAt E (.ticks t.member (refusalWindow (w.height + 1))) =
+    w.meterAt E (.ticks t.member (refusalWindow (w.height + 1)))
   rows : RowsAgree E w w' t
 
 omit [Ord D] [DecidableEq D] in
@@ -186,7 +196,7 @@ private def toothCell : Cell := ⟨0, .ram, []⟩
 /-- From genesis (height 0): bear `toothCell` at `c`, touch nothing, pay the exact weight. -/
 private def bornTurn (c : D) : Turn D :=
   { txId := c, notBefore := 1, validUntil := 1, touches := [], creates := [(c, toothCell)],
-    nullifiers := [], charge := 170, event := ByteArray.empty }
+    nullifiers := [], charge := 210, event := ByteArray.empty, member := c }
 
 /-- **Tooth: `born` is in the cells' footprint.** From genesis a turn bearing one cell is admitted,
 and the frame over the footprint without `born` (the cells of non-`keep` touches, and the
@@ -195,11 +205,11 @@ theorem cellFoot_needs_born (E : Env D) (o c : D) :
     ∃ w w' t, World.admit E w t = .ok w' ∧
       ¬ ∀ s, (∀ x ∈ t.touches, x.act ≠ .keep → s ≠ .cell x.cell) → (∀ n ∈ t.nullifiers, s ≠ .nullifier n) →
         w'.trie.get (trieSpec E) s = w.trie.get (trieSpec E) s := by
-  have hc : check E (World.genesis E o 170) (bornTurn c) = .ok [] := rfl
-  refine ⟨_, _, bornTurn c, show World.admit E _ _ = .ok (commit E (World.genesis E o 170) (bornTurn c) []) by
+  have hc : check E (World.genesis E o 210) (bornTurn c) = .ok [] := rfl
+  refine ⟨_, _, bornTurn c, show World.admit E _ _ = .ok (commit E (World.genesis E o 210) (bornTurn c) []) by
     unfold World.admit; rw [hc], fun hall => ?_⟩
   have h := hall (.cell c) (fun x hx => by simp [bornTurn] at hx) (fun n hn => by simp [bornTurn] at hn)
-  rw [show (commit E (World.genesis E o 170) (bornTurn c) []).trie = commitTrie E (World.genesis E o 170) (bornTurn c) []
+  rw [show (commit E (World.genesis E o 210) (bornTurn c) []).trie = commitTrie E (World.genesis E o 210) (bornTurn c) []
     from rfl, commitTrie_eq] at h
   change (Trie.T.empty.insert (trieSpec E) (.cell c) (.entry (.live toothCell 0))).get (trieSpec E) (.cell c) =
     none at h
@@ -208,15 +218,15 @@ theorem cellFoot_needs_born (E : Env D) (o c : D) :
 
 /-- A World holding one live cell `p` with one declared relation `0` under it (no rows, limit 1). -/
 private def rowWorld (E : Env D) (o p : D) : World D :=
-  { World.genesis E o 250 with
+  { World.genesis E o 290 with
     trie := (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live toothCell 0))
     rows := (Trie.T.empty : Rows D).insert (rowSpec E) (.head p 0) (.head 0 0 1 0 0 false 0) }
 
 /-- Pin `p` (`keep`) and insert one row into its relation `0`, paying the exact weight. -/
 private def rowTurn (E : Env D) (o p : D) : Turn D :=
   { txId := o, notBefore := 1, validUntil := 1, touches := [⟨p, pinOf E (some (.live toothCell 0)), .keep⟩], creates := [],
-    nullifiers := [], charge := 250, event := ByteArray.empty,
-    rows := [⟨.row ⟨p, 0, ByteArray.empty⟩, none, .insert 0 ByteArray.empty⟩] }
+    nullifiers := [], charge := 290, event := ByteArray.empty,
+    rows := [⟨.row ⟨p, 0, ByteArray.empty⟩, none, .insert 0 ByteArray.empty⟩], member := o }
 
 /-- **Tooth: `head` is in the rows' footprint.** A turn inserting one row is admitted on canonical
 rows, and the frame over the footprint without `head` (the non-`keep` row touches' slots, and the

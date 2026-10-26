@@ -239,7 +239,7 @@ theorem checkPins_error_never_admitted {X : Ctx D} {w : World D} {c : Call D} {r
     {t : Turn D} (ht : receive X w c = .ok t) : ∀ w', World.admit X.env w t ≠ .ok w' := by
   intro w' ha
   have hd := receive_derived ht
-  obtain ⟨-, d, -, hs⟩ := receiveWith_sealed (receive_ok_with ht).2
+  obtain ⟨-, d, _k, -, hs⟩ := receiveWith_sealed (receive_ok_with ht).2
   obtain ⟨rts, hrts, hrows, hranges⟩ := sealTurn_rows hs
   have hok : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges = .ok () := by
     refine checkPins_ok_iff.mpr ⟨fun p hp' => ?_, fun p hp' key hk => ?_,

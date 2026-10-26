@@ -113,28 +113,51 @@ theorem refuse_refusalAt {E : Env D} {w w' : World D} {r : Refused D} (h : World
   obtain ⟨_, rfl⟩ := refuse_ok h
   unfold World.refusalAt
   rw [commitRefusal_refusals, Trie.get_insert, Trie.get_insert, Trie.get_insert]
+  simp only [WindowSlot.refusal.injEq]
 
 /-- The refusals after an admission, read at any key: at a multiple of `windowMax`, the leaf if it is
 kept; otherwise the leaf (on a canonical trie). -/
 theorem admit_refusalAt {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
     (h : World.admit E w t = .ok w') (k : RefusalSlot D) :
     w'.refusalAt E k =
-      if (w.height + 1) % Bounds.windowMax = 0 then (w.refusalAt E k).filter (keptRefusal (w.height + 1) k)
+      if (w.height + 1) % Bounds.windowMax = 0 then
+        (w.refusalAt E k).filter (keptRefusal (w.height + 1) (.refusal k))
       else w.refusalAt E k := by
   obtain ⟨_, _, rfl⟩ := admit_ok h
   unfold World.refusalAt
-  rw [commit_refusals, pruneRefusals_get hc]
+  rw [commit_refusals, pruneRefusals_get (commitMeter_canon hc), commitMeter_get_refusal]
+
+/-- **The meter after an admission, at any meter key but the turn's own** (KERNEL-68): as before, up
+to the prune. The meter's own kind's `admit_refusalAt`; the turn's own leaf is `admit_meterAt_self`. -/
+theorem admit_meterAt {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
+    (h : World.admit E w t = .ok w') (m : D) (win : UInt64)
+    (hk : MeterSlot.ticks m win ≠ .ticks t.member (refusalWindow (w.height + 1))) :
+    w'.meterAt E (.ticks m win) =
+      if (w.height + 1) % Bounds.windowMax = 0 ∧ win ≠ refusalWindow (w.height + 1) then none
+      else w.meterAt E (.ticks m win) := by
+  obtain ⟨_, _, rfl⟩ := admit_ok h
+  exact commit_meterAt_ne hc m win hk
+
+/-- **The turn's own meter leaf after an admission** (KERNEL-68): untouched when it spent no ticks,
+else bumped by what it spent. -/
+theorem admit_meterAt_self {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
+    (h : World.admit E w t = .ok w') :
+    w'.meterAt E (.ticks t.member (refusalWindow (w.height + 1))) =
+      if t.ticks = 0 then w.meterAt E (.ticks t.member (refusalWindow (w.height + 1)))
+      else some (ticksUsed E w t.member + t.ticks) := by
+  obtain ⟨_, _, rfl⟩ := admit_ok h
+  exact commit_meterAt_self hc
 
 /-! ## The invariant -/
 
-/-- The refusals trie is canonical, and every leaf it holds fits the World's height
-(`refusalFits`). -/
+/-- The window trie is canonical, and every leaf it holds — of either kind, a refusal-window leaf or
+a meter leaf (KERNEL-68) — fits the World's height (`refusalFits`). -/
 def World.RefusalsOk (E : Env D) (w : World D) : Prop :=
-  w.RefusalsCanon E ∧ ∀ k l, w.refusalAt E k = some l → refusalFits w.height k l = true
+  w.RefusalsCanon E ∧ ∀ k l, w.refusals.get (refusalSpec E) k = some l → refusalFits w.height k l = true
 
 theorem refusalsOk_of_empty {E : Env D} {w : World D} (h : w.refusals = .empty) : w.RefusalsOk E := by
   refine ⟨by unfold World.RefusalsCanon; rw [h]; exact Trie.canon_empty _ 0, fun k l hk => ?_⟩
-  unfold World.refusalAt at hk; rw [h] at hk; cases hk
+  rw [h] at hk; cases hk
 
 theorem genesis_refusalsOk (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).RefusalsOk E :=
   refusalsOk_of_empty rfl
@@ -160,10 +183,10 @@ theorem windowMax_pos : 0 < Bounds.windowMax := by decide
 
 omit [Ord D] [DecidableEq D] in
 /-- One height on, a leaf that fits still fits, unless this height prunes it. -/
-theorem refusalFits_succ {H : Nat} {k : RefusalSlot D} {l : RefusalLeaf D} (hf : refusalFits H k l = true)
+theorem refusalFits_succ {H : Nat} {k : WindowSlot D} {l : RefusalLeaf D} (hf : refusalFits H k l = true)
     (hk : (H + 1) % Bounds.windowMax = 0 → keptRefusal (H + 1) k l = true) :
     refusalFits (H + 1) k l = true := by
-  cases k <;> cases l <;> simp only [refusalFits, decide_eq_true_eq, Bool.false_eq_true] at hf ⊢
+  rcases k with k | k <;> cases k <;> cases l <;> simp only [refusalFits, decide_eq_true_eq, Bool.false_eq_true] at hf ⊢
   · rename_i id hh code
     refine ⟨hf.1, by omega, ?_, hf.2.2.2.1, hf.2.2.2.2⟩
     by_cases hz : (H + 1) % Bounds.windowMax = 0
@@ -191,18 +214,62 @@ theorem refusalFits_succ {H : Nat} {k : RefusalSlot D} {l : RefusalLeaf D} (hf :
       unfold refusalWindow
       congr 1
       rw [windowMax_eq] at hz ⊢; omega
+  · rename_i m win n
+    refine ⟨?_, hf.2.1, hf.2.2⟩
+    by_cases hz : (H + 1) % Bounds.windowMax = 0
+    · have := hk hz
+      simpa [keptRefusal] using this
+    · rw [hf.1]
+      unfold refusalWindow
+      congr 1
+      rw [windowMax_eq] at hz ⊢; omega
 
 /-- **The invariant holds after every admission.** -/
 theorem admit_refusalsOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.RefusalsOk E)
     (h : World.admit E w t = .ok w') : w'.RefusalsOk E := by
   refine ⟨admit_refusalsCanon hw.1 h, fun k l hk => ?_⟩
   rw [admit_height h]
-  rw [admit_refusalAt hw.1 h k] at hk
-  split at hk
-  · rw [Option.filter_eq_some_iff] at hk
-    exact refusalFits_succ (hw.2 k l hk.1) (fun _ => hk.2)
-  · rename_i hz
-    exact refusalFits_succ (hw.2 k l hk) (fun h' => absurd h' hz)
+  obtain ⟨posts, hck, rfl⟩ := admit_ok h
+  rcases k with k | k
+  · -- the refusal window: as before, up to the prune
+    have hk' : (commit E w t posts).refusalAt E k = some l := hk
+    rw [admit_refusalAt hw.1 h k] at hk'
+    split at hk'
+    · rw [Option.filter_eq_some_iff] at hk'
+      exact refusalFits_succ (hw.2 _ l hk'.1) (fun _ => hk'.2)
+    · rename_i hz
+      exact refusalFits_succ (hw.2 _ l hk') (fun h' => absurd h' hz)
+  · -- the meter (KERNEL-68): the turn's own leaf is untouched or bumped within `ticksPerWindow`
+    -- (`checkTicks`); every other meter leaf is as before, up to the prune
+    obtain ⟨m, win⟩ := k
+    rw [commit_refusals, pruneRefusals_get (commitMeter_canon hw.1)] at hk
+    by_cases hown : MeterSlot.ticks m win = .ticks t.member (refusalWindow (w.height + 1))
+    · cases hown
+      unfold commitMeter at hk
+      by_cases ht : t.ticks = 0
+      · simp only [ht, ↓reduceIte] at hk
+        split at hk
+        · rw [Option.filter_eq_some_iff] at hk
+          exact refusalFits_succ (hw.2 _ l hk.1) (fun _ => hk.2)
+        · rename_i hz
+          exact refusalFits_succ (hw.2 _ l hk) (fun h' => absurd h' hz)
+      · simp only [ht, ↓reduceIte, Trie.get_insert_self] at hk
+        have hl : l = .count (ticksUsed E w t.member + t.ticks) := by
+          split at hk
+          · rw [Option.filter_eq_some_iff] at hk; exact (Option.some.inj hk.1).symm
+          · exact (Option.some.inj hk).symm
+        subst hl
+        have hb := hck.ticks
+        unfold checkTicks at hb
+        rw [req_ok, decide_eq_true_eq] at hb
+        simp only [refusalFits, decide_eq_true_eq]
+        exact ⟨trivial, by omega, hb⟩
+    · rw [commitMeter_get_meter_ne hown] at hk
+      split at hk
+      · rw [Option.filter_eq_some_iff] at hk
+        exact refusalFits_succ (hw.2 _ l hk.1) (fun _ => hk.2)
+      · rename_i hz
+        exact refusalFits_succ (hw.2 _ l hk) (fun h' => absurd h' hz)
 
 /-- **The invariant holds after every recorded refusal**: the new leaf fits (refused at the next
 height, below `2^64` because its window is), the member's count stays within the budget. -/
@@ -213,6 +280,15 @@ theorem refuse_refusalsOk {E : Env D} {w w' : World D} {r : Refused D} (hw : w.R
   have hvlt := (refusedBounds_lt hb).2.1
   refine ⟨refuse_refusalsCanon hw.1 h, fun k l hk => ?_⟩
   rw [(refuse_frame h).2.2.1]
+  rcases k with k | k
+  case meter =>
+    -- a refusal writes no meter leaf (KERNEL-68): the three inserts are at refusal-window keys
+    obtain ⟨_, rfl⟩ := refuse_ok h
+    rw [commitRefusal_refusals, Trie.get_insert_ne _ _ _ (by intro he; cases he),
+      Trie.get_insert_ne _ _ _ (by intro he; cases he), Trie.get_insert_ne _ _ _ (by intro he; cases he)] at hk
+    exact hw.2 _ l hk
+  case refusal =>
+  have hk : w'.refusalAt E k = some l := hk
   rw [refuse_refusalAt h k] at hk
   split at hk
   · rename_i he
@@ -232,7 +308,7 @@ theorem refuse_refusalsOk {E : Env D} {w w' : World D} {r : Refused D} (hw : w.R
       simp only [refusalFits, decide_eq_true_eq, counterLimit_eq]
       have := windowMax_pos
       omega
-    · exact hw.2 k l hk
+    · exact hw.2 (.refusal k) l hk
 
 theorem step_refusalsOk {E : Env D} {w w' : World D} {s : Step D} (hw : w.RefusalsOk E)
     (h : World.step E w s = .ok w') : w'.RefusalsOk E := by
@@ -341,10 +417,12 @@ theorem refusalsDisjoint_iff {E : Env D} {w : World D} (hc : w.RefusalsCanon E) 
   rw [List.all_eq_true]
   constructor
   · intro h id hh code mb hr
-    have := h (.tx id, .refused hh code mb) ((Trie.mem_toList (refusalSpec E) 0 w.refusals hc.1 _ _).mpr hr)
+    have := h (.refusal (.tx id), .refused hh code mb) ((Trie.mem_toList (refusalSpec E) 0 w.refusals hc.1 _ _).mpr hr)
     simpa using this
   · intro h p hp
     obtain ⟨k, l⟩ := p
+    rcases k with k | k
+    case meter => cases k; cases l <;> rfl
     cases k with
     | count m win => cases l <;> rfl
     | total o win => cases l <;> rfl
@@ -397,12 +475,13 @@ theorem fold_refusalsDisjoint {E : Env D} {w w' : World D} {l : List (Step D)} (
 
 /-- PLANT (`refusals_separate`'s tooth): the key bytes without the kind byte. A refused id and the
 count of the member whose id has the same bytes, for window 0, route identically. -/
-private def plantRefusalKeyBytes (E : Env D) : RefusalSlot D → ByteArray
-  | .tx id => E.bytes id ++ Nanodregg.Codec.Stream.nat64.bytes 0
-  | .count m win => E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
-  | .total o win => E.bytes o ++ Nanodregg.Codec.Stream.u64.bytes win
+private def plantRefusalKeyBytes (E : Env D) : WindowSlot D → ByteArray
+  | .refusal (.tx id) => E.bytes id ++ Nanodregg.Codec.Stream.nat64.bytes 0
+  | .refusal (.count m win) => E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
+  | .refusal (.total o win) => E.bytes o ++ Nanodregg.Codec.Stream.u64.bytes win
+  | .meter (.ticks m win) => E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
 
-private def plantRefusalSpec (E : Env D) : Trie.Spec (RefusalSlot D) (RefusalLeaf D) D :=
+private def plantRefusalSpec (E : Env D) : Trie.Spec (WindowSlot D) (RefusalLeaf D) D :=
   { refusalSpec E with bit := fun k => byteBit (plantRefusalKeyBytes E k), kbytes := plantRefusalKeyBytes E }
 
 omit [Ord D] [DecidableEq D] in
@@ -410,7 +489,7 @@ omit [Ord D] [DecidableEq D] in
 every depth, for any digest `d` and any `Env`; so `refusals_separate` rests on the kind byte. -/
 theorem plant_refusals_unseparated (E : Env D) (d : D) : ¬ Trie.Separates (plantRefusalSpec E) := by
   intro h
-  obtain ⟨i, -, hi⟩ := h (.tx d) (.count d 0) (by simp)
+  obtain ⟨i, -, hi⟩ := h (.refusal (.tx d)) (.refusal (.count d 0)) (by simp)
   exact hi rfl
 
 /-! ## Finality: a recorded refusal answers its transaction id while the call could be admitted -/

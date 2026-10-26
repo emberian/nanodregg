@@ -111,18 +111,18 @@ theorem store_turns_le {w w' : World D} {l : List (Step D)} (hb : budgetFault w 
   have h3 := sum_map_ge Turn.logWeight 80 turn_logWeight_ge (Step.turns l)
   omega
 
-/-- **The derived World bound is 91,914,346 bytes**: about 34% of the 2^28 it replaced, whose reopen
+/-- **The derived World bound is 91,965,546 bytes** (KERNEL-68: + `windowMax` meter entries of 50): about 34% of the 2^28 it replaced, whose reopen
 PERF-2 measured at 120.7 s against THE BAR's 60 s. -/
-theorem worldBytesDerived_eq : worldBytesDerived = 91914346 := by decide
+theorem worldBytesDerived_eq : worldBytesDerived = 91965546 := by decide
 
 /-- Under `refusalsFits`, CODEC's transaction count is KERNEL's: a transaction key holds a refused
 leaf. -/
-theorem refusalItemTx_eq {H : Nat} {l : List (RefusalSlot D × RefusalLeaf D)} (h : refusalsFits H l = true) :
+theorem refusalItemTx_eq {H : Nat} {l : List (WindowSlot D × RefusalLeaf D)} (h : refusalsFits H l = true) :
     (l.map Codec.Kernel.refusalItemTx).sum = (l.map refusedOne).sum := by
   rw [List.map_congr_left (g := refusedOne) (fun p hp => ?_)]
   have hq := List.all_eq_true.mp h p hp
   obtain ⟨k, v⟩ := p
-  cases k <;> cases v <;> simp_all [refusalFits, Codec.Kernel.refusalItemTx, refusedOne]
+  rcases k with k | k <;> cases k <;> cases v <;> simp_all [refusalFits, Codec.Kernel.refusalItemTx, refusedOne]
 
 /-- **Every World the deployed writer reaches is in the World codec's domain**: it is `Kept`
 (`kept_fold`), and its three listings are within `worldMax`. Each cell leaf weighs at least 32 and
@@ -141,7 +141,7 @@ theorem reached_codecFits {w w' : World D} {l : List (Step D)} (hb : budgetFault
     cases l <;> simp only [rowEntryWeight, RowLeaf.weight] <;> omega) w'.rows.toList
   have hf := refusals_length_le hk'.refusalsOk hk'.counted
   simp only [World.weight, cellsWeight, rowsWeight, potentialMax, potentialRatio, genesisWeightMax,
-    allowanceMax, Kernel.Bounds.refusalsPerWindowMax] at hw hc hr hf
+    allowanceMax, Kernel.Bounds.refusalsPerWindowMax, Kernel.Bounds.windowMax] at hw hc hr hf
   exact codecFits_of_kept hk' (by unfold Codec.Kernel.worldMax; omega) (by unfold Codec.Kernel.worldMax; omega)
     (by unfold Codec.Kernel.worldMax; omega)
 
@@ -160,13 +160,13 @@ theorem reached_size_le {w w' : World D} {l : List (Step D)} (hb : budgetFault w
   have hs := Codec.Kernel.world_size_le_div Codec.Deployed.digestCodec_lawful.on (fun _ => rfl) hfit
   have hw := budget_reaches hb hk.canon hk.slotted hk.rowsCanon h
   have hj := journal_bounded hk'.journalOk
-  obtain ⟨h1, h2, h3, h4⟩ := refusals_bounded hk'.refusalsOk hk'.counted
+  obtain ⟨h1, h2, h3, h4, h5⟩ := refusals_bounded hk'.refusalsOk hk'.counted
   have hrb := Codec.Kernel.refusalsBytes_le_of_fits hfit.refusalsFits
   rw [refusalItemTx_eq hfit.refusalsFits] at hrb
   unfold Codec.Kernel.journalBytes at hs
   simp only [Cadence.deployed, worldBytesDerived, worldWeightMax, journalBytesMax, refusalsBytesMax,
     potentialMax, Codec.Kernel.entrySlack, Codec.Kernel.worldFixed, potentialRatio, genesisWeightMax,
-    allowanceMax, Kernel.Bounds.windowMax, Kernel.Bounds.refusalsPerWindowMax] at hs hw hj h1 h2 h3 ⊢
+    allowanceMax, Kernel.Bounds.windowMax, Kernel.Bounds.refusalsPerWindowMax] at hs hw hj h1 h2 h3 h5 ⊢
   omega
 
 end Nanodregg.Host.Size

@@ -672,10 +672,21 @@ private theorem foot_cell_disjoint {t₁ t₂ : Turn D} {c : D} (hfoot : RowsCom
       exact not_cellFoot_iff.mpr ⟨fun y hy hyc => absurd (by rw [← hyc]; exact List.mem_map_of_mem hy) (hb₁ _ hc).1,
         (hb₁ _ hc).2⟩
 
+omit [Ord D] [DecidableEq D] in
+/-- A checked turn's ticks are within `treeTicksMax` (`checkBounds`, KERNEL-68). -/
+theorem checkBounds_ticks {t : Turn D} (h : checkBounds t = .ok ()) : t.ticks ≤ Bounds.treeTicksMax := by
+  unfold checkBounds at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, ht, _⟩ := h
+  rw [req_ok, decide_eq_true_eq] at ht
+  exact ht
+
 /-- **The second admission**: after `t₁`, `t₂` passes every check with the touches' results it had
 from `w`, and its rows run from `t₁`'s, reading `view` of both lists. -/
 private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {posts₁ posts₂ : List (Post D)}
-    (hjc : w.JournalCanon E) (hrc : w.RefusalsCanon E)
+    (hjc : w.JournalCanon E) (hro : w.RefusalsOk E)
+    (hmeter : t₁.member = t₂.member → 0 < t₁.ticks → 0 < t₂.ticks →
+      ticksUsed E w t₁.member + t₁.ticks + t₂.ticks ≤ Bounds.ticksPerWindow)
     (hfoot : RowsCommFoot t₁ t₂) (hfit : RowsFitTogether E w.rows t₁ t₂)
     (hwin : w.height + 2 ≤ t₂.validUntil) (hchg : t₁.charge + t₂.charge ≤ w.allowance)
     (hsteps : w.steps + 2 < Bounds.counterLimit)
@@ -726,8 +737,9 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
     rw [hj]
     have hr : (commit E w t₁ posts₁).refusalAt E (.tx t₂.txId) =
         if (w.height + 1) % Bounds.windowMax = 0 then (w.refusalAt E (.tx t₂.txId)).filter
-          (keptRefusal (w.height + 1) (.tx t₂.txId)) else w.refusalAt E (.tx t₂.txId) :=
-      pruneRefusals_get hrc _
+          (keptRefusal (w.height + 1) (.refusal (.tx t₂.txId))) else w.refusalAt E (.tx t₂.txId) := by
+      unfold World.refusalAt
+      rw [commit_refusals, pruneRefusals_get (commitMeter_canon hro.1), commitMeter_get_refusal]
     have hw : ∀ hh code mb, w.refusalAt E (.tx t₂.txId) ≠ some (.refused hh code mb) := by
       intro hh code mb he; rw [he] at h; simp at h
     have hw1 : ∀ hh code mb, (commit E w t₁ posts₁).refusalAt E (.tx t₂.txId) ≠ some (.refused hh code mb) := by
@@ -774,11 +786,75 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
     rw [checkCreates_local hcells]; exact hk₂.creates
   have hst : checkSteps (commit E w t₁ posts₁) = .ok () := by
     unfold checkSteps; rw [req_ok]; exact decide_eq_true (by show w.steps + 1 + 1 < _; omega)
+  -- the meter (KERNEL-68): t₂'s member's leaf in the window t₂ now lands in
+  have hticks' : checkTicks E (commit E w t₁ posts₁) t₂ = .ok () := by
+    have h2 := hk₂.ticks
+    have htm : t₂.ticks ≤ Bounds.treeTicksMax := checkBounds_ticks hk₂.bounds
+    unfold checkTicks ticksUsed at h2 ⊢
+    rw [req_ok, decide_eq_true_eq] at h2 ⊢
+    have hcap : Bounds.treeTicksMax ≤ Bounds.ticksPerWindow := by decide
+    show (World.meterAt E (commit E w t₁ posts₁) (.ticks t₂.member (refusalWindow (w.height + 1 + 1)))).getD 0
+      + t₂.ticks ≤ _
+    by_cases hz : (w.height + 1 + 1) % Bounds.windowMax = 0
+    · -- a new window: no meter leaf of it yet (every leaf's window is `w`'s, `RefusalsOk`)
+      have hwm : Bounds.windowMax = 1024 := rfl
+      have hwin : refusalWindow (w.height + 1 + 1) ≠ refusalWindow (w.height + 1) := by
+        unfold refusalWindow
+        intro he
+        have := congrArg UInt64.toNat he
+        rw [UInt64.toNat_ofNat', UInt64.toNat_ofNat'] at this
+        have hq : (w.height + 1 + 1) / Bounds.windowMax = (w.height + 1) / Bounds.windowMax + 1 := by
+          rw [hwm] at hz ⊢; omega
+        rw [hq] at this
+        omega
+      have hz1 : (w.height + 1) % Bounds.windowMax ≠ 0 := by
+        intro h1; rw [hwm] at hz h1; omega
+      have hw1 : refusalWindow (w.height + 1) = refusalWindow w.height := by
+        unfold refusalWindow; congr 1; rw [hwm] at hz1 ⊢; omega
+      have hne : MeterSlot.ticks t₂.member (refusalWindow (w.height + 1 + 1)) ≠
+          .ticks t₁.member (refusalWindow (w.height + 1)) := fun he => hwin (MeterSlot.ticks.inj he).2
+      rw [commit_meterAt_ne hro.1 _ _ hne]
+      simp only [hz1, false_and, ↓reduceIte]
+      have hnone : w.meterAt E (.ticks t₂.member (refusalWindow (w.height + 1 + 1))) = none := by
+        unfold World.meterAt
+        cases hg : w.refusals.get (refusalSpec E) (.meter (.ticks t₂.member (refusalWindow (w.height + 1 + 1)))) with
+        | none => rfl
+        | some v =>
+            exfalso
+            have hf := hro.2 _ _ hg
+            cases v with
+            | refused _ _ _ => simp [refusalFits] at hf
+            | count n =>
+                simp only [refusalFits, decide_eq_true_eq] at hf
+                rw [← hw1] at hf
+                exact hwin hf.1
+      rw [hnone]; simp only [Option.getD_none, Nat.zero_add]; omega
+    · -- the same window as t₂ was checked in
+      have hsame : refusalWindow (w.height + 1 + 1) = refusalWindow (w.height + 1) := by
+        unfold refusalWindow; congr 1; rw [show Bounds.windowMax = 1024 from rfl] at hz ⊢; omega
+      rw [hsame]
+      by_cases hown : MeterSlot.ticks t₂.member (refusalWindow (w.height + 1)) = .ticks t₁.member (refusalWindow (w.height + 1))
+      · have hm : t₂.member = t₁.member := (MeterSlot.ticks.inj hown).1
+        rw [hown, commit_meterAt_self hro.1]
+        split
+        · rename_i h0; rw [← hown]; exact h2
+        · rename_i h0
+          simp only [Option.getD_some]
+          by_cases h20 : t₂.ticks = 0
+          · rw [h20]; simp only [Nat.add_zero]
+            have := hk₁.ticks
+            unfold checkTicks at this; rw [req_ok, decide_eq_true_eq] at this
+            exact this
+          · exact hmeter hm.symm (Nat.pos_of_ne_zero h0) (Nat.pos_of_ne_zero h20)
+      · rw [commit_meterAt_ne hro.1 _ _ hown]
+        split
+        · rename_i hh; exact absurd rfl hh.2
+        · exact h2
   suffices hw : checkWith E (commit E w t₁ posts₁) t₂ = .ok (posts₂, rr) by unfold check; rw [hw]; rfl
   unfold checkWith
   simp only [except_bind_ok]
   exact ⟨(), hk₂.bounds, (), hwin', (), hjour, (), hk₂.shape, raw, hmap', (), hposts ▸ hk₂.value, (), hnul',
-    (), hremain, (), hranges, rr, hrr, (), hposts ▸ hcharge, (), hcreates, (), hst, by rw [hposts]; rfl⟩
+    (), hremain, (), hranges, rr, hrr, (), hposts ▸ hcharge, (), hcreates, (), hticks', (), hst, by rw [hposts]; rfl⟩
 
 /-! ## Two rains on one bell -/
 
@@ -789,10 +865,12 @@ budget covers together, and with room for two steps: BOTH orders admit, they hol
 and nullifiers and read the same at every rows slot, and every head has moved by the sum of both
 turns' inserts. (On canonical journals and refusals: every reached World's.) -/
 theorem admit_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D}
-    (hjc : w.JournalCanon E) (hrc : w.RefusalsCanon E)
+    (hjc : w.JournalCanon E) (hro : w.RefusalsOk E)
     (hfoot : RowsCommFoot t₁ t₂) (hfit : RowsFitTogether E w.rows t₁ t₂)
     (hwin₁ : w.height + 2 ≤ t₁.validUntil) (hwin₂ : w.height + 2 ≤ t₂.validUntil)
     (hchg : t₁.charge + t₂.charge ≤ w.allowance) (hsteps : w.steps + 2 < Bounds.counterLimit)
+    (hmeter : t₁.member = t₂.member → 0 < t₁.ticks → 0 < t₂.ticks →
+      ticksUsed E w t₁.member + t₁.ticks + t₂.ticks ≤ Bounds.ticksPerWindow)
     (h₁ : World.admit E w t₁ = .ok w₁) (h₂ : World.admit E w t₂ = .ok w₂) :
     ∃ w₁₂ w₂₁, World.admit E w₁ t₂ = .ok w₁₂ ∧ World.admit E w₂ t₁ = .ok w₂₁ ∧
       (∀ s, rowAt E w₁₂.rows s = rowAt E w₂₁.rows s) ∧
@@ -802,8 +880,10 @@ theorem admit_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D}
           sm + insA p rel t₁.rows + insA p rel t₂.rows, l, cap, wd, rt) := by
   obtain ⟨posts₁, hk₁, rfl⟩ := admit_ok h₁
   obtain ⟨posts₂, hk₂, rfl⟩ := admit_ok h₂
-  obtain ⟨hc12, hv12⟩ := check_after hjc hrc hfoot hfit hwin₂ hchg hsteps hk₁ hk₂ (admit_new h₂) h₁
-  obtain ⟨hc21, hv21⟩ := check_after hjc hrc (foot_symm hfoot) (fit_symm hfit) hwin₁ (by omega) hsteps
+  obtain ⟨hc12, hv12⟩ := check_after hjc hro hmeter hfoot hfit hwin₂ hchg hsteps hk₁ hk₂ (admit_new h₂) h₁
+  obtain ⟨hc21, hv21⟩ := check_after hjc hro
+    (fun h a b => by rw [h]; have := hmeter h.symm b a; omega)
+    (foot_symm hfoot) (fit_symm hfit) hwin₁ (by omega) hsteps
     hk₂ hk₁ (admit_new h₁) h₂
   have hd := hfoot.2.2.2.2.2.2.2.2.2.1
   have h₁₂ : World.admit E (commit E w t₁ posts₁) t₂ = .ok (commit E (commit E w t₁ posts₁) t₂ posts₂) := by
@@ -856,7 +936,7 @@ theorem admit_comm_rows {E : Env D} {n : Nat} (hE : E.Lawful n) {w w₁ w₂ w�
 private def rain (id p seen : D) (rel : Nat) (k : ByteArray) (amt : Nat) (v : ByteArray) (h ch : Nat) : Turn D :=
   { txId := id, notBefore := h + 1, validUntil := h + 2, touches := [⟨p, seen, .keep⟩], creates := [],
     nullifiers := [], charge := ch, event := ByteArray.empty,
-    rows := [⟨.row ⟨p, rel, k⟩, none, .insert amt v⟩], ranges := [] }
+    rows := [⟨.row ⟨p, rel, k⟩, none, .insert amt v⟩], ranges := [], member := id }
 
 omit [Ord D] in
 /-- **Tooth 1: two rains on one bell meet the premises.** Two single-insert turns into one relation of

@@ -314,8 +314,9 @@ leaf, the member's window count, then the World's window total, `commitRefusals`
 nodes the three paths share once, cv 01a15107-2281) and the head's empty digest. -/
 def refuse (E : Env D) (w : World D) (r : Refused D) (w' : World D) : Except String Nat := do
   let RS := refusalSpec E
-  let keys : List (RefusalSlot D) :=
-    [.tx r.txId, .count r.member (refusalWindow w.height), .total w.origin (refusalWindow w.height)]
+  let keys : List (WindowSlot D) :=
+    [.refusal (.tx r.txId), .refusal (.count r.member (refusalWindow w.height)),
+     .refusal (.total w.origin (refusalWindow w.height))]
   let t := Trie.insertAll RS w.refusals (keys.map fun k => (k, (w'.refusals.get RS k).getD (.count 0)))
   unless t.hashOf RS == w'.refusalsRoot E do throw "the refusal's inserts do not reach the recorded refusals root"
   pure (batchReq RS keys t + emptyRoots w')

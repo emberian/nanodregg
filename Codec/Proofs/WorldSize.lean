@@ -84,10 +84,10 @@ theorem journalItem_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : D ×
   simp [product, nat64, hdc]
 
 omit [Ord D] in
-theorem refusalItem_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : RefusalSlot D × RefusalLeaf D) :
+theorem refusalItem_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : WindowSlot D × RefusalLeaf D) :
     (product (refusalSlot dc) (refusalLeaf dc)).size p = refusalEntryBytes p := by
   obtain ⟨k, v⟩ := p
-  cases k <;> cases v <;>
+  rcases k with k | k <;> cases k <;> cases v <;>
     simp [product, refusalSlot, refusalSlotWire, refusalLeaf, refusalLeafWire, refine, choice, tagged, nat64,
       u64, hdc, refusalEntryBytes]
 
@@ -232,11 +232,11 @@ theorem world_size_le_div [DecidableEq D] {E : Env D} {PD : D → Prop} {dc : St
 /-! ## The refusals' bytes, from their counts -/
 
 omit [Ord D] in
-theorem refusalItemTx_sum_le : ∀ l : List (RefusalSlot D × RefusalLeaf D), (l.map refusalItemTx).sum ≤ l.length
+theorem refusalItemTx_sum_le : ∀ l : List (WindowSlot D × RefusalLeaf D), (l.map refusalItemTx).sum ≤ l.length
   | [] => by simp
   | (k, v) :: l => by
     have := refusalItemTx_sum_le l
-    cases k <;> simp only [List.map_cons, List.sum_cons, List.length_cons, refusalItemTx] <;> omega
+    rcases k with k | k <;> cases k <;> simp only [List.map_cons, List.sum_cons, List.length_cons, refusalItemTx] <;> omega
 
 /-- **On a listing `refusalsFits` admits, a refused transaction's entry is 82 bytes and every other
 entry (a member's count, the World's total) 50**: `82 · tx + 50 · (length − tx)`. So `refusalsBytes`
@@ -256,7 +256,7 @@ theorem refusalsBytes_eq_of_fits [DecidableEq D] {w : World D}
     have ih := ih (fun q hq => hall q (List.mem_cons_of_mem _ hq))
     have hle := refusalItemTx_sum_le l
     obtain ⟨k, v⟩ := p
-    cases k <;> cases v <;> simp_all [refusalFits, refusalEntryBytes, refusalItemTx] <;> omega
+    rcases k with k | k <;> cases k <;> cases v <;> simp_all [refusalFits, refusalEntryBytes, refusalItemTx] <;> omega
 
 /-- The bound HOST discharges from KERNEL's counts: at most 82 bytes per entry, and 50 per entry that
 is no refused transaction's. -/

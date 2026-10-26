@@ -169,7 +169,7 @@ theorem refused_receipt_notCommitted {dc : Stream D} {name nonce : ByteArray} {a
     check X.env dc cell rb = .error "notCommitted" ∧
       (wA.refusalAt X.env (.tx r.txId) = some (.refused h code m) ∨
         CollidesAmong X.env.hash ([rootsPre X.env r.root r.jroot r.rroot r.rowsroot, wA.rootsPre X.env] ++
-          inclPres (refusalSpec X.env) (refusalPre X.env) (.tx r.txId) (.refused h code m) r.rpath wA.refusals)) := by
+          inclPres (refusalSpec X.env) (refusalPre X.env) (.refusal (.tx r.txId)) (.refused h code m) r.rpath wA.refusals)) := by
   refine ⟨by simp [check, hv, hro, hrb, hk], ?_⟩
   have h0 : (genesisWorld X name nonce a fs).RefusalsOk X.env :=
     refusalsOk_of_empty (by simp [genesisWorld, World.genesis])

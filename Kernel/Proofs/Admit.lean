@@ -41,6 +41,8 @@ structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
   rowsRemain : checkRowsRemain E w t = .ok ()
   ranges : checkRanges E w t = .ok ()
   rows : rowsRun E w t = .ok (rowsAfter E w t)
+  /-- the member's meter this window admits the turn's ticks (KERNEL-68) -/
+  ticks : checkTicks E w t = .ok ()
 
 theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     (h : check E w t = .ok posts) : Checked E w t posts := by
@@ -52,13 +54,13 @@ theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
   unfold checkWith at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, hrr, ⟨⟩, hrg, rr, hrw, ⟨⟩, h7,
-    ⟨⟩, h8, ⟨⟩, hs, h9⟩ := h
+    ⟨⟩, h8, ⟨⟩, hk, ⟨⟩, hs, h9⟩ := h
   simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h9
   obtain ⟨h9, -⟩ := h9
   subst h9
   have ha : rowsAfter E w t = rr := by unfold rowsAfter; rw [hrw]
   rw [← ha] at hrw h7
-  exact ⟨h1, h3, h4, h2, hs, ⟨raw, h5, rfl⟩, hv, h6, h7, h8, hrr, hrg, hrw⟩
+  exact ⟨h1, h3, h4, h2, hs, ⟨raw, h5, rfl⟩, hv, h6, h7, h8, hrr, hrg, hrw, hk⟩
 
 /-- Every touch of a checked turn passed `touchCheck`. -/
 theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}

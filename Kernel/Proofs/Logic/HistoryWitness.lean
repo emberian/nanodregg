@@ -90,7 +90,7 @@ private def hCall : Call UInt8 :=
 
 private def hDummy : Turn UInt8 :=
   { txId := 0, notBefore := 0, validUntil := 0, touches := [], creates := [], nullifiers := [],
-    charge := 0, event := .empty }
+    charge := 0, event := .empty, member := 0 }
 
 private def hTurn : Turn UInt8 := ((receive hCtx hW hCall).toOption).getD hDummy
 private def hAfter : World UInt8 := ((World.admit hEnv hW hTurn).toOption).getD hW

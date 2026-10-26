@@ -168,7 +168,7 @@ private def cNew : Call UInt8 := tCall ⟨#[42]⟩ 5 (.create none [] [])
 
 private def tDummy : Turn UInt8 :=
   { txId := 0, notBefore := 0, validUntil := 0, touches := [], creates := [], nullifiers := [],
-    charge := 0, event := .empty }
+    charge := 0, event := .empty, member := 0 }
 
 private def tTurn (c : Call UInt8) : Turn UInt8 := ((receive tCtx tW c).toOption).getD tDummy
 private def tAfter (c : Call UInt8) : World UInt8 := ((World.admit tEnv tW (tTurn c)).toOption).getD tW

@@ -142,31 +142,36 @@ members together (`total`, KERNEL-55 R1, a `count` leaf under the World's origin
 the other two (`kernel/refusal-order`); which key holds which leaf, and the window facts, are the
 World's `kernel/refusals` refusal (KERNEL's `refusalsFits`, which refuses a misfit pairing). -/
 
-abbrev RefusalSlotF (D : Type) : Fin 3 → Type
+abbrev RefusalSlotF (D : Type) : Fin 4 → Type
   | 0 => D
   | 1 => D × UInt64
   | 2 => D × UInt64
+  | 3 => D × UInt64
 
-def refusalSlotWire (dc : Stream D) : (s : Fin 3) → Stream (RefusalSlotF D s)
+def refusalSlotWire (dc : Stream D) : (s : Fin 4) → Stream (RefusalSlotF D s)
   | 0 => dc
   | 1 => product dc u64
   | 2 => product dc u64
+  | 3 => product dc u64
 
 /-- A refusals key: its kind (0 a refused transaction id, 1 a member's window count, 2 the World's
 window total, as in `refusalKeyBytes`), then the id, or the member and the window, or the origin
 and the window. The kind byte leads the key bytes, so a listing holds every `tx`, then every
 `count`, then the `total` (`Codec.Proofs.SlotOrder.refusalKeyBytes_kind_lt`). -/
-def refusalSlot (dc : Stream D) : Stream (RefusalSlot D) :=
-  refine "kernel/refusal-slot" (choice 3 (refusalSlotWire dc))
-    (fun | ⟨0, i⟩ => some (.tx i) | ⟨1, (m, w)⟩ => some (.count m w) | ⟨2, (o, w)⟩ => some (.total o w))
-    (fun | .tx i => ⟨0, i⟩ | .count m w => ⟨1, (m, w)⟩ | .total o w => ⟨2, (o, w)⟩)
+def refusalSlot (dc : Stream D) : Stream (WindowSlot D) :=
+  refine "kernel/refusal-slot" (choice 4 (refusalSlotWire dc))
+    (fun | ⟨0, i⟩ => some (.refusal (.tx i)) | ⟨1, (m, w)⟩ => some (.refusal (.count m w))
+         | ⟨2, (o, w)⟩ => some (.refusal (.total o w)) | ⟨3, (m, w)⟩ => some (.meter (.ticks m w)))
+    (fun | .refusal (.tx i) => ⟨0, i⟩ | .refusal (.count m w) => ⟨1, (m, w)⟩ | .refusal (.total o w) => ⟨2, (o, w)⟩
+         | .meter (.ticks m w) => ⟨3, (m, w)⟩)
 
 /-- A refusals key's kind: the wire's choice tag and the key bytes' first byte (`refusalKeyBytes`): 0 a
 refused transaction id, 1 a member's window count, 2 the World's window total (KERNEL-55 R1). -/
-def refusalKind {K : Type} : RefusalSlot K → Nat
-  | .tx _ => 0
-  | .count _ _ => 1
-  | .total _ _ => 2
+def refusalKind {K : Type} : WindowSlot K → Nat
+  | .refusal (.tx _) => 0
+  | .refusal (.count _ _) => 1
+  | .refusal (.total _ _) => 2
+  | .meter (.ticks _ _) => 3
 
 abbrev RefusalLeafF (D : Type) : Fin 2 → Type
   | 0 => Nat × Nat × D

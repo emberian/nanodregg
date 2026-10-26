@@ -221,11 +221,11 @@ private def ownB : Draft UInt8 := ⟨[], writeOf 5 (diffOps (stateOf bCell) sB),
 
 private def dummy : Turn UInt8 :=
   { txId := 0, notBefore := 0, validUntil := 0, touches := [], creates := [], nullifiers := [],
-    charge := 0, event := .empty }
+    charge := 0, event := .empty, member := 0 }
 
 private def t1 : Turn UInt8 :=
   ((sealTurn wCtx c1 (ownA.append ownB).creates (ownA.append ownB).effects (ownA.append ownB).nullifiers
-    (ownA.append ownB).rows).toOption).getD dummy
+    (ownA.append ownB).rows (poolOf c1.unsigned.body - wkB.pool)).toOption).getD dummy
 
 private def w1 : World UInt8 := ((World.admit wEnv w0 t1).toOption).getD w0
 

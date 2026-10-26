@@ -825,7 +825,7 @@ private def admRange (l : List (RowSlot UInt8 × RowLeaf)) : RangeRead UInt8 :=
 
 private def admTurn0 (l : List (RowSlot UInt8 × RowLeaf)) : Turn UInt8 :=
   { txId := 1, notBefore := 0, validUntil := 1, touches := [⟨7, pinOf admEnv (some (.live admCell 0)), .keep⟩],
-    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty, ranges := [admRange l] }
+    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty, ranges := [admRange l], member := 0 }
 
 private def admTurn (l : List (RowSlot UInt8 × RowLeaf)) : Turn UInt8 :=
   { admTurn0 l with charge := (admTurn0 l).weight }

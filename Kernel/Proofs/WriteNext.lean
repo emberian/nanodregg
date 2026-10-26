@@ -234,25 +234,25 @@ private theorem receive_root {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     ∃ r, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
         ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok r ∧
-      sealTurn X c r.1.creates r.1.effects r.1.nullifiers r.1.rows = .ok t := by
+      sealTurn X c r.1.creates r.1.effects r.1.nullifiers r.1.rows (poolOf c.unsigned.body - r.2.pool) = .ok t := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd, hs⟩ := receiveWith_sealed hw
-  rw [derive_eq] at hd
+  obtain ⟨-, d, k, hd, hs⟩ := receiveWith_sealed hw
+  unfold deriveWithTicks at hd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
       ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
   | error e => rw [hR] at hd; cases hd
   | ok r =>
       rw [hR] at hd
-      simp only [Except.map, Except.ok.injEq] at hd
-      subst hd
+      simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at hd
+      obtain ⟨rfl, rfl⟩ := hd
       exact ⟨r, rfl, hs⟩
 
 /-- An admitted turn whose one act at a live, pinned cell is `writeOf obj ops`: the cell is live
 after, with `ops` applied (or kept, when there are none), `ops`' keys distinct. -/
 private theorem admit_writeOf {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {obj : D}
     {cell : Cell} {ops : List Op} {cr : List (D × Cell)} {ns : List D} {rs : List (RowSlot D × RowAct)}
-    (hs : sealTurn X c cr (writeOf obj ops) ns rs = .ok t) (ha : World.admit X.env w t = .ok w')
+    {k : Nat} (hs : sealTurn X c cr (writeOf obj ops) ns rs k = .ok t) (ha : World.admit X.env w t = .ok w')
     (hl : w.live X.env obj = some cell) (hp : ∃ q ∈ c.unsigned.pins, q.1 = obj) :
     w'.live X.env obj = some { cell with slots := applyOps cell.slots ops } ∧ (opKeys ops).Nodup := by
   obtain ⟨-, -, htouch, -⟩ := sealTurn_ok hs

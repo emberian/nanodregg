@@ -672,7 +672,8 @@ The lines to read:
 
 - A Store whose base holds N one-slot entries. A reopen decodes 2·entries - 1 trie hashes (2.000 per entry),
   exactly, at 200,002, 2,626,114 and 7,669,002 entries.
-- The bound is `worldBytesMax` = 91,914,346 B (HOST-57, derived): 2,626,114 entries, 5,252,227 hashes. By hand at
+- The bound is `worldBytesMax` = 91,965,546 B (HOST-57, derived; KERNEL-68 raised it by 51,200 B, the meter's
+  ≤ windowMax leaves; the counts and timings below are HOST-57's at 91,914,346): 2,626,114 entries, 5,252,227 hashes. By hand at
   the bound the reopen took 56.3 s on a loaded hbox (load1 12-15; reported, never judged; THE BAR's 60 s is a
   quiet-box limit, v2, so the margin there is unmeasured). One entry more (synthetic 2626113) is refused at the
   seal, `Host.genesis worldTooLarge`; no World an admitted turn reaches comes near it. A base record past

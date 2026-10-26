@@ -214,10 +214,11 @@ def turn (dc : Stream D) : Stream (Turn D) :=
     (product dc (product nat64 (product nat64 (product (rawList Bounds.touchesMax (touch dc))
       (product (rawList Bounds.createsMax (product dc cell)) (product (rawList Bounds.nullifiersMax dc)
         (product nat64 (product (rawBytes Bounds.eventBytesMax)
-          (product (rawList Bounds.rowsMax (rowTouch dc)) (rawList Bounds.rangesMax (rangeRead dc)))))))))))
-    (fun (tx, nb, vu, ts, cs, ns, ch, ev, rs, qs) => some ⟨tx, nb, vu, ts, cs, ns, ch, ev, rs, qs⟩)
+          (product (rawList Bounds.rowsMax (rowTouch dc)) (product (rawList Bounds.rangesMax (rangeRead dc))
+            (product dc nat64)))))))))))
+    (fun (tx, nb, vu, ts, cs, ns, ch, ev, rs, qs, m, k) => some ⟨tx, nb, vu, ts, cs, ns, ch, ev, rs, qs, m, k⟩)
     (fun t => (t.txId, t.notBefore, t.validUntil, t.touches, t.creates, t.nullifiers, t.charge, t.event, t.rows,
-      t.ranges))
+      t.ranges, t.member, t.ticks))
 
 /-! ## Calls -/
 

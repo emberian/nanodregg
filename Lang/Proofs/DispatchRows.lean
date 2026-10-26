@@ -116,7 +116,7 @@ theorem dispatched_ok_rows {X : Ctx D} {w : World D} {c : Call D} {R : Draft D �
 
 /-- The sealed Turn's rows are `rowTouchesOf` the caller's row pins and the Draft's rows. -/
 theorem sealTurn_rows {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
-    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} {k : Nat} (h : sealTurn X c cr efs ns rs k = .ok t) :
     rowTouchesOf c.unsigned.rowPins rs = .ok t.rows := by
   unfold sealTurn at h
   simp only [except_bind_ok] at h
@@ -204,7 +204,8 @@ theorem dispatched_invoke_rows {X : Ctx D} {w : World D} {c : Call D} {t : Turn 
       (∀ e ∈ rows, e.1.under.1 = obj) ∧
       ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2 := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd', hs⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd', hs⟩ := receiveWith_sealed hw
+  replace hd' := derive_of_withTicks hd'
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
@@ -239,7 +240,8 @@ theorem dispatched_invoke_children {X : Ctx D} {w : World D} {c : Call D} {t : T
     ∀ i (hi : i < calls.length), ∃ wk', Dispatched X w c m wk' obj calls[i] := by
   intro i hi
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd', -⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd', -⟩ := receiveWith_sealed hw
+  replace hd' := derive_of_withTicks hd'
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)

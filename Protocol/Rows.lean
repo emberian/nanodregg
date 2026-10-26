@@ -1311,12 +1311,14 @@ def barWithCount (count : Nat) : Row where
       withinMs := some 5000 },
     okBind "sponsor" ["install", counter] "counter",
     okBind "sponsor" ["create", "--pkg", "@counter", "(record (total 0))"] "tally",
-    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := count - 23,
+    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := count - 20,
       withinMs := some 5000 },
-    -- The last 23 invokes leave the old measured tail: 7912 bytes, under the 8192-byte
-    -- seal floor. Keep the total workload; do not let setup's wire size choose this boundary.
+    -- The last 20 invokes leave the measured tail under the 8192-byte seal floor (23 did at 7912
+    -- bytes until KERNEL-68 made a Turn record 40 bytes larger, 8832, and the seal fired on the
+    -- tip: a reopen with nothing past its base, a ratio over nothing). Keep the total workload;
+    -- do not let the wire size choose this boundary.
     { actor := "operator", act := .seal, expect := .ok },
-    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := min count 23,
+    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .ok, times := min count 20,
       withinMs := some 5000 },
     no "sponsor" ["invoke", "@tally", "0", "999999"] "lawDenied",
     { actor := "operator", act := .restart, expect := .ok, withinMs := some 60000 },

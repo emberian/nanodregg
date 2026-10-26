@@ -37,7 +37,8 @@ theorem admit_seen {E : Env D} {w w' : World D} {t : Turn D} {x : Touch D}
 theorem rotate_writes_member {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {key : ByteArray} {next : D}
     (hb : c.unsigned.body = .rotate key next) (hr : receive X w c = .ok t) :
     ∃ x ∈ t.touches, x.cell = c.unsigned.member ∧ ∃ ops, x.act = .write ops := by
-  obtain ⟨_, d, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  obtain ⟨_, d, _k, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  replace hdd := derive_of_withTicks hdd
   rw [derive_eq, hb] at hdd
   simp only [dispatch, stepped_map] at hdd
   unfold rotate at hdd
@@ -87,7 +88,7 @@ theorem rotate_stales_outstanding {X : Ctx D} {w₀ w₁ w₂ w w' : World D} {l
     simp [World.fold, World.step, ha]
   have hfw : w.CellsFit Cell.Fits X.env := fold_cellsFit (fold_cellsFit (fold_cellsFit hf h₁) h12) h₂
   have hpre := pinPre_adv_ne (E := X.env) (cellsFit_verFit hf c.unsigned.member) (cellsFit_verFit hfw c.unsigned.member) hadv
-  obtain ⟨_, d, -, hsl⟩ := receiveWith_sealed (receive_ok_with hrc).2
+  obtain ⟨_, d, _k, -, hsl⟩ := receiveWith_sealed (receive_ok_with hrc).2
   obtain ⟨_, _, htouch, -⟩ := sealTurn_ok hsl
   have hx' := List.mem_map_of_mem (f := fun p : D × D =>
     ({ cell := p.1, seen := p.2, act := actFor d.effects p.1 } : Touch D)) hpin

@@ -108,7 +108,7 @@ def rejectNames : List String :=
    "notConserved", "floorNotConserved", "refusedFinal", "refusalBudget", "keyTaken", "relationFull",
    "relationCapped", "rowParentUnpinned", "orphanRow", "rowsRemain", "keyWidth", "noRelation",
    "retractForbidden", "declareLate", "rangeTooLong", "duplicateRow", "rowShape", "missingRow",
-   "refusalsFull"]
+   "refusalsFull", "ticksBudget"]
 
 /-- A verdict's wire name. -/
 def Verdict.name : Verdict D → String

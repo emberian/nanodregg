@@ -37,7 +37,7 @@ def env : Env Nat where
 
 def mkTurn (txId notBefore validUntil : Nat) (nullifiers : List Nat) : Turn Nat :=
   let t : Turn Nat := { txId, notBefore, validUntil, touches := [], creates := [], nullifiers,
-                        charge := 0, event := ByteArray.empty }
+                        charge := 0, event := ByteArray.empty, member := 0 }
   { t with charge := t.weight }
 
 /-- A toy tag: FNV of the input under a domain byte, as 32 bytes. -/

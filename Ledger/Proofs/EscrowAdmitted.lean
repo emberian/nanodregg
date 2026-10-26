@@ -169,7 +169,7 @@ private def callAt (w : World UInt8) (vu method : Nat) (args : ByteArray) : Call
 
 private def dummy : Turn UInt8 :=
   { txId := 0, notBefore := 0, validUntil := 0, touches := [], creates := [], nullifiers := [],
-    charge := 0, event := .empty }
+    charge := 0, event := .empty, member := 0 }
 
 private def noDraft : Draft UInt8 × Walk UInt8 := (⟨[], [], [], []⟩, ⟨[], 0, 0⟩)
 
@@ -213,7 +213,7 @@ private def out1 : Draft UInt8 × Walk UInt8 :=
   ((deriveCalls sub1 obj ⟨[], writeOf obj (diffOps (stateOf objCell) (slotsAt "held")), [], []⟩
     { visited := [obj], pool := poolOf c1.unsigned.body - 119, born := 0 } calls1).toOption).getD noDraft
 private def t1 : Turn UInt8 :=
-  ((sealTurn tX c1 out1.1.creates out1.1.effects out1.1.nullifiers out1.1.rows).toOption).getD dummy
+  ((sealTurn tX c1 out1.1.creates out1.1.effects out1.1.nullifiers out1.1.rows (poolOf c1.unsigned.body - out1.2.pool)).toOption).getD dummy
 private def w1 : World UInt8 := ((World.admit tEnv w0 t1).toOption).getD w0
 
 private theorem c1_pkg : readKind look1 pkg kindPackage = .ok pkgCell := by rfl
@@ -274,7 +274,7 @@ private def out2 : Draft UInt8 × Walk UInt8 :=
   ((deriveCalls sub2 obj ⟨[], writeOf obj (diffOps (stateOf cell2) (slotsAt "released")), [], []⟩
     { visited := [obj], pool := poolOf c2.unsigned.body - 113, born := 0 } calls2).toOption).getD noDraft
 private def t2 : Turn UInt8 :=
-  ((sealTurn tX c2 out2.1.creates out2.1.effects out2.1.nullifiers out2.1.rows).toOption).getD dummy
+  ((sealTurn tX c2 out2.1.creates out2.1.effects out2.1.nullifiers out2.1.rows (poolOf c2.unsigned.body - out2.2.pool)).toOption).getD dummy
 private def w2 : World UInt8 := ((World.admit tEnv w1 t2).toOption).getD w1
 
 private theorem c2_pkg : readKind look2 pkg kindPackage = .ok pkgCell := by rfl

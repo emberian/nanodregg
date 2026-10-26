@@ -40,7 +40,7 @@ namespace Nanodregg.Emit.Vectors
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec Nanodregg.Codec.Kernel
 
 deriving instance Repr for RowKey, RowSlot, RowLeaf, RowAct, RowTouch, RangeRead, Op, Cell, Entry, Slot, Leaf,
-  Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, RefusalLeaf,
+  Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, MeterSlot, WindowSlot, RefusalLeaf,
   Refused, Step, Trie.Proof, Lang.Term, Lang.SupportPin, Lang.HoleCode, Lang.HoleROM, Lang.RelDecl, Lang.Package
 
 /-! ## Values, drawn from the simulation's generator -/
@@ -147,7 +147,7 @@ def rowsOf (l : List (RowSlot Sim.D × RowLeaf)) : Rows Sim.D :=
 
 def turn : G (Turn Sim.D) := do
   return ⟨← dig, ← nat64, ← nat64, ← list 2 touch, ← list 1 (do return (← dig, ← cell)), ← list 2 dig, ← nat64,
-    ← bytes 8, ← list 2 rowTouch, ← list 1 rangeRead⟩
+    ← bytes 8, ← list 2 rowTouch, ← list 1 rangeRead, ← dig, ← nat64⟩
 def right (k : Nat) : G Right := do
   match k with
   | 0 => return .observe
@@ -217,33 +217,33 @@ def proofVecs : G (List (Trie.Proof Sim.D Sim.D)) := do
 
 /-- The count leaves a listing's records make at height `h` (KERNEL-50's `refusalsCounted`): one per
 member with a record in the window of `h`, holding its number of them. -/
-def countsOf (h : Nat) (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
+def countsOf (h : Nat) (l : List (WindowSlot Sim.D × RefusalLeaf Sim.D)) : List (WindowSlot Sim.D × RefusalLeaf Sim.D) :=
   let cur := l.filterMap fun p => match p with
-    | (.tx _, .refused r _ m) => if (r - 1) / Bounds.windowMax = h / Bounds.windowMax then some m else none
+    | (.refusal (.tx _), .refused r _ m) => if (r - 1) / Bounds.windowMax = h / Bounds.windowMax then some m else none
     | _ => none
-  cur.eraseDups.map fun m => (.count m (refusalWindow h), .count (cur.count m))
+  cur.eraseDups.map fun m => (.refusal (.count m (refusalWindow h)), .count (cur.count m))
 
 /-- The total leaf a listing's records make at height `h` under origin `o` (KERNEL-55 R1's
 `refusalsCounted`): the number of records in the window of `h`, all members together, present iff
 there is one. -/
-def totalOf (h : Nat) (o : Sim.D) (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) :
-    List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
+def totalOf (h : Nat) (o : Sim.D) (l : List (WindowSlot Sim.D × RefusalLeaf Sim.D)) :
+    List (WindowSlot Sim.D × RefusalLeaf Sim.D) :=
   let n := (l.map (refusedWin (h / Bounds.windowMax))).sum
-  if n = 0 then [] else [(.total o (refusalWindow h), .count n)]
+  if n = 0 then [] else [(.refusal (.total o (refusalWindow h)), .count n)]
 
 /-- A refusals listing a World at height `h` can hold (KERNEL-44, KERNEL-50): one to three refused
 transaction ids, each refused at a height at or just below `h + 1` and charged to one of one or two
 drawn members, and each charged member's count of its records in the current window (`refusalsFits`,
 `refusalsCounted`). -/
-def refusals (h : Nat) : G (List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) := do
+def refusals (h : Nat) : G (List (WindowSlot Sim.D × RefusalLeaf Sim.D)) := do
   let members ← list1 2 dig
   let txs ← list1 3 (do
     let m := members.getD (← below members.length) 0
-    return (RefusalSlot.tx (← dig), RefusalLeaf.refused (h + 1 - (← below 3)) (← below 40) m))
+    return (WindowSlot.refusal (.tx (← dig)), RefusalLeaf.refused (h + 1 - (← below 3)) (← below 40) m))
   return txs ++ countsOf h txs
 
 /-- The canonical refusals trie of a listing (KERNEL-44). -/
-def refusalsOf (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) : Refusals Sim.D :=
+def refusalsOf (l : List (WindowSlot Sim.D × RefusalLeaf Sim.D)) : Refusals Sim.D :=
   Trie.build (refusalSpec Sim.env) (refusalSpec Sim.env).depth 0 l
 
 /-- The live cells of a cells trie: the parents a relation may sit under. -/
@@ -275,9 +275,9 @@ the current window), and the step it cost: the three inserts `commitRefusals` ma
 member's count, the World's total). -/
 def addRecord (w : World Sim.D) (k m : Sim.D) (code : Nat) : World Sim.D :=
   { w with
-    refusals := ((w.refusals.insert (refusalSpec Sim.env) (.tx k) (.refused (w.height + 1) code m)).insert
-      (refusalSpec Sim.env) (.count m (refusalWindow w.height)) (.count (refusalCount Sim.env w m + 1))).insert
-      (refusalSpec Sim.env) (.total w.origin (refusalWindow w.height)) (.count (refusalTotal Sim.env w + 1))
+    refusals := ((w.refusals.insert (refusalSpec Sim.env) (.refusal (.tx k)) (.refused (w.height + 1) code m)).insert
+      (refusalSpec Sim.env) (.refusal (.count m (refusalWindow w.height))) (.count (refusalCount Sim.env w m + 1))).insert
+      (refusalSpec Sim.env) (.refusal (.total w.origin (refusalWindow w.height))) (.count (refusalTotal Sim.env w + 1))
     steps := w.steps + 1 }
 
 def refused : G (Refused Sim.D) := do
@@ -398,14 +398,14 @@ def refusalsVecs : G (List (WorldWire Sim.D)) := do
   let ks ← each (Bounds.refusalsPerWindow + 1) fun _ => dig
   let at_ (n : Nat) : World Sim.D :=
     { w with
-      refusals := refusalsOf (w.refusals.toList ++ (ks.take n).map (fun k => (.tx k, .refused (w.height + 1) 1 m)) ++
-        [(.count m (refusalWindow w.height), .count n)])
+      refusals := refusalsOf (w.refusals.toList ++ (ks.take n).map (fun k => (.refusal (.tx k), .refused (w.height + 1) 1 m)) ++
+        [(.refusal (.count m (refusalWindow w.height)), .count n)])
       steps := w.steps + n }
   let w' ← Vectors.world
   let total (n : Nat) : World Sim.D :=
     { w' with
-      refusals := refusalsOf (w'.refusals.toList.filter (fun p => match p.1 with | .total _ _ => false | _ => true) ++
-        [(.total w'.origin (refusalWindow w'.height), .count n)]) }
+      refusals := refusalsOf (w'.refusals.toList.filter (fun p => match p.1 with | .refusal (.total _ _) => false | _ => true) ++
+        [(.refusal (.total w'.origin (refusalWindow w'.height)), .count n)]) }
   return drawn ++ [toWire (at_ Bounds.refusalsPerWindow), toWire (at_ (Bounds.refusalsPerWindow + 1)),
     toWire (total Bounds.refusalsPerWindowMax), toWire (total (Bounds.refusalsPerWindowMax + 1))]
 
@@ -445,11 +445,11 @@ def countedVecs : G (List (WorldWire Sim.D)) := do
   let win := refusalWindow w₁.height
   let moved : World Sim.D :=
     { w₁ with
-      refusals := (w₁.refusals.insert (refusalSpec Sim.env) (.count m win) (.count (refusalCount Sim.env w₁ m - 1))).insert
-        (refusalSpec Sim.env) (.count m' win) (.count (refusalCount Sim.env w₁ m' + 1)) }
+      refusals := (w₁.refusals.insert (refusalSpec Sim.env) (.refusal (.count m win)) (.count (refusalCount Sim.env w₁ m - 1))).insert
+        (refusalSpec Sim.env) (.refusal (.count m' win)) (.count (refusalCount Sim.env w₁ m' + 1)) }
   let over : World Sim.D :=
     { w₁ with
-      refusals := w₁.refusals.insert (refusalSpec Sim.env) (.total w₁.origin win) (.count (refusalTotal Sim.env w₁ + 1)) }
+      refusals := w₁.refusals.insert (refusalSpec Sim.env) (.refusal (.total w₁.origin win)) (.count (refusalTotal Sim.env w₁ + 1)) }
   return drawn ++ [toWire w₁, toWire moved, toWire over]
 
 /-- `kernel/refused`'s vectors: two drawn, then the cancel signature's boundary pair (KERNEL-60): a
@@ -828,8 +828,9 @@ def sites : List Site :=
       (each 2 fun _ => do return journalOf (← journal ((← below 1000) + 3))) (fun t => text t.toList),
     site "kernel/proof" (proof (journalSpec Sim.env) Sim.dc Sim.dc) proofVecs text,
     site "kernel/refusal-slot" (refusalSlot Sim.dc)
-      (each 3 fun k => match k with
-        | 0 => do return .tx (← dig) | 1 => do return .count (← dig) (← u64) | _ => do return .total (← dig) (← u64)) text,
+      (each 4 fun k => match k with
+        | 0 => do return .refusal (.tx (← dig)) | 1 => do return .refusal (.count (← dig) (← u64))
+        | 2 => do return .refusal (.total (← dig) (← u64)) | _ => do return .meter (.ticks (← dig) (← u64))) text,
     site "kernel/refusal-leaf" (refusalLeaf Sim.dc)
       (each 2 fun k => if k = 0 then do return .refused (← nat64) (← nat64) (← dig) else do return .count (← nat64)) text,
     site "kernel/refusal-order" (refusalsTrie Sim.env Sim.dc)

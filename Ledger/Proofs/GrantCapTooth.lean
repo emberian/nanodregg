@@ -92,7 +92,7 @@ private def callAt (w : World UInt8) (vu : Nat) : Call UInt8 :=
 
 private def dummy : Turn UInt8 :=
   { txId := 0, notBefore := 0, validUntil := 0, touches := [], creates := [], nullifiers := [],
-    charge := 0, event := .empty }
+    charge := 0, event := .empty, member := 0 }
 
 private def c1 : Call UInt8 := callAt w0 5
 private def t1 : Turn UInt8 := ((receive gX0 w0 c1).toOption).getD dummy

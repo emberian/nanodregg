@@ -753,7 +753,7 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
     check "plant-lookup-recorded: past journalForgets, while the record is kept, still `refused relationFull`"
       (journalForgets w₂.height 0 && lookupOn w₂ == "refused relationFull") failures
     let t₀ : Turn Kernel.Sim.D := { txId := 424242, notBefore := 3 * W - 10, validUntil := 3 * W + 10, touches := [],
-                                    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty }
+                                    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty, member := 0 }
     match World.admit kx.env w₂ { t₀ with charge := t₀.weight } with
     | .error e => check s!"plant-lookup-recorded: the turn at height 3·windowMax admits ({e.name})" false failures
     | .ok w₃ =>
@@ -764,8 +764,8 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
 def rowsMk {D : Type} [Ord D] [DecidableEq D] (E : Env D) (w : World D) (tag : String) (touches : List (Touch D))
     (creates : List (D × Cell)) (rows : List (RowTouch D)) : Turn D :=
   let t0 : Turn D := ⟨E.hash "nanodregg/host-sim/rows" (tag.toUTF8 ++ E.bytes w.chain), w.height + 1,
-    w.height + 64, touches, creates, [], 0, ByteArray.empty, rows, []⟩
-  ⟨t0.txId, t0.notBefore, t0.validUntil, t0.touches, t0.creates, t0.nullifiers, t0.weight, t0.event, t0.rows, t0.ranges⟩
+    w.height + 64, touches, creates, [], 0, ByteArray.empty, rows, [], E.hash "nanodregg/host-sim/rows" tag.toUTF8, 0⟩
+  { t0 with charge := t0.weight }
 
 /-- The two rows Turns from `w` (KERNEL-46/48): a parent cell born with one declared relation (limit 3,
 cap 10, key width 2, retractable), then one row inserted under it with the parent pinned. -/

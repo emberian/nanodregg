@@ -365,10 +365,17 @@ def poolOf : Body D → Nat
   | .invoke _ _ _ budget _ => min budget Bounds.treeTicksMax
   | _ => 0
 
+/-- The signed call's Draft: its Body at the signer, its calls down to `callDepthMax`; and the ticks
+the tree used of its pool (the pool at the start less what is left: 0 for every Body but an
+invoke), which the Turn carries for the kernel's meter (DESIGN-OBS §1.3). -/
+def deriveWithTicks (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) :
+    Except (Refusal D) (Draft D × Nat) :=
+  (dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
+    c.unsigned.member c.unsigned.body).map fun r => (r.1, poolOf c.unsigned.body - r.2.pool)
+
 /-- The signed call's Draft: its Body at the signer, its calls down to `callDepthMax`. -/
 def derive (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Draft D) :=
-  (dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
-    c.unsigned.member c.unsigned.body).map (·.1)
+  (deriveWithTicks X look rv c).map (·.1)
 
 /-- A rotation is signed by the incoming key; every other call by the member's current key. -/
 def keyRule (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=
@@ -378,8 +385,8 @@ def keyRule (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=
 
 /-- The signed call's Turn: its tree's Draft, sealed ONCE (KERNEL-28 (c)). -/
 def deriveTurn (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Turn D) := do
-  let d ← derive X look rv c
-  sealTurn X c d.creates d.effects d.nullifiers d.rows
+  let (d, ticks) ← deriveWithTicks X look rv c
+  sealTurn X c d.creates d.effects d.nullifiers d.rows ticks
 
 /-- Derive from the pinned view: signature, key, then the call's tree. -/
 def receiveWith (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Turn D) := do

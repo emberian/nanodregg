@@ -179,15 +179,17 @@ end Leaves
 
 /-- A refusals key in the digest codec's domain: its id, its member, or (a total, KERNEL-55 R1) the
 origin it is filed under. -/
-def RefusalSlot.Fits (PD : D → Prop) : RefusalSlot D → Prop
-  | .tx i => PD i
-  | .count m _ => PD m
-  | .total o _ => PD o
+def WindowSlot.Fits (PD : D → Prop) : WindowSlot D → Prop
+  | .refusal (.tx i) => PD i
+  | .refusal (.count m _) => PD m
+  | .refusal (.total o _) => PD o
+  | .meter (.ticks m _) => PD m
 
-abbrev RefusalSlotWireFits (PD : D → Prop) : (s : Fin 3) → RefusalSlotF D s → Prop
+abbrev RefusalSlotWireFits (PD : D → Prop) : (s : Fin 4) → RefusalSlotF D s → Prop
   | 0 => PD
   | 1 => fun p => PD p.1 ∧ True
   | 2 => fun p => PD p.1 ∧ True
+  | 3 => fun p => PD p.1 ∧ True
 
 omit [Ord D] in
 theorem refusalSlotWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
@@ -195,28 +197,36 @@ theorem refusalSlotWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulO
   | 0 => hd
   | 1 => product_lawfulOn hd u64_lawful.on
   | 2 => product_lawfulOn hd u64_lawful.on
+  | 3 => product_lawfulOn hd u64_lawful.on
 
 omit [Ord D] in
 theorem refusalSlot_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
-    LawfulOn (RefusalSlot.Fits PD) (refusalSlot dc) := by
+    LawfulOn (WindowSlot.Fits PD) (refusalSlot dc) := by
   unfold refusalSlot
-  refine (refine_lawfulOn (choice_lawfulOn 3 (by decide) (refusalSlotWire_lawfulOn hd)) "kernel/refusal-slot"
+  refine (refine_lawfulOn (choice_lawfulOn 4 (by decide) (refusalSlotWire_lawfulOn hd)) "kernel/refusal-slot"
     ?_ ?_).mono ?_ ?_
-  · intro y _; cases y <;> rfl
+  · intro y _; rcases y with k | k <;> cases k <;> rfl
   · intro x y h
     obtain ⟨s, v⟩ := x
     match s, v, h with
     | 0, i, h => simp at h; subst h; rfl
     | 1, (m, w), h => simp at h; subst h; rfl
     | 2, (o, w), h => simp at h; subst h; rfl
-  · intro y h; cases y with
-    | tx i => exact h
-    | count m w => exact h.1
-    | total o w => exact h.1
-  · intro y h; cases y with
-    | tx i => exact h
-    | count m w => exact ⟨h, trivial⟩
-    | total o w => exact ⟨h, trivial⟩
+    | 3, (m, w), h => simp at h; subst h; rfl
+  · intro y h; rcases y with k | k
+    · cases k with
+      | tx i => exact h
+      | count m w => exact h.1
+      | total o w => exact h.1
+    · cases k with
+      | ticks m w => exact h.1
+  · intro y h; rcases y with k | k
+    · cases k with
+      | tx i => exact h
+      | count m w => exact ⟨h, trivial⟩
+      | total o w => exact ⟨h, trivial⟩
+    · cases k with
+      | ticks m w => exact ⟨h, trivial⟩
 
 /-- A refusals leaf's counters below 2^64 (what the leaf digest needs to be injective,
 `refusalDigest_inj`). -/
@@ -410,8 +420,8 @@ theorem batch_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) (
   rawList_lawfulOn (product_lawfulOn (step_lawfulOn hd) hd) max fits
 
 /-- The refusals listing's domain: within the wire's bound, every key and leaf in its codec's domain. -/
-def RefusalListFits (PD : D → Prop) (l : List (RefusalSlot D × RefusalLeaf D)) : Prop :=
-  l.length ≤ worldMax ∧ ∀ p ∈ l, RefusalSlot.Fits PD p.1 ∧ RefusalLeaf.WireFits PD p.2
+def RefusalListFits (PD : D → Prop) (l : List (WindowSlot D × RefusalLeaf D)) : Prop :=
+  l.length ≤ worldMax ∧ ∀ p ∈ l, WindowSlot.Fits PD p.1 ∧ RefusalLeaf.WireFits PD p.2
 
 /-- The refusals codec's domain: a canonical refusals trie whose listing fits (KERNEL-44). -/
 def RefusalsTrieFits (E : Env D) (PD : D → Prop) (r : Refusals D) : Prop :=
@@ -421,12 +431,13 @@ omit [Ord D] [DecidableEq D] in
 /-- Every leaf of a refusals listing `refusalsFits` admits is in the leaf codec's domain: the window
 check bounds every counter, so a reached World's refusals (KERNEL's `fold_refusalsOk`) need only the
 listing's length for the wire. -/
-theorem refusalLeaf_fits_of_refusalsFits {H : Nat} {l : List (RefusalSlot D × RefusalLeaf D)}
+theorem refusalLeaf_fits_of_refusalsFits {H : Nat} {l : List (WindowSlot D × RefusalLeaf D)}
     (h : refusalsFits H l = true) : ∀ p ∈ l, RefusalLeaf.Fits p.2 := by
   intro p hp
   have hq := List.all_eq_true.mp h p hp
   obtain ⟨k, v⟩ := p
-  cases k <;> cases v <;> simp_all [RefusalLeaf.Fits, refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax] <;>
+  rcases k with k | k <;> cases k <;> cases v <;> simp_all [RefusalLeaf.Fits, refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
+    Bounds.ticksPerWindow, Bounds.treeTicksMax] <;>
     omega
 
 omit [Ord D] in

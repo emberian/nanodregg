@@ -454,7 +454,8 @@ theorem invoke_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
       method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used)) :
     ∃ cell', w'.live X.env obj = some cell' ∧ ∀ k, (stateOf cell').get k = s.get k := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd, hs⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd, hs⟩ := receiveWith_sealed hw
+  replace hd := derive_of_withTicks hd
   obtain ⟨-, -, htouch, -⟩ := sealTurn_ok hs
   rw [derive_eq, hb] at hd
   cases hdisp : invoke X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
@@ -538,7 +539,8 @@ theorem invoke_next_judged {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D
     ∃ laws, lawsOf X obj cell = .ok laws ∧
       X.program.judge (pinned X.env w c.unsigned.pins) (some p) laws (stateOf cell) s r = .ok () := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd, -⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd, -⟩ := receiveWith_sealed hw
+  replace hd := derive_of_withTicks hd
   rw [derive_eq, hb] at hd
   cases hdisp : invoke X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)

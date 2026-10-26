@@ -562,8 +562,8 @@ the effects (a receiver writes or retires only cells it read, so only pinned one
 otherwise; at most one effect per cell: `duplicateEffect`), the receiver's nullifiers, the call as
 the event, the exact charge (refused above the signed ceiling). -/
 def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List (D × Cell))
-    (effects : List (D × Act)) (nullifiers : List D) (rows : List (RowSlot D × RowAct) := []) :
-    Except (Refusal D) (Turn D) := do
+    (effects : List (D × Act)) (nullifiers : List D) (rows : List (RowSlot D × RowAct) := [])
+    (ticks : Nat := 0) : Except (Refusal D) (Turn D) := do
   let pins := c.unsigned.pins
   effectsPinned pins effects
   let rts ← rowTouchesOf c.unsigned.rowPins rows
@@ -572,7 +572,8 @@ def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List (D × Cell
       touches := touchesOf pins effects,
       creates,
       nullifiers, charge := 0,
-      event := X.callBytes c, rows := rts, ranges := c.unsigned.ranges }
+      event := X.callBytes c, rows := rts, ranges := c.unsigned.ranges,
+      member := c.unsigned.member, ticks }
   let t := { t0 with charge := t0.weight }
   if t.charge ≤ c.unsigned.maxCharge then .ok t else .error (.overPrice t.charge)
 

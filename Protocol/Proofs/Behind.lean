@@ -230,7 +230,7 @@ theorem receive_pins {X : Ctx D} {v : World D} {c : Call D} {t : Turn D} (h : re
       (∀ x ∈ t.rows, ∀ s, x.seen = some s → (x.slot, s) ∈ c.unsigned.rowPins) ∧
       t.ranges = c.unsigned.ranges := by
   refine ⟨(receive_derived h).pinned, ?_⟩
-  obtain ⟨-, d, -, hs⟩ := receiveWith_sealed (receive_ok_with h).2
+  obtain ⟨-, d, _k, -, hs⟩ := receiveWith_sealed (receive_ok_with h).2
   unfold sealTurn at hs
   simp only [except_bind_ok] at hs
   obtain ⟨⟨⟩, -, rts, hr, hs⟩ := hs

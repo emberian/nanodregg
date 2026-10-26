@@ -54,7 +54,7 @@ theorem receive_congr {X : Ctx D} {w₁ w₂ : World D} {c : Call D} (ho : w₁.
 pins as its touches, its window, its call and the receiver's nullifiers; every effect is on a
 pinned cell. -/
 theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
-    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} {k : Nat} (h : sealTurn X c cr efs ns rs k = .ok t) :
     t.charge = t.weight ∧ t.charge ≤ c.unsigned.maxCharge ∧
       t.touches = touchesOf c.unsigned.pins efs ∧
       t.event = X.callBytes c ∧ t.txId = txIdOf X c ∧ t.notBefore = c.unsigned.notBefore ∧
@@ -80,7 +80,7 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List
 /-- A sealed Turn's row touches are what `rowTouchesOf` makes of the caller's row pins and the
 receiver's row effects, and its range reads are the caller's. -/
 theorem sealTurn_rows {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
-    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} {k : Nat} (h : sealTurn X c cr efs ns rs k = .ok t) :
     ∃ rts, rowTouchesOf c.unsigned.rowPins rs = .ok rts ∧ t.rows = rts ∧ t.ranges = c.unsigned.ranges := by
   unfold sealTurn at h
   simp only [except_bind_ok] at h
@@ -130,16 +130,22 @@ Draft: what its Body derived at the signer, and every call of its tree. -/
 theorem receiveWith_sealed {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
     (h : receiveWith X look rv c = .ok t) :
     X.verify c.unsigned.key (X.callMessage c.unsigned) c.signature = true ∧
-      ∃ d, derive X look rv c = .ok d ∧
-        sealTurn X c d.creates d.effects d.nullifiers d.rows = .ok t := by
+      ∃ d k, deriveWithTicks X look rv c = .ok (d, k) ∧
+        sealTurn X c d.creates d.effects d.nullifiers d.rows k = .ok t := by
   unfold receiveWith at h
   simp only [except_bind_ok] at h
   obtain ⟨⟨⟩, hs, ⟨⟩, _, h⟩ := h
   unfold deriveTurn at h
   simp only [except_bind_ok] at h
-  obtain ⟨d, hd, h⟩ := h
+  obtain ⟨⟨d, k⟩, hd, h⟩ := h
   unfold checkSignature at hs
-  exact ⟨req_ok.mp hs, d, hd, h⟩
+  exact ⟨req_ok.mp hs, d, k, hd, h⟩
+
+omit [Ord D] in
+/-- The Draft of a derivation with its ticks is the Draft `derive` returns (KERNEL-68). -/
+theorem derive_of_withTicks {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {d : Draft D} {k : Nat}
+    (h : deriveWithTicks X look rv c = .ok (d, k)) : derive X look rv c = .ok d := by
+  unfold derive; rw [h]; rfl
 
 /-- **The receivers' contract** (Q1): what every derived Turn is to the call it was derived from,
 named. It is signed with the key the call names, pays exactly its weight within the signed price,
@@ -160,7 +166,7 @@ structure Derived (X : Ctx D) (c : Call D) (t : Turn D) : Prop where
 observation. -/
 theorem receive_derived {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     (h : receive X w c = .ok t) : Derived X c t := by
-  obtain ⟨hv, _, _, hs⟩ := receiveWith_sealed (receive_ok_with h).2
+  obtain ⟨hv, _, _, _, hs⟩ := receiveWith_sealed (receive_ok_with h).2
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, _⟩ := sealTurn_ok hs
   exact ⟨hv, h1, h2, by rw [h3]; exact touchesOf_pins _ _, h4, h5, h6, h7⟩
 
@@ -183,7 +189,7 @@ theorem keyRule_deriveTurn (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : C
   | rotate key next =>
     cases hr : rotate X look c key next with
     | error e =>
-      unfold deriveTurn derive
+      unfold deriveTurn deriveWithTicks
       rw [hb]
       simp [dispatch, stepped, hr, Except.map, bind, Except.bind]
     | ok d => simp [Except.map, bind, Except.bind, hr]

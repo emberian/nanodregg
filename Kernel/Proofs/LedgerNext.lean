@@ -446,7 +446,8 @@ theorem grant_turn_cell {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {
         i ≤ ledgerSpendsMax ∧
         w'.live X.env g = some { cell with slots := cell.slots.set (base + i) (countBytes (left - u)) } := by
   obtain ⟨-, hw⟩ := receive_ok_with hr
-  obtain ⟨-, d, hd, hs⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd, hs⟩ := receiveWith_sealed hw
+  replace hd := derive_of_withTicks hd
   rw [derive_eq] at hd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
@@ -568,7 +569,7 @@ theorem honest_ledgerContiguous {X : Ctx D} :
 cells), so the admitted World holds there what `postWrite` makes of the cell the turn observed. -/
 private theorem effect_written {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {cr : List (D × Cell)} {efs : List (D × Act)} {ns : List D} {rs : List (RowSlot D × RowAct)}
-    (hs : sealTurn X c cr efs ns rs = .ok t) (ha : World.admit X.env w t = .ok w')
+    {k : Nat} (hs : sealTurn X c cr efs ns rs k = .ok t) (ha : World.admit X.env w t = .ok w')
     {k : D} {ops : List Op} (he : (k, Act.write ops) ∈ efs) :
     ∃ cell post, w.live X.env k = some cell ∧ postWrite k cell ops = .ok post ∧ w'.live X.env k = some post := by
   obtain ⟨-, -, htouch, -, -, -, -, -, -, hpins⟩ := sealTurn_ok hs
@@ -584,7 +585,7 @@ private theorem effect_written {X : Ctx D} {w w' : World D} {c : Call D} {t : Tu
 as `(i + 1, left - u)`. -/
 private theorem effect_reads_back {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {cr : List (D × Cell)} {efs : List (D × Act)} {ns : List D} {rs : List (RowSlot D × RowAct)}
-    (hs : sealTurn X c cr efs ns rs = .ok t) (ha : World.admit X.env w t = .ok w')
+    {k : Nat} (hs : sealTurn X c cr efs ns rs k = .ok t) (ha : World.admit X.env w t = .ok w')
     (hcan : CellsCanon X.env w) (hlc : LedgerContiguous X.env w)
     {g : D} {gc : Cell} {base i left u : Nat} (hb : LedgerBase base)
     (hg : readKind (pinned X.env w c.unsigned.pins) g kindGrant = .ok gc) (hll : ledgerLeft base g gc = .ok (i, left))
@@ -606,18 +607,18 @@ private theorem receive_top {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     ∃ R, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
         ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R ∧
-      sealTurn X c R.1.creates R.1.effects R.1.nullifiers R.1.rows = .ok t := by
+      sealTurn X c R.1.creates R.1.effects R.1.nullifiers R.1.rows (poolOf c.unsigned.body - R.2.pool) = .ok t := by
   obtain ⟨-, hw⟩ := receive_ok_with hr
-  obtain ⟨-, d, hdd, hs⟩ := receiveWith_sealed hw
-  rw [derive_eq] at hdd
+  obtain ⟨-, d, k, hdd, hs⟩ := receiveWith_sealed hw
+  unfold deriveWithTicks at hdd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
       ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
   | error e => rw [hR] at hdd; cases hdd
   | ok R =>
       rw [hR] at hdd
-      simp only [Except.map, Except.ok.injEq] at hdd
-      subst hdd
+      simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at hdd
+      obtain ⟨rfl, rfl⟩ := hdd
       exact ⟨R, rfl, hs⟩
 
 /-- **A transfer through a grant reads back its amount, at any depth** (LEDGER-7's link). A signed

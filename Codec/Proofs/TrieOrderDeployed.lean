@@ -200,7 +200,7 @@ theorem journal_reads_ids_ascending :
 
 /-- **The deployed refusals listing is accepted exactly when strictly ascending by key bytes**
 (`refusalKeyBytes`: kind byte, the 32 digest bytes, the window's eight bytes). -/
-theorem refusalOrder_iff {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Digest × RefusalLeaf Digest)}
+theorem refusalOrder_iff {b : ByteArray} {i j : Nat} {l : List (WindowSlot Digest × RefusalLeaf Digest)}
     (h : (rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).get b i = .ok (l, j)) :
     (refusalsTrie env digestCodec).get b i = .ok (Trie.build (refusalSpec env) (refusalSpec env).depth 0 l, j) ↔
       l.Pairwise (RefusalBefore env) := by
@@ -212,14 +212,14 @@ theorem refusalOrder_iff {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Dige
   · exact refusalsTrie_get_ok Receive.deployed_lawful h
 
 /-- **Any other deployed refusals listing is refused `kernel/refusal-order` by name.** -/
-theorem refusalOrder_refuses {b : ByteArray} {i j : Nat} {l : List (RefusalSlot Digest × RefusalLeaf Digest)}
+theorem refusalOrder_refuses {b : ByteArray} {i j : Nat} {l : List (WindowSlot Digest × RefusalLeaf Digest)}
     (h : (rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).get b i = .ok (l, j))
     (ho : ¬ l.Pairwise (RefusalBefore env)) :
     (refusalsTrie env digestCodec).get b i = .error (.rejected i "kernel/refusal-order") :=
   refusalsTrie_get_refused Receive.deployed_lawful h ho
 
-private theorem refusalList_get (l : List (RefusalSlot Digest × RefusalLeaf Digest))
-    (hf : l.length ≤ worldMax ∧ ∀ p ∈ l, RefusalSlot.Fits (fun _ => True) p.1 ∧ RefusalLeaf.WireFits (fun _ => True) p.2) :
+private theorem refusalList_get (l : List (WindowSlot Digest × RefusalLeaf Digest))
+    (hf : l.length ≤ worldMax ∧ ∀ p ∈ l, WindowSlot.Fits (fun _ => True) p.1 ∧ RefusalLeaf.WireFits (fun _ => True) p.2) :
     (rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).get
         ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes l) 0 =
       .ok (l, ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes l).size) := by
@@ -227,8 +227,8 @@ private theorem refusalList_get (l : List (RefusalSlot Digest × RefusalLeaf Dig
     (refusalLeaf_lawfulOn digest_lawful.on)) worldMax (by decide)).get_of_occurs l _ 0 hf (occursAt_self _)
 
 /-- The two keys of the three-kind teeth: a member's count and the World's total, one window, one digest. -/
-private abbrev cnt : RefusalSlot Digest := .count lo 0
-private abbrev tot : RefusalSlot Digest := .total lo 0
+private abbrev cnt : WindowSlot Digest := .refusal (.count lo 0)
+private abbrev tot : WindowSlot Digest := .refusal (.total lo 0)
 
 /-- **Tooth (KERNEL-55 R1).** The World's total listed before a member's count is refused
 `kernel/refusal-order` by name, though the two keys share their digest and window: the kind byte
@@ -238,7 +238,7 @@ theorem refusals_refuses_total_before_count :
         ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes
           [(tot, .count 1), (cnt, .count 1)]) =
       .error (.rejected 0 "kernel/refusal-order") := by
-  have hg := refusalList_get [(tot, .count 1), (cnt, .count 1)] ⟨by decide, by simp [RefusalSlot.Fits, RefusalLeaf.WireFits]⟩
+  have hg := refusalList_get [(tot, .count 1), (cnt, .count 1)] ⟨by decide, by simp [WindowSlot.Fits, RefusalLeaf.WireFits]⟩
   have ho : ¬ [(tot, (.count 1 : RefusalLeaf Digest)), (cnt, .count 1)].Pairwise (RefusalBefore env) := by
     intro hp
     have h1 : RefusalBefore env (tot, .count 1) (cnt, .count 1) :=
@@ -255,7 +255,7 @@ theorem refusals_reads_count_before_total :
         ((rawList worldMax (product (refusalSlot digestCodec) (refusalLeaf digestCodec))).bytes
           [(cnt, .count 1), (tot, .count 1)]) =
       .ok (Trie.build (refusalSpec env) (refusalSpec env).depth 0 [(cnt, .count 1), (tot, .count 1)]) := by
-  have hg := refusalList_get [(cnt, .count 1), (tot, .count 1)] ⟨by decide, by simp [RefusalSlot.Fits, RefusalLeaf.WireFits]⟩
+  have hg := refusalList_get [(cnt, .count 1), (tot, .count 1)] ⟨by decide, by simp [WindowSlot.Fits, RefusalLeaf.WireFits]⟩
   unfold Stream.decode
   rw [(refusalOrder_iff hg).mpr (List.pairwise_pair.mpr (refusalKeyBytes_kind_lt env (by decide)))]
   simp

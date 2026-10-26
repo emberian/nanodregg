@@ -117,7 +117,8 @@ def rowbarCounts (r : Row) (res : Loopback.Result) : Except String (List (String
     | _ => n) 0
   if writes = 0 then throw "bar: no write command ran (a ratio over nothing)"
   let (read, need) := res.reopenReads.foldl (fun (a, b) (x, y, _) => (a + x, b + y)) (0, 0)
-  if need = 0 then throw "bar: no reopen with bytes past a base was measured (a ratio over nothing)"
+  if need = 0 then
+    throw s!"bar: no reopen with bytes past a base was measured (a ratio over nothing; the measured reopens' (read, past-base) bytes: {res.reopenReads.map fun (x, y, _) => (x, y)})"
   pure [("frames-per-write", res.frames, writes), ("steps-per-write", res.steps, writes),
     ("reopen-bytes-per-byte-past-base", read, need)]
 
@@ -125,7 +126,9 @@ def rowbarCounts (r : Row) (res : Loopback.Result) : Except String (List (String
 this much, above the honest ratio. -/
 def rowbarStated : List (Mutation × String × String) :=
   [(.twiceEach, "frames-per-write", "21.871"), (.twiceEach, "steps-per-write", "1.977"),
-   (.staleBase, "reopen-bytes-per-byte-past-base", "5.260")]
+   -- 6.069 since KERNEL-68 (a Turn record 40 bytes larger; THE BAR's measured tail is 20 invokes,
+   -- not 23, to stay under the seal floor): the stale base reads the whole segment over a shorter tail
+   (.staleBase, "reopen-bytes-per-byte-past-base", "6.069")]
 
 /-- THE BAR under each rowbar plant: its counts must move to their stated values, above the honest
 ones, and the mutation must have happened (`staleBase`: a measured reopen was handed an older base). -/

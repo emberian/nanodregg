@@ -174,20 +174,38 @@ def restartPlant (root : System.FilePath) (key : Digest) (keys : Keys) (seed : N
   match ← serveDir dir keys cadence seed (frames.take 120) with
   | .error e => check s!"{p}: the writer serves ({e})" false failures
   | .ok _ =>
-  -- a few frames more, so the live tail after the newest base holds records
-  match ← serveDir dir keys cadence seed ((frames.drop 120).take 3) with
-  | .error e => check s!"{p}: the writer serves a tail ({e})" false failures
-  | .ok _ =>
-  match ← follow dir keys cadence with
-  | .error e => check s!"{p}: the live Store opens at the copy ({e.name})" false failures
-  | .ok live =>
+  -- frames more, in rounds of three, until the live tail after the newest base holds a record: a
+  -- seal may land on any frame (where depends on the records' bytes: KERNEL-68 grew the Turn record
+  -- by 40 and moved it onto a fixed three-frame tail for two seeds), so the plant reads the Store
+  -- after each round rather than betting on a count
+  let served ← IO.mkRef 120
+  let liveR ← IO.mkRef (none : Option (Opening (World Nat)))
+  let errR ← IO.mkRef (none : Option String)
+  for _ in [0:10] do
+    if (← liveR.get).isSome || (← errR.get).isSome then break
+    let n ← served.get
+    match ← serveDir dir keys cadence seed ((frames.drop n).take 3) with
+    | .error e => errR.set (some s!"{p}: the writer serves a tail ({e})")
+    | .ok _ =>
+      served.set (n + 3)
+      match ← follow dir keys cadence with
+      | .error e => errR.set (some s!"{p}: the live Store opens at the copy ({e.name})")
+      | .ok live => if 0 < live.sealed.offset && 0 < live.opened.records then liveR.set (some live)
+  match ← errR.get with
+  | some e => check e false failures
+  | none =>
+  match ← liveR.get with
+  | none =>
+      check s!"{p} fires: the live Store sealed (its base is off genesis) and its tail holds records" false failures
+  | some live =>
   check s!"{p} fires: the live Store sealed (its base is off genesis) and its tail holds records"
     (0 < live.sealed.offset && 0 < live.opened.records) failures
+  let served ← served.get
   let baseCopy ← IO.FS.readBinFile (basePath dir)
   let segAtCopy ← logical dir (physicalHeaderBytes keys)
-  let rest := if sealFirst then frames.drop 163 else frames.drop 123
+  let rest := if sealFirst then frames.drop (served + 40) else frames.drop served
   if sealFirst then
-    match ← serveDir dir keys cadence seed ((frames.drop 123).take 40) with
+    match ← serveDir dir keys cadence seed ((frames.drop served).take 40) with
     | .error e => check s!"{p}: the writer serves to a newer base ({e})" false failures
     | .ok (r1, _) =>
       check s!"{p} fires: the writer sealed a newer base after the copy, before the restart"

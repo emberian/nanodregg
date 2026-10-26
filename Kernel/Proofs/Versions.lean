@@ -1090,13 +1090,13 @@ private def vCell : Cell := { kind := 0, discipline := .ram, slots := [] }
 
 private def vBirth0 : Turn UInt8 :=
   { txId := 1, notBefore := 0, validUntil := 1, touches := [], creates := [(5, vCell)],
-    nullifiers := [], charge := 0, event := ByteArray.empty }
+    nullifiers := [], charge := 0, event := ByteArray.empty, member := 0 }
 
 private def vBirth : Turn UInt8 := { vBirth0 with charge := vBirth0.weight }
 
 private def vRetire0 : Turn UInt8 :=
   { txId := 2, notBefore := 0, validUntil := 2, touches := [⟨5, pinOf vEnv (some (.live vCell 0)), .retire⟩],
-    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty }
+    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty, member := 0 }
 
 private def vRetire : Turn UInt8 := { vRetire0 with charge := vRetire0.weight }
 
@@ -1171,20 +1171,20 @@ private def dKeep : Touch UInt8 := ⟨7, pinOf vEnv (some (.live vCell 0)), .kee
 
 private def dT1₀ : Turn UInt8 :=
   { txId := 1, notBefore := 0, validUntil := 1, touches := [dKeep], creates := [], nullifiers := [],
-    charge := 0, event := ByteArray.empty, rows := [⟨.row dKey, none, .insert 1 ByteArray.empty⟩] }
+    charge := 0, event := ByteArray.empty, rows := [⟨.row dKey, none, .insert 1 ByteArray.empty⟩], member := 0 }
 
 private def dT1 : Turn UInt8 := { dT1₀ with charge := dT1₀.weight }
 
 private def dT2₀ : Turn UInt8 :=
   { txId := 2, notBefore := 0, validUntil := 2, touches := [dKeep], creates := [], nullifiers := [],
     charge := 0, event := ByteArray.empty,
-    rows := [⟨.row dKey, some (rowPin vEnv 0 (some (.row 1 ByteArray.empty 0))), .retract⟩] }
+    rows := [⟨.row dKey, some (rowPin vEnv 0 (some (.row 1 ByteArray.empty 0))), .retract⟩], member := 0 }
 
 private def dT2 : Turn UInt8 := { dT2₀ with charge := dT2₀.weight }
 
 private def dT3₀ : Turn UInt8 :=
   { txId := 3, notBefore := 0, validUntil := 3, touches := [⟨7, pinOf vEnv (some (.live vCell 0)), .retire⟩],
-    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty }
+    creates := [], nullifiers := [], charge := 0, event := ByteArray.empty, member := 0 }
 
 private def dT3 : Turn UInt8 := { dT3₀ with charge := dT3₀.weight }
 
@@ -1773,7 +1773,7 @@ first tooth above) where, without it, a head that stood at width 1 stands again 
 /-- A turn that bears cell 7 and declares its relation 3 at width 2. -/
 private def wReborn₀ : Turn UInt8 :=
   { txId := 4, notBefore := 0, validUntil := 4, touches := [], creates := [(7, vCell)], nullifiers := [],
-    charge := 0, event := ByteArray.empty, rows := [⟨.head 7 3, none, .declare 10 100 2 true⟩] }
+    charge := 0, event := ByteArray.empty, rows := [⟨.head 7 3, none, .declare 10 100 2 true⟩], member := 0 }
 
 private def wReborn : Turn UInt8 := { wReborn₀ with charge := wReborn₀.weight }
 

@@ -459,7 +459,8 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
 /-- What a derived Turn bears: the call's Draft, sealed once. -/
 theorem receiveWith_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
     (h : receiveWith X look rv c = .ok t) : ∃ d, derive X look rv c = .ok d ∧ t.creates = d.creates := by
-  obtain ⟨_, d, hd, hs⟩ := receiveWith_sealed h
+  obtain ⟨_, d, _k, hd, hs⟩ := receiveWith_sealed h
+  replace hd := derive_of_withTicks hd
   exact ⟨d, hd, (sealTurn_ok hs).2.2.2.2.2.2.2.1⟩
 
 section Steps

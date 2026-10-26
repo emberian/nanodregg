@@ -105,13 +105,14 @@ theorem receive_of {X : Ctx D} {w : World D} {c : Call D} {obj : D} {method : Na
     (hi : invoke X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
       ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member obj method args budget via = .ok (d, wk)) :
-    receive X w c = sealTurn X c d.creates d.effects d.nullifiers d.rows := by
+    receive X w c = sealTurn X c d.creates d.effects d.nullifiers d.rows (poolOf c.unsigned.body - wk.pool) := by
   have h0 : req (decide (c.unsigned.world = w.origin)) Refusal.wrongWorld =
       (Except.ok () : Except (Refusal D) Unit) := by simp [req, hw]
   have hk' : keyRule (pinned X.env w c.unsigned.pins) c.unsigned = .ok () := by
     unfold keyRule; rw [hb]; exact hk
-  have hd : derive X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c = .ok d := by
-    unfold derive; rw [hb] at hi ⊢; simp only [dispatch, hi, Except.map]
+  have hd : deriveWithTicks X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c =
+      .ok (d, poolOf c.unsigned.body - wk.pool) := by
+    unfold deriveWithTicks; rw [hb] at hi ⊢; simp only [dispatch, hi, Except.map]
   unfold receive receiveWith deriveTurn
   simp only [h0, hs, hk', hd, bind, Except.bind]
 
@@ -220,10 +221,10 @@ private def s1 : Slots := [(stateBase, natBytes 7)]
 
 private def dummy : Turn UInt8 :=
   { txId := 0, notBefore := 0, validUntil := 0, touches := [], creates := [], nullifiers := [],
-    charge := 0, event := .empty }
+    charge := 0, event := .empty, member := 0 }
 
 private def t1 : Turn UInt8 :=
-  ((sealTurn wCtx c1 [] (writeOf 5 (diffOps (stateOf objCell) s1)) [] []).toOption).getD dummy
+  ((sealTurn wCtx c1 [] (writeOf 5 (diffOps (stateOf objCell) s1)) [] [] 41).toOption).getD dummy
 
 private def w1 : World UInt8 := ((World.admit wEnv w0 t1).toOption).getD w0
 
@@ -283,7 +284,7 @@ private def req2 : Req UInt8 := reqOf c2.unsigned 5 7 (.invoke 0)
 private def s2 : Slots := [(stateBase, natBytes 9)]
 
 private def t2 : Turn UInt8 :=
-  ((sealTurn wCtx c2 [] (writeOf 5 (diffOps (stateOf cell2) s2)) [] []).toOption).getD dummy
+  ((sealTurn wCtx c2 [] (writeOf 5 (diffOps (stateOf cell2) s2)) [] [] 41).toOption).getD dummy
 
 private def w2 : World UInt8 := ((World.admit wEnv w1 t2).toOption).getD w1
 

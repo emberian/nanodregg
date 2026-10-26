@@ -50,7 +50,7 @@ structure Receipt (D : Type) where
   rowsroot : D
   answer : Answer D
   jpath : Trie.Proof D D
-  rpath : Trie.Proof (RefusalSlot D) D
+  rpath : Trie.Proof (WindowSlot D) D
 
 /-- Why a receipt does not answer (law 7). -/
 inductive Refusal
@@ -84,13 +84,13 @@ def answerOf (E : Env D) (height : Nat) (txId : D) (notBefore : Nat) (r : Receip
   | .refused h code m =>
       -- recorded refused AND not committed: the journal path must show the id absent
       if h < 2 ^ 64 ∧ code < 2 ^ 64 ∧
-          Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code m)) r.rpath = true ∧
+          Trie.verifyInclusion (refusalSpec E) r.rroot (.refusal (.tx txId)) (refusalDigest E (.refused h code m)) r.rpath = true ∧
           Trie.verifyExclusion (journalSpec E) r.jroot txId r.jpath = true
       then .ok (.refused h code m) else .error .pathMismatch
   | .absent =>
       if journalForgets height notBefore = true then .error .forgotten
       else if Trie.verifyExclusion (journalSpec E) r.jroot txId r.jpath = true ∧
-          Trie.verifyExclusion (refusalSpec E) r.rroot (.tx txId) r.rpath = true
+          Trie.verifyExclusion (refusalSpec E) r.rroot (.refusal (.tx txId)) r.rpath = true
       then .ok .absent else .error .pathMismatch
 
 /-- THE decision: the receipt against the head (`height`, `roots`) for the call (`txId`,
@@ -110,7 +110,7 @@ def build (E : Env D) (w : World D) (txId : D) : Receipt D :=
       | _ => .absent
   { txId, root := w.root E, jroot := w.journalRoot E, rroot := w.refusalsRoot E,
     rowsroot := w.rowsRoot E, answer,
-    jpath := w.journal.prove (journalSpec E) txId, rpath := w.refusals.prove (refusalSpec E) (.tx txId) }
+    jpath := w.journal.prove (journalSpec E) txId, rpath := w.refusals.prove (refusalSpec E) (.refusal (.tx txId)) }
 
 /-! ## Wire form
 
@@ -130,7 +130,7 @@ def jproof (E : Env D) (dc : Stream D) : Stream (Trie.Proof D D) :=
   Codec.Kernel.proof (journalSpec E) dc dc
 
 /-- The refusals path's codec: keys are refusals slots (`Codec.Kernel.refusalSlot`). -/
-def rproof (E : Env D) (dc : Stream D) : Stream (Trie.Proof (RefusalSlot D) D) :=
+def rproof (E : Env D) (dc : Stream D) : Stream (Trie.Proof (WindowSlot D) D) :=
   Codec.Kernel.proof (refusalSpec E) (Codec.Kernel.refusalSlot dc) dc
 
 def bytes (E : Env D) (dc : Stream D) (r : Receipt D) : Option ByteArray := do

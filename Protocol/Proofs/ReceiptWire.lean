@@ -30,7 +30,7 @@ codec reads back. -/
 structure Fits (E : Env D) (r : Receipt D) : Prop where
   answer : r.answer.Fits
   jpath : ProofFits (journalSpec E) (fun _ => True) (fun _ => True) r.jpath
-  rpath : ProofFits (refusalSpec E) (RefusalSlot.Fits fun _ => True) (fun _ => True) r.rpath
+  rpath : ProofFits (refusalSpec E) (WindowSlot.Fits fun _ => True) (fun _ => True) r.rpath
 
 theorem frame_lawful : Stream.Lawful frame := Layout.codec_lawful _ _ _
 
@@ -41,7 +41,7 @@ theorem jproof_lawfulOn {E : Env D} {dc : Stream D} (hd : Stream.Lawful dc) :
 
 omit [Ord D] in
 theorem rproof_lawfulOn {E : Env D} {dc : Stream D} (hd : Stream.Lawful dc) :
-    LawfulOn (ProofFits (refusalSpec E) (RefusalSlot.Fits fun _ => True) (fun _ => True)) (rproof E dc) :=
+    LawfulOn (ProofFits (refusalSpec E) (WindowSlot.Fits fun _ => True) (fun _ => True)) (rproof E dc) :=
   proof_lawfulOn (refusalSpec E) (refusalSlot_lawfulOn hd.on) hd.on
 
 theorem toNat_toUInt64 {n : Nat} (h : n < 2 ^ 64) : n.toUInt64.toNat = n := by

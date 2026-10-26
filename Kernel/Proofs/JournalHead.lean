@@ -39,7 +39,7 @@ theorem admit_height_lt {E : Env D} {w w' : World D} {t : Turn D} (h : World.adm
   have hb := admit_bounded h
   unfold checkBounds at hb
   simp only [except_bind_ok] at hb
-  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hc, -⟩ := hb
+  obtain ⟨⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, _, ⟨⟩, hc, -⟩ := hb
   rw [req_ok] at hc
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hc
   rw [admit_height h]

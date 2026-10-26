@@ -137,6 +137,10 @@ theorem checkCreates_staleOnly {P : D → Prop} (E : Env D) (w : World D) (t : T
     StaleOnly P (checkCreates E w t) := by
   unfold checkCreates; stale_only
 
+theorem checkTicks_staleOnly {P : D → Prop} (E : Env D) (w : World D) (t : Turn D) :
+    StaleOnly P (checkTicks E w t) := by
+  unfold checkTicks; stale_only
+
 omit [DecidableEq D] in
 theorem checkSteps_staleOnly {P : D → Prop} (w : World D) : StaleOnly P (checkSteps (D := D) w) := by
   unfold checkSteps; stale_only
@@ -301,6 +305,7 @@ theorem admit_stale_pin {E : Env D} {w : World D} {t : Turn D} {y : D}
   refine StaleOnly.bind ((rowsRun_staleOnly E w t hr).mono fun _ h => .inr (.inl h)) fun _ _ => ?_
   refine StaleOnly.bind (checkCharge_staleOnly w t _) fun _ _ => ?_
   refine StaleOnly.bind (checkCreates_staleOnly E w t) fun _ _ => ?_
+  refine StaleOnly.bind (checkTicks_staleOnly E w t) fun _ _ => ?_
   refine StaleOnly.bind (checkSteps_staleOnly w) fun _ _ => ?_
   exact StaleOnly.pure' _
 
@@ -340,7 +345,7 @@ private def sStaleKeep : Touch UInt8 := ⟨7, pinOf sEnv none, .keep⟩
 private def sTurn0 (ts : List (Touch UInt8)) (rs : List (RowTouch UInt8)) (qs : List (RangeRead UInt8)) :
     Turn UInt8 :=
   { txId := 1, notBefore := 0, validUntil := 1, touches := ts, creates := [], nullifiers := [],
-    charge := 0, event := ByteArray.empty, rows := rs, ranges := qs }
+    charge := 0, event := ByteArray.empty, rows := rs, ranges := qs, member := 0 }
 
 private def sTurn (ts : List (Touch UInt8)) (rs : List (RowTouch UInt8)) (qs : List (RangeRead UInt8)) :
     Turn UInt8 := { sTurn0 ts rs qs with charge := (sTurn0 ts rs qs).weight }

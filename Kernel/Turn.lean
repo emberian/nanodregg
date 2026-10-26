@@ -21,6 +21,11 @@ log with `World.admit` alone, and nothing it would have to trust. It carries
   its log record plus everything it can add to the World (KERNEL-12). The signer signs the price.
 * `event` — the ingress bytes (the signed call), opaque to the kernel, kept in the log so the
   log alone is the audit trail. No archive beside it.
+* `member` and `ticks` (DESIGN-OBS §1.3) — who signed the call, and the ticks its whole tree of
+  runs used. Both are re-derived by every follower from the event (`Receive.rederive`: a page
+  carries the call, never the writer's Turn), so a writer cannot state another member or another
+  count; the kernel meters `ticks` per member per window (`World.ticksUsed`, `ticksBudget`) as it
+  counts refusals, and a receipt of a Turn names its signer as a refusal's names the member charged.
 -/
 import Kernel.Cell
 
@@ -117,6 +122,10 @@ structure Turn (D : Type) where
   rows : List (RowTouch D) := []
   /-- the range reads the turn pins (LANG-44 (c), the second pin kind) -/
   ranges : List (RangeRead D) := []
+  /-- the member whose signed call this is (DESIGN-OBS §1.3; re-derived from `event`) -/
+  member : D
+  /-- the ticks the call's tree of runs used (0 for every Body but an invoke; re-derived) -/
+  ticks : Nat := 0
   deriving DecidableEq
 
 /-- The cells a turn bears, without their ids. -/
@@ -196,8 +205,9 @@ def Touch.weight {D : Type} (x : Touch D) : Nat := 2 * digestWeight + x.act.logW
 
 /-- What a turn's log record costs, field by field in the codec's order (`Codec.Kernel.turn`):
 txId, the window, the touches, the born cells with their ids, the nullifiers (each list with its
-header), the charge and the event (with its length). At the deployed digest this is the record's
-byte count: CODEC proves `(Codec.Kernel.turn dc).size t = t.logWeight`. -/
+header), the charge and the event (with its length), the rows, the ranges, the member and the
+ticks. At the deployed digest this is the record's byte count: CODEC proves
+`(Codec.Kernel.turn dc).size t = t.logWeight`. -/
 def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
   digestWeight + 2 * counterWeight
     + headerWeight + (t.touches.map Touch.weight).sum
@@ -207,6 +217,7 @@ def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
     + headerWeight + t.event.size
     + headerWeight + (t.rows.map RowTouch.weight).sum
     + headerWeight + (t.ranges.map RangeRead.weight).sum
+    + digestWeight + counterWeight
 
 /-- The most a turn can add to the World (`Kernel.Proofs.Weight.admit_world_weight`): each born
 cell with its id, each write's ops, each spent nullifier, each row touch's growth (KERNEL-46

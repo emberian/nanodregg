@@ -748,7 +748,7 @@ def metAtAdmit (st : State D) (what want : String) : Except (Reject D) (World D)
 def forgedTurn (P : Params D) (w : World D) (tag : String) (touches : List (Touch D)) (creates : List Cell) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" (tag.toUTF8 ++ P.env.bytes w.chain)
   let t0 : Turn D := ⟨txId, 0, w.height + 1, touches,
-    creates.zipIdx.map (fun p => (bornId P.env txId p, p.1)), [], 0, ByteArray.empty, [], []⟩
+    creates.zipIdx.map (fun p => (bornId P.env txId p, p.1)), [], 0, ByteArray.empty, [], [], txId, 0⟩
   { t0 with charge := t0.weight }
 
 /-- The value probes: forged turns no receiver derives, each refused by the kernel by name. -/
@@ -797,6 +797,36 @@ def probeRom (P : Params D) (st : State D) : State D :=
       else { st with failures := s!"probe rom-id: expected notContentId, got {r.name}" :: st.failures }
   | .error r, _ => { st with failures := s!"probe rom-id: the control at its content id refused {r.name}" :: st.failures }
   | _, .ok _ => { st with failures := "probe rom-id: a ROM birth at a non-content id was admitted" :: st.failures }
+
+/-- The meter probe (DESIGN-OBS §1.3): on a COPY of the World, sixteen forged Turns by one member,
+each spending `Bounds.treeTicksMax` ticks, are admitted (the sixteenth is the control), the
+seventeenth is refused `ticksBudget` naming the member (`ticks-window:ticksBudget`), and a Turn
+stating more ticks than one tree may use is `overBound`. Met straight at `World.admit`; nothing of
+the run's World moves. Skipped when the seventeen heights would cross a window boundary (the meter
+resets there, which is its design, not this probe's subject). -/
+def probeTicks (P : Params D) (st : State D) : State D :=
+  let w := st.host
+  if (w.height + 1) / Bounds.windowMax ≠ (w.height + 17) / Bounds.windowMax then st else
+  let m := P.env.hash "nanodregg/sim/ticks-member" ByteArray.empty
+  let spend (w : World D) (i : Nat) : Turn D :=
+    { forgedTurn P w s!"ticks-{i}" [] [] with member := m, ticks := Bounds.treeTicksMax }
+  let step (acc : Except String (World D)) (i : Nat) : Except String (World D) := do
+    let w ← acc
+    match World.admit P.env w (spend w i) with
+    | .ok w' => pure w'
+    | .error r => throw s!"probe ticks-window: full tree {i + 1} of 16 in one window refused {r.name}"
+  match (List.range 16).foldl step (.ok w) with
+  | .error e => { st with failures := e :: st.failures }
+  | .ok w16 =>
+    match World.admit P.env w16 (spend w16 16),
+      World.admit P.env w { spend w 99 with ticks := Bounds.treeTicksMax + 1 } with
+    | .error r, .error r' =>
+      if r.name = "ticksBudget" ∧ r'.name = "overBound" then
+        { st with steps := st.steps + 1, refusedAsExpected := st.refusedAsExpected + 2,
+                  seen := "ticks-window:ticksBudget" :: "ticksBudget" :: "overBound" :: st.seen }
+      else { st with failures := s!"probe ticks-window: expected ticksBudget and overBound, got {r.name} and {r'.name}" :: st.failures }
+    | .ok _, _ => { st with failures := "probe ticks-window: a seventeenth full tree in one window was admitted" :: st.failures }
+    | _, .ok _ => { st with failures := "probe ticks-over: a Turn stating more ticks than a tree may use was admitted" :: st.failures }
 
 /-- After every step: the World's value agrees with the model, every denomination sums to 0, its
 floor sum is its cap, and every account is within its floor. A whole-World scan (Sim only). -/
@@ -1174,7 +1204,7 @@ def act (P : Params D) (st : State D) : State D :=
   match k with
   | 15 | 16 => ledgerAct P st (k - 15)
   | 17 | 18 => ledgerAct P st 2
-  | 19 => probeRom P (probeValue P st)
+  | 19 => probeTicks P (probeRom P (probeValue P st))
   | 23 => if !st.treeDone then treeArms P st else if st.capDone then st else capArms P st
   | 20 => ledgerAct P st 3
   | 21 => -- birth a programmed object; half the time its owner makes method 0 public (KERNEL-26:
@@ -1568,7 +1598,8 @@ def probeGenesis (P : Params D) (st : State D) (founders : List (ByteArray × D)
 def journalTurn (P : Params D) (i nb vu : Nat) : Turn D :=
   let t0 : Turn D :=
     { txId := P.env.hash "nanodregg/sim/journal-tx" (toString i).toUTF8, notBefore := nb, validUntil := vu,
-      touches := [], creates := [], nullifiers := [], charge := 0, event := ByteArray.empty }
+      touches := [], creates := [], nullifiers := [], charge := 0, event := ByteArray.empty,
+      member := P.env.hash "nanodregg/sim/journal-tx" (toString i).toUTF8 }
   { t0 with charge := t0.weight }
 
 /-- One verdict of the journal probe, by name. -/
@@ -1975,7 +2006,7 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
     let (st, _) := submit P st (wr st o2 1 "x" (pinsNow st o2)) .ok "refusal-early-advance"
     let (st, _) := submit P st (wr st o2 1 "y" (pinsNow st o2)) .ok "refusal-early-advance"
     let earlyCode := (Verdict.rejected (D := D) .outsideWindow).code
-    let earlyRefusals := st.host.refusals.insert (refusalSpec E) (.tx (txIdOf X ce)) (.refused (H + 1) earlyCode (refusedOf X ce (.rejected .outsideWindow)).member)
+    let earlyRefusals := st.host.refusals.insert (refusalSpec E) (.refusal (.tx (txIdOf X ce))) (.refused (H + 1) earlyCode (refusedOf X ce (.rejected .outsideWindow)).member)
     let early := { st.host with refusals := earlyRefusals }
     let st := match Receive.submit X early ce with
       | .error (.rejected (.refusedFinal _)) => meet st "refusal-early-plant:refusedFinal"
@@ -2021,9 +2052,9 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
     -- (`refusalsFits`) still admits and `refusalsCounted` refuses
     let st := arm st "refusals-counted:counted" (refusalsCounted E st.host) "the Host's World fails refusalsCounted"
     let w := st.host
-    let r₁ := w.refusals.insert (refusalSpec E) (.count f.id (refusalWindow w.height))
+    let r₁ := w.refusals.insert (refusalSpec E) (.refusal (.count f.id (refusalWindow w.height)))
       (.count (refusalCount E w f.id - 1))
-    let r₂ := r₁.insert (refusalSpec E) (.count o (refusalWindow w.height)) (.count (refusalCount E w o + 1))
+    let r₂ := r₁.insert (refusalSpec E) (.refusal (.count o (refusalWindow w.height))) (.count (refusalCount E w o + 1))
     let moved : World D := { w with refusals := r₂ }
     let st := if f.id != o && 2 ≤ refusalCount E w f.id && refusalCount E w o < Bounds.refusalsPerWindow then
         arm st "refusals-counted-plant:refused"
@@ -2037,7 +2068,7 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
     -- and `refusalsCounted` refuses it
     let cur := refusalWindow w.height
     let rFull := { refusedOf X c17 (.rejected (.missingCell o)) with member := o }
-    let rsFull := w.refusals.insert (refusalSpec E) (.total w.origin cur) (.count Bounds.refusalsPerWindowMax)
+    let rsFull := w.refusals.insert (refusalSpec E) (.refusal (.total w.origin cur)) (.count Bounds.refusalsPerWindowMax)
     let wFull : World D := { w with refusals := rsFull }
     let st := match World.refuse E wFull rFull, World.refuse E w rFull with
       | .ok _, _ => failWith st "probe refusals: a refusal past the World's cap was recorded"
@@ -2052,7 +2083,7 @@ def probeRefusals (P : Params D) (st : State D) (g : World D) : State D :=
       | .error .refusalsFull, .error e => failWith st s!"probe refusals: the control refusal was refused {e.name}"
       | .error e, _ => failWith st s!"probe refusals: at the World's cap the refusal was refused {e.name}, not refusalsFull"
     let tot := refusalTotal E w
-    let rsLow := w.refusals.insert (refusalSpec E) (.total w.origin cur) (.count (tot - 1))
+    let rsLow := w.refusals.insert (refusalSpec E) (.refusal (.total w.origin cur)) (.count (tot - 1))
     let lowered : World D := { w with refusals := rsLow }
     let st := if 2 ≤ tot then
         arm st "refusals-total-plant:refused"
@@ -2067,7 +2098,7 @@ Its charge is its own weight; its credit is the retired cell's whole weight. -/
 def retireTurn (P : Params D) (w : World D) (id : D) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" ("retire-budget".toUTF8 ++ P.env.bytes w.chain)
   let t0 : Turn D := ⟨txId, w.height + 1, w.height + 1, [⟨id, pinOf P.env (w.entry P.env id), .retire⟩], [], [], 0,
-    ByteArray.empty, [], []⟩
+    ByteArray.empty, [], [], txId, 0⟩
   { t0 with charge := t0.weight }
 
 /-- The budget probe (cv 01a14ba9-cbf4, `Kernel.Proofs.Budget`), at the end of every seed, on the
@@ -2077,9 +2108,11 @@ Host's World `w`:
 * `carry-budget-edge:ok` — the same carry at allowance 2^64 − 1 − weight (the boundary) is admitted,
   and the light retire on it leaves storage plus allowance below 2^64 (`carry_fold_budget_lt`);
 * `carry-budget-plant:overflow` — the PLANT: the crafted carry built UNCHECKED (`carryWorld`, what the
-  old allowance-only check admitted) and the light retire of its heaviest retirable live cell carries
-  the allowance to 2^64 or past it, outside the World codec's `u64`. The plant must reach the overflow,
-  or the tooth is vacuous and the probe fails. -/
+  old allowance-only check admitted), beside a crafted 1 KiB cell (KERNEL-68: a retire's record carries
+  its member and ticks, 40 bytes more, so a seed's own cells can all be lighter than their retire),
+  and the light retire of its heaviest retirable live cell carries the allowance to 2^64 or past it,
+  outside the World codec's `u64`. The plant must reach the overflow, or the tooth is vacuous and the
+  probe fails. -/
 def probeCarryBudget (P : Params D) (st : State D) : State D :=
   let X := P.ctx
   let w := st.host
@@ -2104,8 +2137,12 @@ def probeCarryBudget (P : Params D) (st : State D) : State D :=
         else if after.any (fun we' => decide (top ≤ we'.weight + we'.allowance)) then
           failWith st "probe carry-budget-edge: a retire carried storage plus allowance past 2^64"
         else { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "carry-budget-edge:ok" :: st.seen }
-  let unchecked := carryWorld X worldName (nonceOf 9) w.origin crafted
-  let reached := live.findSome? fun (id, _) => match World.admit P.env unchecked (retireTurn P unchecked id) with
+  let heavyId := P.env.hash "nanodregg/sim/forge" ("carry-budget-heavy".toUTF8 ++ P.env.bytes w.chain)
+  let heavy : Cell := ⟨0, .ram, [(0, ⟨Array.replicate 1024 0⟩)]⟩
+  let unchecked := carryWorld X worldName (nonceOf 9) w.origin
+    { crafted with trie := crafted.trie.insert (trieSpec P.env) (.cell heavyId) (.entry (.live heavy 0)) }
+  let reached := ((heavyId, heavy) :: live).findSome? fun (id, _) =>
+    match World.admit P.env unchecked (retireTurn P unchecked id) with
     | .ok w' => if top ≤ w'.allowance then some w'.allowance else none
     | .error _ => none
   match reached with
@@ -2133,7 +2170,7 @@ def rowsTurn (P : Params D) (w : World D) (tag : String) (touches : List (Touch 
     (creates : List (D × Cell)) (rows : List (RowTouch D)) (ranges : List (RangeRead D)) : Turn D :=
   let t0 : Turn D :=
     { txId := rowsTx P w tag, notBefore := w.height + 1, validUntil := w.height + 64, touches, creates,
-      nullifiers := [], charge := 0, event := ByteArray.empty, rows, ranges }
+      nullifiers := [], charge := 0, event := ByteArray.empty, rows, ranges, member := rowsTx P w tag }
   { t0 with charge := t0.weight }
 
 /-- A relation's head as `(count, sum)`. -/
@@ -2830,7 +2867,7 @@ def planted : List String :=
   ["wrongWorld", "lawDenied", "noGrant", "unknownKey", "replayed", "stale", "notPrecommitted", "notIssuer",
    "missingCell", "enrollSpent", "transferSpent", "creditSpent", "rightTarget", "grantRight", "grantWidens", "unrooted", "duplicateEffect",
    "overflow", "sameAccount", "zeroAmount", "assetMismatch", "belowFloor", "spent",
-   "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell", "founderKeyTooLong"]
+   "notConserved", "floorNotConserved", "valueMalformed", "overBound", "notWell", "founderKeyTooLong", "ticksBudget"]
 
 /-- The arms a run of 16 or more seeds must each reach with the named verdict (`what:verdict`): a
 refusal name met somewhere else does not test the receiver this arm exercises. -/
@@ -2839,7 +2876,7 @@ def plantedArms : List String :=
    "law-self:lawDenied", "transfer-via:ok", "transfer-past-cap:transferSpent", "transfer-mutate:grantRight", "credit-via:ok", "credit-past-cap:creditSpent",
    "right-target:rightTarget", "cancel:recorded", "cancel-final:refusedFinal", "cancel-other:badSignature",
    "cancel-early:outsideWindow", "cancel-forged:cancelForged", "rotate-stales:stale", "law:ok", "create-frozen:ok", "write:lawDenied", "write-no-grant:noGrant",
-   "rom-id:notContentId", "genesis-founder-key:founderKeyTooLong",
+   "rom-id:notContentId", "ticks-window:ticksBudget", "genesis-founder-key:founderKeyTooLong",
    "proof-sibling:refused", "proof-leaf:refused", "proof-tomb-live:refused", "proof-spent-unspent:refused",
    "proof-stale:refused", "proof-overlong:refused", "proof-spent-empty:refused",
    "account-twice:idTaken", "account-for-other:ok", "transfer-ref-not-well:notWell",

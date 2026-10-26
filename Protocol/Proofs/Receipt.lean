@@ -124,11 +124,11 @@ theorem check_refused_uncommitted {w : World D} (hc : w.JournalCanon E)
 
 /-- Every refusals leaf of a RefusalsOk World fits its wire form (what KERNEL's soundness asks). -/
 theorem refusalsOk_fits {w : World D} (hr : w.RefusalsOk E) :
-    ∀ k v, w.refusalAt E k = some v → Codec.Kernel.RefusalLeaf.Fits v := by
+    ∀ k v, w.refusals.get (refusalSpec E) k = some v → Codec.Kernel.RefusalLeaf.Fits v := by
   intro k v hk
   have hf := hr.2 k v hk
-  cases k <;> cases v <;> simp only [refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
-    decide_eq_true_eq] at hf <;>
+  rcases k with k | k <;> cases k <;> cases v <;> simp only [refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
+    Bounds.ticksPerWindow, Bounds.treeTicksMax, decide_eq_true_eq] at hf <;>
     simp only [Codec.Kernel.RefusalLeaf.Fits] <;> (try cases hf) <;> omega
 
 include hE in
@@ -139,7 +139,7 @@ theorem check_refused_sound {w : World D} (hr : w.RefusalsOk E)
     (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m)) :
     w.refusalAt E (.tx txId) = some (.refused h code m) ∨
       CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
-        inclPres (refusalSpec E) (refusalPre E) (.tx txId) (.refused h code m) r.rpath w.refusals) := by
+        inclPres (refusalSpec E) (refusalPre E) (.refusal (.tx txId)) (.refused h code m) r.rpath w.refusals) := by
   obtain ⟨-, hrd, ha⟩ := check_ok hk
   unfold answerOf at ha
   split at ha
@@ -167,7 +167,7 @@ theorem check_absent_unrefused {w : World D} (hr : w.RefusalsOk E)
     (hk : check E H (w.roots E) txId nb r = .ok .absent) :
     w.refusalAt E (.tx txId) = none ∨
       CollidesAmong E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
-        readPres (refusalSpec E) (.tx txId) r.rpath w.refusals) := by
+        readPres (refusalSpec E) (.refusal (.tx txId)) r.rpath w.refusals) := by
   obtain ⟨-, hrd, ha⟩ := check_ok hk
   unfold answerOf at ha
   split at ha
@@ -228,7 +228,7 @@ theorem check_refused_sound_sep {w : World D} (hr : w.RefusalsOk E)
     {H : Nat} {txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
     (hk : check E H (w.roots E) txId nb r = .ok (.refused h code m))
     (hs : Separates E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
-      inclPres (refusalSpec E) (refusalPre E) (.tx txId) (.refused h code m) r.rpath w.refusals)) :
+      inclPres (refusalSpec E) (refusalPre E) (.refusal (.tx txId)) (.refused h code m) r.rpath w.refusals)) :
     w.refusalAt E (.tx txId) = some (.refused h code m) :=
   (check_refused_sound hE hr hk).resolve_right hs.not_collides
 
@@ -239,7 +239,7 @@ theorem check_absent_unrefused_sep {w : World D} (hr : w.RefusalsOk E)
     {H : Nat} {txId : D} {nb : Nat} {r : Receipt D}
     (hk : check E H (w.roots E) txId nb r = .ok .absent)
     (hs : Separates E.hash ([rootsPre E r.root r.jroot r.rroot r.rowsroot, w.rootsPre E] ++
-      readPres (refusalSpec E) (.tx txId) r.rpath w.refusals)) :
+      readPres (refusalSpec E) (.refusal (.tx txId)) r.rpath w.refusals)) :
     w.refusalAt E (.tx txId) = none :=
   (check_absent_unrefused hE hr hk).resolve_right hs.not_collides
 
@@ -251,7 +251,7 @@ refusal it states, the head's roots opening to that root. -/
 theorem check_refused {E : Env D} {H : Nat} {roots txId : D} {nb : Nat} {r : Receipt D} {h code : Nat} {m : D}
     (hk : check E H roots txId nb r = .ok (.refused h code m)) :
     rootsDigest E r.root r.jroot r.rroot r.rowsroot = roots ∧
-      Trie.verifyInclusion (refusalSpec E) r.rroot (.tx txId) (refusalDigest E (.refused h code m)) r.rpath = true := by
+      Trie.verifyInclusion (refusalSpec E) r.rroot (.refusal (.tx txId)) (refusalDigest E (.refused h code m)) r.rpath = true := by
   obtain ⟨-, hr, ha⟩ := check_ok hk
   refine ⟨hr, ?_⟩
   unfold answerOf at ha

@@ -211,7 +211,7 @@ theorem pruneRefusals_canon {E : Env D} {H : Nat} {r : Refusals D} (hr : Trie.Ca
 omit [Ord D] in
 /-- A lookup in the pruned refusals: at a multiple of `windowMax`, the leaf if it is kept. -/
 theorem pruneRefusals_get {E : Env D} {H : Nat} {r : Refusals D} (hr : Trie.Canon (refusalSpec E) 0 r)
-    (k : RefusalSlot D) :
+    (k : WindowSlot D) :
     (pruneRefusals E H r).get (refusalSpec E) k =
       if H % Bounds.windowMax = 0 then (r.get (refusalSpec E) k).filter (keptRefusal H k)
       else r.get (refusalSpec E) k := by
@@ -220,24 +220,105 @@ theorem pruneRefusals_get {E : Env D} {H : Nat} {r : Refusals D} (hr : Trie.Cano
   · exact Trie.get_retainAt (refusalSpec E) _ [] hr (fun _ _ _ _ _ _ h => by simp at h) k
   · rfl
 
+/-- A Turn's commit prunes the refusals at the new height, over the meter leaf it bumped
+(`commitMeter`: unchanged for a Turn with no ticks, KERNEL-68). -/
 theorem commit_refusals {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} :
-    (commit E w t posts).refusals = pruneRefusals E (w.height + 1) w.refusals := rfl
+    (commit E w t posts).refusals = pruneRefusals E (w.height + 1) (commitMeter E w t) := rfl
+
+/-- A Turn with no ticks leaves the refusals as before, but for the prune. -/
+theorem commit_refusals_of_ticks_zero {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    (h : t.ticks = 0) : (commit E w t posts).refusals = pruneRefusals E (w.height + 1) w.refusals := by
+  rw [commit_refusals]; unfold commitMeter; simp [h]
 
 theorem commitRefusal_refusals {E : Env D} {w : World D} {r : Refused D} :
     (commitRefusal E w r).refusals =
-      ((w.refusals.insert (refusalSpec E) (.tx r.txId) (.refused (w.height + 1) r.code r.member)).insert (refusalSpec E)
-        (.count r.member (refusalWindow w.height)) (.count (refusalCount E w r.member + 1))).insert (refusalSpec E)
-        (.total w.origin (refusalWindow w.height)) (.count (refusalTotal E w + 1)) := by
+      ((w.refusals.insert (refusalSpec E) (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member)).insert
+        (refusalSpec E) (.refusal (.count r.member (refusalWindow w.height))) (.count (refusalCount E w r.member + 1))).insert
+        (refusalSpec E) (.refusal (.total w.origin (refusalWindow w.height))) (.count (refusalTotal E w + 1)) := by
   show commitRefusals E w r = _
   unfold commitRefusals
   rw [Trie.insertAll_eq_foldl]; rfl
+
+/-- The meter's write keeps the refusals canonical (one insert, or nothing: KERNEL-68). -/
+theorem commitMeter_canon {E : Env D} {w : World D} {t : Turn D} (hc : w.RefusalsCanon E) :
+    Trie.Canon (refusalSpec E) 0 (commitMeter E w t) := by
+  unfold commitMeter
+  split
+  · exact hc
+  · exact Trie.canon_insert _ _ _ hc
+
+/-- The meter's write touches no refusal-window key (KERNEL-68): the two kinds of the window trie
+are disjoint by constructor, so no hypothesis. -/
+theorem commitMeter_get_refusal {E : Env D} {w : World D} {t : Turn D} (k : RefusalSlot D) :
+    (commitMeter E w t).get (refusalSpec E) (.refusal k) = w.refusals.get (refusalSpec E) (.refusal k) := by
+  unfold commitMeter
+  split
+  · rfl
+  · exact Trie.get_insert_ne _ _ _ (by intro h; cases h)
+
+/-- The meter's write touches no other meter key (KERNEL-68). -/
+theorem commitMeter_get_meter_ne {E : Env D} {w : World D} {t : Turn D} {k : MeterSlot D}
+    (hk : k ≠ .ticks t.member (refusalWindow (w.height + 1))) :
+    (commitMeter E w t).get (refusalSpec E) (.meter k) = w.refusals.get (refusalSpec E) (.meter k) := by
+  unfold commitMeter
+  split
+  · rfl
+  · exact Trie.get_insert_ne _ _ _ (fun h => hk (WindowSlot.meter.inj h))
+
+/-- **The turn's own meter leaf after a Turn** (KERNEL-68): untouched for a Turn with no ticks, else the
+member's ticks this window bumped by the Turn's. The prune never drops it: it is keyed by the window
+the Turn lands in, which is the window the prune keeps. -/
+theorem commit_meterAt_self {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    (hc : w.RefusalsCanon E) :
+    (commit E w t posts).meterAt E (.ticks t.member (refusalWindow (w.height + 1))) =
+      if t.ticks = 0 then w.meterAt E (.ticks t.member (refusalWindow (w.height + 1)))
+      else some (ticksUsed E w t.member + t.ticks) := by
+  unfold World.meterAt
+  rw [commit_refusals, pruneRefusals_get (commitMeter_canon hc)]
+  unfold commitMeter
+  by_cases ht : t.ticks = 0
+  · simp only [ht, ↓reduceIte]
+    by_cases hz : (w.height + 1) % Bounds.windowMax = 0
+    · simp only [hz, ↓reduceIte]
+      cases hg : w.refusals.get (refusalSpec E) (.meter (.ticks t.member (refusalWindow (w.height + 1)))) with
+      | none => rfl
+      | some v => cases v <;> simp [Option.filter, keptRefusal]
+    · simp only [hz, ↓reduceIte]
+  · simp only [ht, ↓reduceIte, Trie.get_insert_self]
+    by_cases hz : (w.height + 1) % Bounds.windowMax = 0
+    · simp [hz, Option.filter, keptRefusal]
+    · simp [hz]
+
+/-- **Every other meter leaf after a Turn** (KERNEL-68): as before, up to the prune — at a multiple of
+`windowMax` a leaf of any other window is gone. The meter's twin of `admit_refusalAt`, over its own
+kind. -/
+theorem commit_meterAt_ne {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
+    (hc : w.RefusalsCanon E) (m : D) (win : UInt64)
+    (hk : MeterSlot.ticks m win ≠ .ticks t.member (refusalWindow (w.height + 1))) :
+    (commit E w t posts).meterAt E (.ticks m win) =
+      if (w.height + 1) % Bounds.windowMax = 0 ∧ win ≠ refusalWindow (w.height + 1) then none
+      else w.meterAt E (.ticks m win) := by
+  unfold World.meterAt
+  rw [commit_refusals, pruneRefusals_get (commitMeter_canon hc), commitMeter_get_meter_ne hk]
+  by_cases hz : (w.height + 1) % Bounds.windowMax = 0
+  · simp only [hz, true_and, ↓reduceIte]
+    by_cases hw : win = refusalWindow (w.height + 1)
+    · simp only [hw, ne_eq, not_true_eq_false, ↓reduceIte]
+      cases hg : w.refusals.get (refusalSpec E) (.meter (.ticks m (refusalWindow (w.height + 1)))) with
+      | none => rfl
+      | some v => cases v <;> simp [Option.filter, keptRefusal]
+    · simp only [hw, ne_eq, not_false_eq_true, ↓reduceIte]
+      cases hg : w.refusals.get (refusalSpec E) (.meter (.ticks m win)) with
+      | none => rfl
+      | some v => cases v <;> simp [Option.filter, keptRefusal, hw]
+  · simp only [hz, false_and, ↓reduceIte]
 
 theorem admit_refusalsCanon {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
     (h : World.admit E w t = .ok w') : w'.RefusalsCanon E := by
   obtain ⟨_, _, rfl⟩ := admit_ok h
   unfold World.RefusalsCanon
   rw [commit_refusals]
-  exact pruneRefusals_canon hc
+  exact pruneRefusals_canon (commitMeter_canon hc)
 
 theorem refuse_refusalsCanon {E : Env D} {w w' : World D} {r : Refused D} (hc : w.RefusalsCanon E)
     (h : World.refuse E w r = .ok w') : w'.RefusalsCanon E := by

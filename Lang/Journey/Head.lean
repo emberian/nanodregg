@@ -286,6 +286,16 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let (rt9, vt9) := invoke rt3 T [tpkg] 0 (cellArg HA) [] (pinT rt3.st.host T HA)
   let (_, vt10) := invoke rt9 T [tpkg, HA] 1 (acceptArg (receiptOf cA)) (rangeT rt9.st.host T HA)
   r := note r s!"TL3 distrust HA ({vt9}); release with A's receipt: {vt10}" (vt9 == "admitted" && programRefused vt10 "untrusted")
+  -- M0 (DESIGN-OBS §1.3, the meter): the kernel's count of B's ticks this window, read off B's
+  -- World, is the sum of the ticks of B's admitted Turns in the session's log (every Turn re-derived
+  -- through `Receive.submit`), and above zero: the rows ran programs
+  let wM := rt4.st.host
+  let logSum := (rt4.st.log.filterMap fun s => match s with
+    | .turn t => if t.member = b.id then some t.ticks else none
+    | _ => none).sum
+  let meter := ticksUsed Sim.env wM b.id
+  r := note r s!"M0 the kernel's meter of B's ticks this window reads {meter}; the log's sum over B's admitted Turns is {logSum}; A's founder has no meter here: {ticksUsed Sim.env wM a.id}"
+    (meter == logSum && logSum > 0 && ticksUsed Sim.env wM a.id == 0)
   return r
 
 /-- A fresh session for the HD and RC rows: World B (the rows' World) and World A (the foreign one). -/

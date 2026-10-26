@@ -439,16 +439,17 @@ theorem rows_local {E : Env D} {w w' : World D} {t : Turn D}
 check `t` alike: the same refusal, or the same posts. -/
 theorem check_local {E : Env D} {w w' : World D} {t : Turn D} (h : Agree E w w' t) :
     check E w' t = check E w t := by
-  obtain ⟨hcells, hH, hS, hA, hJ, hR, hrows⟩ := h
+  obtain ⟨hcells, hH, hS, hA, hJ, hR, hM, hrows⟩ := h
   obtain ⟨hrem, hran, hrun⟩ := rows_local hcells hrows
   have hwin : checkWindow w' t = checkWindow w t := by unfold checkWindow; rw [hH]
+  have htk : checkTicks E w' t = checkTicks E w t := by unfold checkTicks ticksUsed; rw [hH, hM]
   have hjour : checkJournal E w' t = checkJournal E w t := by unfold checkJournal; rw [hJ, hR]
   have hst : checkSteps w' = checkSteps w := by unfold checkSteps; rw [hS]
   have hch : ∀ b, checkCharge w' t b = checkCharge w t b := by intro b; unfold checkCharge; rw [hA]
   show Prod.fst <$> checkWith E w' t = Prod.fst <$> checkWith E w t
   unfold checkWith
   simp only [hwin, hjour, touches_local hcells, checkNullifiers_local hcells, hrem, hran,
-    checkCreates_local hcells, hst, hch, map_bind, map_pure]
+    checkCreates_local hcells, hst, hch, htk, map_bind, map_pure]
   revert hrun
   cases rowsRun E w t <;> cases rowsRun E w' t <;> intro hrun
   · cases hrun; rfl
@@ -467,13 +468,13 @@ private def readCell : Cell := ⟨0, .ram, []⟩
 
 /-- From genesis: `readCell` live at `p`, the allowance exactly the keep turn's weight. -/
 private def keptWorld (E : Env D) (o p : D) : World D :=
-  { World.genesis E o 145 with
+  { World.genesis E o 185 with
     trie := (Trie.T.empty : Cells D).insert (trieSpec E) (.cell p) (.entry (.live readCell 0)) }
 
 /-- Pin `p` (`keep`) at its live pin, touch nothing else, pay the exact weight. -/
 private def keepTurn (E : Env D) (o p : D) : Turn D :=
   { txId := o, notBefore := 1, validUntil := 1, touches := [⟨p, pinOf E (some (.live readCell 0)), .keep⟩],
-    creates := [], nullifiers := [], charge := 145, event := ByteArray.empty }
+    creates := [], nullifiers := [], charge := 185, event := ByteArray.empty, member := o }
 
 private theorem keepTurn_admitted (E : Env D) (o p : D) (w : World D) (hw : w = keptWorld E o p) :
     check E w (keepTurn E o p) = .ok [] := by
@@ -502,7 +503,7 @@ theorem check_local_outside (E : Env D) (o p q : D) (hq : q ≠ p) :
     rw [Trie.get_insert_self]
     simp [w, keptWorld, Trie.get_insert, hq, Trie.get_empty]
   · rw [check_local (w := w) (w' := w') (t := keepTurn E o p)
-      ⟨fun s hs => Trie.get_insert_ne _ _ _ fun e => hnr (e ▸ hs), rfl, rfl, rfl, rfl, rfl, .same rfl⟩, hw]
+      ⟨fun s hs => Trie.get_insert_ne _ _ _ fun e => hnr (e ▸ hs), rfl, rfl, rfl, rfl, rfl, rfl, .same rfl⟩, hw]
 
 /-- **Tooth: a `keep` pin is read, so the read set cannot shrink to the footprint.** `keptWorld` and
 genesis differ only at `p`, which the keep turn reads and does not write; the turn is admitted from
@@ -515,7 +516,7 @@ theorem check_reads_kept (E : Env D) (o p : D) :
       w'.refusals = w.refusals ∧ w'.rows = w.rows ∧ check E w t = .ok [] ∧
       (check E w' t ≠ check E w t ∨ CollidesAmong E.hash [pinPre E none, pinPre E (some (.live readCell 0))]) := by
   have hw := keepTurn_admitted E o p _ rfl
-  refine ⟨keptWorld E o p, World.genesis E o 145, keepTurn E o p, ?_, .touched (x := ⟨p, pinOf E (some (.live readCell 0)), .keep⟩) (by simp [keepTurn]),
+  refine ⟨keptWorld E o p, World.genesis E o 185, keepTurn E o p, ?_, .touched (x := ⟨p, pinOf E (some (.live readCell 0)), .keep⟩) (by simp [keepTurn]),
     fun s hs => ?_, rfl, rfl, rfl, rfl, rfl, rfl, hw, ?_⟩
   · intro h
     cases h with
@@ -529,9 +530,9 @@ theorem check_reads_kept (E : Env D) (o p : D) :
       have := congrArg Prod.fst h
       simp [pinPre, domAbsent, domCell] at this
     · left
-      have hmap : mapEx (touchCheck E (World.genesis E o 145)) (keepTurn E o p).touches = .error (.stale p) := by
+      have hmap : mapEx (touchCheck E (World.genesis E o 185)) (keepTurn E o p).touches = .error (.stale p) := by
         simp [keepTurn, mapEx, touchCheck, World.entry, World.genesis, Trie.get_empty, req, hpin, bind, Except.bind]
-      have hc : check E (World.genesis E o 145) (keepTurn E o p) = .error (.stale p) := by
+      have hc : check E (World.genesis E o 185) (keepTurn E o p) = .error (.stale p) := by
         unfold check checkWith; rw [hmap]; rfl
       rw [hc, hw]; simp
 
@@ -555,7 +556,7 @@ theorem check_unread_row {E : Env D} {n : Nat} (hE : E.Lawful n) {w : World D} {
     ({ w with rows := w.rows.insert (rowSpec E) k v } : World D).rows ≠ w.rows ∧
       check E { w with rows := w.rows.insert (rowSpec E) k v } t = check E w t := by
   refine ⟨fun h => ?_, check_local (w := w) (w' := { w with rows := w.rows.insert (rowSpec E) k v }) (t := t)
-    ⟨fun _ _ => rfl, rfl, rfl, rfl, rfl, rfl, .read hE hc (Trie.canon_insert (rowSpec E) k v hc) hf
+    ⟨fun _ _ => rfl, rfl, rfl, rfl, rfl, rfl, rfl, .read hE hc (Trie.canon_insert (rowSpec E) k v hc) hf
       fun s hs => Trie.get_insert_ne _ _ _ fun e => hk (e ▸ hs)⟩⟩
   have e := congrArg (fun r => r.get (rowSpec E) k) h
   simp only [Trie.get_insert_self] at e

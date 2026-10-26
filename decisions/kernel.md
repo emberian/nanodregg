@@ -3279,3 +3279,118 @@ Item 3's trigger fired. The trigger was "the first row whose invariant spans two
 - A signed row for `duplicateEffect` (a two-transfer method in `lang-journey`).
 
 **KERNEL-66 amendment (2026-10-24, FIX-KERNEL; lang-journey was RED on main since f1839ed).** Three journey rows expected the old order. LB8b (a second answer of one ring over the view the first answer moved) expected the guard's `rung: answered`; LH7b (a select over the view before a re-pin) expected the method's `support0 moved`; P8.2 (a plan signed before the revoke of its provider's grant) accepted either `support0 dead` or `rejected stale`. Each call's pin moved, so under KERNEL-66 each is `rejected stale`, declined before the guard or method runs. That is the name KERNEL-66 means: the refusal names the stale observation, not what a receiver says of the new state. The rows now expect exactly `rejected stale`; LB8 and LH7 still read the guard's and the method's own refusals on a current view. MEASURED (hbox wt/fixkernel on 0a299c8): lang-journey GREEN in both modes. THE BAR (`--records 60 --standing`) reads PASS, and its `--harness-control` reads RED harness-control with every comparator fired, so no `refused stale` appears (FIX-PROTOCOL's BAR line was INFERRED; it does not reproduce). Its expected word is `declined stale` (scripts/bar.sh `STALE`), unchanged. A different defect found while reading: `Protocol.Command.staleBehind` (Machine.lean) still classifies a call stale by the OLD order (`receive`, then `World.admit`'s `stale`). On follow's World, a call whose pin moved but whose receiver also refuses on the new state reads `false`, so its settlement stays `open` where the Host now declines it `stale`. Its twin-free form is `checkPins` on follow's World. `staleBehind_spec` and `Behind.lean`'s finality proofs restate with it. This is PROTOCOL's file; it is handed to FIX-PROTOCOL as a card.
+
+## KERNEL-68 · The meter: a Turn names its member and its ticks, and the kernel counts a member's ticks per window as it counts refusals — the second KIND of one typed window trie (FABLE-OBS, FABLE-OBS-2, 2026-10-26/27; DESIGN-OBS §1, redregg/work/promo/DESIGN-OBS.md; FRONTIER-AXES axis 4)
+
+**Decision.**
+1. `Turn` gains `member : D` and `ticks : Nat` (`Kernel/Turn.lean`): who signed the call, and the ticks
+   its whole tree of runs used (0 for every Body but an invoke). `Receive.sealTurn` sets both from the
+   call and the Walk's pool (`deriveWithTicks`); every follower re-derives them from the event
+   (`Receive.rederive`: a page carries the call, never the writer's Turn), so a writer that states another
+   member or count is `eventMismatch`. The log record grows by 40 bytes (`logWeight`; `Codec.Kernel.turn`
+   gains the two fields); `checkBounds` refuses `ticks` past `treeTicksMax` (`overBound .ticks`): a forged
+   log cannot jump the meter.
+2. The refusals trie is the WINDOW trie, and its key type is typed by kind: `WindowSlot D = refusal (k :
+   RefusalSlot D) | meter (k : MeterSlot D)`, with `RefusalSlot` unchanged (`tx`, `count`, `total`) and
+   `MeterSlot = ticks (member) (win)` (kind byte 3, one key width with the others, the existing `count`
+   leaf). Two readers, each over its own kind: `refusalAt : RefusalSlot → Option RefusalLeaf` reads
+   `.refusal k`; `meterAt : MeterSlot → Option Nat` reads `.meter k`. `World.admit` checks `ticksUsed +
+   t.ticks ≤ Bounds.ticksPerWindow` (`checkTicks`, after the charge and the births; refused `ticksBudget
+   member`, a class-(A) rejection `judge` records as it records `overAllowance`) and, for a Turn with
+   ticks, writes the leaf at `.meter (.ticks t.member (refusalWindow (height + 1)))` — the window the Turn
+   lands in, the journal's — before the window prune (`commitMeter`: one trie path per invoke, none for
+   any other Body). `refusalFits` bounds the leaf (1 ≤ n ≤ `ticksPerWindow`, the current window);
+   `keptRefusal` prunes it with the counts; `refusalsCounted` accepts its VALUE (critique 1) and bounds its
+   COUNT: a new `CountedOk` clause, `Σ meterKeyOne ≤ height % windowMax + 1` (one leaf per invoking member per
+   height of the current window; the meter's twin of the journal's bound), checked by `refusalsCounted` so a
+   decoded base with more meter leaves than its window has heights is `kernel/refusals-counted`, and the
+   refusals trie's size stays bounded by the check alone (`refusals_bounded` gains `+ Σ meterKeyOne ≤
+   windowMax`; `refusals_length_le` is `4C + 1 + windowMax`; `Host.Bounds.refusalsBytesMax` + 50·windowMax, so
+   `worldBytesDerived` 91,914,346 → **91,965,546** B and `baseRecordMax` 91,965,674).
+3. `Bounds.ticksPerWindow := 16 * treeTicksMax` (2^21): sixteen full-budget trees per member per window,
+   by analogy with `refusalsPerWindow = 16`; ~70,000 invokes of THE BAR's size.
+4. Probes and rows: kernel-sim `probeTicks` (sixteen full trees admitted on a copy, the seventeenth
+   `ticksBudget`, a tree past `treeTicksMax` `overBound`; planted names `ticksBudget`,
+   `ticks-window:ticksBudget`); lang-journey M0 (B's meter reads back as the sum of the ticks of B's
+   admitted Turns in the session log, and A's founder has none).
+
+**Why.** A member may spend `treeTicksMax` ticks per call at every height it can get a call into, bounded
+by nothing (READ `Derive.lean` `poolOf`); refusals were given a window budget (KERNEL-44) and admissions
+were not. The honest self-measurements of a World are the functions of its log the kernel maintains and a
+follower re-derives (DESIGN-OBS §1.2); the window trie is the one place the kernel already keeps a
+per-window per-member counter under the chain, pruned on the schedule a meter wants, and readable by a
+path against its root. A kernel-owned CELL would be touched by a Turn that did not name it (`admit_frame`,
+`fold_potential`, every pin theorem) and a receiver-written one would serialise a member's calls on its pin
+(KERNEL-54's reason refusal counts are not pins). A fifth trie is the cut HOLISTIC-KERNEL §2.2 judged
+wrong. The member in the Turn rather than recovered from the event: the kernel never reads the event; a
+decoder in `Env` would sit in `World.admit`'s hot path and in every kernel theorem's premises; `Refused`
+carries `member` for the same reason (KERNEL-50).
+
+**Why the key is TYPED (FABLE-OBS-2).** The first build (FABLE-OBS) put the meter in `RefusalSlot` as a
+fourth constructor. Then every theorem that says "a Turn moves no refusal leaf" — `admit_refusalAt`,
+`Frame.refusals` — was false at the meter key and gained `k ≠ .ticks t.member win`: a hypothesis on two
+landed statements, to be discharged by every reader (`by simp` where `k` is a literal, a case split where
+it is a variable — `admit_refusalsOk`, `admit_countedOk`, `Settle`). The memory rule
+(minted-price-premises-not-only-cost): a design is priced in the premises it puts on theorems already
+landed. The question asked of this lane: can the exclusion be by the DEFINITION of the refusal window —
+its domain — rather than by a hypothesis? Yes: `refusalAt` over `RefusalSlot` cannot NAME a meter key,
+so `commitMeter_get_refusal` holds by constructor disjointness with no hypothesis, and the two landed
+statements are unchanged (law 1: one trie, two kinds, each theorem over its own kind). The meter's own
+theorems are `admit_meterAt` (every meter leaf but the turn's own, which is in its footprint as its cells
+are), `admit_meterAt_self` (the turn's own, bumped by what it spent, never pruned: it is keyed by the
+window the prune keeps), and `Frame.meter`, a NEW clause. The wire is the same as the first build's.
+
+**Alternatives.** (a) Bytes per member per window (Σ `charge`) first: cheaper and computed by the kernel
+with no receive-layer trust; declined as the FIRST meter because bytes already have a global budget
+(`allowance`) and ticks have none; it is the second constructor of `MeterSlot`, same leaf, same check
+(DESIGN-OBS §1.4). (b) A `ticks` field in the journal entry so the meter is a tally of the journal
+(KERNEL-50's property for refusals): restates the journal leaf, its injectivity and every `JournalHead`
+theorem, for a check whose only reader is a base decode. Declined. (c) A member only on invoke Turns
+(`Option D`): a forged-log probe shape on the wire. Declined; every Turn naming its signer is what B1
+(authority confinement) wants. (d) The meter as a fourth `RefusalSlot` constructor (the first build):
+declined for the two hypotheses above.
+
+**Price — premises on landed theorems, enumerated (the honest table).**
+| theorem | first build | as landed | why it cannot be 0 |
+|---|---|---|---|
+| `admit_refusalAt` | +1 (`k ≠` the meter key) | **0** (typed domain) | — |
+| `Frame.refusals` | +1 premise | **0** (typed domain) | — |
+| `Agree` (`check_local`'s premise) | +1 field `meter` | **+1 field** | `Agree` IS the read set of `check`, and `check` reads the meter; the only shape that keeps it is not checking |
+| `admit_comm` | (pending) | `RefusalsCanon` → `RefusalsOk`; **+1** `hmeter` (same member → both spend ticks → `used + t₁ + t₂ ≤ ticksPerWindow`) | a theorem of the model: two turns of one member that together pass the window do not commute (the second is `ticksBudget`); `Ok` because a window boundary needs fits to know a future window's leaf is absent; guarded so zero-ticks turns owe nothing; NO consumer in any proof |
+| `World.RefusalsOk` | — | RESTATED over the trie's keys (`refusals.get`, `WindowSlot`) | it must bound the meter leaf; through `refusalAt` it no longer would |
+| `Checked` | +1 field `ticks` | +1 field | the record of `check`'s clauses |
+| `World.CountedOk` | — | +1 clause (the meter's leaf count ≤ `height % windowMax + 1`) | an invariant, not a premise: `fold_countedOk` proves more, `refusals_bounded` needs it; a decoded base is refused by it |
+| `Host.Proofs.Deployed.admit_listing` | — | **+1** `hf : w.RefusalsCanon X.env` (and the refusals listing in its statement) | the listing after an insert is known only on a routed trie (`toList_insert_perm`); discharged by `Kept` in `fold_listing`, every reached World's |
+| `receiveWith_sealed`, `receive_of` | gain the ticks binder | the same | `derive` returns the Walk's pool |
+Restated by binder: the Turn construction sites (MEASURED 26 in 18 files at the first build), `Codec.Kernel.turn`
+and its size/injectivity theorems, the window families that case on the slot (`refusalFits`, `keptRefusal`,
+`RefusalLeaf.fits`, `refusalKeyBytes`, `refusalsCounted`, `RefusalsBound`, `RefusalsHead`, the Codec slot
+codec and `WorldSize`, `Receipt.rpath`'s key type). Flag day `kernel!`: the Turn record, the slot codec and
+the refusal code table (`rejectNames` + `ticksBudget`) move, so every pre-meter Store is `shapeMismatch` and
+re-geneses (none deployed); `codec-vectors` and `generated.rs` re-emit. Waste: `admit trie-hashes-per-turn`
+rises by one path for invoke Turns only (the sim's `Required` counts it through `fresh`); `submit
+bytes-per-turn` falls (40 bytes in numerator and denominator).
+
+**Refuses.** `ticksBudget MEMBER` (recorded, final within the window), `overBound ticks`, `shapeMismatch`
+for a pre-meter Store, `kernel/refusals` for a meter leaf outside its window or past `ticksPerWindow`.
+
+**CRITIQUE.** (1) `refusalsCounted` cannot re-tally a meter leaf from the trie (the Turns are not in it), so
+a decoded base with a forged meter passes the state check and is caught only by the trust a received base
+already needs (`CheckpointTrusted`, a sponsor's pin). KERNEL-50's "a function of its records" holds for
+refusals and not for the meter; the fold theorem (the meter at `(m, win)` along an audited log is the sum of
+the window's Turns' ticks by `m`) is NOT yet written: the next step. (2) The cap is a taste number with no
+OWNER: a member cannot buy or be granted more. If a row (the Bell's resident, an agent member) approaches
+2^21 ticks in a window, the honest growth is `Right.ticks cap` as a counted right carved from a founder's
+World grant, spent per invoke like `enroll n`. (3) 32 bytes of member on every record for a counter only
+invokes need. (4) The trie's field and family are still named `refusals`/`refusal*` while the type says
+`WindowSlot`: the rename (`World.window`, `windowSpec`, `WindowLeaf`…) is a card, not this landing — it is
+a sed across ~16 proof files with no theorem behind it, and it would collide with every live lane.
+
+**META-CRITIQUE.** The first build priced the meter at "0 hypotheses on landed theorems" (DESIGN-OBS §1.7)
+and the build found four. The miss was the one the memory names: pricing hashes and binders, not premises —
+the design said "a new key kind in an existing trie" and did not ask what every theorem quantified over
+THAT TRIE'S KEYS would now have to say about the new kind. The typed key is what "a new kind" should have
+meant from the start. The brief said "ticks per window per member is the obvious one"; the bytes meter is
+cheaper and more honest and was nearly built first; ticks won only because it is the hole with no cousin.
+
+**Status.** landed as `kernel!:` (FABLE-OBS.report.md holds the hash and the judge's map lines).

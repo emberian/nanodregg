@@ -756,7 +756,7 @@ admitted turn sealed with effects `efs` leaves at each effect cell whose act is 
 `postWrite` makes of the cell observed there, and every cell no effect names (and not born) as it
 was. -/
 theorem sealed_writes {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {efs : List (D × Act)}
-    {ns : List D} (hseal : sealTurn X c [] efs ns = .ok t) (ha : World.admit X.env w t = .ok w') :
+    {ns : List D} {k : Nat} (hseal : sealTurn X c [] efs ns [] k = .ok t) (ha : World.admit X.env w t = .ok w') :
     (∀ k ops, (∃ e ∈ efs, e.1 = k) → actFor efs k = .write ops →
       ∃ cell post, w.live X.env k = some cell ∧ postWrite k cell ops = .ok post ∧ w'.live X.env k = some post) ∧
       ∀ k, (∀ e ∈ efs, e.1 ≠ k) → k ∉ createdIds t → w'.entry X.env k = w.entry X.env k := by
@@ -826,7 +826,8 @@ theorem transfer_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {s
         w'.live X.env g = some post) ∧
       ∀ k, k ≠ srcR.resolve X → k ≠ dstR.resolve X → via ≠ some k → k ∉ createdIds t →
         w'.entry X.env k = w.entry X.env k := by
-  obtain ⟨_, d, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  obtain ⟨_, d, _k, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  replace hdd := derive_of_withTicks hdd
   rw [derive_eq, hb] at hdd
   simp only [dispatch, stepped_map] at hdd
   obtain ⟨scell, sv, dcell, dv, principal, spend, hs, hd, -, hne, hpos, -, hfs, hfd, hsp, rfl⟩ := transfer_ok hdd
@@ -898,7 +899,8 @@ theorem credit_exact {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {wel
         w'.live X.env g = some post) ∧
       ∀ k, k ≠ well → k ≠ acctR.resolve X → via ≠ some k → k ∉ createdIds t →
         w'.entry X.env k = w.entry X.env k := by
-  obtain ⟨_, d, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  obtain ⟨_, d, _k, hdd, hsl⟩ := receiveWith_sealed (receive_ok_with hr).2
+  replace hdd := derive_of_withTicks hdd
   rw [derive_eq, hb] at hdd
   simp only [dispatch, stepped_map] at hdd
   obtain ⟨wcell, wv, acell, av, principal, spend, hs, hda, -, hwell, hne, hpos, hden, hle, hcap, hsp, rfl⟩ :=

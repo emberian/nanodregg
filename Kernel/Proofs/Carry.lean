@@ -326,7 +326,7 @@ private theorem deriveTurn_world' [DecidableEq D] (X : Ctx D) (U : Unsigned D â†
     deriveTurn X look rv c =
       deriveTurn { X with callBytes := fun _ => X.callBytes c, unsignedBytes := U } look rv
         { c with unsigned := { c.unsigned with world := o } } := by
-  unfold deriveTurn derive
+  unfold deriveTurn deriveWithTicks
   rw [tree_world X U look rv c o, dispatch_world X U look rv c o]
   rfl
 

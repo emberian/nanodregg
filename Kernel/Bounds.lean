@@ -13,6 +13,9 @@ inductive Bound
   | event | slotsPerCell | slotKey | valueBytes | window | weight | counter | denoms | rows
   /-- a cell's or row's version, or a relation's floor, would reach `Bounds.counterLimit` (KERNEL-54) -/
   | version
+  /-- a Turn's `ticks` past `Bounds.treeTicksMax` or `counterLimit` (DESIGN-OBS §1.3: a forged log cannot
+  jump the meter) -/
+  | ticks
   deriving DecidableEq, Repr
 
 namespace Bounds
@@ -83,6 +86,11 @@ budget PROTOCOL's client signs for every invoke (`invokeBudget` = 100000), and 2
 power of two that does; THE BAR's invoke measures 30 ticks per call (gates/waste.tsv), so the cap
 is ~4000 such runs. -/
 def treeTicksMax : Nat := 131072
+
+/-- The ticks one member's admitted Turns may spend per window of `windowMax` heights (DESIGN-OBS
+§1.3, the meter): sixteen full-budget trees, by analogy with `refusalsPerWindow`; at THE BAR's ~30
+ticks per invoke, ~70,000 invokes per member per window. A Turn past it is `ticksBudget`, recorded. -/
+def ticksPerWindow : Nat := 16 * treeTicksMax
 
 /-- A row key's width bound (LANG-44 (e) said 64; KERNEL-48 raises it to 128: a key of two digests in Lang's data encoding, each with CODEC's length byte, is 66 bytes, and CoAuthor's ballots are keyed {pick, voter}). -/
 def keyBytesMax : Nat := 128

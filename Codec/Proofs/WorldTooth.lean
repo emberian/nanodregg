@@ -157,14 +157,14 @@ per-window budget's boundary: a count of `Bounds.refusalsPerWindow` (16) reads b
 `tx` key holding a count. A height above the step count is refused `kernel/steps`. -/
 
 /-- The canonical refusals trie of a listing, at Sim's parameters. -/
-private abbrev rt (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) : Refusals Sim.D :=
+private abbrev rt (l : List (WindowSlot Sim.D × RefusalLeaf Sim.D)) : Refusals Sim.D :=
   Trie.build (refusalSpec Sim.env) (refusalSpec Sim.env).depth 0 l
 
 /-- A World wire at height 7, empty cells and journal, with refusals `r` and `steps` steps. -/
 private abbrev rx (r : Refusals Sim.D) (steps : Nat) : WorldWire Sim.D :=
   (.empty, (.empty : Journal Sim.D), r, (.empty : Rows Sim.D), 7, steps, 0, 0, 0)
 
-private theorem rx_wireFits (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) (steps : Nat) (hst : steps < 2 ^ 64)
+private theorem rx_wireFits (l : List (WindowSlot Sim.D × RefusalLeaf Sim.D)) (steps : Nat) (hst : steps < 2 ^ 64)
     (hl : l.length ≤ worldMax) (hn : (l.map Prod.fst).Nodup) (ht : (rt l).toList = l)
     (hp : ∀ p ∈ l, RefusalLeaf.Fits p.2) :
     WireFits Sim.env (fun _ => True) (rx (rt l) steps) :=
@@ -173,13 +173,13 @@ private theorem rx_wireFits (l : List (RefusalSlot Sim.D × RefusalLeaf Sim.D)) 
     ⟨⟨by simp [Trie.T.toList, Bounds.journalMax, Bounds.windowMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     ⟨⟨by rw [ht]; exact hl, fun p hp' => by
         refine ⟨?_, RefusalLeaf.wireFits_of_fits (fun _ => trivial) (hp p (ht ▸ hp'))⟩
-        cases p.1 <;> trivial⟩, Trie.canon_build _ 0 l hn⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+        obtain ⟨k | k, v⟩ := p <;> cases k <;> trivial⟩, Trie.canon_build _ 0 l hn⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     show 7 < 2 ^ 64 by decide, hst, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
 /-- Member 2's `n` refusals recorded at height 7 (transaction ids 1 to `n`), its count `n`, and the
 World's window total `n` under the origin 0 (KERNEL-55 R1). -/
-private abbrev atCount (n : Nat) : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
-  (List.range n).map (fun i => (.tx (UInt64.ofNat (i + 1)), .refused 7 3 2)) ++ [(.count 2 0, .count n), (.total 0 0, .count n)]
+private abbrev atCount (n : Nat) : List (WindowSlot Sim.D × RefusalLeaf Sim.D) :=
+  (List.range n).map (fun i => (.refusal (.tx (UInt64.ofNat (i + 1))), .refused 7 3 2)) ++ [(.refusal (.count 2 0), .count n), (.refusal (.total 0 0), .count n)]
 
 private theorem rt_atCount1 : (rt (atCount 1)).toList = atCount 1 := by
   decide +kernel
@@ -227,30 +227,30 @@ theorem world_refuses_count_past_budget :
     (by show refusalsFits 7 (rt (atCount 17)).toList = false
         rw [rt_atCount17]; decide +kernel)
 
-private theorem rt_one (k : RefusalSlot Sim.D) (v : RefusalLeaf Sim.D) : (rt [(k, v)]).toList = [(k, v)] := by
+private theorem rt_one (k : WindowSlot Sim.D) (v : RefusalLeaf Sim.D) : (rt [(k, v)]).toList = [(k, v)] := by
   cases hd : (refusalSpec Sim.env).depth <;> simp [rt, Trie.build, Trie.mkLeaf, Trie.T.toList, hd]
 
 /-- **The plant**: a call recorded refused at height 9 in a World at height 7 (above `height + 1`, the
 height it could have been admitted at) is refused `kernel/refusals`. -/
 theorem world_refuses_future_refusal :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.tx 1, .refused 9 3 2)]) 7)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.refusal (.tx 1), .refused 9 3 2)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on
     (rx_wireFits _ 7 (by decide) (by simp [worldMax]) (by simp) (rt_one _ _)
       (by intro p hp; simp at hp; subst hp; exact ⟨by decide, by decide⟩))
     journalFits_empty
-    (by show refusalsFits 7 (rt [(.tx 1, .refused 9 3 2)]).toList = false
+    (by show refusalsFits 7 (rt [(.refusal (.tx 1), .refused 9 3 2)]).toList = false
         rw [rt_one]; decide)
 
 /-- **The plant**: a refused-call key holding a count is refused `kernel/refusals`. -/
 theorem world_refuses_misfit_refusal :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.tx 1, .count 1)]) 7)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.refusal (.tx 1), .count 1)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on
     (rx_wireFits _ 7 (by decide) (by simp [worldMax]) (by simp) (rt_one _ _)
       (by intro p hp; simp at hp; subst hp; show 1 < 2 ^ 64; decide))
     journalFits_empty
-    (by show refusalsFits 7 (rt [(.tx 1, .count 1)]).toList = false
+    (by show refusalsFits 7 (rt [(.refusal (.tx 1), .count 1)]).toList = false
         rw [rt_one]; decide)
 
 /-- **The plant**: a World at height 7 that has taken 6 steps is refused `kernel/steps`; at 7 steps
@@ -267,7 +267,7 @@ theorem world_refuses_height_past_steps :
 theorem refusals_refuses_swapped_listing :
     (match (refusalsTrie Sim.env Sim.dc).decode
         ((rawList worldMax (product (refusalSlot Sim.dc) (refusalLeaf Sim.dc))).bytes
-          [(.count 2 0, .count 1), (.tx 1, .refused 7 3 2)]) with
+          [(.refusal (.count 2 0), .count 1), (.refusal (.tx 1), .refused 7 3 2)]) with
      | .error (.rejected _ "kernel/refusal-order") => true
      | _ => false) = true := by decide +kernel
 
@@ -275,24 +275,24 @@ theorem refusals_refuses_swapped_listing :
 theorem refusals_reads_canonical_listing :
     (match (refusalsTrie Sim.env Sim.dc).decode
         ((rawList worldMax (product (refusalSlot Sim.dc) (refusalLeaf Sim.dc))).bytes
-          [(.tx 1, .refused 7 3 2), (.count 2 0, .count 1)]) with
-     | .ok t => t.toList == [(.tx 1, .refused 7 3 2), (.count 2 0, .count 1)]
+          [(.refusal (.tx 1), .refused 7 3 2), (.refusal (.count 2 0), .count 1)]) with
+     | .ok t => t.toList == [(.refusal (.tx 1), .refused 7 3 2), (.refusal (.count 2 0), .count 1)]
      | .error _ => false) = true := by decide +kernel
 
 /-- **The plant**: transaction id 1 both journaled (admitted at height 7) and recorded refused is
 refused `kernel/refusals-disjoint` by name; no fold reaches it (KERNEL's `fold_refusalsDisjoint`). -/
 theorem world_refuses_refused_and_journaled :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes
-        (.empty, jt [(1, (7, 3))], rt [(.tx 1, .refused 7 3 2)], (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) =
+        (.empty, jt [(1, (7, 3))], rt [(.refusal (.tx 1), .refused 7 3 2)], (.empty : Rows Sim.D), 7, 7, 0, 0, 0)) =
       .error (.rejected 0 "kernel/refusals-disjoint") := by
   have hj := jt_wireFits [(1, (7, 3))] (by decide) (by decide) (jt_one _ _ _) (by decide)
-  have hr := rx_wireFits [(.tx 1, .refused 7 3 2)] 7 (by decide) (by simp [worldMax]) (by simp) (rt_one _ _)
+  have hr := rx_wireFits [(.refusal (.tx 1), .refused 7 3 2)] 7 (by decide) (by simp [worldMax]) (by simp) (rt_one _ _)
     (by intro p hp; simp at hp; subst hp; exact ⟨by decide, by decide⟩)
   exact world_decode_wire_disjointRefused u64_lawful.on
     ⟨hj.1, hj.2.1, hr.2.2.1, hj.2.2.2⟩
     (by show journalFits 7 (jt [(1, (7, 3))]).toList = true
         rw [jt_one]; simp [journalFits, ascendingNat, Bounds.windowMax])
-    (by show refusalsFits 7 (rt [(.tx 1, .refused 7 3 2)]).toList = true
+    (by show refusalsFits 7 (rt [(.refusal (.tx 1), .refused 7 3 2)]).toList = true
         rw [rt_one]; decide)
     (by decide +kernel)
 
@@ -304,20 +304,20 @@ refused at height 2049 is still kept (`4096 < 2049 + 2048`) and one refused at 2
 private abbrev ry (H : Nat) (r : Refusals Sim.D) (steps : Nat) : WorldWire Sim.D :=
   (.empty, (.empty : Journal Sim.D), r, (.empty : Rows Sim.D), H, steps, 0, 0, 0)
 
-private theorem ry_one_wireFits (H steps : Nat) (hH : H < 2 ^ 64) (hst : steps < 2 ^ 64) (k : RefusalSlot Sim.D)
+private theorem ry_one_wireFits (H steps : Nat) (hH : H < 2 ^ 64) (hst : steps < 2 ^ 64) (k : WindowSlot Sim.D)
     (v : RefusalLeaf Sim.D) (hv : RefusalLeaf.Fits v) : WireFits Sim.env (fun _ => True) (ry H (rt [(k, v)]) steps) :=
   ⟨⟨⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, by simp [Trie.T.toList]⟩,
     Trie.canon_empty _ 0⟩,
     ⟨⟨by simp [Trie.T.toList, Bounds.journalMax, Bounds.windowMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     ⟨⟨by rw [rt_one]; simp [worldMax], fun p hp' => by
         rw [rt_one] at hp'; simp at hp'; subst hp'
-        exact ⟨by cases k <;> trivial, RefusalLeaf.wireFits_of_fits (fun _ => trivial) hv⟩⟩, Trie.canon_build _ 0 _ (by simp)⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+        exact ⟨by rcases k with k | k <;> cases k <;> trivial, RefusalLeaf.wireFits_of_fits (fun _ => trivial) hv⟩⟩, Trie.canon_build _ 0 _ (by simp)⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     hH, hst, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
 private theorem journalFits_nil (H : Nat) : journalFits H (Trie.T.empty : Journal Sim.D).toList = true := by
   simp [journalFits, Trie.T.toList, ascendingNat]
 
-private theorem triple_fits (k k' k'' : RefusalSlot Sim.D) {h c n : Nat} {m : Sim.D} (hh : h < 2 ^ 64) (hc : c < 2 ^ 64)
+private theorem triple_fits (k k' k'' : WindowSlot Sim.D) {h c n : Nat} {m : Sim.D} (hh : h < 2 ^ 64) (hc : c < 2 ^ 64)
     (hn : n < 2 ^ 64) :
     ∀ p ∈ [(k, RefusalLeaf.refused h c m), (k', RefusalLeaf.count n), (k'', RefusalLeaf.count n)], RefusalLeaf.Fits p.2 := by
   intro p hp
@@ -331,8 +331,8 @@ private theorem triple_fits (k k' k'' : RefusalSlot Sim.D) {h c n : Nat} {m : Si
 back (with its member's count, and the step it cost): the accepted twin of
 `world_refuses_future_refusal`. -/
 theorem world_reads_refusal_at_next_height :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.tx 1, .refused 8 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)]) 8)) =
-      .ok (ofWire (rx (rt [(.tx 1, .refused 8 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)]) 8)) :=
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (rx (rt [(.refusal (.tx 1), .refused 8 3 2), (.refusal (.count 2 0), .count 1), (.refusal (.total 0 0), .count 1)]) 8)) =
+      .ok (ofWire (rx (rt [(.refusal (.tx 1), .refused 8 3 2), (.refusal (.count 2 0), .count 1), (.refusal (.total 0 0), .count 1)]) 8)) :=
   world_decode_wire_ok u64_lawful.on
     (rx_wireFits _ 8 (by decide) (by simp [worldMax]) (by decide) (by decide +kernel)
       (triple_fits _ _ _ (by decide) (by decide) (by decide)))
@@ -341,8 +341,8 @@ theorem world_reads_refusal_at_next_height :
 
 /-- At a window boundary, a call refused 2048 heights ago is still kept (2049 at height 4096)... -/
 theorem world_reads_refusal_at_window_edge :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 4096 (rt [(.tx 1, .refused 2049 3 2)]) 4097)) =
-      .ok (ofWire (ry 4096 (rt [(.tx 1, .refused 2049 3 2)]) 4097)) :=
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 4096 (rt [(.refusal (.tx 1), .refused 2049 3 2)]) 4097)) =
+      .ok (ofWire (ry 4096 (rt [(.refusal (.tx 1), .refused 2049 3 2)]) 4097)) :=
   world_decode_wire_ok u64_lawful.on (ry_one_wireFits 4096 4097 (by decide) (by decide) _ _ ⟨by decide, by decide⟩)
     (journalFits_nil 4096) (by dsimp only [ofWire, ry]; rw [rt_one]; decide) (by decide +kernel) (by decide)
     (by decide +kernel) rowsFits_empty
@@ -351,7 +351,7 @@ theorem world_reads_refusal_at_window_edge :
 /-- **The plant**: ...and one height older (2048) is stale, refused `kernel/refusals` (it should have
 been pruned). -/
 theorem world_refuses_stale_refusal :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 4096 (rt [(.tx 1, .refused 2048 3 2)]) 4096)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 4096 (rt [(.refusal (.tx 1), .refused 2048 3 2)]) 4096)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 4096 4096 (by decide) (by decide) _ _ ⟨by decide, by decide⟩)
     (journalFits_nil 4096) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
@@ -367,21 +367,21 @@ theorem world_reads_current_window_count :
 
 /-- **The plant**: ...and a count for another window (1) is refused `kernel/refusals`. -/
 theorem world_refuses_past_window_count :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.count 2 1, .count 1)]) 7)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.refusal (.count 2 1), .count 1)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 7 (by decide) (by decide) _ _ (show _ < 2 ^ 64 by decide))
     (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
 
 /-- **The plant**: a count of 0 (a key the kernel never writes) is refused `kernel/refusals`. -/
 theorem world_refuses_zero_count :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.count 2 0, .count 0)]) 7)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.refusal (.count 2 0), .count 0)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 7 (by decide) (by decide) _ _ (show _ < 2 ^ 64 by decide))
     (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
 
 /-- **The plant**: a count key holding a refused leaf is refused `kernel/refusals` (the other misfit). -/
 theorem world_refuses_misfit_count_key :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.count 2 0, .refused 7 3 2)]) 7)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.refusal (.count 2 0), .refused 7 3 2)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 7 (by decide) (by decide) _ _ ⟨by decide, by decide⟩)
     (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
@@ -400,10 +400,10 @@ theorem world_reads_height_eq_steps :
 counted, eight steps: seven Turns and the refusal). -/
 theorem world_reads_refused_not_journaled :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes
-        (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) =
-      .ok (ofWire (.empty, jt [(1, (7, 3))], rt [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) := by
+        (.empty, jt [(1, (7, 3))], rt [(.refusal (.tx 2), .refused 7 3 2), (.refusal (.count 2 0), .count 1), (.refusal (.total 0 0), .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) =
+      .ok (ofWire (.empty, jt [(1, (7, 3))], rt [(.refusal (.tx 2), .refused 7 3 2), (.refusal (.count 2 0), .count 1), (.refusal (.total 0 0), .count 1)], (.empty : Rows Sim.D), 7, 8, 0, 0, 0)) := by
   have hj := jt_wireFits [(1, (7, 3))] (by decide) (by decide) (jt_one _ _ _) (by decide)
-  have hr := rx_wireFits [(.tx 2, .refused 7 3 2), (.count 2 0, .count 1), (.total 0 0, .count 1)] 8 (by decide) (by simp [worldMax]) (by decide)
+  have hr := rx_wireFits [(.refusal (.tx 2), .refused 7 3 2), (.refusal (.count 2 0), .count 1), (.refusal (.total 0 0), .count 1)] 8 (by decide) (by simp [worldMax]) (by decide)
     (by decide +kernel) (triple_fits _ _ _ (by decide) (by decide) (by decide))
   exact world_decode_wire_ok u64_lawful.on
     ⟨hj.1, hj.2.1, hr.2.2.1, hr.2.2.2⟩
@@ -415,7 +415,7 @@ theorem world_reads_refused_not_journaled :
 /-- **The plant**: a call recorded refused at height 0 (a fold records `height + 1 ≥ 1`) is refused
 `kernel/refusals`. -/
 theorem world_refuses_refusal_at_zero :
-    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.tx 1, .refused 0 3 2)]) 7)) =
+    (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes (ry 7 (rt [(.refusal (.tx 1), .refused 0 3 2)]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 7 (by decide) (by decide) _ _ ⟨by decide, by decide⟩)
     (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
@@ -429,9 +429,9 @@ or one dropped), and the right counts at too few steps, are refused `kernel/refu
 name, although every earlier check passes them: each count is within the budget and of the current
 window, so `kernel/refusals` admits it. -/
 
-private abbrev charged (a b : Nat) (t : Nat := 3) : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) :=
-  [(.tx 1, .refused 7 3 2), (.tx 2, .refused 7 3 2), (.tx 3, .refused 7 3 5), (.count 2 0, .count a),
-   (.count 5 0, .count b), (.total 0 0, .count t)]
+private abbrev charged (a b : Nat) (t : Nat := 3) : List (WindowSlot Sim.D × RefusalLeaf Sim.D) :=
+  [(.refusal (.tx 1), .refused 7 3 2), (.refusal (.tx 2), .refused 7 3 2), (.refusal (.tx 3), .refused 7 3 5), (.refusal (.count 2 0), .count a),
+   (.refusal (.count 5 0), .count b), (.refusal (.total 0 0), .count t)]
 
 private theorem rt_charged21 : (rt (charged 2 1)).toList = charged 2 1 := by decide +kernel
 private theorem rt_charged12 : (rt (charged 1 2)).toList = charged 1 2 := by decide +kernel
@@ -485,13 +485,13 @@ are past what `decide` should evaluate). -/
 
 /-- At the cap: a total of exactly C, of the current window, is a leaf `refusalsFits` admits. -/
 theorem refusalsFits_total_at_cap :
-    refusalsFits 7 [((.total 0 0 : RefusalSlot Sim.D), (.count Bounds.refusalsPerWindowMax : RefusalLeaf Sim.D))] = true := by
+    refusalsFits 7 [((.refusal (.total 0 0) : WindowSlot Sim.D), (.count Bounds.refusalsPerWindowMax : RefusalLeaf Sim.D))] = true := by
   decide
 
 /-- **The plant**: one past the cap, a total of C + 1, is refused `kernel/refusals` by name. -/
 theorem world_refuses_total_past_cap :
     (world Sim.env Sim.dc).decode ((worldWire Sim.env Sim.dc).bytes
-        (ry 7 (rt [(.total 0 0, .count (Bounds.refusalsPerWindowMax + 1))]) 7)) =
+        (ry 7 (rt [(.refusal (.total 0 0), .count (Bounds.refusalsPerWindowMax + 1))]) 7)) =
       .error (.rejected 0 "kernel/refusals") :=
   world_decode_wire_refusalsRefused u64_lawful.on (ry_one_wireFits 7 7 (by decide) (by decide) _ _ (show _ < 2 ^ 64 by decide))
     (journalFits_nil 7) (by dsimp only [ofWire, ry]; rw [rt_one]; decide)
@@ -507,7 +507,7 @@ theorem world_refuses_total_over_records :
   world_decode_wire_countedRefused u64_lawful.on (charged_wireFits 2 1 10 (by decide) (by decide) (by decide) (by decide) rt_charged214)
     journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
 
-private abbrev strayTotal : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) := charged 2 1 ++ [(.total 1 0, .count 3)]
+private abbrev strayTotal : List (WindowSlot Sim.D × RefusalLeaf Sim.D) := charged 2 1 ++ [(.refusal (.total 1 0), .count 3)]
 
 private theorem rt_strayTotal : (rt strayTotal).toList = strayTotal := by decide +kernel
 
@@ -532,7 +532,7 @@ theorem world_refuses_stray_total :
       · show 3 < 2 ^ 64; decide))
     journalFits_empty (by decide +kernel) (by decide +kernel) (by decide) (by decide +kernel)
 
-private abbrev untotalled : List (RefusalSlot Sim.D × RefusalLeaf Sim.D) := (charged 2 1).take 5
+private abbrev untotalled : List (WindowSlot Sim.D × RefusalLeaf Sim.D) := (charged 2 1).take 5
 
 private theorem rt_untotalled : (rt untotalled).toList = untotalled := by decide +kernel
 

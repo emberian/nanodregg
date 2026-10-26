@@ -120,7 +120,8 @@ def Turn.Fits (PD : D → Prop) (t : Turn D) : Prop :=
   (t.nullifiers.length ≤ Bounds.nullifiersMax ∧ ∀ n ∈ t.nullifiers, PD n) ∧
   t.charge < 2 ^ 64 ∧ t.event.size ≤ Bounds.eventBytesMax ∧
   (t.rows.length ≤ Bounds.rowsMax ∧ ∀ x ∈ t.rows, RowTouch.Fits PD x) ∧
-  (t.ranges.length ≤ Bounds.rangesMax ∧ ∀ q ∈ t.ranges, RangeRead.Fits PD q)
+  (t.ranges.length ≤ Bounds.rangesMax ∧ ∀ q ∈ t.ranges, RangeRead.Fits PD q) ∧
+  PD t.member ∧ t.ticks < 2 ^ 64
 
 theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Turn.Fits PD) (turn dc) := by
@@ -132,7 +133,8 @@ theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
           (product_lawfulOn (rawList_lawfulOn hd _ (by decide))
             (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
               (product_lawfulOn (rawList_lawfulOn (rowTouch_lawfulOn hd) _ (by decide))
-                (rawList_lawfulOn (rangeRead_lawfulOn hd) _ (by decide)))))))))))
+                (product_lawfulOn (rawList_lawfulOn (rangeRead_lawfulOn hd) _ (by decide))
+                  (product_lawfulOn hd nat64_lawfulOn)))))))))))
     "kernel/turn" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
@@ -333,10 +335,11 @@ canonical and `turnBytes` is injective on admitted turns (with `turn_lawfulOn`).
 theorem checkBounds_fits (t : Turn D) (h : checkBounds t = .ok ()) : Turn.Fits (fun _ => True) t := by
   simp only [checkBounds, req, decide_eq_true_eq] at h
   simp only [bind_req, ite_req, List.all_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨hT, hOps, hC, hN, hE, hS, ⟨hKc, hKt⟩, ⟨hVc, hVt⟩, _, _, ⟨⟨⟨hVu, hNb⟩, hCh⟩, hKind⟩, hR⟩ := h
+  obtain ⟨hT, hOps, hC, hN, hE, hS, ⟨hKc, hKt⟩, ⟨hVc, hVt⟩, _, _, hTk, ⟨⟨⟨hVu, hNb⟩, hCh⟩, hKind⟩, hR⟩ := h
   refine ⟨trivial, by simpa [Bounds.counterLimit] using hNb, by simpa [Bounds.counterLimit] using hVu,
     ⟨hT, fun x hx => ⟨trivial, trivial, ?_⟩⟩, ⟨hC, fun c hc => ⟨trivial, ?_, hS c hc, fun p hp => ⟨?_, hVc c hc p hp⟩⟩⟩,
-    ⟨hN, fun _ _ => trivial⟩, by simpa [Bounds.counterLimit] using hCh, hE, ?_, ?_⟩
+    ⟨hN, fun _ _ => trivial⟩, by simpa [Bounds.counterLimit] using hCh, hE, ?_, ?_, trivial,
+    by unfold Bounds.treeTicksMax at hTk; omega⟩
   · have hops := hOps x hx
     have hk := hKt x hx
     have hv := hVt x hx
@@ -455,10 +458,11 @@ theorem turn_size_logWeight {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (t : T
 
 
 /-- Tooth: the digest premise is load-bearing — with a length-prefixed digest (4 bytes for the empty
-one) the empty turn's record is 52 bytes, not its log weight 80. -/
+one) the empty turn's record is 64 bytes (two empty digests, the id and the member), not its log
+weight 120. -/
 theorem turn_size_needs_digest32 :
-    (turn (rawBytes 64)).size (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], []⟩ : Turn ByteArray) = 52 ∧
-      Turn.logWeight (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], []⟩ : Turn ByteArray) = 80 := by
+    (turn (rawBytes 64)).size (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], [], ByteArray.empty, 0⟩ : Turn ByteArray) = 64 ∧
+      Turn.logWeight (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], [], ByteArray.empty, 0⟩ : Turn ByteArray) = 120 := by
   decide
 
 end Nanodregg.Codec.Kernel

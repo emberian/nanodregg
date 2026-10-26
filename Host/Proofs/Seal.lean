@@ -421,14 +421,14 @@ theorem refuse_refusals_listing_three {w w' : World D} {r : Refused D} (he : w.r
   obtain ⟨_, rfl⟩ := refuse_ok h
   rw [commitRefusal_refusals, he]
   have h0 : Trie.Routed (refusalSpec X.env) 0 (Trie.T.empty : Refusals D) := (Trie.canon_empty _ 0).1
-  have p1 := Trie.toList_insert_perm (refusalSpec X.env) h0 (.tx r.txId) (.refused (w.height + 1) r.code r.member)
-  have h1 := Trie.routed_insert (refusalSpec X.env) (.tx r.txId) (.refused (w.height + 1) r.code r.member) h0
+  have p1 := Trie.toList_insert_perm (refusalSpec X.env) h0 (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member)
+  have h1 := Trie.routed_insert (refusalSpec X.env) (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member) h0
   have p2 := Trie.toList_insert_perm (refusalSpec X.env) h1
-    (.count r.member (refusalWindow w.height)) (.count (refusalCount X.env w r.member + 1))
-  have h2 := Trie.routed_insert (refusalSpec X.env) (.count r.member (refusalWindow w.height))
+    (.refusal (.count r.member (refusalWindow w.height))) (.count (refusalCount X.env w r.member + 1))
+  have h2 := Trie.routed_insert (refusalSpec X.env) (.refusal (.count r.member (refusalWindow w.height)))
     (.count (refusalCount X.env w r.member + 1)) h1
   have p3 := Trie.toList_insert_perm (refusalSpec X.env) h2
-    (.total w.origin (refusalWindow w.height)) (.count (refusalTotal X.env w + 1))
+    (.refusal (.total w.origin (refusalWindow w.height))) (.count (refusalTotal X.env w + 1))
   rw [p3.length_eq, List.length_append, (p2.filter _).length_eq, List.filter_append, List.length_append,
     ((p1.filter _).filter _).length_eq]
   simp [Trie.T.toList]

@@ -102,7 +102,7 @@ theorem journal_listing_unmoved :
 /-- The refusals' listing (a refused id and a member's count), inserted last-first. -/
 theorem refusals_listing_unmoved :
     (refusalsTrie Sim.env Sim.dc).bytes (Trie.insertAll (refusalSpec Sim.env) .empty
-      [(.count 9481210332358033183 0, .count 8), (.tx 15460332949857155479, .refused 474 21 9481210332358033183)]) = refusalsPin := by
+      [(.refusal (.count 9481210332358033183 0), .count 8), (.refusal (.tx 15460332949857155479), .refused 474 21 9481210332358033183)]) = refusalsPin := by
   decide +kernel
 
 /-- The rows' listing (a head at floor 2 and three rows of one relation at versions 0, 128 and 300, keys
@@ -123,7 +123,7 @@ theorem world_listing_unmoved :
         journal := Trie.insertAll (journalSpec Sim.env) .empty
           [(1988241996742230466, (665, 8345854724361631925)), (10528909380561253274, (664, 5078077199334586340))]
         refusals := Trie.insertAll (refusalSpec Sim.env) .empty
-          [(.count 15105636735395362888 0, .count 7), (.tx 6214093019929072952, .refused 666 19 15105636735395362888)]
+          [(.refusal (.count 15105636735395362888 0), .count 7), (.refusal (.tx 6214093019929072952), .refused 666 19 15105636735395362888)]
         rows := .empty
         height := 665
         steps := 667

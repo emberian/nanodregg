@@ -478,7 +478,8 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
         offerTakeIx db rq f = .ok (s, [], rows, used) ∧
       ∀ e ∈ rows, ∃ τ ∈ t.rows, τ.slot = e.1 ∧ τ.act = e.2) := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd', hs⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd', hs⟩ := receiveWith_sealed hw
+  replace hd' := derive_of_withTicks hd'
   rw [derive_eq] at hd'
   cases hRt : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)

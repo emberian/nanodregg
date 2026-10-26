@@ -290,7 +290,7 @@ theorem dispatched_of_signed {X : Ctx D} {w : World D} {c : Call D} {obj : D} {m
 
 /-- A sealed Turn's effects name distinct cells, as `firstDup` saw it (`duplicateEffect`). -/
 theorem sealTurn_firstDup {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
-    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} (h : sealTurn X c cr efs ns rs = .ok t) :
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} {k : Nat} (h : sealTurn X c cr efs ns rs k = .ok t) :
     firstDup (efs.map Prod.fst) = none := by
   unfold sealTurn at h
   simp only [except_bind_ok] at h
@@ -343,7 +343,8 @@ theorem invoke_tree_slots [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w'
       X.program.judge (pinned X.env w c.unsigned.pins) (some p) laws (stateOf cell) s r = .ok () ∧
       ∃ cell', w'.live X.env obj = some cell' ∧ ∀ k, (stateOf cell').get k = s.get k := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd', hs⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd', hs⟩ := receiveWith_sealed hw
+  replace hd' := derive_of_withTicks hd'
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
@@ -424,7 +425,8 @@ theorem invoked_of_signed {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {o
     (hc : receive X w c = .ok t) (hb : c.unsigned.body = .invoke obj method args budget via) :
     Invoked X w c obj := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd, -⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd, -⟩ := receiveWith_sealed hw
+  replace hd := derive_of_withTicks hd
   rw [derive_eq] at hd
   cases hr : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
@@ -451,7 +453,8 @@ theorem dispatched_invoke_fresh {X : Ctx D} {w : World D} {c : Call D} {t : Turn
     (hc : receive X w c = .ok t) (hd : Dispatched X w c n wk actor (.invoke obj method args budget via)) :
     obj ∉ wk.visited := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd', -⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd', -⟩ := receiveWith_sealed hw
+  replace hd' := derive_of_withTicks hd'
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
@@ -923,7 +926,8 @@ theorem object_turn_cases {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
       (∃ laws via, c.unsigned.body = .law obj laws via) ∨
       ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke obj method args budget via) := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
-  obtain ⟨-, d, hd, hs⟩ := receiveWith_sealed hw
+  obtain ⟨-, d, _k, hd, hs⟩ := receiveWith_sealed hw
+  replace hd := derive_of_withTicks hd
   rw [derive_eq] at hd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)

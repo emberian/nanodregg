@@ -142,7 +142,7 @@ theorem derive_all {P : Draft D → Prop} (hP : ∀ a b, P a → P b → P (a.ap
     (hbase : ∀ (sub : Sub D) wk actor (b : Body D) r, b.isInvoke = false →
       dispatch X look rv c sub wk actor b = .ok r → P r.1)
     {d : Draft D} (h : derive X look rv c = .ok d) : P d := by
-  unfold derive at h
+  unfold derive deriveWithTicks at h
   cases hd : dispatch X look rv c (tree X look rv c Bounds.callDepthMax)
       ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
   | error e => rw [hd] at h; cases h
@@ -162,7 +162,10 @@ theorem stepped_map {wk : Walk D} {d : Except (Refusal D) (Draft D)} :
 `⟨[], poolOf body, 0⟩`. -/
 theorem derive_eq {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} :
     derive X look rv c = (dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
-      c.unsigned.member c.unsigned.body).map (·.1) := rfl
+      c.unsigned.member c.unsigned.body).map (·.1) := by
+  unfold derive deriveWithTicks
+  cases dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
+      c.unsigned.member c.unsigned.body <;> rfl
 
 /-! ## Each object once -/
 

@@ -31,9 +31,10 @@ def journalBytes (w : World D) : Nat := 72 * w.journal.toList.length
 /-- One refusals entry's bytes on the wire: the key (a kind byte, the digest, a `count`'s or
 `total`'s window u64) and the leaf (a kind byte; a refused leaf's height and code u64 and its member,
 a count's u64). -/
-def refusalEntryBytes : RefusalSlot D × RefusalLeaf D → Nat
+def refusalEntryBytes : WindowSlot D × RefusalLeaf D → Nat
   | (k, v) =>
-    (match k with | .tx _ => 33 | .count _ _ => 41 | .total _ _ => 41) +
+    (match k with
+      | .refusal (.tx _) => 33 | .refusal (.count _ _) => 41 | .refusal (.total _ _) => 41 | .meter (.ticks _ _) => 41) +
     (match v with | .refused _ _ _ => 49 | .count _ => 9)
 
 /-- The refusals' bytes on the wire, entry by entry. -/
@@ -77,8 +78,8 @@ def versionBytes (w : World D) : Nat :=
   (w.trie.toList.map cellItemVersion).sum + (w.rows.toList.map rowItemVersion).sum
 
 /-- 1 at a refused transaction's entry. -/
-def refusalItemTx : RefusalSlot D × RefusalLeaf D → Nat
-  | (.tx _, _) => 1
+def refusalItemTx : WindowSlot D × RefusalLeaf D → Nat
+  | (.refusal (.tx _), _) => 1
   | _ => 0
 
 /-! ## The slack's witness (`world_size_slack_tight`) -/
