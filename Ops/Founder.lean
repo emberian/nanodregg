@@ -36,12 +36,12 @@ def genesisArgs : List String :=
 /-- The genesis World `host genesis STORE name …genesisArgs` writes (the same `Receive.genesis`),
 or its refusal. -/
 def world (name : String) : Except GenesisRefusal (World D) :=
-  Receive.genesis X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
+  Receive.genesis X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)] Authority.none
 
 /-- The test World's genesis inputs, the bytes `host genesis STORE name …genesisArgs` prints as
 `input HEX` (PROTOCOL-42): what founder 0 invites from. -/
 def input (name : String) : ByteArray :=
-  Protocol.Invite.inputBytes X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)]
+  Protocol.Invite.inputBytes X name.toUTF8 nonce allowanceMax [(key, nextKeyDigest X next)] Authority.none
 
 /-- Founder 0's invitation to the test World `name` at its genesis: the shape `invite INPUT`
 prints (PROTOCOL-42), pinning the genesis World under `Keys.worldDigest`'s unkeyed digest, naming

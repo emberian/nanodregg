@@ -364,10 +364,15 @@ theorem derive_born_grant {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
 
 /-- **Genesis has contiguous ledgers**: each founder's root grant holds one enrolment entry. -/
 theorem genesis_ledgerContiguous (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) :
-    LedgerContiguous X.env (genesisWorld X name nonce allowance founders) := by
+    (founders : List (ByteArray × D)) (auth : Authority) :
+    LedgerContiguous X.env (genesisWorld X name nonce allowance founders auth) := by
   intro id cell hl hk
-  obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries (genesis_live hl)
+  rcases mem_genesisEntries (genesis_live hl) with hm | ⟨-, he⟩
+  case inr =>
+    injection he with he _
+    subst he
+    simp [authorityCell, kindAuthority, kindGrant] at hk
+  obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries hm
   · injection he with he _
     subst he
     simp [founderMember, kindMember, kindGrant] at hk

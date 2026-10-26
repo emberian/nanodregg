@@ -178,7 +178,7 @@ structure Built where
 def build {σ : Type} (dir : System.FilePath) (s : Shape σ) : IO (Except String Built) := do
   let name := s.name
   if ← dir.pathExists then return .error s!"{dir} exists (SCRATCH must be fresh)"
-  let g ← match Receive.genesis X "worstcut".toUTF8 "worstcut-nonce".toUTF8 allowanceMax s.founders with
+  let g ← match Receive.genesis X "worstcut".toUTF8 "worstcut-nonce".toUTF8 allowanceMax s.founders Authority.none with
     | .ok g => pure g
     | .error r => return .error s!"genesis {r.name}"
   let m := Who.of ⟨founderId X g.origin 0, founderSecret, nextSecret⟩

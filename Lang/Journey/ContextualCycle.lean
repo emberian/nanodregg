@@ -105,7 +105,7 @@ def cycleSession : Run :=
   let X := ctxWith langProgram
   let fk := [("lc-a".toUTF8, "lc-a-next".toUTF8), ("lc-b".toUTF8, "lc-b-next".toUTF8)]
   match genesis X Sim.worldName (Sim.nonceOf 6) 100000000
-      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
   | .error e => note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
       s!"LP E4 genesis: {e.name}" false
   | .ok g =>

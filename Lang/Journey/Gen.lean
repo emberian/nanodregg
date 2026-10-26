@@ -175,7 +175,8 @@ def genSession : Run :=
   let X := ctxWith headProgram
   let empty : Run := { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
   match genesis X Sim.worldName (Sim.nonceOf 13) 100000000
-      [("gn-b".toUTF8, nextKeyDigest X "gn-b-next".toUTF8), ("gn-a".toUTF8, nextKeyDigest X "gn-a-next".toUTF8)] with
+      [("gn-b".toUTF8, nextKeyDigest X "gn-b-next".toUTF8), ("gn-a".toUTF8, nextKeyDigest X "gn-a-next".toUTF8)]
+      Authority.none with
   | .error e => note empty s!"GN genesis: {e.name}" false
   | .ok g =>
     let m : Sim.Member := ⟨founderId X g.origin 0, "gn-b".toUTF8, "gn-b-next".toUTF8⟩

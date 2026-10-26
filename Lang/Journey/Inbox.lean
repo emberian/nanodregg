@@ -184,7 +184,7 @@ def session (bell : String) : Run :=
   let empty : Run := { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
   let fk := [("li-a".toUTF8, "li-a-next".toUTF8), ("li-b".toUTF8, "li-b-next".toUTF8)]
   match genesis X Sim.worldName (Sim.nonceOf 12) 100000000
-      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
   | .error e => note empty s!"LI1 genesis: {e.name}" false
   | .ok g =>
     let ms := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Sim.Member)

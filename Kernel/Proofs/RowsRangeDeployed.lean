@@ -15,8 +15,8 @@ open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Codec.Deployed
 
 /-- **Deployed: a range read lists exactly the rows under its prefix, in key order.** -/
 theorem fold_range_exact (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.admit env w t = .ok w') :
     ∀ q ∈ t.ranges, ∃ c s lim cap width rt rows,
       headOf env w.rows q.parent q.rel = some (c, s, lim, cap, width, rt) ∧ q.pre.size ≤ width ∧
@@ -27,10 +27,10 @@ theorem fold_range_exact (program : Program Digest) {name nonce : ByteArray} {al
       rows.Pairwise (fun a b => compare (rowKeyBytes env a.1).data (rowKeyBytes env b.1).data = .lt) := by
   obtain ⟨-, rfl⟩ := genesis_ok.mp hg
   have hc : w.RowsCanon env :=
-    fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders) hl
+    fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders auth) hl
   have hok : w.RowsOk env := fold_rowsOk deployed_lawful
-    (receive_genesis_rowsCanon (ctx program) name nonce allowance founders)
-    (receive_genesis_rowsOk (ctx program) name nonce allowance founders) hl
+    (receive_genesis_rowsCanon (ctx program) name nonce allowance founders auth)
+    (receive_genesis_rowsOk (ctx program) name nonce allowance founders auth) hl
   exact admit_range_exact deployed_lawful hc hok.1 h
 
 end Nanodregg.Kernel.Receive

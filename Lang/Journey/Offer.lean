@@ -209,7 +209,7 @@ def offerSession : Run :=
   let X := ctxWith langProgram
   let fk := [("lf-a".toUTF8, "lf-a-next".toUTF8), ("lf-b".toUTF8, "lf-b-next".toUTF8)]
   match genesis X Sim.worldName (Sim.nonceOf 9) 100000000
-      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
   | .error e => note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
       s!"LF genesis: {e.name}" false
   | .ok g =>

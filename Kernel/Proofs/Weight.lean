@@ -388,7 +388,7 @@ theorem spendAll_weight {E : Env D} :
       rw [ih, h1, e1, e2, Nat.mul_succ]; omega
 
 theorem receive_genesis_slotted (X : Receive.Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) : (Receive.genesisWorld X name nonce allowance founders).Slotted X.env :=
+    (founders : List (ByteArray × D)) (auth : Receive.Authority) : (Receive.genesisWorld X name nonce allowance founders auth).Slotted X.env :=
   insertAll_fits _ (fun s _ hg => nomatch hg.symm.trans (Trie.get_empty (trieSpec X.env) s))
 
 variable [Std.TransOrd D] [Std.LawfulEqOrd D]

@@ -124,7 +124,7 @@ def journey (plant : Plant) (pkg : Package) : Run := Id.run do
   let tag := match plant with | .none => "" | .skipJudge => "P1 skip-judge: "
   let fk : List (ByteArray × ByteArray) := [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := Kernel.Sim.ctxWith prog
-  let g0 ← match genesis X Kernel.Sim.worldName (Kernel.Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+  let g0 ← match genesis X Kernel.Sim.worldName (Kernel.Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
     | .ok g => pure g
     | .error e =>
         return note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } } s!"genesis refused {e.name}" false

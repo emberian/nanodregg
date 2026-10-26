@@ -303,7 +303,7 @@ def headSession (acceptText timelockText : String) : Run :=
   let X := ctxWith headProgram
   let empty : Run := { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
   let one (name next : String) (nonce : Nat) : Except String (Run × Sim.Member) :=
-    match genesis X Sim.worldName (Sim.nonceOf nonce) 100000000 [(name.toUTF8, nextKeyDigest X next.toUTF8)] with
+    match genesis X Sim.worldName (Sim.nonceOf nonce) 100000000 [(name.toUTF8, nextKeyDigest X next.toUTF8)] Authority.none with
     | .error e => .error e.name
     | .ok g =>
       let m : Sim.Member := ⟨founderId X g.origin 0, name.toUTF8, next.toUTF8⟩

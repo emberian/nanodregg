@@ -927,7 +927,7 @@ def secondWriter (sameNonce : Bool) : M D (Except String (Writer.Running D)) := 
   let R := st.sys.writer.R
   let nonce := if sameNonce || st.sys.nonceRepeats then Rows.Params.nonce else flipLast Rows.Params.nonce
   let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest X (keyOf R n 1))
-  let g ← match Receive.genesis X Rows.Params.worldName nonce Rows.Params.allowance fs with
+  let g ← match Receive.genesis X Rows.Params.worldName nonce Rows.Params.allowance fs Authority.none with
     | .ok g => pure g
     | .error r => return .error s!"genesis refused {r.name}"
   match ← Writer.genesisStore st.sys.writer g with
@@ -941,7 +941,7 @@ def forgeInvite (R : Rows.Params D) (X : Ctx D) (resign : Bool) (b : ByteArray) 
   | none => b
   | some i =>
     let start := match i.start with
-      | .genesis name nonce allowance fs => .genesis name (flipLast nonce) allowance fs
+      | .genesis name nonce allowance fs auth => .genesis name (flipLast nonce) allowance fs auth
       | .carried o name nonce fromO height chain => .carried o name (flipLast nonce) fromO height chain
     let input := Invite.startBytes X start
     let key := if resign then keyOf R "relay" 0 else i.key
@@ -1285,7 +1285,7 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
     | some b => { s with writer := { s.writer with pageBudget := b } }
     | none => s
   let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest s.writer.X (keyOf R n 1))
-  let g ← match Receive.genesis s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs with
+  let g ← match Receive.genesis s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs Authority.none with
     | .ok g => pure g
     | .error r => throw (IO.userError s!"genesis refused {r.name}")
   let (mem, r₀) ← match ← Writer.genesisStore s.writer g with
@@ -1298,8 +1298,9 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
   -- the World's origin inputs, as the founders hold them (`host genesis` prints them), and another
   -- World's (the nonce changed)
   let inputs := Invite.inputBytes s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs
+    Authority.none
   let other := Invite.inputBytes s.writer.X Rows.Params.worldName (flipLast Rows.Params.nonce)
-    Rows.Params.allowance fs
+    Rows.Params.allowance fs Authority.none
   -- the founding invitation: the sponsor's, pinning the genesis World
   let invitation ← match Invite.unsignedBytes s.writer.X inputs
       ⟨g.steps, (base R).digest (R.world.bytes g)⟩ (founderId s.writer.X g.origin 0) (keyOf R "sponsor" 0) with

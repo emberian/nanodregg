@@ -63,10 +63,10 @@ theorem join_genesis_iff (inviteHex keyHex : String) (keyR : Option Digest) (k :
         { nonce := pure (.ok ByteArray.empty), readIn := throw none, reopen := fun _ => throw none,
           key := pure keyR, genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
           refuse := fun _ _ => pure 1, report := fun _ => pure () } inviteHex keyHex = .error (some (k, w)) ↔
-    ∃ inv trusted i o name nonce allowance fs,
+    ∃ inv trusted i o name nonce allowance fs auth,
       Protocol.Text.ofHex inviteHex = some inv ∧ Protocol.Text.ofHex keyHex = some trusted ∧
       Protocol.Invite.acceptStart X trusted inv = .ok (i, o) ∧
-      i.start = .genesis name nonce allowance fs ∧
+      i.start = .genesis name nonce allowance fs auth ∧
       Protocol.Invite.startGenesis X i.start = .ok w ∧ budgetFault w = none ∧ keyR = some k := by
   unfold joinWith
   cases hi : Protocol.Text.ofHex inviteHex <;> cases hk : Protocol.Text.ofHex keyHex <;>
@@ -141,13 +141,13 @@ makes (`Receive.genesis`) and the budget check passes stays within `potentialMax
 over every admitted fold; Canon, Slotted and RowsCanon hold at a genesis World
 (`receive_genesis_canon`, `receive_genesis_slotted`, `receive_genesis_rowsCanon`). Imported and joined
 Worlds: cv 01a150ed-7bf7. -/
-theorem genesis_budget_reaches {name nonce : ByteArray} {allowance : Nat} {fs : List (ByteArray × D)}
-    {w w' : World D} {l : List (Step D)} (hg : Receive.genesis X name nonce allowance fs = .ok w)
+theorem genesis_budget_reaches {name nonce : ByteArray} {allowance : Nat} {fs : List (ByteArray × D)} {auth : Receive.Authority}
+    {w w' : World D} {l : List (Step D)} (hg : Receive.genesis X name nonce allowance fs auth = .ok w)
     (hb : budgetFault w = none) (h : World.fold X.env w l = .ok w') :
     potentialRatio.2 * w'.weight ≤ potentialMax := by
   obtain ⟨-, rfl⟩ := Receive.genesis_ok.mp hg
-  exact budget_reaches hb (receive_genesis_canon X _ _ _ _) (receive_genesis_slotted X _ _ _ _)
-    (receive_genesis_rowsCanon X _ _ _ _) h
+  exact budget_reaches hb (receive_genesis_canon X _ _ _ _ _) (receive_genesis_slotted X _ _ _ _ _)
+    (receive_genesis_rowsCanon X _ _ _ _ _) h
 
 /-- **The allowance arm** (HOST-56, ROOT's Q3): a World carrying more than `allowanceMax` is refused
 `allowancePastBound`, whatever its weight. -/
@@ -193,9 +193,9 @@ makes is KERNEL's genesis World of its signed inputs (PROTOCOL's `accept_ok`, `g
 theorem accept_premises {trusted inv : ByteArray} {i : Protocol.Invite.Invitation D} {w : World D}
     (h : Protocol.Invite.accept X trusted inv = .ok (i, w)) :
     w.Canon X.env ∧ w.Slotted X.env ∧ w.RowsCanon X.env := by
-  obtain ⟨_, _, _, _, _, hg⟩ := Protocol.Invite.accept_genesis h
+  obtain ⟨_, _, _, _, _, _, hg⟩ := Protocol.Invite.accept_genesis h
   obtain ⟨-, rfl⟩ := Receive.genesis_ok.mp hg
-  exact ⟨receive_genesis_canon X _ _ _ _, receive_genesis_slotted X _ _ _ _, receive_genesis_rowsCanon X _ _ _ _⟩
+  exact ⟨receive_genesis_canon X _ _ _ _ _, receive_genesis_slotted X _ _ _ _ _, receive_genesis_rowsCanon X _ _ _ _ _⟩
 
 /-- **`budget_reaches` at every World `host import` admits** (HOST-59): no premise beyond the import
 and the fold. -/

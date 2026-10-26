@@ -40,7 +40,7 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- A World adopt may replace (`atGenesis`) holds no live object: each of its cells is a founder's
-member cell or root grant. -/
+member cell or root grant, or the authority cell (`kindAuthority ≠ kindObject`). -/
 theorem atGenesis_object {E : Env D} {w : World D} (h : atGenesis w = true) {c : D} {cell : Cell}
     (hl : w.live E c = some cell) : cell.kind ≠ kindObject := by
   unfold atGenesis at h
@@ -60,7 +60,7 @@ theorem atGenesis_object {E : Env D} {w : World D} (h : atGenesis w = true) {c :
         subst hl
         have hk := hall _ (Trie.mem_of_getAt (trieSpec E) 0 w.trie _ _ hg)
         simp only [genesisLeaf, Bool.or_eq_true, beq_iff_eq] at hk
-        rcases hk with hk | hk <;> rw [hk] <;> decide
+        rcases hk with (hk | hk) | hk <;> rw [hk] <;> decide
 
 omit [Ord D] in
 /-- What `insertAll` lists is what the map listed or one of the inserted entries. -/
@@ -78,14 +78,15 @@ theorem insertAll_toList {E : Env D} {Q : Slot D × Leaf → Prop} :
           · exact hp p List.mem_cons_self)
 
 /-- **A genesis World is one adopt may replace** (the floor `atGenesis` is satisfiable): no step, and
-only the founders' member cells and root grants. A joiner's follow holds exactly this World until it
+only the founders' member cells and root grants and the authority cell. A joiner's follow holds exactly this World until it
 adopts (`nd --join`, then `nd adopt`). -/
 theorem genesisWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) :
-    atGenesis (Receive.genesisWorld X name nonce allowance founders) = true := by
+    (founders : List (ByteArray × D)) (auth : Authority) :
+    atGenesis (Receive.genesisWorld X name nonce allowance founders auth) = true := by
   unfold atGenesis Receive.genesisWorld
   simp only [World.genesis, Bool.and_eq_true, beq_self_eq_true, true_and, List.all_eq_true]
   refine insertAll_toList (Q := fun q => genesisLeaf q.2 = true) _ ?_ (by simp [Trie.T.toList])
+  refine Receive.forall_mem_genesisEntries ?_ (by simp [genesisLeaf, Receive.authorityCell])
   rintro ⟨id, e⟩ hq
   obtain ⟨p, -, ⟨-, he⟩ | ⟨-, he⟩⟩ := Receive.mem_founderEntries hq <;> subst he <;>
     simp [genesisLeaf, Receive.founderMember, Receive.founderRoot]
@@ -106,11 +107,11 @@ theorem carryWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (fromOrigin : 
 /-- The carried-at-0 instance: the carry of any genesis World (a lineage exported before its first
 step) under any new name and nonce. -/
 theorem carry_genesis_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) (name' nonce' : ByteArray) :
-    let g := Receive.genesisWorld X name nonce allowance founders
+    (founders : List (ByteArray × D)) (auth : Authority) (name' nonce' : ByteArray) :
+    let g := Receive.genesisWorld X name nonce allowance founders auth
     atGenesis (carryWorld X name' nonce' g.origin g.carried) = true := by
   intro g
-  have h := genesisWorld_atGenesis X name nonce allowance founders
+  have h := genesisWorld_atGenesis X name nonce allowance founders auth
   simp only [atGenesis, Bool.and_eq_true] at h
   exact carryWorld_atGenesis X name' nonce' g.origin rfl h.2
 

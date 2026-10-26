@@ -337,25 +337,25 @@ theorem fold_height_lt {E : Env D} {w w' : World D} {l : List (Kernel.Step D)} (
 /-- **Every journal height of a reached World fits a u64**: `JournalOk` puts each entry at or below
 the World's height, which `fold_height_lt` bounds. Reached = folded from the World a genesis builds
 (`Receive.genesisWorld`, founders included), where every Store starts. -/
-theorem reached_journal_fits {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)}
+theorem reached_journal_fits {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)} {auth : Authority}
     {l : List (Kernel.Step D)} {w : World D}
-    (h : World.fold X.env (genesisWorld X name nonce a fs) l = .ok w) :
+    (h : World.fold X.env (genesisWorld X name nonce a fs auth) l = .ok w) :
     ∀ k e, w.journalAt X.env k = some e → e.1 < 2 ^ 64 := by
   intro k e he
-  have h1 := ((fold_journalOk (genesisWorld_journalOk X name nonce a fs) h).2.1 k e he).1
-  have h0 : (genesisWorld X name nonce a fs).height < 2 ^ 64 := by simp [genesisWorld, World.genesis]
+  have h1 := ((fold_journalOk (genesisWorld_journalOk X name nonce a fs auth) h).2.1 k e he).1
+  have h0 : (genesisWorld X name nonce a fs auth).height < 2 ^ 64 := by simp [genesisWorld, World.genesis]
   have h2 := fold_height_lt h0 h
   omega
 
 /-- **`check_build` on every World folded from a genesis**, no premise but the answer's own: the
 receipt follow builds from its World checks against that World's head, answering what it states,
 unless `absent` past `journalForgets`. -/
-theorem check_build_reached {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)}
+theorem check_build_reached {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)} {auth : Authority}
     {l : List (Kernel.Step D)} {w : World D}
-    (h : World.fold X.env (genesisWorld X name nonce a fs) l = .ok w) {tx : D} {nb : Nat}
+    (h : World.fold X.env (genesisWorld X name nonce a fs auth) l = .ok w) {tx : D} {nb : Nat}
     (hnf : (build X.env w tx).answer ≠ .absent ∨ journalForgets w.height nb = false) :
     check X.env w.height (w.roots X.env) tx nb (build X.env w tx) = .ok (build X.env w tx).answer :=
-  check_build (fold_journalOk (genesisWorld_journalOk X name nonce a fs) h).1
-    (fold_refusalsOk (genesisWorld_refusalsOk X name nonce a fs) h) (reached_journal_fits h) hnf
+  check_build (fold_journalOk (genesisWorld_journalOk X name nonce a fs auth) h).1
+    (fold_refusalsOk (genesisWorld_refusalsOk X name nonce a fs auth) h) (reached_journal_fits h) hnf
 
 end Nanodregg.Protocol.Receipt

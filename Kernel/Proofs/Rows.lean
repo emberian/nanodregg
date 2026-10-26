@@ -457,7 +457,7 @@ theorem genesis_rowsCanon (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).
   Trie.canon_empty _ 0
 
 theorem receive_genesis_rowsCanon (X : Receive.Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) : (Receive.genesisWorld X name nonce allowance founders).RowsCanon X.env :=
+    (founders : List (ByteArray × D)) (auth : Receive.Authority) : (Receive.genesisWorld X name nonce allowance founders auth).RowsCanon X.env :=
   Trie.canon_empty _ 0
 
 /-! ## The two pin kinds bind (LANG-14 R1: a moved row pin and a moved range pin are both `stale`) -/

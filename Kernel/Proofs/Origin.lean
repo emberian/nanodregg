@@ -35,22 +35,33 @@ theorem fold_origin {E : Env D} {w w' : World D} {l : List (Step D)} (h : World.
   fold_keeps (P := fun v => v.origin = w.origin) (fun hp ha => (admit_origin ha).trans hp)
     (fun hp hr => (refuse_frame hr).2.2.2.2.trans hp) rfl h
 
-theorem genesis_origin (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    (genesisWorld X name nonce allowance founders).origin = originOf X name nonce allowance founders := rfl
+theorem genesis_origin (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) :
+    (genesisWorld X name nonce allowance founders auth).origin = originOf X name nonce allowance founders auth := rfl
 
-theorem genesis_chain (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    (genesisWorld X name nonce allowance founders).chain =
-      World.genesisChain X.env (genesisWorld X name nonce allowance founders).origin := rfl
+theorem genesis_chain (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) :
+    (genesisWorld X name nonce allowance founders auth).chain =
+      World.genesisChain X.env (genesisWorld X name nonce allowance founders auth).origin := rfl
+
+/-- An authority one cell carries and somebody can meet: at most `slotsPerCellMax - 2` certifiers,
+each key within the raw codec's bound, no key twice (a quorum counts distinct keys), the threshold
+within the count and zero only when nobody is listed (`Authority.none`). -/
+def Authority.Fits (a : Authority) : Prop :=
+  a.certifiers.length + 2 ≤ Bounds.slotsPerCellMax ∧ (∀ k ∈ a.certifiers, k.size ≤ Bounds.eventBytesMax) ∧
+    a.certifiers.Nodup ∧ (a.threshold ≤ a.certifiers.length ∧ (a.threshold = 0 → a.certifiers = []))
 
 /-- A genesis input within the raw codec's bounds (every length at most `Bounds.eventBytesMax`) whose
 allowance plus the genesis World's storage is below 2^64 (so the allowance is, and `fold_conserves`
 keeps the sum below it on every World the genesis reaches: `Budget.fold_budget_lt`). `genesis`
 refuses by name outside it (`genesis_ok`). -/
-def GenesisFits (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) : Prop :=
+def GenesisFits (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : Prop :=
   name.size ≤ Bounds.eventBytesMax ∧ nonce.size ≤ Bounds.eventBytesMax ∧
     founders.length ≤ Bounds.eventBytesMax ∧
     (∀ f ∈ founders, f.1.size ≤ Bounds.eventBytesMax ∧ (X.env.bytes f.2).size ≤ Bounds.eventBytesMax) ∧
-    (genesisWorld X name nonce allowance founders).weight + allowance < 2 ^ 64
+    auth.Fits ∧
+    (genesisWorld X name nonce allowance founders auth).weight + allowance < 2 ^ 64
 
 omit [Ord D] [DecidableEq D] in
 /-- Distinct refusals have distinct wire names: equal names, same constructor. -/
@@ -70,26 +81,47 @@ theorem checkFounders_ok {X : Ctx D} : ∀ {i : Nat} {fs : List (ByteArray × D)
       simp only [checkFounders, req_bind_ok, decide_eq_true_eq, List.mem_cons, forall_eq_or_imp]
       rw [checkFounders_ok, and_assoc]
 
+omit [Ord D] [DecidableEq D] in
+theorem checkCertifiers_ok : ∀ {i : Nat} {seen ks : List ByteArray},
+    checkCertifiers i seen ks = .ok () ↔
+      (∀ k ∈ ks, k.size ≤ Bounds.eventBytesMax) ∧ ks.Nodup ∧ ∀ k ∈ ks, k ∉ seen
+  | _, _, [] => by simp [checkCertifiers]
+  | i, seen, k :: rest => by
+      simp only [checkCertifiers, req_bind_ok, decide_eq_true_eq, List.all_eq_true, List.mem_cons,
+        forall_eq_or_imp, List.nodup_cons]
+      rw [checkCertifiers_ok]
+      constructor
+      · rintro ⟨hs, hn, hr, hd, hseen⟩
+        exact ⟨⟨hs, hr⟩, ⟨fun hk => hseen k hk List.mem_cons_self, hd⟩, fun h => hn k h rfl,
+          fun k' hk' h => hseen k' hk' (List.mem_cons_of_mem _ h)⟩
+      · rintro ⟨⟨hs, hr⟩, ⟨hk, hd⟩, hn, hseen⟩
+        refine ⟨hs, fun s hs' hks => hn (by subst hks; exact hs'), hr, hd, fun k' hk' h => ?_⟩
+        rcases List.mem_cons.mp h with rfl | h
+        · exact hk hk'
+        · exact hseen k' hk' h
+
 /-- **The genesis check is `GenesisFits`**, clause by clause. -/
-theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} :
-    checkGenesis X name nonce allowance founders = .ok () ↔ GenesisFits X name nonce allowance founders := by
+theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
+    {auth : Authority} :
+    checkGenesis X name nonce allowance founders auth = .ok () ↔ GenesisFits X name nonce allowance founders auth := by
   have hc : Bounds.counterLimit = 2 ^ 64 := by decide
   simp only [checkGenesis, req_bind_ok, decide_eq_true_eq, hc]
   simp only [except_bind_ok, req_ok, decide_eq_true_eq]
-  unfold GenesisFits
+  unfold GenesisFits Authority.Fits
   constructor
-  · rintro ⟨h1, h2, h3, ⟨⟩, h4, h5⟩
-    exact ⟨h1, h2, h3, checkFounders_ok.mp h4, h5⟩
-  · rintro ⟨h1, h2, h3, h4, h5⟩
-    exact ⟨h1, h2, h3, (), checkFounders_ok.mpr h4, h5⟩
+  · rintro ⟨h1, h2, h3, h6, h8, ⟨⟩, h4, ⟨⟩, h7, h5⟩
+    obtain ⟨h7a, h7b, -⟩ := checkCertifiers_ok.mp h7
+    exact ⟨h1, h2, h3, checkFounders_ok.mp h4, ⟨h6, h7a, h7b, h8⟩, h5⟩
+  · rintro ⟨h1, h2, h3, h4, ⟨h6, h7a, h7b, h8⟩, h5⟩
+    exact ⟨h1, h2, h3, h6, h8, (), checkFounders_ok.mpr h4, (), checkCertifiers_ok.mpr ⟨h7a, h7b, by simp⟩, h5⟩
 
 /-- **Genesis is checked** (KERNEL-31): it returns a World exactly on a `GenesisFits` input, and
 that World is `genesisWorld`. Every theorem about `genesisWorld` is a theorem about what `genesis`
 returns; `genesis_inj`'s premises hold for every genesis that returned. -/
 theorem genesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
-    {w : World D} :
-    genesis X name nonce allowance founders = .ok w ↔
-      GenesisFits X name nonce allowance founders ∧ w = genesisWorld X name nonce allowance founders := by
+    {auth : Authority} {w : World D} :
+    genesis X name nonce allowance founders auth = .ok w ↔
+      GenesisFits X name nonce allowance founders auth ∧ w = genesisWorld X name nonce allowance founders auth := by
   unfold genesis
   rw [except_bind_ok]
   constructor
@@ -101,20 +133,28 @@ theorem genesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {found
 
 theorem genesisInput_lawfulOn :
     LawfulOn (fun v : GenesisInput => v.1.size ≤ Bounds.eventBytesMax ∧ (v.2.1.size ≤ Bounds.eventBytesMax ∧
-      (v.2.2.1 < 2 ^ 64 ∧ (v.2.2.2.length ≤ Bounds.eventBytesMax ∧
-        ∀ x ∈ v.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧ x.2.size ≤ Bounds.eventBytesMax)))) genesisInput :=
+      (v.2.2.1 < 2 ^ 64 ∧ ((v.2.2.2.1.length ≤ Bounds.eventBytesMax ∧
+        ∀ x ∈ v.2.2.2.1, x.1.size ≤ Bounds.eventBytesMax ∧ x.2.size ≤ Bounds.eventBytesMax) ∧
+        ((v.2.2.2.2.1.length ≤ Bounds.eventBytesMax ∧ ∀ x ∈ v.2.2.2.2.1, x.size ≤ Bounds.eventBytesMax) ∧
+          v.2.2.2.2.2 < 2 ^ 64))))) genesisInput :=
   product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
-    (product_lawfulOn nat64_lawfulOn (rawList_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
-      (rawBytes_lawfulOn _ (by decide))) _ (by decide))))
+    (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawList_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
+      (rawBytes_lawfulOn _ (by decide))) _ (by decide))
+      (product_lawfulOn (rawList_lawfulOn (rawBytes_lawfulOn _ (by decide)) _ (by decide)) nat64_lawfulOn))))
 
 theorem inputOf_fits {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
-    (h : GenesisFits X name nonce allowance founders) :
-    let v := inputOf X name nonce allowance founders
+    {auth : Authority} (h : GenesisFits X name nonce allowance founders auth) :
+    let v := inputOf X name nonce allowance founders auth
     v.1.size ≤ Bounds.eventBytesMax ∧ (v.2.1.size ≤ Bounds.eventBytesMax ∧
-      (v.2.2.1 < 2 ^ 64 ∧ (v.2.2.2.length ≤ Bounds.eventBytesMax ∧
-        ∀ x ∈ v.2.2.2, x.1.size ≤ Bounds.eventBytesMax ∧ x.2.size ≤ Bounds.eventBytesMax))) := by
-  obtain ⟨h1, h2, h4, h5, h3⟩ := h
-  refine ⟨h1, h2, by simp only [inputOf]; omega, by simpa [inputOf] using h4, ?_⟩
+      (v.2.2.1 < 2 ^ 64 ∧ ((v.2.2.2.1.length ≤ Bounds.eventBytesMax ∧
+        ∀ x ∈ v.2.2.2.1, x.1.size ≤ Bounds.eventBytesMax ∧ x.2.size ≤ Bounds.eventBytesMax) ∧
+        ((v.2.2.2.2.1.length ≤ Bounds.eventBytesMax ∧ ∀ x ∈ v.2.2.2.2.1, x.size ≤ Bounds.eventBytesMax) ∧
+          v.2.2.2.2.2 < 2 ^ 64)))) := by
+  obtain ⟨h1, h2, h4, h5, ⟨ha1, ha2, -, ha4, -⟩, h3⟩ := h
+  have hs1 : Bounds.slotsPerCellMax = 1024 := rfl
+  have hs2 : Bounds.eventBytesMax = 65536 := rfl
+  refine ⟨h1, h2, by simp only [inputOf]; omega, ⟨by simpa [inputOf] using h4, ?_⟩,
+    ⟨by simp only [inputOf]; omega, fun x hx => ha2 x hx⟩, by simp only [inputOf]; omega⟩
   intro x hx
   simp only [inputOf, List.mem_map] at hx
   obtain ⟨f, hf, rfl⟩ := hx
@@ -162,22 +202,22 @@ names, nonces, allowances and founders (keys and next-key digests, in order), or
 inputs collide. -/
 theorem genesis_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {allowance allowance' : Nat}
-    {founders founders' : List (ByteArray × D)}
-    (hf : GenesisFits X name nonce allowance founders) (hf' : GenesisFits X name' nonce' allowance' founders')
-    (h : originOf X name nonce allowance founders = originOf X name' nonce' allowance' founders') :
-    (name = name' ∧ nonce = nonce' ∧ allowance = allowance' ∧ founders = founders') ∨
+    {founders founders' : List (ByteArray × D)} {auth auth' : Authority}
+    (hf : GenesisFits X name nonce allowance founders auth) (hf' : GenesisFits X name' nonce' allowance' founders' auth')
+    (h : originOf X name nonce allowance founders auth = originOf X name' nonce' allowance' founders' auth') :
+    (name = name' ∧ nonce = nonce' ∧ allowance = allowance' ∧ founders = founders' ∧ auth = auth') ∨
       CollidesAmong X.env.hash
-        [originPre X name nonce allowance founders, originPre X name' nonce' allowance' founders'] := by
-  by_cases hbytes : originInput.bytes (.inl (inputOf X name nonce allowance founders)) =
-      originInput.bytes (.inl (inputOf X name' nonce' allowance' founders'))
+        [originPre X name nonce allowance founders auth, originPre X name' nonce' allowance' founders' auth'] := by
+  by_cases hbytes : originInput.bytes (.inl (inputOf X name nonce allowance founders auth)) =
+      originInput.bytes (.inl (inputOf X name' nonce' allowance' founders' auth'))
   · left
     unfold originInput at hbytes
     rw [sum_bytes_inl_on genesisInput_lawfulOn, sum_bytes_inl_on genesisInput_lawfulOn] at hbytes
     have he := genesisInput_lawfulOn.bytes_injective (inputOf_fits hf) (inputOf_fits hf')
       (ba_append_cancel _ _ _ hbytes)
     simp only [inputOf, Prod.mk.injEq] at he
-    obtain ⟨rfl, rfl, rfl, hl⟩ := he
-    refine ⟨rfl, rfl, rfl, ?_⟩
+    obtain ⟨rfl, rfl, rfl, hl, hc, ht⟩ := he
+    refine ⟨rfl, rfl, rfl, ?_, by cases auth; cases auth'; cases hc; cases ht; rfl⟩
     have hinj : Function.Injective (fun f : ByteArray × D => (f.1, X.env.bytes f.2)) := by
       intro a b hab
       simp only [Prod.mk.injEq] at hab
@@ -201,12 +241,12 @@ theorem genesis_chain_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
 equal genesis inputs. -/
 theorem genesis_inj_sep {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
     {name nonce name' nonce' : ByteArray} {allowance allowance' : Nat}
-    {founders founders' : List (ByteArray × D)}
-    (hf : GenesisFits X name nonce allowance founders) (hf' : GenesisFits X name' nonce' allowance' founders')
+    {founders founders' : List (ByteArray × D)} {auth auth' : Authority}
+    (hf : GenesisFits X name nonce allowance founders auth) (hf' : GenesisFits X name' nonce' allowance' founders' auth')
     (hs : Separates X.env.hash
-      [originPre X name nonce allowance founders, originPre X name' nonce' allowance' founders'])
-    (h : originOf X name nonce allowance founders = originOf X name' nonce' allowance' founders') :
-    name = name' ∧ nonce = nonce' ∧ allowance = allowance' ∧ founders = founders' :=
+      [originPre X name nonce allowance founders auth, originPre X name' nonce' allowance' founders' auth'])
+    (h : originOf X name nonce allowance founders auth = originOf X name' nonce' allowance' founders' auth') :
+    name = name' ∧ nonce = nonce' ∧ allowance = allowance' ∧ founders = founders' ∧ auth = auth' :=
   hs.elim (genesis_inj hE hf hf' h)
 
 omit [DecidableEq D] in

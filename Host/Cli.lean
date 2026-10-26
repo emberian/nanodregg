@@ -90,7 +90,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] | host seal STORE [--retain N] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
+  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] | host seal STORE [--retain N] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -114,12 +114,23 @@ def genesisNonce : Option String → IO (Except Status ByteArray)
       let b ← try IO.getRandomBytes 32 catch _ => pure ByteArray.empty
       pure (if b.size = 32 then .ok b else .error .entropy)
 
-/-- What a genesis prints: the origin, the nonce, each founder's member and grant ids, the chain. -/
-def genesisLines (w₀ : World D) (nonce : ByteArray) (n : Nat) : List String :=
+/-- What a genesis prints: the origin, the nonce, each founder's member and grant ids, the chain,
+then the authority (KERNEL-69) as `authority THRESHOLD COUNT`. Nothing above `chain` moves; `input`
+follows last. -/
+def genesisLines (w₀ : World D) (nonce : ByteArray) (n : Nat) (auth : Receive.Authority) : List String :=
   [s!"origin {w₀.origin.toHex}", s!"nonce {Protocol.Text.toHex nonce}"] ++
   (List.range n).map (fun i =>
     s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}") ++
-  [s!"chain {w₀.chain.toHex}"]
+  [s!"chain {w₀.chain.toHex}", s!"authority {auth.threshold} {auth.certifiers.length}"]
+
+/-- The certifier keys from `--certifier HEX` options, in order: each exactly 32 bytes. The quorum
+itself is not judged here: `Receive.genesis` refuses `badThreshold`, `repeatedCertifier`, … by name. -/
+def certifiers : List String → Option (List ByteArray)
+  | [] => some []
+  | k :: rest => do
+    let key ← Protocol.Text.ofHex k
+    if key.size ≠ 32 then none
+    return key :: (← certifiers rest)
 
 /-- The budget check every World this binary creates a Store from passes (HOST-56, KERNEL-55; `host
 genesis`, `host join`, `host import`, before anything is written): its allowance within
@@ -131,13 +142,18 @@ def budgetFault (w : World D) : Option Status :=
   else if potentialMax < potential w then some .potentialPastBound
   else none
 
-def genesisVerb (store name : String) (nonceArg : Option String) (fs : List String) : IO UInt32 := do
+def genesisVerb (store name : String) (nonceArg : Option String) (certifierArgs : List String)
+    (thresholdArg : Option String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse .usage "founders"
+  let some cs := certifiers certifierArgs | refuse .usage "certifier"
+  let some t := (match thresholdArg with | none => some 0 | some v => v.toNat?) | refuse .usage "threshold"
+  let auth : Receive.Authority := ⟨cs, t⟩
   let nonce ← match ← genesisNonce nonceArg with
     | .ok b => pure b
     | .error s => return ← refuse s "nonce"
-  -- KERNEL's genesis refuses, by name, any input past the raw codec's bounds (`GenesisRefusal`)
-  let w₀ ← match Receive.genesis X name.toUTF8 nonce allowanceMax fs with
+  -- KERNEL's genesis refuses, by name, any input past the raw codec's bounds and any quorum nobody
+  -- meets (`GenesisRefusal`)
+  let w₀ ← match Receive.genesis X name.toUTF8 nonce allowanceMax fs auth with
     | .ok w => pure w
     | .error r => return ← refuse .usage r.name
   if let some s := budgetFault w₀ then return ← refuse s s.name
@@ -146,9 +162,9 @@ def genesisVerb (store name : String) (nonceArg : Option String) (fs : List Stri
       IO (Except (StoreFault (Record.Fault (Reject D))) Unit)) with
   | .error f => refuseStore f
   | .ok () =>
-    (genesisLines w₀ nonce fs.length).forM IO.println
+    (genesisLines w₀ nonce fs.length auth).forM IO.println
     -- last, so no parser of the lines above moves: the inputs a founder invites from (PROTOCOL-42)
-    IO.println s!"input {Protocol.Text.toHex (Protocol.Invite.inputBytes X name.toUTF8 nonce allowanceMax fs)}"
+    IO.println s!"input {Protocol.Text.toHex (Protocol.Invite.inputBytes X name.toUTF8 nonce allowanceMax fs auth)}"
     return 0
 
 /-- `host export STORE OUT`: the read-only open `check` makes (`openClean`), the carried file of
@@ -267,7 +283,7 @@ def joinWith {m : Type → Type} [Monad m] (fx : JoinFx m) (inviteHex keyHex : S
         fx.report ([s!"sponsor {i.sponsor.toHex}"] ++ ls ++
         [s!"input {Protocol.Text.toHex (Protocol.Invite.startBytes X i.start)}"])) }
       name (.origin o) (some ⟨fromO, height, chain⟩)
-  | .genesis _ nonce _ fs =>
+  | .genesis _ nonce _ fs auth =>
     if inPath.isSome then return ← fx.refuse .usage "in"
     let w₀ ← match Protocol.Invite.startGenesis X i.start with
       | .ok w => pure w
@@ -279,7 +295,7 @@ def joinWith {m : Type → Type} [Monad m] (fx : JoinFx m) (inviteHex keyHex : S
     match ← fx.genesis key w₀ with
     | .error f => fx.refuse f.status f.text
     | .ok () =>
-      fx.report (genesisLines w₀ nonce fs.length ++ [s!"sponsor {i.sponsor.toHex}",
+      fx.report (genesisLines w₀ nonce fs.length auth ++ [s!"sponsor {i.sponsor.toHex}",
         s!"input {Protocol.Text.toHex (Protocol.Invite.startBytes X i.start)}"])
       return 0
 
@@ -455,9 +471,17 @@ def withRetain (n : String) (k : Retain → IO UInt32) : IO UInt32 :=
   | .ok r => k r
   | .error name => refuse .usage name
 
+/-- `host genesis`'s options, in any order before the founders: `--nonce HEX32` (KERNEL-24),
+`--certifier HEX32` (repeatable, in order) and `--threshold N` (KERNEL-69; neither given is
+`Authority.none`). -/
+def genesisOpts (store name : String) : List String → Option String → List String → Option String → IO UInt32
+  | "--nonce" :: n :: rest, _, cs, t => genesisOpts store name rest (some n) cs t
+  | "--certifier" :: k :: rest, n, cs, t => genesisOpts store name rest n (cs ++ [k]) t
+  | "--threshold" :: v :: rest, n, cs, _ => genesisOpts store name rest n cs (some v)
+  | fs, n, cs, t => genesisVerb store name n cs t fs
+
 def verb : List String → IO UInt32
-  | "genesis" :: store :: name :: "--nonce" :: n :: fs => genesisVerb store name (some n) fs
-  | "genesis" :: store :: name :: fs => genesisVerb store name none fs
+  | "genesis" :: store :: name :: rest => genesisOpts store name rest none [] none
   | ["serve", store] => serveVerb store none
   | ["serve", store, "--retain", n] => withRetain n (serveVerb store)
   | ["seal", store] => sealVerb store none

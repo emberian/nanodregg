@@ -131,7 +131,7 @@ def lawSession : Run :=
   let X := ctxWith langProgram
   let fk := [("lw-a".toUTF8, "lw-a-next".toUTF8)]
   match genesis X Sim.worldName (Sim.nonceOf 12) 100000000
-      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
   | .error e => note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
       s!"LG genesis: {e.name}" false
   | .ok g =>

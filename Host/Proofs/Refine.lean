@@ -594,20 +594,20 @@ genesis `host join` accepts (`Protocol.Invite.accept`: the genesis World of the 
 and each meets the relation's invariant. The import arm includes a carried join under its signed
 origin; Host.Cli.join_carried_trusted links the actual join effect to that independent pin. -/
 theorem host_start_kept :
-    (∀ {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {w : World D},
-      Receive.genesis X name nonce allowance founders = .ok w → Kept w) ∧
+    (∀ {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {auth : Receive.Authority} {w : World D},
+      Receive.genesis X name nonce allowance founders auth = .ok w → Kept w) ∧
     (∀ {trusted inv : ByteArray} {i : Protocol.Invite.Invitation D} {w : World D},
       Protocol.Invite.accept X trusted inv = .ok (i, w) → Kept w) ∧
     (∀ {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D} {w : World D},
       Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w, r) → Kept w) := by
-  have hg : ∀ {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {w : World D},
-      Receive.genesis X name nonce allowance founders = .ok w → Kept w := by
-    intro name nonce allowance founders w h
+  have hg : ∀ {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {auth : Receive.Authority} {w : World D},
+      Receive.genesis X name nonce allowance founders auth = .ok w → Kept w := by
+    intro name nonce allowance founders auth w h
     obtain ⟨hf, rfl⟩ := Receive.genesis_ok.mp h
     exact kept_of_fits (genesisWorld_codecFits hf)
   refine ⟨hg, ?_, fun h => kept_of_fits (importWorld_codecFits h)⟩
   intro trusted inv i w h
-  obtain ⟨_, _, _, _, _, hgen⟩ := Protocol.Invite.accept_genesis h
+  obtain ⟨_, _, _, _, _, _, hgen⟩ := Protocol.Invite.accept_genesis h
   exact hg hgen
 
 /-- A run of deployed reopen steps over records is the fold of the steps those records decode to. -/

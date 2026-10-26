@@ -104,9 +104,9 @@ omit [Ord D] in
 /-- **A carry's origin is never a genesis's** but by a collision between the two origin inputs:
 they are the two cases of one tagged codec, so their bytes differ in the first byte. -/
 theorem carry_origin_ne_genesis [Ord D] [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D}
-    {c : Carried D} {name' nonce' : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
-    (h : carryOriginOf X name nonce fromOrigin c = originOf X name' nonce' allowance founders) :
-    CollidesAmong X.env.hash [carryOriginPre X name nonce fromOrigin c, originPre X name' nonce' allowance founders] :=
+    {c : Carried D} {name' nonce' : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {auth : Authority}
+    (h : carryOriginOf X name nonce fromOrigin c = originOf X name' nonce' allowance founders auth) :
+    CollidesAmong X.env.hash [carryOriginPre X name nonce fromOrigin c, originPre X name' nonce' allowance founders auth] :=
   .pair (fun he => (sum_inl_ne_inr genesisInput_lawfulOn carryInput_lawfulOn _ _).symm (congrArg Prod.snd he)) h
 
 omit [Ord D] in
@@ -114,10 +114,10 @@ omit [Ord D] in
 origin is not a genesis's. -/
 theorem carry_origin_ne_genesis_sep [Ord D] [DecidableEq D] {X : Ctx D} {name nonce : ByteArray}
     {fromOrigin : D} {c : Carried D} {name' nonce' : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)}
+    {founders : List (ByteArray × D)} {auth : Authority}
     (hs : Separates X.env.hash
-      [carryOriginPre X name nonce fromOrigin c, originPre X name' nonce' allowance founders]) :
-    carryOriginOf X name nonce fromOrigin c ≠ originOf X name' nonce' allowance founders :=
+      [carryOriginPre X name nonce fromOrigin c, originPre X name' nonce' allowance founders auth]) :
+    carryOriginOf X name nonce fromOrigin c ≠ originOf X name' nonce' allowance founders auth :=
   fun h => hs.not_collides (carry_origin_ne_genesis h)
 
 theorem carry_fits_input {X : Ctx D} {name nonce : ByteArray} {fromOrigin : D} {c : Carried D}

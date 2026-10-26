@@ -1585,7 +1585,7 @@ is the run's own genesis, which was admitted. -/
 def probeGenesis (P : Params D) (st : State D) (founders : List (ByteArray × D)) : State D :=
   let long : ByteArray := ⟨Array.replicate (Bounds.eventBytesMax + 1) 7⟩
   let bad := founders ++ [(long, nextKeyDigest P.ctx (P.pub "f2-next".toUTF8))]
-  match genesis P.ctx worldName (nonceOf 0) 100000000 bad with
+  match genesis P.ctx worldName (nonceOf 0) 100000000 bad Authority.none with
   | .error (.founderKeyTooLong i) =>
       if i = founders.length then
         { st with refusedAsExpected := st.refusedAsExpected + 1,
@@ -2748,7 +2748,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := P.ctx
   let founders := fk.map fun (k, n) => (P.pub k, nextKeyDigest X (P.pub n))
-  match genesis X worldName (nonceOf seed) 100000000 founders with
+  match genesis X worldName (nonceOf seed) 100000000 founders Authority.none with
   | .error r =>
       { rng, host := World.genesis P.env P.zero 0, members := [], failures := [s!"genesis refused {r.name}"] }
   | .ok g =>
@@ -2824,7 +2824,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
     | (.error f, st) => failWith st s!"probe rows: {f}"
   -- KERNEL-24: the same log's calls against a second genesis (same name and founders, another
   -- nonce) are each refused `wrongWorld`; another nonce, or the founders swapped, is another chain
-  match genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders with
+  match genesis X worldName (nonceOf (seed + 1000000)) 100000000 founders Authority.none with
   | .error r => failWith st s!"second genesis refused {r.name}"
   | .ok g2 =>
   let st := st.log.foldl (fun st s =>
@@ -2837,7 +2837,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
             { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "wrongWorld" :: st.seen }
         | .error v => { st with failures := s!"replay elsewhere: got {vname v}" :: st.failures }
         | .ok _ => { st with failures := "replay elsewhere: admitted on a second World" :: st.failures }) st
-  match genesis X worldName (nonceOf seed) 100000000 founders.reverse with
+  match genesis X worldName (nonceOf seed) 100000000 founders.reverse Authority.none with
   | .error r => failWith st s!"swapped genesis refused {r.name}"
   | .ok swapped =>
   let st := if swapped.chain = g.chain ∨ g2.chain = g.chain then

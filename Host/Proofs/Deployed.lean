@@ -67,9 +67,9 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec
 /-- The deployed `mark` (`Record.mark X.env`): the step count and the chain's 32 bytes. -/
 theorem recorder_mark (w : World D) : recorder.mark w = (w.steps, w.chain.bytes) := rfl
 
-theorem originChain_genesis (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    originChain (Receive.genesisWorld X name nonce allowance founders) =
-      (recorder.mark (Receive.genesisWorld X name nonce allowance founders)).2 := by
+theorem originChain_genesis (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) (auth : Receive.Authority) :
+    originChain (Receive.genesisWorld X name nonce allowance founders auth) =
+      (recorder.mark (Receive.genesisWorld X name nonce allowance founders auth)).2 := by
   rw [recorder_mark]; simp only [originChain, Receive.genesis_chain]
 
 /-- The deployed keys' chain width is the deployed digest's (an index entry's and a checkpoint
@@ -79,17 +79,17 @@ theorem ofKey_chainBytes (k shapes : Digest) : (Keys.ofKey k shapes).chainBytes 
 /-- **HOST-64 at deployed genesis**: the checkpoint header genesis writes for its base's own file
 passes the deployed open's check (`genesisImage_header`). -/
 theorem genesis_header_passes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) (name nonce : ByteArray)
-    (allowance : Nat) (founders : List (ByteArray × D)) {img : Image}
-    (hst : (Receive.genesisWorld X name nonce allowance founders).steps < 2 ^ 64)
-    (h : genesisImage keys c world recorder.mark (Receive.genesisWorld X name nonce allowance founders) = .ok img) :
-    headerFault keys img.header (originChain (Receive.genesisWorld X name nonce allowance founders))
+    (allowance : Nat) (founders : List (ByteArray × D)) (auth : Receive.Authority) {img : Image}
+    (hst : (Receive.genesisWorld X name nonce allowance founders auth).steps < 2 ^ 64)
+    (h : genesisImage keys c world recorder.mark (Receive.genesisWorld X name nonce allowance founders auth) = .ok img) :
+    headerFault keys img.header (originChain (Receive.genesisWorld X name nonce allowance founders auth))
       img.segment.size (tagDigest keys.segment (segmentInitial ++
-        (recorder.mark (Receive.genesisWorld X name nonce allowance founders)).2))
-      (recorder.mark (Receive.genesisWorld X name nonce allowance founders)) 0 = none :=
+        (recorder.mark (Receive.genesisWorld X name nonce allowance founders auth)).2))
+      (recorder.mark (Receive.genesisWorld X name nonce allowance founders auth)) 0 = none :=
   genesisImage_header keys c world recorder.mark originChain _ h
     (by rw [recorder_mark, hkeys]; exact Digest.size_eq _)
     (by rw [hkeys]; decide) hst
-    (originChain_genesis name nonce allowance founders)
+    (originChain_genesis name nonce allowance founders auth)
 
 theorem foldStep_originChain {w w' : World D} {r : ByteArray} (h : foldStep w r = .ok w') :
     originChain w' = originChain w := by
@@ -176,10 +176,10 @@ theorem openWith_refusalsOk {keys : Keys} {file H I S : ByteArray} {o : Opening 
   · cases hd
 
 /-- A World `host genesis` makes starts at the genesis chain of its origin. -/
-theorem genesis_chain_eq (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    (Receive.genesisWorld X name nonce allowance founders).chain =
-      World.genesisChain X.env (Receive.genesisWorld X name nonce allowance founders).origin :=
-  Receive.genesis_chain X name nonce allowance founders
+theorem genesis_chain_eq (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) (auth : Receive.Authority) :
+    (Receive.genesisWorld X name nonce allowance founders auth).chain =
+      World.genesisChain X.env (Receive.genesisWorld X name nonce allowance founders auth).origin :=
+  Receive.genesis_chain X name nonce allowance founders auth
 
 /-- A World `host import` makes starts at the genesis chain of its NEW origin (KERNEL's
 `carryWorld`), not at the exported World's chain. -/
@@ -237,27 +237,32 @@ theorem founderEntries_length (o : D) (founders : List (ByteArray × D)) :
     (founderEntries X o founders).length = 2 * founders.length := by
   simp [founderEntries, List.length_flatMap, List.map_const', List.sum_replicate_nat, List.length_zipIdx, Nat.mul_comm]
 
+/-- A genesis World's entries: two per founder and the authority cell (KERNEL-69). -/
+theorem genesisEntries_length (o : D) (founders : List (ByteArray × D)) (a : Receive.Authority) :
+    (genesisEntries X o founders a).length = 2 * founders.length + 1 := by
+  simp [genesisEntries, founderEntries_length]
+
 /-- **The World `host genesis` makes is in the deployed World codec's domain**: its cells trie is
 canonical (`insertAll_canon`), every slot holds the leaf of its kind (`insertAll_fits`), every live
-cell fits the cell codec (KERNEL's `genesis_cellsFit`), it lists two entries per founder (within
-`worldMax`), its journal is empty, and its storage plus allowance is below 2^64 (`GenesisFits`). -/
+cell fits the cell codec (KERNEL's `genesis_cellsFit`), it lists two entries per founder and the
+authority cell (within `worldMax`), its journal is empty, and its storage plus allowance is below 2^64 (`GenesisFits`). -/
 theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} (hf : Receive.GenesisFits X name nonce allowance founders) :
+    {founders : List (ByteArray × D)} {auth : Receive.Authority} (hf : Receive.GenesisFits X name nonce allowance founders auth) :
     Codec.Kernel.World.CodecFits X.env (fun _ => True)
-      (Receive.genesisWorld X name nonce allowance founders) := by
-  have hcanon : Trie.Canon (trieSpec X.env) 0 (Receive.genesisWorld X name nonce allowance founders).trie :=
+      (Receive.genesisWorld X name nonce allowance founders auth) := by
+  have hcanon : Trie.Canon (trieSpec X.env) 0 (Receive.genesisWorld X name nonce allowance founders auth).trie :=
     insertAll_canon _ (genesis_canon X.env _ allowance)
-  have hslot : (Receive.genesisWorld X name nonce allowance founders).Slotted X.env :=
+  have hslot : (Receive.genesisWorld X name nonce allowance founders auth).Slotted X.env :=
     insertAll_fits _ (genesis_slotted X.env _ allowance)
   have hcf := genesis_cellsFit hf (fun d => by
     show d.bytes.size ≤ Bounds.valueBytesMax
     rw [Digest.size_eq]; decide)
   have hlen := insertAll_length (E := X.env) (m := .empty)
-    (founderEntries X (originOf X name nonce allowance founders) founders) (Trie.canon_empty _ 0).1
-  rw [founderEntries_length] at hlen
+    (genesisEntries X (originOf X name nonce allowance founders auth) founders auth) (Trie.canon_empty _ 0).1
+  rw [genesisEntries_length] at hlen
   have hfl := hf.2.2.1
-  have hmem : ∀ p ∈ (Receive.genesisWorld X name nonce allowance founders).trie.toList,
-      (Receive.genesisWorld X name nonce allowance founders).trie.get (trieSpec X.env) p.1 = some p.2 :=
+  have hmem : ∀ p ∈ (Receive.genesisWorld X name nonce allowance founders auth).trie.toList,
+      (Receive.genesisWorld X name nonce allowance founders auth).trie.get (trieSpec X.env) p.1 = some p.2 :=
     fun p hp => (Trie.mem_toList (trieSpec X.env) 0 _ hcanon.1 p.1 p.2).mp hp
   refine { cells := ⟨⟨⟨?_, fun p hp => ⟨trivial, ?_⟩⟩, fun p hp => hslot _ _ (hmem p hp)⟩, hcanon⟩,
              journal := ⟨⟨by simp [Receive.genesisWorld, World.genesis, Trie.T.toList],
@@ -267,9 +272,9 @@ theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
              height := by simp [Receive.genesisWorld, World.genesis],
              stepsLt := by simp [Receive.genesisWorld, World.genesis],
              chain := trivial,
-             budget := hf.2.2.2.2,
+             budget := hf.2.2.2.2.2,
              origin := trivial,
-             journalFits := journalFits_of_ok (genesisWorld_journalOk X name nonce allowance founders),
+             journalFits := journalFits_of_ok (genesisWorld_journalOk X name nonce allowance founders auth),
              refusalsFits := by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, refusalsFits],
              refusalsDisjoint := by simp [Receive.genesisWorld, World.genesis, Trie.T.toList, refusalsDisjoint],
              refusalsCounted := Receive.reach_refusalsCounted (X := X) (l := []) rfl,
@@ -296,8 +301,8 @@ theorem genesisWorld_codecFits {name nonce : ByteArray} {allowance : Nat}
 beyond the two successes (KERNEL's genesis, and the genesis image, which refuses only
 `worldTooLarge`) and the Store's chain width, the deployed digest's (`ofKey_chainBytes`). -/
 theorem genesis_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w₀ : World D}
-    (hg : Receive.genesis X name nonce allowance founders = .ok w₀) {img : Image}
+    {founders : List (ByteArray × D)} {auth : Receive.Authority} {w₀ : World D}
+    (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
     ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.header img.segment.size
         img.index.size (segReader img.index) (segReader img.segment)) = .ok o ∧
@@ -305,7 +310,7 @@ theorem genesis_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {
         o.pos.offset = img.segment.size := by
   obtain ⟨hf, rfl⟩ := Receive.genesis_ok.mp hg
   exact genesisImage_opens_deployed keys hkeys (genesisWorld_codecFits hf)
-    (genesis_chain_eq name nonce allowance founders) h
+    (genesis_chain_eq name nonce allowance founders auth) h
 
 /-- What a carried file reads back to is in the carried codec's domain. -/
 theorem read_carried_fits {f : ByteArray} {r : Carry.Read D}

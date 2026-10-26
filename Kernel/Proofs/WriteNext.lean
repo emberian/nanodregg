@@ -209,12 +209,18 @@ theorem slotsOf_ascending (ps : List (Nat × ByteArray)) : Slots.ascending (slot
   refine (ascending_iff _).mpr (foldl_inv (fun s : Slots => s.Pairwise (fun a b => a.1 < b.1)) _
     (fun s p hs => set_pairwise hs) ps [] List.Pairwise.nil)
 
-/-- **Genesis is canonical**: the founders' member and root grant cells are `slotsOf`. -/
+/-- **Genesis is canonical**: the founders' member and root grant cells and the authority cell are
+`slotsOf`. -/
 theorem genesis_cellsCanon (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) :
-    CellsCanon X.env (genesisWorld X name nonce allowance founders) := by
+    (founders : List (ByteArray × D)) (auth : Authority) :
+    CellsCanon X.env (genesisWorld X name nonce allowance founders auth) := by
   intro id cell hl
-  obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries (genesis_live hl)
+  rcases mem_genesisEntries (genesis_live hl) with hm | ⟨-, he⟩
+  case inr =>
+    injection he with he _
+    subst he
+    exact slotsOf_ascending _
+  obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries hm
   · injection he with he _
     subst he
     exact slotsOf_ascending _

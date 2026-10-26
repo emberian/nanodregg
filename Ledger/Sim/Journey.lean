@@ -150,7 +150,7 @@ def journey (mode : Mode) : Run := Id.run do
     [("ka".toUTF8, "ka-next".toUTF8), ("kp".toUTF8, "kp-next".toUTF8), ("kb".toUTF8, "kb-next".toUTF8),
      ("kz".toUTF8, "kz-next".toUTF8)]
   let g ← match genesis X Kernel.Sim.worldName (Kernel.Sim.nonceOf 0) 100000000
-      (keys.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (keys.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
     | .ok g => pure g
     | .error e =>
       let r0 : Run := { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }

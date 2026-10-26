@@ -619,8 +619,8 @@ theorem judgeBy_refusalsFull {X : Ctx D} {w : World D} {c : Call D} {auth : Verd
 /-- **Every World a checked genesis and a fold reach has bounded refusals**: no premise beyond the
 genesis check. -/
 theorem reach_refusals_bounded {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)}
-    (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w) :
+    {founders : List (ByteArray × D)} {auth : Authority} {w : World D} {l : List (Step D)}
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w) :
     (w.refusals.toList.map refusedOne).sum ≤ 3 * Bounds.refusalsPerWindowMax ∧
       (w.refusals.toList.map countKeyOne).sum ≤ Bounds.refusalsPerWindowMax ∧
       (w.refusals.toList.map totalKeyOne).sum ≤ 1 ∧
@@ -628,15 +628,15 @@ theorem reach_refusals_bounded {X : Ctx D} {name nonce : ByteArray} {allowance :
         (w.refusals.toList.map countKeyOne).sum + (w.refusals.toList.map totalKeyOne).sum +
         (w.refusals.toList.map meterKeyOne).sum ∧
       (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax :=
-  fold_refusals_bounded (genesisWorld_refusalsOk X name nonce allowance founders)
+  fold_refusals_bounded (genesisWorld_refusalsOk X name nonce allowance founders auth)
     (countedOk_of_empty rfl (Nat.le_refl _)) h
 
 open Nanodregg.Codec Nanodregg.Codec.Deployed in
 /-- **Deployed**: no premise. Every World the deployed genesis and a fold reach holds at most 49,152
 records, 16,384 counts, one total and 1,024 meter leaves (KERNEL-68) in its window trie. -/
 theorem deployed_reach_refusals_bounded (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     (w.refusals.toList.map refusedOne).sum ≤ 3 * Bounds.refusalsPerWindowMax ∧
       (w.refusals.toList.map countKeyOne).sum ≤ Bounds.refusalsPerWindowMax ∧
       (w.refusals.toList.map totalKeyOne).sum ≤ 1 ∧

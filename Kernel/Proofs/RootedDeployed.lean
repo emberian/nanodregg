@@ -56,24 +56,24 @@ theorem separates_floor_32 :
 
 /-- **Deployed: an honest folded log's World is rooted at its founders.** -/
 theorem deployed_honest_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × Digest)) {w' : World Digest} {l : List (Step Digest)}
-    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders) l = .ok w')
-    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l) :
-    WorldRooted (ctx program) (GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders)) w' :=
-  honest_rooted deployed_lawful (genesis_rooted _ name nonce allowance founders) hf hh
+    (founders : List (ByteArray × Digest)) (auth : Authority) {w' : World Digest} {l : List (Step Digest)}
+    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders auth) l = .ok w')
+    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders auth) l) :
+    WorldRooted (ctx program) (GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders auth)) w' :=
+  honest_rooted deployed_lawful (genesis_rooted _ name nonce allowance founders auth) hf hh
 
 /-- **Deployed: every enrolment is a founder's.** On a World an honest folded log reached from genesis,
 a derived enrolment's grant chain ends at a founder's live genesis grant, issued by the founder the
 chain acts for. -/
 theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × Digest)) {w : World Digest} {l : List (Step Digest)}
-    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders) l = .ok w)
-    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l)
+    (founders : List (ByteArray × Digest)) (auth : Authority) {w : World Digest} {l : List (Step Digest)}
+    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders auth) l = .ok w)
+    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders auth) l)
     {c : Call Digest} {key : ByteArray} {next : Digest} {possession : ByteArray} {via : Digest}
     {base : Nat} {d : Draft Digest}
     (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) c ⟨c.unsigned.member, base⟩ key next possession via
       = .ok d) :
-    ∃ p r cell, GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders) r ∧ w.live (ctx program).env r = some cell ∧
+    ∃ p r cell, GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders auth) r ∧ w.live (ctx program).env r = some cell ∧
       slotDigest (ctx program) r cell grantIssuer = .ok p ∧
       Chain (ctx program) (pinned (ctx program).env w c.unsigned.pins) (worldId (ctx program)) (.enroll 0) true via
         c.unsigned.member p := by
@@ -84,7 +84,7 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
     split at hx
     · simp only [Except.ok.injEq] at hx; exact hx.symm
     · simp at hx
-  obtain ⟨r, cell, hr, hl, hi⟩ := chain_rooted (deployed_honest_rooted program name nonce allowance founders hf hh)
+  obtain ⟨r, cell, hr, hl, hi⟩ := chain_rooted (deployed_honest_rooted program name nonce allowance founders auth hf hh)
     hlook (fun _ _ hd => (bytes_of_digestOf hd).symm) hc
   exact ⟨p, r, cell, hr, hl, hi, hc⟩
 
@@ -107,17 +107,17 @@ theorem deployed_bytes_fit (d : Digest) : (env.bytes d).size ≤ Bounds.valueByt
 
 /-- **Deployed: a World a checked genesis and a fold reach is canonical, and its cells fit.** -/
 theorem deployed_reach (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     w.Canon env ∧ w.CellsFit Nanodregg.Codec.Kernel.Cell.Fits env := by
   obtain ⟨hf, rfl⟩ := genesis_ok.mp hg
-  exact ⟨fold_canon (receive_genesis_canon (ctx program) name nonce allowance founders) hl,
+  exact ⟨fold_canon (receive_genesis_canon (ctx program) name nonce allowance founders auth) hl,
     fold_cellsFit (genesis_cellsFit hf deployed_bytes_fit) hl⟩
 
 /-- **Deployed: inclusion is sound** on every World a checked genesis and a fold reach. -/
 theorem deployed_slot_inclusion_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     {s : Slot Digest} {leaf : Leaf} (hlf : leaf.CellFit Nanodregg.Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) (w.root env) s (leafDigest env leaf) p = true) :
@@ -129,8 +129,8 @@ theorem deployed_slot_inclusion_sound (program : Program Digest) {name nonce : B
 /-- **Deployed: a live cell proved against the root is the World's live cell**, or two of the
 inputs it compares collide. -/
 theorem deployed_live_inclusion_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     {c : Digest} {cell : Cell} {v : Nat} (hcf : (Leaf.entry (.live cell v)).CellFit Nanodregg.Codec.Kernel.Cell.Fits)
     {p : Trie.Proof (Slot Digest) Digest}
     (hv : Trie.verifyInclusion (trieSpec env) (w.root env) (.cell c) (leafDigest env (.entry (.live cell v))) p = true) :
@@ -177,8 +177,8 @@ record's root, show a slot of the World after that turn, or two of the inputs it
 (`headPres`, `inclPres`). Every premise of `head_read_sound` is discharged: 32-byte injective digests, `cellBytes` injective on `Cell.Fits`,
 the World canonical and fitting. -/
 theorem deployed_head_read_sound (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd)
@@ -195,8 +195,8 @@ what CODEC's leaf decoder returns from the served bytes, so `CellFit` comes from
 (`Codec.Kernel.leaf_decode_cellFit`, toothed by `leaf_decode_refuses_misfit`) and no premise about
 the leaf is left: a reached World, one admitted turn, the head record, the proof. -/
 theorem deployed_head_read_sound_bytes (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd)
@@ -225,8 +225,8 @@ theorem deployed_head_read_sound_decoded_bytes {bw : ByteArray} {w w' : World Di
 
 /-- Every World a checked genesis and a fold reach holds `JournalOk` at the deployed codec. -/
 theorem deployed_reach_journalOk (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     w.JournalOk env := by
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
   exact reach_journalOk (X := ctx program) hl
@@ -236,8 +236,8 @@ record that hashes to the chain the next admitted turn reached, and an inclusion
 record's journal root, show the entry in that World's journal, or two of the inputs it compares collide.
 The one premise left is the claimed entry's: its height is below 2^64 (a `u64` on the wire). -/
 theorem deployed_head_journal_read (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : Digest} {e : Nat × Digest}
@@ -251,8 +251,8 @@ theorem deployed_head_journal_read (program : Program Digest) {name nonce : Byte
 /-- **Deployed: the phone's journal absence**, no premise: the id is not in the journal of the World
 after the turn, or two of the inputs it compares collide. -/
 theorem deployed_head_journal_absent (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : Digest} {p : Trie.Proof Digest Digest}
@@ -267,9 +267,9 @@ premise: a turn admitted on a reached World, and any World its log reaches below
 `notBefore + 2 * windowMax`, admit no exclusion proof of the turn's transaction id against that
 World's head but by a collision among the inputs the opening and the read compare. -/
 theorem deployed_head_absent_admitted (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
     {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
     (h₁ : World.admit env w₀ t = .ok w₁) (hf : World.fold env w₁ l = .ok w₂)
     (hnf : journalForgets w₂.height t.notBefore = false) {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w₂.chain)
@@ -285,19 +285,19 @@ theorem deployed_head_absent_admitted (program : Program Digest) {name nonce : B
 canonical refusals trie whose every leaf fits its height (with `fold_member_refusals_le`, no log
 records more than `Bounds.refusalsPerWindow` refusals of a member in a window). -/
 theorem deployed_reach_refusalsOk (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     w.RefusalsOk env := by
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
-  exact fold_refusalsOk (genesisWorld_refusalsOk (ctx program) name nonce allowance founders) hl
+  exact fold_refusalsOk (genesisWorld_refusalsOk (ctx program) name nonce allowance founders auth) hl
 
 /-- **Deployed: a recorded refusal is final**, no premise but the height: on a World a checked
 genesis and a fold reach, after `judge` recorded call `c`'s refusal, every World a later log reaches
 below the prune height answers `c` `refusedFinal` with the recorded code (the A→B→A defect closed). -/
 theorem deployed_judge_recorded_final (program : Program Digest) {name nonce : ByteArray}
-    {allowance : Nat} {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest}
+    {allowance : Nat} {founders : List (ByteArray × Digest)} {auth : Authority} {g w₀ w₁ w₂ : World Digest}
     {l₀ l : List (Step Digest)} {c : Call Digest} {v : Verdict Digest} {r : Refused Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
     (hj : judge (ctx program) w₀ c = .recorded v r w₁) (hf : World.fold env w₁ l = .ok w₂)
     (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax) :
     submit (ctx program) w₂ c = .error (.rejected (.refusedFinal v.code)) :=
@@ -316,8 +316,8 @@ theorem deployed_fold_reaches_host_sep {g host follower : World Digest} {lh lf :
 
 /-- TOOTH (`deployed_head_read_sound`). -/
 theorem deployed_head_read_sound_sep (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {t : Turn Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.admit env w t = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd)
@@ -331,9 +331,9 @@ theorem deployed_head_read_sound_sep (program : Program Digest) {name nonce : By
 
 /-- TOOTH (`deployed_head_absent_admitted`). -/
 theorem deployed_head_absent_admitted_sep (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
     {t : Turn Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (h₀ : World.fold env g l₀ = .ok w₀)
     (h₁ : World.admit env w₀ t = .ok w₁) (hf : World.fold env w₁ l = .ok w₂)
     (hnf : journalForgets w₂.height t.notBefore = false) {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w₂.chain)

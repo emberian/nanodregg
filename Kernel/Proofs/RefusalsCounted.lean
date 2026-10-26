@@ -797,17 +797,17 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- **Every World a checked genesis and a fold reach passes `refusalsCounted`.** -/
 theorem reach_refusalsCounted {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)}
-    (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w) :
+    {founders : List (ByteArray × D)} {auth : Authority} {w : World D} {l : List (Step D)}
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w) :
     refusalsCounted X.env w = true :=
-  fold_refusalsCounted (genesisWorld_refusalsOk X name nonce allowance founders)
+  fold_refusalsCounted (genesisWorld_refusalsOk X name nonce allowance founders auth)
     (countedOk_of_empty rfl (Nat.le_refl _)) h
 
 open Nanodregg.Codec Nanodregg.Codec.Deployed in
 /-- **Deployed**: no premise. -/
 theorem deployed_reach_refusalsCounted (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     refusalsCounted env w = true := by
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
   exact reach_refusalsCounted (X := ctx program) hl

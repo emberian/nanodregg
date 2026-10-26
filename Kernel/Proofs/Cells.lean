@@ -76,7 +76,7 @@ theorem fold_canon {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.Cano
   fold_keeps (P := fun v => v.Canon E) admit_canon refuse_canon hc h
 
 theorem receive_genesis_canon (X : Receive.Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) : (Receive.genesisWorld X name nonce allowance founders).Canon X.env :=
+    (founders : List (ByteArray × D)) (auth : Receive.Authority) : (Receive.genesisWorld X name nonce allowance founders auth).Canon X.env :=
   insertAll_canon _ (Trie.canon_empty _ 0)
 
 /-! ## The deployed parameters satisfy the trie's premises -/

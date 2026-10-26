@@ -519,19 +519,45 @@ theorem founderRoot_target (X : Ctx D) (m : D) :
 
 section Genesis
 
-/-- A live cell of the genesis World is one of the founders' entries. -/
+omit [Ord D] [DecidableEq D] in
+/-- A genesis entry is a founder's or the authority's. -/
+theorem mem_genesisEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)} {a : Authority} {id : D}
+    {e : Entry} (h : (id, e) ∈ genesisEntries X o founders a) :
+    (id, e) ∈ founderEntries X o founders ∨ (id = authorityId X a ∧ e = .live (authorityCell a) 0) := by
+  unfold genesisEntries at h
+  rcases List.mem_append.mp h with h | h
+  · exact .inl h
+  · simp only [List.mem_singleton, Prod.mk.injEq] at h
+    exact .inr h
+
+omit [Ord D] [DecidableEq D] in
+/-- What holds of every founder entry and of the authority entry holds of every genesis entry. -/
+theorem forall_mem_genesisEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)} {a : Authority}
+    {Q : D × Entry → Prop} (hf : ∀ q ∈ founderEntries X o founders, Q q)
+    (ha : Q (authorityId X a, .live (authorityCell a) 0)) : ∀ q ∈ genesisEntries X o founders a, Q q := by
+  intro q hq
+  rcases mem_genesisEntries hq with h | ⟨h1, h2⟩
+  · exact hf q h
+  · obtain ⟨id, e⟩ := q
+    simp only at h1 h2
+    subst h1 h2
+    exact ha
+
+/-- A live cell of the genesis World is one of the genesis entries: a founder's, or the authority. -/
 theorem genesis_live {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {id : D} {cell : Cell}
-    (hl : (genesisWorld X name nonce allowance founders).live X.env id = some cell) :
-    (id, Entry.live cell 0) ∈ founderEntries X (originOf X name nonce allowance founders) founders := by
+    {founders : List (ByteArray × D)} {auth : Authority} {id : D} {cell : Cell}
+    (hl : (genesisWorld X name nonce allowance founders auth).live X.env id = some cell) :
+    (id, Entry.live cell 0) ∈ genesisEntries X (originOf X name nonce allowance founders auth) founders auth := by
   obtain ⟨v, hg⟩ := live_get hl
   rcases insertAll_get_some (m := Trie.T.empty)
-      (ps := founderEntries X (originOf X name nonce allowance founders) founders) hg with h | ⟨_, h⟩
+      (ps := genesisEntries X (originOf X name nonce allowance founders auth) founders auth) hg with h | ⟨_, h⟩
   · have hv : v = 0 := by
-      unfold founderEntries at h
-      obtain ⟨p, _, hm⟩ := List.mem_flatMap.mp h
-      simp only [List.mem_cons, Prod.mk.injEq, Entry.live.injEq, List.not_mem_nil, or_false] at hm
-      rcases hm with ⟨_, _, hv⟩ | ⟨_, _, hv⟩ <;> exact hv
+      rcases mem_genesisEntries h with h | ⟨_, he⟩
+      · unfold founderEntries at h
+        obtain ⟨p, _, hm⟩ := List.mem_flatMap.mp h
+        simp only [List.mem_cons, Prod.mk.injEq, Entry.live.injEq, List.not_mem_nil, or_false] at hm
+        rcases hm with ⟨_, _, hv⟩ | ⟨_, _, hv⟩ <;> exact hv
+      · exact (Entry.live.inj he).2
     exact hv ▸ h
   · exact absurd (h.symm.trans (Trie.get_empty _ _)) (by simp)
 
@@ -548,13 +574,18 @@ theorem mem_founderEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)
   · exact ⟨p, hp, .inr hm⟩
   · simp at hm
 
-/-- **Genesis is rooted**, its roots the founders' grants. -/
+/-- **Genesis is rooted**, its roots the founders' grants (the authority cell is no grant). -/
 theorem genesis_rooted (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) :
-    WorldRooted X (GenesisRoot X (originOf X name nonce allowance founders))
-      (genesisWorld X name nonce allowance founders) := by
+    (founders : List (ByteArray × D)) (auth : Authority) :
+    WorldRooted X (GenesisRoot X (originOf X name nonce allowance founders auth))
+      (genesisWorld X name nonce allowance founders auth) := by
   intro id cell hl hk
-  obtain ⟨p, _, ⟨_, he⟩ | ⟨hid, he⟩⟩ := mem_founderEntries (genesis_live hl)
+  rcases mem_genesisEntries (genesis_live hl) with hm | ⟨-, he⟩
+  case inr =>
+    injection he with he _
+    subst he
+    simp [authorityCell, kindAuthority, kindGrant] at hk
+  obtain ⟨p, _, ⟨_, he⟩ | ⟨hid, he⟩⟩ := mem_founderEntries hm
   · injection he with he _
     subst he
     simp [founderMember, kindMember, kindGrant] at hk
@@ -568,14 +599,19 @@ theorem empty_romContent (E : Env D) (o : D) (a : Nat) : RomContent E (World.gen
   obtain ⟨v, hg⟩ := live_get hl
   exact absurd (hg.symm.trans (Trie.get_empty _ _)) (by simp)
 
-/-- **Genesis bears no ROM cell**, so `fold_romContent` starts from it: the founders' cells are a
-RAM member and an append-only grant. -/
+/-- **Genesis bears one ROM cell, the authority, at its content id**, so `fold_romContent` starts
+from it: the founders' cells are a RAM member and an append-only grant. -/
 theorem genesis_romContent (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) :
-    RomContent X.env (genesisWorld X name nonce allowance founders) := by
+    (founders : List (ByteArray × D)) (auth : Authority) :
+    RomContent X.env (genesisWorld X name nonce allowance founders auth) := by
   intro id cell hl hrom
+  rcases mem_genesisEntries (genesis_live hl) with hm | ⟨hid, he⟩
+  case inr =>
+    injection he with he _
+    subst hid he
+    rfl
   exfalso
-  obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries (genesis_live hl)
+  obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries hm
   · injection he with he _
     subst he
     simp [founderMember] at hrom

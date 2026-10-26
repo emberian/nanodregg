@@ -257,16 +257,16 @@ end Member
 
 /-- **`settle_final_never_admits` on every World folded from a genesis (`Receive.genesisWorld`)**: a call settled
 `expired` or `refused` from the receipt follow built there is admitted by no later World. -/
-theorem settle_final_reached {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)}
+theorem settle_final_reached {X : Ctx D} {name nonce : ByteArray} {a : Nat} {fs : List (ByteArray × D)} {auth : Authority}
     {l₀ : List (Kernel.Step D)} {w w' : World D} {c : Call D} {l : List (Kernel.Step D)}
-    (hw : World.fold X.env (genesisWorld X name nonce a fs) l₀ = .ok w)
+    (hw : World.fold X.env (genesisWorld X name nonce a fs auth) l₀ = .ok w)
     (hv : ofReceipt (journalForgets w.height c.unsigned.notBefore) false w.height c.unsigned.validUntil
         (Receipt.build X.env w (txIdOf X c)).answer = .expired ∨
       ∃ code, ofReceipt (journalForgets w.height c.unsigned.notBefore) false w.height c.unsigned.validUntil
         (Receipt.build X.env w (txIdOf X c)).answer = .refused code)
     (hf : World.fold X.env w l = .ok w') : ∀ out, submit X w' c ≠ .ok out :=
-  settle_final_never_admits (fold_refusalsOk (genesisWorld_refusalsOk X name nonce a fs) hw).1
-    (fold_journalOk (genesisWorld_journalOk X name nonce a fs) hw).1 hv hf
+  settle_final_never_admits (fold_refusalsOk (genesisWorld_refusalsOk X name nonce a fs auth) hw).1
+    (fold_journalOk (genesisWorld_journalOk X name nonce a fs auth) hw).1 hv hf
 
 /-- **The deployed settlement of an admissible call is `open`** (KERNEL-54): with `behind` follow's
 own `staleBehind`, wherever `submit` admits the call the settlement `receipt CALL` prints is `open`,
@@ -333,9 +333,9 @@ theorem windowedIn_mono {X : Ctx D} {S S' : List (Kernel.Step D)} {w : World D} 
 
 /-- The World a genesis builds records no refusal (founders are trie entries only). -/
 theorem genesisWorld_windowedIn (X : Ctx D) (S : List (Kernel.Step D)) (name nonce : ByteArray) (a : Nat)
-    (fs : List (ByteArray × D)) : WindowedIn X S (genesisWorld X name nonce a fs) := by
-  refine ⟨genesisWorld_refusalsOk X name nonce a fs, fun id h code mb hk => ?_⟩
-  have he : (genesisWorld X name nonce a fs).refusals = .empty := rfl
+    (fs : List (ByteArray × D)) (auth : Authority) : WindowedIn X S (genesisWorld X name nonce a fs auth) := by
+  refine ⟨genesisWorld_refusalsOk X name nonce a fs auth, fun id h code mb hk => ?_⟩
+  have he : (genesisWorld X name nonce a fs auth).refusals = .empty := rfl
   unfold World.refusalAt at hk
   rw [he] at hk
   cases hk
@@ -481,13 +481,13 @@ theorem absorbed_windowedIn {X : Ctx D} {S₀ S : List (Kernel.Step D)} {w w' : 
 steps follow itself took: a receipt refusing the member's call settles `refused`, unless follow's own
 log carries a different call (a narrower window) under the member's transaction id. -/
 theorem settle_refused_absorbed {X : Ctx D} {name nonce : ByteArray} {a : Nat}
-    {fs : List (ByteArray × D)} {S : List (Kernel.Step D)} {w : World D} {c : Call D} {fg b : Bool}
-    {H h code : Nat} {m : D} (ha : Absorbed X (genesisWorld X name nonce a fs) S w)
+    {fs : List (ByteArray × D)} {auth : Authority} {S : List (Kernel.Step D)} {w : World D} {c : Call D} {fg b : Bool}
+    {H h code : Nat} {m : D} (ha : Absorbed X (genesisWorld X name nonce a fs auth) S w)
     (hr : (Receipt.build X.env w (txIdOf X c)).answer = .refused h code m) :
     ofReceipt fg b H c.unsigned.validUntil (Receipt.build X.env w (txIdOf X c)).answer = .refused code ∨
       ∃ c' v sg, Kernel.Step.refusal (recordOf X c' v sg) ∈ S ∧ txIdOf X c' = txIdOf X c ∧
         c'.unsigned.validUntil < c.unsigned.validUntil :=
-  settle_refused_final (by simpa using absorbed_windowedIn (genesisWorld_windowedIn X [] name nonce a fs) ha) hr
+  settle_refused_final (by simpa using absorbed_windowedIn (genesisWorld_windowedIn X [] name nonce a fs auth) ha) hr
 
 end Windowed
 

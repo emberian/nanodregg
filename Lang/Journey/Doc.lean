@@ -192,7 +192,7 @@ def session (shipped : List (String × String)) : Run :=
         note r s!"DC0 {dir / f} is the generator's text ({t.length} chars)" (got == t)) empty
   let fk := [("dc-a".toUTF8, "dc-a-next".toUTF8), ("dc-b".toUTF8, "dc-b-next".toUTF8)]
   match genesis X Sim.worldName (Sim.nonceOf 11) 100000000
-      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
   | .error e => note r0 s!"DC1 genesis: {e.name}" false
   | .ok g =>
     let ms := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Sim.Member)

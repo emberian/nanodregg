@@ -64,8 +64,8 @@ theorem submit_at_most_once {X : Kernel.Receive.Ctx D} {w₀ w₁ w₂ : World D
 
 /-- **From a genesis, at most once across a lost reply** (`submit_at_most_once`, no premise). -/
 theorem reach_submit_at_most_once {X : Kernel.Receive.Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {l₀ l : List (Kernel.Step D)} {w₀ w₁ w₂ : World D} {c : Call D}
-    {t : Turn D} (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders) l₀ = .ok w₀)
+    {founders : List (ByteArray × D)} {auth : Authority} {l₀ l : List (Kernel.Step D)} {w₀ w₁ w₂ : World D} {c : Call D}
+    {t : Turn D} (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders auth) l₀ = .ok w₀)
     (h₁ : submit X w₀ c = .ok (t, w₁)) (hf : World.fold X.env w₁ l = .ok w₂) :
     (∀ r, submit X w₂ c ≠ .ok r) ∧
       (journalForgets w₂.height c.unsigned.notBefore = false →

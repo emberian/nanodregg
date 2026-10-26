@@ -221,7 +221,7 @@ def contextualSession : Run :=
   let X := ctxWith langProgram
   let fk := [("lp-a".toUTF8, "lp-a-next".toUTF8), ("lp-b".toUTF8, "lp-b-next".toUTF8)]
   match genesis X Sim.worldName (Sim.nonceOf 7) 100000000
-      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
   | .error e => note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
       s!"LP genesis: {e.name}" false
   | .ok g =>

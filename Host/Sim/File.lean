@@ -478,7 +478,7 @@ def budgetPlants (failures : IO.Ref Nat) : IO Unit := do
   let fs (n : Nat) := (List.range n).map fun i => (keyOf i, Receive.nextKeyDigest X (keyOf (i + 1)))
   let nonce := ByteArray.mk (Array.replicate 32 1)
   let worldOf (allowance n : Nat) : Option (World Nanodregg.Host.Deployed.D) :=
-    match Receive.genesis X "budget".toUTF8 nonce allowance (fs n) with
+    match Receive.genesis X "budget".toUTF8 nonce allowance (fs n) Receive.Authority.none with
     | .ok w => some w
     | .error _ => none
   let importOf (w : World Nanodregg.Host.Deployed.D) : IO String := do

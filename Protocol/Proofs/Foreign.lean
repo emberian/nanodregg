@@ -59,8 +59,8 @@ theorem check_committed_of {E : Env D} {dc : Stream D} {cell : Cell} {rb : ByteA
             | refused => simp [hv, hro, hrb, hc] at hk
             | absent => simp [hv, hro, hrb, hc] at hk
 
-theorem genesisWorld_journalAt (X : Ctx D) (name nonce : ByteArray) (a : Nat) (fs : List (ByteArray × D))
-    (k : D) : (genesisWorld X name nonce a fs).journalAt X.env k = none := by
+theorem genesisWorld_journalAt (X : Ctx D) (name nonce : ByteArray) (a : Nat) (fs : List (ByteArray × D)) (auth : Authority)
+    (k : D) : (genesisWorld X name nonce a fs auth).journalAt X.env k = none := by
   simp [genesisWorld, World.genesis, World.journalAt, Trie.T.get, Trie.getAt]
 
 section Sound
@@ -72,8 +72,8 @@ include hE hn in
 the collision disjunct ranges over inputs fixed by the column (GATES-20s); `check_committed_of hk` supplies
 both, so the premises cost nothing. -/
 theorem foreign_receipt_sound {dc : Stream D} {name nonce : ByteArray} {a : Nat}
-    {fs : List (ByteArray × D)} {l : List (Kernel.Step D)} {wA : World D}
-    (hA : World.fold X.env (genesisWorld X name nonce a fs) l = .ok wA)
+    {fs : List (ByteArray × D)} {auth : Authority} {l : List (Kernel.Step D)} {wA : World D}
+    (hA : World.fold X.env (genesisWorld X name nonce a fs auth) l = .ok wA)
     {cell : Cell} {rb : ByteArray} {s : Lang.Seen}
     (hk : check X.env dc cell rb = .ok s)
     (hr : ∀ w c₀ h₀ rootsB s₀,
@@ -82,7 +82,7 @@ theorem foreign_receipt_sound {dc : Stream D} {name nonce : ByteArray} {a : Nat}
     {r : Receipt D} {td : D} (hrb : Receipt.ofBytes X.env dc rb = some r) (htd : s.turn = X.env.bytes td) :
     s.tx = X.env.bytes r.txId ∧
       ((∃ l₁ t l₂ v v', l = l₁ ++ Kernel.Step.turn t :: l₂ ∧
-          World.fold X.env (genesisWorld X name nonce a fs) l₁ = .ok v ∧ World.admit X.env v t = .ok v' ∧
+          World.fold X.env (genesisWorld X name nonce a fs auth) l₁ = .ok v ∧ World.admit X.env v t = .ok v' ∧
           t.txId = r.txId ∧ s.height = v.height + 1 ∧ td = turnDigest X.env t) ∨
         CollidesAmong X.env.hash ([rootsPre X.env r.root r.jroot r.rroot r.rowsroot, wA.rootsPre X.env] ++
           inclPres (journalSpec X.env) (journalPre X.env) r.txId (s.height, td) r.jpath wA.journal)) := by
@@ -94,11 +94,11 @@ theorem foreign_receipt_sound {dc : Stream D} {name nonce : ByteArray} {a : Nat}
   have hroots : roots = wA.roots X.env := by
     have := hr w c₀ h₀ rootsB s₀ hv; rw [hro] at this; exact Option.some.inj this
   subst hroots
-  have hjo := fold_journalOk (genesisWorld_journalOk X name nonce a fs) hA
+  have hjo := fold_journalOk (genesisWorld_journalOk X name nonce a fs auth) hA
   refine ⟨htx, ?_⟩
   rcases check_committed hE hn hjo.1 (reached_journal_fits hA) hc with hj | col
   · left
-    rcases fold_journal_turn (genesisWorld_journalOk X name nonce a fs).1 hA hj with h0 | ⟨l₁, t, l₂, v, v', hl, hv1, hadm, htx', he⟩
+    rcases fold_journal_turn (genesisWorld_journalOk X name nonce a fs auth).1 hA hj with h0 | ⟨l₁, t, l₂, v, v', hl, hv1, hadm, htx', he⟩
     · rw [genesisWorld_journalAt] at h0; cases h0
     · simp only [Prod.mk.injEq] at he
       exact ⟨l₁, t, l₂, v, v', hl, hv1, hadm, htx', he.1, he.2⟩
@@ -158,8 +158,8 @@ column refuses it `notCommitted` (the refused arm, as an absent receipt is), and
 that refusal at the call's id, with its height, code and charged member, or the hash collides among
 the listed inputs (`check_refused_sound`, the receipt and the World the theorem's own). -/
 theorem refused_receipt_notCommitted {dc : Stream D} {name nonce : ByteArray} {a : Nat}
-    {fs : List (ByteArray × D)} {l : List (Kernel.Step D)} {wA : World D}
-    (hA : World.fold X.env (genesisWorld X name nonce a fs) l = .ok wA)
+    {fs : List (ByteArray × D)} {auth : Authority} {l : List (Kernel.Step D)} {wA : World D}
+    (hA : World.fold X.env (genesisWorld X name nonce a fs auth) l = .ok wA)
     {cell : Cell} {rb : ByteArray} {r : Receipt D} {w c₀ : ByteArray} {h₀ : Nat} {rootsB : ByteArray} {s₀ : Nat}
     (hv : Lang.headView (fun b => (dc.decode b).toOption) (X.env.bytes (headPackageId X.env)) cell =
       some (.at w c₀ h₀ rootsB s₀))
@@ -171,7 +171,7 @@ theorem refused_receipt_notCommitted {dc : Stream D} {name nonce : ByteArray} {a
         CollidesAmong X.env.hash ([rootsPre X.env r.root r.jroot r.rroot r.rowsroot, wA.rootsPre X.env] ++
           inclPres (refusalSpec X.env) (refusalPre X.env) (.refusal (.tx r.txId)) (.refused h code m) r.rpath wA.refusals)) := by
   refine ⟨by simp [check, hv, hro, hrb, hk], ?_⟩
-  have h0 : (genesisWorld X name nonce a fs).RefusalsOk X.env :=
+  have h0 : (genesisWorld X name nonce a fs auth).RefusalsOk X.env :=
     refusalsOk_of_empty (by simp [genesisWorld, World.genesis])
   exact check_refused_sound hE (fold_refusalsOk h0 hA) hk
 

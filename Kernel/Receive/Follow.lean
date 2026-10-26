@@ -28,20 +28,35 @@ def mayFollow (X : Ctx D) (w : World D) (member g : D) : Bool :=
 
 def domFounder : String := "nanodregg/kernel/founder/v2"
 def domFounderGrant : String := "nanodregg/kernel/founder-grant/v2"
-def domOrigin : String := "nanodregg/kernel/origin/v2"
+def domOrigin : String := "nanodregg/kernel/origin/v3"
+
+/-- Who may certify a position as the World's, and how many of them must (KERNEL-69; DESIGN-TRUST
+§1.2): fixed at genesis, committed in the origin, carried in the World as one ROM cell
+(`authorityCell`). A certificate names its signers as indices into `certifiers`
+(`Protocol.Head.certified`). -/
+structure Authority where
+  certifiers : List ByteArray
+  threshold : Nat
+  deriving DecidableEq, Repr
+
+/-- Nobody certifies: every World that names nobody; a certificate under it is `unlisted` whoever
+signs it. -/
+def Authority.none : Authority := ⟨[], 0⟩
 
 /-- What a genesis is made from, as CODEC's raw combinators write it: the name, HOST's nonce, the
-allowance, and each founder's key and next-key digest bytes, in order. -/
-abbrev GenesisInput := ByteArray × ByteArray × Nat × List (ByteArray × ByteArray)
+allowance, each founder's key and next-key digest bytes, in order, then the authority's certifier
+keys, in order, and its threshold. -/
+abbrev GenesisInput := ByteArray × ByteArray × Nat × List (ByteArray × ByteArray) × List ByteArray × Nat
 
 open Nanodregg.Codec Nanodregg.Codec.Stream in
 def genesisInput : Stream GenesisInput :=
   product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax) (product nat64
-    (rawList Bounds.eventBytesMax (product (rawBytes Bounds.eventBytesMax) (rawBytes Bounds.eventBytesMax)))))
+    (product (rawList Bounds.eventBytesMax (product (rawBytes Bounds.eventBytesMax) (rawBytes Bounds.eventBytesMax)))
+      (product (rawList Bounds.eventBytesMax (rawBytes Bounds.eventBytesMax)) nat64))))
 
-def inputOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    GenesisInput :=
-  (name, nonce, allowance, founders.map fun f => (f.1, X.env.bytes f.2))
+def inputOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : GenesisInput :=
+  (name, nonce, allowance, founders.map (fun f => (f.1, X.env.bytes f.2)), auth.certifiers, auth.threshold)
 
 /-- What a carry is made from (KERNEL-29), as CODEC's raw combinators write it: the name, HOST's
 nonce, the exported World's origin bytes, the carried trie's root bytes, the carried rows' root
@@ -64,14 +79,16 @@ byte, so a carry's origin is never a genesis's without a collision of the origin
 (`carry_origin_ne_genesis`). -/
 def originInput : Stream (GenesisInput ⊕ CarryInput) := sum genesisInput carryInput
 
-/-- The World's identity (KERNEL-24): the digest of everything its genesis is made from. -/
-def originOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) : D :=
-  X.env.hash domOrigin (originInput.bytes (.inl (inputOf X name nonce allowance founders)))
+/-- The World's identity (KERNEL-24): the digest of everything its genesis is made from, the
+authority included (KERNEL-69). -/
+def originOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : D :=
+  X.env.hash domOrigin (originInput.bytes (.inl (inputOf X name nonce allowance founders auth)))
 
 /-- What `originOf` hashes. -/
-def originPre (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    String × ByteArray :=
-  (domOrigin, originInput.bytes (.inl (inputOf X name nonce allowance founders)))
+def originPre (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : String × ByteArray :=
+  (domOrigin, originInput.bytes (.inl (inputOf X name nonce allowance founders auth)))
 
 /-- Founder ids are keyed by the World's ORIGIN, so two Worlds with one name share no member id. -/
 def founderId (X : Ctx D) (origin : D) (i : Nat) : D :=
@@ -96,15 +113,46 @@ def founderEntries (X : Ctx D) (o : D) (founders : List (ByteArray × D)) : List
     [(founderId X o p.2, .live (founderMember X p.1) 0),
      (founderGrantId X o p.2, .live (founderRoot X (founderId X o p.2)) 0)]
 
+/-- The authority cell (KERNEL-69): ROM at its content id (`RomContent` holds of it as of every ROM
+cell; `fold_rom` keeps it for the life of the World), kind `kindAuthority` (no receiver reads or
+writes that kind): the threshold, the certifier count, then each certifier's key in order. -/
+def authorityCell (a : Authority) : Cell :=
+  { kind := kindAuthority, discipline := .rom,
+    slots := slotsOf ([(slotThreshold, countBytes a.threshold), (slotCertifierCount, countBytes a.certifiers.length)] ++
+      a.certifiers.zipIdx.map fun p => (certifierBase + p.2, p.1)) }
+
+def authorityId (X : Ctx D) (a : Authority) : D := romIdOf X.env (authorityCell a)
+
+/-- Everything a genesis World holds: each founder's member cell and root grant, then the authority. -/
+def genesisEntries (X : Ctx D) (o : D) (founders : List (ByteArray × D)) (a : Authority) : List (D × Entry) :=
+  founderEntries X o founders ++ [(authorityId X a, .live (authorityCell a) 0)]
+
+/-- An authority cell read back: the threshold, then `count` keys from `certifierBase`. -/
+def authorityOfCell (c : Cell) : Option Authority := do
+  let t ← countOf (← c.slots.get slotThreshold)
+  let n ← countOf (← c.slots.get slotCertifierCount)
+  let ks ← (List.range n).mapM fun i => c.slots.get (certifierBase + i)
+  pure ⟨ks, t⟩
+
+/-- The authority a World carries: its one live `kindAuthority` cell, read back. Two or none is
+`none`: a verifier handed such a World refuses rather than choose (`authorityOf_genesis` is the
+one every genesis World answers; `fold_rom` keeps that cell). -/
+def authorityOf (w : World D) : Option Authority :=
+  match w.trie.toList.filterMap (fun p => match p.2 with
+      | .entry (.live c _) => if c.kind = kindAuthority then some c else none
+      | _ => none) with
+  | [c] => authorityOfCell c
+  | _ => none
+
 /-- The World a genesis builds, UNCHECKED: founders `(key, digest of next key)` as members, each
-with a root World grant; its origin commits to the name, HOST's `nonce`, the allowance and the
-founders. Only `genesis` calls it on the request path; the theorems about the genesis World are
-stated over it (`genesis_ok` says `genesis` returns exactly it). -/
-def genesisWorld (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    World D :=
-  let o := originOf X name nonce allowance founders
+with a root World grant, and the authority cell; its origin commits to the name, HOST's `nonce`,
+the allowance, the founders and the authority. Only `genesis` calls it on the request path; the
+theorems about the genesis World are stated over it (`genesis_ok` says `genesis` returns exactly it). -/
+def genesisWorld (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : World D :=
+  let o := originOf X name nonce allowance founders auth
   let w := World.genesis X.env o allowance
-  { w with trie := insertAll X.env w.trie (founderEntries X o founders) }
+  { w with trie := insertAll X.env w.trie (genesisEntries X o founders auth) }
 
 /-- Why a genesis is refused (law 7): one constructor per clause of `GenesisFits`, in its order.
 Past these bounds `genesisInput`'s raw codec truncates, so two different geneses would share one
@@ -117,6 +165,15 @@ inductive GenesisRefusal
   | founderKeyTooLong (index : Nat)
   /-- founder `index`'s next-key digest bytes are longer than `Bounds.eventBytesMax` -/
   | founderNextTooLong (index : Nat)
+  /-- more certifiers than one cell's slots hold beside the two counts (KERNEL-69) -/
+  | tooManyCertifiers
+  /-- certifier `index`'s key is longer than `Bounds.eventBytesMax` -/
+  | certifierTooLong (index : Nat)
+  /-- certifier `index`'s key is an earlier certifier's: a quorum counts distinct keys -/
+  | repeatedCertifier (index : Nat)
+  /-- the threshold is zero with certifiers listed, or past their count: a quorum nobody, or nobody
+  ever, meets -/
+  | badThreshold
   /-- the allowance plus the genesis World's storage is not below 2^64: past it a retirement's credit
   could carry the allowance out of the World codec's `u64` (cv 01a14ba9-cbf4). Checked last, so the
   World is weighed only once every founder is within bounds. -/
@@ -131,6 +188,10 @@ def GenesisRefusal.name : GenesisRefusal → String
   | .tooManyFounders => "tooManyFounders"
   | .founderKeyTooLong _ => "founderKeyTooLong"
   | .founderNextTooLong _ => "founderNextTooLong"
+  | .tooManyCertifiers => "tooManyCertifiers"
+  | .certifierTooLong _ => "certifierTooLong"
+  | .repeatedCertifier _ => "repeatedCertifier"
+  | .badThreshold => "badThreshold"
 
 /-- Each founder from index `i` on: its key, then its next-key digest bytes. -/
 def checkFounders (X : Ctx D) : Nat → List (ByteArray × D) → Except GenesisRefusal Unit
@@ -140,21 +201,33 @@ def checkFounders (X : Ctx D) : Nat → List (ByteArray × D) → Except Genesis
       req ((X.env.bytes f.2).size ≤ Bounds.eventBytesMax) (.founderNextTooLong i)
       checkFounders X (i + 1) rest
 
-/-- The genesis input is within the raw codec's bounds, checked in `GenesisFits`'s order
-(`checkGenesis_ok`). -/
-def checkGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    Except GenesisRefusal Unit := do
+/-- Each certifier from index `i` on: its key within bounds and not among the earlier ones (`seen`). -/
+def checkCertifiers : Nat → List ByteArray → List ByteArray → Except GenesisRefusal Unit
+  | _, _, [] => .ok ()
+  | i, seen, k :: rest => do
+      req (k.size ≤ Bounds.eventBytesMax) (.certifierTooLong i)
+      req (seen.all fun s => decide (k ≠ s)) (.repeatedCertifier i)
+      checkCertifiers (i + 1) (k :: seen) rest
+
+/-- The genesis input is within the raw codec's bounds and the authority is a quorum somebody can
+meet (`GenesisFits`, `checkGenesis_ok`): the lengths and the threshold first, then each founder and
+each certifier, and the World weighed last, once every one of them is within bounds. -/
+def checkGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : Except GenesisRefusal Unit := do
   req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
   req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
   req (founders.length ≤ Bounds.eventBytesMax) .tooManyFounders
+  req (auth.certifiers.length + 2 ≤ Bounds.slotsPerCellMax) .tooManyCertifiers
+  req (auth.threshold ≤ auth.certifiers.length ∧ (auth.threshold = 0 → auth.certifiers = [])) .badThreshold
   checkFounders X 0 founders
-  req ((genesisWorld X name nonce allowance founders).weight + allowance < Bounds.counterLimit) .allowanceTooLarge
+  checkCertifiers 0 [] auth.certifiers
+  req ((genesisWorld X name nonce allowance founders auth).weight + allowance < Bounds.counterLimit) .allowanceTooLarge
 
 /-- THE genesis: refused by name outside `GenesisFits`, else `genesisWorld` (`genesis_ok`). -/
-def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    Except GenesisRefusal (World D) := do
-  checkGenesis X name nonce allowance founders
-  pure (genesisWorld X name nonce allowance founders)
+def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : Except GenesisRefusal (World D) := do
+  checkGenesis X name nonce allowance founders auth
+  pure (genesisWorld X name nonce allowance founders auth)
 
 /-! ## Carry (KERNEL-29): a new World from a carried state -/
 

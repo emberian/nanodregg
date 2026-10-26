@@ -1,7 +1,7 @@
 /-
 # Protocol.Invite — the sponsor-signed start and checkpoint pin
 
-Start is genesis (name, nonce, allowance, founders) or carried (new origin, name, nonce,
+Start is genesis (name, nonce, allowance, founders, authority) or carried (new origin, name, nonce,
 exported origin, height, chain). One tagged startInput encoding is signed with the checkpoint
 pin, sponsor id and key under domInvite. accept is genesis-only; acceptStart verifies either
 start and returns the origin the joiner must pin. A carried join obtains the export separately
@@ -37,7 +37,7 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- The signed start: a genesis, or a carried World pinned by its new origin. -/
 inductive Start (D : Type) where
-  | genesis (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+  | genesis (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) (auth : Authority)
   | carried (origin : D) (name nonce : ByteArray) (fromOrigin : D) (height : Nat) (chain : D)
 
 /-- The carry start's wire fields. Digests use the same raw byte encoding as genesis inputs. -/
@@ -52,7 +52,7 @@ def carriedStart : Stream CarriedStart :=
 def startInput : Stream (GenesisInput ⊕ CarriedStart) := Stream.sum genesisInput carriedStart
 
 def startBytes (X : Ctx D) : Start D → ByteArray
-  | .genesis name nonce allowance fs => startInput.bytes (.inl (inputOf X name nonce allowance fs))
+  | .genesis name nonce allowance fs auth => startInput.bytes (.inl (inputOf X name nonce allowance fs auth))
   | .carried o name nonce fromO height chain =>
     startInput.bytes (.inr (X.env.bytes o, name, nonce, X.env.bytes fromO, height, X.env.bytes chain))
 
@@ -110,20 +110,20 @@ def foundersOf (X : Ctx D) : List (ByteArray × ByteArray) → Option (List (Byt
 def startOf (X : Ctx D) (b : ByteArray) : Option (Start D) := do
   let .ok raw := startInput.decode b | none
   match raw with
-  | .inl (name, nonce, allowance, fs) =>
-    pure (.genesis name nonce allowance (← foundersOf X fs))
+  | .inl (name, nonce, allowance, fs, cs, t) =>
+    pure (.genesis name nonce allowance (← foundersOf X fs) ⟨cs, t⟩)
   | .inr (o, name, nonce, fromO, height, chain) =>
     pure (.carried (← X.digestOf o) name nonce (← X.digestOf fromO) height (← X.digestOf chain))
 
 /-- The genesis-only admission; carried starts require a separately supplied export. -/
 def startGenesis (X : Ctx D) : Start D → Except Refusal (World D)
-  | .genesis name nonce allowance fs => (genesis X name nonce allowance fs).mapError .inputs
+  | .genesis name nonce allowance fs auth => (genesis X name nonce allowance fs auth).mapError .inputs
   | .carried .. => .error .carried
 
 /-- The origin to which the signed start commits. Genesis inputs are checked before returning it. -/
 def startOrigin (X : Ctx D) : Start D → Except Refusal D
-  | .genesis name nonce allowance fs => do
-    let w ← (genesis X name nonce allowance fs).mapError .inputs
+  | .genesis name nonce allowance fs auth => do
+    let w ← (genesis X name nonce allowance fs auth).mapError .inputs
     pure w.origin
   | .carried o .. => .ok o
 
@@ -140,9 +140,9 @@ def bytes (unsigned signature : ByteArray) : Option ByteArray := do
   pure (invitationFrame.bytes (← f unsigned, ← f signature, ()))
 
 /-- The input bytes of a genesis (what `host genesis` prints and a founder invites from). -/
-def inputBytes (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) :
-    ByteArray :=
-  startBytes X (.genesis name nonce allowance founders)
+def inputBytes (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
+    (auth : Authority) : ByteArray :=
+  startBytes X (.genesis name nonce allowance founders auth)
 
 /-- What the signed bytes say, decoded: the inputs (founders' next-key digests decoded), the pin,
 the sponsor and its key. -/

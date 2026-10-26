@@ -340,7 +340,7 @@ shared would hold it. Over a sealed base `serve` opens and `check` refuses `fore
 genesis base the anchor refuses both first, `foreignSegment`. -/
 def originPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   let other := Founder.nonce.set! 0 (Founder.nonce.get! 0 ^^^ 1)
-  let wOther ← match Receive.genesis X name.toUTF8 other allowanceMax [(Founder.key, nextKeyDigest X Founder.next)] with
+  let wOther ← match Receive.genesis X name.toUTF8 other allowanceMax [(Founder.key, nextKeyDigest X Founder.next)] Authority.none with
     | .ok w => pure w
     | .error r => do IO.eprintln s!"the other genesis refused {r.name}"; return 1
   let mut failed := 0

@@ -75,19 +75,19 @@ is `o` (the Store's recorded origin), that a start of this binary admits (a gene
 that passed the budget check and is `Kept`. -/
 structure CheckpointTrusted (o : D) (w : World D) : Prop where
   reached : ∃ (w₀ : World D) (l : List (Step D)), w₀.origin = o ∧
-    ((∃ (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)),
-        Receive.genesis X name nonce allowance founders = .ok w₀) ∨
+    ((∃ (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) (auth : Receive.Authority),
+        Receive.genesis X name nonce allowance founders auth = .ok w₀) ∨
       (∃ (name nonce : ByteArray) (f : ByteArray) (r : Carry.Read D),
         Carry.read X.env Codec.Deployed.digestCodec f = .ok r ∧ Carry.world X name nonce r = .ok w₀)) ∧
     budgetFault w₀ = none ∧ Kept w₀ ∧ World.fold X.env w₀ l = .ok w
 
 /-- **A genesis that passed the budget check is trusted** (`host genesis`, `host join`: the budget
 check runs before the Store is written, HOST-56). -/
-theorem genesis_trusted {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
-    {w₀ : World D} (hg : Receive.genesis X name nonce allowance founders = .ok w₀)
+theorem genesis_trusted {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {auth : Receive.Authority}
+    {w₀ : World D} (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀)
     (hb : budgetFault w₀ = none) : CheckpointTrusted w₀.origin w₀ := by
   obtain ⟨hf, rfl⟩ := Receive.genesis_ok.mp hg
-  exact ⟨⟨_, [], rfl, Or.inl ⟨name, nonce, allowance, founders, hg⟩, hb,
+  exact ⟨⟨_, [], rfl, Or.inl ⟨name, nonce, allowance, founders, auth, hg⟩, hb,
     kept_of_fits (genesisWorld_codecFits hf), by simp [World.fold]⟩⟩
 
 /-- **An import that passed the budget check is trusted** (`host import`, HOST-59). -/
@@ -288,8 +288,8 @@ theorem genesisImage_trusted {r : D} {keys : Keys} {w₀ : World D} (ht : Checkp
 /-- **A writer's life from `host genesis` holds trusted bases throughout** (at the genesis World's
 origin): the genesis that passed the budget check (`genesis_trusted`), its image, then any life. -/
 theorem genesis_life_trusted {keys : Keys} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w₀ : World D}
-    (hg : Receive.genesis X name nonce allowance founders = .ok w₀) (hb : budgetFault w₀ = none)
+    {founders : List (ByteArray × D)} {auth : Receive.Authority} {w₀ : World D}
+    (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀) (hb : budgetFault w₀ = none)
     {img : Image} (h : genesisImage keys c world recorder.mark w₀ = .ok img) {fileN : ByteArray}
     (life : WriterLife keys img.base fileN) :
     ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
@@ -310,8 +310,8 @@ theorem import_life_trusted {keys : Keys} {name nonce : ByteArray} {o : D} {f : 
 within `worldBytesMax` (`opened_size_le`), so no seal of the life refuses `worldTooLarge` by the
 tail's growth. -/
 theorem life_opened_size_le {keys : Keys} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w₀ : World D}
-    (hg : Receive.genesis X name nonce allowance founders = .ok w₀) (hb : budgetFault w₀ = none)
+    {founders : List (ByteArray × D)} {auth : Receive.Authority} {w₀ : World D}
+    (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀) (hb : budgetFault w₀ = none)
     {img : Image} (h : genesisImage keys c world recorder.mark w₀ = .ok img) {fileN H I S : ByteArray}
     (life : WriterLife keys img.base fileN) {o : Opening (World D)}
     (ho : Id.run (openWith keys c world recorder.mark originChain foldStep fileN H S.size I.size
@@ -333,15 +333,15 @@ theorem life_refutes_potential {r : D} {keys : Keys} {file₀ fileN : ByteArray}
 /-- **Two geneses with one origin are one World**, or their two origin inputs collide (KERNEL's
 `genesis_inj` over the explicit pair). -/
 theorem start_genesis_unique {name nonce name' nonce' : ByteArray} {allowance allowance' : Nat}
-    {founders founders' : List (ByteArray × D)} {w₀ w₀' : World D}
-    (hg : Receive.genesis X name nonce allowance founders = .ok w₀)
-    (hg' : Receive.genesis X name' nonce' allowance' founders' = .ok w₀')
+    {founders founders' : List (ByteArray × D)} {auth auth' : Receive.Authority} {w₀ w₀' : World D}
+    (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀)
+    (hg' : Receive.genesis X name' nonce' allowance' founders' auth' = .ok w₀')
     (ho : w₀.origin = w₀'.origin) :
     w₀ = w₀' ∨ CollidesAmong X.env.hash
-      [Receive.originPre X name nonce allowance founders, Receive.originPre X name' nonce' allowance' founders'] := by
+      [Receive.originPre X name nonce allowance founders auth, Receive.originPre X name' nonce' allowance' founders' auth'] := by
   obtain ⟨hf, rfl⟩ := Receive.genesis_ok.mp hg
   obtain ⟨hf', rfl⟩ := Receive.genesis_ok.mp hg'
-  rcases Receive.genesis_inj Receive.deployed_lawful hf hf' ho with ⟨rfl, rfl, rfl, rfl⟩ | hc
+  rcases Receive.genesis_inj Receive.deployed_lawful hf hf' ho with ⟨rfl, rfl, rfl, rfl, rfl⟩ | hc
   · exact .inl rfl
   · exact .inr hc
 
@@ -378,13 +378,13 @@ theorem start_carry_commits {name nonce name' nonce' : ByteArray} {pin pin' : Ca
 /-- **A genesis and an import never share an origin**, but by a collision between their two origin
 inputs (KERNEL's `carry_origin_ne_genesis`: the two cases of one tagged codec). -/
 theorem start_kinds_disjoint {name nonce name' nonce' : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D} {w₀ w₀' : World D}
-    (hg : Receive.genesis X name nonce allowance founders = .ok w₀)
+    {founders : List (ByteArray × D)} {auth : Receive.Authority} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D} {w₀ w₀' : World D}
+    (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀)
     (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' pin f = .ok (w₀', r))
     (ho : w₀.origin = w₀'.origin) :
     CollidesAmong X.env.hash
       [Receive.carryOriginPre X name' nonce' r.head.fromOrigin r.carried,
-       Receive.originPre X name nonce allowance founders] := by
+       Receive.originPre X name nonce allowance founders auth] := by
   obtain ⟨_, rfl⟩ := Receive.genesis_ok.mp hg
   obtain ⟨-, hw', -⟩ := Carry.importWorld_ok h'
   obtain ⟨_, rfl⟩ := Receive.carry_ok.mp hw'

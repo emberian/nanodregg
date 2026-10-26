@@ -2589,7 +2589,7 @@ def p8Session (src : String := p8Text) : Run :=
   let X := ctxWith langProgram
   let fk := [("p8-a".toUTF8, "p8-a-next".toUTF8), ("p8-b".toUTF8, "p8-b-next".toUTF8)]
   match genesis X Sim.worldName (Sim.nonceOf 8) 100000000
-      (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+      (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
   | .error e => note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
       s!"P8 genesis: {e.name}" false
   | .ok g =>
@@ -2602,7 +2602,7 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := ctxWith prog
-  let g ← match genesis X Sim.worldName (Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+  let g ← match genesis X Sim.worldName (Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
     | .ok g => pure g
     | .error e =>
         return note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } } s!"genesis refused {e.name}" false
@@ -2895,7 +2895,7 @@ def holeObservationJourney (contextual : Bool := false) : Run := Id.run do
   let fk : List (ByteArray × ByteArray) :=
     [("f0".toUTF8, "f0-next".toUTF8), ("f1".toUTF8, "f1-next".toUTF8)]
   let X := ctxWith prog
-  let g ← match genesis X Sim.worldName (Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) with
+  let g ← match genesis X Sim.worldName (Sim.nonceOf 0) 100000000 (fk.map fun (k, n) => (k, nextKeyDigest X n)) Authority.none with
     | .ok g => pure g
     | .error e =>
         return note { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } } s!"genesis refused {e.name}" false

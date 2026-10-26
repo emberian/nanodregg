@@ -366,6 +366,9 @@ def kindPackage : Nat := 1
 def kindObject : Nat := 2
 def kindGrant : Nat := 3
 def kindMember : Nat := 4
+/-- The World's authority (KERNEL-69): who certifies a head as the World's. Born at genesis only,
+ROM at its content id; no receiver reads or writes it (`readKind` names every other kind). -/
+def kindAuthority : Nat := 5
 
 /-- Object: 0 package id (absent: a data object), 1 owner, `2 ≤ k < stateBase` extra law ids,
 state at `stateBase + i`. -/
@@ -377,6 +380,11 @@ def stateBase : Nat := 16
 def slotKey : Nat := 0
 def slotNext : Nat := 1
 def slotSponsor : Nat := 2
+/-- Authority: 0 the threshold, 1 the certifier count (both `countBytes`), certifier `i`'s key at
+`certifierBase + i`. -/
+def slotThreshold : Nat := 0
+def slotCertifierCount : Nat := 1
+def certifierBase : Nat := 2
 /-- Grant: 0 target, 1 grantee, 2 issuer, 3 parent (absent at a root), the rights at `rightKey`.
 A COUNTED right's (`enroll`, `transfer`, `credit`) slot is the first of its LEDGER, `base + i` for
 `i ≤ ledgerSpendsMax`: slot `i` holds what is left after the grant's `i`-th spend (slot 0: as

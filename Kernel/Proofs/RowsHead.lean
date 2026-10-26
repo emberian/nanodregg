@@ -1157,7 +1157,7 @@ theorem genesis_rowsOk (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).Row
   ⟨fun _ h => by simp [World.genesis, Trie.T.toList] at h, rfl, rfl⟩
 
 theorem receive_genesis_rowsOk (X : Receive.Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) : (Receive.genesisWorld X name nonce allowance founders).RowsOk X.env :=
+    (founders : List (ByteArray × D)) (auth : Receive.Authority) : (Receive.genesisWorld X name nonce allowance founders auth).RowsOk X.env :=
   ⟨fun _ h => by simp [Receive.genesisWorld, World.genesis, Trie.T.toList] at h, rfl, rfl⟩
 
 theorem refuse_rowsOk {E : Env D} {w w' : World D} {r : Refused D} (hok : w.RowsOk E)

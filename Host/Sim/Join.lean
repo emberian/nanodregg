@@ -38,7 +38,7 @@ def checks : IO (List (String × Bool)) := do
   let fs := [(key, Receive.nextKeyDigest X (R.pub "host-join-next".toUTF8))]
   let name := "join-plant".toUTF8
   let nonce := "signed-nonce".toUTF8
-  let .ok g := Receive.genesis X name "first".toUTF8 10000 fs |
+  let .ok g := Receive.genesis X name "first".toUTF8 10000 fs Receive.Authority.none |
     throw (IO.userError "join plant genesis")
   let .ok file := Carry.exportFile X.env Codec.Deployed.digestCodec g |
     throw (IO.userError "join plant export")
@@ -59,7 +59,7 @@ def checks : IO (List (String × Bool)) := do
     key (some "in") file
   let (_, anchor, aw, _) ← trial (← invitation (.carried w.origin name nonce r.head.fromOrigin (r.head.height + 1) r.head.chain))
     key (some "in") file
-  let (_, arity, gw, _) ← trial (← invitation (.genesis name "first".toUTF8 10000 fs)) key (some "in") file
+  let (_, arity, gw, _) ← trial (← invitation (.genesis name "first".toUTF8 10000 fs Receive.Authority.none)) key (some "in") file
   return [
     ("join-carried: signed nonce/origin reaches genesis and reopens", ok == 0 && writes == 1 &&
       (made.map fun m => R.world.bytes m == R.world.bytes w).getD false),

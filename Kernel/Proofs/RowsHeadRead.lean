@@ -276,21 +276,21 @@ open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Codec.Deployed
 /-- **Deployed: every World a checked genesis and a fold reach has canonical rows that keep the rows
 invariant**, no premise. -/
 theorem deployed_reach_rows (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     w.RowsCanon env ∧ w.RowsOk env := by
   obtain ⟨-, rfl⟩ := genesis_ok.mp hg
-  exact ⟨fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders) hl,
-    fold_rowsOk deployed_lawful (receive_genesis_rowsCanon (ctx program) name nonce allowance founders)
-      (receive_genesis_rowsOk (ctx program) name nonce allowance founders) hl⟩
+  exact ⟨fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders auth) hl,
+    fold_rowsOk deployed_lawful (receive_genesis_rowsCanon (ctx program) name nonce allowance founders auth)
+      (receive_genesis_rowsOk (ctx program) name nonce allowance founders auth) hl⟩
 
 /-- **Deployed: the phone's rows read.** On a World a checked genesis and a fold reach, a head record
 that hashes to the chain the next step reached, and an inclusion proof against the record's rows
 root, show the leaf in that World's rows, or two of the inputs it compares collide. The one premise
 left is the claimed leaf's: its counters below 2^64 and its value within `Bounds.valueBytesMax`. -/
 theorem deployed_head_rows_read (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.step env w s = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : RowSlot Digest} {v : RowLeaf}
@@ -304,8 +304,8 @@ theorem deployed_head_rows_read (program : Program Digest) {name nonce : ByteArr
 
 /-- **Deployed: the phone's rows absence**, no premise, for every key. -/
 theorem deployed_head_rows_absent (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.step env w s = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : RowSlot Digest}

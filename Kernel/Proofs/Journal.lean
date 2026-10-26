@@ -665,28 +665,28 @@ theorem submit_forgotten {X : Ctx D} {w : World D} {c : Call D}
   omega
 
 theorem genesisWorld_journalOk (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) : (genesisWorld X name nonce allowance founders).JournalOk X.env :=
+    (founders : List (ByteArray × D)) (auth : Authority) : (genesisWorld X name nonce allowance founders auth).JournalOk X.env :=
   journalOk_of_empty rfl
 
 /-- **Every World a genesis reaches holds `JournalOk`**, no premise. -/
 theorem reach_journalOk {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)}
-    (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w) : w.JournalOk X.env :=
-  fold_journalOk (genesisWorld_journalOk X name nonce allowance founders) h
+    {founders : List (ByteArray × D)} {auth : Authority} {w : World D} {l : List (Step D)}
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w) : w.JournalOk X.env :=
+  fold_journalOk (genesisWorld_journalOk X name nonce allowance founders auth) h
 
 /-- **Every World a genesis reaches holds fewer than `3 * windowMax` journal entries**, whatever
 its history: no premise (law 4 at the World's journal). -/
 theorem reach_journal_bounded {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)}
-    (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w) :
+    {founders : List (ByteArray × D)} {auth : Authority} {w : World D} {l : List (Step D)}
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w) :
     w.journal.toList.length < 3 * Bounds.windowMax :=
   journal_bounded (reach_journalOk h)
 
 /-- **From genesis, a call is admitted at most once, ever** (`submit_once`, no premise): `w₀` is
 any World a genesis reaches. -/
 theorem reach_submit_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {l₀ l : List (Step D)} {w₀ w₁ w₂ : World D} {c : Call D} {t : Turn D}
-    (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders) l₀ = .ok w₀)
+    {founders : List (ByteArray × D)} {auth : Authority} {l₀ l : List (Step D)} {w₀ w₁ w₂ : World D} {c : Call D} {t : Turn D}
+    (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders auth) l₀ = .ok w₀)
     (h₁ : submit X w₀ c = .ok (t, w₁)) (hf : World.fold X.env w₁ l = .ok w₂) :
     ∀ r, submit X w₂ c ≠ .ok r :=
   submit_once (reach_journalOk h₀).1 h₁ hf
@@ -694,9 +694,9 @@ theorem reach_submit_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
 /-- **From genesis, one call, one admission on any path through `receive`** (`derived_once`, no
 premise). -/
 theorem reach_derived_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {l₀ l : List (Step D)} {w₀ w₁ w₂ w₃ : World D} {c : Call D}
+    {founders : List (ByteArray × D)} {auth : Authority} {l₀ l : List (Step D)} {w₀ w₁ w₂ w₃ : World D} {c : Call D}
     {t t' : Turn D}
-    (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders) l₀ = .ok w₀)
+    (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders auth) l₀ = .ok w₀)
     (hr₁ : receive X w₀ c = .ok t) (h₁ : World.admit X.env w₀ t = .ok w₁)
     (hf : World.fold X.env w₁ l = .ok w₂)
     (hr₂ : receive X w₂ c = .ok t') (h₂ : World.admit X.env w₂ t' = .ok w₃) : False :=
@@ -705,8 +705,8 @@ theorem reach_derived_once {X : Ctx D} {name nonce : ByteArray} {allowance : Nat
 /-- **From genesis, two admissions of one transaction id are more than `2 * windowMax` heights
 apart** (`admit_spacing`, no premise). -/
 theorem reach_admit_spacing {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {l₀ l : List (Step D)} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D}
-    (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders) l₀ = .ok w₀)
+    {founders : List (ByteArray × D)} {auth : Authority} {l₀ l : List (Step D)} {w₀ w₁ w₂ w₃ : World D} {t t' : Turn D}
+    (h₀ : World.fold X.env (genesisWorld X name nonce allowance founders auth) l₀ = .ok w₀)
     (h₁ : World.admit X.env w₀ t = .ok w₁) (hf : World.fold X.env w₁ l = .ok w₂)
     (h₂ : World.admit X.env w₂ t' = .ok w₃) (hid : t'.txId = t.txId) :
     w₀.height + 1 + 2 * Bounds.windowMax ≤ w₂.height :=
@@ -716,15 +716,15 @@ theorem reach_admit_spacing {X : Ctx D} {name nonce : ByteArray} {allowance : Na
 window discharged): a World a genesis reaches checks each windowed retry exactly as the same
 World carrying the latest entry its log wrote under each transaction id, none pruned. -/
 theorem reach_prune_check {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)} {t : Turn D}
-    (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w)
-    (hv : ∀ e, (shadowJournal X.env (genesisWorld X name nonce allowance founders).height
-        (genesisWorld X name nonce allowance founders).journal l).get (journalSpec X.env) t.txId = some e →
+    {founders : List (ByteArray × D)} {auth : Authority} {w : World D} {l : List (Step D)} {t : Turn D}
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w)
+    (hv : ∀ e, (shadowJournal X.env (genesisWorld X name nonce allowance founders auth).height
+        (genesisWorld X name nonce allowance founders auth).journal l).get (journalSpec X.env) t.txId = some e →
       t.validUntil ≤ e.1 + Bounds.windowMax) :
     check X.env w t = check X.env { w with journal := (shadowJournal X.env
-      (genesisWorld X name nonce allowance founders).height
-      (genesisWorld X name nonce allowance founders).journal l) } t :=
-  let hg := genesisWorld_journalOk X name nonce allowance founders
+      (genesisWorld X name nonce allowance founders auth).height
+      (genesisWorld X name nonce allowance founders auth).journal l) } t :=
+  let hg := genesisWorld_journalOk X name nonce allowance founders auth
   fold_prune_check hg.1 (journalFiltered_self hg) h hv
 
 /-! ## A call's retry needs no window premise (KERNEL-38 (c))
@@ -903,31 +903,31 @@ follower's honest folded log reaches from a genesis checks a call's retry (a tur
 World, from the call its event decodes to) exactly as the same World carrying the journal its log
 never pruned, or two of the events `retryPres t l` names have one `domTx` digest. -/
 theorem reach_prune_check_call {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
-    (hf : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w)
-    (hh : Honest X (genesisWorld X name nonce allowance founders) l)
+    {founders : List (ByteArray × D)} {auth : Authority} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
+    (hf : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w)
+    (hh : Honest X (genesisWorld X name nonce allowance founders auth) l)
     (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t) :
     check X.env w t = check X.env { w with journal := (shadowJournal X.env
-      (genesisWorld X name nonce allowance founders).height
-      (genesisWorld X name nonce allowance founders).journal l) } t ∨
+      (genesisWorld X name nonce allowance founders auth).height
+      (genesisWorld X name nonce allowance founders auth).journal l) } t ∨
       CollidesAmong X.env.hash (retryPres t l) :=
-  let hg := genesisWorld_journalOk X name nonce allowance founders
+  let hg := genesisWorld_journalOk X name nonce allowance founders auth
   honest_prune_check hg.1 (journalFiltered_self hg) hf hh hd hr (fun e he => by
-    rw [show (genesisWorld X name nonce allowance founders).journal = .empty from rfl,
+    rw [show (genesisWorld X name nonce allowance founders auth).journal = .empty from rfl,
       Trie.get_empty] at he
     cases he)
 
 /-- TOOTH (`reach_prune_check_call`): under a hash that separates the events `retryPres t l` names,
 pruning changed no check of a call's retry. -/
 theorem reach_prune_check_call_sep {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
-    (hf : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w)
-    (hh : Honest X (genesisWorld X name nonce allowance founders) l)
+    {founders : List (ByteArray × D)} {auth : Authority} {w v : World D} {l : List (Step D)} {t : Turn D} {c : Call D}
+    (hf : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w)
+    (hh : Honest X (genesisWorld X name nonce allowance founders auth) l)
     (hd : X.decodeCall t.event = some c) (hr : receive X v c = .ok t)
     (hsep : Separates X.env.hash (retryPres t l)) :
     check X.env w t = check X.env { w with journal := (shadowJournal X.env
-      (genesisWorld X name nonce allowance founders).height
-      (genesisWorld X name nonce allowance founders).journal l) } t :=
+      (genesisWorld X name nonce allowance founders auth).height
+      (genesisWorld X name nonce allowance founders auth).journal l) } t :=
   hsep.elim (reach_prune_check_call hf hh hd hr)
 
 /-! ### Teeth, on a concrete call log

@@ -30,14 +30,14 @@ theorem carry_rooted {X : Ctx D} {R : D → Prop} {name nonce : ByteArray} {w w'
 from genesis, carried, and folded again by an honest log: every World grant has a parent or is one of the FIRST genesis's
 founder grants. The carried World's own origin roots nothing: its ids are the lineage's. -/
 theorem deployed_carry_rooted (program : Program Digest) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × Digest)) {name' nonce' : ByteArray} {w w' w'' : World Digest}
+    (founders : List (ByteArray × Digest)) (auth : Authority) {name' nonce' : ByteArray} {w w' w'' : World Digest}
     {l l' : List (Step Digest)}
-    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders) l = .ok w)
-    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders) l)
+    (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders auth) l = .ok w)
+    (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders auth) l)
     (hc : carry (ctx program) name' nonce' w.origin w.carried = .ok w')
     (hf' : World.fold (ctx program).env w' l' = .ok w'') (hh' : Honest (ctx program) w' l') :
-    WorldRooted (ctx program) (GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders)) w'' :=
+    WorldRooted (ctx program) (GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders auth)) w'' :=
   honest_rooted deployed_lawful
-    (carry_rooted (deployed_honest_rooted program name nonce allowance founders hf hh) hc) hf' hh'
+    (carry_rooted (deployed_honest_rooted program name nonce allowance founders auth hf hh) hc) hf' hh'
 
 end Nanodregg.Kernel.Receive

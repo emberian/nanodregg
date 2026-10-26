@@ -221,28 +221,24 @@ and not compared. -/
 /-! ## Certified heads (PROTOCOL-76; DESIGN-TRUST §1.2, §4.3: T3's unsigned half)
 
 An attestation says what ONE MEMBER holds. A CERTIFICATE says what the WORLD is at: a head with
-`threshold` signatures by the World's CERTIFIERS, the authority a World is given at its genesis.
+`threshold` signatures by the World's CERTIFIERS, the authority a World is given at its genesis
+(KERNEL-69: `Kernel.Receive.Authority`, in the genesis input and the World's authority cell).
 Every World today has `Authority.none` (no certifier, threshold 0: the writer's page is its bare
 word and members audit, as before); one key at threshold 1 is the lock writer with a signature; `3f+1`
 keys at threshold `2f+1` is the committee. The object, its domain (`domCertify`, the eighth a key
 signs under) and its one verification path (`certified`: `threshold` DISTINCT listed certifiers,
 each signature verifying over the certified bytes) land here, with refusals by name. No deployed
 path PRODUCES a certificate yet (a Store holds no certify seed: cv 01a1769d, Ember's), and none
-consumes one until the authority reaches the genesis input (`GenesisInput` + `Carried`, the
-`log`/`read` reply field, `Thin.accept`, the head law's `uncertified`: the next flag day, `host!` +
-`protocol!`). What a verifier learns from `certified = .ok` is `Proofs.Head.certified_ok`; what two
+consumes one yet (the `Carried` start, the `log`/`read` reply field, `Thin.accept`, the head law's
+`uncertified`: the next landing). What a verifier learns from `certified = .ok` is `Proofs.Head.certified_ok`; what two
 certificates at one step count mean under a quorum is `certified_intersect` and
 `certified_equivocation` there, the committee row of DESIGN-TRUST §1.3's table as a theorem over
 the object alone. -/
 
-/-- Who may certify a position as the World's, and how many of them must. -/
-structure Authority where
-  certifiers : List ByteArray
-  threshold : Nat
-  deriving DecidableEq, Repr
-
-/-- Nobody certifies: every World today. -/
-def Authority.none : Authority := ⟨[], 0⟩
+/-! `Authority` here is KERNEL's (`Kernel.Receive.Authority`, KERNEL-69): who may certify and how
+many must, fixed at genesis, committed in the origin (`GenesisInput`) and carried in the World as
+one ROM cell (`authorityCell`, read back by `authorityOf`); `Authority.none` names nobody. This file
+defines no copy of it. -/
 
 /-- The domain every certificate message begins with (byte 19 differs from `domHead`). -/
 def domCertify : ByteArray := "nanodregg/protocol/certify/v1".toUTF8

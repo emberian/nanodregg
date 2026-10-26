@@ -1117,6 +1117,7 @@ def hintReps : List (Refusal Nat) :=
   CustodyRefusal.all.map Refusal.custody ++
   (([.badInvitation, .notSponsor, .pinMismatch, .otherWorld, .noBase, .baseMismatch, .carried] : List Invite.Refusal) ++
     ([.nameTooLong, .nonceTooLong, .tooManyFounders, .founderKeyTooLong 0, .founderNextTooLong 0,
+      .tooManyCertifiers, .certifierTooLong 0, .repeatedCertifier 0, .badThreshold,
       .allowanceTooLarge] : List GenesisRefusal).map Invite.Refusal.inputs).map Refusal.invite
 
 /-- The names a hint may carry: every `refused NAME` follow's machine prints but the Host's word
@@ -1196,14 +1197,15 @@ def settled (X : Ctx D) (me : Self D) (w : World D) (out cb result : ByteArray) 
     | _ => refused (D := D) .badResult
   else refused (D := D) .badResult
 
-/-- A live member cell or grant cell: the kinds a genesis builds (`Receive.founderEntries`) and the
-only ones a step-0 World holds. Any member or grant passes, not only this lineage's founders'. -/
+/-- A live member cell, grant cell or authority cell: the kinds a genesis builds
+(`Receive.genesisEntries`: the founders' members and grants, then the authority, KERNEL-69) and the
+only ones a step-0 World holds. Any member, grant or authority passes, not only this lineage's. -/
 def genesisLeaf : Leaf → Bool
-  | .entry (.live cell _) => cell.kind == kindMember || cell.kind == kindGrant
+  | .entry (.live cell _) => cell.kind == kindMember || cell.kind == kindGrant || cell.kind == kindAuthority
   | _ => false
 
-/-- Follow's World is a step-0 World of members and grants: no step folded, and every cell a member
-cell or a World grant. Two Worlds follow can hold are that: the one a genesis builds, a joiner's
+/-- Follow's World is a step-0 World of members, grants and the authority: no step folded, and every
+cell a member cell, a World grant or the authority cell. Two Worlds follow can hold are that: the one a genesis builds, a joiner's
 before its adopt (`genesisWorld_atGenesis`: the founders' cells are there at step 0, so "no cell"
 refused every honest adopt), and one carried at height 0 (`carryWorld_atGenesis`: `carryWorld` sets
 `steps` to the carried height), a re-invited member's. It is NOT "a World this joiner's genesis

@@ -418,8 +418,8 @@ record that hashes to the chain the next step reached, and an inclusion proof ag
 refusals root, show the leaf in that World's refusals, or two of the inputs it compares collide. The one premise left is the
 claimed leaf's: its counters are below 2^64 (`u64`s on the wire). -/
 theorem deployed_head_refusal_read (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.step env w s = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : WindowSlot Digest} {v : RefusalLeaf Digest}
@@ -432,8 +432,8 @@ theorem deployed_head_refusal_read (program : Program Digest) {name nonce : Byte
 
 /-- **Deployed: the phone's refusals absence**, no premise. -/
 theorem deployed_head_refusal_absent (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w)
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w w' : World Digest} {l : List (Step Digest)} {s : Step Digest}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w)
     (h : World.step env w s = .ok w') {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
     (hhead : headLink env prev tag td rd = w'.chain)
     (hrd : rootsDigest env root' jroot' rroot' wroot' = rd) {k : WindowSlot Digest}
@@ -446,9 +446,9 @@ theorem deployed_head_refusal_absent (program : Program Digest) {name nonce : By
 
 /-- **Deployed: a recorded refusal is shown at every head below its horizon**, no premise. -/
 theorem deployed_head_refused_retained (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
     {r : Refused Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl₀ : World.fold env g l₀ = .ok w₀)
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl₀ : World.fold env g l₀ = .ok w₀)
     (h₁ : World.refuse env w₀ r = .ok w₁) (hf : World.fold env w₁ l = .ok w₂)
     (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax)
     {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}
@@ -464,9 +464,9 @@ theorem deployed_head_refused_retained (program : Program Digest) {name nonce : 
 
 /-- **Deployed: below its horizon a recorded refusal cannot be shown absent**, no premise. -/
 theorem deployed_head_refused_not_absent (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w₀ w₁ w₂ : World Digest} {l₀ l : List (Step Digest)}
     {r : Refused Digest}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl₀ : World.fold env g l₀ = .ok w₀)
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl₀ : World.fold env g l₀ = .ok w₀)
     (h₁ : World.refuse env w₀ r = .ok w₁) (hf : World.fold env w₁ l = .ok w₂)
     (hlt : w₂.height < w₀.height + 1 + 2 * Bounds.windowMax)
     {prev td rd root' jroot' rroot' wroot' : Digest} {tag : UInt8}

@@ -974,7 +974,7 @@ def judgePlant (failures : IO.Ref Nat) : IO Unit := do
   let kx := Kernel.Sim.ctx
   let key := "f0".toUTF8
   let founders := [(key, Receive.nextKeyDigest kx "f0-next".toUTF8)]
-  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders with
+  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders Receive.Authority.none with
   | .error r => check s!"{p}: genesis ({r.name})" false failures
   | .ok g =>
   let me := Receive.founderId kx g.origin 0
@@ -1037,7 +1037,7 @@ def cancelOpPlant (failures : IO.Ref Nat) : IO Unit := do
   let kx := Kernel.Sim.ctx
   let key := "f0".toUTF8
   let founders := [(key, Receive.nextKeyDigest kx "f0-next".toUTF8)]
-  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders with
+  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders Receive.Authority.none with
   | .error r => check s!"{p}: genesis ({r.name})" false failures
   | .ok g =>
   let me := Receive.founderId kx g.origin 0
@@ -1099,7 +1099,7 @@ def cancelPagePlant (failures : IO.Ref Nat) : IO Unit := do
   let kx := Kernel.Sim.ctx
   let key := "f0".toUTF8
   let founders := [(key, Receive.nextKeyDigest kx "f0-next".toUTF8)]
-  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders with
+  match Receive.genesis kx Kernel.Sim.worldName (Kernel.Sim.nonceOf 1) 100000000 founders Receive.Authority.none with
   | .error r => check s!"{p}: genesis ({r.name})" false failures
   | .ok g =>
   let me := Receive.founderId kx g.origin 0

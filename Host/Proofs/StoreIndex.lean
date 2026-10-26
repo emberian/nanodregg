@@ -809,8 +809,8 @@ theorem genesisImage_base_read (keys : Keys) {w₀ : World D}
 /-- **`host genesis`'s Store has a coherent index**: it holds none, and its run begins at the
 genesis World's step count. -/
 theorem genesis_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w₀ : World D}
-    (hg : Receive.genesis X name nonce allowance founders = .ok w₀) {img : Image}
+    {founders : List (ByteArray × D)} {auth : Receive.Authority} {w₀ : World D}
+    (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
     Coherent keys img.base img.index img.segment w₀.steps := by
   obtain ⟨o, ho, -⟩ := genesis_reopens keys hkeys hg h
@@ -821,7 +821,7 @@ theorem genesis_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {
     Codec.Deployed.digestCodec _ _ _ ho
   obtain ⟨b, _, _, _, _, _, hb, _, _, _, _, _, _, _, _, _, _, _, hoo⟩ :=
     openWith_seg_ok keys c world recorder.mark originChain foldStep _ _ _ _ ho
-  have hsteps : o.sealed.steps = (Receive.genesisWorld X name nonce allowance founders).steps := by
+  have hsteps : o.sealed.steps = (Receive.genesisWorld X name nonce allowance founders auth).steps := by
     rw [hoo]
     show (recorder.mark b.world).1 = _
     rw [hb] at hrd; cases hrd

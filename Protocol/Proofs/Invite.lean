@@ -76,23 +76,23 @@ theorem accept_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : 
 /-- Genesis-only admission produces a genesis with the signed inputs, never a carried start. -/
 theorem accept_genesis {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : World D}
     (h : accept X trusted b = .ok (inv, w)) :
-    ∃ name nonce allowance fs, inv.start = .genesis name nonce allowance fs ∧
-      genesis X name nonce allowance fs = .ok w := by
+    ∃ name nonce allowance fs auth, inv.start = .genesis name nonce allowance fs auth ∧
+      genesis X name nonce allowance fs auth = .ok w := by
   have hg := (accept_ok h).2.2.2
   cases hs : inv.start with
-  | genesis name nonce allowance fs =>
-    refine ⟨name, nonce, allowance, fs, rfl, ?_⟩
-    cases he : genesis X name nonce allowance fs with
+  | genesis name nonce allowance fs auth =>
+    refine ⟨name, nonce, allowance, fs, auth, rfl, ?_⟩
+    cases he : genesis X name nonce allowance fs auth with
     | error r => simp [hs, startGenesis, he, Except.mapError] at hg
     | ok g => simpa [hs, startGenesis, he, Except.mapError] using hg
   | carried o name nonce fromO height chain => simp [hs, startGenesis] at hg
 
 theorem accept_origin {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : World D}
     (h : accept X trusted b = .ok (inv, w)) :
-    ∃ name nonce allowance fs, inv.start = .genesis name nonce allowance fs ∧
-      w = genesisWorld X name nonce allowance fs := by
-  obtain ⟨name, nonce, allowance, fs, hs, hg⟩ := accept_genesis h
-  exact ⟨name, nonce, allowance, fs, hs, (genesis_ok.mp hg).2⟩
+    ∃ name nonce allowance fs auth, inv.start = .genesis name nonce allowance fs auth ∧
+      w = genesisWorld X name nonce allowance fs auth := by
+  obtain ⟨name, nonce, allowance, fs, auth, hs, hg⟩ := accept_genesis h
+  exact ⟨name, nonce, allowance, fs, auth, hs, (genesis_ok.mp hg).2⟩
 
 theorem acceptStart_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {o : D}
     (h : acceptStart X trusted b = .ok (inv, o)) :

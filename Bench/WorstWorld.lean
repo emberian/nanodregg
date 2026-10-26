@@ -57,7 +57,7 @@ def honest (scratch : System.FilePath) (stateBytes : Nat) (control : Bool) : IO 
   IO.FS.createDirAll scratch
   let dir := scratch / "world"
   if ← dir.pathExists then return ← fail s!"{dir} exists (SCRATCH must be fresh)"
-  let g ← match Receive.genesis X "worstworld".toUTF8 "worstworld-nonce".toUTF8 allowanceMax founders with
+  let g ← match Receive.genesis X "worstworld".toUTF8 "worstworld-nonce".toUTF8 allowanceMax founders Authority.none with
     | .ok g => pure g
     | .error r => return ← fail s!"genesis {r.name}"
   let m := Who.of ⟨founderId X g.origin 0, founderSecret, nextSecret⟩
@@ -129,7 +129,7 @@ def synthetic (scratch : System.FilePath) (n : Nat) (control : Bool) : IO UInt32
   IO.FS.createDirAll scratch
   let dir := scratch / "synthetic"
   if ← dir.pathExists then return ← fail s!"{dir} exists (SCRATCH must be fresh)"
-  let g ← match Receive.genesis X "worstworld".toUTF8 "worstworld-nonce".toUTF8 allowanceMax founders with
+  let g ← match Receive.genesis X "worstworld".toUTF8 "worstworld-nonce".toUTF8 allowanceMax founders Authority.none with
     | .ok g => pure g
     | .error r => return ← fail s!"genesis {r.name}"
   let t0 ← IO.monoMsNow

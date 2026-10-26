@@ -38,10 +38,10 @@ theorem fold_budget_lt {E : Env D} {w w' : World D} {l : List (Step D)} (hc : w.
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A checked genesis starts below 2^64 (`GenesisFits`'s budget clause). -/
-theorem genesis_budget {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
-    {g : World D} (hg : genesis X name nonce allowance founders = .ok g) : g.weight + g.allowance < 2 ^ 64 := by
+theorem genesis_budget {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)} {auth : Authority}
+    {g : World D} (hg : genesis X name nonce allowance founders auth = .ok g) : g.weight + g.allowance < 2 ^ 64 := by
   obtain ⟨hf, rfl⟩ := genesis_ok.mp hg
-  exact hf.2.2.2.2
+  exact hf.2.2.2.2.2
 
 omit [DecidableEq D] [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A checked carry starts below 2^64 (`CarryFits`'s budget clause: the carried cells are the World's). -/
@@ -52,14 +52,14 @@ theorem carry_budget {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D
 
 /-- **Every World a checked genesis reaches is below the budget**, no premise. -/
 theorem genesis_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {g w : World D} {l : List (Step D)}
-    (hg : genesis X name nonce allowance founders = .ok g) (hl : World.fold X.env g l = .ok w) :
+    {founders : List (ByteArray × D)} {auth : Authority} {g w : World D} {l : List (Step D)}
+    (hg : genesis X name nonce allowance founders auth = .ok g) (hl : World.fold X.env g l = .ok w) :
     w.weight + w.allowance < 2 ^ 64 := by
   have hb := genesis_budget hg
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
-  exact fold_budget_lt (receive_genesis_canon X name nonce allowance founders)
-    (receive_genesis_slotted X name nonce allowance founders)
-    (receive_genesis_rowsCanon X name nonce allowance founders) hb hl
+  exact fold_budget_lt (receive_genesis_canon X name nonce allowance founders auth)
+    (receive_genesis_slotted X name nonce allowance founders auth)
+    (receive_genesis_rowsCanon X name nonce allowance founders auth) hb hl
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A carried World's slots hold the leaves of their kinds when the exported one's did (the trie is the same). -/
@@ -89,8 +89,8 @@ so its allowance is inside the World codec's `u64` and every seal of it reads ba
 a World a genesis reached (`w₀`, the lineage); `host import` of a file reaches the same bound through
 the carried codec (`carry_fold_budget_lt`, HOST's `Kept`). No premise. -/
 theorem deployed_budget_lt (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × Digest)} {g w : World Digest} {l : List (Step Digest)}
-    (hg : genesis (ctx program) name nonce allowance founders = .ok g) (hl : World.fold env g l = .ok w) :
+    {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
+    (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     (w.weight + w.allowance < 2 ^ 64) ∧
       ∀ {name' nonce' : ByteArray} {w₁ w₂ : World Digest} {l' : List (Step Digest)},
         carry (ctx program) name' nonce' w.origin w.carried = .ok w₁ → World.fold env w₁ l' = .ok w₂ →
@@ -98,11 +98,11 @@ theorem deployed_budget_lt (program : Program Digest) {name nonce : ByteArray} {
   refine ⟨genesis_fold_budget_lt (X := ctx program) hg hl, fun {_ _ w₁ _ _} hc hl' => ?_⟩
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
   have hcan : w.Canon (ctx program).env :=
-    fold_canon (receive_genesis_canon (ctx program) name nonce allowance founders) hl
+    fold_canon (receive_genesis_canon (ctx program) name nonce allowance founders auth) hl
   have hsl : w.Slotted (ctx program).env :=
-    fold_slotted (receive_genesis_slotted (ctx program) name nonce allowance founders) hl
+    fold_slotted (receive_genesis_slotted (ctx program) name nonce allowance founders auth) hl
   have hrc : w.RowsCanon (ctx program).env :=
-    fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders) hl
+    fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders auth) hl
   exact carry_fold_budget_lt (X := ctx program) hc (carry_canon hcan hc) (carry_slotted hsl hc)
     (carry_rowsCanon hrc hc) hl'
 

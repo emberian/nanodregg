@@ -542,12 +542,12 @@ variable {D : Type} [Ord D] [DecidableEq D]
 steps`, and the difference is the log's recorded refusals (`fold_steps_height`). (A carry sets
 `steps` to the carried height, `carryWorld`, so a fold from it keeps the same.) -/
 theorem reach_height_le_steps {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {w : World D} {l : List (Step D)}
-    (h : World.fold X.env (genesisWorld X name nonce allowance founders) l = .ok w) : w.height ≤ w.steps :=
+    {founders : List (ByteArray × D)} {auth : Authority} {w : World D} {l : List (Step D)}
+    (h : World.fold X.env (genesisWorld X name nonce allowance founders auth) l = .ok w) : w.height ≤ w.steps :=
   fold_height_le_steps (Nat.le_refl _) h
 
 theorem genesisWorld_refusalsOk (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) : (genesisWorld X name nonce allowance founders).RefusalsOk X.env :=
+    (founders : List (ByteArray × D)) (auth : Authority) : (genesisWorld X name nonce allowance founders auth).RefusalsOk X.env :=
   refusalsOk_of_empty rfl
 
 /-- **A recorded refusal is final** (KERNEL-44, the A→B→A defect closed). After `World.refuse`
