@@ -218,6 +218,23 @@ and not compared. -/
   (selfPosts X w' ts).findSome? fun p =>
     if anchorCheck X.env p.1 p.2.1 w.steps w.chain ts = .forked then some (p.1, p.2.2) else none
 
+/-- The self-head posts a page carries at a position follow was already AT or past before the page
+(`steps ≤ w.steps`): exactly the ones `anchorCheck` cannot reach from follow's position (it compares
+the step counts `w.steps + 1 …` the page walks), so `forkedSelfPost` leaves them `unreached`. Follow's
+own Store answers them (`forkedBehindPost`, `Host.Follow.loop`: T2b'). -/
+def behindPosts (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D) :
+    List (Nat × ByteArray × Option D) :=
+  (selfPosts X w' ts).filter fun p => decide (p.1 ≤ w.steps)
+
+/-- The first behind post whose chain is not the chain follow's own history holds at its step count
+(`chainAt s`, read from follow's Store: `Host.Deployed.chainKept`), and its poster. A step the Store no
+longer keeps (`chainAt s = none`: below its oldest kept file) is not compared: the Store cannot say. -/
+def forkedBehindPost (posts : List (Nat × ByteArray × Option D)) (chainAt : Nat → Option ByteArray) :
+    Option (Nat × Option D) :=
+  posts.findSome? fun p => match chainAt p.1 with
+    | some c => if c = p.2.1 then none else some (p.1, p.2.2)
+    | none => none
+
 /-! ## Certified heads (PROTOCOL-76; DESIGN-TRUST §1.2, §4.3: T3's unsigned half)
 
 An attestation says what ONE MEMBER holds. A CERTIFICATE says what the WORLD is at: a head with

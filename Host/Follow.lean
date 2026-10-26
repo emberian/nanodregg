@@ -85,6 +85,27 @@ def answer {D : Type} [Ord D] [DecidableEq D] (X : Receive.Ctx D) (dc : Stream D
       stepOut fs' p r
   | some op => refused (.wrongSocket op)
 
+/-- The reply a page's BEHIND self-head posts force, else `out` (T2b', cv 01a176ab-14f5): a post at a
+step count follow was already at or past before the page (`Head.behindPosts`: the walk of
+`Command.postOr` cannot reach it) is compared with the chain follow's OWN Store holds at that step
+(`chainKept` over the kept files, `r` the Store before the page is appended); the first mismatch is
+`refused forkedPost` (`Head.forkedBehindPost`, `Proofs.Head.forkedBehindPost_forked`), the page kept
+as `postOr` keeps it. A step below the kept files, or a file the read cannot find, is not compared:
+the Store cannot say. -/
+def behindOr (keys : Keys) (files : PageFiles) (r : Resident (World D)) (posts : List (Nat × ByteArray × Option D))
+    (out : UInt8 × ByteArray) : IO (UInt8 × ByteArray) := do
+  if posts.isEmpty then return out
+  let (k0, read, readIndex) ← files.readers
+  let chains ← posts.mapM fun p => do
+    let ch ← try (·.toOption) <$> chainKept keys k0 read readIndex r p.1 catch _ => pure none
+    pure (p.1, ch)
+  match Head.forkedBehindPost posts (fun s => (chains.lookup s).join) with
+  | none => return out
+  | some (s, m) =>
+    match (Command.refused (D := D) (.forkedPost s m)).bytes with
+    | some b => return (Status.ok.code, b)
+    | none => return named Refusal.stepTooLarge.name
+
 /-- The follower loop: one frame at a time, at most `fuel` frames. `dl` is follow's memory (the base
 download in progress and the newest writer base it verified itself, PROTOCOL-47), held in memory only, in a reference the caller owns, so it survives a fuel restart's
 in-process reopen exactly as the port's queued frames do (a process restart starts it again). Absorbed steps are appended through
@@ -92,8 +113,8 @@ in-process reopen exactly as the port's queued frames do (a process restart star
 at its segment position (no record before it belongs to the adopted World's history, so the index
 restarts empty: adopt runs only at genesis (PROTOCOL's `notAtGenesis`), where the index file is empty,
 so the base counts no entry and the seal writes none) BEFORE the step is answered. -/
-def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (World D)) (port : Port)
-    (dl : IO.Ref Command.Memory) : Nat → Resident (World D) → IO (Exit × Resident (World D))
+def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (World D)) (files : PageFiles)
+    (port : Port) (dl : IO.Ref Command.Memory) : Nat → Resident (World D) → IO (Exit × Resident (World D))
   | 0, r => finish .fuel r
   | fuel + 1, r => do
     let r ← match ← reap r with
@@ -108,8 +129,9 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
     | .steps [] =>
       dl.set fs'.memory
       port.send ⟨f.conn, status, payload⟩
-      loop keys me store ck port dl fuel { r with world := fs'.world }
+      loop keys me store ck files port dl fuel { r with world := fs'.world }
     | .steps ts =>
+      let (status, payload) ← behindOr keys files r (Head.behindPosts X r.world ts fs'.world) (status, payload)
       match ← append recorder keys.segment ck c store r fs'.world ts.toArray with
       | .error e =>
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
@@ -117,7 +139,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       | .ok r =>
         dl.set fs'.memory
         port.send ⟨f.conn, status, payload⟩
-        loop keys me store ck port dl fuel r
+        loop keys me store ck files port dl fuel r
     | .adopt w' =>
       let r ← match r.pending with
         | none => pure r
@@ -133,7 +155,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
           (recorder.mark w').2, digest, ix⟩
         dl.set fs'.memory
         port.send ⟨f.conn, status, payload⟩
-        loop keys me store ck port dl fuel
+        loop keys me store ck files port dl fuel
           { r with world := w', sealed, index := #[], pending := none }
 
 end Nanodregg.Host.Follow

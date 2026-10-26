@@ -146,11 +146,7 @@ def chainAt (store : System.FilePath) (k : Kept) (h : Nat) : IO (Except Page.Fau
   let files : PageFiles := ⟨store, k.keys, originChain o.opened.world,
     ← IO.mkRef (k.files.retainedFrom, k.files.indexFrom), ← IO.mkRef #[o.sealed.offset], ← IO.mkRef k.files.generation⟩
   let (k0, read, readIndex) ← files.readers
-  -- budget 0: the page holds no event, so its chain is the chain AT step `h`
-  let r ← Page.kept X.env Codec.Deployed.digestCodec X.digestOf k.keys.segment c.recordBytesMax 0 k0 read
-    (Page.entryAt (k.keys.forStore (originChain o.opened.world)) readIndex o.sealed.index.count o.index)
-    (o.sealed.index.count + o.index.size) o.pos.offset (recorder.mark o.opened.world) h
-  return r.map (·.chain)
+  chainKept k.keys k0 read readIndex o.resident h
 
 /-- The kept segment before the base recovers clean, frame by frame, from the oldest kept header's
 tag to exactly `len` bytes. -/

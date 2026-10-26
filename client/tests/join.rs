@@ -13,6 +13,10 @@ use std::process::{Command, Output};
 use nanodregg_client::generated::command_exit;
 use nanodregg_devtools::{Supervisor, mkdirs};
 
+fn repo_text(rel: &str) -> String {
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)).unwrap()
+}
+
 fn line<'a>(out: &'a str, key: &str) -> &'a str {
     out.lines()
         .find_map(|l| l.strip_prefix(key).map(str::trim))
@@ -328,6 +332,43 @@ fn join_from_a_signed_invitation_refuses_forgeries_and_serves_a_write() {
     assert_eq!(err(&o), "refused ahead\n");
     let o = a.nd(&["sync", "--check", "00"]);
     assert_eq!(err(&o), "refused badAttestation\n");
+    // T2b' (DESIGN-TRUST): a member AT THE TIP compares a self-head post naming a step it is already
+    // past against its OWN Store (`Host.Follow.behindOr`: the chain its kept files hold there). The
+    // founder's honest post of its own head is silent for B; a forged post naming step 2 with a chain
+    // no fold has is refused `forkedPost` by name, the page kept, and B's next sync proceeds.
+    // The seed is itself a claim about this World at step 0, compared like any post: it names the
+    // genesis chain (a seed naming another chain is refused `forkedPost` by every member that absorbs it).
+    let origin = line(&g, "origin ").to_owned();
+    let chain0 = line(&g, "chain ").to_owned();
+    let seed = format!(
+        "(record (head (at (record (chain #{chain0}) (height 0) (roots #{member}) (steps 0)))) (world #{origin}))"
+    );
+    let head_pkg = line(&a.ok(&["install", &repo_text("world/head/Head")]), "id ").to_owned();
+    let hs = line(&a.ok(&["create", "--pkg", &head_pkg, &seed]), "id ").to_owned();
+    b.ok(&["sync"]);
+    a.ok(&["sync", "--post", &hs]);
+    b.ok(&["sync"]);
+    let h2 = line(&a.ok(&["create", "--pkg", &head_pkg, &seed]), "id ").to_owned();
+    let fake = "ab".repeat(32);
+    // The writer admits the forged post (the head law judges monotony only); the poster's OWN follow,
+    // confirming it, is already past step 2 and refuses it by the same comparison.
+    let o = a.nd(&[
+        "invoke",
+        &h2,
+        "1",
+        &format!("(record (chain #{fake}) (height 1) (roots #{fake}) (steps 2))"),
+    ]);
+    let both = format!("{}{}", text(&o), err(&o));
+    assert!(both.contains("forkedPost"), "{both}");
+    let o = b.nd(&["sync"]);
+    assert_eq!(
+        o.status.code(),
+        Some(i32::from(command_exit::REFUSED)),
+        "{}",
+        err(&o)
+    );
+    assert_eq!(err(&o), "refused forkedPost\n");
+    b.ok(&["sync"]);
     drop(writer);
     std::fs::remove_dir_all(&root).unwrap();
 }

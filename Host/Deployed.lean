@@ -57,11 +57,22 @@ def limits : Limits := ⟨recordTurnsMax, 1 <<< 20⟩
 
 /-- A `log` page from `start` over the files a base keeps (HOST-64): `Page.kept` at the deployed
 instance, the index read through `Page.entryAt` (the base's entries on disk, the loop's since). -/
-def pageKept {m : Type → Type} [Monad m] (keys : Keys) (k0 : Nat) (read readIndex : Nat → Nat → m ByteArray)
-    (r : Resident (World D)) (start : Nat) : m (Except Page.Fault Page.Acc) :=
-  Page.kept X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax Page.budget k0 read
+def keptWith {m : Type → Type} [Monad m] (budget : Nat) (keys : Keys) (k0 : Nat)
+    (read readIndex : Nat → Nat → m ByteArray) (r : Resident (World D)) (start : Nat) : m (Except Page.Fault Page.Acc) :=
+  Page.kept X.env Codec.Deployed.digestCodec X.digestOf keys.segment c.recordBytesMax budget k0 read
     (Page.entryAt (keys.forStore (originChain r.world)) readIndex r.sealed.index.count r.index)
     (r.sealed.index.count + r.index.size) r.pos.offset (recorder.mark r.world) start
+
+def pageKept {m : Type → Type} [Monad m] (keys : Keys) (k0 : Nat) (read readIndex : Nat → Nat → m ByteArray)
+    (r : Resident (World D)) (start : Nat) : m (Except Page.Fault Page.Acc) :=
+  keptWith Page.budget keys k0 read readIndex r start
+
+/-- The chain after step `h ≤ r.world.steps`, from the files a base keeps: the same walk with no
+room for events (budget 0), so the page holds no event and its chain is the chain AT step `h`
+(`checkpointed` below the kept files). `host check --anchor` and follow's behind posts (T2b') read it. -/
+def chainKept {m : Type → Type} [Monad m] (keys : Keys) (k0 : Nat) (read readIndex : Nat → Nat → m ByteArray)
+    (r : Resident (World D)) (h : Nat) : m (Except Page.Fault ByteArray) := do
+  return (← keptWith 0 keys k0 read readIndex r h).map (·.chain)
 
 /-- A deferred reply from the Store's files: a `log` page from the segment files, located through
 the kept index file (every entry it reads is checked at its position, `Page.entryAt`) and the

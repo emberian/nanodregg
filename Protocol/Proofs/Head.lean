@@ -244,6 +244,44 @@ theorem forkedSelfPost_none {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step
   | unreached => exact .inl rfl
   | forked => simp [hk] at hz
 
+/-- **A behind `forkedPost` is never free** (T2b'): the post it names is one the page carries, at a
+position follow was already at or past before the page, and follow's own history holds ANOTHER
+chain at that step count. -/
+theorem forkedBehindPost_forked {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
+    {chainAt : Nat → Option ByteArray} {s : Nat} {m : Option D}
+    (h : forkedBehindPost (behindPosts X w ts w') chainAt = some (s, m)) :
+    ∃ c, (s, c, m) ∈ selfPosts X w' ts ∧ s ≤ w.steps ∧ ∃ c', chainAt s = some c' ∧ c' ≠ c := by
+  unfold forkedBehindPost at h
+  obtain ⟨⟨s', c, m'⟩, hp, hf⟩ := List.exists_of_findSome?_eq_some h
+  unfold behindPosts at hp
+  obtain ⟨hp, hle⟩ := List.mem_filter.mp hp
+  simp only [decide_eq_true_eq] at hle
+  simp only at hf
+  split at hf
+  · rename_i c' hc
+    split at hf
+    · cases hf
+    · rename_i hne
+      simp only [Option.some.injEq, Prod.mk.injEq] at hf
+      obtain ⟨rfl, rfl⟩ := hf
+      exact ⟨c, hp, hle, c', hc, hne⟩
+  · cases hf
+
+/-- **No behind `forkedPost`: every behind post agrees with follow's history** wherever the Store
+still keeps that step: each self-head post the page carries at a step count follow was already at or
+past names the chain follow's own Store holds there. -/
+theorem forkedBehindPost_none {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
+    {chainAt : Nat → Option ByteArray} (h : forkedBehindPost (behindPosts X w ts w') chainAt = none) :
+    ∀ s c m, (s, c, m) ∈ selfPosts X w' ts → s ≤ w.steps → ∀ c', chainAt s = some c' → c' = c := by
+  intro s c m hm hle c' hc
+  unfold forkedBehindPost at h
+  have hz := List.findSome?_eq_none_iff.mp h (s, c, m)
+    (List.mem_filter.mpr ⟨hm, by simpa using hle⟩)
+  simp only [hc] at hz
+  split at hz
+  · assumption
+  · cases hz
+
 /-- **Consent: `sync --post` posts follow's OWN head.** The body follow plans for `sync --post OBJ` is
 `invoke OBJ post` with the arguments read, at the head package's argument type, from `headText` of
 the World it plans on: the chain, height, roots and step count of follow's own fold, never a
