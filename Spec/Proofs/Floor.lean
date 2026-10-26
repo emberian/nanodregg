@@ -268,4 +268,184 @@ theorem floor_shown (d : ByteArray → ByteArray) : ¬ Shown.onlyFollowers (open
   rw [envelope_empty] at this
   cases this
 
+/-! ## §3 INTEGRITY (B2): the kernel that mints -/
+
+private def mintDenom : ByteArray := "spec-mint".toUTF8
+
+/-- A value cell of 10 units and no floor: a balance from nowhere. -/
+private def mintCell : Cell :=
+  { kind := 0, discipline := .value,
+    slots := [(Value.denomKey, mintDenom), (Value.balanceKey, Value.balanceBytes 10),
+      (Value.floorKey, Value.floorBytes 0)] }
+
+private def tMint0 : Turn Digest :=
+  { txId := oneDigest, notBefore := 0, validUntil := 10, touches := [], creates := [(oneDigest, mintCell)],
+    nullifiers := [], charge := 0, event := .empty, member := oneDigest }
+
+/-- The Turn that bears it, paying exactly its weight. -/
+private def tMint : Turn Digest := { tMint0 with charge := tMint0.weight }
+
+/-- **The mint**: at the genesis World the kernel refuses the Turn `notConserved` (and only
+`checkValue` refuses it: the minting kernel admits it), and the World the minting kernel reaches
+holds a balance sum of the denomination the genesis World does not. -/
+theorem run_mint :
+    ((match World.admit Xd.env wGenesis tMint with | .error (.notConserved _) => true | _ => false) &&
+      match checkMinting Xd.env wGenesis tMint with
+      | .ok (posts, rr) =>
+          decide ((commitWith Xd.env wGenesis tMint posts rr).valueSum mintDenom ≠ wGenesis.valueSum mintDenom)
+      | .error _ => false) = true := by
+  native_decide
+
+/-- One Turn the minting kernel's checks pass is a one-step fold of it. -/
+theorem minting_fold_one (d : ByteArray → ByteArray) {g : World Digest} {t : Turn Digest}
+    {posts : List (Post Digest)} {rr : Rows Digest × Nat} (hm : checkMinting Xd.env g t = .ok (posts, rr)) :
+    (minting d).fold g [.turn t] = .ok (commitWith Xd.env g t posts rr) := by
+  have hs : (minting d).admit g t = .ok (commitWith Xd.env g t posts rr) := by
+    show (match checkMinting Xd.env g t with
+      | .ok (posts, rr) => Except.ok (commitWith Xd.env g t posts rr)
+      | .error r => .error r) = _
+    rw [hm]
+  simp only [System.fold, System.step, hs]
+
+/-- **FLOOR (B2).** The claim refuses the kernel that admits without `checkValue`: from the
+(canonical) genesis World, one Turn bearing an unbalanced value cell changes a denomination's sum. -/
+theorem floor_integrity_value (d : ByteArray → ByteArray) : ¬ Integrity.value (minting d) := by
+  intro h
+  have hc : wGenesis.Canon Xd.env := by unfold wGenesis; exact receive_genesis_canon Xd _ _ _ _ _
+  have hr := run_mint
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨-, hr⟩ := hr
+  revert hr hc
+  generalize wGenesis = g
+  generalize tMint = t
+  intro hc hr
+  cases hm : checkMinting Xd.env g t with
+  | error e => rw [hm] at hr; cases hr
+  | ok pr =>
+    obtain ⟨posts, rr⟩ := pr
+    rw [hm] at hr
+    exact (decide_eq_true_iff.mp hr) (h hc (minting_fold_one d hm) mintDenom).1
+
+/-! ## §3 INTEGRITY (B3): the writer that rewrites the package slot -/
+
+/-- The founder creates a data object (no package, no laws) holding one state slot. -/
+private def oCreate : Call Digest :=
+  let u : Unsigned Digest :=
+    { world := wGenesis.origin, member := wMember, key := wKey, notBefore := 0, validUntil := 101,
+      pins := [(wMember, pinOf Xd.env (wGenesis.entry Xd.env wMember))], maxCharge := 1000000,
+      body := .create none [] [(stateBase, "x".toUTF8)] }
+  ⟨u, Ed25519.sign (wSeed "f0") (Xd.callMessage u)⟩
+
+/-- The World after the create, as the writer stages it. -/
+private def oLog : List (Step Digest) :=
+  match submit Xd wGenesis oCreate with
+  | .ok (t, _) => [.turn t]
+  | .error _ => []
+
+/-- The World the writer stages on that log. -/
+private def oWorld : World Digest :=
+  match submit Xd wGenesis oCreate with
+  | .ok (_, w) => w
+  | .error _ => wGenesis
+
+/-- The object it bore. -/
+private def oId : Digest := cellIdOf Xd.env (txIdOf Xd oCreate) 0
+
+/-- The owner writes 32 bytes at edit key 0: under the kernel, state slot `stateBase`; under the raw
+writer, the package slot. -/
+private def oWrite : Call Digest :=
+  let u : Unsigned Digest :=
+    { world := oWorld.origin, member := wMember, key := wKey, notBefore := 0, validUntil := 101,
+      pins := [(wMember, pinOf Xd.env (oWorld.entry Xd.env wMember)), (oId, pinOf Xd.env (oWorld.entry Xd.env oId))],
+      maxCharge := 1000000, body := .write oId [(slotPackage, some oneDigest.bytes)] none }
+  ⟨u, Ed25519.sign (wSeed "f0") (Xd.callMessage u)⟩
+
+/-- The create re-derives from genesis (so the object's World is an honest fold, canonical), the
+object is live with no package; the raw writer derives the write and the kernel admits it, and the
+object's package after is not its package before. -/
+theorem run_raw_write :
+    (match rederiveLog Xd wGenesis oLog with
+     | .ok w₁ => decide (w₁.height = 1) &&
+      match rawReceive w₁ oWrite with
+      | .ok tw =>
+          match World.admit Xd.env w₁ tw with
+          | .ok w₂ => decide (Xd.decodeCall tw.event = some oWrite) &&
+              match w₁.live Xd.env oId, w₂.live Xd.env oId with
+              | some cell, some cell' => decide (cell.kind = kindObject) &&
+                  (match packageOf Xd oId cell with | .ok none => true | _ => false) &&
+                  (match packageOf Xd oId cell' with | .ok (some _) => true | _ => false)
+              | _, _ => false
+          | .error _ => false
+      | .error _ => false
+     | .error _ => false) = true := by
+  native_decide
+
+/-- A law term and a package holding it: the claim's law premises, inhabited. -/
+private def law0 : Lang.Term := .lam .nat (.lam .nat (.lam .nat (.bool true)))
+
+private def pkg0 : Lang.Package :=
+  { imports := [], state := .nat, iface := .nat, body := .record [("law", law0)], methods := [],
+    laws := ["law"] }
+
+/-- **FLOOR (B3).** The claim refuses the kernel whose `write` reaches the package slot: an audited
+one-step log from a canonical World (the genesis World and the founder's create) moves the
+object's package. -/
+theorem floor_integrity_law (d : ByteArray → ByteArray) : ¬ Integrity.law (rawWriter d) := by
+  intro h
+  have hr := run_raw_write
+  cases ho : rederiveLog Xd wGenesis oLog with
+  | error e => rw [ho] at hr; cases hr
+  | ok w₁ =>
+  rw [ho] at hr
+  dsimp only at hr
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨-, hr⟩ := hr
+  have hcan : CellsCanon Xd.env w₁ := by
+    have hs := (rederiveLog_sound ho).1
+    unfold wGenesis at hs
+    exact fold_cellsCanon (genesis_cellsCanon Xd _ _ _ _ _) hs
+  revert hr
+  generalize oWrite = c
+  generalize oId = obj
+  intro hr
+  cases htw : rawReceive w₁ c with
+  | error e => rw [htw] at hr; cases hr
+  | ok tw =>
+    rw [htw] at hr
+    dsimp only at hr
+    cases ha : World.admit Xd.env w₁ tw with
+    | error e => rw [ha] at hr; cases hr
+    | ok w₂ =>
+      rw [ha] at hr
+      dsimp only at hr
+      simp only [Bool.and_eq_true] at hr
+      obtain ⟨hd, hr⟩ := hr
+      cases hl : w₁.live Xd.env obj with
+      | none => rw [hl] at hr; cases hr
+      | some cell =>
+        cases hl' : w₂.live Xd.env obj with
+        | none => rw [hl, hl'] at hr; cases hr
+        | some cell' =>
+          rw [hl, hl'] at hr
+          dsimp only at hr
+          simp only [Bool.and_eq_true, decide_eq_true_eq] at hr
+          obtain ⟨⟨hk, hp₁⟩, hp₂⟩ := hr
+          have hs : (rawWriter d).admit w₁ tw = .ok w₂ := ha
+          have ha' : Audited (rawWriter d) w₁ [.turn tw] w₂ :=
+            ⟨by simp only [System.fold, System.step, hs],
+              ⟨c, decide_eq_true_eq.mp hd, htw, fun _ _ => trivial⟩⟩
+          obtain ⟨-, -, ⟨cell'', hl'', hpk⟩, -⟩ :=
+            h (obj := obj) (law := oneDigest) (p := pkg0) (fs := [("law", law0)]) (ℓ := "law") (t := law0)
+              rfl (by simp [pkg0]) (by simp [Lang.Row.find?]) ⟨_, _, _, _, rfl⟩
+              (by simp [law0, Lang.NoRef]) ha' hcan hl hk
+          have hl₂ : w₂.live Xd.env obj = some cell'' := hl''
+          have hpk' : packageOf Xd obj cell'' = packageOf Xd obj cell := hpk
+          rw [hl'] at hl₂
+          cases hl₂
+          rw [hpk'] at hp₂
+          revert hp₁ hp₂
+          cases packageOf Xd obj cell with
+          | error _ => intro h₁; cases h₁
+          | ok o => cases o <;> intro h₁ h₂ <;> cases h₁ <;> cases h₂
+
 end Nanodregg.Spec

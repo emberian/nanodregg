@@ -156,3 +156,44 @@ the next change to `Command.step` breaks Spec, which is the point, but far from 
 **META-CRITIQUE.** Kept in my own directory to avoid a cross-layer landing: convenience.
 
 **Status.** open; `step_world` restated as a corollary is PROTOCOL's to take.
+
+## SPEC-7 The floors of B2 and B3: two kernels with one check missing, run at the deployed `Ctx` (2026-10-26)
+
+**Decision.** `Spec/Trivial.lean` gains `minting` (`World.admitImpl` with `checkValue` dropped from
+`checkWith`'s sequence, every other check in its order) and `rawWriter` (the kernel's receivers, but a
+signed `write` checks the World, the signature, the key and the owner's authority, then lands its
+edits at RAW slot keys, judged by no law). `floor_integrity_value`: from the genesis World (canonical,
+`receive_genesis_canon`), one Turn bearing a 10-unit value cell is refused `notConserved` by the kernel
+and admitted by `minting`, and the denomination's sum moves (`run_mint`). `floor_integrity_law`: the
+founder's `create` of a data object re-derives from genesis (so the start is an honest fold, and
+`CellsCanon` by `fold_cellsCanon`); the founder's `write` of 32 bytes at edit key 0 is derived by
+`rawWriter` and admitted, and the object's package is `none` before and `some _` after
+(`run_raw_write`). Both facts are `native_decide` (allow and TCB rows as SPEC-5).
+
+**Found.** SPEC-6 inferred that B2's floor needs a canonical World no fold reaches, built as a term
+(cv 01a17a38-9802's recipe). It does not: the claim quantifies over the TRIVIAL system's folds, and
+`minting`'s fold from genesis reaches the unbalanced World. What no deployed fold reaches is the end
+of the run, which is the floor's point. The term-built World is not needed and was not built.
+
+**Alternatives.** (B2) A `minting` that adds a unit to some balance after `World.admit` (one line, no
+copy of the check sequence): refutes the claim but is not a kernel anyone would write; the copy is the
+plant TOPLEVEL-SPEC §3.FLOOR names. (B3) `unjudgedKernel` (the program's `judge` admitting all):
+refutes the law-chain clause, but refuting it means showing NO `tr` with `ObjectHistory` carries the
+chain, and `ObjectHistory` is a relation over Worlds, not over the log, so every path between the two
+Worlds must be excluded. Not done.
+
+**Why.** Each trivial kernel is the deployed one with exactly the check the claim is about removed,
+so each floor says the claim sees that check.
+
+**CRITIQUE.** `checkMinting` is a second copy of `checkWith`'s sequence: when KERNEL adds a check,
+`minting` lacks it and still refutes B2, so the copy drifts silently (the floor stays true; it just
+stops being "deployed minus one"). B3's floor refutes only the package clause; a kernel that skipped
+`judge` but kept the package slot fixed is not refuted by any floor here, so the third conjunct of
+`Integrity.law` (the clause an author most cares about) carries no vacuity witness of its own.
+
+**META-CRITIQUE.** I picked the package clause because its refutation needs no reasoning about
+`ObjectHistory`; that is choosing the floor by cost. The honest remedy is the unjudged floor with a
+lemma that `ObjectHistory` over a one-step audited log has exactly the judged step (a determinism
+lemma KERNEL does not have), filed as owed.
+
+**Status.** open; the law-chain floor owed.

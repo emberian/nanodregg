@@ -15,8 +15,8 @@ claims owe a vacuity argument; a lemma under a top theorem means what the claim 
 |---|---|---|---|---|
 | 2 A1 | `OneHistory.member` | whatever frames follow is fed, the member's World is an audited fold from a start it consented to | `top_oneHistory_member` (under `keyFaithful`; `Proofs/Member.lean`) | `floor_oneHistory_member`: the follower that takes the World it is told |
 | 2 A2 | `OneHistory.pair` | two folds from one World that agree on step count and chain are one World, up to a collision among their link inputs | `top_oneHistory_pair` | `floor_oneHistory_pair`: the kernel whose chain does not move |
-| 3 B2 | `Integrity.value` | along any fold, every denomination's balance sum is unchanged, and its floor sum unless the log created its well | `top_integrity_value` | not yet |
-| 3 B3 | `Integrity.law` | along an audited log an object's package never changes and its states are a chain its `NoRef` laws' reference meaning admits | `top_integrity_law` | not yet |
+| 3 B2 | `Integrity.value` | along any fold, every denomination's balance sum is unchanged, and its floor sum unless the log created its well | `top_integrity_value` | `floor_integrity_value`: the kernel that admits without `checkValue` |
+| 3 B3 | `Integrity.law` | along an audited log an object's package never changes and its states are a chain its `NoRef` laws' reference meaning admits | `top_integrity_law` | `floor_integrity_law`: the receiver whose `write` reaches the package slot |
 | 4 C(ii) | `Consent.okCommitted` | a command that ends `done ok` at the settle phase means follow's own World journals the call | `top_consent_okCommitted` | `floor_consent_okCommitted`: the follower that says ok on the Host's word |
 | 4 C(iii) | `Consent.final` | a settlement `expired`, or `refused` other than `stale`, is never contradicted on any extension | `top_consent_final` | `floor_consent_final`: the settlement that is always final |
 | 8 G2 | `Shown.onlyFollowers` | the writer defers a frame (answers with a page) only past an `Envelope.check` on its World | `top_shown` | `floor_shown`: the host that serves every frame |
@@ -35,8 +35,9 @@ everything makes every log `Decided`, which A1 cannot see and B2/B3 refuse.
 * **Canonical tries** (B2: `w.Canon`; B3: `CellsCanon`; C(iii): `RefusalsCanon`, `JournalCanon`): true of
   every World a Store opens to (`Kept`), carried as premises because the claims are generic in `D`.
 
-Owed floors (cv 01a17a38-9802): B2 (every World reachable from genesis has value sum 0, so the
-refuting World is a non-reachable canonical one) and B3 (a deployed package with a `NoRef` law).
+B2's floor starts at the genesis World and ends at a World no deployed fold reaches, reached by the
+minting kernel's fold (SPEC-7). B3's floor refutes the package clause; the law-chain clause has no
+floor of its own yet (SPEC-7).
 
 ## Inhabited
 
