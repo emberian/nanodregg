@@ -3,6 +3,7 @@ import Lang.Journey.ContextualWire
 import Lang.Journey.Head
 import Lang.Journey.Offer
 import Lang.Journey.OfferEscrow
+import Lang.Journey.Doc
 
 open Nanodregg.Lang.Journey
 
@@ -20,5 +21,7 @@ def main (args : List String) : IO UInt32 := do
     let bad := runs.foldl (fun n r => n + r.bad) 0
     IO.println s!"contextual-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
     return if bad = 0 then 0 else 1
+  if let ["--write", d] := args then return ← Doc.write d
   let accept ← try IO.FS.readFile acceptSourcePath catch _ => pure ""
-  runAll args [offerSession, offerEscrowSession, headSession accept]
+  let shipped ← Doc.readShipped
+  runAll args [offerSession, offerEscrowSession, headSession accept, Doc.session shipped]

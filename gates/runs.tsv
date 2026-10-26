@@ -43,6 +43,7 @@ cargo:launcher:members	hosting-residents,host,hosting-broker,hosting-controller	
 cargo-untraced:launcher:fence	host,hosting-broker,hosting-residents	exit 0	nobin RED
 cargo:devtools:workspace	host	exit 0	nobin RED
 cargo:client:join	host	exit 0	nobin RED
+cargo:client:doc	host	exit 0	nobin RED
 cargo:client:real	host	exit 0	nobin RED
 cargo:client:stdio	host	exit 0	nobin RED
 cargo:client:supervise	host	exit 0	nobin RED
