@@ -182,4 +182,6 @@ def genSession : Run :=
     let a : Sim.Member := ⟨founderId X g.origin 1, "gn-a".toUTF8, "gn-a-next".toUTF8⟩
     genRows { st := { rng := ⟨1⟩, host := g, members := [m, a] } } m a
 
+initialize register { name := "gen", run := pure genSession }
+
 end Nanodregg.Lang.Journey

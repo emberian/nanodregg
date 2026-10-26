@@ -199,4 +199,6 @@ def session (shipped : List (String × String)) : Run :=
     lifeRows { r0 with st := { rng := ⟨1⟩, host := g, members := ms } }
       (ms.headD ⟨0, .empty, .empty⟩) (ms.getD 1 ⟨0, .empty, .empty⟩)
 
+initialize register { name := "doc", run := do pure (session (← readShipped)) }
+
 end Nanodregg.Lang.Journey.Doc

@@ -1,4 +1,5 @@
 /- Malformed encodings and width bounds for the new contextual wire forms. -/
+import Lang.Journey
 import Lang.Journey.ContextualChecks
 
 namespace Nanodregg.Lang.Journey.Contextual
@@ -37,5 +38,7 @@ def wireRows : List (String × Bool) :=
      some (.cellPackage (factKeyAt 1) (factKeyAt 2))),
    ("wire-cell-law-pin-children", (Wire.supportPinOf (.node 2 (factKeyAt 1) [])).isNone),
    ("wire-pin-unknown-tag", (Wire.supportPinOf (.node 4 (factKeyAt 1) [])).isNone)]
+
+initialize register { name := "contextual-checks", run := pure (checksRun "LP" (boundaryRows ++ gateRows ++ wireRows)), contextual := true }
 
 end Nanodregg.Lang.Journey.Contextual

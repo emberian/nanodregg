@@ -177,4 +177,6 @@ def offerEscrowSession : Run :=
     lvRows { st := { rng := ⟨1⟩, host := g, members := ms } }
       (ms.headD ⟨0, .empty, .empty⟩) (ms.getD 1 ⟨0, .empty, .empty⟩)
 
+initialize register { name := "offer-escrow", run := pure offerEscrowSession }
+
 end Nanodregg.Lang.Journey

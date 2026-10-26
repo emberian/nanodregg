@@ -47,4 +47,6 @@ def claimSession : Run :=
   let r := note r s!"LK4 the journey's bounded (inline test) is not in shape yet (DESIGN-PCC §3.4): {chk bounded}" (!chk bounded)
   r
 
+initialize register { name := "claims", run := pure claimSession }
+
 end Nanodregg.Lang.Journey

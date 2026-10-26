@@ -2905,9 +2905,48 @@ def holeObservationJourney (contextual : Bool := false) : Run := Id.run do
   let b := members.getD 1 ⟨0, .empty, .empty⟩
   return holeRows mode r a b contextual
 
-/-- Every row of the journey; `extra` are sessions run after P8 (sections in their own modules,
-which import this one: `Lang.Journey.Offer`). -/
-def runAll (args : List String) (extra : List Run := []) : IO UInt32 := do
+/-- A session of the journey, registered by the module that defines it (`register`), so that no two
+modules edit one line of `Main` to be run (that line cost five lanes a landing attempt each, real
+2026-10-26): its name, the `IO` that reads what it needs from disk and runs it, and whether
+`--contextual` selects it. EVERY registered session runs in the default journey, the one
+`gates/runs.tsv` judges; `--contextual` and `--contextual-checks` are filters for a lane at work, not a
+second verdict. Sessions run in registration order: this module's, then `Main`'s import order. -/
+structure Session where
+  name : String
+  run : IO Run
+  contextual : Bool := false
+
+initialize sessionsRef : IO.Ref (Array Session) ← IO.mkRef #[]
+
+/-- Register a session: one `initialize register { … }` line at the end of the module that defines it. -/
+def register (s : Session) : IO Unit := sessionsRef.modify (·.push s)
+
+/-- A text read from disk by name, `""` for a missing file (the shipped sources a session reads). -/
+def readOr (p : System.FilePath) : IO String := try IO.FS.readFile p catch _ => pure ""
+
+/-- A session of pure checks: each row a line `{tag} {name}`, a false row counted bad. -/
+def checksRun (tag : String) (rows : List (String × Bool)) : Run :=
+  rows.foldl (fun r (n, ok) => note r s!"{tag} {n}" ok)
+    { st := { rng := ⟨1⟩, host := World.genesis (ctxWith Mode.honest.program).env 0 0, members := [] } }
+
+/-- The registered sessions `args` select: `--contextual` the contextual ones, `--contextual-checks`
+the checks session alone, otherwise every one. -/
+def selectSessions (args : List String) (sessions : Array Session) : Array Session :=
+  if args == ["--contextual"] then sessions.filter (·.contextual)
+  else if args == ["--contextual-checks"] then sessions.filter (·.name == "contextual-checks")
+  else sessions
+
+/-- Every row of the journey: the LB/LA rows, the twelve modes, then every registered session; or,
+under a filter (`selectSessions`), the selected sessions alone. -/
+def runAll (args : List String) : IO UInt32 := do
+  let sessions ← sessionsRef.get
+  if args == ["--contextual"] || args == ["--contextual-checks"] then
+    let runs ← (selectSessions args sessions).mapM (·.run)
+    for r in runs do
+      for line in r.log do IO.println line
+    let bad := runs.foldl (fun n r => n + r.bad) 0
+    IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
+    return if bad = 0 then 0 else 1
   if args == ["--hole-omitted-blocker-pin-admits"] then
     let r := holeObservationJourney
     for l in r.log do IO.println l
@@ -2918,7 +2957,7 @@ def runAll (args : List String) (extra : List Run := []) : IO UInt32 := do
       | [] => some false
       | ["--harness-control"] => some true
       | _ => none)
-    | IO.eprintln s!"usage: lang-journey [--harness-control | --hole-omitted-blocker-pin-admits] (got {args})"; return 2
+    | IO.eprintln s!"usage: lang-journey [--harness-control | --hole-omitted-blocker-pin-admits | --contextual | --contextual-checks] (got {args})"; return 2
   let bell ← try IO.FS.readFile bellSourcePath catch _ => pure ""
   let bellCore ← try IO.FS.readFile bellCorePath catch _ => pure ""
   -- LB0 the Bell's surface source lowers to exactly the core shipped beside it; one flipped edit is caught
@@ -2963,7 +3002,7 @@ def runAll (args : List String) (extra : List Run := []) : IO UInt32 := do
   IO.println s!"{if activityOk then "ok  " else "FAIL"} LA0 activity with its own facts relation reads and checks: {activityVerdict}"
   let runs := [Mode.honest, .skipJudge, .eraseOccasion, .erasePayload, .dropCalls, .rawInstall, .bytesIds,
     .skipLits, .totalDigest, .unlawfulCodec, .dropRangeRow, .foreignRow].map (journey bell)
-  let runs := runs ++ [p8Session] ++ extra
+  let runs := runs ++ (← sessions.mapM (·.run)).toList
   let runs := match control, runs with
     | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
     | _, rs => rs
@@ -2971,5 +3010,8 @@ def runAll (args : List String) (extra : List Run := []) : IO UInt32 := do
   let bad := (runs.map (·.bad)).foldl (· + ·) ((if ok0 then 0 else 1) + (if okd then 0 else 1) + (if okw then 0 else 1) + (if activityOk then 0 else 1))
   IO.println s!"lang-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
   return if bad = 0 then 0 else 1
+
+initialize register { name := "p8", run := pure (p8Session p8Text), contextual := true }
+initialize register { name := "hole-observation", run := pure (holeObservationJourney true), contextual := true }
 
 end Nanodregg.Lang.Journey

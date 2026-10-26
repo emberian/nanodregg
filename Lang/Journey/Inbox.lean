@@ -191,4 +191,6 @@ def session (bell : String) : Run :=
     lifeRows { empty with st := { rng := ⟨1⟩, host := g, members := ms } }
       (ms.headD ⟨0, .empty, .empty⟩) (ms.getD 1 ⟨0, .empty, .empty⟩) bell
 
+initialize register { name := "inbox", run := do pure (session (← readOr bellSourcePath)) }
+
 end Nanodregg.Lang.Journey.Inbox

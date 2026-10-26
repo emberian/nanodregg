@@ -217,4 +217,6 @@ def offerSession : Run :=
     lfRows { st := { rng := ⟨1⟩, host := g, members := ms } }
       (ms.headD ⟨0, .empty, .empty⟩) (ms.getD 1 ⟨0, .empty, .empty⟩)
 
+initialize register { name := "offer", run := pure offerSession }
+
 end Nanodregg.Lang.Journey

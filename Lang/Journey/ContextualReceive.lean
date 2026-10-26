@@ -229,4 +229,6 @@ def contextualSession : Run :=
     contextualRows { st := { rng := ⟨1⟩, host := g, members := ms } }
       (ms.headD ⟨0, .empty, .empty⟩) (ms.getD 1 ⟨0, .empty, .empty⟩)
 
+initialize register { name := "contextual", run := pure contextualSession, contextual := true }
+
 end Nanodregg.Lang.Journey

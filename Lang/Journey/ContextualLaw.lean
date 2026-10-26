@@ -138,4 +138,6 @@ def lawSession : Run :=
     let ms := fk.zipIdx.map fun ((k, n), i) => (⟨founderId X g.origin i, k, n⟩ : Sim.Member)
     lawRows { st := { rng := ⟨1⟩, host := g, members := ms } } (ms.headD ⟨0, .empty, .empty⟩)
 
+initialize register { name := "law", run := pure lawSession, contextual := true }
+
 end Nanodregg.Lang.Journey.Law

@@ -313,4 +313,6 @@ def headSession (acceptText timelockText : String) : Run :=
   | .error e, _ => note empty s!"HD genesis B: {e}" false
   | _, .error e => note empty s!"HD genesis A: {e}" false
 
+initialize register { name := "head", run := do pure (headSession (← readOr acceptSourcePath) (← readOr timelockSourcePath)) }
+
 end Nanodregg.Lang.Journey

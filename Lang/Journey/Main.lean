@@ -11,24 +11,9 @@ import Lang.Journey.Inbox
 
 open Nanodregg.Lang.Journey
 
+/-- `lang-journey [--harness-control | --hole-omitted-blocker-pin-admits | --contextual |
+--contextual-checks | --write DIR]`. The sessions are the registry's (`Journey.register`: one line at
+the end of each session module); this file only imports them, and adds no line per session. -/
 def main (args : List String) : IO UInt32 := do
-  if args == ["--contextual-checks"] then
-    let rows := Contextual.boundaryRows ++ Contextual.gateRows ++ Contextual.wireRows
-    for (name, ok) in rows do IO.println s!"{if ok then "ok  " else "FAIL"} LP {name}"
-    let bad := rows.filter (fun row => !row.2) |>.length
-    IO.println s!"contextual-checks: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
-    return if bad = 0 then 0 else 1
-  if args == ["--contextual"] then
-    let runs := [contextualSession, cycleSession, p8Session, holeObservationJourney true, Law.lawSession]
-    for r in runs do
-      for line in r.log do IO.println line
-    let bad := runs.foldl (fun n r => n + r.bad) 0
-    IO.println s!"contextual-journey: {if bad = 0 then "GREEN" else s!"RED ({bad})"}"
-    return if bad = 0 then 0 else 1
   if let ["--write", d] := args then return ← Doc.write d
-  let accept ← try IO.FS.readFile acceptSourcePath catch _ => pure ""
-  let timelock ← try IO.FS.readFile timelockSourcePath catch _ => pure ""
-  let shipped ← Doc.readShipped
-  let bell ← try IO.FS.readFile bellSourcePath catch _ => pure ""
-  runAll args [offerSession, offerEscrowSession, headSession accept timelock, Doc.session shipped, claimSession, genSession,
-    Inbox.session bell]
+  runAll args
