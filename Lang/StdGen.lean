@@ -90,18 +90,25 @@ def maxParam : Quote.Param := ⟨.nat, .get (.var 1) "max"⟩
 /-- The argument of `generate`: `rec {max : nat}`. -/
 def maxArgTy : Ty := .record [("max", .nat)]
 
-/-- `generate`: `λ rows state arg req. {calls = {c0 = some (install {pkg = QUOTED})}, edits = {},
-state = state}` where QUOTED writes `boundedPackageWith r f (var 4)`'s bytes with the free `var 4`
-(the bound, under the law's three binders and the arm's) taken from `arg.max`. -/
-def boundedGenerateMethod (r : List (Label × Ty)) (f : Label) : Term :=
-  .lam (.record []) (.lam genStateTy (.lam maxArgTy (.lam reqTy
-    (resultT (callsT [installOf
-      (Quote.quotePackage [maxParam] (.bytes .empty) (boundedPackageWith r f (.var 4)))]) (.var 2)))))
+/-! ## Template generators, in general (LANG-88.1) -/
 
-/-- The template generator: `generate {max}` installs `boundedPackage r f max`. -/
+/-- `generate`: `λ rows state arg req. {calls = {c0 = some (install {pkg = QUOTED})}, edits = {},
+state = state}` where QUOTED writes the template `p`'s bytes with its free variables taken from the
+parameters `ps` (terms over this environment: `arg` at `var 1`, `req` at `var 0`). -/
+def templateMethod (A : Ty) (ps : List Quote.Param) (p : Package) : Term :=
+  .lam (.record []) (.lam genStateTy (.lam A (.lam reqTy
+    (resultT (callsT [installOf (Quote.quotePackage ps (.bytes .empty) p)]) (.var 2)))))
+
+/-- A TEMPLATE GENERATOR: one method `generate : A`, no state, no laws, whose run installs the
+template `p` filled at the parameters' values (`generate_template_sound`). -/
+def templateGenerator (A : Ty) (ps : List Quote.Param) (p : Package) (doc : String) : Package :=
+  { pkgOf genStateTy [] [("generate", A, [installSlot], templateMethod A ps p)] with doc := doc.toUTF8 }
+
+/-- The bounded generator: `generate {max}` installs `boundedPackage r f max` — the template at the
+bound, under the law's three binders and the arm's, taken from `arg.max`. -/
 def boundedGenerator (r : List (Label × Ty)) (f : Label) : Package :=
-  { pkgOf genStateTy [] [("generate", maxArgTy, [installSlot], boundedGenerateMethod r f)] with
-    doc := s!"installs a {f}-bounded record at the bound its argument names".toUTF8 }
+  templateGenerator maxArgTy [maxParam] (boundedPackageWith r f (.var 4))
+    s!"installs a {f}-bounded record at the bound its argument names"
 
 /-! ## A generator whose output names its invoker (LANG-88): authority by naming, from the receipt -/
 
@@ -121,18 +128,11 @@ def ownedPackage (r : List (Label × Ty)) (i : ByteArray) : Package := ownedPack
 any argument, written into the law by `dsized`. -/
 def agentParam : Quote.Param := ⟨.digest, .get (.var 0) "agent"⟩
 
-/-- `generate`: `λ rows state arg req. {calls = {c0 = some (install {pkg = QUOTED})}, …}` where
-QUOTED writes `ownedPackageWith r (var 4)`'s bytes with the free `var 4` taken from `req.agent`. -/
-def ownerGenerateMethod (r : List (Label × Ty)) : Term :=
-  .lam (.record []) (.lam genStateTy (.lam (.record []) (.lam reqTy
-    (resultT (callsT [installOf
-      (Quote.quotePackage [agentParam] (.bytes .empty) (ownedPackageWith r (.var 4)))]) (.var 2)))))
-
 /-- The generator whose output names its invoker: `generate {}` installs `ownedPackage r (the
-signer's id)`. The receipt (the Turn's signer) is the only input; a member who generates gets a
-package only they may use, and the package's text says who, by id. -/
+signer's id)` — the template at `req.agent`. The receipt (the Turn's signer) is the only input; a
+member who generates gets a package only they may use, and the package's text says who, by id. -/
 def ownerGenerator (r : List (Label × Ty)) : Package :=
-  { pkgOf genStateTy [] [("generate", .record [], [installSlot], ownerGenerateMethod r)] with
-    doc := "installs a record only its generating member may use: the allowlist names the invoker".toUTF8 }
+  templateGenerator (.record []) [agentParam] (ownedPackageWith r (.var 4))
+    "installs a record only its generating member may use: the allowlist names the invoker"
 
 end Nanodregg.Lang.Std

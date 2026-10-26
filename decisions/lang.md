@@ -7208,6 +7208,20 @@ should land instead of a third copy.
 TRUST's column); a quorum-gated generator (`Std.quorum` over a generator object: k of n members approve a
 generation); rung 2 over TYPES's `Ty.seq`.
 
+### LANG-88.1 One theorem for every template generator: `Std.templateGenerator A ps p` and `generate_template_sound` (2026-10-26; FABLE-META-2; the refactor LANG-87's and LANG-88's critiques named)
+
+`Std.templateMethod A ps p` is the one method a template generator has (`generate : A`, the body quoting `p` at `ps`);
+`Std.templateGenerator A ps p doc` the package; `boundedGenerator` and `ownerGenerator` are its two instances, byte for
+byte what they were (GN6–GN11 unchanged). `generate_template_sound` (`Lang/Proofs/StdGen.lean`): every admitted run of
+`generate` returns `[install B]` with `encodePackage (fillPackage vals p) = some B` and no row acts, whenever the
+parameters mean `vals` in the method's environment `[req, arg, state, rows]` — for every closure and decoded argument
+the run produces — and `B` fits a byte value. `generate_bounded_sound` and `generate_owner_sound` keep their statements
+and become ten-line instances (the parameter's meaning, by the argument's decoding or by `reqData`, and the fill lemma).
+Deleted: the two per-generator method definitions and six per-generator lemmas. Price: none; the general theorem's
+`Params` hypothesis quantifies over the run's closure and data, which is exactly what each instance can supply.
+The third generator (a quorum-gated one, or any template with a `bytes`/`bool` parameter) now costs a template, a
+fill lemma and a `Params` proof.
+
 ## LANG-83 The document: a section is a `Std.hole` at `bytes` whose candidates are members' posts, justified by their grants, selected by an editor, withdrawn by name on revocation; its refusals name the justification that failed (2026-10-26; FABLE-CTX; design `redregg/work/promo/DESIGN-CTX.md` §2.3, §4, S0 + S1; method R-0069)
 
 **Ember's ask.** "Elaborating the contextual theory thoroughly into the most powerful possible instantiation of itself seems reasonable." The design memo answers it (what the theory is: justified instantiation of contextual types inside a replicated state machine; the SLOT as the one object the ROM hole, the activity's waiting row, the offer, the law list and the package link all inhabit; the top clause CONTEXTUAL INTEGRITY ∧ REPAIR as a clause of INTEGRITY with its floor). The first two steps of its sequence land here, because together they make the top clause inhabited by a run a member can see, and neither needs the kernel.
