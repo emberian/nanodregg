@@ -93,6 +93,16 @@ theorem natResult_sound (n : Nat) :
   · simp only [h, if_true]; exact .nat h
   · simp [h]
 
+/-- A payload writer's result is bytes within `bytesMax`, or `tooLarge`; never `stuck` (LANG-87). -/
+theorem appended_sound {r : ByteArray} :
+    match appended r with
+    | .ok v => ValTy Δ v .bytes
+    | .error e => e ≠ .stuck := by
+  unfold appended
+  by_cases h : r.size ≤ Bounds.bytesMax
+  · simp only [h, if_true]; exact .bytes h
+  · simp [h]
+
 /-- A primitive on operands of its types yields a value of its result type, or a named
 arithmetic fault; never `stuck`. -/
 theorem primEval_sound {p : Prim} {a b : Val} (ha : ValTy Δ a p.left) (hb : ValTy Δ b p.right) :
@@ -116,6 +126,16 @@ theorem primEval_sound {p : Prim} {a b : Val} (ha : ValTy Δ a p.left) (hb : Val
     by_cases h : x.size + y.size ≤ Bounds.bytesMax
     · simp only [h, if_true]; exact .bytes (by simpa [ByteArray.size_append] using h)
     · simp [h]
+  | u64be =>
+    obtain ⟨x, rfl, _⟩ := ValTy.bytes_inv ha
+    cases hb with
+    | nat hy => exact appended_sound
+  | sized =>
+    obtain ⟨x, rfl, _⟩ := ValTy.bytes_inv ha; obtain ⟨y, rfl, _⟩ := ValTy.bytes_inv hb
+    exact appended_sound
+  | dsized =>
+    obtain ⟨x, rfl, _⟩ := ValTy.bytes_inv ha; obtain ⟨y, rfl, _⟩ := ValTy.digest_inv hb
+    exact appended_sound
   | _ =>
     cases ha with
     | nat hx => cases hb with

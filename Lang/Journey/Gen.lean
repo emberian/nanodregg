@@ -16,6 +16,13 @@ kernel's `Program` (the deployed receipt check at the Sim's parameters, as `Lang
   name at the nested install (`program decode …`), and the World is unchanged.
 * GN5 a generator of a package that does not check (a method its interface lacks) is refused
   `program noMethod …` at the nested install.
+* GN6 (LANG-87, rung 1) B installs the TEMPLATE generator `Std.boundedGenerator {n : nat} n` and
+  generates at 100: the Turn bears one package cell whose id is the content id of
+  `encodePackage (Std.boundedPackage {n : nat} n 100)` — the nano generator wrote the Lean
+  generator's bytes at the receipt's argument (`generate_bounded_sound`, run).
+* GN7 the generated package runs: B creates an object O of THAT id with n = 0 and sets n = 50.
+* GN8 the generated law holds at the generated bound: n = 101 is refused `lawDenied bounded: n over
+  the bound` by name.
 -/
 import Lang.Journey.Head
 import Lang.StdGen
@@ -97,6 +104,36 @@ def genRows (r0 : Run) (b : Sim.Member) : Run := Id.run do
   let (r9, v9, t9) := generate r8 gpkg8 G8
   r := note r9 s!"GN5 a generator of a package whose methods name a field it lacks ({v8}); generate: {v9}; nothing born: {t9.isNone}"
     (programRefused v9 "noMethod" && t9.isNone)
+  -- GN6 the template generator (LANG-87): generate at 100
+  let rty : List (Label × Ty) := [("n", .nat)]
+  let (r10, v10, g10?) := generator r "GN6" (Std.boundedGenerator rty "n")
+  let some (gpkg10, G10) := g10? | return note r10 s!"GN6 {v10}" false
+  let expected := (Wire.encodePackage (Std.boundedPackage rty "n" 100)).getD .empty
+  let eid := romIdOf Sim.env { kind := kindPackage, discipline := .rom, slots := [(0, expected)] }
+  let (r11, v11, t11) := match Wire.encodeData Std.maxArgTy (.record [("max", .nat 100)]) with
+    | none => (r10, "no argument bytes", none)
+    | some x => go prog r10 (Sim.signed r10.st b b.key (Sim.S.pinsFor r10.st.host [b.id, G10, gpkg10])
+        (.invoke G10 0 x 1000000 none))
+  let born11 := (t11.map createdIds).getD []
+  r := note r11 s!"GN6 B installs Std.boundedGenerator \{n : nat} n ({v10}) and generates at 100: {v11}; the Turn bears {born11.length} cell(s), a package cell whose id is the content id of encodePackage (boundedPackage \{n : nat} n 100) ({expected.size} bytes): {born11 == [eid]}"
+    (v11 == "admitted" && born11 == [eid] && expected.size > 0)
+  -- GN7 the generated package runs: an object at n = 0, set to 50
+  let (r12, v12, t12) := match stateSlots (recordRow (.record rty)) [("n", .nat 0)] 0 with
+    | none => (r, "no seed bytes", none)
+    | some seed => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, eid]) (.create (some eid) [] seed))
+  let some O := bornOf t12 | return note r12 s!"GN7 B creates an object of the generated package: {v12}" false
+  let setArg (k : Nat) : Option ByteArray := Wire.encodeData (.record rty) (.record [("n", .nat k)])
+  let setN (r : Run) (k : Nat) : Run × String × Option (Turn D) :=
+    match setArg k with
+    | none => (r, "no argument bytes", none)
+    | some x => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, O, eid]) (.invoke O 0 x 1000000 none))
+  let (r13, v13, _) := setN r12 50
+  r := note r13 s!"GN7 B creates an object O of the generated package ({v12}) and sets n = 50: {v13}"
+    (v12 == "admitted" && v13 == "admitted")
+  -- GN8 the generated law at the generated bound
+  let (r14, v14, _) := setN r 101
+  r := note r14 s!"GN8 B sets n = 101: {v14}"
+    (v14.startsWith "refused lawDenied" && (v14.splitOn "bounded: n over the bound").length > 1)
   return r
 
 /-- A fresh session for the GN rows. -/

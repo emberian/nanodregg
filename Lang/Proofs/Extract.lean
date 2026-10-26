@@ -454,7 +454,8 @@ theorem toVal4_noRef (a b c d : Data) : ∀ v ∈ [a.toVal, b.toVal, c.toVal, d.
 
 theorem primEval_noRefVal {p : Prim} {x y v : Val} (h : primEval p x y = .ok v) : NoRefVal v := by
   unfold primEval at h
-  split at h <;> (try unfold natResult at h) <;> (try split at h) <;> first | (cases h <;> constructor) | simp at h
+  split at h <;> (try unfold natResult at h) <;> (try unfold appended at h) <;> (try split at h) <;>
+    first | (cases h <;> constructor) | simp at h
 
 theorem suspend_noRef {env : Env} {fs : List (Label × Term)} (hf : NoRefRow fs) (he : ∀ v ∈ env, NoRefVal v) :
     ∀ p ∈ suspend env fs, NoRef p.2.1 ∧ ∀ v ∈ p.2.2, NoRefVal v := by

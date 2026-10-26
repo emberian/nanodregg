@@ -13,11 +13,20 @@ This module holds rung 0 of the design (DESIGN-META §1.3): the CONSTANT generat
 whose `generate` returns `install b` for a fixed `b`. `headGenerator` is `Std.headPackage` as an
 installed object: its one method installs exactly `headPackageBytes`, so the cell a generation bears
 is `Protocol.Foreign.headPackageId` (`Lang.Journey.Gen` GN1 checks the two ids equal). What the
-generator's run returns is `generate_run_sound` (`Lang.Proofs.StdGen`). Rung 1 (parameters spliced
-into the package tree) needs the codec's framing as primitives and is a package-wire flag day
-(DESIGN-META §3).
+generator's run returns is `generate_run_sound` (`Lang.Proofs.StdGen`).
+
+Rung 1 (LANG-87): the TEMPLATE generator. `boundedGenerator r f` takes `generate {max : nat}` and
+installs `boundedPackage r f max` — a record state `r` under the law `bounded` (`f ≤ max`) with a
+`set` method — for the `max` of its argument: its method is `Lang.Quote.quotePackage` over the
+template `boundedPackageWith r f (var 4)`, whose one free variable is the bound at the law
+clause's depth, written at run time by the `u64be` payload writer from `get arg "max"`.
+`generate_bounded_sound` (`Lang.Proofs.StdGen`): the run returns `install` of exactly
+`encodePackage (boundedPackage r f max)` — the nano generator IS the Lean generator at the
+receipt's argument, byte for byte, so the law's theorem `bounded_spec` is about what the kernel
+checked and installed.
 -/
 import Lang.StdHead
+import Lang.Quote
 
 namespace Nanodregg.Lang.Std
 
@@ -49,5 +58,49 @@ def headPackageBytes : ByteArray := (Wire.encodePackage headPackage).getD .empty
 def headGenerator : Package :=
   generatorOf headPackageBytes
     "installs Std.head (a foreign World's head, keyed by steps, E5): the cell it bears is headPackageId"
+
+/-! ## Rung 1: a template generator (LANG-87) -/
+
+/-- `some (install {pkg = t})` in the generator's slot, the package bytes a term. -/
+def installOf (t : Term) : Term :=
+  someCallT installSlot (.inj installSlot "install" (.record [("pkg", t)]))
+
+/-- `set`: `λ rows state arg req. {calls = {}, edits = {}, state = arg}`, the state record `r`'s
+fields copied from the argument (`r` in canonical order, as a record type is). -/
+def setMethod (r : List (Label × Ty)) : Term :=
+  .lam (.record []) (.lam (.record r) (.lam (.record r) (.lam reqTy
+    (resultT (callsT []) (.record (r.map fun (ℓ, _) => (ℓ, .get (.var 1) ℓ)))))))
+
+/-- The template of `boundedPackage`: state `rec r`, the law `bounded` (field `f` at most `maxT`,
+a term at the law clause's depth), the method `set`; rows in canonical order (`bounded` < `set`). -/
+def boundedPackageWith (r : List (Label × Ty)) (f : Label) (maxT : Term) : Package :=
+  { imports := [], state := .record r,
+    iface := .record [("bounded", lawTy (.record r)), ("set", methodTy (.record r) (.record r))],
+    body := .record [("bounded", boundedWith (.record r) f maxT), ("set", setMethod r)],
+    methods := ["set"], laws := ["bounded"] }
+
+/-- A record state `r` whose natural field `f` is at most `max`, written whole by `set`: the package
+the template generator installs at `max`. -/
+def boundedPackage (r : List (Label × Ty)) (f : Label) (max : Nat) : Package :=
+  boundedPackageWith r f (natT max)
+
+/-- The generator's one parameter: `max`, its argument's field, a natural. -/
+def maxParam : Quote.Param := ⟨.nat, .get (.var 1) "max"⟩
+
+/-- The argument of `generate`: `rec {max : nat}`. -/
+def maxArgTy : Ty := .record [("max", .nat)]
+
+/-- `generate`: `λ rows state arg req. {calls = {c0 = some (install {pkg = QUOTED})}, edits = {},
+state = state}` where QUOTED writes `boundedPackageWith r f (var 4)`'s bytes with the free `var 4`
+(the bound, under the law's three binders and the arm's) taken from `arg.max`. -/
+def boundedGenerateMethod (r : List (Label × Ty)) (f : Label) : Term :=
+  .lam (.record []) (.lam genStateTy (.lam maxArgTy (.lam reqTy
+    (resultT (callsT [installOf
+      (Quote.quotePackage [maxParam] (.bytes .empty) (boundedPackageWith r f (.var 4)))]) (.var 2)))))
+
+/-- The template generator: `generate {max}` installs `boundedPackage r f max`. -/
+def boundedGenerator (r : List (Label × Ty)) (f : Label) : Package :=
+  { pkgOf genStateTy [] [("generate", maxArgTy, [installSlot], boundedGenerateMethod r f)] with
+    doc := s!"installs a {f}-bounded record at the bound its argument names".toUTF8 }
 
 end Nanodregg.Lang.Std

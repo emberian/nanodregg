@@ -8,7 +8,7 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
 
     type  ::= nat | bool | bytes | digest | (-> T U) | (rec (l T)…) | (sum (l T)…)
     term  ::= x | 123 | true | false | "text" | #hex | (lam x T e) | (fn (x T)… e) | (let x T e e)
-            | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq len<=
+            | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq len<= u64be sized dsized
             | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)
             | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T "why") | (e e…)
     package ::= (package (imports "hex"…) (doc ["text"]) (state T) (iface T) (methods l…) (laws l…) (rels rel…)
@@ -179,6 +179,7 @@ def primOf : String → Option Prim
   | "+" => some .add | "-" => some .sub | "*" => some .mul | "/" => some .div | "%" => some .mod
   | "==" => some .eq | "<" => some .lt | "<=" => some .le | "beq" => some .beq | "cat" => some .cat
   | "deq" => some .deq | "len<=" => some .lenLe
+  | "u64be" => some .u64be | "sized" => some .sized | "dsized" => some .dsized
   | _ => none
 
 /-- The entries `(label x)…` of a row, each `x` read by `f`. -/

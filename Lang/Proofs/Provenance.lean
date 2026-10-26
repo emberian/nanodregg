@@ -200,7 +200,7 @@ theorem mem_merge {α : Type} {x : Label × α} :
 
 theorem primEval_lits {p : Prim} {a b r : Val} (h : primEval p a b = .ok r) : ValLits P r := by
   unfold primEval at h
-  split at h <;> (try unfold natResult at h) <;> (repeat' split at h) <;>
+  split at h <;> (try unfold natResult at h) <;> (try unfold appended at h) <;> (repeat' split at h) <;>
     first | (cases h; constructor) | (simp at h)
 
 theorem step_lits {lib : List Term} {s : State} (hlib : LibLits P lib) (hs : StateLits P s) :

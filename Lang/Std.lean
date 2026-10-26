@@ -157,10 +157,17 @@ def allowlist (S : Ty) (ids : List ByteArray) : Except StdRefusal Term := do
 
 /-! ## Bounds -/
 
-/-- Natural field `f` is at most `max` in every state the object reaches, its seed included. -/
-def bounded (S : Ty) (f : Label) (max : Nat) : Term :=
-  let c (a : At) := allOf [(.prim .le (a.newF f) (natT max), s!"{f} over {max}")]
+/-- Natural field `f` is at most `maxT` in every state the object reaches, its seed included; the
+bound is a term at the clause's depth (4: the law's three binders and the arm's), so a GENERATOR
+can splice it from its argument (`Std.boundedGenerator`, LANG-87). The refusal names the field, not
+the bound: a nano program cannot write a number as text, and the bound is in the law's text and the
+generation's receipt. -/
+def boundedWith (S : Ty) (f : Label) (maxT : Term) : Term :=
+  let c (a : At) := allOf [(.prim .le (a.newF f) maxT, s!"{f} over the bound")]
   lawOf S c c (fun _ => okT) c
+
+/-- Natural field `f` is at most `max` in every state the object reaches, its seed included. -/
+def bounded (S : Ty) (f : Label) (max : Nat) : Term := boundedWith S f (natT max)
 
 /-! ## Quorum: k of n members approve one proposal, which is then the only change admitted
 

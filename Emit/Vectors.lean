@@ -645,14 +645,14 @@ def rowLeafHashedVecs : G (List ByteArray) := do
 /-! ### A package (cv 01a14e58-1586, LANG-15's set)
 
 One row per term tag (0–18; tag 15, a record's field, rides in the record row), per type tag (0–7; tag
-6, a row's field, rides in the record type), per primitive code (0–11), and per package section
+6, a row's field, rides in the record type), per primitive code (0–14), and per package section
 (imports, a relation with every option and one with none, methods and laws, a doc). Then the boundary:
-the first unused term tag (19), type tag (8) and primitive code (12), each refused `lang/package/5` by
+the first unused term tag (19), type tag (8) and primitive code (15), each refused `lang/package/6` by
 name. A Lang change that gives one of them a meaning flips its row from refused to read under an
 unchanged tag: the gate goes red, and `Bounds.packageWireVersion` moves (LANG-60). Then the doc's
-bound (a doc of `docMax` bytes read, one byte past it refused `lang/package/5`, a doc holding `"`
+bound (a doc of `docMax` bytes read, one byte past it refused `lang/package/6`, a doc holding `"`
 refused, a doc holding a line feed and one that is not UTF-8 each refused), and the version: the current tree at the previous version byte, and a LANG-59-era
-package's bytes as they were written (no version byte), each refused `lang/package-version/5`. -/
+package's bytes as they were written (no version byte), each refused `lang/package-version/6`. -/
 
 open Lang in
 /-- The empty package around a body and a state type. -/
@@ -680,7 +680,7 @@ def tyRows : List Ty :=
 
 open Lang in
 def primRows : List Term :=
-  [.add, .sub, .mul, .div, .mod, .eq, .lt, .le, .beq, .cat, .deq, .lenLe].map fun p =>
+  [.add, .sub, .mul, .div, .mod, .eq, .lt, .le, .beq, .cat, .deq, .lenLe, .u64be, .sized, .dsized].map fun p =>
     .prim p (operand p.left) (operand p.right)
 
 open Lang in
@@ -729,7 +729,7 @@ def packageVecs : List ByteArray :=
     [rawPackage (.node 19 .empty []) (tyTree (.record [])),
      rawPackage (.node 18 .empty []) (tyTree (.record [])),
      rawPackage (termTree (.record [])) (.node 8 .empty []),
-     rawPackage (.node 7 (Stream.u8.bytes 12) [termTree (.nat 1), termTree (.nat 2)]) (tyTree (.record [])),
+     rawPackage (.node 7 (Stream.u8.bytes 15) [termTree (.nat 1), termTree (.nat 2)]) (tyTree (.record [])),
      rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨Array.replicate Lang.Bounds.docMax 0x61⟩,
      rawPackage (termTree (.record [])) (tyTree (.record [])) ⟨Array.replicate (Lang.Bounds.docMax + 1) 0x61⟩,
      rawPackage (termTree (.record [])) (tyTree (.record [])) "a \"quoted\" doc".toUTF8,
@@ -868,9 +868,9 @@ def sites : List Site :=
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
     site "host/base/retained" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc)) baseVecs printBase,
     site "host/carried-head" (Host.Carry.head Sim.dc) (each 2 fun _ => do return ⟨← dig, ← nat64, ← dig⟩) text,
-    ⟨"lang/package/5", Tag.of "lang/package/5" Lang.Wire.packageCodec, pure packageVecs,
+    ⟨"lang/package/6", Tag.of "lang/package/6" Lang.Wire.packageCodec, pure packageVecs,
       print Lang.Wire.packageCodec text⟩,
-    ⟨"lang/package-version/5", Tag.of "lang/package-version/5" Lang.Wire.packageVersion,
+    ⟨"lang/package-version/6", Tag.of "lang/package-version/6" Lang.Wire.packageVersion,
       pure [ByteArray.mk #[Lang.Bounds.packageWireVersion], ByteArray.mk #[Lang.Bounds.packageWireVersion - 1]],
       print Lang.Wire.packageVersion fun () => "()"⟩,
     ⟨"lang/key", Tag.of "lang/key" (Lang.Wire.dataStream keyVecTy), pure keyVecs,

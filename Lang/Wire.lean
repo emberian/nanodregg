@@ -75,11 +75,12 @@ def u64Bytes (n : Nat) : ByteArray := Stream.u64be.bytes (UInt64.ofNat n)
 def primCode : Prim → UInt8
   | .add => 0 | .sub => 1 | .mul => 2 | .div => 3 | .mod => 4
   | .eq => 5 | .lt => 6 | .le => 7 | .beq => 8 | .cat => 9 | .deq => 10 | .lenLe => 11
+  | .u64be => 12 | .sized => 13 | .dsized => 14
 
 def primOf : UInt8 → Option Prim
   | 0 => some .add | 1 => some .sub | 2 => some .mul | 3 => some .div | 4 => some .mod
   | 5 => some .eq | 6 => some .lt | 7 => some .le | 8 => some .beq | 9 => some .cat
-  | 10 => some .deq | 11 => some .lenLe
+  | 10 => some .deq | 11 => some .lenLe | 12 => some .u64be | 13 => some .sized | 14 => some .dsized
   | _ => none
 
 def primOfBytes (p : ByteArray) : Option Prim :=

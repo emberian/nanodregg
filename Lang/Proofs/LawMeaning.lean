@@ -119,7 +119,7 @@ theorem LawFields.merge : ∀ {gs gs'}, LawFields gs gs' → ∀ {fs fs'}, LawFi
 
 theorem LawVal.prim {p x x' y y'} (hx : LawVal x x') (hy : LawVal y y') :
     LawResult (primEval p x y) (primEval p x' y') := by
-  cases hx <;> cases hy <;> cases p <;> simp only [primEval, natResult]
+  cases hx <;> cases hy <;> cases p <;> simp only [primEval, natResult, appended]
   all_goals repeat' split
   all_goals first | exact .error | exact .ok .nat | exact .ok .bool | exact .ok .bytes | exact .ok .digest
 

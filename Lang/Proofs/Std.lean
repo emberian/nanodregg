@@ -195,9 +195,9 @@ theorem bounded_spec {S : Ty} {f : Label} {max : Nat} {rq n o occ : Data}
     (hc : IsChange occ ∨ (∃ x, occ = .inj "birth" x) ∨ ∃ x, occ = .inj "adopt" x) :
     ∃ m, n.field f = some (.nat m) ∧ m ≤ max := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [bounded, lawOf, lawBody] at hb
+  simp only [bounded, boundedWith, lawOf, lawBody] at hb
   have key : ∀ x : Data, BigStep lib (x.toVal :: LawEnv rq n o cenv)
-      (allOf [(.prim .le ((⟨1⟩ : At).newF f) (natT max), s!"{f} over {max}")]) (.ok (.inj "ok" w)) →
+      (allOf [(.prim .le ((⟨1⟩ : At).newF f) (natT max), s!"{f} over the bound")]) (.ok (.inj "ok" w)) →
       ∃ m, n.field f = some (.nat m) ∧ m ≤ max := by
     intro x hx
     have hle := allOf_ok hx _ (List.mem_singleton_self _)

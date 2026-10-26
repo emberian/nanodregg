@@ -23,6 +23,7 @@ reports the exact number of steps it took. Every way a run can end is a named `F
 -/
 import Lang.Bounds
 import Lang.Term
+import Codec.Varint
 
 namespace Nanodregg.Lang
 
@@ -106,6 +107,10 @@ inductive Step
 def natResult (n : Nat) : Except Fault Val :=
   if n < Bounds.natLimit then .ok (.nat n) else .error .overflow
 
+/-- A payload writer's result (LANG-87): the bytes it wrote, within `bytesMax`, else `tooLarge`. -/
+def appended (r : ByteArray) : Except Fault Val :=
+  if r.size ≤ Bounds.bytesMax then .ok (.bytes r) else .error .tooLarge
+
 /-- One primitive on two values. Wrong-shaped operands are `stuck`. -/
 def primEval : Prim → Val → Val → Except Fault Val
   | .add, .nat a, .nat b => natResult (a + b)
@@ -121,18 +126,28 @@ def primEval : Prim → Val → Val → Except Fault Val
   | .lenLe, .bytes a, .nat n => .ok (.bool (decide (a.size ≤ n)))
   | .cat, .bytes a, .bytes b =>
       if a.size + b.size ≤ Bounds.bytesMax then .ok (.bytes (a ++ b)) else .error .tooLarge
+  | .u64be, .bytes a, .nat n => appended (Codec.Stream.u64be.put (UInt64.ofNat n) a)
+  | .sized, .bytes a, .bytes s => appended (Codec.Stream.putVarint s.size a ++ s)
+  | .dsized, .bytes a, .digest d => appended (Codec.Stream.putVarint d.size a ++ d)
   | _, _, _ => .error .stuck
 
 /-- The operand bytes a primitive walks (LANG-64), read off the compiled machine: `beq` and `deq`
 decide `a = b` on `ByteArray`, which compares the two `data` arrays, and each `data` is built from
 its byte string (`lean_byte_array_data`): both operands are copied whatever their sizes. `cat`
 copies both into the result (`a ++ b` is `copySlice`; a shared `a` is copied first). A `cat` past
-`bytesMax` refuses on the sizes alone and walks nothing. Every other primitive walks no bytes:
-naturals are below `2^64` and `lenLe` reads a size. -/
+`bytesMax` refuses on the sizes alone and walks nothing. A payload writer (LANG-87) copies its
+buffer and writes its payload: charged the size of its result (`written`), nothing when it refuses.
+Every other primitive walks no bytes: naturals are below `2^64` and `lenLe` reads a size. -/
 def primBytes : Prim → Val → Val → Nat
   | .beq, .bytes a, .bytes b | .deq, .digest a, .digest b => a.size + b.size
   | .cat, .bytes a, .bytes b => if a.size + b.size ≤ Bounds.bytesMax then a.size + b.size else 0
+  | .u64be, .bytes a, .nat n => written (Codec.Stream.u64be.put (UInt64.ofNat n) a)
+  | .sized, .bytes a, .bytes s => written (Codec.Stream.putVarint s.size a ++ s)
+  | .dsized, .bytes a, .digest d => written (Codec.Stream.putVarint d.size a ++ d)
   | _, _, _ => 0
+where
+  /-- The bytes a writer is charged: its result's size when it is within `bytesMax`. -/
+  written (r : ByteArray) : Nat := if r.size ≤ Bounds.bytesMax then r.size else 0
 
 /-- The ticks a primitive is charged (LANG-64): one per `Bounds.wordBytes` it walks, rounded up
 (`⌈n / 32⌉` for `n ≥ 1` bytes), and one when it walks none. A primitive on at most one word of

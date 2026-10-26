@@ -7052,6 +7052,124 @@ with the deal it decoded; the matcher deleted) is the next commit of this sessio
 
 **Meta-critique.** The temptation was to land rung 1's primitives tonight so the first generator could take a parameter; that would have put a wire flag day under the judge's one question (may an object install, and is it checked as a member's) and made two questions of it. The other temptation was a `code` type; the design prices it and says why bytes first.
 
+## LANG-87 Rung 1 of generators: three payload writers (`u64be`, `sized`, `dsized`), a quoter whose output is proved to be the encoder's bytes, and the first template generator `Std.boundedGenerator` (2026-10-26; FABLE-META-2, axis 1; design `redregg/work/promo/DESIGN-META.md` §3; a `lang!`: package wire 5 → 6)
+
+**The question.** Rung 0 (LANG-86) installed a CONSTANT: `Std.headGenerator`'s method returns `install` of a byte
+literal. A generator worth the name takes a PARAMETER and writes a package whose text carries it — a bound, a doc,
+a member's id. The package wire is one concatenative `Codec.Tree` (`tag ‖ varint |p| ‖ p ‖ varint k ‖ kids`), so a
+method with `cat` can assemble any tree from literal fragments EXCEPT the three payloads a parameter changes: a
+`nat` literal's eight big-endian bytes, a `bytes` literal's length-prefixed bytes, a `digest` literal's. The core
+had no `nat → bytes`, no length as a number, and (LANG-38) an id was a type never made from bytes — nor, until now,
+made INTO bytes.
+
+**The answer: three payload writers, one per scalar literal kind, each a deployed codec's `put`.** `Prim` gains
+`u64be : bytes → nat → bytes` (`Stream.u64be.put`: the operand appended as a datum's eight big-endian bytes, a `nat`
+literal's payload), `sized : bytes → bytes → bytes` (`Stream.bytesV`'s put: a varint length then the bytes — a
+`bytes` literal's payload, a label's, a refusal name's, a doc's), `dsized : bytes → digest → bytes` (the same for an
+id: a `digest` literal's payload). Each is BINARY and buffer-first — `Term.prim` is binary everywhere (the `primL`/
+`primR` frames, the checker, `BigStep`), so a unary `len`/`idBytes` would have needed a dummy operand; an append
+whose left operand is the buffer being built is the natural binary shape and is exactly how the codec's own `put`
+is written (`Codec/Stream.lean`: `put v buf` appends). A `bool` parameter needs no writer: `ite` over the two literal
+nodes. Each writer is charged the bytes it writes, as `cat` is (`primBytes.written`: its result's size; LANG-64's
+one word per tick), refuses `tooLarge` past `bytesMax` and then walks nothing (`appended`); none can be `stuck` on
+typed operands (`appended_sound`, in `primEval_sound`). What there is NOT: a `len : bytes → nat`, a standalone
+`varint`, a raw `digest → bytes`. The first two are not needed by any template (a template's child counts and
+closed payload lengths are constants; a parameter's length is written by `sized` itself); the third is refused on
+LANG-38's ground made stronger: **an id's bytes enter a byte string only as a codec payload, never raw**, so a
+program can name a member in a package it writes and cannot smuggle an id into a key or a value.
+
+**The quoter (`Lang/Quote.lean`), and what it means.** A TEMPLATE is an open `Term`: a free variable (`var i` at
+or past the binders above it) is a stage-1 parameter (`Quote.Param`: its scalar type and the term that fetches it
+where the generator runs, e.g. `get (var 1) "max"`). `quoteTerm ps d buf t` is a nano term appending to `buf` the
+wire bytes of `t` with each free variable replaced by its parameter's LITERAL — cross-stage persistence, as MetaML
+lifts a stage-1 value into a bracket. Every CLOSED subterm is one `cat` of one literal fragment (written by the
+ordinary encoder at authoring time); only the nodes on the path to a parameter are built from their frame
+(`Quote.frame`: `Tree.putD`'s own prefix, not a second spelling of the codec) and their children. `quotePackage ps
+buf p` writes `encodePackage`'s bytes of a package whose body is a template: version byte, the package node's
+frame, the closed sections, the body quoted, the closed sections after it — three fragments and the body. The
+specification is `Term.fill vals d t` (free variables replaced by the values' literals; `fillPackage`), and the
+theorem is `Quote.quotePackage_sound` (`Lang/Proofs/Quote.lean`): under `Params` (each parameter term evaluates to a
+scalar of its declared type), whenever `encodePackage (fillPackage vals p) = some B`, the quoted term appends
+EXACTLY `B` to any buffer (`Appends`: for every buffer meaning `b` with `b ++ B` within `bytesMax`, the term means
+`b ++ B`). One induction over the template (`quoteTerm_sound`, mutual with the field and term lists), every case the
+same step — a node's bytes are its frame then its children's, and `Appends.comp` composes; `putD_of_fits` lets a
+closed subtree written at `depthMax` stand for the same subtree at the depth its node leaves it; `appends_param`
+is the four writers. The quoter names no closure package (`noRef_quotePackage`), so the receiver runs it as
+written. Hygiene stays the wire's: a parameter enters the generated code only as a literal node; a `var` of the
+template under its binders is a bound variable of the GENERATED program and is written as one.
+
+**The first template generator.** `Std.boundedWith S f maxT` is `Std.bounded` with its bound a TERM at the law
+clause's depth (4: the law's three binders and the arm's); `Std.bounded S f max := boundedWith S f (natT max)` —
+one definition. Its refusal is now `"{f} over the bound"`, not `"{f} over {max}"`: a nano program cannot write a
+number as text, and the bound is in the law's text (a describe prints it) and in the generation's receipt (the
+Turn's argument). `Std.boundedPackageWith r f maxT` is a record state `r` under that law with a `set` method
+writing the state whole; `boundedPackage r f max` its instance. `Std.boundedGenerator r f` is a package whose
+`generate {max : nat}` returns `install` of `quotePackage [maxParam] "" (boundedPackageWith r f (var 4))`.
+`generate_bounded_sound` (`Lang/Proofs/StdGen.lean`): every admitted run of `generate` whose argument decodes to
+`{max = m}` returns `[install B]` with `encodePackage (boundedPackage r f m) = some B` — **the nano generator IS
+the Lean generator at the receipt's argument, byte for byte** — through `fill_boundedPackage` (the template filled
+at `m` is `boundedPackage r f m`, by `simp`), `quotePackage_sound`, and the method-run machinery of
+`generate_run_sound`. So the law's theorem `bounded_spec` (the new value of `f` is at most `max` in every admitted
+change) is about what the kernel checked and installed, for the `max` the receipt names, with no Lean in the
+member's hands.
+
+**Journey (`Lang.Journey.Gen`, in `lake exe lang-journey`).** GN6 B installs `Std.boundedGenerator {n : nat} n`,
+creates G, and generates at 100: admitted; the Turn bears one package cell whose id is the content id of
+`encodePackage (boundedPackage {n : nat} n 100)` — the deployed run of `generate_bounded_sound`. GN7 B creates an
+object O of THAT id at n = 0 and sets n = 50: admitted. GN8 B sets n = 101: refused `lawDenied bounded: n over the
+bound` by name — the generated law holds at the generated bound. GN0–GN5 unchanged. Teeth (`Lang.Proofs.Teeth`):
+`u64be_writes`, `sized_writes`, `dsized_writes` (the bytes, after the buffer);
+`Lang.Proofs.WireTeeth.prim_codes` (was `lenLe_code`): codes 11–14 are `len<=`, `u64be`, `sized`, `dsized` and 15 is
+none.
+
+**Wire (the `lang!`), every byte.** `Bounds.packageWireVersion` 5 → 6: primitive codes 12, 13, 14 under term tag 7
+turn three refused boundary rows into reads. Codec labels `lang/package/5` → `/6`, `lang/package-version/5` → `/6`
+(`packageCodec_label` ties the label to the version). `gates/codec-vectors.tsv` re-drawn by `codec-vectors --write`
+(the sites' names moved), `--check` ok: the package site gains the three writer rows (`primRows`, codes 12–14) and
+its boundary row moves from code 12 to 15; every other package row differs only in its first byte 05 → 06; the
+version site's rows are 06/05 (were 05/04); the LANG-59-era row's refusal now names `lang/package-version/6`. A
+version-5 package refuses `lang/package-version/6` before its tree is read: never reinterpreted (row LV, LV1–LV3 print
+version 6). No other site moves. Rust: the primitive table is Lean's (the client decodes no terms; `grep lenLe
+client/` finds nothing); nothing in Rust moves. The surface reader and printer know the three words (`u64be`,
+`sized`, `dsized`).
+
+**What breaks, what re-emits.** Every package id (the version byte): every journey World re-runs from genesis;
+`Protocol.Foreign.headPackageId` moves (it is computed, not pinned; `Std.headGenerator` still bears it, GN1). Every
+Store re-geneses (none deployed). The worstcut-rows bench's base World holds the installed Bell under a new id, so its trie
+keys differ: 55 more trie hashes over 16448 steps (20.184 → 20.187 per step, `gates/waste.tsv`, the WASTE line). The `.ob` fixtures are source and re-encode at read. Nothing outside the
+journeys holds a package id.
+
+**The price, in the spec's terms.** TOPLEVEL-SPEC's claims: no statement moves, no premise is added. Theorems gaining
+a case: `primEval_sound` (three writer cases through `appended_sound`), `LawVal.prim`, `primEval_lits`,
+`primEval_noRefVal` (each by unfolding `appended`); `bounded_spec` and `noRef_bounded` carry the new refusal text.
+`generate_bounded_sound`'s premises, named: the Lean generator's package has bytes (`encodePackage … = some B`:
+labels within bounds, the tree within `depthMax`) and `B.size ≤ bytesMax` — the honest limit of staging at the
+BYTE level: a generator writes a package the language can hold as one value (128 KiB; `callFits` says the same of
+an install). Cost: the bounded generator's method is three `cat`s of fragments plus the path to the bound (a
+record field, a case, three arms each one `ite` and one `u64be`), charged per word copied: a few thousand ticks at
+a 2 KiB package.
+
+**Critique.** The quoter is a mirror of `termTree` with eighteen cases, and its theorem is the only thing that
+makes it not a twin: a certified compiler against the one encoder, which is the sanctioned shape (the Std generators
+are the same shape at the term level). `fill_boundedPackage` is proved by `simp` over the law combinators, which is
+a proof about one template; a general "a template's free variables at the clause depth" lemma would serve the next
+generators (`allowlist` with a `digest` parameter, `windowed` with two `nat`s) without a `simp` each — write it when
+the second one comes. `Params` is a per-index relation (`ParamAt`) rather than `List.Forall₂` so the var case needs
+no library lemma; it is the less idiomatic of the two.
+
+**Meta-critique.** The pull was to land the predecessor's four primitives as designed (`len`, `varint`, `be`,
+`idBytes`) and discover their arity problem in the proofs; reading `Term.prim`'s binary shape FIRST turned four
+primitives of mixed arity into three binary appends that are the codec's own `put`s, and deleted `len` and `varint`
+as unneeded by any template. The second pull was to keep `"{f} over {max}"` and let the nano generator emit a
+DIFFERENT law text from `Std.bounded`'s; that would have made two bounded laws (a twin) and a theorem about the wrong
+one. The number left the name instead, and `bounded` became one definition with a term-shaped bound.
+
+**Next (rung 1 continued, then rung 2).** `Std.allowlistGenerator` (a `digest` parameter from `req.agent`:
+authority by naming, written by `dsized`); `createOf` (generate and instantiate in one Turn, DESIGN-META §6.3); a
+quorum-gated generator (laws on a generator object, no new machinery). Rung 2, structural generators, waits for a
+bounded sequence type (`Ty.seq`, axis 7, TYPES's column): then `code` over it (DESIGN-META §6.2) replaces bytes as
+the type of what a generator emits.
+
 ## LANG-83 The document: a section is a `Std.hole` at `bytes` whose candidates are members' posts, justified by their grants, selected by an editor, withdrawn by name on revocation; its refusals name the justification that failed (2026-10-26; FABLE-CTX; design `redregg/work/promo/DESIGN-CTX.md` §2.3, §4, S0 + S1; method R-0069)
 
 **Ember's ask.** "Elaborating the contextual theory thoroughly into the most powerful possible instantiation of itself seems reasonable." The design memo answers it (what the theory is: justified instantiation of contextual types inside a replicated state machine; the SLOT as the one object the ROM hole, the activity's waiting row, the offer, the law list and the package link all inhabit; the top clause CONTEXTUAL INTEGRITY ∧ REPAIR as a clause of INTEGRITY with its floor). The first two steps of its sequence land here, because together they make the top clause inhabited by a run a member can see, and neither needs the kernel.

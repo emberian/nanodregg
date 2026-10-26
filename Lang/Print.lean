@@ -128,7 +128,7 @@ def tyText (T : Ty) (h : (ty T).isSome = true := by decide) : String := (ty T).g
 def primWord : Prim → String
   | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
   | .eq => "==" | .lt => "<" | .le => "<=" | .beq => "beq" | .cat => "cat" | .deq => "deq"
-  | .lenLe => "len<="
+  | .lenLe => "len<=" | .u64be => "u64be" | .sized => "sized" | .dsized => "dsized"
 
 /-- The name of the variable bound at depth `d`. -/
 def name (d : Nat) : String := "x" ++ Nat.repr d

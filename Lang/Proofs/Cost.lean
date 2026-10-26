@@ -50,6 +50,13 @@ theorem primBytes_beq (a b : ByteArray) : primBytes .beq (.bytes a) (.bytes b) =
 /-- `deq` is `beq` on digests: both operands, by the same copies. -/
 theorem primBytes_deq (a b : ByteArray) : primBytes .deq (.digest a) (.digest b) = a.size + b.size := rfl
 
+/-- What a payload writer is charged for is what it writes: the size of its result (LANG-87). -/
+theorem primBytes_written {p : Prim} {x y : Val} {r : ByteArray}
+    (hp : p = .u64be ∨ p = .sized ∨ p = .dsized) (h : primEval p x y = .ok (.bytes r)) :
+    primBytes p x y = r.size := by
+  rcases hp with rfl | rfl | rfl <;> cases x <;> cases y <;> simp only [primEval, appended] at h <;>
+    (try cases h) <;> split at h <;> cases h <;> simp_all [primBytes, primBytes.written]
+
 /-- What `cat` is charged for is what it writes: the size of its result. -/
 theorem primBytes_cat {x y : Val} {r : ByteArray} (h : primEval .cat x y = .ok (.bytes r)) :
     primBytes .cat x y = r.size := by

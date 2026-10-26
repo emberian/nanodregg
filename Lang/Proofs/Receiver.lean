@@ -291,7 +291,7 @@ theorem noRef_allowlist (S : Ty) (ids : List ByteArray) : NoRef (allowlistLaw S 
 
 open Std NoRefStd in
 theorem noRef_bounded (S : Ty) (f : Label) (max : Nat) : NoRef (bounded S f max) := by
-  have : NoRef (allOf [(.prim .le ((⟨1⟩ : At).newF f) (natT max), s!"{f} over {max}")]) :=
+  have : NoRef (allOf [(.prim .le ((⟨1⟩ : At).newF f) (natT max), s!"{f} over the bound")]) :=
     allOf_ (by simp)
   exact lawOf_ this this okT_ this
 

@@ -30,6 +30,10 @@ private def isFault (f : Fault) : Outcome → Bool
   | .fault g _ => g == f
   | _ => false
 
+private def isBytes (b : ByteArray) : Outcome → Bool
+  | .value (.bytes c) _ => c == b
+  | _ => false
+
 /-- Open recursion through the knot: the final self's `fact`. -/
 theorem fact_five : isNat 120 (eval [] 1000 (.app (.get fact "fact") (.nat 5))) = true := by
   decide
@@ -133,5 +137,19 @@ theorem lenLe_size_not_content : isBool true (eval [] 10 (.prim .lenLe (.bytes �
   decide
 
 theorem lenLe_empty_zero : isBool true (eval [] 10 (.prim .lenLe (.bytes .empty) (.nat 0))) = true := by decide
+
+/-- The payload writers (LANG-87) append AFTER their buffer: `u64be` the natural's eight big-endian
+bytes, `sized` the length (a varint) then the bytes, `dsized` the same for an id. -/
+theorem u64be_writes :
+    isBytes ⟨#[7, 0, 0, 0, 0, 0, 0, 1, 2]⟩ (eval [] 10 (.prim .u64be (.bytes ⟨#[7]⟩) (.nat 258))) = true := by
+  decide
+
+theorem sized_writes :
+    isBytes ⟨#[7, 4, 108, 97, 116, 101]⟩ (eval [] 10 (.prim .sized (.bytes ⟨#[7]⟩) (.bytes late))) = true := by
+  decide +kernel
+
+theorem dsized_writes :
+    isBytes ⟨#[4, 108, 97, 116, 101]⟩ (eval [] 10 (.prim .dsized (.bytes .empty) (.digest late))) = true := by
+  decide +kernel
 
 end Nanodregg.Lang.Teeth

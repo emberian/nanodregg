@@ -167,10 +167,10 @@ private def os (owner : String) (total : Nat) : Data := .record [("owner", .byte
 theorem bounded_admits : admits (runLaw [] (bounded OS "total" 100) (os "a" 0) (os "a" 100) (req "a" "a" write)) = true := by
   decide +kernel
 theorem bounded_refuses :
-    refusedWith "total over 100" (runLaw [] (bounded OS "total" 100) (os "a" 0) (os "a" 101) (req "a" "a" write)) = true := by
+    refusedWith "total over the bound" (runLaw [] (bounded OS "total" 100) (os "a" 0) (os "a" 101) (req "a" "a" write)) = true := by
   decide +kernel
 theorem bounded_adopt :
-    refusedWith "total over 100" (runLaw [] (bounded OS "total" 100) (os "a" 500) (os "a" 500) (req "a" "a" (adopt "L"))) = true := by
+    refusedWith "total over the bound" (runLaw [] (bounded OS "total" 100) (os "a" 500) (os "a" 500) (req "a" "a" (adopt "L"))) = true := by
   decide +kernel
 theorem bounded_adopts :
     admits (runLaw [] (bounded OS "total" 100) (os "a" 5) (os "a" 5) (req "a" "a" (adopt "L"))) = true := by
@@ -199,7 +199,7 @@ theorem ownerSigns_adopt_delegate :
     refusedWith "not signed by the owner" (runLaw [] (ownerSigns OS) (os "a" 0) (os "a" 0) (req "d" "a" (adopt "L"))) = true := by
   decide +kernel
 theorem bounded_birth :
-    refusedWith "total over 100" (runLaw [] (bounded OS "total" 100) (os "a" 500) (os "a" 500) (req "a" "a" birth)) = true := by
+    refusedWith "total over the bound" (runLaw [] (bounded OS "total" 100) (os "a" 500) (os "a" 500) (req "a" "a" birth)) = true := by
   decide +kernel
 
 /-- A delegate `d` acting with owner `a`'s authority is refused; the owner's own key is admitted. -/

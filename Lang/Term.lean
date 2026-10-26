@@ -23,23 +23,31 @@ inductive Prim
   /-- `a.size ≤ n` for bytes `a` and a natural `n`: the one byte length the core has, O(1)
   (LANG-51; a bounded text argument is checked by it) -/
   | lenLe
+  /-- The three PAYLOAD WRITERS (LANG-87): each appends to its left operand, a byte string, the
+  codec's spelling of its right, so a program can write the bytes of a package tree
+  (`Lang.Quote`): `u64be buf n` a natural as a datum's eight big-endian bytes (`Stream.u64be`, a
+  `nat` literal's payload); `sized buf s` bytes as a length-prefixed payload (`Stream.bytesV`: a
+  `bytes` literal's, a label's, a refusal name's); `dsized buf d` an id as one (a `digest`
+  literal's: an id's bytes enter a byte string only as a codec payload, never raw). Charged the
+  bytes written, as `cat` is; a result past `bytesMax` is refused `tooLarge` and walks nothing. -/
+  | u64be | sized | dsized
   deriving DecidableEq, Repr
 
 /-- The operand and result types of a primitive. -/
 def Prim.left : Prim → Ty
-  | .beq | .cat | .lenLe => .bytes
+  | .beq | .cat | .lenLe | .u64be | .sized | .dsized => .bytes
   | .deq => .digest
   | _ => .nat
 
 def Prim.right : Prim → Ty
-  | .beq | .cat => .bytes
-  | .deq => .digest
+  | .beq | .cat | .sized => .bytes
+  | .deq | .dsized => .digest
   | _ => .nat
 
 def Prim.result : Prim → Ty
   | .add | .sub | .mul | .div | .mod => .nat
   | .eq | .lt | .le | .beq | .deq | .lenLe => .bool
-  | .cat => .bytes
+  | .cat | .u64be | .sized | .dsized => .bytes
 
 inductive Term
   | var (index : Nat)
