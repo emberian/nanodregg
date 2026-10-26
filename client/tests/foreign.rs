@@ -15,6 +15,10 @@
 //!   (`head: forkedHead`); X3b: the poster records the fork (`fork`): admitted, and every later receipt
 //!   against that head object refuses `forkedHead`, and so does a post.
 //! * X5: the owner withdraws the trust anchor (`distrust`): a valid receipt refuses `untrusted`.
+//! * X6 (DESIGN-OBS §2.3, `fixtures/foreign/Timelock`): an outside fact as a judged input — A's HEIGHT.
+//!   A lock with `deadline` one past A's head: the old call's receipt is `early`; A admits one more call
+//!   (its clock reaches the deadline); that receipt is `headMismatch` until B posts A's new head, then
+//!   releases the lock (`read` shows `(released true)`); a second release is the law's `settled`.
 //!
 //! The control "A's call at B's writer refuses `wrongWorld`" is the `wrongWorld` row
 //! (`Protocol.Rows.wrongWorld`). `headDead` (a retired head object) and `notCommitted` have no row
@@ -415,6 +419,85 @@ fn a_receipt_from_another_world_is_accepted_once_and_forgeries_and_forks_refuse(
     assert!(
         !o.status.success() && both(&o).contains("untrusted"),
         "X5: {}",
+        both(&o)
+    );
+
+    // X6 (DESIGN-OBS §2.3): a time-lock on A's clock. The fact a receipt states is the HEIGHT A admitted
+    // a call at; the lock releases only on a receipt at or past its `deadline`. A head object of A's
+    // current head; a lock whose deadline is one past that height.
+    let (r6, s6, h6, roots6) = receipt(&ba, &call);
+    let seed6 = format!(
+        "(record (head (at {})) (world #{a_origin}))",
+        head_text(&s6, &h6, &roots6)
+    );
+    let h6id = line(&bf.ok(&["create", "--pkg", &head_pkg, &seed6]), "id ").to_owned();
+    let tl_pkg = line(
+        &bf.ok(&[
+            "install",
+            &repo_text("client/tests/fixtures/foreign/Timelock"),
+        ]),
+        "id ",
+    )
+    .to_owned();
+    let deadline: u64 = h6.parse::<u64>().unwrap() + 1;
+    let tl = line(
+        &bf.ok(&[
+            "create",
+            "--pkg",
+            &tl_pkg,
+            &format!("(record (deadline {deadline}) (released false))"),
+        ]),
+        "id ",
+    )
+    .to_owned();
+    let anchor6 = format!("(record (cell #{h6id}))");
+    bf.ok(&["invoke", &tl, "2", &anchor6]);
+    let release = |rr: &str| -> Output {
+        bf.nd(&[
+            "invoke",
+            &tl,
+            "1",
+            &format!("(record (receipt #{rr}))"),
+            "--range",
+            "heads",
+            "1",
+            &anchor6,
+        ])
+    };
+    // the old call's receipt: committed below the deadline: `early`
+    let o = release(&r6);
+    assert!(
+        !o.status.success() && both(&o).contains("early"),
+        "X6 early: {}",
+        both(&o)
+    );
+    // A's clock advances: one more call of A, admitted at the deadline
+    a.founder.ok(&["write", &offer, "4", "tick"]);
+    let tick = a.founder.last_call();
+    let (r7, s7, h7, roots7) = receipt(&ba, &tick);
+    assert_eq!(
+        h7.parse::<u64>().unwrap(),
+        deadline,
+        "X6: A's clock is at the deadline"
+    );
+    // ... but B's head is behind it: `headMismatch`, never a release
+    let o = release(&r7);
+    assert!(
+        !o.status.success() && both(&o).contains("headMismatch"),
+        "X6 behind: {}",
+        both(&o)
+    );
+    // B posts A's new head; the tick's receipt releases the lock
+    bf.ok(&["invoke", &h6id, "1", &head_text(&s7, &h7, &roots7)]);
+    let o = release(&r7);
+    assert!(o.status.success(), "X6 release: {}", both(&o));
+    let state = bf.ok(&["read", &tl]);
+    assert!(state.contains("(released true)"), "X6 state: {state}");
+    // released once: the law's `settled`
+    let o = release(&r7);
+    assert!(
+        !o.status.success() && both(&o).contains("settled"),
+        "X6 settled: {}",
         both(&o)
     );
     std::fs::remove_dir_all(&root).unwrap();

@@ -1,0 +1,27 @@
+; A time-lock on a FOREIGN clock (DESIGN-OBS §2.3; journey rows TL0-TL3, Rust row X6): the object releases
+; only on a receipt, checked against a head object this World trusts (`heads`, as Accept.ob), of a call the
+; other World A admitted at or past `deadline` — A's HEIGHT, the one outside fact a receipt states
+; (`Protocol.Foreign.check` shows the committed height; `foreign_receipt_sound` says A admitted the call
+; there). No second of wall time is claimed: what `release` learns is that A's writer ordered a call at or
+; past `deadline` and a member here posted A's head past it; a stalled A keeps the lock shut (the oracle
+; World's liveness is the lock's). The law makes the release once (`settled`) and the lock immutable.
+(package
+  (doc "A time-lock on a foreign clock: release only on a receipt, checked against a trusted head of World A, of a call A admitted at or past `deadline` (A's height).")
+  (state (rec (deadline nat) (released bool)))
+  (rel heads (key (cell digest)) (val (rec)) (limit 16) (retract))
+  (method distrust (arg (rec (cell digest))) (edits 1)
+    (done state (retract heads (record (cell arg.cell)))))
+  (method release (reads (heads (range 1 1) (receipt))) (arg (rec (receipt bytes)))
+    (case rows.heads.range.rows.r0 (none _ (refuse "untrusted"))
+      (some h (if (<= state.deadline h.receipt.height)
+                  (done (with state (released true)))
+                  (refuse "early")))))
+  (method trust (arg (rec (cell digest))) (edits 1)
+    (done state (insert heads (record (cell arg.cell)) (record))))
+  (law timelock
+    (on invoke m
+      (if (== m (index release))
+          (all ((not old.released) "settled") (new.released "badPhase"))
+          ok))
+    (on (relaw write) (refuse "frozen"))
+    (else ok)))

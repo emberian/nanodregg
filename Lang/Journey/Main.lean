@@ -24,5 +24,6 @@ def main (args : List String) : IO UInt32 := do
     return if bad = 0 then 0 else 1
   if let ["--write", d] := args then return ← Doc.write d
   let accept ← try IO.FS.readFile acceptSourcePath catch _ => pure ""
+  let timelock ← try IO.FS.readFile timelockSourcePath catch _ => pure ""
   let shipped ← Doc.readShipped
-  runAll args [offerSession, offerEscrowSession, headSession accept, Doc.session shipped, claimSession]
+  runAll args [offerSession, offerEscrowSession, headSession accept timelock, Doc.session shipped, claimSession]

@@ -26,6 +26,12 @@ deployed ones. A row passes only when its verdict is the expected one.
 * RC3 `notCommitted`, the refused arm: the receipt of a call A's Host refused and RECORDED
   (`Receive.judge`; it shows `refused`, `Protocol.Foreign.refused_receipt_notCommitted`: the column
   refuses it, and it is A's recorded refusal).
+* TL0–TL3 (DESIGN-OBS §2.3: an outside fact as a judged input; the fact is A's HEIGHT): B installs
+  `client/tests/fixtures/foreign/Timelock.ob`, creates a lock with `deadline` = the height A committed
+  its call at, trusts HA; `release` with A's receipt is admitted and `released` reads back true (TL0);
+  a lock with `deadline` one past it refuses `early` on the same receipt (TL1); a second `release` of
+  the released lock is `lawDenied` (`timelock: settled`, TL2); `distrust` then `release` is `untrusted`
+  (TL3). The receipt proves ADMISSION at a height, never content; no wall time is claimed.
 -/
 import Lang.Journey
 import Lang.StdHead
@@ -41,6 +47,20 @@ def headProgram : Program D :=
 
 /-- The deployed acceptor's source, read by `lang-journey` from the repository root. -/
 def acceptSourcePath : System.FilePath := "client" / "tests" / "fixtures" / "foreign" / "Accept.ob"
+
+/-- The timelock's source (TL0–TL3), read by `lang-journey` from the repository root. -/
+def timelockSourcePath : System.FilePath := "client" / "tests" / "fixtures" / "foreign" / "Timelock.ob"
+
+/-- The timelock's state type (`Timelock.ob`: `(state (rec (deadline nat) (released bool)))`). -/
+def timelockStateTy : Ty := .record [("deadline", .nat), ("released", .bool)]
+
+/-- The lock's `released` slot, read back from its cell (state slot 1). -/
+def releasedOf (w : World D) (obj : D) : Option Bool :=
+  match (w.live Sim.env obj).bind (fun c => c.slots.get (stateBase + 1)) with
+  | some b => match Wire.decodeData .bool b with
+    | .ok (.bool v) => some v
+    | _ => none
+  | none => none
 
 def hdDig (n : D) : ByteArray := Sim.dc.bytes n
 
@@ -58,7 +78,8 @@ def hdSeed (h : Nat) (roots : ByteArray) (s : Nat) (w : ByteArray) : Option Slot
 def programRefused (v why : String) : Bool :=
   v.startsWith "refused program" && (v.splitOn why).length > 1
 
-def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptText : String) : Run := Id.run do
+def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptText timelockText : String) :
+    Run := Id.run do
   let prog := headProgram
   let X := ctxWith prog
   let mut r := r0
@@ -91,11 +112,11 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
         (.create pkg laws s))
       (r', v, t.bind fun t => (createdIds t).head?)
   let invoke (r : Run) (obj : D) (cells : List D) (m : Nat) (arg : Option ByteArray)
-      (ranges : List (RangeRead D) := []) : Run × String :=
+      (ranges : List (RangeRead D) := []) (rowPins : List (RowSlot D × D) := []) : Run × String :=
     match arg with
     | none => (r, "no bytes")
     | some x =>
-      let (r', v, _) := go prog r (signedRows r.st b (Sim.S.pinsFor r.st.host ([b.id, obj] ++ cells)) [] ranges
+      let (r', v, _) := go prog r (signedRows r.st b (Sim.S.pinsFor r.st.host ([b.id, obj] ++ cells)) rowPins ranges
         (.invoke obj m x 1000000 none))
       (r', v)
   let held (r : Run) (obj : D) : Option HeadView :=
@@ -207,10 +228,61 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let (_, vc3) := invoke w1 Acc [apkg, HA] 0 (acceptArg (receiptOf cRef)) (rangeAt w1.st.host HA)
   r := note r s!"RC3 accept, the range naming HA, with A's receipt of a call it refused and recorded (the receipt states refused: {refusedAnswer}): {vc3}"
     (refusedAnswer && programRefused vc3 "notCommitted")
+  -- TL: a time-lock on A's clock (DESIGN-OBS §2.3). The fact a receipt states is the HEIGHT A admitted
+  -- the call at; the lock releases only on a receipt at or past its `deadline`. Methods, labels
+  -- ascending: 0 distrust, 1 release, 2 trust.
+  let tl ← match Surface.readPackage timelockText with
+    | .ok p => pure p
+    | .error e => return note r s!"TL0 read {timelockSourcePath}: {e.text timelockText}" false
+  let some tb := Wire.encodePackage tl | return note r "TL0 the timelock has no bytes" false
+  let some ti := relIndex tl.rels "heads" | return note r "TL0 the timelock has no heads relation" false
+  let some tdcl := tl.rels.lookup "heads" | return note r "TL0 the timelock has no heads relation" false
+  let some atH := committedAt | return note r "TL0 A committed nothing" false
+  let (rt1, vt1, tt1) := go prog w1 (Sim.signed w1.st b b.key (Sim.S.pinsFor w1.st.host [b.id]) (.install tb))
+  let some tpkg := tt1.bind fun t => (createdIds t).head? | return note r s!"TL0 install the timelock: {vt1}" false
+  let tlSeed (deadline : Nat) : Option Slots :=
+    stateSlots (recordRow timelockStateTy) [("deadline", .nat deadline), ("released", .bool false)] 0
+  -- the lock's signed range over its `heads` at the key `k`, at what B sees on `w`
+  let rangeT (w : World D) (obj : D) (k : D) : List (RangeRead D) :=
+    match Wire.encodeData (keyWireTy tdcl 1) (.record [("k0", .digest (hdDig k))]), headOf Sim.env w.rows obj ti with
+    | some pre, some (_, _, _, _, width, _) =>
+      match rangeRows Sim.env w.rows obj ti width pre 1 with
+      | some l =>
+        let seen := rangePin Sim.env obj ti width pre (headFloor Sim.env w.rows obj ti) l
+        [{ parent := obj, rel := ti, pre, most := 1, seen }]
+      | none => []
+    | _, _ => []
+  -- TL0 deadline = the height A committed cA at: the receipt releases the lock
+  let (rt2, vt2, T?) := create rt1 (some tpkg) [] (tlSeed atH)
+  let some T := T? | return note r s!"TL0 B creates the timelock: {vt2}" false
+  let (rt3, vt3) := invoke rt2 T [tpkg] 2 (cellArg HA)
+  let (rt4, vt4) := invoke rt3 T [tpkg, HA] 1 (acceptArg (receiptOf cA)) (rangeT rt3.st.host T HA)
+  r := note r s!"TL0 B installs the timelock from {timelockSourcePath} ({vt1}; methods {tl.methods}), creates T with deadline {atH} = A's commit height ({vt2}), trusts HA ({vt3}); release with A's receipt: {vt4}; released reads back {releasedOf rt4.st.host T}"
+    (vt1 == "admitted" && tl.methods == ["distrust", "release", "trust"] && vt2 == "admitted" && vt3 == "admitted" &&
+      vt4 == "admitted" && releasedOf rt3.st.host T == some false && releasedOf rt4.st.host T == some true)
+  -- TL1 deadline one past it: the same receipt is `early`
+  let (rt5, vt5, T1?) := create rt1 (some tpkg) [] (tlSeed (atH + 1))
+  let some T1 := T1? | return note r s!"TL1 B creates the later timelock: {vt5}" false
+  let (rt6, vt6) := invoke rt5 T1 [tpkg] 2 (cellArg HA)
+  let (rt7, vt7) := invoke rt6 T1 [tpkg, HA] 1 (acceptArg (receiptOf cA)) (rangeT rt6.st.host T1 HA)
+  r := note r s!"TL1 a lock with deadline {atH + 1}, one past A's commit height ({vt5}, trust {vt6}); release with the same receipt: {vt7}; released stays {releasedOf rt7.st.host T1}"
+    (vt5 == "admitted" && vt6 == "admitted" && programRefused vt7 "early" && releasedOf rt7.st.host T1 == some false)
+  -- TL2 the released lock, released again: the law's `settled`
+  let (_, vt8) := invoke rt4 T [tpkg, HA] 1 (acceptArg (receiptOf cA)) (rangeT rt4.st.host T HA)
+  r := note r s!"TL2 release of the released lock, the same receipt: {vt8}" (deniedWith vt8 "timelock: settled")
+  -- TL3 the anchor withdrawn (`distrust` retracts the pinned `heads` row): `untrusted`
+  let pinT (w : World D) (obj : D) (k : D) : List (RowSlot D × D) :=
+    match keyBytes tdcl (.record [("cell", .digest (hdDig k))]) with
+    | some kb => let s : RowSlot D := .row ⟨obj, ti, kb⟩
+      [(s, rowPin Sim.env (headFloor Sim.env w.rows obj ti) (rowAt Sim.env w.rows s))]
+    | none => []
+  let (rt9, vt9) := invoke rt3 T [tpkg] 0 (cellArg HA) [] (pinT rt3.st.host T HA)
+  let (_, vt10) := invoke rt9 T [tpkg, HA] 1 (acceptArg (receiptOf cA)) (rangeT rt9.st.host T HA)
+  r := note r s!"TL3 distrust HA ({vt9}); release with A's receipt: {vt10}" (vt9 == "admitted" && programRefused vt10 "untrusted")
   return r
 
 /-- A fresh session for the HD and RC rows: World B (the rows' World) and World A (the foreign one). -/
-def headSession (acceptText : String) : Run :=
+def headSession (acceptText timelockText : String) : Run :=
   let X := ctxWith headProgram
   let empty : Run := { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
   let one (name next : String) (nonce : Nat) : Except String (Run × Sim.Member) :=
@@ -220,7 +292,7 @@ def headSession (acceptText : String) : Run :=
       let m : Sim.Member := ⟨founderId X g.origin 0, name.toUTF8, next.toUTF8⟩
       .ok ({ st := { rng := ⟨1⟩, host := g, members := [m] } }, m)
   match one "hd-b" "hd-b-next" 11, one "hd-a" "hd-a-next" 12 with
-  | .ok (rB, b), .ok (rA, a) => headRows rB b rA a acceptText
+  | .ok (rB, b), .ok (rA, a) => headRows rB b rA a acceptText timelockText
   | .error e, _ => note empty s!"HD genesis B: {e}" false
   | _, .error e => note empty s!"HD genesis A: {e}" false
 
