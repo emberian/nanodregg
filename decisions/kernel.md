@@ -3250,6 +3250,20 @@ Item 3's trigger fired. The trigger was "the first row whose invariant spans two
 
 **Meta-critique, naming a bias.** The first design put the pins before the signature (cheapest; "stale before anything") and it built green on all 755 jobs. That is a bias toward the cheapest refusal and toward the brief's wording ("before any receiver or law"), read as "before everything". Its cost was a confidentiality hole, found only by asking who may receive a `stale` answer. Build-green measured nothing about it, and no theorem here states it either: the oracle argument is prose. The second bias is to trust "one verify" (PERF-1) as a constraint rather than as a measurement; it held here, but it shaped the design before the oracle question was asked.
 
+## KERNEL-75 · `install` is a call an object may make: a method's returned `install` is derived as the object through the one install receiver, checked as a member's (2026-10-26; FABLE-META; with LANG-86; CROSS-LAYER: LANG owns the generator, KERNEL the arm; design `redregg/work/promo/DESIGN-META.md`)
+
+**What changed.** `Body.callable` admits `.install` (six callable kinds: `invoke`, `transfer`, `account`, `credit`, `grant`, `install`; the `notCallable` docstring names them). Nothing else in the kernel moves: `dispatch`'s `install` arm already ran at any actor (`install X look c ⟨actor, wk.born⟩ pkg`: `checkInstall`, then `bornAt` of a ROM package cell), it takes no authority from the actor and reads no owner, so an object installing is an act every member could already perform, with the same check, at the signer's pinned view.
+
+**Why widening this assertion is sound (the pause the charter asks for at a weakened check).** The line between callable and not is "spends nobody's authority and changes no cell": `install` is the only receiver on that side besides `account`. What an object still may NOT do and why: `create` (the object would be owned by the signer through the object's choice: a confused deputy), `enroll`/`rotate`/`revoke`/`issue` (member or issuer authority), `write`/`law` (KERNEL-28: effects are derived as signed and spend the owner's authority).
+
+**Theorems.** `Kernel/Proofs/Generated.lean`: `PackagesChecked X look d` (every package cell `d` bears holds bytes `checkInstall` accepted at `look`); `tree_package_checked`: every level of a call's tree below the signed call bears only checked package cells (`tree_all` with five callable cases; `install`'s is the receiver's own check). `tree_zeroBorn` (Ledger) gains the `install` case (a ROM cell is not a value cell). LANG's `callsOf_callable` still makes `notCallable` unreachable from `Lang.program`; the kernel keeps the assertion where calls enter (law 4).
+
+**Floor.** The kernel whose nested `install` is `stepped wk (.ok ⟨bornAt …⟩)` without the check: `tree_package_checked` fails at its `install` case. The deployed run that reaches the check: `Lang.Journey.Gen` GN4 (a generator of bytes that are not a package is refused `program decode …` at the nested install, nothing born).
+
+**What re-emits.** Nothing: no wire, no cell shape, no refusal code moves.
+
+**Critique.** `tree_package_checked` is about the TREE below the signed call; the signed `install` itself is checked by the same receiver, and the composition over `derive` (thirteen cases) is not written: the new power is the nested one, and the theorem is about the new power. A generator cannot learn the id it bore (a nested call returns nothing), so "generate then create" is two Turns; DESIGN-META §6.3 names the `createOf` arm and its authority question rather than adding it.
+
 ## KERNEL-67 · The kernel memo's documentation debt: comments and decision entries that said the opposite of the code (FIX-KERNEL, 2026-10-24; READ-KERNEL B2, B3, B4, B7; method R-0069)
 
 **Fixed (text only; no definition, statement or bytes change).**

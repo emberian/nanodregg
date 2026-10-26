@@ -168,6 +168,13 @@ theorem slot_kind_outside :
     isIllTyped ((slotPkg [invokeOnly] (goWith (someCallT invokeOnly tr))).checkWith []) = true := by
   decide +kernel
 
+/-- An `install` datum in an install-only slot reads as `.install` of its bytes (LANG-86), so a
+generator's one call reaches the kernel as the install it is. -/
+theorem install_reads :
+    callsIs (callsOf dig8 [callOf ["install"]]
+      (.record [("c0", .inj "some" (.inj "install" (.record [("pkg", .bytes obj8)])))])) [.install obj8] = true := by
+  decide +kernel
+
 /-! ## Liveness: its premises are met, and the refusal it allows is the real one -/
 
 theorem invokeSlot_ok : callSlotOk invokeSlot = true := by decide

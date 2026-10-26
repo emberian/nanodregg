@@ -75,7 +75,7 @@ def lawTy (S : Ty) : Ty := .fn S (.fn S (.fn reqTy verdictTy))
 The core has no lists, so a method returns its calls in a row of option SLOTS `c0 … c(k-1)`,
 `k ≤ Kernel.Bounds.callsMax`. Each slot's type names the kinds of call it may carry: options over
 a sub-sum of `callTy`, every arm at exactly its `callTy` type. `callTy` has one arm per kind an
-object may exercise (KERNEL's `Body.callable`: account, credit, grant, invoke, transfer), its fields
+object may exercise (KERNEL's `Body.callable`: account, credit, grant, install, invoke, transfer), its fields
 the `Body` constructor's: a digest is `digest`, an `Option` is `optTy`, an `AcctRef` is
 `acctRefTy`, a grant's rights the fixed-arity `rightsTy`. So a method's type says how many calls
 it may make and of which kinds, and costs bytes only for those: a method that makes none has
@@ -122,6 +122,11 @@ def grantArm : Label × Ty :=
 def transferArm : Label × Ty :=
   ("transfer", .record [("amount", .nat), ("dst", acctRefTy), ("once", optTy .bytes), ("src", acctRefTy),
     ("via", optTy .digest)])
+/-- `install`: the object installs the package these bytes encode (LANG-86, KERNEL-75: a generator).
+The kernel checks the bytes exactly as a member's `install` (`checkInstall` at the signer's pins) and
+bears the ROM cell `romIdOf`; a `bytes` value holds at most `Bounds.bytesMax`, so a package an object
+installs is at most that long. -/
+def installArm : Label × Ty := ("install", .record [("pkg", .bytes)])
 
 /-- The `invoke` arm's record at argument type `A`. -/
 def invokeArm (A : Ty) : Ty :=
@@ -130,8 +135,8 @@ def invokeArm (A : Ty) : Ty :=
 /-- The arms a call slot may hold, in canonical order: with an `invoke` arm at argument type `A`
 (`some A`), or without one (`none`). -/
 def callArms : Option Ty → List (Label × Ty)
-  | some A => [accountArm, creditArm, grantArm, ("invoke", invokeArm A), transferArm]
-  | none => [accountArm, creditArm, grantArm, transferArm]
+  | some A => [accountArm, creditArm, grantArm, installArm, ("invoke", invokeArm A), transferArm]
+  | none => [accountArm, creditArm, grantArm, installArm, transferArm]
 
 /-- Any call an object may make, its invokes (if `A` names an argument type) carrying a value of `A`. -/
 def callTy (A : Option Ty) : Ty := .sum (callArms A)

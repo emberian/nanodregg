@@ -205,11 +205,11 @@ theorem argsBytes_live {A : Ty} {a : Data} (hA : Wire.dataTy A = true) (h : Conf
   simp only [argsBytes, hb]
   exact Live.pure _
 
-/-- The four arms every slot may hold, read at any invoke argument type (they do not read it). -/
+/-- The five arms every slot may hold, read at any invoke argument type (they do not read it). -/
 private theorem bodyOf_live_fixed {A : Option Ty} {ℓ : Label} {T : Ty} {d' : Data}
     (hf : Row.find? ℓ (callArms none) = some T) (hd : Conforms d' T) :
     Live digestOf (.inj ℓ d') (bodyOf digestOf A (.inj ℓ d')) := by
-  simp only [callArms, accountArm, creditArm, grantArm, transferArm, Row.find?] at hf
+  simp only [callArms, accountArm, creditArm, grantArm, installArm, transferArm, Row.find?] at hf
   split at hf
   · cases hf; subst_vars
     cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
@@ -238,6 +238,13 @@ private theorem bodyOf_live_fixed {A : Option Ty} {ℓ : Label} {T : Ty} {d' : D
         Live.bind (rights_live hrs) fun _ => Live.bind (optDigest_live _ _ (.one _) h2 (under_field (by simp))) fun _ => Live.pure _
   split at hf
   · cases hf; subst_vars
+    cases hd with | record hr => cases hr with | cons h1 hr =>
+    cases hr
+    obtain ⟨b, rfl⟩ := conf_bytes h1
+    simp only [bodyOf]
+    exact Live.pure _
+  split at hf
+  · cases hf; subst_vars
     cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
     cases hr with | cons h3 hr => cases hr with | cons h4 hr => cases hr with | cons h5 hr =>
     cases hr
@@ -247,11 +254,13 @@ private theorem bodyOf_live_fixed {A : Option Ty} {ℓ : Label} {T : Ty} {d' : D
       Live.bind (optBytes_live _ _ h3) fun _ => Live.pure _
   cases hf
 
-/-- The arm a value of `callTy (some A')` sits at: one of the four every slot has, or the `invoke`
+/-- The arm a value of `callTy (some A')` sits at: one of the five every slot has, or the `invoke`
 arm at `A'`. -/
 private theorem find_some {ℓ : Label} {A' T : Ty} (hf : Row.find? ℓ (callArms (some A')) = some T) :
     Row.find? ℓ (callArms none) = some T ∨ (ℓ = "invoke" ∧ T = invokeArm A') := by
   simp only [callArms, Row.find?] at hf ⊢
+  split at hf
+  · cases hf; subst_vars; left; rfl
   split at hf
   · cases hf; subst_vars; left; rfl
   split at hf

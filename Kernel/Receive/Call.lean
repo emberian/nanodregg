@@ -191,7 +191,7 @@ inductive Refusal (D : Type)
   /-- a credit line out of an account that is not a well (its denomination is not its own id) -/
   | notWell (cell : D)
   /-- a method returned a call of a kind an object may not exercise (only `invoke`, `transfer`,
-  `account`, `credit` and `grant` are callable): the kernel's own assertion where calls enter -/
+  `account`, `credit`, `grant` and `install` are callable): the kernel's own assertion where calls enter -/
   | notCallable (kind : String)
   /-- a call nested past `Bounds.callDepthMax` -/
   | callTooDeep
@@ -514,7 +514,7 @@ structure At (D : Type) where
 
 /-- The kinds an object may exercise as a call (KERNEL-28 (a)). -/
 def Body.callable : Body D → Bool
-  | .invoke .. | .transfer .. | .account .. | .credit .. | .grant .. => true
+  | .invoke .. | .transfer .. | .account .. | .credit .. | .grant .. | .install .. => true
   | _ => false
 
 /-- The body is an invoke (the one receiver that derives calls through `sub`). -/

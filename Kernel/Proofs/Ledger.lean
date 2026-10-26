@@ -511,7 +511,8 @@ def ZeroBorn (d : Draft D) : Prop :=
 
 omit [Ord D] in
 /-- **An object's calls bear only empty value cells**: no callable receiver issues (`issue` is not
-callable), `account` bears balance and floor 0, and the rest bear no value cell. -/
+callable), `account` bears balance and floor 0, `install` a ROM package cell (KERNEL-75), and the
+rest bear no value cell. -/
 theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} :
     ∀ n wk a b r, tree X look rv c n wk a b = .ok r → ZeroBorn r.1 := by
   refine tree_all ?_ ?_ ?_
@@ -550,6 +551,18 @@ theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D
         have hd := stepped_draft h
         obtain ⟨_, _, _, _, _, _, -, -, -, -, -, -, -, -, -, -, hr⟩ := credit_ok hd
         rw [hr]; simp [ZeroBorn]
+    | install pkg =>
+        have hd := stepped_draft h
+        simp only [install, bind, Except.bind] at hd
+        split at hd
+        · cases hd
+        · simp only [pure, Except.pure, Except.ok.injEq] at hd
+          rw [← hd]
+          intro p hp v hv
+          have := mem_bornAt_cell hp
+          simp only [List.mem_singleton] at this
+          rw [this, ofCell_not_value (by simp)] at hv
+          cases hv
     | _ => simp [Body.callable] at hc
 
 omit [Ord D] in

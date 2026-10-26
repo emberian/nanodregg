@@ -1,5 +1,6 @@
 import Lang.Journey.ContextualCycle
 import Lang.Journey.ContextualWire
+import Lang.Journey.Gen
 import Lang.Journey.Head
 import Lang.Journey.Offer
 import Lang.Journey.OfferEscrow
@@ -26,4 +27,4 @@ def main (args : List String) : IO UInt32 := do
   let accept ← try IO.FS.readFile acceptSourcePath catch _ => pure ""
   let timelock ← try IO.FS.readFile timelockSourcePath catch _ => pure ""
   let shipped ← Doc.readShipped
-  runAll args [offerSession, offerEscrowSession, headSession accept timelock, Doc.session shipped, claimSession]
+  runAll args [offerSession, offerEscrowSession, headSession accept timelock, Doc.session shipped, claimSession, genSession]

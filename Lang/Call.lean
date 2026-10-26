@@ -10,7 +10,8 @@ VALUE of the slot's declared argument type (`slotInvokeArg`), encoded here with 
 method composes a nested call from values it computed (LANG-77; before it, `args` was bytes the
 method had to hold). Every Body it returns is of a kind an object may exercise
 (`Lang.Proofs.Call.callsOf_callable`), so KERNEL's `notCallable` is unreachable from
-`Lang.program`; KERNEL still asserts it where calls enter (law 4). On a checked run the encoder
+`Lang.program`; KERNEL still asserts it where calls enter (law 4). An `install` slot (LANG-86)
+carries the package bytes a method computed: the kernel installs them as it would a member's. On a checked run the encoder
 never refuses: the extracted datum conforms to the slot's type and the type is one the wire carries
 (`callSlotOk`), so `Lang.Proofs.CallLive.callsOf_live` keeps the digest refusal as the only one.
 
@@ -94,7 +95,8 @@ def callData (A : Option Ty) : Body D → Option Data
       some (.inj "transfer" (.record [("amount", .nat amount), ("dst", acctRefData bytesOf dst),
         ("once", optData Data.bytes once), ("src", acctRefData bytesOf src),
         ("via", optData (digestData bytesOf) via)]))
-  | .enroll .. | .rotate .. | .install .. | .create .. | .write .. | .law .. | .revoke .. | .issue .. =>
+  | .install pkg => some (.inj "install" (.record [("pkg", .bytes pkg)]))
+  | .enroll .. | .rotate .. | .create .. | .write .. | .law .. | .revoke .. | .issue .. =>
       none
 
 end
@@ -108,6 +110,7 @@ def rightFits : Right → Bool
 
 def callFits : Body D → Bool
   | .credit _ _ amount _ => decide (amount < Bounds.natLimit)
+  | .install pkg => decide (pkg.size ≤ Bounds.bytesMax)
   | .grant _ _ rights _ => rights.all rightFits
   | .invoke _ method _ budget _ => decide (method < Bounds.natLimit) && decide (budget < Bounds.natLimit)
   | .transfer _ _ amount _ once =>
@@ -186,6 +189,7 @@ def bodyOf (A : Option Ty) : Data → Except String (Body D)
         pure (.grant (← digestAt digestOf "target" t) (← digestAt digestOf "grantee" ge)
           (← rightsOf rs) (← optOf (digestAt digestOf "parent") "parent" pa))
       else throw "rights: too many"
+  | .inj "install" (.record [("pkg", .bytes pkg)]) => pure (.install pkg)
   | .inj "invoke" (.record [("args", a), ("budget", b), ("method", m), ("obj", o), ("via", v)]) => do
       pure (.invoke (← digestAt digestOf "obj" o) (← natOf "method" m) (← argsBytes A "args" a)
         (← natOf "budget" b) (← optOf (digestAt digestOf "via") "via" v))

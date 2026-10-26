@@ -216,7 +216,10 @@ theorem bodyOf_callData (hdig : ∀ x, digestOf (bytesOf x) = some x) {b : Body 
     cases src <;> cases dst <;> cases via <;> cases once <;>
       simp [bodyOf, digestAt, digestData, acctRefData, acctRefOf, optData, optOf, natOf, bytesAt,
         hdig, bind, Except.bind, pure, Except.pure, Except.map]
-  | enroll | rotate | install | create | write | law | revoke | issue => simp [callData] at h
+  | install pkg =>
+    simp only [callData, Option.some.injEq] at h; subst h
+    simp [bodyOf, pure, Except.pure]
+  | enroll | rotate | create | write | law | revoke | issue => simp [callData] at h
 
 /-- A kind an object may not exercise has no call data. -/
 theorem callData_not_callable {b : Body D} (h : b.callable = false) : callData bytesOf A b = none := by
@@ -365,7 +368,11 @@ theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMa
       | some k => exact .inj (A := .bytes) rfl (.bytes (by simpa using hf.2))
     cases A <;> exact .inj rfl (.record (.cons (.nat hf.1) (.cons (conf_acct hb dst) (.cons ho
       (.cons (conf_acct hb src) (.cons (conf_optDigest hb via) .nil))))))
-  | enroll | rotate | install | create | write | law | revoke | issue => simp [callData] at h
+  | install pkg =>
+    simp only [callData, Option.some.injEq] at h; subst h
+    simp only [callFits, decide_eq_true_eq] at hf
+    cases A <;> exact .inj rfl (.record (.cons (.bytes hf) .nil))
+  | enroll | rotate | create | write | law | revoke | issue => simp [callData] at h
 
 end
 
