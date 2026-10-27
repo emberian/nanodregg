@@ -20,7 +20,7 @@ Writes and invokes first sign envelopes for bounded log pages. The eventual call
 
 The form nd read OBJ REL K [PREFIX] reads a bounded relation range. The form nd sync --to STEPS:CHAIN compares a position while catching up; --attest signs follow's head, --check ATTEST checks another member's attestation, and --post OBJ posts follow's own head. A follower already beyond the requested comparison answers ahead.
 
-The language also has init, enroll, install, create, law, grant, revoke, rotate, adopt, issue, account, transfer, credit and invite. [Verb.usage](../Protocol/Command/Verb.lean) gives their forms. The --init, --init-hosted, --init-observer, --seal-observer and --keys flags are local custody operations. The --input HEX helper retains founder input; bare invite and adopt KEY_FILE use retained input/invitation files.
+The language also has init, enroll, install, create, law, grant, retire, rotate, adopt, issue, account, transfer, credit and invite. [Verb.usage](../Protocol/Command/Verb.lean) gives their forms. The --init, --init-hosted, --init-observer, --seal-observer and --keys flags are local custody operations. The --input HEX helper retains founder input; bare invite and adopt KEY_FILE use retained input/invitation files.
 
 A refusal names the failed condition. Stale means a signed pin no longer matches; lawDenied carries the law's reason; noGrant and grantRight concern authority. Parsing and pre-signing refusals create no signed call. An already-sent call needs settlement: uncertain, declined, open and hostContradicted do not mean absent forever. Behind preserves catch-up progress; pageIo identifies a writer page-read failure.
 

@@ -1,6 +1,6 @@
 # The system
 
-Nanodregg is a shared World with one writer and members who check its history themselves. A member signs a call planned against its own view. The writer derives and judges the call, records an admitted turn or a recordable refusal, and serves the history. Followers re-derive each event before accepting the resulting World. The operator can read every byte in a World. The operator can read every byte in a World.
+Nanodregg is a shared World with one writer and members who check its history themselves. A member signs a call planned against its own view. The writer derives and judges the call, records an admitted turn or a recordable refusal, and serves the history. Followers re-derive each event before accepting the resulting World. The operator can read every byte in a World.
 
 | Layer | Contract |
 |---|---|

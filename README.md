@@ -227,7 +227,10 @@ They give no secrecy from the operator, no agreement among several writers, and 
 
 | Question | Read |
 |---|---|
-| What are packages, methods, laws, relations and holes, and how are they checked? | [`docs/OBJECTS.md`](docs/OBJECTS.md), then the Lean: [`Lang/Term.lean`](Lang/Term.lean), [`Lang/Check.lean`](Lang/Check.lean), [`Lang/Package.lean`](Lang/Package.lean), [`Lang/Eval.lean`](Lang/Eval.lean), [`Lang/LiveHoles.lean`](Lang/LiveHoles.lean) |
+| What is the language, exactly: syntax, typing, execution, bytes? | [`docs/spec/`](docs/spec/README.md), the Objective Bend specification; read it first |
+| What is a World, and which transition does a call make? | [`docs/reference/kernel.md`](docs/reference/kernel.md) |
+| How do members sign, follow, settle and compare heads? | [`docs/reference/protocol.md`](docs/reference/protocol.md) |
+| Which executable scenario shows each construction? | [`docs/OBJECTS.md`](docs/OBJECTS.md) |
 | What exactly is claimed, with which premises? | [`Spec/README.md`](Spec/README.md) |
 | What does a member trust? | [`docs/TRUST.md`](docs/TRUST.md) |
 | What is the whole system? | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) |
