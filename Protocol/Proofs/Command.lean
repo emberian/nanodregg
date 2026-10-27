@@ -1406,6 +1406,8 @@ theorem hintNames_complete (r : Refusal D) (h : ∀ n, r ≠ .host n) : r.name �
       | _ => simp [Refusal.name, Invite.Refusal.name, hintNames, hintReps]
   | attest a =>
       cases a <;> simp [Refusal.name, Head.Refusal.name, Head.Refusal.all, hintNames, hintReps]
+  | certified a =>
+      cases a <;> simp [Refusal.name, Head.CertRefusal.name, Head.CertRefusal.all, hintNames, hintReps]
   | _ => simp [Refusal.name, hintNames, hintReps]
 
 /-- **The hint is read iff** the payload is at most `Bounds.hintBytesMax` bytes and its first line

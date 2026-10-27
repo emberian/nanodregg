@@ -314,17 +314,28 @@ inductive CertRefusal
   | badCertifySignature (index : Nat)
   /-- fewer distinct listed certifiers than the authority's threshold -/
   | belowThreshold (signers threshold : Nat)
+  /-- the authority names nobody (threshold 0, `Authority.none`): it certifies nothing, so no
+  certificate under it is taken, however many signatures it carries (PROTOCOL-77.1) -/
+  | noAuthority
+  /-- it verifies, but certifies another head than the World it is checked against (PROTOCOL-77.1:
+  a stale certificate of an older base, or a forged World under a genuine one) -/
+  | otherHead
   deriving DecidableEq, Repr
 
 def CertRefusal.name : CertRefusal → String
   | .badCertificate => "badCertificate" | .otherWorld => "otherWorld" | .unlisted _ => "unlisted"
   | .repeated _ => "repeated" | .badCertifySignature _ => "badCertifySignature"
-  | .belowThreshold .. => "belowThreshold"
+  | .belowThreshold .. => "belowThreshold" | .noAuthority => "noAuthority" | .otherHead => "otherHead"
 
 /-- The constructor's index, the thing a name must determine (`Proofs.Head.CertRefusal.name_injective`). -/
 def CertRefusal.tag : CertRefusal → Nat
   | .badCertificate => 0 | .otherWorld => 1 | .unlisted _ => 2 | .repeated _ => 3
-  | .badCertifySignature _ => 4 | .belowThreshold .. => 5
+  | .badCertifySignature _ => 4 | .belowThreshold .. => 5 | .noAuthority => 6 | .otherHead => 7
+
+/-- One refusal of every name (arguments are placeholders; a name drops them). -/
+def CertRefusal.all : List CertRefusal :=
+  [.badCertificate, .otherWorld, .unlisted 0, .repeated 0, .badCertifySignature 0, .belowThreshold 0 0,
+   .noAuthority, .otherHead]
 
 /-- Decode the certified bytes, checking nothing they state. -/
 def certifiedSaid (X : Ctx D) (u : ByteArray) : Option (Head D) :=
@@ -358,11 +369,13 @@ def certifySigners (X : Ctx D) (auth : Authority) (msg : ByteArray) :
           else if !X.verify k msg s then .error (.badCertifySignature i)
           else certifySigners X auth msg rest (i :: seen)
 
-/-- Decode and verify under `auth`: the certificate is for `origin`, and at least `auth.threshold`
-distinct listed certifiers each signed its certified bytes under `domCertify`. The one path every
+/-- Decode and verify under `auth`: the authority names somebody (`noAuthority` otherwise: a
+threshold of 0 would take a certificate with no signature), the certificate is for `origin`, and at
+least `auth.threshold` distinct listed certifiers each signed its certified bytes under `domCertify`. The one path every
 party that trusts a head without a World (a thin joiner, a foreign World, a phone) will run. -/
 def certified (X : Ctx D) (auth : Authority) (origin : D) (b : ByteArray) :
     Except CertRefusal (Certificate D) :=
+  if auth.threshold = 0 then .error .noAuthority else
   match certificateOfBytes X b with
   | none => .error .badCertificate
   | some c =>
@@ -372,5 +385,21 @@ def certified (X : Ctx D) (auth : Authority) (origin : D) (b : ByteArray) :
       | .ok signers =>
           if signers.length < auth.threshold then .error (.belowThreshold signers.length auth.threshold)
           else .ok c
+
+/-- **A World's head, certified under the World's own authority** (PROTOCOL-77.1): what a member
+adopting a base asks of the writer's certificate `b`. Under an authority that names nobody nothing
+is asked (`ok`: every World today, `Authority.none`); otherwise `b` verifies under that authority
+(`certified`) and certifies exactly `headOf w` (`otherHead` else). A World that carries no single
+authority cell is refused `noAuthority` (no honest fold reaches one: `authorityOf_honest_fold`). The
+authority is read off `w`, so the caller must already trust `w`'s bytes (a pin binds them); what
+this adds is the writer's own signature on the head, non-repudiable to anyone holding the genesis. -/
+def certifiesWorld (X : Ctx D) (w : World D) (b : ByteArray) : Except CertRefusal Unit :=
+  match authorityOf w with
+  | none => .error .noAuthority
+  | some auth =>
+      if auth.threshold = 0 then .ok ()
+      else match certified X auth w.origin b with
+        | .error r => .error r
+        | .ok c => if c.head = headOf X.env w then .ok () else .error .otherHead
 
 end Nanodregg.Protocol.Head

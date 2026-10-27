@@ -14,20 +14,20 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | Lean lines (Census) | 1211 | — |
 | Lean lines (Codec) | 13777 | — |
 | Lean lines (Emit) | 1858 | — |
-| Lean lines (Host) | 18369 | — |
+| Lean lines (Host) | 18385 | — |
 | Lean lines (Hosting) | 13750 | — |
 | Lean lines (Kernel) | 38711 | — |
 | Lean lines (Lang) | 49658 | — |
 | Lean lines (Ledger) | 2913 | — |
 | Lean lines (Ops) | 2558 | — |
-| Lean lines (Protocol) | 15210 | — |
+| Lean lines (Protocol) | 15335 | — |
 | Lean lines (Spec) | 1425 | — |
 | Lean lines (Web) | 427 | — |
-| Lean lines (deployed) | 32038 | — |
-| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 24302 | — |
+| Lean lines (deployed) | 32098 | — |
+| Lean lines (tooling: Sim, Rows, Journey, Census, Emit, Ops, Bench) | 24364 | — |
 | foundation modules | 7 | 8 |
 | max dependents of a non-foundation module | 417 | — |
-| theorems | 6701 | — |
+| theorems | 6703 | — |
 | partial defs (deployed) | 0 | 0 |
 | sorry | 0 | 0 |
 | native (extern/implemented_by) | 12 | 12 |
@@ -45,5 +45,5 @@ edit it, never pass it as a PATH). Ceilings live in `gates/ceilings.tsv`. A rise
 | refusal constructors | 86 | — |
 | protocol status codes | 6 | — |
 | protocol step codes | 7 | — |
-| conformance rows | 51 | — |
+| conformance rows | 52 | — |
 | Rust lines (nd-members) | 701 | 701 |

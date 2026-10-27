@@ -151,6 +151,10 @@ inductive Refusal (D : Type)
   | forkedPost (steps : Nat) (member : Option D)
   /-- `sync --check`: the attestation refused by `Protocol.Head`'s name -/
   | attest (r : Head.Refusal)
+  /-- `adopt`: under an authority that names certifiers, the base the pin bound is not certified by
+  the writer's certificate the page carried, by `Protocol.Head`'s name (`Head.certifiesWorld`,
+  PROTOCOL-77.1); the download is dropped and nothing adopted -/
+  | certified (r : Head.CertRefusal)
 
 /-- A step answered to the client. -/
 inductive Reply
@@ -202,6 +206,7 @@ def Refusal.name : Refusal D → String
   | .ahead _ => "ahead"
   | .forkedPost .. => "forkedPost"
   | .attest r => r.name
+  | .certified r => r.name
 
 def refused (r : Refusal D) : Reply :=
   .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
@@ -1108,7 +1113,7 @@ def hintReps : List (Refusal Nat) :=
   [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
    .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
    .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0, .forkedPost 0 none] ++
-  Head.Refusal.all.map Refusal.attest ++
+  Head.Refusal.all.map Refusal.attest ++ Head.CertRefusal.all.map Refusal.certified ++
   ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
     .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :
     List ParseRefusal).map Refusal.parse ++
@@ -1538,6 +1543,11 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                         if !atGenesis w then drop (.notAtGenesis w.steps) else
                         -- the pin binds the World's bytes, origin included; this says so by name
                         if w'.origin ≠ me.world then drop .wrongWorld else
+                        -- the writer's certificate of the base, under the base's own authority
+                        -- (PROTOCOL-77.1): asked only when that authority names certifiers
+                        match Head.certifiesWorld X w' page.certificate with
+                        | .error r => ({ f with download := none }, .steps [], refusedAt X (.certified r))
+                        | .ok () =>
                         ({ world := w', download := none, verified := none }, .adopt w',
                           printed s!"adopted {pin.steps} {Text.toHex pin.digest}\n")
                     | .ok (.more d) =>

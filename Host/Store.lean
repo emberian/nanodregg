@@ -52,6 +52,17 @@ def indexPathAt (dir : System.FilePath) (k0 : Nat) : System.FilePath := (StorePa
 def baseTmpPath (dir : System.FilePath) : System.FilePath := dir / "base.tmp"
 def segTmpPath (dir : System.FilePath) : System.FilePath := dir / "seg.tmp"
 def indexTmpPath (dir : System.FilePath) : System.FilePath := dir / "index.tmp"
+/-- The writer's certificate of its newest base's head (PROTOCOL-77.1; the producer is HOST-80): self-authenticating
+(its signatures are checked by whoever reads it, under the World's genesis authority), so it carries
+no Store MAC; replaced atomically by `certTmpPath` → rename; absent until the writer certifies. -/
+def certPath (dir : System.FilePath) : System.FilePath := dir / "base.cert"
+def certTmpPath (dir : System.FilePath) : System.FilePath := dir / "cert.tmp"
+
+/-- The certificate file's bytes, or empty: absent, or past a frame (no frame could carry it). -/
+def readCert (dir : System.FilePath) : IO ByteArray := do
+  unless ← (certPath dir).pathExists do return ByteArray.empty
+  let b ← IO.FS.readBinFile (certPath dir)
+  return if b.size ≤ Protocol.Bounds.frameBytesMax then b else ByteArray.empty
 
 /-- The first of `files` absent from `dir`, or none. Every open runs it before its first handle
 (HOST-35), so a missing Store file is refused `missing` by name, never an IO exception from the

@@ -357,52 +357,46 @@ theorem certifySigners_ok {X : Ctx D} {auth : Authority} {msg : ByteArray} :
               · exact .inr ⟨s', k', List.mem_cons_of_mem _ hm, hk', hv'⟩
 
 omit [Ord D] in
-/-- What `certified` accepted: the bytes decode to it, it names `origin`, and at least `threshold`
-distinct listed certifiers each signed its certified bytes under `domCertify`. -/
+/-- What `certified` accepted: the authority names somebody, the bytes decode to it, it names
+`origin`, and at least `threshold` (at least one) distinct listed certifiers each signed its
+certified bytes under `domCertify`. -/
 theorem certified_ok {X : Ctx D} {auth : Authority} {origin : D} {b : ByteArray} {c : Certificate D}
     (h : certified X auth origin b = .ok c) :
-    certificateOfBytes X b = some c ∧ c.head.origin = origin ∧
+    0 < auth.threshold ∧ certificateOfBytes X b = some c ∧ c.head.origin = origin ∧
       ∃ signers : List Nat, signers.Nodup ∧ auth.threshold ≤ signers.length ∧
         ∀ i ∈ signers, ∃ s k, (i, s) ∈ c.sigs ∧ auth.certifiers[i]? = some k ∧
           X.verify k (certifyMessage c.certified) s = true := by
   unfold certified at h
   split at h
   · cases h
-  · rename_i c' hb
+  · rename_i ht0
     split at h
     · cases h
-    · rename_i ho
+    · rename_i c' hb
       split at h
       · cases h
-      · rename_i signers hs
+      · rename_i ho
         split at h
         · cases h
-        · rename_i hlt
-          cases h
-          obtain ⟨hn, -, -, hall⟩ := certifySigners_ok List.nodup_nil hs
-          refine ⟨hb, by simpa using ho, signers, hn, by omega, fun i hi => ?_⟩
-          rcases hall i hi with hi' | hrest
-          · simp at hi'
-          · exact hrest
+        · rename_i signers hs
+          split at h
+          · cases h
+          · rename_i hlt
+            cases h
+            obtain ⟨hn, -, -, hall⟩ := certifySigners_ok List.nodup_nil hs
+            refine ⟨by omega, hb, by simpa using ho, signers, hn, by omega, fun i hi => ?_⟩
+            rcases hall i hi with hi' | hrest
+            · simp at hi'
+            · exact hrest
 
 omit [Ord D] in
-/-- **Today's authority certifies nothing**: under `Authority.none` a certificate that names any
-signer is `unlisted`, and one that names none passes only because the threshold is 0 — a verifier
-given `Authority.none` learns exactly what it learns today, the head's bare word. -/
-theorem certified_none_unlisted {X : Ctx D} {origin : D} {b : ByteArray} {c : Certificate D}
-    (hb : certificateOfBytes X b = some c) (ho : c.head.origin = origin) {i : Nat} {s : ByteArray}
-    (hs : c.sigs.head? = some (i, s)) :
-    certified X Authority.none origin b = .error (.unlisted i) := by
-  unfold certified
-  rw [hb]
-  simp only [ho, ne_eq, not_true_eq_false, if_false]
-  cases hsigs : c.sigs with
-  | nil => simp [hsigs] at hs
-  | cons p rest =>
-    rw [hsigs] at hs
-    simp only [List.head?_cons, Option.some.injEq] at hs
-    subst hs
-    simp [certifySigners, Authority.none]
+/-- **An authority that names nobody certifies nothing** (PROTOCOL-77.1): under `Authority.none` every
+bytes are refused `noAuthority`, a certificate with no signature included — a verifier given
+`Authority.none` learns exactly what it learns today, the head's bare word, and never mistakes it for
+a certified one. -/
+theorem certified_none (X : Ctx D) (origin : D) (b : ByteArray) :
+    certified X Authority.none origin b = .error .noAuthority := by
+  simp [certified, Authority.none]
 
 /-- Distinct naturals below `n` number at most `n` (`nodup_window_length` at the window `[0, n)`). -/
 theorem nodup_lt_length {n : Nat} {l : List Nat} (hn : l.Nodup) (hb : ∀ x ∈ l, x < n) :
@@ -427,8 +421,8 @@ theorem certified_intersect {X : Ctx D} {auth : Authority} {origin : D} {b₁ b�
     ∃ i k, auth.certifiers[i]? = some k ∧
       (∃ s, (i, s) ∈ c₁.sigs ∧ X.verify k (certifyMessage c₁.certified) s = true) ∧
       (∃ s, (i, s) ∈ c₂.sigs ∧ X.verify k (certifyMessage c₂.certified) s = true) := by
-  obtain ⟨-, -, s₁, hn₁, ht₁, hall₁⟩ := certified_ok h₁
-  obtain ⟨-, -, s₂, hn₂, ht₂, hall₂⟩ := certified_ok h₂
+  obtain ⟨-, -, -, s₁, hn₁, ht₁, hall₁⟩ := certified_ok h₁
+  obtain ⟨-, -, -, s₂, hn₂, ht₂, hall₂⟩ := certified_ok h₂
   -- pigeonhole over the two signer lists: disjoint and distinct, they would number 2t > n
   have hcommon : ∃ i ∈ s₁, i ∈ s₂ := by
     refine Decidable.byContradiction fun hno => ?_
@@ -466,9 +460,32 @@ theorem certified_equivocation {X : Ctx D} {auth : Authority} {origin : D} {b₁
       c₁.certified ≠ c₂.certified ∧ c₁.head.steps = c₂.head.steps := by
   obtain ⟨i, k, hk, ha, hb⟩ := certified_intersect h₁ h₂ hq
   refine ⟨i, k, hk, ha, hb, fun he => hc ?_, hs⟩
-  have e₁ := certificateOfBytes_head (certified_ok h₁).1
-  have e₂ := certificateOfBytes_head (certified_ok h₂).1
+  have e₁ := certificateOfBytes_head (certified_ok h₁).2.1
+  have e₂ := certificateOfBytes_head (certified_ok h₂).2.1
   rw [he, e₂] at e₁
   exact (congrArg Head.chain (Option.some.inj e₁)).symm
+
+/-- **What a certified adoption knows** (PROTOCOL-77.1): when `certifiesWorld` accepts a World whose
+authority names somebody, the bytes are a certificate under THAT authority (at least its threshold of
+distinct listed certifiers signed them, `certified_ok`) of exactly the World's own head: origin, step
+count, height, roots and chain. -/
+theorem certifiesWorld_ok {X : Ctx D} {w : World D} {b : ByteArray} {auth : Authority}
+    (h : certifiesWorld X w b = .ok ()) (ha : authorityOf w = some auth) (ht : 0 < auth.threshold) :
+    ∃ c, certified X auth w.origin b = .ok c ∧ c.head = headOf X.env w := by
+  unfold certifiesWorld at h
+  rw [ha] at h
+  simp only [Nat.pos_iff_ne_zero.mp ht, if_false] at h
+  split at h
+  · cases h
+  · rename_i c hc
+    split at h
+    · rename_i he
+      exact ⟨c, hc, he⟩
+    · cases h
+
+/-- Under an authority that names nobody `certifiesWorld` asks nothing: every World today. -/
+theorem certifiesWorld_none {X : Ctx D} {w : World D} (b : ByteArray) (ha : authorityOf w = some Authority.none) :
+    certifiesWorld X w b = .ok () := by
+  simp [certifiesWorld, ha, Authority.none]
 
 end Nanodregg.Protocol.Head

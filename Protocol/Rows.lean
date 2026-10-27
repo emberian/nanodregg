@@ -227,6 +227,9 @@ inductive Mutation
   | lieTip
   /-- the writer serves its newest base with one World byte flipped, stating the honest digest -/
   | forgeBase
+  /-- the writer's certificate of its base carries a flipped signature byte: a forged certification
+  (PROTOCOL-77.1) -/
+  | forgeCertificate
   /-- the writer refuses an expired envelope by the name alone, stating no height (PROTOCOL-12's
   shape, before PROTOCOL-19) -/
   | unstatedExpiry
@@ -1771,10 +1774,11 @@ def forkRow : Row where
       fault := .cold }])
   plant := .caught .ignoreAnchor 10 .ok
 
-/-- A self-head object's seed: an `at` head at step 0 (the law judges a seed's shape only) of THIS
-World (`world` its origin, bound by the harness). -/
+/-- A self-head object's seed: an `at` head at step 0 of THIS World, stating what the World held
+there: the genesis chain and roots (`chain0`, `roots0`, bound by the harness from the genesis World;
+a seed is a claim at its step, HOST-79, cv 01a17a38-366e), and `world` its origin. -/
 def selfHeadSeed : String :=
-  "(record (head (at (record (chain #{@sponsor}) (height 0) (roots #{@sponsor}) (steps 0)))) (world #{@world}))"
+  "(record (head (at (record (chain #{@chain0}) (height 0) (roots #{@roots0}) (steps 0)))) (world #{@world}))"
 
 /-- PROTOCOL-75 (DESIGN-TRUST T2: self-heads through the writer). The sponsor installs `Std.head`
 (`world/head/Head`), creates its own head object of THIS World and posts its head at the tip
@@ -1804,11 +1808,33 @@ def selfHeadRow : Row where
     ok "operator" ["sync"]])
   plant := .measured "Head.forkedSelfPost := none: line 12 ends ok (MEASURED on hbox, PROTOCOL-75)"
 
+/-- PROTOCOL-77.1 (DESIGN-TRUST T3b, the consumers): the rows' World names the writer's certify key as
+its one certifier (threshold 1, `Writer.authority`), so a thin member adopts a base only when the
+writer's certificate of that base's head verifies under the genesis authority and certifies exactly
+the World the pinned bytes decode to (`Head.certifiesWorld`). The operator seals and pins its own
+World; the thin member adopts it, certified, and reads past it. The plant forges the certification
+(`forgeCertificate`: one signature byte flipped by the writer): line 14, the adopt, is refused
+`badCertifySignature` by name and nothing is adopted. -/
+def certifiedRow : Row where
+  name := "certified"
+  replaces := []
+  ops := everyWrite ++ [.read]
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ join "sponsor" "thin" ++ [
+    okBind "sponsor" ["grant", "@shared", "@thin", "observe,mutate"] "gt",
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "operator" ["read", "@shared", "2=1"],
+    { actor := "operator", act := .seal, expect := .ok },
+    okBind "operator" ["invite", "@inputs"] "pin",
+    ok "thin" ["adopt", "@pin", "@operator.key"],
+    ok "thin" ["read", "@shared", "2=1"]])
+  plant := .caught .forgeCertificate 14 (.refused "badCertifySignature")
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow, forkRow, selfHeadRow]
+   forgedRefusalRow, forkRow, selfHeadRow, certifiedRow]
 
 end Nanodregg.Protocol

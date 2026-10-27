@@ -77,12 +77,13 @@ def chainKept {m : Type → Type} [Monad m] (keys : Keys) (k0 : Nat) (read readI
 /-- A deferred reply from the Store's files: a `log` page from the segment files, located through
 the kept index file (every entry it reads is checked at its position, `Page.entryAt`) and the
 loop's entries since the base (`pageKept`), and a `read` page from the newest base (opened per page: the base
-is replaced, never written in place). -/
+is replaced, never written in place) with the certificate file beside it (`readCert`, PROTOCOL-77.1). -/
 def pager (keys : Keys) (files : PageFiles) (r : Resident (World D)) :
     Deferred → IO (UInt8 × ByteArray)
   | .read start => do
     let base ← File.open (basePath files.dir) .read
-    match ← Page.basePage Page.budget (fun off len => base.readAt off.toUInt64 len.toUSize) r.sealed start with
+    let cert ← readCert files.dir
+    match ← Page.basePage Page.budget (fun off len => base.readAt off.toUInt64 len.toUSize) r.sealed cert start with
     | .error f => return named f.name
     | .ok b => return (Protocol.Status.ok.code, b)
   | .log start => do

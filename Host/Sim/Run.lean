@@ -1258,9 +1258,10 @@ def run (args : List String) : IO UInt32 := do
   let mut readPages := 0
   for _ in List.range (r.resident.sealed.bytes / 100 + 2) do
     if r.resident.sealed.bytes ≤ got.size then break
-    let (st, p) ← memBasePage 100 basesRef r.resident got.size
+    -- 100 bytes a page: the budget less the empty certificate's 4-byte length (PROTOCOL-77.1)
+    let (st, p) ← memBasePage 104 basesRef r.resident ByteArray.empty got.size
     match Protocol.readReplyFrame.decode p with
-    | .ok (h, t, d, c, b, ()) =>
+    | .ok (h, t, d, c, b, _, ()) =>
       unless st = Protocol.Status.ok.code ∧ Protocol.Text.ofU64 h.1 = some r.resident.sealed.steps do
         readOk := false
       unless Protocol.Text.ofU64 t.1 = some r.resident.sealed.bytes ∧ d.1 = r.resident.sealed.digest ∧
@@ -1271,7 +1272,7 @@ def run (args : List String) : IO UInt32 := do
     (readOk && got == worldBytesOf r.bases.file r.resident.sealed.bytes &&
       keys.worldDigest got == r.resident.sealed.digest) failures
   check "plant-read-past-end: a read past the World bytes is refused `pastEnd`"
-    ((← memBasePage 100 basesRef r.resident (r.resident.sealed.bytes + 1)).2 == "pastEnd".toUTF8) failures
+    ((← memBasePage 104 basesRef r.resident ByteArray.empty (r.resident.sealed.bytes + 1)).2 == "pastEnd".toUTF8) failures
   -- waste (law 5): work done ÷ work the operation must do
   let records := (Log.recover keys.segment cadence.recordBytesMax origin.tag.bytes
     (r.disk.synced.extract origin.offset r.disk.synced.size)).records

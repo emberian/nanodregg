@@ -21,6 +21,7 @@ import Host.Open
 import Host.Record
 import Host.Sim.MemStore
 import Host.Page
+import Protocol.Head
 
 namespace Nanodregg.Protocol.Rows.Writer
 
@@ -50,6 +51,9 @@ structure Params (D : Type) [Ord D] where
   /-- `read` pages serve the newest base with one World byte flipped, stating the honest digest (a
   plant: a forged base) -/
   forgeBase : Bool := false
+  /-- the writer's certificate of its base carries a flipped signature byte (a plant: a forged
+  certification, PROTOCOL-77.1) -/
+  forgeCertificate : Bool := false
   /-- an `expired` refusal states the name alone, no height (a plant: the shape before
   PROTOCOL-19, which leaves a follower more than a window behind unable to catch up) -/
   unstatedExpiry : Bool := false
@@ -151,14 +155,43 @@ def checkpoint (P : Params D) (m : Mem) : Checkpoint (World D) :=
   Host.Sim.memCheckpoint m.disk m.bases P.R.keys (cadence P) P.R.world (mark P)
     (fun w => P.X.env.bytes (World.genesisChain P.X.env w.origin))
 
+/-- The rows' certifier secret: the key the writer certifies its bases under, listed as the one
+certifier (threshold 1) of every World the rows make (`authority`, PROTOCOL-77.1). The harness holds it
+and signs as the deployed writer's custody does (HOST-80); the follower only ever sees the
+certificate. -/
+def certifierSecret : ByteArray := "key:writer:certify".toUTF8
+
+/-- The rows' genesis authority: the writer's certify key, threshold 1. -/
+def authority (R : Rows.Params D) : Authority := ⟨[R.pub certifierSecret], 1⟩
+
+/-- The writer's certificate of its newest base's head (PROTOCOL-77.1): the base's World decoded from
+the base file, its head (`Head.headOf`) signed under `domCertify` with the rows' certifier key at its
+index in that World's authority; empty when the authority does not list it (or the base does not
+decode). `forgeCertificate` flips the signature's first byte. -/
+def certificate (P : Params D) (m : Mem) (r : Resident (World D)) : IO ByteArray := do
+  let file := (← m.bases.get).file
+  match P.R.world.decode (worldBytesOf file r.sealed.bytes) with
+  | .error _ => pure ByteArray.empty
+  | .ok w =>
+    match authorityOf w with
+    | none => pure ByteArray.empty
+    | some auth =>
+      match auth.certifiers.idxOf? (P.R.pub certifierSecret), Head.certifiedBytes P.X.env (Head.headOf P.X.env w) with
+      | some i, some u =>
+          let sig := P.R.sign certifierSecret (Head.certifyMessage u)
+          let sig := if P.forgeCertificate then Host.Sim.flipByte sig 0 else sig
+          pure ((Head.certificateBytes u [(i, sig)]).getD ByteArray.empty)
+      | _, _ => pure ByteArray.empty
+
 /-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes
 and `index.log` (`Host.Page.entryAt`): what `Host.Deployed.pager` does over the files. -/
 def pager (P : Params D) (m : Mem) (r : Resident (World D)) : Deferred → IO (UInt8 × ByteArray)
   | .read start => do
-    if !P.forgeBase then Host.Sim.memBasePage Page.budget m.bases r start else
+    let cert ← certificate P m r
+    if !P.forgeBase then Host.Sim.memBasePage Page.budget m.bases r cert start else
     -- the World bytes follow the base frame's 4-byte length; flip one in the middle
     let file := Host.Sim.flipByte (← m.bases.get).file (4 + r.sealed.bytes / 2)
-    match Id.run (Page.basePage Page.budget (fun off len => pure (file.extract off (off + len))) r.sealed start) with
+    match Id.run (Page.basePage Page.budget (fun off len => pure (file.extract off (off + len))) r.sealed cert start) with
     | .ok b => pure (Status.ok.code, b)
     | .error f => pure (Status.refused.code, f.name.toUTF8)
   | .log start => do

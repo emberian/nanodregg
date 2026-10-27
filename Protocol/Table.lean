@@ -412,9 +412,12 @@ the log, KERNEL-47, PROTOCOL-41) and `chain` are the base World's,
 `bytes` = World bytes `[start, start + chunk)`. All numbers are u64le. A seal between two pages
 changes `steps` and `digest`, and the member starts its download again. The member trusts none of
 it: it accepts the assembled bytes only if they hash to a base digest it pinned out of band
-(`Protocol.Thin.accept`; a forged byte is `baseMismatch`). -/
+(`Protocol.Thin.accept`; a forged byte is `baseMismatch`). Last, the writer's CERTIFICATE of the
+base's head (PROTOCOL-77.1; empty when it holds none): under an authority that names certifiers the
+member adopts only a base whose head it certifies (`Thin.finish`). The writer's page budget pays
+for it: `Host.Page.basePage` serves `budget` bytes less the certificate's encoding. -/
 def readReplyLayout : Codec.Layout :=
-  [.bytes "steps", .bytes "total", .bytes "digest", .bytes "chain", .bytes "bytes"]
+  [.bytes "steps", .bytes "total", .bytes "digest", .bytes "chain", .bytes "bytes", .bytes "certificate"]
 
 /-! The bounds the client and the supervisor enforce before allocating. -/
 namespace Bounds

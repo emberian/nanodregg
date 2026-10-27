@@ -136,6 +136,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .advanceOnSend => { writer := { R, X := R.ctx }, follow := R.ctx, advanceOnSend := true }
   | some .lieTip => { writer := { R, X := R.ctx, lieTip := true }, follow := R.ctx }
   | some .forgeBase => { writer := { R, X := R.ctx, forgeBase := true }, follow := R.ctx }
+  | some .forgeCertificate => { writer := { R, X := R.ctx, forgeCertificate := true }, follow := R.ctx }
   | some .unstatedExpiry => { writer := { R, X := R.ctx, unstatedExpiry := true }, follow := R.ctx }
   | some .ignoreNotBefore => { writer := { R, X := R.ctx, ignoreNotBefore := true }, follow := R.ctx }
   | some .forgottenRefused => { writer := { R, X := R.ctx, forgottenRefused := true }, follow := R.ctx }
@@ -945,7 +946,7 @@ def secondWriter (sameNonce : Bool) : M D (Except String (Writer.Running D)) := 
   let R := st.sys.writer.R
   let nonce := if sameNonce || st.sys.nonceRepeats then Rows.Params.nonce else flipLast Rows.Params.nonce
   let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest X (keyOf R n 1))
-  let g ← match Receive.genesis X Rows.Params.worldName nonce Rows.Params.allowance fs Authority.none with
+  let g ← match Receive.genesis X Rows.Params.worldName nonce Rows.Params.allowance fs (Writer.authority R) with
     | .ok g => pure g
     | .error r => return .error s!"genesis refused {r.name}"
   match ← Writer.genesisStore st.sys.writer g with
@@ -1309,7 +1310,7 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
     | some b => { s with writer := { s.writer with pageBudget := b } }
     | none => s
   let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest s.writer.X (keyOf R n 1))
-  let g ← match Receive.genesis s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs Authority.none with
+  let g ← match Receive.genesis s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs (Writer.authority R) with
     | .ok g => pure g
     | .error r => throw (IO.userError s!"genesis refused {r.name}")
   let (mem, r₀) ← match ← Writer.genesisStore s.writer g with
@@ -1322,9 +1323,9 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
   -- the World's origin inputs, as the founders hold them (`host genesis` prints them), and another
   -- World's (the nonce changed)
   let inputs := Invite.inputBytes s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs
-    Authority.none
+    (Writer.authority R)
   let other := Invite.inputBytes s.writer.X Rows.Params.worldName (flipLast Rows.Params.nonce)
-    Rows.Params.allowance fs Authority.none
+    Rows.Params.allowance fs (Writer.authority R)
   -- the founding invitation: the sponsor's, pinning the genesis World
   let invitation ← match Invite.unsignedBytes s.writer.X inputs
       ⟨g.steps, (base R).digest (R.world.bytes g)⟩ (founderId s.writer.X g.origin 0) (keyOf R "sponsor" 0) with
@@ -1335,7 +1336,8 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
   let binds := founders.zipIdx.flatMap (fun (n, i) =>
     [(n, hex (founderId s.writer.X g.origin i)),
      (n ++ ".grant", hex (founderGrantId s.writer.X g.origin i))]) ++
-    [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other), ("world", hex g.origin)] ++
+    [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other), ("world", hex g.origin),
+     ("chain0", hex g.chain), ("roots0", hex (g.roots s.writer.X.env))] ++
     (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf R n 0))
   let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, first := g, binds, invitation }
   let steps := match ← st.host.stop with

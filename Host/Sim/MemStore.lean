@@ -130,11 +130,11 @@ def memGenesis {W F : Type} (keys : Keys) (c : Cadence) (world : Codec.Stream W)
         { world := o.opened.world, pos := o.pos, sealed := o.sealed, index := o.index })
 
 /-- A `read` page over the in-memory base (`Host.Page.basePage`, what `Host.Deployed.pager` does
-over base.world). -/
-def memBasePage {W : Type} (budget : Nat) (bases : IO.Ref Bases) (r : Resident W) (start : Nat) :
-    IO (UInt8 × ByteArray) := do
+over base.world), with the certificate the caller holds for it. -/
+def memBasePage {W : Type} (budget : Nat) (bases : IO.Ref Bases) (r : Resident W) (cert : ByteArray)
+    (start : Nat) : IO (UInt8 × ByteArray) := do
   let file := (← bases.get).file
-  match Id.run (Page.basePage budget (fun off len => pure (file.extract off (off + len))) r.sealed start) with
+  match Id.run (Page.basePage budget (fun off len => pure (file.extract off (off + len))) r.sealed cert start) with
   | .ok b => return (Protocol.Status.ok.code, b)
   | .error f => return (Protocol.Status.refused.code, f.name.toUTF8)
 

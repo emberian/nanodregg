@@ -248,20 +248,23 @@ def bytes (a : Acc) (tipSteps tipHeight baseSteps : Nat) (baseDigest : ByteArray
   | _, _, _, _, _, _, _ => .error .tooLarge
 
 /-- A `read` page (HOST-15): the newest base's World bytes from byte `start`, at most `budget` of
-them, with the base's step count, total size, digest and chain (`readReplyLayout`). `readBase off len`
-reads the base file. A seal that replaces the file between pages changes the stated digest, and
+them less the certificate's encoding, with the base's step count, total size, digest and chain and
+the writer's certificate of the base's head (`readReplyLayout`; `cert` empty when the writer holds
+none, PROTOCOL-77.1; it is served as read, never checked here: the member decides it). `readBase off
+len` reads the base file. A seal that replaces the file between pages changes the stated digest, and
 the member restarts. A reader that sees the new file under the old header produces bytes that do not hash
 to the stated digest, and the member's `Thin.accept` refuses them. One pread, O(page). -/
-def basePage (budget : Nat) (readBase : Nat → Nat → m ByteArray) (sealed : Sealed) (start : Nat) :
-    m (Except Fault ByteArray) := do
+def basePage (budget : Nat) (readBase : Nat → Nat → m ByteArray) (sealed : Sealed) (cert : ByteArray)
+    (start : Nat) : m (Except Fault ByteArray) := do
   if sealed.bytes < start then return .error (.pastEnd start sealed.bytes)
-  let len := min budget (sealed.bytes - start)
+  let len := min (budget - (4 + cert.size)) (sealed.bytes - start)
   let b ← readBase (worldStart + start) len
   if b.size ≠ len then return .error .shortBase
   let f := Protocol.Text.fit Protocol.Bounds.frameBytesMax
   match f (Protocol.Text.u64 sealed.steps), f (Protocol.Text.u64 sealed.bytes), f sealed.digest,
-      f sealed.chain, f b with
-  | some h, some t, some d, some c, some p => return .ok (Protocol.readReplyFrame.bytes (h, t, d, c, p, ()))
-  | _, _, _, _, _ => return .error .tooLarge
+      f sealed.chain, f b, f cert with
+  | some h, some t, some d, some c, some p, some k =>
+      return .ok (Protocol.readReplyFrame.bytes (h, t, d, c, p, k, ()))
+  | _, _, _, _, _, _ => return .error .tooLarge
 
 end Nanodregg.Host.Page

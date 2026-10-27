@@ -53,19 +53,22 @@ structure Page where
   digest : ByteArray
   chain : ByteArray
   bytes : ByteArray
+  /-- the writer's certificate of the base's head, as carried (empty: none); decided at the end of
+  the download, on the World it decodes to (`Protocol.Head.certifiesWorld`, PROTOCOL-77.1) -/
+  certificate : ByteArray
 
 def Page.ofBytes (b : ByteArray) : Option Page :=
   match readReplyFrame.decode b with
-  | .ok (h, t, d, c, x, ()) => do
+  | .ok (h, t, d, c, x, k, ()) => do
       pure { steps := ← Text.ofU64 h.1, total := ← Text.ofU64 t.1, digest := d.1, chain := c.1,
-             bytes := x.1 }
+             bytes := x.1, certificate := k.1 }
   | .error _ => none
 
 /-- A page's wire bytes, or `none` when a field does not fit a frame. -/
 def Page.toBytes (p : Page) : Option ByteArray := do
   let f := Text.fit Bounds.frameBytesMax
   pure (readReplyFrame.bytes (← f (Text.u64 p.steps), ← f (Text.u64 p.total), ← f p.digest,
-    ← f p.chain, ← f p.bytes, ()))
+    ← f p.chain, ← f p.bytes, ← f p.certificate, ()))
 
 /-- Why a base is not adopted (law 7). -/
 inductive Refusal
