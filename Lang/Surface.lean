@@ -16,7 +16,7 @@ text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_
               kind    ::= account | credit | grant | transfer | (invoke T)   — T the argument the invoke sends (LANG-77)
               | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))
               | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))
-              | (activity cursor log [(limits cursorLimit logLimit)] [(patience n)] [(expose m…)]
+              | (activity cursor log [(limits cursorLimit logLimit)] [(patience n)] [(withdraw)] [(expose m…)]
                   [(guards q w)] [(refusals "r" "u" "c")] (resumer e) plan…)
               | (machine f initial (methods m…) (from m to)…) | (guard g body)
     plan    ::= (plan name (arg T) (resp U) [(pre e)] (start e) (resume e))
@@ -34,6 +34,8 @@ req. Its cursor and continuation are rows under self. The generated start_name/r
 methods and retire method use the same row guards and install checker as handwritten methods.
 `(patience n)` (LANG-76, n > 0 heights) adds a `timeout` method: an unanswered row may be retracted
 by anyone at or past its key's `notBefore` + n; without it an unanswered row waits for its resumer.
+`(withdraw)` (LANG-97) lets the member that started a row retract it, unanswered, at any time, with
+its cursor row; the deadline stays everyone else's.
 
 Every annotation the lowering writes comes from a declaration; nothing is inferred, so the
 surface never decides a type (the checker does). A method binds `rows state arg req`, a law
@@ -781,6 +783,9 @@ def activityDecl (c : Ctx) (p : Nat) (cursor log : Label) (xs : List SExp)
       | some n => pure (some n, rest)
       | none => throw (.badClause q)
     | _ => pure (none, rest)
+  let (withdraw, rest) ← match rest with
+    | .list _ [.atom _ "withdraw"] :: rest => pure (true, rest)
+    | _ => pure (false, rest)
   let (expose, rest) ← match rest with
     | .list _ (.atom _ "expose" :: names) :: rest =>
       pure (some (← labelsOf names), rest)
@@ -816,10 +821,10 @@ def activityDecl (c : Ctx) (p : Nat) (cursor log : Label) (xs : List SExp)
             [("state", c.state), ("captured", K), ("response", R), ("req", reqTy)] resume } : Std.ActivityPlan)
       | _ => throw (.badClause q)
     | _ => throw (.badClause x.pos)
-  match Std.activity c.state cursor log cursorLimit logLimit resumer plans patience with
+  match Std.activity c.state cursor log cursorLimit logLimit resumer plans patience withdraw with
   | .ok _ =>
     let pkg := Std.activityPackage c.state cursor log cursorLimit logLimit resumer plans
-      extraRels guardNames vocabulary patience
+      extraRels guardNames vocabulary patience withdraw
     match expose with
     | none => pure pkg
     | some ns =>

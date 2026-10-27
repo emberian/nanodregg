@@ -16,7 +16,8 @@ The first target is the document's section (`Lang.Journey.Doc`: a `Std.hole` at 
 which the editor posted as a fact. Revoke the grant: the next judgment suspends the candidate by
 name (`support0 dead`) and a `select` of it is refused — the hole the agent filled is re-judged when
 its support is withdrawn — and a further aimed answer is refused by the kernel (`missingCell`: the revoked grant is a
-tombstone), the ring left pending.
+tombstone), the ring left pending. The ringer then withdraws that ring at once (LANG-97, DESIGN-AGENT
+§6.4): a ring aimed at a target that refuses does not hold the resident's queue until the patience.
 
 The LI rows run this through `Receive.submit` on the Sim, over the Bell's surface source and the
 section generator's packages linked at the Sim's ids.
@@ -176,6 +177,11 @@ def lifeRows (r0 : Run) (a b : Sim.Member) (bell : String) : Run := Id.run do
     (pinRing r.st.host k1 ++ pinFact r.st.host) forwardCells)
   r := note r s!"LI9b B answers it echoing the aim: {v16}; the ring stays pending {(storyRow r16.st.host obj 0 dP k1).isSome}; no candidate {(candidateOf r16.st.host sec dC cand2).isNone}"
     (v16.startsWith "refused missingCell" && (storyRow r16.st.host obj 0 dP k1).isSome && (candidateOf r16.st.host sec dC cand2).isNone)
+  -- LI9c (LANG-97) the ringer withdraws its own aimed ring at once: A, who aimed it through the revoked
+  -- grant, retires it before its deadline; the ring and its pending row leave, and the queue is clear
+  let (r17, v17, _) := go prog r (bellCall r a 3 (retireArg h1 a) r.st.host.height (pinRing r.st.host k1))
+  r := note r17 s!"LI9c A withdraws its own aimed ring at {h1}, before its deadline: {v17}; pending row gone {(storyRow r17.st.host obj 0 dP k1).isNone}; rings row gone {(storyRow r17.st.host obj 1 dR k1).isNone}"
+    (v17 == "admitted" && (storyRow r17.st.host obj 0 dP k1).isNone && (storyRow r17.st.host obj 1 dR k1).isNone)
   return r
 
 /-- The inbox session over the Bell's surface source. -/

@@ -41,17 +41,17 @@ private def retirementInput (key old : Data) : Data :=
   .record [("edit", .inj "retract" (.record [("key", key)])), ("old", old)]
 
 /-- Retirement of an answered continuation succeeds for every requester and
-state, whatever the vocabulary and the declared patience. The old row comes from
+state, whatever the vocabulary, the declared patience and the withdrawal. The old row comes from
 the kernel at the edited key; authorisation to answer is checked on the separate
 upsert transition. -/
 theorem activity_retire_some_meaning
     (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term)
     (key captured answer : Data) (lib : List Term) (env : Env) (state req : Val)
-    {names : ActivityVocabulary} {patience : Option Nat} :
+    {names : ActivityVocabulary} {patience : Option Nat} {withdraw : Bool} :
     BigStep lib
       ((retirementInput key (.inj "some" (.record [
         ("answered", .inj "some" answer), ("captured", captured)]))).toVal :: req :: state :: env)
-      (activityApply (activityWaiting S plans d resumer names patience) [.var 2, .var 1, .var 0])
+      (activityApply (activityWaiting S plans d resumer names patience withdraw) [.var 2, .var 1, .var 0])
       (.ok (.inj "ok" (.record []))) := by
   unfold activityApply activityWaiting
   simp only [List.foldl]
@@ -64,18 +64,48 @@ theorem activity_retire_some_meaning
   · exact .get (.var rfl) (.field rfl (.var rfl))
   exact .inj .record
 
-/-- With no declared patience an unanswered continuation cannot be retired: the
-guard returns the named refusal for arbitrary state, request, capture, key and
-vocabulary. -/
-theorem activity_retire_none_meaning
-    (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term)
-    (key captured : Data) (lib : List Term) (env : Env) (state req : Val)
-    {names : ActivityVocabulary} :
+/-! ## The starter's own withdrawal (LANG-97) -/
+
+/-- `activityOwn` with `withdraw`, over a key and a request whose agents are one digest `a`: `ok`,
+whatever `rest` is (it is never run). -/
+theorem activityOwn_same {lib : List Term} {env : Env} {kt rt rest : Term} {key req : Data} {a : ByteArray}
+    (hkt : BigStep lib env kt (.ok key.toVal)) (hrt : BigStep lib env rt (.ok req.toVal))
+    (hk : key.field "agent" = some (.digest a)) (hr : req.field "agent" = some (.digest a)) :
+    BigStep lib env (activityOwn true kt rt rest) (.ok (.inj "ok" (.record []))) := by
+  rw [activityOwn, if_pos rfl]
+  refine .iteT ?_ (.inj .record)
+  have h := BigStep.prim (p := .deq) (get_data hkt hk) (get_data hrt hr) (by simp [Data.toVal, primEval])
+  simpa [Data.toVal, primEval] using h
+
+/-- `activityOwn` for everyone else: without `withdraw`, or by a request whose agent `ra` is not
+the key's `ka`, it is `rest`'s value. -/
+theorem activityOwn_other {lib : List Term} {env : Env} {kt rt rest : Term} {key req : Data}
+    {ka ra : ByteArray} {v : Val} (withdraw : Bool)
+    (hkt : BigStep lib env kt (.ok key.toVal)) (hrt : BigStep lib env rt (.ok req.toVal))
+    (hk : key.field "agent" = some (.digest ka)) (hr : req.field "agent" = some (.digest ra))
+    (hne : ¬ (withdraw = true ∧ ka = ra)) (hrest : BigStep lib env rest (.ok v)) :
+    BigStep lib env (activityOwn withdraw kt rt rest) (.ok v) := by
+  cases withdraw with
+  | false => simpa [activityOwn] using hrest
+  | true =>
+    have hne' : ka ≠ ra := fun h => hne ⟨rfl, h⟩
+    rw [activityOwn, if_pos rfl]
+    refine .iteF ?_ hrest
+    have h := BigStep.prim (p := .deq) (get_data hkt hk) (get_data hrt hr) (by simp [Data.toVal, primEval])
+    simpa [Data.toVal, primEval, hne'] using h
+
+/-- **The starter withdraws its own unanswered row** (LANG-97): with `withdraw`, a retraction of an
+unanswered row by a request whose agent is the key's own is admitted at every patience and every
+height, for arbitrary state, capture and vocabulary; no deadline is read. -/
+theorem waiting_withdraw_own_admitted
+    (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (names : ActivityVocabulary)
+    (patience : Option Nat) (key captured req : Data) {a : ByteArray} (lib : List Term) (env : Env) (state : Val)
+    (hka : key.field "agent" = some (.digest a)) (hra : req.field "agent" = some (.digest a)) :
     BigStep lib
       ((retirementInput key (.inj "some" (.record [
-        ("answered", .inj "none" (.record [])), ("captured", captured)]))).toVal :: req :: state :: env)
-      (activityApply (activityWaiting S plans d resumer names none) [.var 2, .var 1, .var 0])
-      (.ok (.inj "refused" (.bytes "unanswered".toUTF8))) := by
+        ("answered", .inj "none" (.record [])), ("captured", captured)]))).toVal :: req.toVal :: state :: env)
+      (activityApply (activityWaiting S plans d resumer names patience true) [.var 2, .var 1, .var 0])
+      (.ok (.inj "ok" (.record []))) := by
   unfold activityApply activityWaiting
   simp only [List.foldl]
   apply BigStep.app (BigStep.app (BigStep.app .lam (.var rfl) .lam) (.var rfl) .lam) (.var rfl)
@@ -85,7 +115,36 @@ theorem activity_retire_none_meaning
   · exact .get (.var rfl) (.field rfl (.var rfl))
   refine BigStep.case (ℓ := "none") (w := .record []) ?_ rfl ?_
   · exact .get (.var rfl) (.field rfl (.var rfl))
-  exact .inj .bytes
+  exact activityOwn_same (.get (.var rfl) (.field rfl (.var rfl))) (.var rfl) hka hra
+
+/-- With no declared patience an unanswered continuation is retired only by its own starter, under
+`withdraw` (LANG-97): for every other requester the guard returns the named refusal, for arbitrary
+state, capture, key and vocabulary. -/
+theorem activity_retire_none_meaning
+    (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (withdraw : Bool)
+    (key captured req : Data) {ka ra : ByteArray} (lib : List Term) (env : Env) (state : Val)
+    {names : ActivityVocabulary}
+    (hka : key.field "agent" = some (.digest ka)) (hra : req.field "agent" = some (.digest ra)) :
+    BigStep lib
+      ((retirementInput key (.inj "some" (.record [
+        ("answered", .inj "none" (.record [])), ("captured", captured)]))).toVal :: req.toVal :: state :: env)
+      (activityApply (activityWaiting S plans d resumer names none withdraw) [.var 2, .var 1, .var 0])
+      (.ok (if withdraw = true ∧ ka = ra then .inj "ok" (.record []) else .inj "refused" (.bytes "unanswered".toUTF8))) := by
+  by_cases hA : withdraw = true ∧ ka = ra
+  · rw [if_pos hA]
+    obtain ⟨rfl, rfl⟩ := hA
+    exact waiting_withdraw_own_admitted S plans d resumer names none key captured req lib env state hka hra
+  · rw [if_neg hA]
+    unfold activityApply activityWaiting
+    simp only [List.foldl]
+    apply BigStep.app (BigStep.app (BigStep.app .lam (.var rfl) .lam) (.var rfl) .lam) (.var rfl)
+    refine BigStep.case (ℓ := "retract") (w := (Data.record [("key", key)]).toVal) ?_ rfl ?_
+    · exact .get (.var rfl) (.field rfl (.var rfl))
+    refine BigStep.case (ℓ := "some") (w := (Data.record [("answered", .inj "none" (.record [])), ("captured", captured)]).toVal) ?_ rfl ?_
+    · exact .get (.var rfl) (.field rfl (.var rfl))
+    refine BigStep.case (ℓ := "none") (w := .record []) ?_ rfl ?_
+    · exact .get (.var rfl) (.field rfl (.var rfl))
+    exact activityOwn_other withdraw (.get (.var rfl) (.field rfl (.var rfl))) (.var rfl) hka hra hA (.inj .bytes)
 
 
 /-! ## The deadline arm (LANG-76) -/
@@ -106,86 +165,101 @@ theorem activityDue_meaning {lib : List Term} {env : Env} {kt rt : Term} {key re
   simpa [Data.toVal, primEval] using h
 
 /-- **The deadline arm's meaning**: with a declared patience `P`, retracting an UNANSWERED row is
-admitted exactly when the call's signed `notBefore` `m` is at least the row key's `notBefore` `n`
-plus `P`, and otherwise refused by the name it had before LANG-76, `unanswered`; for arbitrary
-state, capture, vocabulary and requester (no agent is read). -/
+admitted exactly when the request is the starter's own under `withdraw` (LANG-97: the key's agent
+`ka` is the request's `ra`), or the call's signed `notBefore` `m` is at least the row key's
+`notBefore` `n` plus `P`; otherwise it is refused by the name it had before LANG-76, `unanswered`;
+for arbitrary state, capture and vocabulary. -/
 theorem waiting_retract_unanswered_meaning
     (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (names : ActivityVocabulary)
-    (P n m : Nat) (key captured req : Data) (lib : List Term) (env : Env) (state : Val)
+    (P n m : Nat) (withdraw : Bool) (key captured req : Data) {ka ra : ByteArray} (lib : List Term) (env : Env) (state : Val)
     (hk : key.field "notBefore" = some (.nat n)) (hr : req.field "notBefore" = some (.nat m))
+    (hka : key.field "agent" = some (.digest ka)) (hra : req.field "agent" = some (.digest ra))
     (hlim : n + P < Bounds.natLimit) :
     BigStep lib
       ((retirementInput key (.inj "some" (.record [
         ("answered", .inj "none" (.record [])), ("captured", captured)]))).toVal :: req.toVal :: state :: env)
-      (activityApply (activityWaiting S plans d resumer names (some P)) [.var 2, .var 1, .var 0])
-      (.ok (if n + P ≤ m then .inj "ok" (.record []) else .inj "refused" (.bytes "unanswered".toUTF8))) := by
-  unfold activityApply activityWaiting
-  simp only [List.foldl]
-  apply BigStep.app (BigStep.app (BigStep.app .lam (.var rfl) .lam) (.var rfl) .lam) (.var rfl)
-  refine BigStep.case (ℓ := "retract") (w := (Data.record [("key", key)]).toVal) ?_ rfl ?_
-  · exact .get (.var rfl) (.field rfl (.var rfl))
-  refine BigStep.case (ℓ := "some") (w := (Data.record [("answered", .inj "none" (.record [])), ("captured", captured)]).toVal) ?_ rfl ?_
-  · exact .get (.var rfl) (.field rfl (.var rfl))
-  refine BigStep.case (ℓ := "none") (w := .record []) ?_ rfl ?_
-  · exact .get (.var rfl) (.field rfl (.var rfl))
-  simp only [activityLate, guard]
-  by_cases h : n + P ≤ m
-  · rw [if_pos h]
-    refine .iteT ?_ (.inj .record)
-    rw [show true = decide (n + P ≤ m) by simp [h]]
-    exact activityDue_meaning (.get (.var rfl) (.field rfl (.var rfl))) (.var rfl) hk hr hlim
-  · rw [if_neg h]
-    refine .iteF ?_ (.inj .bytes)
-    rw [show false = decide (n + P ≤ m) by simp [h]]
-    exact activityDue_meaning (.get (.var rfl) (.field rfl (.var rfl))) (.var rfl) hk hr hlim
+      (activityApply (activityWaiting S plans d resumer names (some P) withdraw) [.var 2, .var 1, .var 0])
+      (.ok (if (withdraw = true ∧ ka = ra) ∨ n + P ≤ m then .inj "ok" (.record []) else .inj "refused" (.bytes "unanswered".toUTF8))) := by
+  by_cases hA : withdraw = true ∧ ka = ra
+  · rw [if_pos (Or.inl hA)]
+    obtain ⟨rfl, rfl⟩ := hA
+    exact waiting_withdraw_own_admitted S plans d resumer names (some P) key captured req lib env state hka hra
+  · simp only [hA, false_or]
+    unfold activityApply activityWaiting
+    simp only [List.foldl]
+    apply BigStep.app (BigStep.app (BigStep.app .lam (.var rfl) .lam) (.var rfl) .lam) (.var rfl)
+    refine BigStep.case (ℓ := "retract") (w := (Data.record [("key", key)]).toVal) ?_ rfl ?_
+    · exact .get (.var rfl) (.field rfl (.var rfl))
+    refine BigStep.case (ℓ := "some") (w := (Data.record [("answered", .inj "none" (.record [])), ("captured", captured)]).toVal) ?_ rfl ?_
+    · exact .get (.var rfl) (.field rfl (.var rfl))
+    refine BigStep.case (ℓ := "none") (w := .record []) ?_ rfl ?_
+    · exact .get (.var rfl) (.field rfl (.var rfl))
+    refine activityOwn_other withdraw (.get (.var rfl) (.field rfl (.var rfl))) (.var rfl) hka hra hA ?_
+    simp only [activityLate, guard]
+    by_cases h : n + P ≤ m
+    · rw [if_pos h]
+      refine .iteT ?_ (.inj .record)
+      rw [show true = decide (n + P ≤ m) by simp [h]]
+      exact activityDue_meaning (.get (.var rfl) (.field rfl (.var rfl))) (.var rfl) hk hr hlim
+    · rw [if_neg h]
+      refine .iteF ?_ (.inj .bytes)
+      rw [show false = decide (n + P ≤ m) by simp [h]]
+      exact activityDue_meaning (.get (.var rfl) (.field rfl (.var rfl))) (.var rfl) hk hr hlim
 
-/-- **Before its deadline an unanswered row is not retired** (LANG-76): the guard refuses
-`unanswered`, whoever asks. -/
+/-- **Before its deadline an unanswered row is not retired by anyone but its own starter under
+`withdraw`** (LANG-76, LANG-97): the guard refuses `unanswered`. -/
 theorem waiting_retract_before_deadline_refused
     (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (names : ActivityVocabulary)
-    (P n m : Nat) (key captured req : Data) (lib : List Term) (env : Env) (state : Val)
+    (P n m : Nat) (withdraw : Bool) (key captured req : Data) {ka ra : ByteArray} (lib : List Term) (env : Env) (state : Val)
     (hk : key.field "notBefore" = some (.nat n)) (hr : req.field "notBefore" = some (.nat m))
-    (hlim : n + P < Bounds.natLimit) (hearly : m < n + P) :
+    (hka : key.field "agent" = some (.digest ka)) (hra : req.field "agent" = some (.digest ra))
+    (hlim : n + P < Bounds.natLimit) (hown : withdraw = true → ka ≠ ra) (hearly : m < n + P) :
     BigStep lib
       ((retirementInput key (.inj "some" (.record [
         ("answered", .inj "none" (.record [])), ("captured", captured)]))).toVal :: req.toVal :: state :: env)
-      (activityApply (activityWaiting S plans d resumer names (some P)) [.var 2, .var 1, .var 0])
+      (activityApply (activityWaiting S plans d resumer names (some P) withdraw) [.var 2, .var 1, .var 0])
       (.ok (.inj "refused" (.bytes "unanswered".toUTF8))) := by
-  have h := waiting_retract_unanswered_meaning S plans d resumer names P n m key captured req lib env state hk hr hlim
-  rwa [if_neg (by omega)] at h
+  have h := waiting_retract_unanswered_meaning S plans d resumer names P n m withdraw key captured req lib env state
+    hk hr hka hra hlim
+  rwa [if_neg (not_or.mpr ⟨fun ⟨hw, he⟩ => hown hw he, by omega⟩)] at h
 
 /-- **At or after its deadline an unanswered row is retired by anyone** (LANG-76, the abandon of
-ACT-D): the guard admits the retraction for every requester and state. -/
+ACT-D): the guard admits the retraction for every requester and state, with or without `withdraw`. -/
 theorem waiting_retire_after_deadline_admitted
     (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (names : ActivityVocabulary)
-    (P n m : Nat) (key captured req : Data) (lib : List Term) (env : Env) (state : Val)
+    (P n m : Nat) (withdraw : Bool) (key captured req : Data) {ka ra : ByteArray} (lib : List Term) (env : Env) (state : Val)
     (hk : key.field "notBefore" = some (.nat n)) (hr : req.field "notBefore" = some (.nat m))
+    (hka : key.field "agent" = some (.digest ka)) (hra : req.field "agent" = some (.digest ra))
     (hlim : n + P < Bounds.natLimit) (hlate : n + P ≤ m) :
     BigStep lib
       ((retirementInput key (.inj "some" (.record [
         ("answered", .inj "none" (.record [])), ("captured", captured)]))).toVal :: req.toVal :: state :: env)
-      (activityApply (activityWaiting S plans d resumer names (some P)) [.var 2, .var 1, .var 0])
+      (activityApply (activityWaiting S plans d resumer names (some P) withdraw) [.var 2, .var 1, .var 0])
       (.ok (.inj "ok" (.record []))) := by
-  have h := waiting_retract_unanswered_meaning S plans d resumer names P n m key captured req lib env state hk hr hlim
-  rwa [if_pos hlate] at h
+  have h := waiting_retract_unanswered_meaning S plans d resumer names P n m withdraw key captured req lib env state
+    hk hr hka hra hlim
+  rwa [if_pos (Or.inr hlate)] at h
 
-/-- Retirement admits exactly answered rows and, under a declared patience `P`, unanswered rows
-whose deadline has come; independently of who requests cleanup. This is an iff about the generated
-guard's actual semantics (LANG-76 restates it: with no patience the right side is `answer.isSome`,
-as before). The key and request carry `notBefore` fields, as every key and request of an activity
+/-- Retirement admits exactly answered rows; under `withdraw` (LANG-97), unanswered rows retracted
+by their own starter; and, under a declared patience `P`, unanswered rows whose deadline has come,
+whoever requests cleanup. This is an iff about the generated guard's actual semantics (LANG-76 and
+LANG-97 restate it: with no patience and no withdrawal the right side is `answer.isSome`, as before).
+The key and request carry `notBefore` and `agent` fields, as every key and request of an activity
 log does (`activityKey`, `reqTy`). -/
 theorem waiting_retract_iff
     (S : Ty) (plans : List ActivityPlan) (d : RelDecl) (resumer : Term) (names : ActivityVocabulary)
-    (patience : Option Nat) (n m : Nat) (key captured req : Data) (answer : Option Data)
-    (lib : List Term) (env : Env) (state : Val)
+    (patience : Option Nat) (withdraw : Bool) (n m : Nat) (key captured req : Data) (answer : Option Data)
+    {ka ra : ByteArray} (lib : List Term) (env : Env) (state : Val)
     (hk : key.field "notBefore" = some (.nat n)) (hr : req.field "notBefore" = some (.nat m))
+    (hka : key.field "agent" = some (.digest ka)) (hra : req.field "agent" = some (.digest ra))
     (hlim : ∀ P, patience = some P → n + P < Bounds.natLimit) :
     (∃ w, BigStep lib
       ((retirementInput key (.inj "some" (.record [
         ("answered", match answer with | none => .inj "none" (.record []) | some a => .inj "some" a),
         ("captured", captured)]))).toVal :: req.toVal :: state :: env)
-      (activityApply (activityWaiting S plans d resumer names patience) [.var 2, .var 1, .var 0])
-      (.ok (.inj "ok" w))) ↔ answer.isSome = true ∨ ∃ P, patience = some P ∧ n + P ≤ m := by
+      (activityApply (activityWaiting S plans d resumer names patience withdraw) [.var 2, .var 1, .var 0])
+      (.ok (.inj "ok" w))) ↔
+      answer.isSome = true ∨ (withdraw = true ∧ ka = ra) ∨ ∃ P, patience = some P ∧ n + P ≤ m := by
   cases answer with
   | some a =>
     exact ⟨fun _ => .inl rfl, fun _ =>
@@ -193,26 +267,34 @@ theorem waiting_retract_iff
   | none =>
     cases patience with
     | none =>
-      constructor
-      · rintro ⟨w, h⟩
-        have he := bigStep_deterministic h
-          (activity_retire_none_meaning S plans d resumer key captured lib env state req.toVal (names := names))
-        simp at he
-      · rintro (h | ⟨P, h, -⟩) <;> cases h
-    | some P =>
-      have h := waiting_retract_unanswered_meaning S plans d resumer names P n m key captured req lib env
-        state hk hr (hlim P rfl)
+      have h := activity_retire_none_meaning S plans d resumer withdraw key captured req lib env state
+        (names := names) hka hra
       constructor
       · rintro ⟨w, hw⟩
         have he := bigStep_deterministic hw h
-        by_cases hd : n + P ≤ m
-        · exact .inr ⟨P, rfl, hd⟩
-        · rw [if_neg hd] at he; simp at he
-      · rintro (h' | ⟨P', hP, hd⟩)
+        by_cases hA : withdraw = true ∧ ka = ra
+        · exact .inr (.inl hA)
+        · rw [if_neg hA] at he; simp at he
+      · rintro (h' | hA | ⟨P, hP, -⟩)
         · cases h'
+        · exact ⟨.record [], by rwa [if_pos hA] at h⟩
         · cases hP
-          exact ⟨.record [], by rwa [if_pos hd] at h⟩
-
+    | some P =>
+      have h := waiting_retract_unanswered_meaning S plans d resumer names P n m withdraw key captured req lib env
+        state hk hr hka hra (hlim P rfl)
+      constructor
+      · rintro ⟨w, hw⟩
+        have he := bigStep_deterministic hw h
+        by_cases hd : (withdraw = true ∧ ka = ra) ∨ n + P ≤ m
+        · rcases hd with hA | hB
+          · exact .inr (.inl hA)
+          · exact .inr (.inr ⟨P, rfl, hB⟩)
+        · rw [if_neg hd] at he; simp at he
+      · rintro (h' | hA | ⟨P', hP, hd⟩)
+        · cases h'
+        · exact ⟨.record [], by rwa [if_pos (Or.inl hA)] at h⟩
+        · cases hP
+          exact ⟨.record [], by rwa [if_pos (Or.inr hd)] at h⟩
 
 private def upsertInput (key old value : Data) : Data :=
   .record [("edit", .inj "upsert" (.record [("key", key), ("val", value)])),

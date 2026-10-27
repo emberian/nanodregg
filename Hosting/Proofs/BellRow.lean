@@ -192,7 +192,7 @@ theorem answered_row_is_kept_answer [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ct
           rows = [(.row ⟨req.self, 1, kb⟩, .upsert 0 vb), (.row ⟨req.self, 0, kb⟩, .retract)]) ∧
         ∃ (lib : List Lang.Term) (sd : Lang.Data) (es' : List (Lang.Edit D)), rows = es'.map (fun x => (x.slot, x.act)) ∧
           ∀ x ∈ es', x.label = "rings" → ∃ old, Lang.guardOld X.digestOf rv req.self x = .ok old ∧
-            Lang.Std.WaitingStep lib Lang.Bell.resumer (some Lang.Bell.patience) (Lang.reqData X.env.bytes req) sd x.data old) := by
+            Lang.Std.WaitingStep lib Lang.Bell.resumer (some Lang.Bell.patience) Lang.Bell.withdraw (Lang.reqData X.env.bytes req) sd x.data old) := by
   refine ⟨Lifetime.lifetime_invoke_kept h hi, ?_⟩
   obtain ⟨o, g, wf, u, sig, hh, td, args, ho, -, hmem, hbody, henc, hj, hrt, wb, P, pc, pk, sg, hwb, hpat, hrp,
     hres, hshape⟩ := delivered_answer_committed_strong hX h hm hk hs hi hok

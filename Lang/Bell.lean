@@ -13,6 +13,10 @@ argument echoes it and, for an aimed ring, returns one typed nested call (`forwa
 in the same Turn, besides the two edits. The resident pins nothing new: the `rung` guard compares the
 capture, so an answer that drops or alters the aim is refused `rung: text`.
 
+LANG-97 (A1b): the Bell declares `(withdraw)`, so a ringer retires its own unanswered ring at any
+time (`rung` and `queued` admit the ringer's retraction before the deadline; everyone else waits for
+it): a ring aimed at a target that refuses no longer holds the resident's queue until the patience.
+
 This module names the parts of that package the witness reads, built by the same generators and
 lowering pieces the surface uses (`Std.activityWaiting`, `Std.activityLog`, `Surface.boundCheck`),
 and `shapeOk p`: package `p` is the Bell at every one of them. `Lang.Journey`'s row LBw computes
@@ -147,8 +151,13 @@ def answer : Term :=
 anyone from its key's `notBefore` + 2048 on. -/
 def patience : Nat := 2048
 
-/-- The `rung` guard: the generated waiting guard over the Bell's log, at its patience. -/
-def rung : Term := activityWaiting S plans rings resumer names (some patience)
+/-- The Bell declares `(withdraw)` (LANG-97): a ringer withdraws its own unanswered ring at any time,
+with its pending row. -/
+def withdraw : Bool := true
+
+/-- The `rung` guard: the generated waiting guard over the Bell's log, at its patience, with the
+ringer's withdrawal. -/
+def rung : Term := activityWaiting S plans rings resumer names (some patience) withdraw
 
 /-- The two body fields the witness reads. -/
 def bodyOk : Term → Bool
