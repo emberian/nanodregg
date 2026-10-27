@@ -1,41 +1,263 @@
 # nanodregg
 
-nanodregg is a research system for shared objects whose updates each member checks independently.
+nanodregg is a research system built around one language, **Objective Bend**.
+An Objective Bend program is a *package*: a typed interface, a state type, methods, laws, keyed relations and typed holes.
+An *object* holds a package and a state.
+Objects live in a *World*, a shared state with one writer.
+Every member re-executes every step of the World's log before accepting the World it produces.
+Lean defines the language and the World, and the deployed writer and follower run that Lean, compiled.
+
+The language is small and exact.
+Its core has eighteen term formers, seven type formers and fifteen primitives.
+Types are monomorphic, rows are canonical, and type equality is syntactic.
+The checker is a total function, proved sound and complete for a declarative typing relation (`Lang/Proofs/Check.lean`, `inferE_iff_live`).
+Programs run on one CEK machine under a tick budget.
+A checked program never gets stuck (`Lang/Proofs/Sound.lean`, `checked_never_stuck`), and every way a run ends without a value is a named fault.
+
+Two properties set Objective Bend apart from other ledger languages.
+
+**Its meaning is contextual.**
+A package may leave a decision open as a typed hole `u :: [Ψ ⊢ A]`, in the sense of contextual modal type theory.
+The package commits the hole's candidates at install.
+Each candidate lists the facts of the World it relies on: a row of the object at an exact version, or a cell that must be live, possibly governed by a named law or running a named package.
+At each invocation the runtime reads the selection the caller pinned, checks the selected candidate's facts against the caller's pinned view, and splices the candidate in.
+When a fact does not hold, the hole becomes a typed refusal that names the fact.
+That refusal fires only if the run demands the hole.
+So the code an installed package runs is a function of the caller's view of the World, and a run that needs a dead fact is refused by the fact's name.
+
+**Its surface is extensible.**
+A law judges a change by the act that makes it: birth, write, law replacement, adoption, invocation or retirement.
+A law replacement on a data object is judged by the laws in force and by each incoming law.
+A method may return a call that installs package bytes it computed, or that installs a package and creates an object of it in the same step, so packages generate packages.
+A package may carry a claim, `keeps INV LAW`, that is part of its identity, and install refuses the package unless the law's term has the shape that proves the claim.
+A method may declare a grade, `(effect (moves N))`, that bounds the value one run moves.
+A relation may declare that each of its rows holds value, and a run that writes such a row must move that value.
+
+## One program
+
+The program below is one complete package.
+It is a counter whose step is a hole with two candidates.
+A law judges every act on the counter.
+A third method generates a package.
+
+The core text writes every type in full.
+For reading, this page names seven of them:
+
+```
+S       = (rec (count nat))
+Req     = (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat)
+               (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec))))
+               (principal digest) (self digest) (validUntil nat))
+Verdict = (sum (ok (rec)) (refused bytes))
+Row     = (rec (key (rec (k nat))) (val nat))
+Choice  = (sum (insert Row) (upsert Row))
+Edit    = (sum (choice Choice))
+Call    = (sum (install (rec (pkg bytes))))
+(Opt T) = (sum (none (rec)) (some T))
+```
+
+`PRE` and `POST` name two byte strings, given after the program.
+`G` names the id of a grant.
+[`Lang/Journey/Readme.lean`](Lang/Journey/Readme.lean) holds the literal text, writes a real grant's id for `G`, and runs every step described below through the kernel's receivers (`Receive.submit` with `Lang.program`) on a simulator World (`lake exe lang-journey`, rows RM1 to RM14).
+
+```
+(package
+  (imports)
+  (doc "a counter whose step is chosen in context; it spawns parameter packages")
+  (state S)
+  (iface (rec
+    (bump (-> (rec) (-> S (-> (rec) (-> Req (rec (calls (rec)) (edits (rec)) (state S)))))))
+    (cap (-> S (-> S (-> Req Verdict))))
+    (choose (-> (rec) (-> S (-> (rec (i nat)) (-> Req (rec (calls (rec)) (edits (rec (e0 (Opt Edit)))) (state S)))))))
+    (spawn (-> (rec) (-> S (-> (rec (n nat)) (-> Req (rec (calls (rec (c0 (Opt Call)))) (edits (rec)) (state S)))))))))
+  (methods bump choose spawn)
+  (laws cap)
+  (rels (choice (key (k nat)) (val nat) (limit 1) (sum) (cap 0) (retract false) (guard) (holds)))
+  (body (record
+    (bump (fn (rows (rec)) (state S) (arg (rec)) (req Req)
+      (record (calls (record)) (edits (record))
+        (state (record (count (+ (. state count) (hole 0 (subst)))))))))
+    (cap (fn (old S) (new S) (req Req)
+      (let ok Verdict (inj Verdict ok (record))
+      (let within Verdict (if (<= (. new count) 100) ok (inj Verdict refused "over 100"))
+        (case (. req occasion)
+          (adopt x within) (birth x within) (invoke m within)
+          (relaw x (inj Verdict refused "frozen"))
+          (retire x (if (== (. old count) 0) ok (inj Verdict refused "not empty")))
+          (write x (inj Verdict refused "frozen")))))))
+    (choose (fn (rows (rec)) (state S) (arg (rec (i nat))) (req Req)
+      (record (calls (record)) (state state)
+        (edits (record (e0 (inj (Opt Edit) some
+          (inj Edit choice (inj Choice upsert
+            (record (key (record (k 0))) (val (. arg i))))))))))))
+    (spawn (fn (rows (rec)) (state S) (arg (rec (n nat))) (req Req)
+      (record (edits (record)) (state state)
+        (calls (record (c0 (inj (Opt Call) some
+          (inj Call install
+            (record (pkg (cat (u64be #PRE (. arg n)) #POST)))))))))))))
+  (holes (hole 0 (context) (result nat) (selection 0 #0000000000000000) (hypotheses)
+    (guard (structural) true)
+    (code (candidate 1 (supports)) (candidate 10 (supports (cell #G)))))))
+```
+
+```
+PRE  = 0a00000b00000004000004000106016e010000000800010f016e010408
+POST = 00010000010000020000000000030000040000050000
+```
+
+Read it section by section.
+
+`(imports)` is empty, so the body refers to no other package.
+`(doc …)` is one line the package says of itself; nothing runs it.
+
+`(state S)` makes an object's state a record with one natural, `count`.
+State is first-order data, and each field lives in its own slot of the object's cell.
+
+`(iface …)` is the type of the body, a record with four fields.
+A *method* has type `rows → state → argument → request → result`.
+`rows` is what the method reads from relations; these methods read none, so it is `(rec)`.
+The result is a record of `calls` the object makes, `edits` to its rows, and the new `state`.
+The type fixes how many calls and edits a method may return, and of which kinds: `bump` makes none, `choose` makes one edit, `spawn` makes one call of kind `install`.
+A *law* has type `old → new → request → Verdict`.
+`Req` is what a method and a law see of the request: the member who signed, the object, the calling object if any, the signed height window, and the *occasion*, which says which act is judged.
+
+`(methods bump choose spawn)` and `(laws cap)` say which fields are methods and which are laws.
+A member invokes a method by its index in this list: `bump` is 0, `choose` 1, `spawn` 2.
+
+`(rels …)` declares one relation, `choice`: rows keyed by a natural, holding a natural, at most one row, no sum column, no retraction, no guard, holding no value.
+Relation 0 holds the hole's selection.
+
+`bump` adds the hole's value to `count`.
+`(hole 0 (subst))` is hole 0 under the empty substitution; it has type `nat` because the hole's declaration says so.
+
+`cap` is the law.
+It cases on `(. req occasion)`, and the checker requires one arm per occasion, so a law has no default.
+At a birth, an adoption and an invocation, the new count must be at most 100.
+A retirement is judged over the object's last state; `cap` admits it only at count 0.
+Writes and law replacements are refused.
+The kernel refuses those two acts on an object that has methods before any law runs; the arms matter when the package serves as an extra law on a data object.
+
+`choose` writes the selection.
+It returns one edit: an `upsert` into relation `choice` at key 0, with the candidate index from its argument.
+An upsert replaces the row at a key the caller pinned, present or absent.
+
+`spawn` is a generator.
+It returns one call, `install`, whose package bytes it computes: `PRE`, then the argument `n` as eight big-endian bytes, then `POST`.
+At `n = 7` those bytes read as `(package (imports) (doc) (state (rec)) (iface (rec (n nat))) (methods) (laws) (rels) (body (record (n 7))))`, a package that exports one constant.
+The kernel installs them as it installs a member's package: it decodes and checks them, and the new package cell's id is the digest of the bytes.
+
+`(holes …)` declares hole 0.
+Its context is empty and its result type is `nat`.
+Its selection is the row of relation 0 at key `0000000000000000`, the eight-byte encoding of `k = 0`.
+It has no hypotheses.
+Its guard has no pin and evaluates `true`.
+It has two candidates: `1`, which relies on nothing, and `10`, which relies on cell `G` being live.
+
+The journey runs the program as follows.
+Member B makes the grant `G` and installs the package.
+Install checks every candidate at the hole's context and type, and checks the body with the hole's declaration in scope (RM2).
+B creates a counter at count 0 (RM3).
+`bump` before any selection is refused `program "bump: refused holeSelectionAbsent 0"`: the run demanded a hole whose selection row is absent (RM4).
+B chooses candidate 1, and `bump` with `G` pinned raises count to 10 (RM5, RM6).
+`bump` without `G` pinned is refused `program "bump: refused holeUnpinned cell:G"` (RM7).
+B revokes `G`.
+`bump` with `G` pinned at its tombstone is refused `program "bump: refused holeSupportDead 0 cell:G"`, and count stays 10 (RM8, RM9).
+B chooses candidate 0, and `bump` raises count to 11 (RM10, RM11).
+`spawn` at 7 installs exactly the package above; the Turn creates one cell, whose id is the digest of the computed bytes (RM12).
+Retiring the counter at count 11 is refused `lawDenied … "cap: not empty"` (RM13).
+Creating a counter at count 101 is refused `lawDenied … "cap: over 100"` at its birth (RM14).
+
+The language has a second, higher-level text, [`Lang/Surface.lean`](Lang/Surface.lean), which lowers to the core text and adds names for `Req` and `Verdict`, declared types, bounded arguments and generated activities.
+It has no syntax for holes, so this page uses the core text.
+[`world/escrow/Escrow.ob`](world/escrow/Escrow.ob) is a complete package in the surface text.
+
+## What the World guarantees
+
+A World is cells, accounts, grants, relation rows and value, under four authenticated tries.
 One writer orders signed calls.
-Each member's follower re-executes the log from a trusted starting state.
-Objective Bend defines the objects' methods and laws.
-Methods propose changes.
-Laws decide whether changes are allowed.
-The kernel commits an accepted call's effects together.
-The system includes document and escrow demonstrations, a native host and client, a hosted model resident, and a browser testground.
-Lean proofs cover specified properties of admission, history and settlement.
-The operator can read every byte in a World.
+A call that passes every check becomes a *Turn*: its effects, committed together or not at all.
+A call that fails a check is recorded as a named refusal.
+Each member's follower re-derives every Turn and every refusal from its own copy of the World.
 
-The testground is the quickest way in.
-It is served from the demo box at <https://nano.demo.dregg.online/>, with a GitHub Pages mirror as the sandbox at <https://emberian.github.io/nanodregg/>.
-It runs the real kernel, compiled to WebAssembly, in your tab.
+The top claims are stated over the deployed entry points in [`Spec/`](Spec/README.md).
+Each has a top theorem, a *floor* that refutes it for a trivial system, and a deployed run that reaches its premise.
+One sentence each:
 
-## One edit, followed through
+| claim | what it says | theorem |
+|---|---|---|
+| `OneHistory.member` | A follower's World is an audited extension of the World it held, or the adoption of a base its trusted sponsor pinned. | `top_oneHistory_member`, under `keyFaithful` |
+| `OneHistory.pair` | Two folds from one World that agree on step count and chain are one World, up to a hash collision among their link inputs. | `top_oneHistory_pair` |
+| `Integrity.authority` | Every step that changes a live cell is a Turn derived from a signed call entitled to that change. | `top_integrity_authority` |
+| `Integrity.value` | Along any fold, every denomination's balance sum is unchanged, and its floor sum unless the log created its well. | `top_integrity_value` |
+| `Integrity.law` | An object's package never changes, and every history of an object under a law without package references is a chain that law's reference meaning admits. | `top_integrity_law` |
+| `Integrity.grantCap` | Transfers and credit sent through a grant sum to at most what its ledger had left. | `top_integrity_grantCap` |
+| `Integrity.exchange` | An admitted fuse pays each party what its offer wants, with value conserved. | `top_integrity_exchange` |
+| `Integrity.escrow` | Along any admitted history of one escrow, at most one call is a payout. | `top_integrity_escrow` |
+| `Consent.signs` | Every call message the follower offers for signature is the call its planner derived on the follower's own World. | `top_consent_signs` |
+| `Consent.signShapes` | Every message the follower offers for signature has one of six named shapes. | `top_consent_signShapes` |
+| `Consent.okCommitted` | A command that ends `done ok` means the follower's World journals the call. | `top_consent_okCommitted` |
+| `Consent.cancelOk` | A cancel that ends `done ok` leaves the call recorded as refused `cancelled`. | `top_consent_cancelOk` |
+| `Consent.final` | A settlement `expired`, or `refused` other than `stale`, is never contradicted on any extension. | `top_consent_final` |
+| `Consent.staleFinal` | A call settled `refused stale` is admitted on no extension, up to a collision among its pin inputs. | `top_consent_staleFinal` |
+| `ForkConsistent` | A follower that absorbs another fold's head post shares that fold's history up to the post, or refuses `forkedPost`. | `top_forkConsistent` |
+| `ForkConsistent.sync` | A `sync --to STEPS:CHAIN` that reaches the stated head holds the other fold's log up to it. | `top_forkConsistent_sync` |
+| `Agree.pageAbsorbs` | The writer's page of a batch moves the follower to the World the writer keeps. | `top_agree_pageAbsorbs` |
+| `Durable.reopen` | A successful reopen returns the fold of exactly the records the recovery check verifies. | `top_durable_reopen` |
+| `Durable.follower` | Every follower step that persists persists a rooted run of the kernel. | `top_durable_follower` |
+| `Durable.resident` | A resident's keep is atomic across a crash and durable once complete. | `top_durable_resident` |
+| `ReceiptTruth` | A receipt the check answers against a World's own head is its journal entry, its refusal, or the absence of both. | `top_receiptTruth` |
+| `Bell.ringer` | Every answer a run writes to the Bell answers a waiting ring the caller pinned, signed by the resident. | `top_bell_ringer` |
+| `Bell.oneAsk` | Every path of the resident's act asks the model at most once, about the decided ring, after keeping its intent. | `top_bell_oneAsk` |
+| `Foreign` | A receipt shown committed against a held head names a call admitted in that head's fold, under `HeadOf`. | `top_foreign` |
 
-A **World** is the shared state: objects, packages, members, grants and value.
-A **member** is a key that can sign calls.
-Alice and Bob are members of a World that holds a document section.
-The section is an object, and its text is a slot that members fill by proposing candidates.
+The premises are named in [`Spec/README.md`](Spec/README.md).
+Three matter most here.
+`keyFaithful` says a member's adoption names the sponsor key the member trusts.
+`NoRef` restricts `Integrity.law` to laws that name no other package; a law with holes is inside it when its fillings are.
+`HeadOf` says a held head belongs to a fold of the foreign World.
 
-1. Bob proposes a text. He runs `nd invoke DOC 3 ARGS --pin facts PIN --via GRANT`. Method 3 of the section package proposes a candidate, `--pin` names the version of the cell it reads, and `--via` names the grant that lets him call it.
-2. Bob's **follower** plans the call. The follower is the process that holds Bob's own copy of the World and checks every step of it. It catches up with the log, then derives the call against that copy: the pins, Bob's authority, the section's laws and the budget. If any check fails, the follower refuses and Bob's key signs nothing.
-3. Bob's key signs the call, and `nd` sends it to the **writer**. The writer is the one process that orders calls for this World.
-4. The writer derives the call again. If it is admitted, the kernel builds a **Turn**: the call's effects, committed together or not at all. A **law** is code in the package that sees the old state, the new state and the request, and accepts or rejects the change. The writer appends the Turn to the log. If the call is stale or a law rejects it, the writer records a refusal instead.
-5. Bob's follower reads the log page, re-derives each step, and accepts only the World it computed itself. The writer's reply is a hint. The follower settles the call.
-6. Bob runs `nd receipt CALL`. A **receipt** is evidence, checked against the follower's own head, that the call is in Bob's journal.
+No top claim yet covers the contextual layer at the level of a history.
+The run-level theorems exist: a successful selection is the candidate the pinned row names with every support live (`Lang/Proofs/LiveHoles.lean`, `selectHole_origin`, `selectHole_cell_support`); a retired support refuses the selection (`revoked_support_refused`); a prepared body is typed at the interface (`instantiateHoles_typed`).
+The history-level statement, contextual integrity with repair, is a design in redregg's `promo/DESIGN-CTX.md` §2.4, not a theorem.
 
-Alice selects Bob's text with the same sequence.
-When Alice revokes Bob's grant, the fact that supported his text dies.
-The next check suspends the candidate, and a second selection is refused with the dead support named.
-The testground's "Document section with a hole" demonstration plays this out.
-[`docs/MEMBER.md`](docs/MEMBER.md) lists every command and what it checks.
+The claims do not cover the Lean compiler, the C runtime, the filesystem or the operating system.
+They give no secrecy from the operator, no agreement among several writers, and no end-to-end durability over crashes with acknowledged replies.
 
-## Run the browser testground locally
+## Where to read
+
+| Question | Read |
+|---|---|
+| What are packages, methods, laws, relations and holes, and how are they checked? | [`docs/OBJECTS.md`](docs/OBJECTS.md), then the Lean: [`Lang/Term.lean`](Lang/Term.lean), [`Lang/Check.lean`](Lang/Check.lean), [`Lang/Package.lean`](Lang/Package.lean), [`Lang/Eval.lean`](Lang/Eval.lean), [`Lang/LiveHoles.lean`](Lang/LiveHoles.lean) |
+| What exactly is claimed, with which premises? | [`Spec/README.md`](Spec/README.md) |
+| What does a member trust? | [`docs/TRUST.md`](docs/TRUST.md) |
+| What is the whole system? | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) |
+| How do I act as a member, and what does each command check? | [`docs/MEMBER.md`](docs/MEMBER.md) |
+| Why is each part designed as it is? | [`decisions/lang.md`](decisions/lang.md) and the other files of [`decisions/`](decisions/README.md); later entries revise earlier ones |
+| What does a complete scenario look like? | [`Lang/Journey/`](Lang/Journey/) for the language, [`Protocol/Rows.lean`](Protocol/Rows.lean) for member conversations |
+| What rules shape the implementation? | [`CHARTER.md`](CHARTER.md) |
+| How do I run a World natively? | [`docs/OPERATING.md`](docs/OPERATING.md), then [`deploy/RUNBOOK.md`](deploy/RUNBOOK.md) |
+| How does the browser system work? | [`docs/TESTGROUND.md`](docs/TESTGROUND.md) |
+| How do I land a change? | [`docs/JUDGE.md`](docs/JUDGE.md) |
+| What is still proposed? | [`proposals/`](proposals/README.md) |
+
+Research memos and outside reviews live in a separate repository, redregg, which is not part of this tree.
+
+## Try it
+
+The testground runs the real kernel, compiled to WebAssembly, in a browser tab.
+It is served from the demo box at <https://nano.demo.dregg.online/>, with a GitHub Pages mirror at <https://emberian.github.io/nanodregg/>.
+Its "Document section with a hole" demonstration shows a candidate withdrawn by name when the grant supporting it is revoked.
+
+The README's program runs as journey rows RM1 to RM14:
+
+```sh
+lake build lang-journey
+lake exe lang-journey
+```
+
+`lake exe lang-journey` runs every registered language session, the README's among them, and prints one line per row.
+
+### Run the browser testground locally
 
 The route needs no hosted World and no native binary.
 
@@ -70,7 +292,7 @@ The two hashes agree.
 No `deployment.json` is present in a local build, so the page offers no door to a live World.
 [`docs/TESTGROUND.md`](docs/TESTGROUND.md) describes the windows, hosted mode and the hosted setup.
 
-## What the system consists of
+## The system around the language
 
 The one-page map is [`docs/OVERVIEW.md`](docs/OVERVIEW.md).
 Each layer below has an entry point, a role and its decision file.
@@ -155,76 +377,6 @@ Decisions: [`decisions/gates.md`](decisions/gates.md).
 [`Bench/`](Bench/) and [`scripts/bar.sh`](scripts/bar.sh) run THE BAR: two members and one hosted resident against one World.
 Each benchmark records its measurement conditions.
 Decisions: [`decisions/ops.md`](decisions/ops.md), [`decisions/perf.md`](decisions/perf.md).
-
-## Where to read what
-
-| Question | Read |
-|---|---|
-| What is the whole system? | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) |
-| How do I act as a member, and what does each command check? | [`docs/MEMBER.md`](docs/MEMBER.md) |
-| What are packages, methods, laws, relations and contextual slots? | [`docs/OBJECTS.md`](docs/OBJECTS.md) |
-| What does a member trust? | [`docs/TRUST.md`](docs/TRUST.md) |
-| What exactly is claimed, with which premises? | [`Spec/README.md`](Spec/README.md) |
-| How do I run a World natively? | [`docs/OPERATING.md`](docs/OPERATING.md), then [`deploy/RUNBOOK.md`](deploy/RUNBOOK.md) |
-| How does the browser system work? | [`docs/TESTGROUND.md`](docs/TESTGROUND.md) |
-| How do I land a change? | [`docs/JUDGE.md`](docs/JUDGE.md) |
-| What rules shape the implementation? | [`CHARTER.md`](CHARTER.md), the twelve laws and scope |
-| Why is a layer designed this way? | [`decisions/README.md`](decisions/README.md), one append-only file per layer. Later entries revise earlier ones. |
-| What does a complete scenario look like? | [`Lang/Journey/`](Lang/Journey/) for language scenarios and [`Protocol/Rows.lean`](Protocol/Rows.lean) for member conversations |
-| What is still proposed? | [`proposals/`](proposals/README.md) |
-
-Research memos and outside reviews live in a separate repository, redregg, which is not part of this tree.
-
-## What a member is promised
-
-Each claim below names its subject.
-[`Spec/README.md`](Spec/README.md) holds the theorem names, floors and premises.
-The proofs assume Lean's kernel and the trusted components in [`gates/tcb.tsv`](gates/tcb.tsv).
-They do not cover the compiler, the C runtime, the filesystem or the operating system.
-
-**A checked history for each member.**
-The admission and follower decisions are implemented in Lean.
-A member's World is an audited fold from a start the member consents to (`OneHistory.member`).
-That claim assumes the member's adoption key is the one it trusts (`keyFaithful`).
-
-**Comparing two members.**
-Two logs folded from the same starting World produce the same World when their step counts and chains match, unless the hash collides among their link inputs (`OneHistory.pair`).
-This binds a comparison.
-It does not make disconnected members agree, and it is not consensus.
-Comparing heads can expose conflicting histories, and nothing merges them.
-
-**Value.**
-Along any fold from a World with canonical tries, every denomination's balance sum is unchanged (`Integrity.value`).
-Its floor sum is unchanged too, unless a Turn of the log created the denomination's well.
-
-**Laws.**
-For a law in force throughout an object's history, [`Integrity.law`](Spec/Proofs/Claims.lean) relates the object's transitions to that law's reference semantics.
-It requires an audited log, canonical cells, `IsLaw` and `NoRef` for the law, where `NoRef` means the law term holds no reference to another package.
-Runtime admission of a law is a separate mechanism, described under Kernel above.
-
-**Signing and settlement.**
-The follower derives a call against its own World before it requests a signature.
-`Consent.signs` states the composed property: every call message the follower offers custody is the call that `plan` produced on its own World.
-A submitted command that ends `done ok` is in that World's journal (`Consent.okCommitted`).
-A successful cancel is settled there as cancelled (`Consent.cancelOk`).
-A final refusal stays final on every extension, and a stale settlement is admitted on no extension (`Consent.final`, `Consent.staleFinal`).
-
-**Durability.**
-The writer syncs a log frame before it acknowledges it.
-`Durable.reopen` states that a successful open returns the fold of exactly the records the recovery check verifies.
-It is a model of the Store contract.
-Durability over crash images with acknowledged replies is not yet a claim.
-
-**The Bell.**
-The resident keeps its intent before it asks the provider and keeps its answer before it submits it.
-`Bell.oneAsk` states that each path of the resident's act asks at most once about the decided ring.
-The Bell's guards reject a second answer to an answered ring.
-The composition of these across crashes and retries is not yet a claim, and Spec records that "once per ring key" does not hold today.
-
-**Foreign receipts.**
-A foreign receipt proves transaction admission relative to a held head.
-It names a call admitted in a fold of the cited World, under the premise that the held head belongs to such a fold (`Foreign`).
-It does not establish freshness, outside content or atomicity across Worlds.
 
 ## Ideas and literatures
 
