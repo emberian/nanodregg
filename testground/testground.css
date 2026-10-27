@@ -74,3 +74,7 @@ fieldset.writer button.btn { padding: 1px 6px; margin: 1px; }
   #icons { flex-direction: row; flex-wrap: wrap; }
   .log .row { grid-template-columns: 3em 5em 1fr; } .log .row .x { display: none; }
 }
+details.terms { margin: 6px 0; } details.terms summary { cursor: pointer; font-weight: bold; }
+details.terms dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 4px 0 0; }
+details.terms dt { font: bold 11px var(--mono); } details.terms dd { margin: 0; }
+.props + .props, .props + p, p + .props { margin-top: 6px; }

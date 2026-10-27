@@ -15,6 +15,10 @@ const $ = (tag, attrs = {}, ...kids) => {
   return e;
 };
 const short = (h) => (h && h.length > 12 ? `${h.slice(0, 8)}…` : h);
+// a two-column table of labelled values (STYLE.md: a labelled value instead of a sentence)
+const kv = (pairs) => $('table', { class: 'props sunken' }, pairs.filter(Boolean).map(([k, ...v]) => $('tr', {}, $('td', {}, k), $('td', {}, ...v))));
+// the terms a window uses, defined in that window (STYLE.md)
+const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'Terms'), $('dl', {}, pairs.flatMap(([t, d]) => [$('dt', {}, t), $('dd', {}, d)])));
 
 // ---------------------------------------------------------------- the window manager
 const desk = document.getElementById('desktop'), tasks = document.getElementById('tasks');
@@ -87,11 +91,25 @@ function openWorld() {
   const rows = lines.map((l) => { const w = l.split(' '); return $('tr', {}, $('td', {}, w[0] === 'founder' ? `founder ${w[1]}` : w[0]), $('td', {}, w[0] === 'founder' ? `${world.members[+w[1]].name}: member ${w[3]}  grant ${w[5]}` : w.slice(1).join(' '))); });
   const body = $('div', {},
     $('table', { class: 'props sunken' }, rows),
-    $('p', { class: 'dim' }, `kernel loaded in ${loadMs.toFixed(0)} ms; genesis in ${world.ms.toFixed(0)} ms, in this tab. One writer, one follow per member, all Lean compiled to WebAssembly; this page moves bytes.`),
-    $('button', { class: 'btn', onclick: () => newWorld() }, 'Re-genesis (a new World)'), ' ',
-    $('button', { class: 'btn', onclick: () => joinHosted() }, 'Join the hosted World…'),
+    kv([['kernel load', `${loadMs.toFixed(0)} ms`], ['genesis', `${world.ms.toFixed(0)} ms`], ['runs in', 'this tab: one writer, one follow per member']]),
+    glossed([
+      ['World', 'One shared ledger: a set of cells (objects) and a log of the calls that changed them.'],
+      ['writer', 'The process that orders calls into the log. It is not trusted.'],
+      ['follow', 'A member\'s own copy of the World. It replays the log and checks every entry.'],
+      ['Turn', 'One admitted call and its effects: one entry (event) in the log.'],
+      ['origin', 'Hash of the genesis input. It names the World.'],
+      ['nonce', 'Random bytes in the genesis input, so two Worlds never share an origin.'],
+      ['founder N', 'A member created at genesis: its member id and its grant on the World.'],
+      ['member', 'A key holder. Its id is a hash of its key.'],
+      ['grant', 'A cell that gives one member rights on one target (observe, mutate, invoke:N, …).'],
+      ['chain', 'Hash chain over the log. Two follows with the same chain hold the same history.'],
+      ['chain0, roots0', 'The chain and the state roots (hash of all cells) at genesis.'],
+      ['authority', 'Certifiers of the World\'s head: count and threshold. 0 0 means none.'],
+    ]),
+    $('button', { class: 'btn', onclick: () => newWorld() }, 'New World (genesis)'), ' ',
+    $('button', { class: 'btn', onclick: () => joinHosted() }, 'Join a hosted World…'),
     writerMenu());
-  openWindow({ id: 'world', title: 'World — testground', x: 110, y: 16, w: 570, body });
+  openWindow({ id: 'world', title: 'World', x: 110, y: 16, w: 570, body });
 }
 
 // ---------------------------------------------------------------- (B) a hosted World
@@ -104,50 +122,51 @@ function openWorld() {
 const hostedDefault = () => new URLSearchParams(location.search).get('hosted') ?? '';
 function httpOf(ws) { return ws.replace(/^ws/, 'http').replace(/\/ws$/, ''); }
 async function joinHosted(url = null) {
-  url = url ?? prompt('The hosted World\'s relay (wss://…/ws):', hostedDefault() || 'ws://127.0.0.1:8787/ws');
+  url = url ?? prompt('Relay address (wss://…/ws):', hostedDefault() || 'ws://127.0.0.1:8787/ws');
   if (!url) return;
   const say = (t) => { boot.textContent = t; };
   let wj;
   try { wj = await (await fetch(`${httpOf(url)}/world.json`)).json(); } catch (e) { alert(`cannot read ${httpOf(url)}/world.json: ${e.message}`); return; }
   const j = K.join(unhex(wj.invitation), unhex(wj.sponsorKey));
   const text = new TextDecoder().decode(j.slice(1));
-  if (j[0] !== K.table.statuses.find((x) => x.name === 'ok').code) { alert(`the invitation is refused: ${text}`); return; }
-  const kv = Object.fromEntries(text.trim().split('\n').map((l) => l.split(' ')));
+  if (j[0] !== K.table.statuses.find((x) => x.name === 'ok').code) { alert(`Invitation refused: ${text}`); return; }
+  const jv = Object.fromEntries(text.trim().split('\n').map((l) => l.split(' ')));
   for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); }
   frames = []; cmdNo = 0; lie = 'honest'; setTray();
   const host = framed(wsOpen(url), { frameMax: K.table.bounds.frameBytesMax });
-  const me = { name: 'you', index: +kv.index, custody: custody(K, [rand32(), rand32(), rand32()]) };
+  const me = { name: 'you', index: +jv.index, custody: custody(K, [rand32(), rand32(), rand32()]) };
   me.nd = client(K, { host, onFrame: (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie, ...f }); renderLog(); } });
-  world = { hosted: true, url, wj, origin: kv.origin, members: [me], objects: new Map(), text: '' };
+  world = { hosted: true, url, wj, origin: jv.origin, members: [me], objects: new Map(), text: '' };
   openHosted(); openLog(); openTerm(me, 700, 16);
-  print(me, $('div', { class: 'dim' }, `joined over the guest-book's invitation: your follow's World is the one its signed inputs make (origin ${short(kv.origin)}), checked under the sponsor key world.json names. Asking the guest-book to enrol you…`));
-  const init = await runIn(me, ['init', wj.sponsor], 'a join token, signed by your new key');
+  print(me, $('div', { class: 'dim' }, `Joined by invitation. World origin ${short(jv.origin)}. The invitation was checked against the sponsor key in world.json. Asking the guest-book (the member that enrols new members) to enrol you.`));
+  const init = await runIn(me, ['init', wj.sponsor], 'join token, signed by your new key');
   const token = (init.stdout.match(/^join ([0-9a-f]+)/m) || [])[1];
   if (!token) return;
   let en;
   try { en = await (await fetch(`${httpOf(url)}/enroll`, { method: 'POST', body: token })).json(); } catch (e) { en = { refused: e.message }; }
-  if (!en.member) { print(me, $('div', { class: 'bad' }, `the guest-book did not enrol you: ${en.refused}`)); return; }
+  if (!en.member) { print(me, $('div', { class: 'bad' }, `Not enrolled: ${en.refused}`)); return; }
   K.self(me.index, en.member, en.grant); me.id = en.member; me.grant = en.grant;
-  print(me, $('div', { class: 'ok' }, `enrolled: member ${short(en.member)}, World grant ${short(en.grant)}. You are a member of a World whose writer is not in this tab; every reply it sends, your follow checks.`));
+  print(me, $('div', { class: 'ok' }, `Enrolled. member ${short(en.member)}, grant ${short(en.grant)}. The writer runs elsewhere. Your follow checks each of its replies.`));
   openHosted();
   await runIn(me, ['sync']);
 }
 function openHosted() {
   const me = world.members[0];
-  const row = (k, v) => $('tr', {}, $('td', {}, k), $('td', {}, v));
   const body = $('div', {},
-    $('table', { class: 'props sunken' }, row('relay', world.url), row('origin', world.origin), row('sponsor', `${world.wj.sponsor} (the guest-book)`),
-      row('you', me.id ? `member ${me.id}  grant ${me.grant}` : 'not yet enrolled')),
-    $('p', { class: 'dim' }, 'The writer is a real host serve elsewhere; this tab holds your keys and your follow, which re-derives every step before custody signs. Open this page in a second tab to be a second member of the same World.'),
+    kv([['relay', world.url], ['origin', world.origin], ['sponsor', `${world.wj.sponsor} (guest-book)`],
+      ['you', me.id ? `member ${me.id}  grant ${me.grant}` : 'not enrolled']]),
+    $('p', { class: 'dim' }, 'The writer is a host serve process on another machine. This tab holds your keys and your follow. The follow checks each step before your key signs. A second tab of this page is a second member.'),
+    glossed([['relay', 'Forwards frames between this tab and the writer. It is not trusted.'], ['guest-book', 'The member that enrols new members.'],
+      ['sponsor', 'The member whose key signed the invitation.'], ['follow', 'Your own copy of the World. It replays the log and checks every entry.']]),
     relayMenu(me), forkCheck(me),
-    $('button', { class: 'btn', onclick: () => newWorld() }, 'Back to a World in this tab'));
-  openWindow({ id: 'world', title: 'World — hosted', x: 110, y: 16, w: 570, body });
+    $('button', { class: 'btn', onclick: () => newWorld() }, 'Local World'));
+  openWindow({ id: 'world', title: 'Hosted World', x: 110, y: 16, w: 570, body });
 }
 
 // ---------------------------------------------------------------- the Writer menu: the writer lies
 // Each lie is a conformance row's own plant, switched on in the kernel (K.lie); the row and the
 // outcome it expects come from the kernel's menu (K.lies), read off Protocol.Rows.rows.
-const lieTitle = (n) => (lieScenes[n] ?? memberLies[n])?.title ?? (n === 'neverForward' ? 'never forwards your call (a loss, not a lie)' : n);
+const lieTitle = (n) => (lieScenes[n] ?? memberLies[n])?.title ?? (n === 'neverForward' ? 'drops the call (a loss, not a lie)' : n);
 const rowOf = (n) => K.lies.find((l) => l.name === n);
 function setLie(name) {
   const r = K.lie(name);
@@ -157,10 +176,10 @@ function setLie(name) {
   const note = document.getElementById('writer-note'); if (note) note.replaceChildren(...lieNote(name));
 }
 function lieNote(name) {
-  if (name === 'honest') return [world?.hosted ? 'The relay forwards every frame as it is. Your follow re-derives what the writer serves anyway.' : 'The writer runs the deployed loop with no plant. Every member re-derives what it serves anyway.'];
+  if (name === 'honest') return [world?.hosted ? 'The relay forwards every frame unchanged. Your follow checks every reply in any case.' : 'The writer runs unmodified. Every follow checks what it serves in any case.'];
   const r = rowOf(name);
-  return [$('b', { class: 'bad' }, `The ${world?.hosted ? 'relay' : 'writer'} ${lieTitle(name)}.`), ' ', r?.row ? `This is row ${r.row}'s plant; at its line ${r.line} the row expects: ` : '', r?.row ? $('code', {}, r.expect) : '',
-    '. Run any command, or play the row\'s scene; switching back to honest does not undo what a lying writer already logged.'];
+  return [$('b', { class: 'bad' }, `${world?.hosted ? 'Relay' : 'Writer'}: ${lieTitle(name)}.`), ' ', r?.row ? `Conformance row ${r.row} (a scripted test in Protocol.Rows), line ${r.line}, expects: ` : '', r?.row ? $('code', {}, r.expect) : '',
+    '. Entries logged during the lie stay in the log after you switch back.'];
 }
 function writerMenu() {
   const sel = $('select', { id: 'writer-lie', 'aria-label': 'what the writer does', onchange: (e) => setLie(e.target.value) },
@@ -169,27 +188,27 @@ function writerMenu() {
   sel.value = lie;
   const scenes = [...Object.keys(lieScenes), ...Object.keys(memberLies)];
   return $('fieldset', { class: 'writer' }, $('legend', {}, 'Writer'),
-    $('div', {}, 'The writer ', sel, ' ', $('span', { class: 'dim' }, 'cold: '), world.members.map((m) => $('button', { class: 'btn', title: `${m.name}'s follow starts again from genesis`, onclick: () => { K.cold(m.index); print(m, $('div', { class: 'warn' }, `— ${m.name}'s follow forgot its World: its next command catches up from genesis, re-deriving every Turn.`)); } }, m.name))),
+    $('div', {}, 'The writer ', sel, ' ', $('span', { class: 'dim' }, 'reset follow (cold): '), world.members.map((m) => $('button', { class: 'btn', title: `reset ${m.name}'s follow to genesis`, onclick: () => { K.cold(m.index); print(m, $('div', { class: 'warn' }, `${m.name}'s follow is reset to genesis. Its next command replays and re-checks every Turn.`)); } }, m.name))),
     $('div', { id: 'writer-note', class: 'dim' }, ...lieNote(lie)),
-    $('div', {}, 'Play a row\'s scene on a fresh World: ', scenes.map((n) => $('button', { class: 'btn', title: lieTitle(n), onclick: () => playLie(n) }, n))));
+    $('div', {}, 'Run a row\'s scene on a new World: ', scenes.map((n) => $('button', { class: 'btn', title: lieTitle(n), onclick: () => playLie(n) }, n))));
 }
 // The fork across two tabs (PROTOCOL-74): another writer of this World's genesis (deploy/testground/
 // run.sh fork) has the same origin and the same guest-book founder. Its guest-book's attestation (its
 // head, signed) is checked by THIS tab's follow: cold, catching up through the attested position on
 // this writer's log, and comparing chains (`sync --check`). The other tab is any tab joined there.
 function forkCheck(me) {
-  const url = $('input', { class: 'sunken', 'aria-label': 'another writer\'s relay', value: new URLSearchParams(location.search).get('fork') ?? '', placeholder: 'ws://…/ws of another writer of this genesis', size: 34 });
+  const url = $('input', { class: 'sunken', 'aria-label': 'another writer\'s relay', value: new URLSearchParams(location.search).get('fork') ?? '', placeholder: 'ws://…/ws (another writer, same genesis)', size: 34 });
   const go = async () => {
     let a;
     try { a = await (await fetch(`${httpOf(url.value)}/attest`)).json(); } catch (e) { a = { refused: e.message }; }
-    if (!a.attest) { print(me, $('div', { class: 'bad' }, `no attestation from ${url.value}: ${a.refused}`)); return; }
+    if (!a.attest) { print(me, $('div', { class: 'bad' }, `No attestation from ${url.value}: ${a.refused}`)); return; }
     K.cold(me.index);
-    print(me, $('div', { class: 'warn' }, `— the other writer's guest-book signed its head (${url.value}). Your follow forgets its World and catches up through that position on YOUR writer's log, then compares the chains.`));
-    await runIn(me, ['sync', '--check', a.attest], 'another writer\'s attestation');
+    print(me, $('div', { class: 'warn' }, `Attestation from ${url.value}: the other writer's head, signed by its guest-book. Your follow resets, replays your writer's log up to that position, and compares the two chains.`));
+    await runIn(me, ['sync', '--check', a.attest], 'attestation from another writer');
   };
-  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Fork check (another writer of this genesis)'),
-    $('div', {}, url, ' ', $('button', { class: 'btn', onclick: go }, 'check its attestation')),
-    $('div', { class: 'dim' }, 'One origin, two writers: each tab\'s follow is right about its own writer. Comparing a signed head from the other is how a member finds the fork, by name.'));
+  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Fork check'),
+    $('div', {}, url, ' ', $('button', { class: 'btn', onclick: go }, 'Check attestation')),
+    $('div', { class: 'dim' }, 'Two writers can serve the same genesis. A follow checks only its own writer. A signed head (attestation) from the other writer shows a fork: refused forkedWorld.'));
 }
 // A hosted tab's relay: the rows' relay lies, told by this tab's own relay around its socket
 // (Web.Sim.Testground.relayPre/relayPost); the writer is the real one and stays honest. A writer lie
@@ -199,10 +218,10 @@ function relayMenu(me) {
     $('option', { value: 'honest' }, 'is honest'),
     K.lies.filter((l) => l.kind === 'relay').map((l) => $('option', { value: l.name }, lieTitle(l.name))));
   sel.value = lie;
-  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Relay (between this tab and the writer)'),
-    $('div', {}, 'The relay ', sel, ' ', $('button', { class: 'btn', title: 'your follow starts again from the World the invitation made', onclick: () => { K.cold(me.index); print(me, $('div', { class: 'warn' }, '— your follow forgot its World: your next command catches up from the start, re-deriving every Turn the writer serves through this relay.')); } }, 'cold')),
+  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Relay'),
+    $('div', {}, 'The relay ', sel, ' ', $('button', { class: 'btn', title: 'reset your follow to the World the invitation made', onclick: () => { K.cold(me.index); print(me, $('div', { class: 'warn' }, 'Your follow is reset. Its next command replays and re-checks every Turn the writer serves through this relay.')); } }, 'reset follow (cold)')),
     $('div', { id: 'writer-note', class: 'dim' }, ...lieNote(lie)),
-    $('div', { class: 'dim' }, 'Try: the relay alters a Turn, press cold, then nd sync. The real writer logged the honest Turn; your follow re-derives what the relay handed it and refuses it by name.'));
+    $('div', { class: 'dim' }, 'Example: choose "alters an event in the log", press reset follow, run nd sync. The writer logged the true Turn. Your follow checks the altered copy and refuses it (eventMismatch).'));
 }
 function setTray() {
   const t = document.getElementById('tray-lie'); if (!t) return;
@@ -217,10 +236,10 @@ async function playLie(name, { fresh = true, from = 0 } = {}) {
   const fetchText = async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text());
   const r = await runScene({ ...sc, steps: sc.steps.slice(from) }, { fetchText, members: world.members, origin, head0: head0Of(world.text), act: async (s, v) => {
     const m = s.who ? by(s.who) : null;
-    if (s.say) print(m ?? world.members[0], $('div', { class: 'warn' }, `— ${s.say}`));
+    if (s.say) print(m ?? world.members[0], $('div', { class: 'warn' }, s.say));
     if (s.lie) { setLie(s.lie); return null; }
-    if (s.cold) { K.cold(by(s.cold).index); print(by(s.cold), $('div', { class: 'dim' }, `(${s.cold}'s follow starts again from genesis)`)); return null; }
-    if (s.forge) return runIn(m, s.forge(v), 'a hostile client: planned and signed WITHOUT the follow\'s admission', { forge: true, quiet: true });
+    if (s.cold) { K.cold(by(s.cold).index); print(by(s.cold), $('div', { class: 'dim' }, `${s.cold}'s follow is reset to genesis.`)); return null; }
+    if (s.forge) return runIn(m, s.forge(v), 'hostile client: signed without the follow\'s check', { forge: true, quiet: true });
     if (s.cancel) return runIn(m, ['cancel', hex(by(s.cancel).last)], '', { quiet: s.check });
     return runIn(m, s.argv(v), '', { quiet: s.check || s.expect });
   } });
@@ -237,17 +256,18 @@ function caught(name, r, row) {
   const body = $('div', {},
     $('div', { class: 'mark' + (r.outcome === 'ok' ? ' okm' : '') }, r.outcome === 'ok' ? '✓' : '×'),
     $('div', {},
-      $('div', { class: 'dim' }, member ? `A member lies: ${lieTitle(name)}; the honest writer admits it (its laws judge the post, not the history).` : `The writer ${lieTitle(name)}.`),
       $('div', { class: 'name' }, r.outcome),
-      (r.r.stderr || '').trim().split('\n').filter((l) => l && l !== r.outcome).map((l) => $('div', {}, l)),
-      $('div', {}, r.outcome === 'ok'
-        ? 'The lie did not stick: the member\'s own follow settled the call on its own World, not on the writer\'s word.'
-        : `Refused by name in the member's own follow, which re-derived what the writer served and found it is not what ${member ? 'the post claims' : 'the writer says'}. Nothing it signed rests on the lie.`),
-      liar ? $('div', {}, 'The frame that lied: ', $('a', { class: 'cmd', onclick: () => { logSel = liar.n; openLog(); } }, `#${liar.n} ${liar.who} → writer ${liar.op}`), member ? ' (the hostile client\'s call, admitted)' : liar.lied ? ' (rewritten by the relay)' : ' (served by the lying writer)') : '',
-      row.row ? $('div', { class: match ? 'ok' : 'bad' }, `Row ${row.row}, line ${row.line}, expects "${row.expect}": ${match ? 'the same, in this tab' : 'NOT what this tab said'}.`) : '',
-      explain(r.outcome) ? $('div', {}, explain(r.outcome)) : ''),
+      kv([['lie', member ? `by a member: ${lieTitle(name)}` : `by the writer: ${lieTitle(name)}`],
+        member ? ['writer', 'honest; it admitted the call (laws judge the new state, not the history)'] : null,
+        ...(r.r.stderr || '').trim().split('\n').filter((l) => l && l !== r.outcome).map((l) => ['detail', l]),
+        ['result', r.outcome === 'ok' ? 'ok: the follow decided the call from its own copy of the World, not from the writer\'s reply'
+          : `refused by the member's follow: what the writer served does not match ${member ? 'the post' : 'what the writer says'}. Nothing signed depends on it.`],
+        liar ? ['lying frame', $('a', { class: 'cmd', onclick: () => { logSel = liar.n; openLog(); } }, `#${liar.n} ${liar.who} → writer ${liar.op}`), member ? ' (hostile call, admitted)' : liar.lied ? ' (rewritten by the relay)' : ' (from the lying writer)'] : null,
+        row.row ? ['row expects', `${row.expect} (row ${row.row}, line ${row.line})`] : null,
+        row.row ? ['match', $('span', { class: match ? 'ok' : 'bad' }, match ? 'yes' : 'NO')] : null]),
+      explain(r.outcome) ? $('p', {}, explain(r.outcome)) : ''),
     $('div', { class: 'actions' }, $('button', { class: 'btn', onclick: () => d.el.querySelector('.titlebar button').click() }, 'OK')));
-  const d = openWindow({ id: `caught-${cmdNo}`, title: r.outcome === 'ok' ? 'Caught — and settled' : 'Caught', x: 240, y: 160, w: 500, body, dialog: true });
+  const d = openWindow({ id: `caught-${cmdNo}`, title: r.outcome === 'ok' ? 'Lie without effect' : 'Lie caught', x: 240, y: 160, w: 500, body, dialog: true });
   if (liar) { logSel = liar.n; renderLog(); }
 }
 
@@ -291,8 +311,8 @@ function openTerm(m, x, y) {
   });
   const body = $('div', { class: 'term' }, out, $('div', { class: 'line' }, $('span', { class: 'prompt' }, `${m.name}$ nd`), input));
   terms.set(m.name, { out, m });
-  openWindow({ id: `term-${m.name}`, title: `${m.name}@${m.world ?? 'testground'} — nd`, x, y, w: 520, body });
-  print(m, $('span', { class: 'dim' }, `you are ${m.name}, founder ${m.index}${m.world ? ` of World ${m.world}` : ''}: member ${short(m.id)}. Your keys are in this tab; your follow re-derives every step before it signs.\n`));
+  openWindow({ id: `term-${m.name}`, title: `${m.name}${m.world ? ` (World ${m.world})` : ''}`, x, y, w: 520, body });
+  print(m, $('span', { class: 'dim' }, `You are ${m.name}, founder ${m.index}${m.world ? ` of World ${m.world}` : ''}, member ${short(m.id)}. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\nCommands: create · write OBJ SLOT TEXT · read OBJ [?] · grant OBJ MEMBER RIGHTS · invoke OBJ N ARGS · install TEXT · sync\n`));
 }
 function print(m, ...nodes) { const t = terms.get(m.name); if (!t) return; t.out.append(...nodes); t.out.scrollTop = t.out.scrollHeight; }
 
@@ -332,7 +352,7 @@ function meterOf(m) {
   const r = (m.K ?? K).meter(m.index);
   if (r[0] !== K.table.statuses.find((x) => x.name === 'ok').code) return '';
   const kv = Object.fromEntries(new TextDecoder().decode(r.slice(1)).trim().split('\n').map((l) => l.split(' ')));
-  return `meter ${(+kv.ticks).toLocaleString()} of ${(+kv.budget).toLocaleString()} ticks this window`;
+  return `ticks ${(+kv.ticks).toLocaleString()} / ${(+kv.budget).toLocaleString()} this window`;
 }
 
 // ---------------------------------------------------------------- refusals are dialogs, by name
@@ -342,34 +362,34 @@ function refusal(m, argv, r, fs) {
   const head = lines.find((l) => l.startsWith(r.exit + ' ')) ?? lines.at(-1) ?? r.exit;
   const rest = [...lines.filter((l) => l !== head), ...(r.stdout || '').trim().split('\n').filter(Boolean)];
   const sub = fs.filter((f) => f.to === 'writer' && (f.op === 'submit' || f.op === 'lookup')).at(-1);
-  const writerSaid = sub ? `${sub.op} → ${sub.status}${sub.status === 'ok' ? '' : ' ' + new TextDecoder().decode(sub.payload)}` : 'nothing — your own follow re-derived the call on its own World, refused it, and never asked custody to sign';
+  const writerSaid = sub ? `${sub.op} → ${sub.status}${sub.status === 'ok' ? '' : ' ' + new TextDecoder().decode(sub.payload)}` : 'nothing: your follow refused the call before signing, so nothing was sent';
   const body = $('div', {},
     $('div', { class: 'mark' + (r.exit === 'declined' ? ' warn' : '') }, r.exit === 'declined' ? '!' : '×'),
     $('div', {},
       $('div', { class: 'name' }, head),
       rest.map((l) => $('div', {}, l)),
-      $('div', { class: 'dim' }, `${m.name}'s nd ${argv[0]} ended ${r.exit}. The writer said: ${writerSaid}.`),
-      lie !== 'honest' ? $('div', { class: 'bad' }, `${world.hosted ? "The relay between this tab and the writer" : "The writer"} is lying: it ${lieTitle(lie)}.`, (() => { const l = fs.filter((f) => f.lied).at(-1); return l ? ` The frame that lied: #${l.n} (${l.op}).` : ''; })()) : '',
-      $('div', {}, explain(head))),
+      kv([['command', `${m.name}: nd ${argv[0]}`], ['exit', r.exit], ['writer\'s reply', writerSaid],
+        lie !== 'honest' ? ['lie on', $('span', { class: 'bad' }, `${world.hosted ? 'relay' : 'writer'}: ${lieTitle(lie)}`, (() => { const l = fs.filter((f) => f.lied).at(-1); return l ? `; lying frame #${l.n} (${l.op})` : ''; })())] : null]),
+      explain(head) ? $('p', {}, explain(head)) : ''),
     $('div', { class: 'actions' }, $('button', { class: 'btn', onclick: () => d.el.querySelector('.titlebar button').click() }, 'OK')));
-  const d = openWindow({ id: `dlg-${cmdNo}`, title: r.exit === 'declined' ? 'Declined' : 'Refused', x: 260 + (cmdNo % 5) * 14, y: 180 + (cmdNo % 5) * 14, w: 460, body, dialog: true });
+  const d = openWindow({ id: `dlg-${cmdNo}`, title: r.exit === 'declined' ? 'Declined call' : 'Refusal', x: 260 + (cmdNo % 5) * 14, y: 180 + (cmdNo % 5) * 14, w: 460, body, dialog: true });
 }
 // What a refusal's NAME means, for a visitor; the name itself is the kernel's (law 7).
 const glossary = {
-  stale: 'A cell your call pinned changed before your call was admitted: the writer would not apply it to a World you did not sign over. Run it again; your follow re-plans on the new World.',
-  noGrant: 'You are not the owner and named no grant (`--via GRANT`) that reaches the owner.',
-  missingCell: 'No such cell in your follow\'s World.',
-  idTaken: 'Packages are content addressed: these exact bytes are installed already.',
-  lawDenied: 'A law of the object refused the act.',
-  program: 'The object\'s own method refused; the line above says which check, by name.',
-  eventMismatch: 'An event on the page does not re-derive to the Turn the writer logged: a byte of it is not what was signed and admitted. The page is refused; nothing is absorbed from it.',
-  chainMismatch: 'Folding the page\'s events on your own World does not reach the chain the writer states for it: an event is missing, or the writer logged something other than what it served.',
-  cancelForged: 'The page carries a cancel whose signature is not its member\'s: the writer served a cancel nobody signed.',
-  forkedPost: 'A member posted a head naming a step of this World with a chain your own fold does not have there: two histories claim one World. The page is kept; the post is named.',
-  hostContradicted: 'The writer said one thing about your call and your own follow, re-deriving on its own World, says another. The attempt stays open; the writer\'s word is shown, never acted on.',
-  relationFull: 'The slot is taken: the object\'s relation holds at most one entry.',
-  forkedWorld: 'Two writers of one World: the signed head you were handed names, at its step, a chain your own follow did not fold on your writer\'s log. One of the two histories is not yours; the page that says so is refused.',
-  ticksBudget: 'The meter: this member\'s admitted Turns already spent this window\'s ticks. Every Turn names its member and its ticks, re-derived by every follower, so no writer can bill another member; a later window starts again from zero.',
+  stale: 'stale: your call pinned a cell (named the state it expected), and the cell changed before the writer admitted the call. The writer does not apply a call signed over an older state. Run the command again; the follow plans it on the new state.',
+  noGrant: 'noGrant: you do not own the object and named no grant (--via GRANT) that reaches its owner.',
+  missingCell: 'missingCell: no cell with this id in your follow\'s World.',
+  idTaken: 'idTaken: a package id is the hash of its bytes. These bytes are already installed.',
+  lawDenied: 'lawDenied: a law of the object refused the change. A law compares the old state with the new state.',
+  program: 'program: a check inside the method refused. The line above names the check.',
+  eventMismatch: 'eventMismatch: an event on the log page does not match the Turn the writer admitted; one byte differs from what was signed. The follow refuses the page and keeps nothing from it.',
+  chainMismatch: 'chainMismatch: replaying the page does not produce the chain hash the writer reports. An event is missing, or the writer logged something other than what it served.',
+  cancelForged: 'cancelForged: the page has a cancel whose signature is not its member\'s.',
+  forkedPost: 'forkedPost: a member posted a head for a step of this World whose chain hash differs from your follow\'s at that step. Two histories claim one World. The page is kept; the post is refused.',
+  hostContradicted: 'hostContradicted: the writer reports one outcome for your call and your follow finds another. The attempt stays open. The writer\'s reply is shown and not acted on.',
+  relationFull: 'relationFull: the relation (a table of rows inside the object) is at its row limit; here, the one slot is taken.',
+  forkedWorld: 'forkedWorld: the signed head names a chain hash your follow does not have at that step of your writer\'s log. The two writers serve different histories of one genesis.',
+  ticksBudget: 'ticksBudget: this member has spent its ticks for this window. Each Turn records its member and its ticks, and every follow recomputes both, so no writer can charge one member for another. The count restarts each window.',
 };
 function explain(name) { const w = name.split(' ').find((x) => glossary[x]); return w ? glossary[w] : ''; }
 
@@ -399,17 +419,21 @@ function openObject(m, id) {
     const row = (k, ...v) => $('tr', {}, $('td', {}, k), $('td', {}, ...v));
     const table = $('table', { class: 'props sunken' },
       props.map(([k, v]) => row(k, ...linkify(v, m))),
-      core ? row('core', $('details', {}, $('summary', {}, `${core.length / 2} bytes: the package cell, the bytes invoke will run`), $('code', { style: 'word-break:break-all' }, core))) : '',
+      core ? row('core', $('details', {}, $('summary', {}, `${core.length / 2} bytes (the package code invoke runs)`), $('code', { style: 'word-break:break-all' }, core))) : '',
       methods.map((x) => row(`method ${x.i}`, $('b', {}, x.label), ' ', $('code', {}, x.ty), ' ', $('a', { class: 'cmd', onclick: () => prefill(m, `invoke ${id} ${x.i} `) }, 'invoke…'))),
       calls.map((c) => row('call', c)), laws.map((c) => row('law', c)), rels.map((c) => row('rel', $('code', {}, c))));
     const state = $('table', { class: 'props sunken' }, (s.exit === 'ok' ? s.stdout : s.stderr).trim().split('\n').filter(Boolean).map((l) => {
       const e = l.indexOf('='); return e < 0 ? row('', ...linkify(l, m)) : row(l.slice(0, e), ...linkify(l.slice(e + 1), m));
     }));
     w.setBody($('div', {},
-      $('div', { class: 'dim' }, `as ${m.name}'s follow describes it (read ${short(id)} ?), re-read after every command`),
+      kv([['source', `${m.name}'s follow: read ${short(id)} ?`], ['updated', 'after every command']]),
       d.exit === 'ok' ? table : $('div', { class: 'bad' }, d.stderr),
       $('h4', { style: 'margin:8px 0 4px' }, 'state'), state,
-      methods.length ? '' : $('p', {}, $('a', { class: 'cmd', onclick: () => prefill(m, `write ${id} 0 `) }, 'write a slot…'))));
+      methods.length ? '' : $('p', {}, $('a', { class: 'cmd', onclick: () => prefill(m, `write ${id} 0 `) }, 'write a slot…')),
+      glossed([['owner', 'The member who may change the object without a grant.'], ['data', 'A cell with numbered slots and no code (create with no package).'],
+        ['package', 'The id of the code the object runs.'], ['method N', 'An entry point: name and argument type. Call it with invoke OBJ N ARGS.'],
+        ['call', 'A call a method may make to another object: method index, call index, type.'], ['law', 'A rule that judges every change: old state → new state.'],
+        ['rel', 'A relation: a table of keyed rows inside the object, with a row limit.'], ['state', 'The current value, from read OBJ.']])));
   };
   w.refresh();
 }
@@ -417,35 +441,39 @@ function openObject(m, id) {
 // ---------------------------------------------------------------- the wire, as a scrubbable timeline
 let logSel = -1;
 function openLog() {
-  const w = openWindow({ id: 'log', title: 'Wire — every frame', x: 110, y: 560, w: 570, body: $('div', {}) });
+  const w = openWindow({ id: 'log', title: 'Frames', x: 110, y: 560, w: 570, body: $('div', {}) });
   w.refresh = renderLog; renderLog();
 }
 function renderLog() {
   const w = wins.get('log'); if (!w) return;
-  const scrub = $('input', { type: 'range', class: 'scrub', min: 0, max: Math.max(0, frames.length - 1), value: logSel < 0 ? frames.length - 1 : logSel, 'aria-label': 'scrub the wire' });
+  const scrub = $('input', { type: 'range', class: 'scrub', min: 0, max: Math.max(0, frames.length - 1), value: logSel < 0 ? frames.length - 1 : logSel, 'aria-label': 'frame' });
   const rows = frames.slice(-200).map((f) => $('div', { class: 'row' + (f.n === logSel ? ' sel' : ''), onclick: () => { logSel = f.n; renderLog(); } },
     $('span', {}, `#${f.n}`), $('span', {}, f.who), $('span', {}, `→${f.to}`), $('span', { class: 'x' }, f.op), $('span', { class: f.status === 'ok' ? 'ok' : 'bad' }, `${f.status} ${f.bytes}B`, f.lied ? $('b', { class: 'lied' }, ' LIED') : '', f.forged ? $('b', { class: 'lied' }, ' FORGED') : '')));
   const sel = frames[logSel < 0 ? frames.length - 1 : logSel];
   scrub.addEventListener('input', () => { logSel = +scrub.value; renderLog(); });
   w.setBody($('div', {}, scrub,
-    sel ? $('div', { class: sel.lied ? 'bad' : 'dim' }, `frame #${sel.n}, command ${sel.cmd}: ${sel.who} → ${sel.to} ${sel.op}, ${sel.bytes} bytes, answered ${sel.status}${sel.lied ? ' — the relay in front of the writer rewrote, answered or kept this frame' : ''}${sel.lie && sel.lie !== 'honest' ? ` (writer: ${sel.lie})` : ''}`) : '',
-    $('div', { class: 'log sunken', style: 'max-height:180px;overflow:auto' }, rows)));
+    sel ? kv([['frame', `#${sel.n} (command ${sel.cmd})`], ['from → to', `${sel.who} → ${sel.to}`], ['op', sel.op], ['bytes', sel.bytes], ['reply', sel.status],
+      sel.lied ? ['lied', $('span', { class: 'bad' }, 'yes: the relay in front of the writer rewrote, answered or withheld this frame')] : null,
+      sel.lie && sel.lie !== 'honest' ? ['lie on', sel.lie] : null]) : '',
+    $('div', { class: 'log sunken', style: 'max-height:180px;overflow:auto' }, rows),
+    glossed([['frame', 'One message: member → its follow, or member → writer.'], ['op', 'The request kind (command, resume, submit, lookup, log, …).'],
+      ['reply', 'The status the receiver answered with.']])));
   const on = w.el.querySelector('.log .row.sel'); if (on) on.scrollIntoView({ block: 'nearest' });
   else { const l = w.el.querySelector('.log'); if (l) l.scrollTop = l.scrollHeight; }
 }
 
 // ---------------------------------------------------------------- the first five minutes
 const tour = [
-  { say: 'alice creates a data object she owns.', argv: () => ['create'], who: 0, done: (a) => a[0] === 'create' },
-  { say: 'alice writes slot 0. Her follow pins the cell, re-derives the Turn on its own World, and only then asks custody to sign.', argv: () => ['write', firstObj(), '0', 'hello from the testground'], who: 0, done: (a) => a[0] === 'write' },
-  { say: 'alice asks the object to describe itself; click its id anywhere to open it as a window.', argv: () => ['read', firstObj(), '?'], who: 0, done: (a) => a[0] === 'read' },
-  { say: 'alice grants bob mutate on it.', argv: () => ['grant', firstObj(), world.members[1].id, 'mutate'], who: 0, done: (a) => a[0] === 'grant' },
-  { say: 'bob writes through that grant, but alice writes the same slot while bob\'s signed call is on its way. Watch the dialog: the kernel names why.', argv: () => ['write', firstObj(), '0', 'bob says hi', '--via', firstGrant()], who: 1, race: true, done: (a, m) => m.name === 'bob' && a[0] === 'write' },
-  { say: 'Now make the writer lie. Until now every party was the same honest program, so you could not tell trusting the writer from checking it. The writer starts flipping a byte of every event it serves; bob forgets his World and catches up from genesis, re-deriving each Turn himself.', argv: () => ['sync'], who: 1, lie: 'flipEvent', done: (a, m) => m.name === 'bob' && a[0] === 'sync' && lie !== 'honest' },
+  { say: 'alice creates a cell: an object with numbered slots and no code. She owns it.', argv: () => ['create'], who: 0, done: (a) => a[0] === 'create' },
+  { say: 'alice writes slot 0. Her copy of the World checks the write before her key signs it. If the check fails, nothing is signed.', argv: () => ['write', firstObj(), '0', 'hello from the testground'], who: 0, done: (a) => a[0] === 'write' },
+  { say: 'alice reads the description of the cell. Click any id to open the object.', argv: () => ['read', firstObj(), '?'], who: 0, done: (a) => a[0] === 'read' },
+  { say: 'alice grants bob the right to write the cell (mutate). The grant is a cell with its own id.', argv: () => ['grant', firstObj(), world.members[1].id, 'mutate'], who: 0, done: (a) => a[0] === 'grant' },
+  { say: 'bob writes slot 0 through the grant. His call names the state of the cell it expects (a pin). alice writes slot 0 while his signed call is in transit, so the writer declines his call (stale).', argv: () => ['write', firstObj(), '0', 'bob says hi', '--via', firstGrant()], who: 1, race: true, done: (a, m) => m.name === 'bob' && a[0] === 'write' },
+  { say: 'The writer lies: it changes one byte of every event it serves. bob\'s follow resets to genesis and replays the log. It checks each Turn and refuses the altered one (eventMismatch).', argv: () => ['sync'], who: 1, lie: 'flipEvent', done: (a, m) => m.name === 'bob' && a[0] === 'sync' && lie !== 'honest' },
   // one demo per axis (DESIGN-TESTGROUND §5): each is demos.js's argv, typed into the terminals
-  { say: 'A generator generating (META): a package whose method installs a package; the generated law then refuses a write past the bound it was generated at.', demo: 'generator' },
-  { say: 'The meter (OBS): every Turn names its member and the ticks it spent; bob spins until the kernel refuses him ticksBudget, and reads his meter back from his own fold.', demo: 'meter' },
-  { say: 'A time-lock on another World\'s clock (OBS): a second World opens in this tab; alice\'s lock releases only on a receipt of a call World A admitted at or past the deadline.', demo: 'timelock' },
+  { say: 'A generator: a package whose method installs another package. The generated package has the law n <= 100; setting n = 101 is refused (lawDenied).', demo: 'generator' },
+  { say: 'The meter: each Turn records its member and its ticks (evaluator steps). bob repeats an expensive call until his ticks for the window run out (ticksBudget).', demo: 'meter' },
+  { say: 'A time lock: a second World (A) runs in this tab. alice\'s lock releases only with a receipt showing that A admitted a call at or after the deadline height.', demo: 'timelock' },
 ];
 let tourAt = 0;
 const firstObj = () => [...world.objects.entries()].find(([, v]) => v === 'create')?.[0] ?? '';
@@ -461,16 +489,16 @@ function openTour() {
       if (s.lie) { const sc = lieScenes[s.lie]; await playLie(s.lie, { fresh: false, from: sc.steps.findIndex((x) => x.lie) }); return; }
       await runIn(m, s.argv());
     } }, 'Run')) : ''));
-  openWindow({ id: 'tour', title: 'Start here', x: 110, y: 270, w: 570,
-    body: $('div', { class: 'tour' }, $('p', {}, 'This is a World with two members, alice and bob, running entirely in this tab. Type into their terminals, or follow these steps.'), $('ol', {}, items),
-      tourAt >= tour.length ? $('p', {}, 'Now the other lies: the World window\'s Writer menu switches the writer to each one the conformance rows plant, and plays that row\'s scene. Or break something yourself: write as bob without --via, install a package twice, press Re-genesis.') : '') });
+  openWindow({ id: 'tour', title: 'Tour', x: 110, y: 270, w: 570,
+    body: $('div', { class: 'tour' }, $('p', {}, 'One World, two members (alice, bob), all in this tab. Type into their terminals, or press Run on each step.'), $('ol', {}, items),
+      tourAt >= tour.length ? $('p', {}, 'More: the Writer menu in the World window turns on each lie the conformance rows test, and runs its scene. Or try: write as bob without --via; install a package twice; New World.') : '') });
 }
 
 // ---------------------------------------------------------------- demos: command sequences a member types
 function openDemos() {
   const list = Object.entries(demos).map(([k, d]) => $('li', {}, $('b', {}, d.title), ' ',
-    $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run'), $('div', { class: 'dim' }, `${d.steps.length} nd commands, typed into alice's and bob's terminals as they run`)));
-  openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' }, $('ol', {}, list), $('p', { class: 'dim' }, 'Every demo is the same argv a member would type; each runs on this World, so run it after the tour or on a fresh World.')) });
+    $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run'), $('div', { class: 'dim' }, `${d.steps.length} commands`)));
+  openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' }, $('ol', {}, list), $('p', { class: 'dim' }, 'Each demo types ordinary nd commands into the terminals, on the current World.')) });
 }
 // a second World in this tab (the time-lock's clock): its own kernel instance, its own writer, its
 // founders' terminals; made once per World in the tab and kept until Re-genesis
@@ -495,13 +523,13 @@ async function playDemo(name) {
     fetchText: async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text()),
     members, origin,
     run: async (m, argv, s) => {
-      if (s.say) print(m, $('div', { class: 'warn' }, `— ${s.say}`));
-      const out = await runIn(m, argv, s.again ? `again (${s.again})` : '');
+      if (s.say) print(m, $('div', { class: 'warn' }, s.say));
+      const out = await runIn(m, argv, s.again ? `repeat ${s.again}` : '');
       if (s.open) { const id = (out.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1]; if (id) openObject(m, id); }
       return out;
     },
   });
-  print(world.members[0], $('div', { class: r.ok ? 'ok' : 'bad' }, `demo ${name}: ${r.ok ? 'every step answered as scripted' : 'stopped'} in ${((performance.now() - t) / 1000).toFixed(1)} s`));
+  print(world.members[0], $('div', { class: r.ok ? 'ok' : 'bad' }, `demo ${name}: ${r.ok ? 'every step as expected' : 'stopped'}, ${((performance.now() - t) / 1000).toFixed(1)} s`));
   return r;
 }
 
@@ -511,7 +539,7 @@ const icon = (glyph, label, act) => icons.append($('button', { class: 'icon', on
 icon('◆', 'World', () => openWorld());
 icon('a', 'alice', () => openTerm(world.members[0]));
 icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]));
-icon('≡', 'Wire', () => openLog());
+icon('≡', 'Frames', () => openLog());
 icon('?', 'Start here', () => openTour());
 icon('▶', 'Demos', () => openDemos());
 document.getElementById('start').addEventListener('click', () => openWorld());
