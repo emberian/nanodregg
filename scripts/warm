@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# scripts/warm — the box's ONE warm build of origin/main (METHOD-20261027 §3, GATES-32).
+#
+#   scripts/warm status          the commit the warm tree is at, its last build's verdict, the published generation
+#   scripts/warm start           start the loop (detached; PID file ~/nd-land/.warm/warm.pid, log warm.log)
+#   scripts/warm stop            stop the loop by its PID file (its process group: the loop and the build it runs)
+#   scripts/warm advance         one step, in the foreground: fetch; when origin/main moved, build it in the warm tree
+#   scripts/warm gen             print the published generation's directory (what scripts/nd-check builds against)
+#
+# THE TREE. ~/nd-land/warm (git config nanodregg.warmtree), a worktree of this clone detached at origin/main that
+# nothing else edits. Its .lake is built whole once and then advanced: every step fetches origin/main and, when it
+# moved, checks the tree out at it and runs `lake build` (every target), which rebuilds only what the landings since
+# the last step changed and what imports it. One process advances it at a time (~/nd-land/.warm/warm.flock); the
+# build takes one of the box's build slots through scripts/nd-build (idle priority, swarm-build at SWARM_MEM_MAX,
+# default 24G here: the whole tree's floor is 18G). The verdict is gates/converge.py's: ok, RED (lake finished and
+# failed), ABSENT(killed: …); one line per built commit in ~/nd-land/.warm/verdicts, its log in log/<sha12>.log.
+#
+# THE GENERATION. A green build is published as ~/nd-land/.warm/gen/<sha12> (gates/ndcheck.py snapshot: hard links to
+# its .olean files, module objects, static libraries and exes; copies of the link response files) and `current` is
+# pointed at it. Lanes read generations, never the tree, so a build in progress is never half-read; a generation is
+# immutable because every file it links is one the build replaces by rename (MEASURED, gates/ndcheck.py), and every
+# step checks that claim (`ndcheck.py leaks` over the older generations: a file written after its generation was
+# published stops publishing, ~/nd-land/.warm/LEAK, until Ember looks). Generations other than the current and the
+# previous one are removed once no nd-check holds them (a shared flock on gen/<sha12>/.lock). A red build publishes
+# nothing: `current` stays at the last green commit and nd-check's reach includes everything since it.
+set -uo pipefail
+export PATH=$HOME/.elan/bin:$PATH
+WD=${ND_WARM_DIR:-$HOME/nd-land/.warm}
+W=$(git config nanodregg.warmtree 2>/dev/null || echo "$HOME/nd-land/warm")
+cmd=${1:-status}
+mkdir -p "$WD/gen" "$WD/log"
+
+alive() { local p; p=$(cat "$WD/warm.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo "$p"; }
+age() { local s=$(( $(date +%s) - $1 )); if [ $s -ge 3600 ]; then echo "$((s / 3600)) h $((s % 3600 / 60)) min"; else echo "$((s / 60)) min"; fi; }
+
+advance() {
+  exec 6> "$WD/warm.flock"; flock 6
+  [ -d "$W/.git" ] || [ -f "$W/.git" ] || { echo "warm: no warm tree at $W (scripts/warm start makes it)"; return 2; }
+  git -C "$W" fetch -q origin main || { echo "warm: git fetch failed"; return 1; }
+  local target last log start rc v
+  target=$(git -C "$W" rev-parse origin/main)
+  IFS=$'\t' read -r last lastv lastat _ < <(tail -1 "$WD/verdicts" 2>/dev/null) || true
+  # a commit is built once; a build that was killed (ABSENT) is tried again after 15 min
+  if [ "$target" = "${last:-}" ]; then
+    case $lastv in ABSENT*) [ $(( $(date +%s) - lastat )) -ge 900 ] || return 0 ;; *) return 0 ;; esac
+  fi
+  echo "warm: $(date -u +%FT%TZ) building ${target:0:12} $(git -C "$W" log -1 --format=%s "$target" | cut -c1-90)"
+  git -C "$W" checkout -q -f --detach "$target" || return 1
+  log=$WD/log/${target:0:12}.log
+  start=$(date +%s)
+  rm -f "$WD/build.cgroup"
+  # shellcheck disable=SC2016
+  ( cd "$W" && SWARM_MEM_MAX=${SWARM_MEM_MAX:-24G} scripts/nd-build \
+      sh -c 'cat /proc/self/cgroup > "$0" 2>/dev/null; exec env LEAN_NUM_THREADS="$1" lake build' \
+      "$WD/build.cgroup" "${LEAN_NUM_THREADS:-4}" ) > "$log" 2>&1
+  rc=$?
+  v=$(python3 "$W/gates/converge.py" build --tool lake --out "$log" --rc "$rc" --cgroup "$WD/build.cgroup" 2>> "$log")
+  v=${v:-ABSENT(gates/converge.py build gave no verdict; lake exit $rc)}
+  printf '%s\t%s\t%s\t%s\n' "$target" "$v" "$(date +%s)" "$(( $(date +%s) - start ))" >> "$WD/verdicts"
+  echo "warm: ${target:0:12} $v in $(( $(date +%s) - start )) s (log: $log)"
+  [ "$v" = ok ] || return 0
+  publish "$target"
+}
+
+publish() {
+  local sha=$1 g o prev
+  g=$WD/gen/${sha:0:12}
+  [ -d "$g" ] || python3 "$W/gates/ndcheck.py" snapshot "$W/.lake/build" "$g" "$sha" || return 1
+  for o in "$WD"/gen/*/; do
+    o=${o%/}; [ "$o" = "$g" ] && continue
+    if ! python3 "$W/gates/ndcheck.py" leaks "$o" > "$WD/leaks.out"; then
+      cat "$WD/leaks.out" >> "$WD/LEAK"; cat "$WD/leaks.out"
+      echo "warm: LEAK — a published generation changed after it was published; nothing is published until Ember looks ($WD/LEAK)"
+      return 1
+    fi
+  done
+  prev=$(readlink "$WD/current" 2>/dev/null || true)
+  ln -sfn "gen/${sha:0:12}" "$WD/current.new" && mv -T "$WD/current.new" "$WD/current"
+  echo "warm: published ${sha:0:12}"
+  # keep the current and the previous generation; any other goes when no nd-check holds it
+  for o in "$WD"/gen/*/; do
+    o=${o%/}
+    case "gen/$(basename "$o")" in "gen/${sha:0:12}"|"$prev") continue ;; esac
+    ( flock -n -x 9 && rm -rf "$o" ) 9< "$o/.lock" 2>/dev/null || true
+  done
+}
+
+case $cmd in
+  advance) advance; exit $? ;;
+  loop)
+    # the running copy is $WD/warm.run, never the tree's file (a checkout replaces it under bash's feet); a new
+    # scripts/warm on main takes over at the next step
+    while :; do
+      advance
+      sleep "${ND_WARM_EVERY:-60}"
+      if ! cmp -s "$W/scripts/warm" "$WD/warm.run"; then
+        cp "$W/scripts/warm" "$WD/warm.run.new" && mv "$WD/warm.run.new" "$WD/warm.run"
+        echo "warm: scripts/warm changed on main; running the new one"
+        exec bash "$WD/warm.run" loop
+      fi
+    done ;;
+  start)
+    if p=$(alive); then echo "warm: the loop is running (pid $p)"; exit 0; fi
+    if [ ! -e "$W/.git" ]; then
+      git fetch -q origin main && git worktree add -q --detach "$W" origin/main || exit 2
+      echo "warm: made the warm tree $W at $(git -C "$W" rev-parse --short HEAD); its first build is cold (one whole build)"
+    fi
+    cp "$W/scripts/warm" "$WD/warm.run"
+    setsid nohup bash "$WD/warm.run" loop >> "$WD/warm.log" 2>&1 < /dev/null &
+    echo $! > "$WD/warm.pid"
+    echo "warm: started the loop (pid $!; log $WD/warm.log)" ;;
+  stop)
+    if p=$(alive); then kill -TERM -- "-$p" && echo "warm: stopped the loop (process group $p)"; else echo "warm: the loop is not running"; fi ;;
+  gen)
+    [ -s "$WD/LEAK" ] && { echo "warm: LEAK — no generation is served until Ember looks: $WD/LEAK" >&2; exit 3; }
+    g=$(readlink -f "$WD/current" 2>/dev/null) && [ -f "$g/COMMIT" ] || { echo "warm: no published generation (scripts/warm status)" >&2; exit 2; }
+    echo "$g" ;;
+  status)
+    if [ -e "$W/.git" ]; then
+      h=$(git -C "$W" rev-parse HEAD)
+      echo "warm: tree $W at ${h:0:12} $(git -C "$W" log -1 --format=%s "$h" | cut -c1-90)"
+    else echo "warm: no warm tree at $W"; fi
+    if [ -s "$WD/verdicts" ]; then
+      IFS=$'\t' read -r s v at wall < <(tail -1 "$WD/verdicts")
+      echo "warm: last build ${s:0:12}: $v ($wall s, $(age "$at") ago)"
+    fi
+    if g=$(readlink -f "$WD/current" 2>/dev/null) && [ -f "$g/COMMIT" ]; then
+      c=$(cat "$g/COMMIT"); behind=$(git -C "$W" rev-list --count "$c..origin/main" 2>/dev/null || echo "?")
+      echo "warm: generation ${c:0:12} (green; published $(age "$(stat -c %Y "$g/STAMP")") ago; origin/main is $behind commit(s) ahead of it as of the last fetch)"
+    else echo "warm: no published generation"; fi
+    [ -s "$WD/LEAK" ] && echo "warm: LEAK — $(head -1 "$WD/LEAK")"
+    if p=$(alive); then echo "warm: loop running (pid $p; log $WD/warm.log)"; else echo "warm: loop NOT running (scripts/warm start)"; fi ;;
+  *) echo "usage: scripts/warm status|start|stop|advance|gen" >&2; exit 2 ;;
+esac

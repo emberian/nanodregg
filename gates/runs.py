@@ -209,7 +209,7 @@ def data_paths(root: str, changed: list[str]) -> list[str]:
 
 
 # A module that spawns a process (`IO.Process.spawn`/`output`/`run`): Ops.Plants runs {host}, and
-# Protocol.Rows.Run runs `lake exe NAME` for names its row files hold. Read on the blanked code, so a
+# Protocol.Rows.Run runs the exe NAME beside itself for names its row files hold. Read on the blanked code, so a
 # comment or a string naming it does not count.
 SPAWN = re.compile(r"\bIO\.Process\b|\bProcess\.(?:spawn|output|run)\b")
 
@@ -217,7 +217,7 @@ SPAWN = re.compile(r"\bIO\.Process\b|\bProcess\.(?:spawn|output|run)\b")
 def reach(t: tree.Tree, e: str) -> set[str]:
     """The modules whose change can move a run of exe `e`: its import closure, and, when that closure
     holds a module that spawns a process, EVERY exe's closure (what it spawns is data, so it is taken
-    as every exe). GATES-8: store-plants (runs {host}) and rows (runs `lake exe lang-journey`) were
+    as every exe). GATES-8: store-plants (runs {host}) and rows (runs lang-journey) were
     selected by their own closure only; ten of main's last 150 landings changed a module only a driven
     binary links and judged pre-push GREEN without the run (standing was the backstop)."""
     c = t.closure([t.exes[e]])

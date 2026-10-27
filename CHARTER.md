@@ -160,8 +160,10 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
 - **A landing** (`scripts/commit`): rebase on origin/main; build what you changed (the modules your diff
   touches and their importers; `cargo check` of the reached packages); run the rows and journeys your
   change touches; push to main. If main moved, it rebases and pushes again; if the rebase conflicts,
-  you resolve it. Its build and test trees live on the home disk (`~/nd-land/<worktree>/`; on hbox the
-  NVMe, never /tank), at idle priority under swarm-build. That is the whole gate.
+  you resolve it. It builds your reach against the box's one warm build of origin/main
+  (`scripts/warm`; `scripts/nd-check` is the same check while you work), writing only your modules'
+  outputs to `~/nd-land/<worktree>/` on the home disk (on hbox the NVMe, never /tank), at idle priority
+  under swarm-build. No lane copies a `.lake`. That is the whole gate.
 - The commit message is prose: what changed and what it lets the system do. No form lines.
 - Tests are theorems, journeys and rows. The whole is a periodic REPORT: `scripts/converge` builds
   the tree, runs every row, test and bench, the census and the tables, and says what is red and
@@ -169,8 +171,8 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
   fixed forward. No unfiltered test suites.
 - Decisions: `decisions/<layer>.md`, append-only, one critiqued entry per real design choice (law 10).
 - Box safety: PID file or nothing for kills (never by pattern); every loop sleeps and has a deadline;
-  every build runs through `scripts/nd-build` (one of six box-wide build slots, `ionice -c3 nice -n 15`,
-  swarm-build at a lane budget: 6G a module, 24G a tree);
+  every build runs through `scripts/nd-build` or `scripts/nd-check` (one of six box-wide build slots,
+  `ionice -c3 nice -n 15`, swarm-build at a lane budget: 6G a module, 16G a reach, 24G a tree);
   disk pressure is Ember's (stop and report, delete nothing outside your own scratch).
 - When a process constraint appears, the first question is "do we need this at all?". When a lane
   spends more time landing than building, the gate is the defect.

@@ -14,17 +14,22 @@
 #     this is that version: "this tree's scripts/commit is stale: rebase onto origin/main first";
 #     A replayed commit that takes back hunks of recent landings is refused (gates/reverts.py, GATES-30): "this
 #     commit reverts N hunks of M landings", each named; a lane that means to revert says so with --reverts;
-#  2. materialize the rebased tree in the lane's build directory on the home disk (hbox: NVMe, never /tank):
-#     ~/nd-land/<worktree name>/tree, its .lake and cargo target kept between landings (seeded once from this
-#     worktree's .lake/build), so a build re-hashes only that tree;
-#  3. build what the change touched (gates/touched.py: the changed modules and their importers, their libs and the
-#     exes whose closure holds one; `cargo check` of the reached packages), under the clone's build wrapper
-#     (hbox: swarm-build, SWARM_MEM_MAX default 24G) at idle priority (ionice -c3, nice 15);
+#  2. materialize the rebased tree's SOURCES in the lane's directory on the home disk (hbox: NVMe, never /tank):
+#     ~/nd-land/<worktree name>/tree (<worktree>/.lake/nd/tree when the worktree is itself ~/nd-land/<name>); no
+#     .lake is made or copied there (GATES-32);
+#  3. build what the change touched against the box's ONE warm build of origin/main (scripts/warm's published
+#     generation; gates/ndcheck.py): the changed modules and their importers are elaborated, in import order, against
+#     the generation's .olean files, into the lane's out directory beside the tree, and the exes whose closure holds
+#     one are compiled and linked there; nothing else is rebuilt. A rebased commit that does not contain the
+#     generation's commit (main moved and the warm build already followed) is re-based onto the new origin/main
+#     first. `cargo check` of the reached packages. Under the clone's build wrapper (hbox: swarm-build,
+#     SWARM_MEM_MAX default 24G) at idle priority (ionice -c3, nice 15);
 #     The build and the rows hold one of ND_BUILD_SLOTS (default 6) box-wide build slots
 #     (~/nd-land/.locks/build-K.flock), taken in arrival order through one door lock (~/nd-land/.locks/door.flock):
 #     a landing waits for a build slot, never for a verdict, and keeps no queue state;
 #  4. run the rows the change touched (gates/touched.py rows: the Lean verdict rows whose exe it reaches, the cargo
-#     rows whose crate or driven exes it reaches), at idle priority;
+#     rows whose crate or driven exes it reaches) over the out directory's bin (the reached exes linked there, every
+#     other one the generation's), at idle priority;
 #  5. push to origin main. A push refused because main moved is re-based and pushed again; it is rebuilt and re-run
 #     only when the commits that moved main changed a path this change changed;
 #  6. refs/heads/main of this clone follows origin/main, and this worktree moves to the landed commit when its
@@ -134,57 +139,54 @@ fi
 R=$(replay "$base") || exit 1
 git -C "$repo" log --oneline "$base..$R" | sed 's/^/  landing: /' | cut -c1-140
 
-# 2-4. build what it changed, run what it touched, in the lane's build directory on the home disk
+# 2-4. build what it changed against the warm build, run what it touched, in the lane's directory on the home disk
 D=${ND_LAND_DIR:-$HOME/nd-land/$(basename "$repo")}
+case "$D/" in "$repo/"*) D=$repo/.lake/nd ;; esac
 judge() {
-  local c=$1 plan targets crates rowsel exes
+  local c=$1 plan crates rowsel gen w rc
   mkdir -p "$D"
   GIT_INDEX_FILE=$D/tree.index git -C "$repo" --work-tree="$D/tree" read-tree --reset -u "$c" 2>/dev/null ||
     { mkdir -p "$D/tree" && GIT_INDEX_FILE=$D/tree.index git -C "$repo" --work-tree="$D/tree" read-tree --reset -u "$c"; } || return 2
-  if [ ! -d "$D/tree/.lake/build" ] && [ -d "$repo/.lake/build" ]; then
-    stage seeding "the build directory from this worktree's .lake/build (once)"
-    mkdir -p "$D/tree/.lake" && cp -a "$repo/.lake/build" "$D/tree/.lake/" || return 2
-  fi
   git -C "$repo" diff --name-only "$base" "$c" > "$tmp/changed"
   git -C "$repo" show "$base:gates/runs.tsv" > "$tmp/runs.base" 2>/dev/null || : > "$tmp/runs.base"
   plan=$(python3 "$D/tree/gates/touched.py" plan "$D/tree" --changed "$tmp/changed" --base-table "$tmp/runs.base") ||
     { echo "scripts/commit: gates/touched.py plan failed"; return 1; }
-  targets=$(sed -n 's/^targets: //p' <<< "$plan"); crates=$(sed -n 's/^crates: //p' <<< "$plan")
-  rowsel=$(sed -n 's/^rows: //p' <<< "$plan"); exes=$(sed -n 's/^exes: //p' <<< "$plan")
-  # shellcheck disable=SC2086
-  local build=$(printf '%s\n' $targets $exes | awk 'NF && !seen[$0]++' | tr '\n' ' ')
-  if [ -n "${build// }" ]; then
-    stage building "$build"
-    # shellcheck disable=SC2086
-    idle env -C "$D/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $build > "$tmp/build.log" 2>&1
-    local rc=$?
-    cp "$tmp/build.log" "$D/build.log"
-    if [ $rc -ne 0 ]; then
-      if ! grep -qE '^error: [^ ]+\.lean:[0-9]+:[0-9]+:' "$tmp/build.log" &&
-         { [ $rc -ge 128 ] || grep -qE '^Terminated|^Killed|exited with code (137|143)|signal: (9|15)' "$tmp/build.log"; }; then
-        tail -3 "$tmp/build.log"
-        echo "scripts/commit: NOT BUILT — the build was killed (exit $rc; SWARM_MEM_MAX=$SWARM_MEM_MAX, LEAN_NUM_THREADS=${LEAN_NUM_THREADS:-4}): not a verdict about the change; run again with a larger budget or fewer threads (log: $D/build.log)"
-        return 76
-      fi
-      grep -E '^error|error:' "$tmp/build.log" | head -30; tail -5 "$tmp/build.log"
-      echo "scripts/commit: RED — the build of what this change touched failed (log: $D/build.log)"; return 1
-    fi
-  else echo "scripts/commit: no module changed; nothing to build"; fi
+  crates=$(sed -n 's/^crates: //p' <<< "$plan"); rowsel=$(sed -n 's/^rows: //p' <<< "$plan")
+  # the warm build's generation, held (a shared flock) while the check and the rows read it
+  gen=$(bash "$here/warm" gen) || { echo "scripts/commit: NOT BUILT — no warm build to check against (scripts/warm status)"; return 76; }
+  exec 9< "$gen/.lock"; ! command -v flock > /dev/null || flock -s 9
+  w=$(cat "$gen/COMMIT")
+  git -C "$repo" merge-base --is-ancestor "$w" "$c" || { exec 9<&-; return 75; }
+  stage checking "the reach against the warm build ${w:0:12}"
+  idle python3 "$here/../gates/ndcheck.py" check --repo "$repo" --tree "$D/tree" --gen "$gen" --out "$D/out" --rev "$c" \
+    > "$tmp/build.log" 2>&1
+  rc=$?
+  cp "$tmp/build.log" "$D/build.log"
+  grep -E '^nd-check: (warm|ok)' "$tmp/build.log"
+  case $rc in
+    0) ;;
+    76) tail -5 "$tmp/build.log"
+        echo "scripts/commit: NOT BUILT — a lean or clang was killed (SWARM_MEM_MAX=$SWARM_MEM_MAX, ND_CHECK_JOBS=${ND_CHECK_JOBS:-6}): not a verdict about the change; run again with a larger budget or fewer jobs (log: $D/build.log)"
+        exec 9<&-; return 76 ;;
+    *) grep -A40 -E '^  FAILED ' "$tmp/build.log" | head -80; tail -2 "$tmp/build.log"
+       echo "scripts/commit: RED — the build of what this change touched failed (log: $D/build.log)"; exec 9<&-; return 1 ;;
+  esac
   export CARGO_TARGET_DIR=$D/cargo-target
   case $crates in
     "") ;;
     workspace) stage checking "the Rust workspace"
       idle cargo check --quiet --locked --workspace --all-targets --manifest-path "$D/tree/Cargo.toml" > "$tmp/cargo.log" 2>&1 ||
-        { tail -30 "$tmp/cargo.log"; echo "scripts/commit: RED — cargo check"; return 1; } ;;
+        { tail -30 "$tmp/cargo.log"; echo "scripts/commit: RED — cargo check"; exec 9<&-; return 1; } ;;
     *) stage checking "$crates"; local pk=(); for x in $crates; do pk+=(-p "$x"); done
       idle cargo check --quiet --locked "${pk[@]}" --all-targets --manifest-path "$D/tree/Cargo.toml" > "$tmp/cargo.log" 2>&1 ||
-        { tail -30 "$tmp/cargo.log"; echo "scripts/commit: RED — cargo check"; return 1; } ;;
+        { tail -30 "$tmp/cargo.log"; echo "scripts/commit: RED — cargo check"; exec 9<&-; return 1; } ;;
   esac
   if [ -n "$rowsel" ]; then
     stage running "$rowsel"
     idle python3 "$D/tree/gates/touched.py" rows "$D/tree" --changed "$tmp/changed" --base-table "$tmp/runs.base" \
-      --bin "$D/tree/.lake/build/bin" || { echo "scripts/commit: RED — a row this change touched"; return 1; }
+      --bin "$D/out/bin" || { echo "scripts/commit: RED — a row this change touched"; exec 9<&-; return 1; }
   else echo "scripts/commit: no row touched"; fi
+  exec 9<&-
   return 0
 }
 # build_slot: one of ND_BUILD_SLOTS box-wide slots on fd 8, entered through the door (fd 7) so slots go in arrival order
@@ -205,7 +207,16 @@ build_slot() {
   done
 }
 judged() { build_slot || return 2; judge "$@"; local rc=$?; exec 8>&-; return $rc; }
-judged "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
+# 75: the warm build already followed a main that moved after the fetch; re-base onto it and judge again
+for _ in 1 2 3; do
+  judged "$R"; rc=$?
+  [ $rc -eq 75 ] || break
+  git -C "$repo" fetch -q origin main || exit 1
+  base=$(git -C "$repo" rev-parse origin/main)
+  echo "scripts/commit: the warm build is past this base; re-based onto origin/main ${base:0:9}"
+  R=$(replay "$base") || exit 1
+done
+[ $rc -eq 0 ] || exit $rc
 
 # 5. push; a moved main is re-based, and re-judged only when it changed a path this change changed
 mine=$(git -C "$repo" diff --name-only "$base" "$R")
@@ -223,7 +234,9 @@ for attempt in $(seq 1 20); do
   R=$(replay "$base") || exit 1
   if [ -n "$overlap" ]; then
     echo "scripts/commit: main moved and changed $(wc -l <<< "$overlap") path(s) this change changed ($(head -3 <<< "$overlap" | tr '\n' ' ')); building and running again"
-    judged "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
+    judged "$R"; rc=$?
+    [ $rc -ne 75 ] || { echo "scripts/commit: the warm build moved past this base again; run scripts/commit again"; exit 1; }
+    [ $rc -eq 0 ] || exit $rc
   else
     echo "scripts/commit: main moved (${old:0:9}..${base:0:9}), touching none of this change's paths; re-based, pushing"
   fi

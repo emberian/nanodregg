@@ -1,8 +1,7 @@
 """gates/touched.py — what a change touches: what a landing builds and runs (WORK-RULES 10-27, rule 1).
 
   touched.py plan TREE --changed FILE [--base-table F]
-                                                 four lines: `targets: …`, `crates: …`, `rows: …`, `exes: …` (the
-                                                 exes those rows run, built beside the targets)
+                                                 two lines: `crates: …`, `rows: …`
   touched.py rows TREE --changed FILE --bin DIR [--base-table F]
                                                  run the rows the change touches over the built exes in DIR; one
                                                  line per run, exit 1 when one is not ok
@@ -10,9 +9,9 @@
 A landing builds what it changed and runs what it touched, then pushes (scripts/commit). Nothing else gates it; the
 whole tree, every row, the benches, the census and the tables are the convergence's REPORT (scripts/converge).
 
-THE TARGETS. The changed modules, their importers, and the importers of a deleted module (tree.reach): the lean_libs
-holding one of them and the lean_exes whose import closure holds one. A non-module build input (lakefile.lean,
-lean-toolchain, lake-manifest.json, a C source or header) builds every target. A lib target is built whole.
+THE LEAN BUILD is not planned here: scripts/commit checks the change's reach (the changed modules, their importers,
+the importers of a deleted module: tree.reach) against the box's warm build with gates/ndcheck.py (GATES-32), which
+also links the exes whose closure the reach meets; every other exe a row runs is the warm build's.
 
 THE CRATES. A path under a workspace member reaches that member's package and every member that depends on it by a
 path dependency; the root Cargo.toml or Cargo.lock, or a manifest that does not parse, reaches the workspace whole.
@@ -32,23 +31,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tree  # noqa: E402
 
 BUILD_INPUTS = ("lakefile.lean", "lean-toolchain", "lake-manifest.json")
-
-
-def targets(root: str, changed: list[str]) -> list[str]:
-    t = tree.read(root)
-    allt = [x["name"] for x in t.lake["lean_lib"]] + [x["name"] for x in t.lake["lean_exe"]]
-    if any(p in BUILD_INPUTS or p.endswith((".c", ".h")) for p in changed):
-        return allt
-    lean = tree.changed_modules(changed)
-    if not lean:
-        return []
-    gone = lean - set(t.modules)
-    r = tree.reach(t, lean)
-    libs = [x for x in t.libs if any(m.split(".")[0] == x for m in r)]
-    exes = [e for e, root_mod in t.exes.items() if t.closure([root_mod]) & r]
-    # a deleted module with no importer reaches its lib (its other modules may still name it in a doc only)
-    libs += [x for x in t.libs if x not in libs and any(m.split(".")[0] == x for m in gone)]
-    return libs + exes
 
 
 def crates(root: str, changed: list[str]) -> list[str] | str:
@@ -112,21 +94,6 @@ def rows(root: str, changed: list[str], base_table: str | None = None) -> list[s
     return sorted(lean) + sorted(cargo)
 
 
-def needs(root: str, selected: list[str]) -> list[str]:
-    """The lean_exes the selected rows run: the row's own exe, `host` for a `{host}` argument, a cargo row's drives."""
-    import runs  # noqa: E402
-    table, out = runs.table(root), set()
-    for k in selected:
-        rs = table[k][0]
-        if k.startswith(runs.CARGO):
-            out |= set(rs[0])
-        else:
-            out.add(k)
-            if any("{host}" in a for args in rs for a in args):
-                out.add("host")
-    return sorted(out)
-
-
 def run_rows(root: str, selected: list[str], bindir: str) -> int:
     import runs  # noqa: E402
     import tempfile  # noqa: E402
@@ -159,11 +126,8 @@ def main() -> int:
     changed = [x for x in open(opt("--changed"), encoding="utf-8").read().split("\n") if x]
     if cmd == "plan":
         c = crates(root, changed)
-        print("targets: " + " ".join(targets(root, changed)))
         print("crates: " + (c if isinstance(c, str) else " ".join(c)))
-        rs = rows(root, changed, opt("--base-table"))
-        print("rows: " + " ".join(rs))
-        print("exes: " + " ".join(needs(root, rs)))
+        print("rows: " + " ".join(rows(root, changed, opt("--base-table"))))
         return 0
     if cmd == "rows":
         return run_rows(root, rows(root, changed, opt("--base-table")), opt("--bin"))

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# scripts/nd-check [--rev REV] [--exes] [MODULE|FILE…] — check this lane's change against the box's ONE warm build of
+# origin/main (scripts/warm), with no `.lake` of the lane's own (METHOD-20261027 §3, GATES-32).
+#
+#   scripts/nd-check                        the whole reach of this worktree's change (committed or not), and the exes
+#                                           it reaches, linked: what scripts/commit builds
+#   scripts/nd-check Kernel/Receive/Derive.lean Kernel.Proofs.World
+#                                           only those modules and the changed modules they import
+#   scripts/nd-check --rev REV              the reach of commit REV instead of the worktree
+#
+# The reach is the modules changed since the warm generation's commit and every importer of one (gates/tree.py's
+# reach, as gates/touched.py builds it); every other module is the generation's .olean and is never elaborated here.
+# Outputs go to the lane's directory, ~/nd-land/<worktree name>/out (or <worktree>/.lake/nd/out when the worktree is
+# itself ~/nd-land/<name>); OUT/bin is a whole bin directory (the exes this change reaches, linked here; every other
+# one the generation's). A lane whose HEAD does not contain the generation's commit is told to rebase and nothing is
+# checked (exit 2). The check takes one of the box's build slots (scripts/nd-build: idle priority, swarm-build at
+# SWARM_MEM_MAX, default 16G here; ND_CHECK_JOBS lean processes at once, default 6) and holds the generation (a shared
+# flock) while it reads it. Exit 0 green, 1 red, 2 refused, 76 killed (not a verdict). gates/ndcheck.py says how.
+#
+# While iterating on one file, `scripts/nd-check FILE` checks it against the warm build; `scripts/nd-build lake env
+# lean FILE` does the same only in a tree that has a .lake of its own.
+set -uo pipefail
+export PATH=$HOME/.elan/bin:$PATH
+repo=$(git rev-parse --show-toplevel) || exit 2
+args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --rev) args+=(--rev "$(git -C "$repo" rev-parse "$2")") || exit 2; shift ;;
+    --exes) args+=(--exes) ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -*) echo "nd-check: unknown flag $1" >&2; exit 2 ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+D=${ND_LAND_DIR:-$HOME/nd-land/$(basename "$repo")}
+case "$D/" in "$repo/"*) D=$repo/.lake/nd ;; esac
+gen=$(bash "$repo/scripts/warm" gen) || exit 2
+if command -v flock > /dev/null; then exec 9< "$gen/.lock"; flock -s 9; fi
+chk=(python3 "$repo/gates/ndcheck.py" check --repo "$repo" --tree "$repo" --gen "$gen" --out "$D/out" "${args[@]}")
+# nothing reached (a change outside the Lean tree, or none): the answer needs no build slot
+"${chk[@]}" --plan; rc=$?
+[ $rc -eq 10 ] || exit $rc
+SWARM_MEM_MAX=${SWARM_MEM_MAX:-16G} exec "$repo/scripts/nd-build" "${chk[@]}"

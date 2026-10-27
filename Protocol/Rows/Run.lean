@@ -7,7 +7,7 @@ Runs every row of `Protocol.rows` (or the named ones) and prints one line per ro
 some have no driver yet). An unknown row name is refused before anything runs (exit 2).
 
 The runner moves processes and bytes; `Protocol.Rows.Judge.judge` decides. An `exe` row is
-`lake exe NAME ARGS` with stdin closed, waited for by polling under a deadline (killed past it;
+the exe NAME beside this one (the same bin directory) run with ARGS, stdin closed, waited for by polling under a deadline (killed past it;
 the runner holds the child's handle, so the kill names exactly the process it started). A
 `members` row runs in process (`Protocol.Rows.Loopback`: HOST's loop on its own thread, each actor's
 follow machine and custody, every step through the wire codecs), under the deadline the same way;
@@ -52,9 +52,12 @@ inductive Ran
   | broken (why : String)
   | pending (why : String)
 
+/-- Run the exe `name` that sits beside this one: the bin directory this exe was run from is the one
+build it belongs to (a lake tree's `.lake/build/bin`, or a lane's nd-check output), so nothing is built
+here and no `lake` is needed at run time. -/
 def runExe (name : String) (args : List String) : IO Ran := do
   let child ← IO.Process.spawn
-    { cmd := "lake", args := #["exe", name] ++ args.toArray,
+    { cmd := ((← IO.appDir) / name).toString, args := args.toArray,
       stdin := .null, stdout := .piped, stderr := .piped }
   let out ← IO.asTask child.stdout.readToEnd
   let err ← IO.asTask child.stderr.readToEnd
