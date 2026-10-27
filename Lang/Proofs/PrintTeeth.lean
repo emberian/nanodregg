@@ -3,7 +3,8 @@
 
 `reqTy_reads`: the request type every law takes prints, and its text reads back to it (so
 `readTy_ty`'s premises are met by the type the rows and journeys paste). `five_reads`: a datum
-reads back at its type; `id_reads` a term with a binder; `empty_package_reads` a package. The refusals: a label that is not one atom has no text, and neither has a
+reads back at its type; `id_reads` a term with a binder; `empty_package_reads` a package;
+`holePkg_reads` a package with a hole (LANG-104). The refusals: a label that is not one atom has no text, and neither has a
 free variable. These are what `none` means.
 -/
 import Lang.Proofs.Print
@@ -62,6 +63,42 @@ theorem empty_package_reads :
     Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [] [] [])).get empty_package_prints) =
       .ok (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [] [] []) :=
   readPackage_package rfl rfl rfl (.record rfl .nil) rfl (Option.some_get _).symm
+
+/-- LANG-104: a package with one hole (context `nat`, result `nat`, a candidate that is its variable and
+a candidate resting on a live cell) has a text, reads back from it as itself, and `Print.package`'s
+re-read of it is idle: the hole case's premises are met by a hole that uses every part of the form. -/
+private def oneHole : HoleROM where
+  name := 0
+  ctx := [.nat]
+  ty := .nat
+  code := [⟨.var 0, []⟩, ⟨.nat 1, [.cell ⟨#[1]⟩, .row 0 ⟨#[2]⟩ 3]⟩]
+  selectionRel := 0
+  selectionKey := ⟨#[0]⟩
+  hypotheses := [some (.cellLaw ⟨#[4]⟩ ⟨#[5]⟩)]
+  guardPin := some (.cellPackage ⟨#[6]⟩ ⟨#[7]⟩)
+  guard := .var 0
+
+private def holePkg : Package :=
+  { imports := [], state := .record [], iface := .record [], body := .record [], methods := [], laws := [],
+    holes := [oneHole] }
+
+private theorem holePkg_printable : ∀ h ∈ holePkg.holes, HolePrintable h := by
+  intro h hh
+  simp only [holePkg, List.mem_cons, List.mem_nil_iff, or_false] at hh
+  subst hh
+  refine ⟨rfl, rfl, .var, fun c hc => ?_⟩
+  simp only [oneHole, List.mem_cons, List.mem_nil_iff, or_false] at hc
+  rcases hc with rfl | rfl
+  · exact .var
+  · exact .nat
+
+theorem holePkg_prints : (packageText holePkg).isSome = true := by decide +kernel
+
+theorem holePkg_reads : Read.readPackage ((packageText holePkg).get holePkg_prints) = .ok holePkg :=
+  readPackage_packageText rfl rfl rfl (.record rfl .nil) holePkg_printable rfl (Option.some_get _).symm
+
+theorem holePkg_package : package holePkg = packageText holePkg :=
+  package_eq_packageText rfl rfl rfl (.record rfl .nil) holePkg_printable rfl
 
 /-- A relation whose value type is not canonical (a record with its fields descending): the
 package prints, and reads back as a DIFFERENT package (the reader sorts the fields), so

@@ -8,6 +8,9 @@ The round trip, for every value the printer gives a text (`some`):
 * `readData_data`: data conforming to a canonical type reads back from `Print.data` at that type;
 * `readPackage_package` / `readPackage_checked`: a package the install check accepts (over canonical
   import interfaces) reads back from `Print.package` as exactly that package.
+* `holeROM_read` / `readPackage_packageText`: a hole with canonical types and terms (`HolePrintable`)
+  reads back from its text, so a package with holes does too; `package_eq_packageText`: the re-read
+  `Print.package` makes of a package with holes never refuses such a package (LANG-104).
 The parser half is `Lang.Proofs.PrintParse`. Elaboration is proved over any form `Same` as the
 printed one (`ty_tySx`, `term_termSx`, `dataAt_dataSx`), since the parser assigns real offsets.
 The printed forms are `Ok` (`tySx_ok`, `termSx_ok`, `dataSx_ok`): every label passes `labelOk`, a
@@ -1761,6 +1764,478 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
         assumption
       · cases h
     · cases h
+
+/-! ## Holes (LANG-104): a printed hole reads back as itself
+
+The contextual case of the round trip. `Print.package` re-reads the text of a package with holes and
+compares (`contextualText`); `package_eq_packageText` says that comparison never refuses a package
+whose holes are `HolePrintable` (canonical context and result types, canonical guard and candidate
+terms), because `holeROMSx` and `Read.holeROM` are inverse there (`holeROM_read`), and
+`readPackage_packageText` is `readPackage_closedText` without its `p.holes = []` premise. -/
+
+/-- What a hole's text needs to read back as the hole: canonical types and canonical terms. -/
+def HolePrintable (h : HoleROM) : Prop :=
+  h.ctx.all Ty.wf = true ∧ h.ty.wf = true ∧ Canon h.guard ∧ ∀ c ∈ h.code, Canon c.body
+
+/-- A hole's context is read under the names the printer gives its variables. -/
+theorem holeScope_name (n : Nat) : Read.holeScope n = (List.map name (List.range n)).reverse := rfl
+
+private theorem need_in {p : Nat} {xs : List SExp} {x : SExp} {d : Nat} (h : x ∈ xs)
+    (hn : need (.list p xs) ≤ d) : need x ≤ d :=
+  Nat.le_of_lt (Nat.lt_of_lt_of_le (need_lt_list h) hn)
+
+private theorem needs_in {p : Nat} {xs : List SExp} {d : Nat} (hn : need (.list p xs) ≤ d) : needs xs ≤ d := by
+  simp only [need] at hn; omega
+
+private theorem needs_tail_le {p : Nat} {a : SExp} {ys L : List SExp} {d : Nat} (hm : SExp.list p (a :: ys) ∈ L)
+    (hL : needs L ≤ d) : needs ys ≤ d := by
+  have h1 := needs_le_of_mem hm
+  simp only [need, needs] at h1
+  omega
+
+private theorem need_sub_le {p : Nat} {ys L : List SExp} {x : SExp} {d : Nat} (hm : SExp.list p ys ∈ L)
+    (hx : x ∈ ys) (hL : needs L ≤ d) : need x ≤ d := by
+  have h1 := needs_le_of_mem hm
+  have h2 := needs_le_of_mem hx
+  simp only [need] at h1
+  omega
+
+theorem supportPinSx_ok : ∀ (s : SupportPin), Ok (supportPinSx s)
+  | .row _ _ _ => by
+    simp only [supportPinSx, digestSx]
+    exact .list (.cons (kw_ok _) (.cons (repr_ok _) (.cons (hexAtom_ok _) (.cons (repr_ok _) .nil))))
+  | .cell _ => by
+    simp only [supportPinSx, digestSx]
+    exact .list (.cons (kw_ok _) (.cons (hexAtom_ok _) .nil))
+  | .cellLaw _ _ => by
+    simp only [supportPinSx, digestSx]
+    exact .list (.cons (kw_ok _) (.cons (hexAtom_ok _) (.cons (hexAtom_ok _) .nil)))
+  | .cellPackage _ _ => by
+    simp only [supportPinSx, digestSx]
+    exact .list (.cons (kw_ok _) (.cons (hexAtom_ok _) (.cons (hexAtom_ok _) .nil)))
+
+theorem supportOptPinSx_ok : ∀ (o : Option SupportPin), Ok (supportOptPinSx o)
+  | none => by simp only [supportOptPinSx]; exact .list (.cons (kw_ok _) .nil)
+  | some s => by simp only [supportOptPinSx]; exact supportPinSx_ok s
+
+theorem supportPins_ok : ∀ (ps : List SupportPin), OkL (ps.map supportPinSx)
+  | [] => .nil
+  | s :: ps => .cons (supportPinSx_ok s) (supportPins_ok ps)
+
+theorem supportOptPins_ok : ∀ (os : List (Option SupportPin)), OkL (os.map supportOptPinSx)
+  | [] => .nil
+  | o :: os => .cons (supportOptPinSx_ok o) (supportOptPins_ok os)
+
+/-- A printed pin reads back as the pin. -/
+theorem supportPin_read : ∀ (s : SupportPin) {y : SExp}, Same (supportPinSx s) y → Read.supportPin y = .ok s
+  | .row r k v, y, hs => by
+    simp only [supportPinSx, digestSx, list, atom] at hs
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+    obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+    obtain ⟨y3, ys, rfl, h3, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨_, rfl⟩ := same_atom h0
+    obtain ⟨_, rfl⟩ := same_atom h1
+    obtain ⟨_, rfl⟩ := same_atom h2
+    obtain ⟨_, rfl⟩ := same_atom h3
+    simp [Read.supportPin, Read.holeNat, Read.holeBytes, hexBytes_hex, bind, Except.bind, pure, Except.pure]
+  | .cell i, y, hs => by
+    simp only [supportPinSx, digestSx, list, atom] at hs
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨_, rfl⟩ := same_atom h0
+    obtain ⟨_, rfl⟩ := same_atom h1
+    simp [Read.supportPin, Read.holeBytes, hexBytes_hex, bind, Except.bind, pure, Except.pure]
+  | .cellLaw i l, y, hs => by
+    simp only [supportPinSx, digestSx, list, atom] at hs
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+    obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨_, rfl⟩ := same_atom h0
+    obtain ⟨_, rfl⟩ := same_atom h1
+    obtain ⟨_, rfl⟩ := same_atom h2
+    simp [Read.supportPin, Read.holeBytes, hexBytes_hex, bind, Except.bind, pure, Except.pure]
+  | .cellPackage i k, y, hs => by
+    simp only [supportPinSx, digestSx, list, atom] at hs
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+    obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨_, rfl⟩ := same_atom h0
+    obtain ⟨_, rfl⟩ := same_atom h1
+    obtain ⟨_, rfl⟩ := same_atom h2
+    simp [Read.supportPin, Read.holeBytes, hexBytes_hex, bind, Except.bind, pure, Except.pure]
+
+/-- A printed pin is never the one-word `(structural)`. -/
+private theorem pin_not_structural (s : SupportPin) {y : SExp} (hs : Same (supportPinSx s) y) :
+    ∀ q q', y ≠ .list q [.atom q' "structural"] := by
+  intro q q' he
+  subst he
+  cases s <;> simp only [supportPinSx, digestSx, list, atom] at hs <;>
+    (obtain ⟨_, _, he, hl⟩ := same_list hs; injection he with _ he; subst he
+     obtain ⟨_, _, he, h0, hl⟩ := sameL_cons hl
+     injection he with he1 he2; subst he1; subst he2
+     first
+     | (cases sameL_nil hl)
+     | (obtain ⟨_, _, he, _, _⟩ := sameL_cons hl; cases he))
+
+theorem supportOptPin_read : ∀ (o : Option SupportPin) {y : SExp}, Same (supportOptPinSx o) y →
+    Read.supportOptPin y = .ok o
+  | none, y, hs => by
+    simp only [supportOptPinSx, list, atom] at hs
+    obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+    cases sameL_nil hl
+    obtain ⟨_, rfl⟩ := same_atom h0
+    rfl
+  | some s, y, hs => by
+    simp only [supportOptPinSx] at hs
+    have hn := pin_not_structural s hs
+    unfold Read.supportOptPin
+    split
+    · rename_i q q'; exact absurd rfl (hn q q')
+    · rw [supportPin_read s hs]; rfl
+
+theorem supportPins_read : ∀ (ps : List SupportPin) {ys : List SExp}, SameL (ps.map supportPinSx) ys →
+    ys.mapM Read.supportPin = .ok ps
+  | [], _, hs => by cases sameL_nil hs; rfl
+  | s :: ps, _, hs => by
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    simp [List.mapM_cons, supportPin_read s hy, supportPins_read ps hrest]
+    rfl
+
+theorem supportOptPins_read : ∀ (os : List (Option SupportPin)) {ys : List SExp},
+    SameL (os.map supportOptPinSx) ys → ys.mapM Read.supportOptPin = .ok os
+  | [], _, hs => by cases sameL_nil hs; rfl
+  | o :: os, _, hs => by
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    simp [List.mapM_cons, supportOptPin_read o hy, supportOptPins_read os hrest]
+    rfl
+
+theorem tys_ok : ∀ (Ts : List Ty) {xs : List SExp}, Ts.mapM tySx = some xs → OkL xs
+  | [], _, h => by simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; exact .nil
+  | T :: Ts, _, h => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    exact .cons (tySx_ok T hx) (tys_ok Ts hr)
+
+theorem tys_read : ∀ (Ts : List Ty) (d : Nat) {xs ys : List SExp}, Ts.mapM tySx = some xs → SameL xs ys →
+    needs xs ≤ d → Ts.all Ty.wf = true → ys.mapM (Read.ty d) = .ok Ts
+  | [], _, _, _, h, hs, _, _ => by
+    simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; cases sameL_nil hs; rfl
+  | T :: Ts, d, _, _, h, hs, hn, hw => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    simp only [needs] at hn
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    simp [List.mapM_cons, ty_tySx T d hx hy (by omega) hw.1, tys_read Ts d hr hrest (by omega) hw.2]
+    rfl
+
+theorem holeCodeSx_ok {ctx : List Ty} {c : HoleCode} {x : SExp} (h : holeCodeSx ctx c = some x) : Ok x := by
+  simp only [holeCodeSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+  obtain ⟨xb, hb, rfl⟩ := h
+  exact .list (.cons (kw_ok _) (.cons (termSx_ok _ _ hb) (.cons (.list (.cons (kw_ok _) (supportPins_ok _))) .nil)))
+
+theorem holeCode_read (ctx : List Ty) {c : HoleCode} {x y : SExp} (h : holeCodeSx ctx c = some x) (hs : Same x y)
+    (hn : need x ≤ depthMax) (hc : Canon c.body) : Read.holeCode ctx y = .ok c := by
+  obtain ⟨body, supports⟩ := c
+  simp only [holeCodeSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+  obtain ⟨xb, hb, rfl⟩ := h
+  simp only [list, atom] at hs hn
+  obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+  obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+  obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+  obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+  cases sameL_nil hl
+  obtain ⟨_, rfl⟩ := same_atom h0
+  obtain ⟨q2, zs, rfl, hz⟩ := same_list h2
+  obtain ⟨z0, zs, rfl, hz0, hrest⟩ := sameL_cons hz
+  obtain ⟨_, rfl⟩ := same_atom hz0
+  have eb := term_termSx body ctx.length depthMax hb h1 (need_in (by simp) hn) hc
+  rw [← holeScope_name] at eb
+  simp only [Read.holeCode, eb, supportPins_read supports hrest, bind, Except.bind, pure, Except.pure]
+
+theorem holeCodes_ok (ctx : List Ty) : ∀ (cs : List HoleCode) {xs : List SExp}, cs.mapM (holeCodeSx ctx) = some xs → OkL xs
+  | [], _, h => by simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; exact .nil
+  | c :: cs, _, h => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    exact .cons (holeCodeSx_ok hx) (holeCodes_ok ctx cs hr)
+
+theorem holeCodes_read (ctx : List Ty) : ∀ (cs : List HoleCode) {xs ys : List SExp},
+    cs.mapM (holeCodeSx ctx) = some xs → SameL xs ys → needs xs ≤ depthMax → (∀ c ∈ cs, Canon c.body) →
+    ys.mapM (Read.holeCode ctx) = .ok cs
+  | [], _, _, h, hs, _, _ => by
+    simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; cases sameL_nil hs; rfl
+  | c :: cs, _, _, h, hs, hn, hc => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    simp only [needs] at hn
+    simp [List.mapM_cons, holeCode_read ctx hx hy (by omega) (hc c (by simp)),
+      holeCodes_read ctx cs hr hrest (by omega) (fun c' hc' => hc c' (by simp [hc']))]
+    rfl
+
+theorem holeROMSx_ok {h : HoleROM} {x : SExp} (hx : holeROMSx h = some x) : Ok x := by
+  simp only [holeROMSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hx
+  obtain ⟨xc, hc, xt, ht, xg, hg, xk, hk, rfl⟩ := hx
+  simp only [digestSx]
+  exact .list (.cons (kw_ok _) (.cons (repr_ok _)
+    (.cons (.list (.cons (kw_ok _) (tys_ok _ hc)))
+    (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ ht) .nil)))
+    (.cons (.list (.cons (kw_ok _) (.cons (repr_ok _) (.cons (hexAtom_ok _) .nil))))
+    (.cons (.list (.cons (kw_ok _) (supportOptPins_ok _)))
+    (.cons (.list (.cons (kw_ok _) (.cons (supportOptPinSx_ok _) (.cons (termSx_ok _ _ hg) .nil))))
+    (.cons (.list (.cons (kw_ok _) (holeCodes_ok _ _ hk))) .nil))))))))
+
+/-- **A printed hole reads back as the hole.** -/
+theorem holeROM_read {h : HoleROM} {x y : SExp} (hx : holeROMSx h = some x) (hs : Same x y)
+    (hn : need x ≤ depthMax) (hp : HolePrintable h) : Read.holeROM y = .ok h := by
+  obtain ⟨name, ctx, ty, code, selectionRel, selectionKey, hypotheses, guardPin, guard⟩ := h
+  obtain ⟨hctx, hty, hguard, hcode⟩ := hp
+  simp only [holeROMSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hx
+  obtain ⟨xc, hc, xt, ht, xg, hg, xk, hk, rfl⟩ := hx
+  simp only [digestSx, list, atom] at hs hn
+  have hn' := needs_in hn
+  obtain ⟨q, ys, rfl, hl⟩ := same_list hs
+  obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hl
+  obtain ⟨y1, ys, rfl, h1, hl⟩ := sameL_cons hl
+  obtain ⟨y2, ys, rfl, h2, hl⟩ := sameL_cons hl
+  obtain ⟨y3, ys, rfl, h3, hl⟩ := sameL_cons hl
+  obtain ⟨y4, ys, rfl, h4, hl⟩ := sameL_cons hl
+  obtain ⟨y5, ys, rfl, h5, hl⟩ := sameL_cons hl
+  obtain ⟨y6, ys, rfl, h6, hl⟩ := sameL_cons hl
+  obtain ⟨y7, ys, rfl, h7, hl⟩ := sameL_cons hl
+  cases sameL_nil hl
+  obtain ⟨_, rfl⟩ := same_atom h0
+  obtain ⟨_, rfl⟩ := same_atom h1
+  -- context
+  obtain ⟨q2, z2, rfl, g2⟩ := same_list h2
+  obtain ⟨w2, z2, rfl, k2, t2⟩ := sameL_cons g2
+  obtain ⟨_, rfl⟩ := same_atom k2
+  -- result
+  obtain ⟨q3, z3, rfl, g3⟩ := same_list h3
+  obtain ⟨w3, z3, rfl, k3, g3⟩ := sameL_cons g3
+  obtain ⟨v3, z3, rfl, m3, g3⟩ := sameL_cons g3
+  cases sameL_nil g3
+  obtain ⟨_, rfl⟩ := same_atom k3
+  -- selection
+  obtain ⟨q4, z4, rfl, g4⟩ := same_list h4
+  obtain ⟨w4, z4, rfl, k4, g4⟩ := sameL_cons g4
+  obtain ⟨v4, z4, rfl, m4, g4⟩ := sameL_cons g4
+  obtain ⟨u4, z4, rfl, n4, g4⟩ := sameL_cons g4
+  cases sameL_nil g4
+  obtain ⟨_, rfl⟩ := same_atom k4
+  obtain ⟨_, rfl⟩ := same_atom m4
+  obtain ⟨_, rfl⟩ := same_atom n4
+  -- hypotheses
+  obtain ⟨q5, z5, rfl, g5⟩ := same_list h5
+  obtain ⟨w5, z5, rfl, k5, t5⟩ := sameL_cons g5
+  obtain ⟨_, rfl⟩ := same_atom k5
+  -- guard
+  obtain ⟨q6, z6, rfl, g6⟩ := same_list h6
+  obtain ⟨w6, z6, rfl, k6, g6⟩ := sameL_cons g6
+  obtain ⟨v6, z6, rfl, m6, g6⟩ := sameL_cons g6
+  obtain ⟨u6, z6, rfl, n6, g6⟩ := sameL_cons g6
+  cases sameL_nil g6
+  obtain ⟨_, rfl⟩ := same_atom k6
+  -- code
+  obtain ⟨q7, z7, rfl, g7⟩ := same_list h7
+  obtain ⟨w7, z7, rfl, k7, t7⟩ := sameL_cons g7
+  obtain ⟨_, rfl⟩ := same_atom k7
+  -- the bounds each part is read within
+  have bC : needs xc ≤ depthMax := needs_tail_le (p := 0) (a := SExp.atom 0 "context") (by simp) hn'
+  have bT : need xt ≤ depthMax := need_sub_le (p := 0) (ys := [SExp.atom 0 "result", xt]) (by simp) (by simp) hn'
+  have bG : need xg ≤ depthMax :=
+    need_sub_le (p := 0) (ys := [SExp.atom 0 "guard", supportOptPinSx guardPin, xg]) (by simp) (by simp) hn'
+  have bK : needs xk ≤ depthMax := needs_tail_le (p := 0) (a := SExp.atom 0 "code") (by simp) hn'
+  have eC := tys_read ctx depthMax hc t2 bC hctx
+  have eT := ty_tySx ty depthMax ht m3 bT hty
+  have eG := term_termSx guard 1 depthMax hg n6 bG hguard
+  rw [← holeScope_name] at eG
+  have eK := holeCodes_read ctx code hk t7 bK hcode
+  unfold Read.holeROM
+  simp only [eC, eT, eG, eK, Read.holeNat, Read.holeBytes, toNat_repr, hexBytes_hex,
+    supportOptPins_read hypotheses t5, supportOptPin_read guardPin m6, bind, Except.bind, pure, Except.pure]
+
+theorem holeROMs_ok : ∀ (hs : List HoleROM) {xs : List SExp}, hs.mapM holeROMSx = some xs → OkL xs
+  | [], _, h => by simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; exact .nil
+  | r :: hs, _, h => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    exact .cons (holeROMSx_ok hx) (holeROMs_ok hs hr)
+
+theorem holeROMs_read : ∀ (hs : List HoleROM) {xs ys : List SExp}, hs.mapM holeROMSx = some xs → SameL xs ys →
+    needs xs ≤ depthMax → (∀ h ∈ hs, HolePrintable h) → ys.mapM Read.holeROM = .ok hs
+  | [], _, _, h, hs, _, _ => by
+    simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; cases sameL_nil hs; rfl
+  | r :: rs, _, _, h, hs, hn, hp => by
+    simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨x, hx, xr, hr, rfl⟩ := h
+    obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
+    simp only [needs] at hn
+    simp [List.mapM_cons, holeROM_read hx hy (by omega) (hp r (by simp)),
+      holeROMs_read rs hr hrest (by omega) (fun r' hr' => hp r' (by simp [hr']))]
+    rfl
+
+/-- **A package's text reads back as the package, holes included**: `readPackage_closedText` without
+its `p.holes = []` premise, at printable holes. -/
+theorem readPackage_packageText {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
+    (hr : p.rels.all relWf = true) (hb : Canon p.body) (hh : ∀ h ∈ p.holes, HolePrintable h)
+    (hpw : p.effects.all (fun e => e.2.produces.all Ty.wf) = true)
+    (h : packageText p = some s) : Read.readPackage s = .ok p := by
+  by_cases he : p.holes = []
+  · exact readPackage_closedText hs hi hr hb he hpw h
+  have hne : p.holes.isEmpty = false := by
+    cases hp : p.holes with
+    | nil => exact absurd hp he
+    | cons _ _ => rfl
+  unfold packageText at h
+  generalize hE : optSection "effects" effectSx p.effects = mE at h
+  generalize hC : optSection "claims" claimSx p.claims = mC at h
+  generalize hH : p.holes.mapM holeROMSx = mH at h
+  cases mE with
+  | none => simp [bind] at h
+  | some E =>
+  cases mC with
+  | none => simp [bind] at h
+  | some C =>
+  cases mH with
+  | none => simp [hne, bind] at h
+  | some xH =>
+  simp only [hne, Bool.false_eq_true, if_false, bind, Option.bind_eq_some_iff, Option.bind_some, pure] at h
+  obtain ⟨xs, hxs, h⟩ := h
+  split at h
+  · rename_i hf
+    obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
+    simp only [Option.some.injEq] at h; subst h
+    have hokx : OkL xs := by cases sectionsSx_ok hxs; assumption
+    have hokE : OkL E := by
+      rcases optSection_eq hE with ⟨-, rfl⟩ | ⟨xE, hmE, rfl⟩
+      · exact .nil
+      · exact .cons (.list (.cons (kw_ok _) (effects_ok _ hmE))) .nil
+    have hokC : OkL C := by
+      rcases optSection_eq hC with ⟨-, rfl⟩ | ⟨xC, hmC, rfl⟩
+      · exact .nil
+      · exact .cons (.list (.cons (kw_ok _) (claims_ok _ hmC))) .nil
+    have hokH : OkL [list (atom "holes" :: xH)] := .cons (.list (.cons (kw_ok _) (holeROMs_ok _ hH))) .nil
+    have hxn : ∀ x ∈ xs, need x < depthMax := fun x hx =>
+      Nat.lt_of_lt_of_le (need_lt_list (List.mem_cons_of_mem _ (List.mem_append_left _
+        (List.mem_append_left _ (List.mem_append_left _ hx))))) hn
+    have bH : needs xH ≤ depthMax := by
+      have h1 := need_lt_list (p := 0)
+        (x := list (atom "holes" :: xH)) (xs := atom "package" :: (xs ++ E ++ C ++ [list (atom "holes" :: xH)]))
+        (by simp)
+      have h2 : needs xH < need (list (atom "holes" :: xH)) := by simp only [list, need, needs]; omega
+      have h3 := Nat.lt_of_lt_of_le h1 hn
+      omega
+    have hok : OkL (atom "package" :: (xs ++ E ++ C ++ [list (atom "holes" :: xH)])) :=
+      .cons (kw_ok _) (okL_append (okL_append (okL_append hokx hokE) hokC) hokH)
+    obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
+    simp only [Read.readPackage, hy, bind, Except.bind]
+    obtain ⟨y0, ys, rfl, h0, hl⟩ := sameL_cons hsame
+    obtain ⟨r0, rfl⟩ := same_atom h0
+    simp only [List.append_assoc] at hl
+    obtain ⟨ys8, ws, rfl, h8, hT⟩ := sameL_append hl
+    obtain ⟨y1, y2, y3, y4, y5, y6, y7, y8, rfl, hbase⟩ := packageBase_reads hs hi hr hb hxs hxn h8 0 r0
+    rcases optSection_eq hE with ⟨hpe, rfl⟩ | ⟨xE, hmE, rfl⟩ <;>
+      rcases optSection_eq hC with ⟨hpc, rfl⟩ | ⟨xC, hmC, rfl⟩ <;>
+      simp only [List.nil_append, List.cons_append] at hT
+    · -- holes only
+      obtain ⟨yh, ws, rfl, hyh, hw0⟩ := sameL_cons hT
+      cases sameL_nil hw0
+      obtain ⟨qh, zh, rfl, gh⟩ := same_list hyh
+      obtain ⟨wh, zh, rfl, kh, th⟩ := sameL_cons gh
+      obtain ⟨rh, rfl⟩ := same_atom kh
+      have eH := holeROMs_read p.holes hH th bH hh
+      have hp : { ({ p with holes := [], effects := [], claims := [] } : Package) with holes := p.holes } = p := by
+        obtain ⟨⟩ := p; simp only at hpe hpc; subst hpe hpc; rfl
+      simp only [List.cons_append, List.nil_append, Read.package, hbase, eH, bind, Except.bind, pure,
+        Except.pure, hp]
+    · -- claims and holes
+      obtain ⟨yc, ws, rfl, hyc, hw0⟩ := sameL_cons hT
+      obtain ⟨yh, ws, rfl, hyh, hw1⟩ := sameL_cons hw0
+      cases sameL_nil hw1
+      obtain ⟨qc, zc, rfl, gc⟩ := same_list hyc
+      obtain ⟨wc, zc, rfl, kc, tc⟩ := sameL_cons gc
+      obtain ⟨rc, rfl⟩ := same_atom kc
+      obtain ⟨qh, zh, rfl, gh⟩ := same_list hyh
+      obtain ⟨wh, zh, rfl, kh, th⟩ := sameL_cons gh
+      obtain ⟨rh, rfl⟩ := same_atom kh
+      have eC := claims_mapM p.claims hmC tc
+      have eH := holeROMs_read p.holes hH th bH hh
+      have hp : { ({ p with holes := [], effects := [], claims := [] } : Package) with
+          claims := p.claims, holes := p.holes } = p := by
+        obtain ⟨⟩ := p; simp only at hpe; subst hpe; rfl
+      simp only [List.cons_append, List.nil_append, Read.package, hbase, eC, eH, bind, Except.bind, pure,
+        Except.pure, hp]
+    · -- effects and holes
+      obtain ⟨ye, ws, rfl, hye, hw0⟩ := sameL_cons hT
+      obtain ⟨yh, ws, rfl, hyh, hw1⟩ := sameL_cons hw0
+      cases sameL_nil hw1
+      obtain ⟨qe, ze, rfl, ge⟩ := same_list hye
+      obtain ⟨we, ze, rfl, ke, te⟩ := sameL_cons ge
+      obtain ⟨re, rfl⟩ := same_atom ke
+      obtain ⟨qh, zh, rfl, gh⟩ := same_list hyh
+      obtain ⟨wh, zh, rfl, kh, th⟩ := sameL_cons gh
+      obtain ⟨rh, rfl⟩ := same_atom kh
+      have eE := effects_mapM p.effects hmE te (fun x hx => need_sub_le (p := 0) (ys := atom "effects" :: xE)
+        (by simp [list]) (List.mem_cons_of_mem _ hx) (needs_in hn)) hpw
+      have eH := holeROMs_read p.holes hH th bH hh
+      have hp : { ({ p with holes := [], effects := [], claims := [] } : Package) with
+          effects := p.effects, holes := p.holes } = p := by
+        obtain ⟨⟩ := p; simp only at hpc; subst hpc; rfl
+      simp only [List.cons_append, List.nil_append, Read.package, hbase, eE, eH, bind, Except.bind, pure,
+        Except.pure, hp]
+    · -- effects, claims and holes
+      obtain ⟨ye, ws, rfl, hye, hw0⟩ := sameL_cons hT
+      obtain ⟨yc, ws, rfl, hyc, hw1⟩ := sameL_cons hw0
+      obtain ⟨yh, ws, rfl, hyh, hw2⟩ := sameL_cons hw1
+      cases sameL_nil hw2
+      obtain ⟨qe, ze, rfl, ge⟩ := same_list hye
+      obtain ⟨we, ze, rfl, ke, te⟩ := sameL_cons ge
+      obtain ⟨re, rfl⟩ := same_atom ke
+      obtain ⟨qc, zc, rfl, gc⟩ := same_list hyc
+      obtain ⟨wc, zc, rfl, kc, tc⟩ := sameL_cons gc
+      obtain ⟨rc, rfl⟩ := same_atom kc
+      obtain ⟨qh, zh, rfl, gh⟩ := same_list hyh
+      obtain ⟨wh, zh, rfl, kh, th⟩ := sameL_cons gh
+      obtain ⟨rh, rfl⟩ := same_atom kh
+      have eE := effects_mapM p.effects hmE te (fun x hx => need_sub_le (p := 0) (ys := atom "effects" :: xE)
+        (by simp [list]) (List.mem_cons_of_mem _ hx) (needs_in hn)) hpw
+      have eC := claims_mapM p.claims hmC tc
+      have eH := holeROMs_read p.holes hH th bH hh
+      have hp : { ({ p with holes := [], effects := [], claims := [] } : Package) with
+          effects := p.effects, claims := p.claims, holes := p.holes } = p := by
+        obtain ⟨⟩ := p; rfl
+      simp only [List.cons_append, List.nil_append, Read.package, hbase, eE, eC, eH, bind, Except.bind, pure,
+        Except.pure, hp]
+  · cases h
+
+/-- **The contextual printer's re-read never refuses a printable package.** `Print.package` checks
+that a package with holes reads back from its text (`contextualText`); at printable holes that check
+is a consequence, so `Print.package` is `packageText`. -/
+theorem package_eq_packageText {p : Package} (hs : p.state.wf = true) (hi : p.iface.wf = true)
+    (hr : p.rels.all relWf = true) (hb : Canon p.body) (hh : ∀ h ∈ p.holes, HolePrintable h)
+    (hpw : p.effects.all (fun e => e.2.produces.all Ty.wf) = true) :
+    package p = packageText p := by
+  unfold package
+  cases ht : packageText p with
+  | none => rfl
+  | some s =>
+    simp only [bind, Option.bind_some]
+    split
+    · rfl
+    · simp [contextualText, readPackage_packageText hs hi hr hb hh hpw ht, Except.toOption]
+
 
 /-! ## Every checked term is canonical, so every checked term and package reads back -/
 

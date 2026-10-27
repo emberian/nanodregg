@@ -27,10 +27,13 @@ def grammar : String :=
   "term  ::= x | 123 | true | false | \"text\" | #hex | (lam x T e) | (fn (x T)… e) | (let x T e e)\n" ++
   "        | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq len<= u64be sized dsized\n" ++
   "        | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)\n" ++
-  "        | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T \"why\") | (e e…)\n" ++
+  "        | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T \"why\") | (hole n (subst e…)) | (e e…)\n" ++
   "package ::= (package (imports \"hex\"…) (doc [\"text\"]) (state T) (iface T) (methods l…) (laws l…) (rels rel…)\n" ++
-  "            (body e) [(effects (l n)…)])\n" ++
-  "rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]) (holds [l]))\n"
+  "            (body e) [(effects (l n)…)] [(claims (keeps INV LAW)…)] [(holes hole…)])\n" ++
+  "rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]) (holds [l]))\n" ++
+  "hole    ::= (hole n (context T…) (result T) (selection r #key) (hypotheses opt…) (guard opt e)\n" ++
+  "            (code (candidate e (supports pin…))…))   — e names context entry i of n as x(n-1-i); the guard's x0 is its pin's truth\n" ++
+  "pin     ::= (pin r #key v) | (cell #id) | (cell-law #id #law) | (cell-package #id #pkg)   opt ::= pin | (structural)\n"
 
 /-- An s-expression; every node carries the character offset where it starts. -/
 inductive SExp

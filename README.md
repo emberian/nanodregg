@@ -40,118 +40,95 @@ It is a counter whose step is a hole with two candidates.
 A law judges every act on the counter.
 A third method generates a package.
 
-The core text writes every type in full.
-For reading, this page names seven of them:
-
-```
-S       = (rec (count nat))
-Req     = (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat)
-               (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec))))
-               (principal digest) (self digest) (validUntil nat))
-Verdict = (sum (ok (rec)) (refused bytes))
-Row     = (rec (key (rec (k nat))) (val nat))
-Choice  = (sum (insert Row) (upsert Row))
-Edit    = (sum (choice Choice))
-Call    = (sum (install (rec (pkg bytes))))
-(Opt T) = (sum (none (rec)) (some T))
-```
-
-`PRE` and `POST` name two byte strings, given after the program.
-`G` names the id of a grant.
-[`Lang/Journey/Readme.lean`](Lang/Journey/Readme.lean) holds the literal text, writes a real grant's id for `G`, and runs every step described below through the kernel's receivers (`Receive.submit` with `Lang.program`) on a simulator World (`lake exe lang-journey`, rows RM1 to RM14).
-
 ```
 (package
-  (imports)
   (doc "a counter whose step is chosen in context; it spawns parameter packages")
-  (state S)
-  (iface (rec
-    (bump (-> (rec) (-> S (-> (rec) (-> Req (rec (calls (rec)) (edits (rec)) (state S)))))))
-    (cap (-> S (-> S (-> Req Verdict))))
-    (choose (-> (rec) (-> S (-> (rec (i nat)) (-> Req (rec (calls (rec)) (edits (rec (e0 (Opt Edit)))) (state S)))))))
-    (spawn (-> (rec) (-> S (-> (rec (n nat)) (-> Req (rec (calls (rec (c0 (Opt Call)))) (edits (rec)) (state S)))))))))
-  (methods bump choose spawn)
-  (laws cap)
-  (rels (choice (key (k nat)) (val nat) (limit 1) (sum) (cap 0) (retract false) (guard) (holds)))
-  (body (record
-    (bump (fn (rows (rec)) (state S) (arg (rec)) (req Req)
-      (record (calls (record)) (edits (record))
-        (state (record (count (+ (. state count) (hole 0 (subst)))))))))
-    (cap (fn (old S) (new S) (req Req)
-      (let ok Verdict (inj Verdict ok (record))
-      (let within Verdict (if (<= (. new count) 100) ok (inj Verdict refused "over 100"))
-        (case (. req occasion)
-          (adopt x within) (birth x within) (invoke m within)
-          (relaw x (inj Verdict refused "frozen"))
-          (retire x (if (== (. old count) 0) ok (inj Verdict refused "not empty")))
-          (write x (inj Verdict refused "frozen")))))))
-    (choose (fn (rows (rec)) (state S) (arg (rec (i nat))) (req Req)
-      (record (calls (record)) (state state)
-        (edits (record (e0 (inj (Opt Edit) some
-          (inj Edit choice (inj Choice upsert
-            (record (key (record (k 0))) (val (. arg i))))))))))))
-    (spawn (fn (rows (rec)) (state S) (arg (rec (n nat))) (req Req)
-      (record (edits (record)) (state state)
-        (calls (record (c0 (inj (Opt Call) some
-          (inj Call install
-            (record (pkg (cat (u64be #PRE (. arg n)) #POST)))))))))))))
-  (holes (hole 0 (context) (result nat) (selection 0 #0000000000000000) (hypotheses)
-    (guard (structural) true)
-    (code (candidate 1 (supports)) (candidate 10 (supports (cell #G)))))))
+  (state (rec (count nat)))
+  (rel choice (key (k nat)) (val nat) (limit 1))
+  (hole step (⊢ nat)
+    (select choice (record (k 0)))
+    (candidate 1)
+    (candidate 10 (cell #G)))
+  (method bump
+    (done (with state (count (+ state.count (hole step))))))
+  (method choose (arg (rec (i nat))) (edits 1)
+    (done state (upsert choice (record (k 0)) arg.i)))
+  (method spawn (arg (rec (n nat))) (calls (install))
+    (done state
+      (install (pkg (cat (u64be #0a00000b00000004000004000106016e010000000800010f016e010408 arg.n)
+                         #00010000010000020000000000030000040000050000)))))
+  (law cap
+    (on (adopt birth invoke) (if (<= new.count 100) ok (refuse "over 100")))
+    (on retire (if (== old.count 0) ok (refuse "not empty")))
+    (else (refuse "frozen"))))
 ```
 
-```
-PRE  = 0a00000b00000004000004000106016e010000000800010f016e010408
-POST = 00010000010000020000000000030000040000050000
-```
+`#G` stands for the id of a grant.
+[`Lang/Journey/Readme.lean`](Lang/Journey/Readme.lean) reads this block from this file, writes a real grant's id for `G`, and runs every step described below through the kernel's receivers (`Receive.submit` with `Lang.program`) on a simulator World (`lake exe lang-journey`, rows RM0 to RM16).
+
+The text is the authoring text, [`Lang/Surface.lean`](Lang/Surface.lean).
+It lowers to the core text that the [specification](docs/spec/README.md) defines, and the core reader reads the result.
+`ob '(core P)'` prints the core text of a package `P`.
+The core text writes every type in full, and each of those types comes from a declaration here.
 
 Read it section by section.
 
-`(imports)` is empty, so the body refers to no other package.
 `(doc …)` is one line the package says of itself; nothing runs it.
+There is no `(import …)`, so the body refers to no other package.
 
-`(state S)` makes an object's state a record with one natural, `count`.
+`(state (rec (count nat)))` makes an object's state a record with one natural, `count`.
 State is first-order data, and each field lives in its own slot of the object's cell.
 
-`(iface …)` is the type of the body, a record with four fields.
+`(rel choice (key (k nat)) (val nat) (limit 1))` declares one relation, `choice`: rows keyed by a natural, holding a natural, at most one row.
+The core form also states a sum column, a cap, retraction, a guard and held value; this relation has none of them.
+Relations are numbered in label order, so `choice` is relation 0.
+
+`(hole step (⊢ nat) …)` declares the hole `step :: [· ⊢ nat]`.
+Before `⊢` is its context, here empty; after `⊢` is its type.
+A context entry is written `(x T)`, and a candidate's term may use `x`.
+`(select choice (record (k 0)))` says that the row of `choice` at key `k = 0` holds the selection, the index of a candidate.
+Each `(candidate e fact…)` commits one candidate at install, with the facts of the World it relies on.
+Candidate 0 is `1` and relies on nothing.
+Candidate 1 is `10` and relies on cell `G` being live.
+A fact is a row of the object at a version, `(row rel key ver)`; a live cell, `(cell #id)`; a live cell governed by a named law, `(cell #id (law #pkg))`; or a live cell running a named package, `(cell #id (runs #pkg))`.
+A context entry may carry a fact as a third element, and a hole may have a guard; this hole needs neither.
+The hole is hole 0, the first declared.
+
 A *method* has type `rows → state → argument → request → result`.
-`rows` is what the method reads from relations; these methods read none, so it is `(rec)`.
+The surface writes that type from the method's clauses.
+`(arg T)` is the argument type; without it the argument is the empty record.
+`rows` is what the method reads from relations; these methods read none.
 The result is a record of `calls` the object makes, `edits` to its rows, and the new `state`.
-The type fixes how many calls and edits a method may return, and of which kinds: `bump` makes none, `choose` makes one edit, `spawn` makes one call of kind `install`.
-A *law* has type `old → new → request → Verdict`.
+`(edits 1)` gives a method one edit slot, typed by the package's relations; `(calls (install))` gives it one call slot of kind `install`.
+The body sees `rows`, `state`, `arg` and `req`, and `state.count` is a field of `state`.
+`(done s item…)` is the result: the new state `s`, then the edits and calls in order, with every other slot empty.
 `Req` is what a method and a law see of the request: the member who signed, the object, the calling object if any, the signed height window, and the *occasion*, which says which act is judged.
 
-`(methods bump choose spawn)` and `(laws cap)` say which fields are methods and which are laws.
-A member invokes a method by its index in this list: `bump` is 0, `choose` 1, `spawn` 2.
-
-`(rels …)` declares one relation, `choice`: rows keyed by a natural, holding a natural, at most one row, no sum column, no retraction, no guard, holding no value.
-Relation 0 holds the hole's selection.
-
 `bump` adds the hole's value to `count`.
-`(hole 0 (subst))` is hole 0 under the empty substitution; it has type `nat` because the hole's declaration says so.
+`(hole step)` is the hole under the empty substitution, the core's `(hole 0 (subst))`; it has type `nat` because the declaration says so.
+`(with state (count e))` is `state` with `count` replaced.
+
+`choose` writes the selection.
+It returns one edit: an `upsert` into relation `choice` at key 0, with the candidate index from its argument.
+An upsert replaces the row at a key the caller pinned, present or absent.
+Only methods edit rows, so a selection needs a method that writes it.
+
+`spawn` is a generator.
+It returns one call, `install`, whose package bytes it computes: the first byte string, then the argument `n` as eight big-endian bytes, then the second.
+At `n = 7` those bytes read as `(package (imports) (doc) (state (rec)) (iface (rec (n nat))) (methods) (laws) (rels) (body (record (n 7))))`, a package that exports one constant.
+The kernel installs them as it installs a member's package: it decodes and checks them, and the new package cell's id is the digest of the bytes.
 
 `cap` is the law.
-It cases on `(. req occasion)`, and the checker requires one arm per occasion, so a law has no default.
+A *law* has type `old → new → request → Verdict`, where `Verdict` is `ok` or `refused` with a reason.
+Each `(on occasions body)` judges the named acts and `(else body)` judges the rest.
+The lowering writes one arm per occasion, so a law has no default.
 At a birth, an adoption and an invocation, the new count must be at most 100.
 A retirement is judged over the object's last state; `cap` admits it only at count 0.
 Writes and law replacements are refused.
 The kernel refuses those two acts on an object that has methods before any law runs; the arms matter when the package serves as an extra law on a data object.
 
-`choose` writes the selection.
-It returns one edit: an `upsert` into relation `choice` at key 0, with the candidate index from its argument.
-An upsert replaces the row at a key the caller pinned, present or absent.
-
-`spawn` is a generator.
-It returns one call, `install`, whose package bytes it computes: `PRE`, then the argument `n` as eight big-endian bytes, then `POST`.
-At `n = 7` those bytes read as `(package (imports) (doc) (state (rec)) (iface (rec (n nat))) (methods) (laws) (rels) (body (record (n 7))))`, a package that exports one constant.
-The kernel installs them as it installs a member's package: it decodes and checks them, and the new package cell's id is the digest of the bytes.
-
-`(holes …)` declares hole 0.
-Its context is empty and its result type is `nat`.
-Its selection is the row of relation 0 at key `0000000000000000`, the eight-byte encoding of `k = 0`.
-It has no hypotheses.
-Its guard has no pin and evaluates `true`.
-It has two candidates: `1`, which relies on nothing, and `10`, which relies on cell `G` being live.
+The lowered package lists its methods in label order, `bump choose spawn`, and its laws, `cap`.
+A member invokes a method by its index in that list: `bump` is 0, `choose` 1, `spawn` 2.
 
 The journey runs the program as follows.
 Member B makes the grant `G` and installs the package.
@@ -167,9 +144,22 @@ B chooses candidate 0, and `bump` raises count to 11 (RM10, RM11).
 Retiring the counter at count 11 is refused `lawDenied … "cap: not empty"` (RM13).
 Creating a counter at count 101 is refused `lawDenied … "cap: over 100"` at its birth (RM14).
 
-The language has a second, higher-level text, [`Lang/Surface.lean`](Lang/Surface.lean), which lowers to the core text and adds names for `Req` and `Verdict`, declared types, bounded arguments and generated activities.
-It has no syntax for holes, so this page uses the core text.
-[`world/escrow/Escrow.ob`](world/escrow/Escrow.ob) is a complete package in the surface text.
+The checking tool `ob` runs the same install check without a World.
+Given a view, it also resolves each hole the way a run does, on the facts the view states.
+With `P` the program's text:
+
+```
+ob '(check P)'                                    ok BYTES bytes id ID
+ob '(check P (view (select step none)))'          refused holeSelectionAbsent 0
+ob '(check P (view (select step 1)))'             refused holeUnpinned cell:G
+ob '(check P (view (select step 1) (live #G)))'   ok BYTES bytes id ID hole 0 candidate 1
+ob '(check P (view (select step 1) (dead #G)))'   refused holeSupportDead 0 cell:G
+ob '(check P (view (select step 0)))'             ok BYTES bytes id ID hole 0 candidate 0
+```
+
+A view states the selection row, rows of the object at versions, live cells with their laws and package, and dead cells; a fact it does not state is unpinned.
+Rows RM15 and RM16 run these checks and compare each answer with the World's answer in RM4 to RM11.
+[`world/escrow/Escrow.ob`](world/escrow/Escrow.ob) is another complete package in the authoring text.
 
 ## What the World guarantees
 
@@ -251,7 +241,7 @@ The testground runs the real kernel, compiled to WebAssembly, in a browser tab.
 It is served from the demo box at <https://nano.demo.dregg.online/>, with a GitHub Pages mirror at <https://emberian.github.io/nanodregg/>.
 Its "Document section with a hole" demonstration shows a candidate withdrawn by name when the grant supporting it is revoked.
 
-The README's program runs as journey rows RM1 to RM14:
+The README's program runs as journey rows RM0 to RM16:
 
 ```sh
 lake build lang-journey

@@ -187,6 +187,36 @@ The core text of a ROM declaration is
 with `h` and `g` each `(structural)` or a support, and supports written `(pin r #k v)`, `(cell #d)`, `(cell-law #d #l)` and `(cell-package #d #q)`.
 A candidate's context variables are named `x0`, `x1`, …, with `x0` the last context position; the guard's variable is `x0`.
 
+The surface text (`Lang/Surface.lean`) writes the same declaration by name, in the notation `u :: [Ψ ⊢ τ]`:
+
+```
+(hole u ((x₁ τ₁ [π₁]) … (xₖ τₖ [πₖ]) ⊢ τ)
+  (select ℓ key)
+  [(guard [π] t)]
+  (candidate t π…)…)
+```
+
+and a body uses it as `(hole u t₁ … tₖ)`.
+Each part lowers to one field of the ROM declaration:
+
+| surface | ROM declaration |
+|---|---|
+| `u` | `name n`, where `n` is the hole's position among the package's hole declarations |
+| `(xᵢ τᵢ)` | context position `i` of type `τᵢ`, with hypothesis `structural` |
+| `(xᵢ τᵢ π)` | context position `i` of type `τᵢ`, with hypothesis `π` |
+| `τ` after `⊢` | `type τ` |
+| `(select ℓ key)` | `selection (r, k)`: `r` is the index of relation `ℓ` in label order, `k` the bytes of `key` (`Lang/Rel.lean` `keyBytes`) |
+| `(guard π t)`, `(guard t)`, none | `guardpin π`, no guard pin, or no guard pin and the guard `true`; `t` names the guard's variable `present` |
+| `(candidate t π…)` | one candidate, in order; `t` names context position `i` as `xᵢ` |
+| `(row ℓ key v)` | `row r k v` |
+| `(cell #d)`, `(cell #d (law #l))`, `(cell #d (runs #q))` | `cell d`, `cellLaw d l`, `cellPackage d q` |
+| `(hole u t₁ … tₖ)` in a body | `hole n (t₁ … tₖ)` |
+
+A key is the relation's key fields as a record literal, `(record (f v)…)`.
+A body that names no declared hole is refused `noHole`; a malformed declaration is refused `badClause`, at the offset of the form.
+
+Lean: `Lang/Surface.lean` `holeDecl`, `pinOf`; the surface's package is printed and read again by the core reader, and a printed hole reads back as itself (`Lang/Proofs/Print.lean` `holeROM_read`, `readPackage_packageText`).
+
 ## 2.6 Relations
 
 A *relation* is a place under an object that holds keyed rows.
@@ -406,7 +436,7 @@ A value leaves the machine as data only by *extraction* at a data type, which fo
 ## 2.11 Packages as programs
 
 A package's body is usually a record literal of its interface fields.
-The program in the [README](../../README.md#one-program) is a complete package in core text.
+The program in the [README](../../README.md#one-program) is a complete package in surface text; `ob '(core P)'` prints its core text.
 `Lang/Std*.lean` are Lean functions that emit packages: activities, offers, escrow, posted-candidate holes, heads and generators.
 
 ## 2.12 Packages that write packages

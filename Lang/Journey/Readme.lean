@@ -1,12 +1,14 @@
 /-
 # Lang.Journey.Readme — §RM: the README's program, through the real receivers
 
-The program README.md reads through line by line is `counterText`: a counter whose step is a contextual
-hole, whose law judges each act, and whose `spawn` method generates a package. Every row is a call
-through `Receive.submit` with `Lang.program` as the kernel's `Program`, on one World of the Sim. The
-text names one cell, the grant `G` its candidate 1 cites; the session makes `G` first and writes its
-id into the text, so the text installed is the README's with `G` filled in.
+The program README.md reads through section by section is the first code block of its "One program"
+section: a counter whose step is a contextual hole, whose law judges each act, and whose `spawn`
+method generates a package. It is a SURFACE text (`Lang.Surface`), and the session reads it FROM
+README.md (`lake exe lang-journey` runs from the repository root), so the text the page shows is the
+text that is lowered, checked, installed and run. The text names one cell, the grant `G` its candidate 1
+cites, as `#G`; the session makes `G` first and writes its id there.
 
+* RM0 the README's program block is read from README.md, and it is a surface text.
 * RM1 B creates a data object and grants A `mutate` on it: the grant `G`.
 * RM2 B installs the counter text: admitted (the install check admits the hole at its signature).
 * RM3 B creates a counter `O` at `count 0`.
@@ -20,56 +22,38 @@ id into the text, so the text installed is the README's with `G` filled in.
   computed, which read as `(body (record (n 7)))`.
 * RM13 B retires `O` at `count 11`: refused `lawDenied cap: not empty`.
 * RM14 B creates a counter at `count 101`: refused `lawDenied cap: over 100` at its birth.
+* RM15 `ob (check P)` admits the same text off the World, by install's own admission (LANG-105), with a
+  deployed-width id for `G`.
+* RM16 `ob (check P (view …))` resolves the hole on the five views RM4, RM6, RM7, RM9 and RM11 ran on,
+  and answers what the World answered: the same refusal, by name and coordinate (the id of `G` aside,
+  which differs between the Sim and the deployed width), or the candidate whose run the World admitted.
 -/
 import Lang.Journey.Gen
+import Lang.Resident
 
 namespace Nanodregg.Lang.Journey
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
-/-- The README's program; `GGGG` stands for the hex of the grant `G` candidate 1 cites. -/
-def counterText : String := "(package
-  (imports)
-  (doc \"a counter whose step is chosen in context; it spawns parameter packages\")
-  (state (rec (count nat)))
-  (iface (rec
-    (bump (-> (rec) (-> (rec (count nat)) (-> (rec) (-> (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)) (rec (calls (rec)) (edits (rec)) (state (rec (count nat)))))))))
-    (cap (-> (rec (count nat)) (-> (rec (count nat)) (-> (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)) (sum (ok (rec)) (refused bytes))))))
-    (choose (-> (rec) (-> (rec (count nat)) (-> (rec (i nat)) (-> (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)) (rec (calls (rec)) (edits (rec (e0 (sum (none (rec)) (some (sum (choice (sum (insert (rec (key (rec (k nat))) (val nat))) (upsert (rec (key (rec (k nat))) (val nat))))))))))) (state (rec (count nat)))))))))
-    (spawn (-> (rec) (-> (rec (count nat)) (-> (rec (n nat)) (-> (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)) (rec (calls (rec (c0 (sum (none (rec)) (some (sum (install (rec (pkg bytes))))))))) (edits (rec)) (state (rec (count nat)))))))))))
-  (methods bump choose spawn)
-  (laws cap)
-  (rels (choice (key (k nat)) (val nat) (limit 1) (sum) (cap 0) (retract false) (guard) (holds)))
-  (body (record
-    (bump (fn (rows (rec)) (state (rec (count nat))) (arg (rec)) (req (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)))
-      (record (calls (record)) (edits (record))
-        (state (record (count (+ (. state count) (hole 0 (subst)))))))))
-    (cap (fn (old (rec (count nat))) (new (rec (count nat))) (req (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)))
-      (let ok (sum (ok (rec)) (refused bytes)) (inj (sum (ok (rec)) (refused bytes)) ok (record))
-      (let within (sum (ok (rec)) (refused bytes)) (if (<= (. new count) 100) ok (inj (sum (ok (rec)) (refused bytes)) refused \"over 100\"))
-        (case (. req occasion)
-          (adopt x within) (birth x within) (invoke m within)
-          (relaw x (inj (sum (ok (rec)) (refused bytes)) refused \"frozen\"))
-          (retire x (if (== (. old count) 0) ok (inj (sum (ok (rec)) (refused bytes)) refused \"not empty\")))
-          (write x (inj (sum (ok (rec)) (refused bytes)) refused \"frozen\")))))))
-    (choose (fn (rows (rec)) (state (rec (count nat))) (arg (rec (i nat))) (req (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)))
-      (record (calls (record)) (state state)
-        (edits (record (e0 (inj (sum (none (rec)) (some (sum (choice (sum (insert (rec (key (rec (k nat))) (val nat))) (upsert (rec (key (rec (k nat))) (val nat)))))))) some
-          (inj (sum (choice (sum (insert (rec (key (rec (k nat))) (val nat))) (upsert (rec (key (rec (k nat))) (val nat)))))) choice (inj (sum (insert (rec (key (rec (k nat))) (val nat))) (upsert (rec (key (rec (k nat))) (val nat)))) upsert
-            (record (key (record (k 0))) (val (. arg i))))))))))))
-    (spawn (fn (rows (rec)) (state (rec (count nat))) (arg (rec (n nat))) (req (rec (agent digest) (caller (sum (none (rec)) (some digest))) (notBefore nat) (occasion (sum (adopt bytes) (birth (rec)) (invoke nat) (relaw bytes) (retire (rec)) (write (rec)))) (principal digest) (self digest) (validUntil nat)))
-      (record (edits (record)) (state state)
-        (calls (record (c0 (inj (sum (none (rec)) (some (sum (install (rec (pkg bytes)))))) some
-          (inj (sum (install (rec (pkg bytes)))) install
-            (record (pkg (cat (u64be #0a00000b00000004000004000106016e010000000800010f016e010408 (. arg n)) #00010000010000020000000000030000040000050000)))))))))))))
-  (holes (hole 0 (context) (result nat) (selection 0 #0000000000000000) (hypotheses)
-    (guard (structural) true)
-    (code (candidate 1 (supports)) (candidate 10 (supports (cell #GGGG)))))))"
+/-- Where the README is, from the repository root. -/
+def readmePath : System.FilePath := "README.md"
+
+/-- The README's program: the first code block of its "One program" section. -/
+def programOf (readme : String) : Option String :=
+  match readme.splitOn "\n## One program\n" with
+  | [_, rest] =>
+    match rest.splitOn "```" with
+    | _ :: block :: _ => some block.trimAscii.toString
+    | _ => none
+  | _ => none
 
 /-- The counter's text with `G`'s id written in. -/
-def counterAt (g : ByteArray) : String := counterText.replace "GGGG" (hexOf g)
+def counterAt (text : String) (g : ByteArray) : String := text.replace "#G" ("#" ++ hexOf g)
 
-def readmeRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
+/-- A refusal's text with an id written as `G`. -/
+def withG (v : String) (g : ByteArray) : String := v.replace (hexOf g) "G"
+
+def readmeRows (text : String) (r0 : Run) (b a : Sim.Member) : Run := Id.run do
   let prog := langProgram
   let mut r := r0
   let has (v w : String) : Bool := (v.splitOn w).length > 1
@@ -83,7 +67,7 @@ def readmeRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
     (v1 == "admitted" && v1b == "admitted")
   let gb := Sim.dc.bytes g
   -- RM2
-  let .ok p := Surface.readPackage (counterAt gb) | return note r "RM2 the counter text reads" false
+  let .ok p := Surface.readPackage (counterAt text gb) | return note r "RM2 the counter text reads" false
   let some bytes := Wire.encodePackage p | return note r "RM2 the counter has bytes" false
   let (r2, v2, t2) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, g]) (.install bytes))
   let some pkg := bornOf t2 | return note r2 s!"RM2 B installs the counter: {v2}" false
@@ -145,12 +129,38 @@ def readmeRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
   let some s101 := seed 101 | return note r "RM14 seed" false
   let (_, v14, _) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, pkg]) (.create (some pkg) [] s101))
   r := note r s!"RM14 B creates a counter at count 101: {v14}" (has v14 "lawDenied" && has v14 "cap: over 100")
+  -- RM15, RM16: the same text off the World, by `ob`, with a deployed-width id for G
+  let gd : ByteArray := ⟨(List.replicate 32 (0x47 : UInt8)).toArray⟩
+  let P := counterAt text gd
+  let ob (view : String) : String := (Lang.Resident.run s!"(check {P}{view})").line
+  let a15 := ob ""
+  r := note r s!"RM15 ob (check P): {a15}" (a15.startsWith "ok " && !has a15 "hole")
+  let live := s!" (live #{hexOf gd})"
+  let dead := s!" (dead #{hexOf gd})"
+  let views : List (String × String × String) := [
+    ("RM4", " (view (select step none))", withG v4 gb),
+    ("RM7", " (view (select step 1))", withG v7 gb),
+    ("RM6", s!" (view (select step 1){live})", "hole 0 candidate 1"),
+    ("RM9", s!" (view (select step 1){dead})", withG v9 gb),
+    ("RM11", " (view (select step 0))", "hole 0 candidate 0")]
+  for (row, view, world) in views do
+    let a := withG (ob view) gd
+    -- a refusal: ob's refusal (after `refused `) is in the World's verdict; a resolution: ob names the
+    -- candidate the World's admitted run took
+    let same := if a.startsWith "refused " then has world (a.drop 8).toString
+      else a.startsWith "ok " && a.endsWith world
+    r := note r s!"RM16 ob (check P (view …)) as {row}: {a}" same
   return r
 
-/-- A fresh session for the RM rows. -/
-def readmeSession : Run :=
+/-- A fresh session for the RM rows, over the README's program `text`. -/
+def readmeSessionOf (text : String) : Run :=
   let X := ctxWith langProgram
   let empty : Run := { st := { rng := ⟨1⟩, host := World.genesis X.env 0 0, members := [] } }
+  let surface := match Read.parse text with
+    | .ok x => !Surface.isCore x
+    | .error _ => false
+  let empty := note empty s!"RM0 the README's program is read from {readmePath} ({text.length} chars), a surface text: {surface}"
+    (!text.isEmpty && surface)
   match genesis X Sim.worldName (Sim.nonceOf 17) 100000000
       [("rm-b".toUTF8, nextKeyDigest X "rm-b-next".toUTF8), ("rm-a".toUTF8, nextKeyDigest X "rm-a-next".toUTF8)]
       Authority.none with
@@ -158,8 +168,14 @@ def readmeSession : Run :=
   | .ok g =>
     let b : Sim.Member := ⟨founderId X g.origin 0, "rm-b".toUTF8, "rm-b-next".toUTF8⟩
     let a : Sim.Member := ⟨founderId X g.origin 1, "rm-a".toUTF8, "rm-a-next".toUTF8⟩
-    readmeRows { st := { rng := ⟨1⟩, host := g, members := [b, a] } } b a
+    let r := readmeRows text { empty with st := { rng := ⟨1⟩, host := g, members := [b, a] } } b a
+    r
 
-initialize register { name := "readme", run := pure readmeSession }
+/-- The session over README.md's own text. -/
+def readmeSession : IO Run := do
+  let readme ← try IO.FS.readFile readmePath catch _ => pure ""
+  pure (readmeSessionOf ((programOf readme).getD ""))
+
+initialize register { name := "readme", run := readmeSession }
 
 end Nanodregg.Lang.Journey
