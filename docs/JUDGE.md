@@ -6,7 +6,7 @@ Use git fetch origin, git rebase origin/main and git push origin HEAD:main from 
 
 Whole-system validation is a periodic report through scripts/converge or its successor. It builds the tree, runs the rows and tests, and attributes failures to the changes that introduced them. A reported failure becomes work for that change's owner to fix forward.
 
-Per-landing judge slots, displacement queues and message-form gates are not part of this workflow. Censuses, vector tables, pins, ceilings, TCB and waste measurements serve the convergence report. Existing source-check implementations cover closure, refusals, size, paths, runs, rebase, TCB, vectors, waste, owners and targets; they are evidence tools, not landing authorization.
+Per-landing judge slots, displacement queues and message-form gates are not part of this workflow. Censuses, vector tables, pins, ceilings, TCB and waste measurements serve the convergence report. Existing source-check implementations cover closure, refusals, size, size_limit, paths, runs, rebase, TCB, vectors, waste, owners and targets; they are evidence tools, not landing authorization.
 
 Keep design decisions in the layer's decision ledger, with critique and meta-critique. Write an entry for a real design choice rather than for every commit.
 
