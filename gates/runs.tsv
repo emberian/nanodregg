@@ -63,3 +63,4 @@ script:gates/cbytes.py	vectors {fresh}	CBYTES VECTORS GREEN	vectors {fresh} --ha
 script:gates/tcb.py	--plants {fresh}	TCB PLANTS GREEN	--plants {fresh} --harness-control
 script:gates/waste.py	--plants	WASTE PLANTS GREEN	--plants --harness-control
 script:gates/build_peak.py	{fresh}	BUILD PEAKS GREEN	{fresh} --harness-control
+script:gates/interp.py	kernel-sim 1 ; kernel-sim 2	INTERP AGREE	kernel-sim 3 --harness-control
