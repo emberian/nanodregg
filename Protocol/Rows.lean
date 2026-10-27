@@ -103,6 +103,11 @@ inductive Act
   follow's own admission; what the writer answers is the outcome. Custody is not advanced (only
   a rotation advances it, and a forged rotation is not a row's business) -/
   | forge (argv : List String)
+  /-- like `forge`, with the call's causal pin (KERNEL-79) replaced by step `steps` and a chain no fold
+  has: a client that pins its call to a history the writer's is not. When the writer commits it anyway
+  (a forking writer), the actor's own follow then catches up (`sync`), and the line's outcome is
+  follow's: the member re-derives the Turn and refuses the page by the pin's name -/
+  | forgePin (argv : List String) (steps : Nat)
   /-- the operator stops the writer, exports its World (`Host.Carry.exportFile`) and imports it as
   a NEW World (`Host.Carry.importWorld`: the one decision `host import` makes), under the rows'
   name and another nonce, with the file's digest (`rightDigest`) or a digest with one bit flipped;
@@ -219,6 +224,9 @@ change to the row. -/
 inductive Mutation
   /-- the Host serves `log` without checking the read envelope -/
   | openLog
+  /-- the writer admits a pinned call whose causal pin does not hold on its World (KERNEL-79): a writer
+  that relays a member's call onto another history -/
+  | admitsForkedPin
   /-- every law admits (LANG's judge skipped), for the writer and every follower -/
   | skipJudge
   /-- a follower accepts any signature on a logged event -/
@@ -1653,11 +1661,15 @@ def uncertainHintRow : Row where
 closes its own LOOSE call (sent, outcome unknown, window live) without waiting out the window. The
 sponsor's write never reaches the writer (`open`); the newcomer's cancel of it is refused
 `badSignature` (a cancel verifies under the CALL's member's key); the sponsor's own cancel is
-recorded and prints `cancelled TXID`; the attempt's next run settles `refused cancelled` by the
-member's own fold; the same bytes sent again are answered from the record; a second cancel is
-`refusedFinal`. A call whose window has passed (the newcomer signs for one height, the sponsor's
-write moves the World past it) is refused `outsideWindow`. The plant is custody signing the cancel
-without its domain: line 8 is `refused badSignature`. -/
+recorded and prints `cancelled TXID`; the same bytes sent again are answered from the record
+(`refused cancelled`); a second cancel is `refusedFinal`. The attempt's next run settles `refused
+cancelled` by the member's own fold, and then, as after any final refusal, plans the command afresh:
+the new call is pinned at the head the cancel's record moved (KERNEL-79, PROTOCOL-86), so it is another
+call, and it lands (`ok`). Before causal pins the fresh plan was the cancelled call's bytes again, so a
+cancel also blocked the command's re-run until its window passed. A call whose window has passed (the
+newcomer signs for one height, the sponsor's write moves the World past it) is refused
+`outsideWindow`. The plant is custody signing the cancel without its domain: line 8 is `refused
+badSignature`. -/
 def cancelRow : Row where
   name := "cancel"
   replaces := []
@@ -1668,9 +1680,9 @@ def cancelRow : Row where
       fault := .neverForward },
     { actor := "newcomer", act := .cancelOf "sponsor", expect := .refused "badSignature" },
     { actor := "sponsor", act := .cancelOf "sponsor", expect := .ok, prints := some "cancelled " },
-    { actor := "sponsor", act := .rerun, expect := .refused "cancelled" },
     { actor := "sponsor", act := .resubmit, expect := .refused "cancelled" },
     { actor := "sponsor", act := .cancelOf "sponsor", expect := .refused "refusedFinal" },
+    { actor := "sponsor", act := .rerun, expect := .ok },
     { actor := "newcomer", act := .window 1, expect := .ok },
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"], expect := .open,
       fault := .neverForward },
@@ -1825,6 +1837,28 @@ def forkRow : Row where
       fault := .cold }])
   plant := .caught .ignoreAnchor 10 .ok
 
+/-- PROTOCOL-85 (KERNEL-79: causal pins). Every call nd plans carries follow's head as its causal pin,
+and the writer admits it only where its chain at that step is the pin's. The newcomer's write, pinned
+at its own head, is admitted. A hostile client's write pinned at step 2 with a chain no fold has is
+declined `forkedPin` by name, unrecorded (the pin is final on this history, as a `stale` pin behind
+is). One pinned past the writer's step count is declined `pinAhead`. The operator, cold, re-derives
+the whole log (every pin holds) and catches up. The plant is a writer that commits the forked-pin call
+anyway (`admitsForkedPin`: a writer relaying a member's call onto another history): the newcomer's own
+follow re-derives the page that carries it and refuses it `forkedPin` at line 7, by the step it names. -/
+def causalRow : Row where
+  name := "causal"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    { actor := "newcomer", act := .forgePin ["write", "@shared", "2", "2", "--via", "@g"] 2,
+      expect := .declined "forkedPin" },
+    { actor := "newcomer", act := .forgePin ["write", "@shared", "2", "3", "--via", "@g"] 999,
+      expect := .declined "pinAhead" },
+    { actor := "operator", act := .cmd ["sync"], expect := .ok, fault := .cold }])
+  plant := .caught .admitsForkedPin 7 (.refused "forkedPin")
+
 /-- A self-head object's seed: an `at` head at step 0 of THIS World, stating what the World held
 there: the genesis chain and roots (`chain0`, `roots0`, bound by the harness from the genesis World;
 a seed is a claim at its step, HOST-79, cv 01a17a38-366e), and `world` its origin. -/
@@ -1948,7 +1982,7 @@ def rows : List Row :=
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow, forkRow, selfHeadRow, selfHeadPageRow, certifiedRow, certifiedPageRow, rerunRow,
+   forgedRefusalRow, forkRow, causalRow, selfHeadRow, selfHeadPageRow, certifiedRow, certifiedPageRow, rerunRow,
    strippedCertificateRow]
 
 end Nanodregg.Protocol

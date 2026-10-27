@@ -126,7 +126,7 @@ end Sound
 /-- A counter key's own path verifies at the World's own root, for the counter the World holds
 (`refusalFits`: a counter key holds only a `count` leaf, between 1 and its bound). -/
 theorem counted_build {E : Env D} {w : World D} (hr : w.RefusalsOk E) {k : WindowSlot D}
-    (hk : ∀ x, k ≠ .refusal (.tx x)) :
+    (hk : ∀ x, k ≠ .refusal (.tx x)) (hc : ∀ x, k ≠ .chain x) :
     counted E (w.refusalsRoot E) k (countAt E w k) (w.refusals.prove (refusalSpec E) k) = true := by
   cases hg : w.refusals.get (refusalSpec E) k with
   | none =>
@@ -137,11 +137,14 @@ theorem counted_build {E : Env D} {w : World D} (hr : w.RefusalsOk E) {k : Windo
     cases v with
     | refused h c m' =>
       exfalso
-      rcases k with k | k <;> cases k <;> first | exact hk _ rfl | simp [refusalFits] at hf
+      rcases k with k | k | k <;> cases k <;> first | exact hk _ rfl | exact hc _ rfl | simp [refusalFits] at hf
+    | head s c =>
+      exfalso
+      rcases k with k | k | k <;> cases k <;> first | exact hk _ rfl | exact hc _ rfl | simp [refusalFits] at hf
     | count c =>
       have h1 : countAt E w k = c := by unfold countAt; rw [hg]
       have hb : 1 ≤ c ∧ c < 2 ^ 64 := by
-        rcases k with k | k <;> cases k <;>
+        rcases k with k | k | k <;> cases k <;> first | exact absurd rfl (hc _) | skip <;>
           simp [refusalFits, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
             Bounds.ticksPerWindow, Bounds.treeTicksMax] at hf <;> exact ⟨hf.2.1, by have := hf.2.2; omega⟩
       rw [h1]; unfold counted; rw [if_neg (by omega)]
@@ -156,7 +159,8 @@ theorem check_build {E : Env D} {w : World D} (hr : w.RefusalsOk E) (m : D) :
   unfold check build
   dsimp only
   rw [if_neg (fun h => h rfl), if_neg (fun h => h (World.roots_eq E w).symm),
-    if_pos ⟨counted_build hr (fun _ h => by cases h), counted_build hr (fun _ h => by cases h),
-      counted_build hr (fun _ h => by cases h)⟩]
+    if_pos ⟨counted_build hr (fun _ h => by cases h) (fun _ h => by cases h),
+      counted_build hr (fun _ h => by cases h) (fun _ h => by cases h),
+      counted_build hr (fun _ h => by cases h) (fun _ h => by cases h)⟩]
 
 end Nanodregg.Protocol.Health

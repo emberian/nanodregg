@@ -251,6 +251,7 @@ theorem settle_open_not_final {X : Ctx D} {w w' : World D} {c : Call D} {t : Tur
   | some leaf =>
       cases leaf with
       | refused h code m => simp [hr] at hra
+      | head _ _ => simp [ofReceipt, hnf, hnot]
       | count n => simp [ofReceipt, hnf, hnot]
 
 end Member

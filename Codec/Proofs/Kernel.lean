@@ -113,6 +113,26 @@ theorem touch_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
   · intro y h; exact h
   · intro y h; exact h
 
+/-- A causal pin's fit (KERNEL-79): a `u64` step count and a fitting digest. -/
+def CausalPin.Fits (PD : D → Prop) (p : CausalPin D) : Prop := p.steps < 2 ^ 64 ∧ PD p.chain
+
+theorem causalPin_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (CausalPin.Fits PD) (causalPin dc) := by
+  unfold causalPin
+  refine (refine_lawfulOn (product_lawfulOn nat64_lawfulOn hd) "kernel/causal-pin" ?_ ?_).mono ?_ ?_
+  · intro y _; rfl
+  · intro x y h; simp at h; subst h; rfl
+  · intro y h; exact h
+  · intro y h; exact h
+
+theorem causalPin_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : CausalPin D) :
+    (causalPin dc).size p = 8 + 32 := by
+  simp [causalPin, refine, product, nat64, hdc]
+
+theorem optionCausal_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (o : Option (CausalPin D)) :
+    (option (causalPin dc)).size o = if o.isSome then 1 + counterWeight + digestWeight else 1 := by
+  cases o <;> simp [option, causalPin_size hdc, counterWeight, digestWeight]
+
 def Turn.Fits (PD : D → Prop) (t : Turn D) : Prop :=
   PD t.txId ∧ t.notBefore < 2 ^ 64 ∧ t.validUntil < 2 ^ 64 ∧
   (t.touches.length ≤ Bounds.touchesMax ∧ ∀ x ∈ t.touches, Touch.Fits PD x) ∧
@@ -121,7 +141,7 @@ def Turn.Fits (PD : D → Prop) (t : Turn D) : Prop :=
   t.charge < 2 ^ 64 ∧ t.event.size ≤ Bounds.eventBytesMax ∧
   (t.rows.length ≤ Bounds.rowsMax ∧ ∀ x ∈ t.rows, RowTouch.Fits PD x) ∧
   (t.ranges.length ≤ Bounds.rangesMax ∧ ∀ q ∈ t.ranges, RangeRead.Fits PD q) ∧
-  PD t.member ∧ t.ticks < 2 ^ 64
+  PD t.member ∧ t.ticks < 2 ^ 64 ∧ OptionFits (CausalPin.Fits PD) t.causal
 
 theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Turn.Fits PD) (turn dc) := by
@@ -134,7 +154,8 @@ theorem turn_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
             (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
               (product_lawfulOn (rawList_lawfulOn (rowTouch_lawfulOn hd) _ (by decide))
                 (product_lawfulOn (rawList_lawfulOn (rangeRead_lawfulOn hd) _ (by decide))
-                  (product_lawfulOn hd nat64_lawfulOn)))))))))))
+                  (product_lawfulOn hd (product_lawfulOn nat64_lawfulOn
+                    (option_lawfulOn (causalPin_lawfulOn hd))))))))))))))
     "kernel/turn" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
@@ -294,7 +315,8 @@ theorem body_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
 def Unsigned.Fits (PD : D → Prop) (u : Unsigned D) : Prop :=
   PD u.world ∧ PD u.member ∧ BytesFits u.key ∧ u.notBefore < 2 ^ 64 ∧ u.validUntil < 2 ^ 64 ∧
   ListFits (fun p => PD p.1 ∧ PD p.2) u.pins ∧ u.maxCharge < 2 ^ 64 ∧ Body.Fits PD u.body ∧
-  ListFits (fun p => RowSlot.Fits PD p.1 ∧ PD p.2) u.rowPins ∧ ListFits (RangeRead.Fits PD) u.ranges
+  ListFits (fun p => RowSlot.Fits PD p.1 ∧ PD p.2) u.rowPins ∧ ListFits (RangeRead.Fits PD) u.ranges ∧
+  OptionFits (CausalPin.Fits PD) u.causal
 
 theorem unsigned_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Unsigned.Fits PD) (unsigned dc) := by
@@ -304,7 +326,8 @@ theorem unsigned_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc
       (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawList_lawfulOn (product_lawfulOn hd hd) _ (by decide))
         (product_lawfulOn nat64_lawfulOn (product_lawfulOn (body_lawfulOn hd)
           (product_lawfulOn (rawList_lawfulOn (product_lawfulOn (rowKey_lawfulOn hd) hd) _ (by decide))
-            (rawList_lawfulOn (rangeRead_lawfulOn hd) _ (by decide)))))))))))
+            (product_lawfulOn (rawList_lawfulOn (rangeRead_lawfulOn hd) _ (by decide))
+              (option_lawfulOn (causalPin_lawfulOn hd))))))))))))
     "kernel/unsigned" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; simp at h; subst h; rfl
@@ -339,11 +362,11 @@ canonical and `turnBytes` is injective on admitted turns (with `turn_lawfulOn`).
 theorem checkBounds_fits (t : Turn D) (h : checkBounds t = .ok ()) : Turn.Fits (fun _ => True) t := by
   simp only [checkBounds, req, decide_eq_true_eq] at h
   simp only [bind_req, ite_req, List.all_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨hT, hOps, hC, hN, hE, hS, ⟨hKc, hKt⟩, ⟨hVc, hVt⟩, _, _, hTk, ⟨⟨⟨hVu, hNb⟩, hCh⟩, hKind⟩, hR⟩ := h
+  obtain ⟨hT, hOps, hC, hN, hE, hS, ⟨hKc, hKt⟩, ⟨hVc, hVt⟩, _, _, hTk, ⟨⟨⟨hVu, hNb⟩, hCh⟩, hKind⟩, hR, hCz⟩ := h
   refine ⟨trivial, by simpa [Bounds.counterLimit] using hNb, by simpa [Bounds.counterLimit] using hVu,
     ⟨hT, fun x hx => ⟨trivial, trivial, ?_⟩⟩, ⟨hC, fun c hc => ⟨trivial, ?_, hS c hc, fun p hp => ⟨?_, hVc c hc p hp⟩⟩⟩,
     ⟨hN, fun _ _ => trivial⟩, by simpa [Bounds.counterLimit] using hCh, hE, ?_, ?_, trivial,
-    by unfold Bounds.treeTicksMax at hTk; omega⟩
+    by unfold Bounds.treeTicksMax at hTk; omega, ?_⟩
   · have hops := hOps x hx
     have hk := hKt x hx
     have hv := hVt x hx
@@ -370,6 +393,11 @@ theorem checkBounds_fits (t : Turn D) (h : checkBounds t = .ok ()) : Turn.Fits (
     · cases act <;> simp_all [RowAct.Fits, Bounds.counterLimit]
   · exact ⟨hR.1.1.2, fun q hq => let h := hR.2 q hq
       ⟨trivial, h.1.1, h.1.2, by simpa [Bounds.counterLimit] using h.2, trivial⟩⟩
+  · cases hc : t.causal with
+    | none => trivial
+    | some p =>
+      rw [hc] at hCz
+      exact ⟨by simpa [Bounds.counterLimit] using hCz, trivial⟩
 
 /-! ## The Env/Ctx facts -/
 
@@ -456,17 +484,19 @@ theorem touch_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (x : Touch D) :
 /-- **The record's size is the turn's log weight**, for any digest codec of 32 bytes (the deployed one). -/
 theorem turn_size_logWeight {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (t : Turn D) :
     (turn dc).size t = t.logWeight := by
+  cases hc : t.causal <;>
   simp [turn, Turn.logWeight, digestWeight, counterWeight, headerWeight, refine, product, nat64, rawList,
-    rawBytes, hdc, foldl_add_size, touch_size hdc, cell_size, rowTouch_size hdc, rangeRead_size hdc]
+    rawBytes, hdc, foldl_add_size, touch_size hdc, cell_size, rowTouch_size hdc, rangeRead_size hdc,
+    hc, option, causalPin_size hdc] <;>
   omega
 
 
 /-- Tooth: the digest premise is load-bearing — with a length-prefixed digest (4 bytes for the empty
 one) the empty turn's record is 64 bytes (two empty digests, the id and the member), not its log
-weight 120. -/
+weight 120, and a causal pin's absent tag one byte more of each (KERNEL-79). -/
 theorem turn_size_needs_digest32 :
-    (turn (rawBytes 64)).size (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], [], ByteArray.empty, 0⟩ : Turn ByteArray) = 64 ∧
-      Turn.logWeight (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], [], ByteArray.empty, 0⟩ : Turn ByteArray) = 120 := by
+    (turn (rawBytes 64)).size (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], [], ByteArray.empty, 0, none⟩ : Turn ByteArray) = 65 ∧
+      Turn.logWeight (⟨ByteArray.empty, 0, 0, [], [], [], 0, ByteArray.empty, [], [], ByteArray.empty, 0, none⟩ : Turn ByteArray) = 121 := by
   decide
 
 end Nanodregg.Codec.Kernel

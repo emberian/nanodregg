@@ -460,9 +460,13 @@ theorem submit_of_admit {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
       cases hp : checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges with
       | ok u => cases u; rfl
       | error r => exact absurd ha (checkPins_error_never_admitted hcr hp hr0 w')
+    -- the causal pin (KERNEL-79): admission checked the Turn's, which is the call's
+    have hcz : checkCausal X.env w c.unsigned.causal = .ok () := by
+      obtain ⟨posts, hk, -⟩ := admit_ok ha
+      rw [← deriveTurn_causal hr]; exact hk.causal
     unfold submit
     rw [hjn]
-    simp only [hrf, hs, hp, hr, ha]
+    simp only [hrf, hs, hp, hcz, hr, ha]
 
 /-- **What `rederive` takes an event to**, by its kind: a Turn event to `submit`'s Turn, a refusal
 event to the record `judge` makes, a cancel event to the record `cancel` makes under its signature;

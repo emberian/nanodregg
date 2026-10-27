@@ -135,6 +135,17 @@ inductive Reject (D : Type)
   (DESIGN-OBS §1.3, the meter): a rate limit on compute as `refusalBudget` is on refusals; recorded
   (class (A): the call was signed and its pins compared) and final within its window -/
   | ticksBudget (member : D)
+  /-- the Turn's causal pin (KERNEL-79) names step `steps`, where this World's chain is another: the
+  signer planned on another history. Never recorded: the chain at a passed step never changes along a
+  fold, so the pin is forked at every World this one reaches (final without a record, like a `stale`
+  pin BEHIND) -/
+  | forkedPin (steps : Nat)
+  /-- the causal pin names a step this World has not reached: the signer saw a longer history. Never
+  recorded, and not final (a World can reach the step) -/
+  | pinAhead (steps : Nat)
+  /-- the causal pin names a step older than the ring of recent heads (`Bounds.pinWindow`): the World
+  can no longer say whether it is its own. Never recorded; refused, never admitted unchecked -/
+  | pinExpired (steps : Nat)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -180,6 +191,9 @@ def Reject.name {D : Type} : Reject D → String
   | .missingRow _ => "missingRow"
   | .refusalsFull => "refusalsFull"
   | .ticksBudget _ => "ticksBudget"
+  | .forkedPin _ => "forkedPin"
+  | .pinAhead _ => "pinAhead"
+  | .pinExpired _ => "pinExpired"
 
 variable {D : Type} [Ord D]
 
@@ -227,6 +241,13 @@ inductive MeterSlot (D : Type)
   | ticks (member : D) (win : UInt64)
   deriving DecidableEq
 
+/-- A key of the ring of recent chain heads (KERNEL-79): position `j` of the ring (`steps % pinWindow`).
+`origin` is the World's, a FILLER, as `total`'s is: every window key is one kind byte, one digest and
+eight bytes. The window trie's THIRD kind: `chainAt` reads it; `refusalAt` and `meterAt` cannot name it. -/
+inductive ChainSlot (D : Type)
+  | ring (origin : D) (j : UInt64)
+  deriving DecidableEq
+
 /-- A key of the window trie (the World's `refusals`): the refusal window's keys (KERNEL-44) or the
 meter's (KERNEL-68) — two kinds of one trie under one root, routed by one key width (kind bytes 0–2
 and 3, `refusalKeyBytes`), pruned together at the window's end. Each reader is typed by its kind
@@ -236,6 +257,7 @@ their statements; the meter has `admit_meterAt` and `Frame.meter` of its own). -
 inductive WindowSlot (D : Type)
   | refusal (k : RefusalSlot D)
   | meter (k : MeterSlot D)
+  | chain (k : ChainSlot D)
   deriving DecidableEq
 
 /-- What the refusals trie holds: at a `tx` key, the height the call was refused AT (the World's
@@ -247,6 +269,8 @@ refusals the World has had recorded in that window. -/
 inductive RefusalLeaf (D : Type)
   | refused (h code : Nat) (member : D)
   | count (n : Nat)
+  /-- a ring leaf (KERNEL-79): the chain the World had at step `steps` -/
+  | head (steps : Nat) (chain : D)
   deriving DecidableEq
 
 abbrev Refusals (D : Type) := Trie.T (WindowSlot D) (RefusalLeaf D) D
@@ -503,6 +527,7 @@ def refusalKeyBytes (E : Env D) : WindowSlot D → ByteArray
   | .refusal (.count m win) => ⟨#[1]⟩ ++ E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
   | .refusal (.total o win) => ⟨#[2]⟩ ++ E.bytes o ++ Nanodregg.Codec.Stream.u64.bytes win
   | .meter (.ticks m win) => ⟨#[3]⟩ ++ E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
+  | .chain (.ring o j) => ⟨#[4]⟩ ++ E.bytes o ++ Nanodregg.Codec.Stream.u64.bytes j
 
 /-- What a refusals leaf commits to: a kind byte (refused 0, count 1), then its counters as eight
 little-endian bytes each, then (refused) the charged member's bytes. -/
@@ -510,6 +535,7 @@ def refusalLeafBytes (E : Env D) : RefusalLeaf D → ByteArray
   | .refused h code m => ⟨#[0]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes h ++ Nanodregg.Codec.Stream.nat64.bytes code ++
       E.bytes m
   | .count n => ⟨#[1]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes n
+  | .head s c => ⟨#[2]⟩ ++ Nanodregg.Codec.Stream.nat64.bytes s ++ E.bytes c
 
 def refusalDigest (E : Env D) (l : RefusalLeaf D) : D := E.hash domRefusal (refusalLeafBytes E l)
 
@@ -557,6 +583,7 @@ def RefusalLeaf.fits {D : Type} : WindowSlot D → RefusalLeaf D → Bool
   | .refusal (.count _ _), .count _ => true
   | .refusal (.total _ _), .count _ => true
   | .meter (.ticks _ _), .count _ => true
+  | .chain (.ring _ _), .head _ _ => true
   | _, _ => false
 
 /-! ## Rows (KERNEL-46, LANG-44): the fourth instance of the one trie, and its two pin kinds -/
@@ -724,6 +751,9 @@ def rangePre (E : Env D) (parent : D) (rel width : Nat) (pre : ByteArray) (floor
 /-- The window a height counts refusals in. -/
 def refusalWindow (H : Nat) : UInt64 := UInt64.ofNat (H / Bounds.windowMax)
 
+/-- The ring position of step `s` (KERNEL-79). -/
+def ringSlot (s : Nat) : UInt64 := UInt64.ofNat (s % Bounds.pinWindow)
+
 /-- A slot holds the leaf of its kind. -/
 def Leaf.fits {D : Type} : Slot D → Leaf → Bool
   | .cell _, .entry _ => true
@@ -827,6 +857,15 @@ def meterAt (E : Env D) (w : World D) (k : MeterSlot D) : Option Nat :=
   match w.refusals.get (refusalSpec E) (.meter k) with
   | some (.count n) => some n
   | _ => none
+
+/-- The chain this World had at step `s` (KERNEL-79): its own chain at its own step count, the ring's
+leaf for one of the last `Bounds.pinWindow` steps before it, nothing for any other step. Typed by its
+kind, as `refusalAt` and `meterAt` are by theirs. -/
+def chainAt [DecidableEq D] (E : Env D) (w : World D) (s : Nat) : Option D :=
+  if s = w.steps then some w.chain
+  else match w.refusals.get (refusalSpec E) (.chain (.ring w.origin (ringSlot s))) with
+    | some (.head s' c) => if s' = s then some c else none
+    | _ => none
 
 /-- Has the nullifier been spent? -/
 def isSpent (E : Env D) (w : World D) (n : D) : Bool :=
@@ -961,6 +1000,8 @@ def checkBounds (t : Turn D) : Except (Reject D) Unit := do
           | _ => true)) &&
        (t.ranges.all fun q => decide (q.rel < 256) && decide (q.pre.size ≤ Bounds.keyBytesMax) &&
           decide (q.most < Bounds.counterLimit))) (.overBound .rows)
+  -- the causal pin's step count is a `u64` (KERNEL-79)
+  req (t.causal.all fun p => decide (p.steps < Bounds.counterLimit)) (.overBound .counter)
 
 variable [DecidableEq D]
 
@@ -1011,6 +1052,22 @@ def commitMeter (E : Env D) (w : World D) (t : Turn D) : Refusals D :=
   if t.ticks = 0 then w.refusals
   else w.refusals.insert (refusalSpec E) (.meter (.ticks t.member (refusalWindow (w.height + 1))))
     (.count (ticksUsed E w t.member + t.ticks))
+
+/-- A causal pin against the World (KERNEL-79): none passes; a pin passes when the World's chain at its
+step is the pin's (`chainAt`); otherwise it names the step: `pinAhead` past the World's steps,
+`forkedPin` where the World holds another chain there, `pinExpired` where the ring no longer reaches. -/
+def checkCausal [DecidableEq D] (E : Env D) (w : World D) : Option (CausalPin D) → Except (Reject D) Unit
+  | none => .ok ()
+  | some p =>
+    if w.steps < p.steps then .error (.pinAhead p.steps)
+    else match w.chainAt E p.steps with
+      | some c => req (decide (c = p.chain)) (.forkedPin p.steps)
+      | none => .error (.pinExpired p.steps)
+
+/-- The ring after a step (KERNEL-79): the chain the World leaves, at the step it leaves, written at
+that step's ring position (overwriting the leaf `Bounds.pinWindow` steps older). One path per step. -/
+def ringPush (E : Env D) (w : World D) (r : Refusals D) : Refusals D :=
+  r.insert (refusalSpec E) (.chain (.ring w.origin (ringSlot w.steps))) (.head w.steps w.chain)
 
 /-- The step counter stays below `2^64` (KERNEL-47; every step, a Turn or a refusal, checks it), so
 every reached World's `steps` fits CODEC's `u64`. -/
@@ -1497,6 +1554,7 @@ def checkWith (E : Env D) (w : World D) (t : Turn D) : Except (Reject D) (List (
   checkWindow w t
   checkJournal E w t
   checkShape t
+  checkCausal E w t.causal
   let posts := (← mapEx (touchCheck E w) t.touches).reduceOption
   checkValue E t posts
   checkNullifiers E w t
@@ -1587,6 +1645,7 @@ def refusalFits (height : Nat) : WindowSlot D → RefusalLeaf D → Bool
   | .refusal (.total _ win), .count n =>
       decide (win = refusalWindow height ∧ 1 ≤ n ∧ n ≤ Bounds.refusalsPerWindowMax)
   | .meter (.ticks _ win), .count n => decide (win = refusalWindow height ∧ 1 ≤ n ∧ n ≤ Bounds.ticksPerWindow)
+  | .chain (.ring _ j), .head s _ => decide (s < Bounds.counterLimit ∧ j = ringSlot s)
   | _, _ => false
 
 /-- A refusals listing a World at `height` can hold (KERNEL-47; the twin of `journalFits`, for CODEC's
@@ -1615,11 +1674,13 @@ def commitJournal (E : Env D) (w : World D) (t : Turn D) : Journal D :=
 leaf while `kept` (KERNEL-33's rule: it was refused at `h` inside its window, so it outlives every
 height it could be admitted at); a count or a total only for the current window. -/
 def keptRefusal (H : Nat) : WindowSlot D → RefusalLeaf D → Bool
+  | .chain _, _ => true
   | .refusal (.count _ win), _ => decide (win = refusalWindow H)
   | .refusal (.total _ win), _ => decide (win = refusalWindow H)
   | .meter (.ticks _ win), _ => decide (win = refusalWindow H)
   | _, .refused h _ _ => decide (H < h + 2 * Bounds.windowMax)
   | _, .count _ => false
+  | _, .head _ _ => false
 
 /-- The refusals at height `H`: pruned with the journal, at every multiple of `Bounds.windowMax`, by
 the same canonical `Trie.retainAt`; unchanged between multiples. -/
@@ -1631,7 +1692,7 @@ can fail failed in `checkWith`. -/
 def commitWith (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D)) (rr : Rows D × Nat) : World D :=
   let trie := commitTrie E w t posts
   let journal := commitJournal E w t
-  let refusals := pruneRefusals E (w.height + 1) (commitMeter E w t)
+  let refusals := ringPush E w (pruneRefusals E (w.height + 1) (commitMeter E w t))
   let rows := rr.1
   { trie
     journal
@@ -1670,7 +1731,7 @@ private theorem checkWith_rows {E : Env D} {w : World D} {t : Turn D} {posts : L
     rowsRun E w t = .ok rr := by
   unfold checkWith at h
   simp only [bind_ok_iff] at h
-  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, raw, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, rr', hrw, ⟨⟩, -,
+  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, raw, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, rr', hrw, ⟨⟩, -,
     ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h9⟩ := h
   simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h9
   rw [← h9.2]; exact hrw
@@ -1748,6 +1809,11 @@ def meterKeyOne : WindowSlot D × RefusalLeaf D → Nat
   | (.meter _, _) => 1
   | _ => 0
 
+/-- 1 at a ring key, else 0 (KERNEL-79): what bounds the window trie's ring of recent heads. -/
+def chainKeyOne : WindowSlot D × RefusalLeaf D → Nat
+  | (.chain _, _) => 1
+  | _ => 0
+
 /-- 1 at a refusal recorded in window `k` (any member), else 0 (KERNEL-55 R1). -/
 def refusedWin (k : Nat) : WindowSlot D × RefusalLeaf D → Nat
   | (.refusal (.tx _), .refused h _ _) => if (h - 1) / Bounds.windowMax = k then 1 else 0
@@ -1798,7 +1864,9 @@ by the check alone (`refusals_bounded`). Below window 2 the two clauses truncate
 record can be of a window outside the three (`refusal_window_range`), so nothing is dropped. KERNEL-68: the
 meter leaves are at most one more than the heights elapsed in the current window (`height % windowMax + 1`:
 one Turn lands per height and writes at most one meter leaf; the window's start prunes the rest), so the
-trie's size stays bounded with the meter in it (`refusals_bounded`). One pass to tally, one
+trie's size stays bounded with the meter in it (`refusals_bounded`). KERNEL-79: every ring key is
+under the World's origin (a ring position is below `Bounds.pinWindow` by `refusalFits`), so the ring
+holds at most `pinWindow` leaves. One pass to tally, one
 pass over the listing, one lookup per entry. CODEC's `kernel/refusals-counted` refusal. -/
 def refusalsCounted [DecidableEq D] (E : Env D) (w : World D) : Bool :=
   let l := w.refusals.toList
@@ -1816,6 +1884,8 @@ def refusalsCounted [DecidableEq D] (E : Env D) (w : World D) : Bool :=
       -- cannot re-tally it (the fold theorem is its truth; a received base trusts it as it trusts
       -- every cell); `refusalFits` bounds its value and window
       | (.meter _, _) => true
+      -- a ring leaf (KERNEL-79): under the World's origin, so the ring has one key per position
+      | (.chain (.ring o _), _) => decide (o = w.origin)
       | (.refusal (.tx _), .refused h _ m) =>
           !decide ((h - 1) / Bounds.windowMax = j) ||
             ((w.refusalAt E (.count m (refusalWindow w.height))).isSome &&
@@ -1857,7 +1927,7 @@ def commitRefusals (E : Env D) (w : World D) (r : Refused D) : Refusals D :=
 /-- The World after a checked refusal: only the refusals, the step counter and the chain move. The
 cells, the journal, the height and the allowance are untouched (`refuse_frame`). -/
 def commitRefusal (E : Env D) (w : World D) (r : Refused D) : World D :=
-  let refusals := commitRefusals E w r
+  let refusals := ringPush E w (commitRefusals E w r)
   { w with
     refusals
     steps := w.steps + 1

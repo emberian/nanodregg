@@ -75,6 +75,8 @@ structure Params (D : Type) [Ord D] where
   refusals forgotten) while answering it `refused NAME` (a plant: KERNEL-44's A→B→A defect, as a
   writer that lies to its client) -/
   admitsRecorded : Bool := false
+  /-- the writer admits a pinned call whose causal pin does not hold on its World (KERNEL-79) -/
+  admitsForkedPin : Bool := false
   /-- every page states its TIP as the newest base, with the sealed base's digest (a plant: a
   writer that lies about where its base is, PROTOCOL-47) -/
   lieBase : Bool := false
@@ -114,6 +116,29 @@ def admitRecorded (X : Ctx D) (w : World D) (f : Frame) : Option (Answer (World 
         ((codeName code).getD "refusedFinal").toUTF8)
   | .error _ => none
 
+/-- The `admitsForkedPin` plant's submit (KERNEL-79): a pinned call whose pin does not hold on the
+writer's World is committed anyway. The Turn is the one derived from the signed call, checked with its
+pin set aside and committed WITH its pin, so the log carries the signed call a member re-derives.
+`none` for any other frame. -/
+def admitForkedPin (X : Ctx D) (w : World D) (f : Frame) : Option (Answer (World D) (Kernel.Step D)) := do
+  if f.op ≠ Op.submit.code then none
+  let c ← X.decodeCall f.payload
+  let p ← c.unsigned.causal
+  match checkCausal X.env w (some p) with
+  | .ok () => none
+  | .error _ =>
+    match deriveTurn X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c with
+    | .error _ => none
+    | .ok t =>
+      -- checked with its pin set aside (and the charge of that unpinned Turn, which `checkCharge` holds
+      -- to its weight); committed WITH its pin
+      let t0 := { t with causal := none }
+      match check X.env w { t0 with charge := t0.weight } with
+      | .ok posts =>
+        let w' := commit X.env w t posts
+        some (.commit (.turn t) w' Status.ok.code (Host.receipt X w'.height (turnDigest X.env t)))
+      | .error _ => none
+
 /-- `Host.handle`, except under a plant: `openLog` pages a `log` envelope that decodes without
 `Envelope.check`; `forgetSpent` judges a submit on the World with its spent set forgotten (and
 keeps the World that reaches); `admitsRecorded` commits a recorded call. -/
@@ -131,7 +156,8 @@ def machine (P : Params D) : Machine (World D) (Kernel.Step D) Frame D where
         | _ => Host.handle P.X w f
       | none => Host.handle P.X w f
     else if P.forgetSpent && f.op = Op.submit.code then Host.handle P.X (unspend P.X.env w) f
-    else match (if P.admitsRecorded then admitRecorded P.X w f else none) with
+    else match (if P.admitsRecorded then admitRecorded P.X w f
+        else if P.admitsForkedPin then admitForkedPin P.X w f else none) with
     | some a => a
     | none =>
     match Host.handle P.X w f with

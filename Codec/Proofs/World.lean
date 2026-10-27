@@ -184,12 +184,14 @@ def WindowSlot.Fits (PD : D → Prop) : WindowSlot D → Prop
   | .refusal (.count m _) => PD m
   | .refusal (.total o _) => PD o
   | .meter (.ticks m _) => PD m
+  | .chain (.ring o _) => PD o
 
-abbrev RefusalSlotWireFits (PD : D → Prop) : (s : Fin 4) → RefusalSlotF D s → Prop
+abbrev RefusalSlotWireFits (PD : D → Prop) : (s : Fin 5) → RefusalSlotF D s → Prop
   | 0 => PD
   | 1 => fun p => PD p.1 ∧ True
   | 2 => fun p => PD p.1 ∧ True
   | 3 => fun p => PD p.1 ∧ True
+  | 4 => fun p => PD p.1 ∧ True
 
 omit [Ord D] in
 theorem refusalSlotWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
@@ -198,14 +200,15 @@ theorem refusalSlotWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulO
   | 1 => product_lawfulOn hd u64_lawful.on
   | 2 => product_lawfulOn hd u64_lawful.on
   | 3 => product_lawfulOn hd u64_lawful.on
+  | 4 => product_lawfulOn hd u64_lawful.on
 
 omit [Ord D] in
 theorem refusalSlot_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (WindowSlot.Fits PD) (refusalSlot dc) := by
   unfold refusalSlot
-  refine (refine_lawfulOn (choice_lawfulOn 4 (by decide) (refusalSlotWire_lawfulOn hd)) "kernel/refusal-slot"
+  refine (refine_lawfulOn (choice_lawfulOn 5 (by decide) (refusalSlotWire_lawfulOn hd)) "kernel/refusal-slot"
     ?_ ?_).mono ?_ ?_
-  · intro y _; rcases y with k | k <;> cases k <;> rfl
+  · intro y _; rcases y with k | k | k <;> cases k <;> rfl
   · intro x y h
     obtain ⟨s, v⟩ := x
     match s, v, h with
@@ -213,32 +216,39 @@ theorem refusalSlot_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD
     | 1, (m, w), h => simp at h; subst h; rfl
     | 2, (o, w), h => simp at h; subst h; rfl
     | 3, (m, w), h => simp at h; subst h; rfl
-  · intro y h; rcases y with k | k
+    | 4, (o, j), h => simp at h; subst h; rfl
+  · intro y h; rcases y with k | k | k
     · cases k with
       | tx i => exact h
       | count m w => exact h.1
       | total o w => exact h.1
     · cases k with
       | ticks m w => exact h.1
-  · intro y h; rcases y with k | k
+    · cases k with
+      | ring o j => exact h.1
+  · intro y h; rcases y with k | k | k
     · cases k with
       | tx i => exact h
       | count m w => exact ⟨h, trivial⟩
       | total o w => exact ⟨h, trivial⟩
     · cases k with
       | ticks m w => exact ⟨h, trivial⟩
+    · cases k with
+      | ring o j => exact ⟨h, trivial⟩
 
 /-- A refusals leaf's counters below 2^64 (what the leaf digest needs to be injective,
 `refusalDigest_inj`). -/
 def RefusalLeaf.Fits : RefusalLeaf D → Prop
   | .refused h c _ => h < 2 ^ 64 ∧ c < 2 ^ 64
   | .count n => n < 2 ^ 64
+  | .head s _ => s < 2 ^ 64
 
 /-- A refusals leaf in the leaf codec's domain: its counters below 2^64, and a refused leaf's member
 in the digest codec's. -/
 def RefusalLeaf.WireFits (PD : D → Prop) : RefusalLeaf D → Prop
   | .refused h c m => (h < 2 ^ 64 ∧ c < 2 ^ 64) ∧ PD m
   | .count n => n < 2 ^ 64
+  | .head s c => s < 2 ^ 64 ∧ PD c
 
 omit [Ord D] in
 /-- A leaf whose counters fit is in the leaf codec's domain wherever every digest is in the digest
@@ -247,22 +257,25 @@ theorem RefusalLeaf.wireFits_of_fits {PD : D → Prop} (hpd : ∀ d, PD d) :
     ∀ {l : RefusalLeaf D}, RefusalLeaf.Fits l → RefusalLeaf.WireFits PD l
   | .refused _ _ m, h => ⟨h, hpd m⟩
   | .count _, h => h
+  | .head _ c, h => ⟨h, hpd c⟩
 
-abbrev RefusalLeafWireFits (PD : D → Prop) : (s : Fin 2) → RefusalLeafF D s → Prop
+abbrev RefusalLeafWireFits (PD : D → Prop) : (s : Fin 3) → RefusalLeafF D s → Prop
   | 0 => fun p => p.1 < 2 ^ 64 ∧ p.2.1 < 2 ^ 64 ∧ PD p.2.2
   | 1 => fun n => n < 2 ^ 64
+  | 2 => fun p => p.1 < 2 ^ 64 ∧ PD p.2
 
 omit [Ord D] in
 theorem refusalLeafWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     ∀ s, LawfulOn (RefusalLeafWireFits PD s) (refusalLeafWire dc s)
   | 0 => product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn hd)
   | 1 => nat64_lawfulOn
+  | 2 => product_lawfulOn nat64_lawfulOn hd
 
 omit [Ord D] in
 theorem refusalLeaf_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (RefusalLeaf.WireFits PD) (refusalLeaf dc) := by
   unfold refusalLeaf
-  refine (refine_lawfulOn (choice_lawfulOn 2 (by decide) (refusalLeafWire_lawfulOn hd)) "kernel/refusal-leaf"
+  refine (refine_lawfulOn (choice_lawfulOn 3 (by decide) (refusalLeafWire_lawfulOn hd)) "kernel/refusal-leaf"
     ?_ ?_).mono ?_ ?_
   · intro y _; cases y <;> rfl
   · intro x y h
@@ -270,12 +283,15 @@ theorem refusalLeaf_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD
     match s, v, h with
     | 0, (a, c, m), h => simp at h; subst h; rfl
     | 1, n, h => simp at h; subst h; rfl
+    | 2, (s, c), h => simp at h; subst h; rfl
   · intro y h; cases y with
     | refused a c m => exact ⟨⟨h.1, h.2.1⟩, h.2.2⟩
     | count n => exact h
+    | head s c => exact h
   · intro y h; cases y with
     | refused a c m => exact ⟨h.1.1, h.1.2, h.2⟩
     | count n => exact h
+    | head s c => exact h
 
 /-! ## The log's steps (KERNEL-47) -/
 
@@ -436,7 +452,7 @@ theorem refusalLeaf_fits_of_refusalsFits {H : Nat} {l : List (WindowSlot D × Re
   intro p hp
   have hq := List.all_eq_true.mp h p hp
   obtain ⟨k, v⟩ := p
-  rcases k with k | k <;> cases k <;> cases v <;> simp_all [RefusalLeaf.Fits, refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
+  rcases k with k | k | k <;> cases k <;> cases v <;> simp_all [RefusalLeaf.Fits, refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
     Bounds.ticksPerWindow, Bounds.treeTicksMax] <;>
     omega
 

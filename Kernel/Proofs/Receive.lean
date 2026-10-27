@@ -91,6 +91,26 @@ theorem sealTurn_ok {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List
     exact ⟨p, hp, of_decide_eq_true hpe⟩
   · simp at h
 
+/-- A sealed Turn carries the call's causal pin (KERNEL-79). -/
+theorem sealTurn_causal {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
+    {ns : List D} {rs : List (RowSlot D × RowAct)} {t : Turn D} {k : Nat} (h : sealTurn X c cr efs ns rs k = .ok t) :
+    t.causal = c.unsigned.causal := by
+  unfold sealTurn at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, _, _, _, h⟩ := h
+  split at h
+  · simp only [Except.ok.injEq] at h
+    subst h; rfl
+  · simp at h
+
+/-- A derived Turn carries the call's causal pin (KERNEL-79). -/
+theorem deriveTurn_causal {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
+    (h : deriveTurn X look rv c = .ok t) : t.causal = c.unsigned.causal := by
+  unfold deriveTurn at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨d, k⟩, _, h⟩ := h
+  exact sealTurn_causal h
+
 /-- A sealed Turn's row touches are what `rowTouchesOf` makes of the caller's row pins and the
 receiver's row effects, and its range reads are the caller's. -/
 theorem sealTurn_rows {X : Ctx D} {c : Call D} {cr : List (D × Cell)} {efs : List (D × Act)}
@@ -237,15 +257,17 @@ theorem submit_ok {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
         · simp at h
         · split at h
           · simp at h
-          · rename_i t' hd
-            split at h
+          · split at h
             · simp at h
-            · rename_i w'' ha
-              simp only [Except.ok.injEq, Prod.mk.injEq] at h
-              obtain ⟨rfl, rfl⟩ := h
-              refine ⟨hj, ?_, ha⟩
-              rw [receive_signed, hs]
-              exact hd
+            · rename_i t' hd
+              split at h
+              · simp at h
+              · rename_i w'' ha
+                simp only [Except.ok.injEq, Prod.mk.injEq] at h
+                obtain ⟨rfl, rfl⟩ := h
+                refine ⟨hj, ?_, ha⟩
+                rw [receive_signed, hs]
+                exact hd
 
 /-- **A retry is never re-judged.** A call already in the journal is `replayed` at its height,
 whatever the World and the call's own derivation would say now. -/

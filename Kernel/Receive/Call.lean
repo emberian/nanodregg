@@ -124,6 +124,9 @@ structure Unsigned (D : Type) where
   rowPins : List (RowSlot D × D) := []
   /-- the range reads the caller observed (the second pin kind), each at its listing's pin -/
   ranges : List (RangeRead D) := []
+  /-- the head the caller's World was at when it planned the call (KERNEL-79, the third pin kind):
+  `World.admit` admits the call only on a World whose chain at that step is this one -/
+  causal : Option (CausalPin D) := none
   deriving DecidableEq
 
 structure Call (D : Type) where
@@ -639,7 +642,7 @@ def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List (D × Cell
       creates,
       nullifiers, charge := 0,
       event := X.callBytes c, rows := rts, ranges := c.unsigned.ranges,
-      member := c.unsigned.member, ticks }
+      member := c.unsigned.member, ticks, causal := c.unsigned.causal }
   let t := { t0 with charge := t0.weight }
   if t.charge ≤ c.unsigned.maxCharge then .ok t else .error (.overPrice t.charge)
 

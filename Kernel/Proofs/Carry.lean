@@ -486,18 +486,27 @@ theorem deriveTurn_world_sep :
   rw [h0, h1] at this
   exact hne (Option.some.inj this)
 
-/-- **Admission is blind to the origin and the chain.** -/
-theorem check_origin_blind [DecidableEq D] {E : Env D} {w : World D} {t : Turn D} {o ch : D} :
-    check E { w with origin := o, chain := ch } t = check E w t := rfl
+/-- **Admission of an unpinned Turn is blind to the origin and the chain.** A Turn carrying a causal
+pin (KERNEL-79) reads the chain and the ring of recent heads, which sit under the origin: it is
+admitted only on the history it names, so its check is not blind to either. -/
+theorem check_origin_blind [DecidableEq D] {E : Env D} {w : World D} {t : Turn D} {o ch : D}
+    (ht : t.causal = none) :
+    check E { w with origin := o, chain := ch } t = check E w t := by
+  unfold check checkWith
+  rw [ht]
+  rfl
 
 /-- **A carry changes no admission but the refusals it forgets**: the carried World checks every
-turn as the exported one would with its recorded refusals dropped and its step counter restarted at
-its height (KERNEL-44: a carry carries no refusals; a call refused in the old World is `wrongWorld`
-in the new, KERNEL-24). -/
+unpinned turn as the exported one would with its recorded refusals dropped and its step counter
+restarted at its height (KERNEL-44: a carry carries no refusals; a call refused in the old World is
+`wrongWorld` in the new, KERNEL-24). A pinned turn (KERNEL-79) names a head of the old World's
+history, which the carried World does not hold: the carry forgets the ring with the refusals. -/
 theorem carry_check [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
-    (h : carry X name nonce w.origin w.carried = .ok w') (t : Turn D) :
+    (h : carry X name nonce w.origin w.carried = .ok w') (t : Turn D) (ht : t.causal = none) :
     check X.env w' t = check X.env { w with refusals := .empty, steps := w.height } t := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
+  unfold check checkWith
+  rw [ht]
   rfl
 
 end Nanodregg.Kernel.Receive

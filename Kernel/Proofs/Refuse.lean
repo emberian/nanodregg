@@ -220,22 +220,47 @@ theorem pruneRefusals_get {E : Env D} {H : Nat} {r : Refusals D} (hr : Trie.Cano
   · exact Trie.get_retainAt (refusalSpec E) _ [] hr (fun _ _ _ _ _ _ h => by simp at h) k
   · rfl
 
-/-- A Turn's commit prunes the refusals at the new height, over the meter leaf it bumped
-(`commitMeter`: unchanged for a Turn with no ticks, KERNEL-68). -/
-theorem commit_refusals {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} :
-    (commit E w t posts).refusals = pruneRefusals E (w.height + 1) (commitMeter E w t) := rfl
+/-! ### The ring of recent chain heads (KERNEL-79): the window trie's third kind -/
 
-/-- A Turn with no ticks leaves the refusals as before, but for the prune. -/
+/-- The ring's write touches no refusal-window key: the kinds are disjoint by constructor. -/
+theorem ringPush_get_refusal {E : Env D} {w : World D} {r : Refusals D} (k : RefusalSlot D) :
+    (ringPush E w r).get (refusalSpec E) (.refusal k) = r.get (refusalSpec E) (.refusal k) :=
+  Trie.get_insert_ne _ _ _ (by intro h; cases h)
+
+/-- The ring's write touches no meter key. -/
+theorem ringPush_get_meter {E : Env D} {w : World D} {r : Refusals D} (k : MeterSlot D) :
+    (ringPush E w r).get (refusalSpec E) (.meter k) = r.get (refusalSpec E) (.meter k) :=
+  Trie.get_insert_ne _ _ _ (by intro h; cases h)
+
+/-- The ring's write: the World's step and chain at its step's ring position, nothing else. -/
+theorem ringPush_get_chain {E : Env D} {w : World D} {r : Refusals D} (k : ChainSlot D) :
+    (ringPush E w r).get (refusalSpec E) (.chain k) =
+      if k = .ring w.origin (ringSlot w.steps) then some (.head w.steps w.chain)
+      else r.get (refusalSpec E) (.chain k) := by
+  unfold ringPush; rw [Trie.get_insert]
+  by_cases h : k = .ring w.origin (ringSlot w.steps)
+  · subst h; simp
+  · rw [if_neg (fun he => h (WindowSlot.chain.inj he)), if_neg h]
+
+theorem ringPush_canon {E : Env D} {w : World D} {r : Refusals D} (hr : Trie.Canon (refusalSpec E) 0 r) :
+    Trie.Canon (refusalSpec E) 0 (ringPush E w r) := Trie.canon_insert _ _ _ hr
+
+/-- A Turn's commit prunes the refusals at the new height, over the meter leaf it bumped
+(`commitMeter`: unchanged for a Turn with no ticks, KERNEL-68), then writes the ring (KERNEL-79). -/
+theorem commit_refusals {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)} :
+    (commit E w t posts).refusals = ringPush E w (pruneRefusals E (w.height + 1) (commitMeter E w t)) := rfl
+
+/-- A Turn with no ticks leaves the refusals as before, but for the prune and the ring. -/
 theorem commit_refusals_of_ticks_zero {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
-    (h : t.ticks = 0) : (commit E w t posts).refusals = pruneRefusals E (w.height + 1) w.refusals := by
+    (h : t.ticks = 0) : (commit E w t posts).refusals = ringPush E w (pruneRefusals E (w.height + 1) w.refusals) := by
   rw [commit_refusals]; unfold commitMeter; simp [h]
 
 theorem commitRefusal_refusals {E : Env D} {w : World D} {r : Refused D} :
-    (commitRefusal E w r).refusals =
-      ((w.refusals.insert (refusalSpec E) (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member)).insert
+    (commitRefusal E w r).refusals = ringPush E w
+      (((w.refusals.insert (refusalSpec E) (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member)).insert
         (refusalSpec E) (.refusal (.count r.member (refusalWindow w.height))) (.count (refusalCount E w r.member + 1))).insert
-        (refusalSpec E) (.refusal (.total w.origin (refusalWindow w.height))) (.count (refusalTotal E w + 1)) := by
-  show commitRefusals E w r = _
+        (refusalSpec E) (.refusal (.total w.origin (refusalWindow w.height))) (.count (refusalTotal E w + 1))) := by
+  show ringPush E w (commitRefusals E w r) = _
   unfold commitRefusals
   rw [Trie.insertAll_eq_foldl]; rfl
 
@@ -274,7 +299,7 @@ theorem commit_meterAt_self {E : Env D} {w : World D} {t : Turn D} {posts : List
       if t.ticks = 0 then w.meterAt E (.ticks t.member (refusalWindow (w.height + 1)))
       else some (ticksUsed E w t.member + t.ticks) := by
   unfold World.meterAt
-  rw [commit_refusals, pruneRefusals_get (commitMeter_canon hc)]
+  rw [commit_refusals, ringPush_get_meter, pruneRefusals_get (commitMeter_canon hc)]
   unfold commitMeter
   by_cases ht : t.ticks = 0
   · simp only [ht, ↓reduceIte]
@@ -299,7 +324,7 @@ theorem commit_meterAt_ne {E : Env D} {w : World D} {t : Turn D} {posts : List (
       if (w.height + 1) % Bounds.windowMax = 0 ∧ win ≠ refusalWindow (w.height + 1) then none
       else w.meterAt E (.ticks m win) := by
   unfold World.meterAt
-  rw [commit_refusals, pruneRefusals_get (commitMeter_canon hc), commitMeter_get_meter_ne hk]
+  rw [commit_refusals, ringPush_get_meter, pruneRefusals_get (commitMeter_canon hc), commitMeter_get_meter_ne hk]
   by_cases hz : (w.height + 1) % Bounds.windowMax = 0
   · simp only [hz, true_and, ↓reduceIte]
     by_cases hw : win = refusalWindow (w.height + 1)
@@ -318,14 +343,14 @@ theorem admit_refusalsCanon {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Re
   obtain ⟨_, _, rfl⟩ := admit_ok h
   unfold World.RefusalsCanon
   rw [commit_refusals]
-  exact pruneRefusals_canon (commitMeter_canon hc)
+  exact ringPush_canon (pruneRefusals_canon (commitMeter_canon hc))
 
 theorem refuse_refusalsCanon {E : Env D} {w w' : World D} {r : Refused D} (hc : w.RefusalsCanon E)
     (h : World.refuse E w r = .ok w') : w'.RefusalsCanon E := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   unfold World.RefusalsCanon
   rw [commitRefusal_refusals]
-  exact Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ hc))
+  exact ringPush_canon (Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ hc)))
 
 theorem step_refusalsCanon {E : Env D} {w w' : World D} {s : Step D} (hc : w.RefusalsCanon E)
     (h : World.step E w s = .ok w') : w'.RefusalsCanon E := by
@@ -363,7 +388,85 @@ theorem refuse_recorded {E : Env D} {w w' : World D} {r : Refused D} (h : World.
     w'.refusalAt E (.tx r.txId) = some (.refused (w.height + 1) r.code r.member) := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   unfold World.refusalAt
-  rw [commitRefusal_refusals]
+  rw [commitRefusal_refusals, ringPush_get_refusal]
   simp [Trie.get_insert]
+
+/-- The meter's write touches no ring key. -/
+theorem commitMeter_get_chain {E : Env D} {w : World D} {t : Turn D} (k : ChainSlot D) :
+    (commitMeter E w t).get (refusalSpec E) (.chain k) = w.refusals.get (refusalSpec E) (.chain k) := by
+  unfold commitMeter
+  split
+  · rfl
+  · exact Trie.get_insert_ne _ _ _ (by intro h; cases h)
+
+/-- **A step writes the ring at its own position and nothing else of it** (KERNEL-79): the leaf
+`(w.steps, w.chain)` at `ringSlot w.steps`; every other ring leaf is as before (the prune keeps every
+ring leaf; the meter and the refusal records are other kinds). -/
+theorem step_ring {E : Env D} {w w' : World D} {st : Step D} (hc : w.RefusalsCanon E)
+    (h : World.step E w st = .ok w') (k : ChainSlot D) :
+    w'.refusals.get (refusalSpec E) (.chain k) =
+      if k = .ring w.origin (ringSlot w.steps) then some (.head w.steps w.chain)
+      else w.refusals.get (refusalSpec E) (.chain k) := by
+  cases st with
+  | turn t =>
+    obtain ⟨posts, _, rfl⟩ := admit_ok h
+    rw [commit_refusals, ringPush_get_chain]
+    split
+    · rfl
+    · rw [pruneRefusals_get (commitMeter_canon hc), commitMeter_get_chain]
+      split
+      · cases w.refusals.get (refusalSpec E) (.chain k) <;> simp [Option.filter, keptRefusal]
+      · rfl
+  | refusal r =>
+    obtain ⟨_, rfl⟩ := refuse_ok h
+    rw [commitRefusal_refusals, ringPush_get_chain]
+    split
+    · rfl
+    · rw [Trie.get_insert_ne _ _ _ (by intro he; cases he), Trie.get_insert_ne _ _ _ (by intro he; cases he),
+        Trie.get_insert_ne _ _ _ (by intro he; cases he)]
+
+/-- **A pin passes exactly when it is not ahead and the World's chain at its step is the pin's**
+(KERNEL-79, `checkCausal`). -/
+theorem checkCausal_some_ok {E : Env D} {w : World D} {p : CausalPin D} :
+    checkCausal E w (some p) = .ok () ↔ p.steps ≤ w.steps ∧ w.chainAt E p.steps = some p.chain := by
+  constructor
+  · intro h
+    simp only [checkCausal] at h
+    split at h
+    · cases h
+    · rename_i hlt
+      refine ⟨Nat.le_of_not_lt hlt, ?_⟩
+      split at h
+      · rename_i c hc
+        unfold req at h
+        split at h
+        · rename_i he
+          rw [hc]
+          simpa using he
+        · cases h
+      · cases h
+  · rintro ⟨hle, hc⟩
+    simp only [checkCausal]
+    rw [if_neg (Nat.not_lt.mpr hle), hc]
+    simp [req]
+
+/-- A Turn's causal pin survives one more step on `w`: it names `w`'s own head, or a ring position the
+step does not overwrite (KERNEL-79). A pin `Bounds.pinWindow` steps behind the head is the one the next
+step's ring leaf replaces. -/
+def PinSurvives (w : World D) (t : Turn D) : Prop :=
+  ∀ p, t.causal = some p → p.steps = w.steps ∨ ringSlot p.steps ≠ ringSlot w.steps
+
+/-- **The ring across an admission** (KERNEL-79): at every step the World has passed, the admitted World
+answers the chain the World answered, but at the one ring position the step overwrites. -/
+theorem chainAt_admit {E : Env D} {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon E)
+    (h : World.admit E w t = .ok w') {s : Nat} (hs : s ≤ w.steps)
+    (hr : s = w.steps ∨ ringSlot s ≠ ringSlot w.steps) : w'.chainAt E s = w.chainAt E s := by
+  have hst := admit_steps h
+  have ho : w'.origin = w.origin := step_origin (s := .turn t) h
+  unfold World.chainAt
+  rw [if_neg (show ¬ s = w'.steps by omega), ho, step_ring (st := .turn t) hc h]
+  rcases hr with rfl | hne
+  · simp
+  · rw [if_neg (fun he => hne (ChainSlot.ring.inj he).2), if_neg (fun he => hne (by rw [he]))]
 
 end Nanodregg.Kernel

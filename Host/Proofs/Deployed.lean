@@ -23,9 +23,9 @@
 * `openWith_codecFits` (cv 01a14e33-3911) — every World the deployed open returns is in the World
   codec's domain, no premise: `Kept` carries the refusals (`RefusalsOk`, disjoint from the journal)
   and the step counter as well, and `openWith_listing_lt` bounds the cells, rows and refusals
-  listings together (a recorded refusal adds at most three refusals entries, `refuse_refusals_listing`,
-  paid for by 96 bytes of its step; an admission adds at most one meter leaf, paid by its member
-  digest, `admit_refusals_listing`). So
+  listings together (a recorded refusal adds at most four refusals entries, `refuse_refusals_listing`,
+  paid for by 128 bytes of its step; an admission adds at most one meter leaf and one ring leaf, paid
+  by its member and transaction digests, `admit_refusals_listing`). So
   the next seal's base reads back with no premise (`sealed_opens_deployed`);
 * `openWith_exportFile_ok` (HOST-28) — `host export` refuses no World the deployed open returns,
   no premise: the base World is in the World codec's domain because the codec read it
@@ -493,7 +493,7 @@ theorem codecFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.le
     have := hk.height
     omega
   · obtain ⟨k, _⟩ := p
-    rcases k with k | k <;> cases k <;> trivial
+    rcases k with k | k | k <;> cases k <;> trivial
 
 /-- The base World of a deployed open is `Kept`, and so is the World it opens to. -/
 theorem openWith_kept {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}
@@ -581,7 +581,7 @@ its transaction id or member, KERNEL-44). -/
 theorem refusals_entry_size (x : WindowSlot D × RefusalLeaf D) :
     33 ≤ (Codec.Stream.product (Codec.Kernel.refusalSlot Codec.Deployed.digestCodec) (Codec.Kernel.refusalLeaf Codec.Deployed.digestCodec)).size x := by
   obtain ⟨s, l⟩ := x
-  rcases s with s | s <;> cases s <;>
+  rcases s with s | s | s <;> cases s <;>
     simp [Codec.Stream.product, Codec.Kernel.refusalSlot, Codec.Kernel.refusalSlotWire, Codec.Stream.refine,
       Codec.Stream.choice, Codec.Stream.tagged, Codec.Stream.digest] <;> omega
 
@@ -662,13 +662,25 @@ theorem admit_cells_listing {w w' : World D} {t : Turn D} (hc : w.Canon X.env)
   rw [commit_trie_eq]
   omega
 
-/-- (ii'') **An admission grows the window trie's listing by at most one entry**, its member's
-meter leaf (KERNEL-68, `commitMeter`), and then prunes it (`pruneRefusals`, a `retainAt` whose
-listing is the old one filtered: `Trie.toList_retainAt`). -/
+/-- (ii'') **An admission grows the window trie's listing by at most two entries**, its member's
+meter leaf (KERNEL-68, `commitMeter`), pruned (`pruneRefusals`, a `retainAt` whose listing is the
+old one filtered: `Trie.toList_retainAt`), and the ring leaf of the step it leaves (KERNEL-79,
+`ringPush`). -/
 theorem admit_refusals_listing {w w' : World D} {t : Turn D} (hc : w.RefusalsCanon X.env)
-    (h : World.admit X.env w t = .ok w') : w'.refusals.toList.length ≤ w.refusals.toList.length + 1 := by
+    (h : World.admit X.env w t = .ok w') : w'.refusals.toList.length ≤ w.refusals.toList.length + 2 := by
   obtain ⟨_, _, rfl⟩ := admit_ok h
   rw [commit_refusals]
+  have hp := pruneRefusals_canon (H := w.height + 1) (commitMeter_canon (t := t) hc)
+  have hring : (ringPush X.env w (pruneRefusals X.env (w.height + 1) (commitMeter X.env w t))).toList.length ≤
+      (pruneRefusals X.env (w.height + 1) (commitMeter X.env w t)).toList.length + 1 := by
+    unfold ringPush
+    rw [(Trie.toList_insert_perm (refusalSpec X.env) hp.1 _ _).length_eq, List.length_append,
+      List.length_singleton]
+    have := List.length_filter_le (fun q : WindowSlot D × RefusalLeaf D =>
+      decide (q.1 ≠ .chain (.ring w.origin (ringSlot w.steps))))
+      (pruneRefusals X.env (w.height + 1) (commitMeter X.env w t)).toList
+    omega
+  refine Nat.le_trans hring ?_
   have hm : (commitMeter X.env w t).toList.length ≤ w.refusals.toList.length + 1 := by
     unfold commitMeter
     split
@@ -678,12 +690,15 @@ theorem admit_refusals_listing {w w' : World D} {t : Turn D} (hc : w.RefusalsCan
       have := List.length_filter_le (fun q : WindowSlot D × RefusalLeaf D =>
         decide (q.1 ≠ .meter (.ticks t.member (refusalWindow (w.height + 1))))) w.refusals.toList
       omega
-  unfold pruneRefusals
-  split
-  · rw [Trie.toList_retainAt (refusalSpec X.env) _ [] 0 _ (commitMeter_canon hc).1
-      (fun _ _ _ _ _ _ h => by simp at h)]
-    exact Nat.le_trans (List.length_filter_le _ _) hm
-  · exact hm
+  have hpl : (pruneRefusals X.env (w.height + 1) (commitMeter X.env w t)).toList.length ≤
+      w.refusals.toList.length + 1 := by
+    unfold pruneRefusals
+    split
+    · rw [Trie.toList_retainAt (refusalSpec X.env) _ [] 0 _ (commitMeter_canon hc).1
+        (fun _ _ _ _ _ _ h => by simp at h)]
+      exact Nat.le_trans (List.length_filter_le _ _) hm
+    · exact hm
+  omega
 
 /-- (ii') **An admission adds at most one cell leaf per touch, created cell and nullifier, and at
 most one rows entry per row touch** (`admit_rows_listing`), each costing at least 32 bytes of the
@@ -699,14 +714,15 @@ theorem admit_listing {w w' : World D} {t : Turn D} (hc : w.Canon X.env) (hr : w
     unfold RowTouch.weight; cases x.slot <;> simp [RowSlot.weight, digestWeight] <;> omega) t.rows
   have hlw : t.logWeight ≥ (t.touches.map Touch.weight).sum +
       (t.creates.map fun p => digestWeight + p.2.weight).sum + 32 * t.nullifiers.length +
-      (t.rows.map RowTouch.weight).sum + 32 := by
+      (t.rows.map RowTouch.weight).sum + 64 := by
     unfold Turn.logWeight; simp only [show digestWeight = 32 from rfl]; omega
   omega
 
-/-- (ii''') **A recorded refusal adds at most three refusals entries**: the transaction's leaf, the
-member's window count and the World's window total (`commitRefusals`, three inserts; KERNEL-55 R1). -/
+/-- (ii''') **A recorded refusal adds at most four refusals entries**: the transaction's leaf, the
+member's window count and the World's window total (`commitRefusals`, three inserts; KERNEL-55 R1),
+and the ring leaf of the step it leaves (`ringPush`, KERNEL-79). -/
 theorem refuse_refusals_listing {w w' : World D} {r : Refused D} (hc : w.RefusalsCanon X.env)
-    (h : World.refuse X.env w r = .ok w') : w'.refusals.toList.length ≤ w.refusals.toList.length + 3 := by
+    (h : World.refuse X.env w r = .ok w') : w'.refusals.toList.length ≤ w.refusals.toList.length + 4 := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   rw [commitRefusal_refusals]
   have hr1 := Trie.routed_insert (refusalSpec X.env) (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member) hc.1
@@ -725,16 +741,26 @@ theorem refuse_refusals_listing {w w' : World D} {r : Refused D} (hc : w.Refusal
     decide (q.1 ≠ WindowSlot.refusal (.total w.origin (refusalWindow w.height))))
     ((w.refusals.insert (refusalSpec X.env) (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member)).insert
       (refusalSpec X.env) (.refusal (.count r.member (refusalWindow w.height))) (.count (refusalCount X.env w r.member + 1))).toList
-  simp only [List.length_append, List.length_singleton] at p1 p2 p3
+  have hr3 := Trie.routed_insert (refusalSpec X.env) (.refusal (.total w.origin (refusalWindow w.height)))
+    (.count (refusalTotal X.env w + 1)) hr2
+  unfold ringPush
+  have p4 := (Trie.toList_insert_perm (refusalSpec X.env) hr3 (.chain (.ring w.origin (ringSlot w.steps)))
+    (.head w.steps w.chain)).length_eq
+  have f4 := List.length_filter_le (fun q : WindowSlot D × RefusalLeaf D =>
+    decide (q.1 ≠ WindowSlot.chain (.ring w.origin (ringSlot w.steps))))
+    (((w.refusals.insert (refusalSpec X.env) (.refusal (.tx r.txId)) (.refused (w.height + 1) r.code r.member)).insert
+      (refusalSpec X.env) (.refusal (.count r.member (refusalWindow w.height))) (.count (refusalCount X.env w r.member + 1))).insert
+      (refusalSpec X.env) (.refusal (.total w.origin (refusalWindow w.height))) (.count (refusalTotal X.env w + 1))).toList
+  simp only [List.length_append, List.length_singleton] at p1 p2 p3 p4
   omega
 
-/-- A step's log weight: a Turn's (`Turn.logWeight`); a recorded refusal's three refusals entries,
+/-- A step's log weight: a Turn's (`Turn.logWeight`); a recorded refusal's four refusals entries,
 32 bytes each of its step (`record_steps_le`: a refusal's record holds its transaction id and member,
-and the step carries the 32-byte roots digest beside it; KERNEL-55 R1's third entry, the World's
-window total, is paid from that digest's bytes). -/
+its three counters and its two byte strings' lengths, and the step carries the 32-byte roots digest
+beside it; KERNEL-55 R1's total and KERNEL-79's ring leaf are paid from those bytes). -/
 private def stepWeight : Step D → Nat
   | .turn t => t.logWeight
-  | .refusal _ => 96
+  | .refusal _ => 128
 
 /-- The three listings a fold reaches, 32 bytes per entry, grow by at most the steps' weights. -/
 theorem fold_listing : ∀ {w w' : World D} {l : List (Step D)}, Kept w →
@@ -761,8 +787,8 @@ theorem fold_listing : ∀ {w w' : World D} {l : List (Step D)}, Kept w →
       omega
 
 /-- (iii) **A record's bytes are at least the weight of its steps**: a Turn's log weight
-(`turn_size_logWeight`), a refusal's 96 (its transaction id and member digests and the roots digest
-beside it). -/
+(`turn_size_logWeight`), a refusal's 128 (its transaction id and member digests, its counters and
+byte-string lengths, and the roots digest beside it). -/
 theorem record_steps_le {r : ByteArray} {ps : List (Step D × D)}
     (h : (Record.codec Codec.Deployed.digestCodec).decode r = .ok ps) :
     ((ps.map Prod.fst).map stepWeight).sum ≤ r.size := by
@@ -784,9 +810,10 @@ theorem record_steps_le {r : ByteArray} {ps : List (Step D × D)}
         rw [Codec.Kernel.turn_size_logWeight (fun _ => rfl)]
         omega
       | refusal r =>
-        show 96 ≤ (1 + (Codec.Kernel.refused Codec.Deployed.digestCodec).size r) + _
+        show 128 ≤ (1 + (Codec.Kernel.refused Codec.Deployed.digestCodec).size r) + _
         have e : ∀ d : Codec.Digest, Codec.Deployed.digestCodec.size d = 32 := fun _ => rfl
-        simp only [Codec.Kernel.refused, Codec.Stream.refine, Codec.Stream.product, e]
+        simp only [Codec.Kernel.refused, Codec.Stream.refine, Codec.Stream.product, Codec.Stream.nat64,
+          Codec.Stream.rawBytes, e]
         omega) ps
   omega
 
@@ -847,7 +874,7 @@ theorem openWith_listing_lt {keys : Keys} {file H I S : ByteArray} {o : Opening 
   cases hb₂
   have hl := Record.foldlM_listing hk hf
   have hw := world_size_listing b.world
-  have e1 : c.baseRecordMax = 91965674 := by decide
+  have e1 : c.baseRecordMax = 91976170 := by decide
   have e2 : c.tailMax n = 2 * max 1048576 (n / 4) + (4 + 16779332 + 32) := rfl
   have hm : max 1048576 (n / 4) ≤ 1048576 + n / 4 :=
     Nat.max_le.mpr ⟨Nat.le_add_right _ _, Nat.le_add_left _ _⟩

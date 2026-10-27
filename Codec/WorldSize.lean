@@ -28,14 +28,15 @@ def worldFixed : Nat := 4 * 4 + 3 * 8 + 2 * 32
 /-- The journal's bytes on the wire: 72 per entry (transaction id, u64 height, turn digest). -/
 def journalBytes (w : World D) : Nat := 72 * w.journal.toList.length
 
-/-- One refusals entry's bytes on the wire: the key (a kind byte, the digest, a `count`'s or
-`total`'s window u64) and the leaf (a kind byte; a refused leaf's height and code u64 and its member,
-a count's u64). -/
+/-- One refusals entry's bytes on the wire: the key (a kind byte, the digest, a `count`'s, `total`'s
+or meter's window u64, a ring key's position u64) and the leaf (a kind byte; a refused leaf's height
+and code u64 and its member, a count's u64, a ring leaf's step u64 and chain). -/
 def refusalEntryBytes : WindowSlot D × RefusalLeaf D → Nat
   | (k, v) =>
     (match k with
-      | .refusal (.tx _) => 33 | .refusal (.count _ _) => 41 | .refusal (.total _ _) => 41 | .meter (.ticks _ _) => 41) +
-    (match v with | .refused _ _ _ => 49 | .count _ => 9)
+      | .refusal (.tx _) => 33 | .refusal (.count _ _) => 41 | .refusal (.total _ _) => 41 | .meter (.ticks _ _) => 41
+      | .chain (.ring _ _) => 41) +
+    (match v with | .refused _ _ _ => 49 | .count _ => 9 | .head _ _ => 41)
 
 /-- The refusals' bytes on the wire, entry by entry. -/
 def refusalsBytes (w : World D) : Nat := (w.refusals.toList.map refusalEntryBytes).sum

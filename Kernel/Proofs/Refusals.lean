@@ -48,6 +48,11 @@ theorem checkRefusal_facts {E : Env D} {w : World D} {r : Refused D} (h : checkR
           rw [hr] at h
           cases l with
           | refused hh code mb => simp at h
+          | head _ _ =>
+              try simp only [except_bind_ok] at h
+              obtain ⟨⟨⟩, h1, h2⟩ := h
+              refine ⟨rfl, fun hh code mb he => ?_, by simpa using req_ok.mp h1, by simpa using req_ok.mp h2⟩
+              simp at he
           | count n =>
               try simp only [except_bind_ok] at h
               obtain ⟨⟨⟩, h1, h2⟩ := h
@@ -112,7 +117,7 @@ theorem refuse_refusalAt {E : Env D} {w w' : World D} {r : Refused D} (h : World
       else w.refusalAt E k := by
   obtain ⟨_, rfl⟩ := refuse_ok h
   unfold World.refusalAt
-  rw [commitRefusal_refusals, Trie.get_insert, Trie.get_insert, Trie.get_insert]
+  rw [commitRefusal_refusals, ringPush_get_refusal, Trie.get_insert, Trie.get_insert, Trie.get_insert]
   simp only [WindowSlot.refusal.injEq]
 
 /-- The refusals after an admission, read at any key: at a multiple of `windowMax`, the leaf if it is
@@ -125,7 +130,7 @@ theorem admit_refusalAt {E : Env D} {w w' : World D} {t : Turn D} (hc : w.Refusa
       else w.refusalAt E k := by
   obtain ⟨_, _, rfl⟩ := admit_ok h
   unfold World.refusalAt
-  rw [commit_refusals, pruneRefusals_get (commitMeter_canon hc), commitMeter_get_refusal]
+  rw [commit_refusals, ringPush_get_refusal, pruneRefusals_get (commitMeter_canon hc), commitMeter_get_refusal]
 
 /-- **The meter after an admission, at any meter key but the turn's own** (KERNEL-68): as before, up
 to the prune. The meter's own kind's `admit_refusalAt`; the turn's own leaf is `admit_meterAt_self`. -/
@@ -186,7 +191,7 @@ omit [Ord D] [DecidableEq D] in
 theorem refusalFits_succ {H : Nat} {k : WindowSlot D} {l : RefusalLeaf D} (hf : refusalFits H k l = true)
     (hk : (H + 1) % Bounds.windowMax = 0 → keptRefusal (H + 1) k l = true) :
     refusalFits (H + 1) k l = true := by
-  rcases k with k | k <;> cases k <;> cases l <;> simp only [refusalFits, decide_eq_true_eq, Bool.false_eq_true] at hf ⊢
+  rcases k with k | k | k <;> cases k <;> cases l <;> simp only [refusalFits, decide_eq_true_eq, Bool.false_eq_true] at hf ⊢
   · rename_i id hh code
     refine ⟨hf.1, by omega, ?_, hf.2.2.2.1, hf.2.2.2.2⟩
     by_cases hz : (H + 1) % Bounds.windowMax = 0
@@ -223,14 +228,17 @@ theorem refusalFits_succ {H : Nat} {k : WindowSlot D} {l : RefusalLeaf D} (hf : 
       unfold refusalWindow
       congr 1
       rw [windowMax_eq] at hz ⊢; omega
+  · exact hf
 
 /-- **The invariant holds after every admission.** -/
 theorem admit_refusalsOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.RefusalsOk E)
     (h : World.admit E w t = .ok w') : w'.RefusalsOk E := by
   refine ⟨admit_refusalsCanon hw.1 h, fun k l hk => ?_⟩
   rw [admit_height h]
+  have hsl := admit_steps_lt h
+  rw [admit_steps h] at hsl
   obtain ⟨posts, hck, rfl⟩ := admit_ok h
-  rcases k with k | k
+  rcases k with k | k | k
   · -- the refusal window: as before, up to the prune
     have hk' : (commit E w t posts).refusalAt E k = some l := hk
     rw [admit_refusalAt hw.1 h k] at hk'
@@ -242,7 +250,7 @@ theorem admit_refusalsOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.Refus
   · -- the meter (KERNEL-68): the turn's own leaf is untouched or bumped within `ticksPerWindow`
     -- (`checkTicks`); every other meter leaf is as before, up to the prune
     obtain ⟨m, win⟩ := k
-    rw [commit_refusals, pruneRefusals_get (commitMeter_canon hw.1)] at hk
+    rw [commit_refusals, ringPush_get_meter, pruneRefusals_get (commitMeter_canon hw.1)] at hk
     by_cases hown : MeterSlot.ticks m win = .ticks t.member (refusalWindow (w.height + 1))
     · cases hown
       unfold commitMeter at hk
@@ -270,6 +278,25 @@ theorem admit_refusalsOk {E : Env D} {w w' : World D} {t : Turn D} (hw : w.Refus
         exact refusalFits_succ (hw.2 _ l hk.1) (fun _ => hk.2)
       · rename_i hz
         exact refusalFits_succ (hw.2 _ l hk) (fun h' => absurd h' hz)
+  · -- the ring (KERNEL-79): the step's own leaf is `(w.steps, w.chain)` at its own position, its step
+    -- below `2^64` (`checkSteps`); every other ring leaf is as before (the prune keeps the ring)
+    obtain ⟨o, j⟩ := k
+    rw [commit_refusals, ringPush_get_chain] at hk
+    split at hk
+    · rename_i he
+      cases he; cases hk
+      have hc : Bounds.counterLimit = 2 ^ 64 := by decide
+      show decide (w.steps < Bounds.counterLimit ∧ ringSlot w.steps = ringSlot w.steps) = true
+      exact decide_eq_true ⟨by omega, rfl⟩
+    · rw [pruneRefusals_get (commitMeter_canon hw.1), commitMeter_get_chain] at hk
+      have hk' : w.refusals.get (refusalSpec E) (.chain (.ring o j)) = some l := by
+        split at hk
+        · exact (Option.filter_eq_some_iff.mp hk).1
+        · exact hk
+      have hf := hw.2 _ l hk'
+      cases l with
+      | head s c => exact hf
+      | _ => simp [refusalFits] at hf
 
 /-- **The invariant holds after every recorded refusal**: the new leaf fits (refused at the next
 height, below `2^64` because its window is), the member's count stays within the budget. -/
@@ -280,11 +307,27 @@ theorem refuse_refusalsOk {E : Env D} {w w' : World D} {r : Refused D} (hw : w.R
   have hvlt := (refusedBounds_lt hb).2.1
   refine ⟨refuse_refusalsCanon hw.1 h, fun k l hk => ?_⟩
   rw [(refuse_frame h).2.2.1]
-  rcases k with k | k
+  have hsl := refuse_steps_lt h
+  rw [refuse_steps h] at hsl
+  rcases k with k | k | k
+  case chain =>
+    -- the ring (KERNEL-79): the step's own leaf, its step below `2^64`; every other ring leaf as before
+    obtain ⟨o, j⟩ := k
+    obtain ⟨_, rfl⟩ := refuse_ok h
+    rw [commitRefusal_refusals, ringPush_get_chain] at hk
+    split at hk
+    · rename_i he
+      cases he; cases hk
+      have hc : Bounds.counterLimit = 2 ^ 64 := by decide
+      show decide (w.steps < Bounds.counterLimit ∧ ringSlot w.steps = ringSlot w.steps) = true
+      exact decide_eq_true ⟨by omega, rfl⟩
+    · rw [Trie.get_insert_ne _ _ _ (by intro he; cases he), Trie.get_insert_ne _ _ _ (by intro he; cases he),
+        Trie.get_insert_ne _ _ _ (by intro he; cases he)] at hk
+      exact hw.2 _ l hk
   case meter =>
     -- a refusal writes no meter leaf (KERNEL-68): the three inserts are at refusal-window keys
     obtain ⟨_, rfl⟩ := refuse_ok h
-    rw [commitRefusal_refusals, Trie.get_insert_ne _ _ _ (by intro he; cases he),
+    rw [commitRefusal_refusals, ringPush_get_meter, Trie.get_insert_ne _ _ _ (by intro he; cases he),
       Trie.get_insert_ne _ _ _ (by intro he; cases he), Trie.get_insert_ne _ _ _ (by intro he; cases he)] at hk
     exact hw.2 _ l hk
   case refusal =>
@@ -421,8 +464,9 @@ theorem refusalsDisjoint_iff {E : Env D} {w : World D} (hc : w.RefusalsCanon E) 
     simpa using this
   · intro h p hp
     obtain ⟨k, l⟩ := p
-    rcases k with k | k
+    rcases k with k | k | k
     case meter => cases k; cases l <;> rfl
+    case chain => cases k; cases l <;> rfl
     cases k with
     | count m win => cases l <;> rfl
     | total o win => cases l <;> rfl
@@ -431,6 +475,7 @@ theorem refusalsDisjoint_iff {E : Env D} {w : World D} (hc : w.RefusalsCanon E) 
         | refused hh code mb =>
             have hg := (Trie.mem_toList (refusalSpec E) 0 w.refusals hc.1 _ _).mp hp
             simp [h id hh code mb hg]
+        | head _ _ => rfl
         | count n => rfl
 
 theorem genesis_refusalsDisjoint (E : Env D) (o : D) (a : Nat) : (World.genesis E o a).RefusalsDisjoint E :=
@@ -480,6 +525,7 @@ private def plantRefusalKeyBytes (E : Env D) : WindowSlot D → ByteArray
   | .refusal (.count m win) => E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
   | .refusal (.total o win) => E.bytes o ++ Nanodregg.Codec.Stream.u64.bytes win
   | .meter (.ticks m win) => E.bytes m ++ Nanodregg.Codec.Stream.u64.bytes win
+  | .chain (.ring o j) => E.bytes o ++ Nanodregg.Codec.Stream.u64.bytes j
 
 private def plantRefusalSpec (E : Env D) : Trie.Spec (WindowSlot D) (RefusalLeaf D) D :=
   { refusalSpec E with bit := fun k => byteBit (plantRefusalKeyBytes E k), kbytes := plantRefusalKeyBytes E }

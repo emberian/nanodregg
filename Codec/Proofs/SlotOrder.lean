@@ -209,7 +209,7 @@ below one of a higher kind whatever their digests and windows, at any `Env` (the
 So a canonical refusals listing holds its `tx` keys, then its `count` keys, then its `total`. -/
 theorem refusalKeyBytes_kind_lt (E : Env D) {k k' : WindowSlot D} (h : refusalKind k < refusalKind k') :
     compare (refusalKeyBytes E k).data (refusalKeyBytes E k').data = .lt := by
-  rcases k with k | k <;> rcases k' with k' | k' <;> cases k <;> cases k' <;> simp only [refusalKind] at h <;>
+  rcases k with k | k | k <;> rcases k' with k' | k' | k' <;> cases k <;> cases k' <;> simp only [refusalKind] at h <;>
     (try omega) <;>
     simp [refusalKeyBytes, Array.compare_eq_compare_toList] <;> rfl
 

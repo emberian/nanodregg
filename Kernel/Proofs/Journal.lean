@@ -450,7 +450,7 @@ theorem check_journal_filter {E : Env D} {w : World D} {t : Turn D} {H : Nat} {J
           have hkept : kept H e = true := by
             simp only [kept, decide_eq_true_eq]; rw [windowMax_eq] at *; omega
           simp [Option.filter, hkept]
-    exact (check_local (w := w) (w' := { w with journal := J }) (t := t) ⟨fun _ _ => rfl, rfl, rfl, rfl, hg, rfl, rfl, .same rfl⟩).symm
+    exact (check_local (w := w) (w' := { w with journal := J }) (t := t) ⟨fun _ _ => rfl, rfl, rfl, rfl, hg, rfl, rfl, fun _ _ => rfl, .same rfl⟩).symm
   · unfold check checkWith
     cases hb : checkBounds t with
     | error _ => simp [bind, Except.bind, Except.map]

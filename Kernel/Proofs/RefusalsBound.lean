@@ -66,6 +66,15 @@ theorem sumN_add4 {α : Type} (f g k m : α → Nat) :
       simp only [List.map_cons, List.sum_cons]; omega
 
 omit [Ord D] [DecidableEq D] in
+theorem sumN_add5 {α : Type} (f g k m n : α → Nat) :
+    ∀ l : List α, (l.map fun x => f x + g x + k x + m x + n x).sum =
+      (l.map f).sum + (l.map g).sum + (l.map k).sum + (l.map m).sum + (l.map n).sum
+  | [] => rfl
+  | x :: l => by
+      have := sumN_add5 f g k m n l
+      simp only [List.map_cons, List.sum_cons]; omega
+
+omit [Ord D] [DecidableEq D] in
 theorem sumN_swap {α β : Type} (f : α → β → Nat) :
     ∀ (l₁ : List α) (l₂ : List β),
       (l₁.map fun x => (l₂.map (f x)).sum).sum = (l₂.map fun y => (l₁.map fun x => f x y).sum).sum
@@ -116,24 +125,26 @@ theorem refusedOne_le_windows {H : Nat} {p : WindowSlot D × RefusalLeaf D} (hf 
     refusedOne p ≤ refusedWin (H / Bounds.windowMax) p + refusedWin (H / Bounds.windowMax - 1) p +
       refusedWin (H / Bounds.windowMax - 2) p := by
   obtain ⟨k, v⟩ := p
-  rcases k with k | k
+  rcases k with k | k | k
   · cases k with
     | count _ _ => exact Nat.zero_le _
     | total _ _ => exact Nat.zero_le _
     | tx id =>
         cases v with
         | count _ => exact Nat.zero_le _
+        | head _ _ => exact Nat.zero_le _
         | refused h c m =>
             have := refusal_window_range hf
             simp only [refusedOne, refusedWin]
             split <;> split <;> split <;> omega
   · exact Nat.zero_le _
+  · exact Nat.zero_le _
 
 /-! ## The bound -/
 
-/-- **The window trie is bounded by the kernel** (KERNEL-55 R1, KERNEL-68): on a `RefusalsOk`,
+/-- **The window trie is bounded by the kernel** (KERNEL-55 R1, KERNEL-68, KERNEL-79): on a `RefusalsOk`,
 `CountedOk` World, the listing holds at most `3 * C` records, at most `C` member counts, at most one
-total, at most `windowMax` meter leaves, and every entry is one of the four
+total, at most `windowMax` meter leaves, at most `pinWindow` ring leaves, and every entry is one of the five
 (C = `Bounds.refusalsPerWindowMax`). What CODEC's size equality and HOST's `worldBytesMax` derivation
 read: a count of each key kind. -/
 theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w.CountedOk E) :
@@ -142,16 +153,17 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
       (w.refusals.toList.map totalKeyOne).sum ≤ 1 ∧
       w.refusals.toList.length = (w.refusals.toList.map refusedOne).sum +
         (w.refusals.toList.map countKeyOne).sum + (w.refusals.toList.map totalKeyOne).sum +
-        (w.refusals.toList.map meterKeyOne).sum ∧
-      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax := by
-  obtain ⟨-, hc2, hc3, hc4, hc5, hc6, hc7⟩ := hc
+        (w.refusals.toList.map meterKeyOne).sum + (w.refusals.toList.map chainKeyOne).sum ∧
+      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax ∧
+      (w.refusals.toList.map chainKeyOne).sum ≤ Bounds.pinWindow := by
+  obtain ⟨-, hc2, hc3, hc4, hc5, hc6, hc7, hc8⟩ := hc
   have hmem : ∀ k v, (k, v) ∈ w.refusals.toList ↔ w.refusals.get (refusalSpec E) k = some v :=
     fun k v => Trie.mem_toList (refusalSpec E) 0 w.refusals hw.1.1 k v
   have hfit : ∀ p ∈ w.refusals.toList, refusalFits w.height p.1 p.2 = true :=
     fun p hp => hw.2 p.1 p.2 ((hmem p.1 p.2).mp hp)
   have hnd := Trie.toList_nodup (refusalSpec E) 0 w.refusals hw.1.1
   have htot := refusalTotal_le hw
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- records: three windows of at most C each
     have h1 := sumN_le_of_le refusedOne (fun p => refusedWin (w.height / Bounds.windowMax) p +
       refusedWin (w.height / Bounds.windowMax - 1) p + refusedWin (w.height / Bounds.windowMax - 2) p)
@@ -166,8 +178,9 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
     have hq : ∀ q ∈ w.refusals.toList, countKeyOne q ≤ (w.refusals.toList.map (f q)).sum := by
       intro q hq
       obtain ⟨k, v⟩ := q
-      rcases k with k | k
+      rcases k with k | k | k
       case meter => exact Nat.zero_le _
+      case chain => exact Nat.zero_le _
       cases k with
       | tx _ => exact Nat.zero_le _
       | total _ _ => exact Nat.zero_le _
@@ -175,6 +188,7 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
           have hf := hfit _ hq
           cases v with
           | refused _ _ _ => simp [refusalFits] at hf
+          | head _ _ => simp [refusalFits] at hf
           | count n =>
               simp only [refusalFits, decide_eq_true_eq] at hf
               obtain ⟨rfl, hn, -⟩ := hf
@@ -192,22 +206,28 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
         (w.refusals.toList.map fun q => f q p).sum ≤ refusedWin (w.height / Bounds.windowMax) p := by
       intro p _
       obtain ⟨k, v⟩ := p
-      rcases k with k | k
+      rcases k with k | k | k
       case meter =>
         rw [sumN_eq_zero_of]; · exact Nat.zero_le _
-        intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' <;> cases k' <;> simp [f, refusedIn]
+        intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' | k' <;> cases k' <;> simp [f, refusedIn]
+      case chain =>
+        rw [sumN_eq_zero_of]; · exact Nat.zero_le _
+        intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' | k' <;> cases k' <;> simp [f, refusedIn]
       cases k with
       | count _ _ =>
           rw [sumN_eq_zero_of]; · exact Nat.zero_le _
-          intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' <;> cases k' <;> simp [f, refusedIn]
+          intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' | k' <;> cases k' <;> simp [f, refusedIn]
       | total _ _ =>
           rw [sumN_eq_zero_of]; · exact Nat.zero_le _
-          intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' <;> cases k' <;> simp [f, refusedIn]
+          intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' | k' <;> cases k' <;> simp [f, refusedIn]
       | tx id =>
           cases v with
+          | head _ _ =>
+              rw [sumN_eq_zero_of]; · exact Nat.zero_le _
+              intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' | k' <;> cases k' <;> simp [f, refusedIn]
           | count _ =>
               rw [sumN_eq_zero_of]; · exact Nat.zero_le _
-              intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' <;> cases k' <;> simp [f, refusedIn]
+              intro q _; obtain ⟨k', v'⟩ := q; rcases k' with k' | k' | k' <;> cases k' <;> simp [f, refusedIn]
           | refused h c m' =>
               by_cases hwin : (h - 1) / Bounds.windowMax = w.height / Bounds.windowMax
               · have hle := sumN_le_of_le (fun q => f q (.refusal (.tx id), .refused h c m'))
@@ -216,8 +236,9 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
                   (l := w.refusals.toList) (by
                     intro q _
                     obtain ⟨k', v'⟩ := q
-                    rcases k' with k' | k'
+                    rcases k' with k' | k' | k'
                     case meter => exact Nat.zero_le _
+                    case chain => exact Nat.zero_le _
                     cases k' with
                     | tx _ => exact Nat.zero_le _
                     | total _ _ => exact Nat.zero_le _
@@ -233,7 +254,7 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
                 omega
               · rw [sumN_eq_zero_of]; · exact Nat.zero_le _
                 intro q _; obtain ⟨k', v'⟩ := q
-                rcases k' with k' | k' <;> cases k' <;> simp [f, refusedIn, hwin]
+                rcases k' with k' | k' | k' <;> cases k' <;> simp [f, refusedIn, hwin]
     have hsw := sumN_swap f w.refusals.toList w.refusals.toList
     have a1 := sumN_le_of_le _ _ hq
     have a2 := sumN_le_of_le _ _ hp
@@ -245,8 +266,9 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
       (l := w.refusals.toList) (by
         intro q hq
         obtain ⟨k, v⟩ := q
-        rcases k with k | k
+        rcases k with k | k | k
         case meter => exact Nat.zero_le _
+        case chain => exact Nat.zero_le _
         cases k with
         | tx _ => exact Nat.zero_le _
         | count _ _ => exact Nat.zero_le _
@@ -255,27 +277,60 @@ theorem refusals_bounded {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w
             have ho := hc6 o win v ((hmem _ _).mp hq)
             cases v with
             | refused _ _ _ => simp [refusalFits] at hf
+            | head _ _ => simp [refusalFits] at hf
             | count n =>
                 simp only [refusalFits, decide_eq_true_eq] at hf
                 subst ho; rw [hf.1]; simp [totalKeyOne])
     have := sumN_key_le_one (WindowSlot.refusal (.total w.origin (refusalWindow w.height))) hnd
     omega
-  · -- every entry is one of the four kinds
-    rw [← sumN_add4, sumN_eq_length]
+  · -- every entry is one of the five kinds
+    rw [← sumN_add5, sumN_eq_length]
     intro q hq
     have hf := hfit q hq
     obtain ⟨k, v⟩ := q
-    rcases k with k | k <;> cases k <;> cases v <;>
-      simp_all [refusedOne, countKeyOne, totalKeyOne, meterKeyOne, refusalFits]
+    rcases k with k | k | k <;> cases k <;> cases v <;>
+      simp_all [refusedOne, countKeyOne, totalKeyOne, meterKeyOne, chainKeyOne, refusalFits]
   · -- the meter leaves (KERNEL-68): one more than the heights elapsed in the window, at most
     have := Nat.mod_lt w.height windowMax_pos
     omega
+  · -- the ring (KERNEL-79): every ring key is `ring origin (s % pinWindow)` (the origin by
+    -- `CountedOk`, the position by `refusalFits`), and the keys are distinct
+    let f : WindowSlot D × RefusalLeaf D → Nat → Nat := fun q j =>
+      if q.1 = WindowSlot.chain (.ring w.origin (UInt64.ofNat j)) then 1 else 0
+    have hq : ∀ q ∈ w.refusals.toList, chainKeyOne q ≤ ((List.range Bounds.pinWindow).map (f q)).sum := by
+      intro q hq
+      obtain ⟨k, v⟩ := q
+      rcases k with k | k | k
+      · exact Nat.zero_le _
+      · exact Nat.zero_le _
+      · obtain ⟨o, j⟩ := k
+        have hf := hfit _ hq
+        have ho := hc8 o j v ((hmem _ _).mp hq)
+        subst ho
+        cases v with
+        | refused _ _ _ => simp [refusalFits] at hf
+        | count _ => simp [refusalFits] at hf
+        | head s c =>
+            simp only [refusalFits, decide_eq_true_eq] at hf
+            obtain ⟨-, rfl⟩ := hf
+            have hm : s % Bounds.pinWindow ∈ List.range Bounds.pinWindow :=
+              List.mem_range.mpr (Nat.mod_lt _ (by decide))
+            refine Nat.le_trans ?_ (le_sumN_of_mem _ hm)
+            simp [f, chainKeyOne, ringSlot]
+    have hp : ∀ j ∈ List.range Bounds.pinWindow, (w.refusals.toList.map fun q => f q j).sum ≤ 1 :=
+      fun j _ => sumN_key_le_one _ hnd
+    have hsw := sumN_swap f w.refusals.toList (List.range Bounds.pinWindow)
+    have a1 := sumN_le_of_le _ _ hq
+    have a2 := sumN_le_of_le _ (fun _ => 1) hp
+    have a3 : ((List.range Bounds.pinWindow).map fun _ => 1).sum = Bounds.pinWindow := by
+      rw [sumN_eq_length (fun _ => 1) (fun _ _ => rfl), List.length_range]
+    omega
 
-/-- **The trie's length**: at most `4 * C + 1` entries (49,152 records, 16,384 counts and one total at
-the deployed C). -/
+/-- **The trie's length**: at most `4 * C + 1 + windowMax + pinWindow` entries (49,152 records,
+16,384 counts and one total at the deployed C, the meter leaves and the ring). -/
 theorem refusals_length_le {E : Env D} {w : World D} (hw : w.RefusalsOk E) (hc : w.CountedOk E) :
-    w.refusals.toList.length ≤ 4 * Bounds.refusalsPerWindowMax + 1 + Bounds.windowMax := by
-  obtain ⟨h1, h2, h3, h4, h5⟩ := refusals_bounded hw hc
+    w.refusals.toList.length ≤ 4 * Bounds.refusalsPerWindowMax + 1 + Bounds.windowMax + Bounds.pinWindow := by
+  obtain ⟨h1, h2, h3, h4, h5, h6⟩ := refusals_bounded hw hc
   omega
 
 /-- **Every fold keeps the refusals bounded** from a `RefusalsOk`, `CountedOk` World: no receive
@@ -287,8 +342,9 @@ theorem fold_refusals_bounded {E : Env D} {w w' : World D} {l : List (Step D)} (
       (w'.refusals.toList.map totalKeyOne).sum ≤ 1 ∧
       w'.refusals.toList.length = (w'.refusals.toList.map refusedOne).sum +
         (w'.refusals.toList.map countKeyOne).sum + (w'.refusals.toList.map totalKeyOne).sum +
-        (w'.refusals.toList.map meterKeyOne).sum ∧
-      (w'.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax :=
+        (w'.refusals.toList.map meterKeyOne).sum + (w'.refusals.toList.map chainKeyOne).sum ∧
+      (w'.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax ∧
+      (w'.refusals.toList.map chainKeyOne).sum ≤ Bounds.pinWindow :=
   refusals_bounded (fold_refusalsOk hw h) (fold_countedOk hw hc h)
 
 /-- **A decoded base CODEC admits is bounded**: `kernel/refusals` (`RefusalsOk`) and
@@ -300,8 +356,9 @@ theorem refusals_bounded_of_counted {E : Env D} {w : World D} (hw : w.RefusalsOk
       (w.refusals.toList.map totalKeyOne).sum ≤ 1 ∧
       w.refusals.toList.length = (w.refusals.toList.map refusedOne).sum +
         (w.refusals.toList.map countKeyOne).sum + (w.refusals.toList.map totalKeyOne).sum +
-        (w.refusals.toList.map meterKeyOne).sum ∧
-      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax :=
+        (w.refusals.toList.map meterKeyOne).sum + (w.refusals.toList.map chainKeyOne).sum ∧
+      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax ∧
+      (w.refusals.toList.map chainKeyOne).sum ≤ Bounds.pinWindow :=
   refusals_bounded hw ((refusalsCounted_iff hw).mp hc)
 
 /-! ## Teeth -/
@@ -331,16 +388,17 @@ theorem counted_world (E : Env Nat) (n : Nat) (hn : n ≤ Bounds.refusalsPerWind
       (∀ o win, t.get (refusalSpec E) (.refusal (.total o win)) =
         if o = 0 ∧ win = 0 ∧ 1 ≤ n then some (.count n) else none) ∧
       (∀ m win, t.get (refusalSpec E) (.meter (.ticks m win)) = none) ∧
+      (∀ k, t.get (refusalSpec E) (.chain k) = none) ∧
       (t.toList.map refusedOne).sum = n ∧
       (∀ m, (t.toList.map (refusedIn 0 m)).sum = if m < n then 1 else 0) ∧
       (∀ k, (t.toList.map (refusedWin k)).sum = if k = 0 then n else 0) := by
     intro n
     induction n with
     | zero =>
-        refine ⟨.empty, Trie.canon_empty _ 0, ?_, ?_, ?_, ?_, rfl, fun m => rfl, fun k => by simp [Trie.T.toList]⟩ <;>
+        refine ⟨.empty, Trie.canon_empty _ 0, ?_, ?_, ?_, ?_, ?_, rfl, fun m => rfl, fun k => by simp [Trie.T.toList]⟩ <;>
           intros <;> simp [Trie.get_empty]
     | succ n ih =>
-        obtain ⟨t, hc, htx, hcnt, htot, hmet, hs1, hs2, hs3⟩ := ih
+        obtain ⟨t, hc, htx, hcnt, htot, hmet, hch, hs1, hs2, hs3⟩ := ih
         have hr1 := Trie.routed_insert (refusalSpec E) (.refusal (.tx n)) (.refused 1 0 n) hc.1
         have hr2 := Trie.routed_insert (refusalSpec E) (.refusal (.count n 0)) (.count 1) hr1
         have hnone : t.get (refusalSpec E) (.refusal (.tx n)) = none := by rw [htx]; simp
@@ -355,7 +413,7 @@ theorem counted_world (E : Env Nat) (n : Nat) (hn : n ≤ Bounds.refusalsPerWind
         refine ⟨((t.insert (refusalSpec E) (.refusal (.tx n)) (.refused 1 0 n)).insert (refusalSpec E) (.refusal (.count n 0))
             (.count 1)).insert (refusalSpec E) (.refusal (.total 0 0)) (.count (n + 1)),
           Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ (Trie.canon_insert _ _ _ hc)),
-          ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+          ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
         · intro i
           simp only [Trie.get_insert]
           by_cases hi : i = n
@@ -382,6 +440,9 @@ theorem counted_world (E : Env Nat) (n : Nat) (hn : n ≤ Bounds.refusalsPerWind
         · intro m win
           simp only [Trie.get_insert]
           rw [if_neg (by simp), if_neg (by simp), if_neg (by simp), hmet]
+        · intro k
+          simp only [Trie.get_insert]
+          rw [if_neg (by simp), if_neg (by simp), if_neg (by simp), hch]
         · rw [hsum refusedOne (fun _ _ v => by cases v <;> rfl) (fun _ _ v => by cases v <;> rfl), hs1]; rfl
         · intro m
           rw [hsum (refusedIn 0 m) (fun _ _ v => by cases v <;> rfl) (fun _ _ v => by cases v <;> rfl), hs2]
@@ -398,7 +459,7 @@ theorem counted_world (E : Env Nat) (n : Nat) (hn : n ≤ Bounds.refusalsPerWind
           by_cases hk : k = 0
           · subst hk; simp
           · simp [hk, Ne.symm hk]
-  obtain ⟨t, hc, htx, hcnt, htot, hmet, hs1, hs2, hs3⟩ := key n
+  obtain ⟨t, hc, htx, hcnt, htot, hmet, hch, hs1, hs2, hs3⟩ := key n
   have hw0 : refusalWindow 0 = 0 := by decide
   let w : World Nat := { World.genesis E 0 0 with refusals := t, steps := n }
   have hat : ∀ k, w.refusalAt E k = t.get (refusalSpec E) (.refusal k) := fun k => rfl
@@ -422,7 +483,7 @@ theorem counted_world (E : Env Nat) (n : Nat) (hn : n ≤ Bounds.refusalsPerWind
     refine ⟨hc, fun k v hk => ?_⟩
     rw [hat'] at hk
     show refusalFits 0 k v = true
-    rcases k with k | k
+    rcases k with k | k | k
     · cases k with
       | tx i =>
           rw [htx] at hk
@@ -443,8 +504,9 @@ theorem counted_world (E : Env Nat) (n : Nat) (hn : n ≤ Bounds.refusalsPerWind
           · cases hk
     · obtain ⟨m, win⟩ := k
       rw [hmet] at hk; cases hk
+    · rw [hch] at hk; cases hk
   refine ⟨w, rfl, rfl, rfl, rfl, hok, ?_, htotal, fun m => by rw [hcount]; split <;> omega, ?_⟩
-  · refine ⟨?_, fun m => ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · refine ⟨?_, fun m => ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · show (t.toList.map refusedOne).sum + 0 ≤ n; rw [hs1]; exact Nat.le_refl _
     · rw [hcount]; show _ = (t.toList.map (refusedIn 0 m)).sum; rw [hs2]
     · rw [htotal]; show n = (t.toList.map (refusedWin (0 / Bounds.windowMax))).sum
@@ -463,12 +525,15 @@ theorem counted_world (E : Env Nat) (n : Nat) (hn : n ≤ Bounds.refusalsPerWind
       · exact Nat.zero_le _
       intro p hp
       obtain ⟨k, v⟩ := p
-      rcases k with k | k
+      rcases k with k | k | k
       · cases k <;> rfl
       · obtain ⟨m, win⟩ := k
         have : t.get (refusalSpec E) (.meter (.ticks m win)) = some v :=
           (Trie.mem_toList (refusalSpec E) 0 t hc.1 _ _).mp hp
         rw [hmet] at this; cases this
+      · rfl
+    · intro o j v hk
+      rw [hat', hch] at hk; cases hk
   · intro i hi
     rw [hat, htx, if_neg (by omega)]
 
@@ -505,7 +570,7 @@ theorem uncapped_overflows {E : Env D} {w : World D} {r : Refused D}
   have hat : (commitRefusal E w r).refusalAt E (.total w.origin (refusalWindow w.height)) =
       some (.count (Bounds.refusalsPerWindowMax + 1)) := by
     unfold World.refusalAt
-    rw [commitRefusal_refusals, Trie.get_insert, if_pos rfl, ht]
+    rw [commitRefusal_refusals, ringPush_get_refusal, Trie.get_insert, if_pos rfl, ht]
   refine ⟨hat, fun hok => ?_⟩
   have := hok.2 _ _ hat
   simp [refusalFits, Bounds.refusalsPerWindowMax] at this
@@ -626,14 +691,16 @@ theorem reach_refusals_bounded {X : Ctx D} {name nonce : ByteArray} {allowance :
       (w.refusals.toList.map totalKeyOne).sum ≤ 1 ∧
       w.refusals.toList.length = (w.refusals.toList.map refusedOne).sum +
         (w.refusals.toList.map countKeyOne).sum + (w.refusals.toList.map totalKeyOne).sum +
-        (w.refusals.toList.map meterKeyOne).sum ∧
-      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax :=
+        (w.refusals.toList.map meterKeyOne).sum + (w.refusals.toList.map chainKeyOne).sum ∧
+      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax ∧
+      (w.refusals.toList.map chainKeyOne).sum ≤ Bounds.pinWindow :=
   fold_refusals_bounded (genesisWorld_refusalsOk X name nonce allowance founders auth)
     (countedOk_of_empty rfl (Nat.le_refl _)) h
 
 open Nanodregg.Codec Nanodregg.Codec.Deployed in
 /-- **Deployed**: no premise. Every World the deployed genesis and a fold reach holds at most 49,152
-records, 16,384 counts, one total and 1,024 meter leaves (KERNEL-68) in its window trie. -/
+records, 16,384 counts, one total, 1,024 meter leaves (KERNEL-68) and 128 ring leaves (KERNEL-79) in
+its window trie. -/
 theorem deployed_reach_refusals_bounded (program : Program Digest) {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
@@ -642,8 +709,9 @@ theorem deployed_reach_refusals_bounded (program : Program Digest) {name nonce :
       (w.refusals.toList.map totalKeyOne).sum ≤ 1 ∧
       w.refusals.toList.length = (w.refusals.toList.map refusedOne).sum +
         (w.refusals.toList.map countKeyOne).sum + (w.refusals.toList.map totalKeyOne).sum +
-        (w.refusals.toList.map meterKeyOne).sum ∧
-      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax := by
+        (w.refusals.toList.map meterKeyOne).sum + (w.refusals.toList.map chainKeyOne).sum ∧
+      (w.refusals.toList.map meterKeyOne).sum ≤ Bounds.windowMax ∧
+      (w.refusals.toList.map chainKeyOne).sum ≤ Bounds.pinWindow := by
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
   exact reach_refusals_bounded (X := ctx program) hl
 

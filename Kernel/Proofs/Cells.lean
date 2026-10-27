@@ -176,14 +176,14 @@ theorem journal_separate : Trie.Separates (journalSpec E) := by
 
 omit [DecidableEq D] in
 theorem refusalKeyBytes_size (hE : E.Lawful n) (k : WindowSlot D) : (refusalKeyBytes E k).size = 1 + n + 8 := by
-  rcases k with k | k <;> cases k <;> simp [refusalKeyBytes, hE.size, Nanodregg.Codec.Stream.nat64_bytes] <;> rfl
+  rcases k with k | k | k <;> cases k <;> simp [refusalKeyBytes, hE.size, Nanodregg.Codec.Stream.nat64_bytes] <;> rfl
 
 include hE in
 omit [DecidableEq D] in
 /-- A refusals key's bytes determine it (a kind byte, a digest of fixed size, eight bytes). -/
 theorem refusalKeyBytes_inj {k k' : WindowSlot D} (h : refusalKeyBytes E k = refusalKeyBytes E k') : k = k' := by
   have hsz : ∀ d : D, (E.bytes d).size = n := hE.size
-  rcases k with k | k <;> rcases k' with k' | k' <;> cases k <;> cases k' <;> simp only [refusalKeyBytes, Nanodregg.Codec.Stream.nat64_bytes] at h <;>
+  rcases k with k | k | k <;> rcases k' with k' | k' | k' <;> cases k <;> cases k' <;> simp only [refusalKeyBytes, Nanodregg.Codec.Stream.nat64_bytes] at h <;>
     obtain ⟨h1, hw⟩ := bytes_append_inj h (by simp [hsz]) <;>
     obtain ⟨h0, hm⟩ := bytes_append_inj h1 rfl <;>
     (try (have := congrArg (fun z : ByteArray => z.data.toList) h0; simp at this; done)) <;>

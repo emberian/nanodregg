@@ -108,6 +108,19 @@ omit [DecidableEq D] in
 theorem checkShape_staleOnly {P : D → Prop} (t : Turn D) : StaleOnly P (checkShape t) := by
   unfold checkShape; stale_only
 
+/-- The causal pin's check (KERNEL-79) never answers `stale`: its refusals are its own three names. -/
+theorem checkCausal_staleOnly {P : D → Prop} (E : Env D) (w : World D) (p : Option (CausalPin D)) :
+    StaleOnly P (checkCausal E w p) := by
+  intro y h
+  unfold checkCausal at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · split at h
+      · unfold req at h; split at h <;> cases h
+      · cases h
+
 omit [Ord D] [DecidableEq D] in
 theorem checkValueCell_staleOnly {P : D → Prop} (c : D) (cell : Cell) : StaleOnly P (checkValueCell c cell) := by
   unfold checkValueCell; stale_only
@@ -296,6 +309,7 @@ theorem admit_stale_pin {E : Env D} {w : World D} {t : Turn D} {y : D}
   refine StaleOnly.bind (checkWindow_staleOnly w t) fun _ _ => ?_
   refine StaleOnly.bind (checkJournal_staleOnly E w t) fun _ _ => ?_
   refine StaleOnly.bind (checkShape_staleOnly t) fun _ _ => ?_
+  refine StaleOnly.bind (checkCausal_staleOnly E w t.causal) fun _ _ => ?_
   refine StaleOnly.bind (StaleOnly.mapEx fun x hx => (touchCheck_staleOnly E w x).mono
     fun y ⟨h1, h2⟩ => .inl ⟨x, hx, h1, h2⟩) fun _ _ => ?_
   refine StaleOnly.bind (checkValue_staleOnly E t _) fun _ _ => ?_

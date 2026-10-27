@@ -27,6 +27,10 @@ log with `World.admit` alone, and nothing it would have to trust. It carries
   carries the call, never the writer's Turn), so a writer cannot state another member or another
   count; the kernel meters `ticks` per member per window (`World.ticksUsed`, `ticksBudget`) as it
   counts refusals, and a receipt of a Turn names its signer as a refusal's names the member charged.
+* `causal` (KERNEL-79) — the head the signer's World was at when it planned the call, when the call
+  carries one: a position of the log, the third pin kind beside the cell pins and the row and range
+  pins. Re-derived from the event like `member`. `World.admit` admits a pinned Turn only on a World
+  whose chain at that step is the pin's (`forkedPin`, `pinAhead`, `pinExpired`).
 -/
 import Kernel.Cell
 
@@ -97,6 +101,14 @@ structure RowTouch (D : Type) where
   act : RowAct
   deriving DecidableEq
 
+/-- A causal pin (KERNEL-79): a position of the log, its step count and the chain there. A signed
+call may carry one, the head its signer planned at; `World.admit` judges it against the World's own
+chain (the current one, or the ring of recent heads `World.chainAt` reads). -/
+structure CausalPin (D : Type) where
+  steps : Nat
+  chain : D
+  deriving DecidableEq, Repr
+
 /-- A range read (LANG-44 (c), LANG-47; the SECOND pin kind): the rows of relation `rel` under
 `parent` whose key starts with `pre`, at most `most` of them, pinned by `seen = rangePin` of their
 listing. Admission recomputes the listing (refused `rangeTooLong` past `most`, never truncated)
@@ -127,6 +139,8 @@ structure Turn (D : Type) where
   member : D
   /-- the ticks the call's tree of runs used (0 for every Body but an invoke; re-derived) -/
   ticks : Nat := 0
+  /-- the signer's causal pin (KERNEL-79; re-derived from the event) -/
+  causal : Option (CausalPin D) := none
   deriving DecidableEq
 
 /-- The cells a turn bears, without their ids. -/
@@ -206,8 +220,8 @@ def Touch.weight {D : Type} (x : Touch D) : Nat := 2 * digestWeight + x.act.logW
 
 /-- What a turn's log record costs, field by field in the codec's order (`Codec.Kernel.turn`):
 txId, the window, the touches, the born cells with their ids, the nullifiers (each list with its
-header), the charge and the event (with its length), the rows, the ranges, the member and the
-ticks. At the deployed digest this is the record's byte count: CODEC proves
+header), the charge and the event (with its length), the rows, the ranges, the member, the
+ticks and the causal pin (a tag byte, then the step count and the chain). At the deployed digest this is the record's byte count: CODEC proves
 `(Codec.Kernel.turn dc).size t = t.logWeight`. -/
 def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
   digestWeight + 2 * counterWeight
@@ -219,6 +233,7 @@ def Turn.logWeight {D : Type} (t : Turn D) : Nat :=
     + headerWeight + (t.rows.map RowTouch.weight).sum
     + headerWeight + (t.ranges.map RangeRead.weight).sum
     + digestWeight + counterWeight
+    + (if t.causal.isSome then 1 + counterWeight + digestWeight else 1)
 
 /-- The most a turn can add to the World (`Kernel.Proofs.Weight.admit_world_weight`): each born
 cell with its id, each write's ops, each spent nullifier, each row touch's growth (KERNEL-46

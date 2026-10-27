@@ -173,7 +173,7 @@ private theorem rx_wireFits (l : List (WindowSlot Sim.D × RefusalLeaf Sim.D)) (
     ⟨⟨by simp [Trie.T.toList, Bounds.journalMax, Bounds.windowMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     ⟨⟨by rw [ht]; exact hl, fun p hp' => by
         refine ⟨?_, RefusalLeaf.wireFits_of_fits (fun _ => trivial) (hp p (ht ▸ hp'))⟩
-        obtain ⟨k | k, v⟩ := p <;> cases k <;> trivial⟩, Trie.canon_build _ 0 l hn⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+        obtain ⟨k | k | k, v⟩ := p <;> cases k <;> trivial⟩, Trie.canon_build _ 0 l hn⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     show 7 < 2 ^ 64 by decide, hst, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
 /-- Member 2's `n` refusals recorded at height 7 (transaction ids 1 to `n`), its count `n`, and the
@@ -311,7 +311,7 @@ private theorem ry_one_wireFits (H steps : Nat) (hH : H < 2 ^ 64) (hst : steps <
     ⟨⟨by simp [Trie.T.toList, Bounds.journalMax, Bounds.windowMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     ⟨⟨by rw [rt_one]; simp [worldMax], fun p hp' => by
         rw [rt_one] at hp'; simp at hp'; subst hp'
-        exact ⟨by rcases k with k | k <;> cases k <;> trivial, RefusalLeaf.wireFits_of_fits (fun _ => trivial) hv⟩⟩, Trie.canon_build _ 0 _ (by simp)⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
+        exact ⟨by rcases k with k | k | k <;> cases k <;> trivial, RefusalLeaf.wireFits_of_fits (fun _ => trivial) hv⟩⟩, Trie.canon_build _ 0 _ (by simp)⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
     hH, hst, trivial, show 0 < 2 ^ 64 by decide, trivial⟩
 
 private theorem journalFits_nil (H : Nat) : journalFits H (Trie.T.empty : Journal Sim.D).toList = true := by

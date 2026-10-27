@@ -142,28 +142,32 @@ members together (`total`, KERNEL-55 R1, a `count` leaf under the World's origin
 the other two (`kernel/refusal-order`); which key holds which leaf, and the window facts, are the
 World's `kernel/refusals` refusal (KERNEL's `refusalsFits`, which refuses a misfit pairing). -/
 
-abbrev RefusalSlotF (D : Type) : Fin 4 → Type
+abbrev RefusalSlotF (D : Type) : Fin 5 → Type
   | 0 => D
   | 1 => D × UInt64
   | 2 => D × UInt64
   | 3 => D × UInt64
+  | 4 => D × UInt64
 
-def refusalSlotWire (dc : Stream D) : (s : Fin 4) → Stream (RefusalSlotF D s)
+def refusalSlotWire (dc : Stream D) : (s : Fin 5) → Stream (RefusalSlotF D s)
   | 0 => dc
   | 1 => product dc u64
   | 2 => product dc u64
   | 3 => product dc u64
+  | 4 => product dc u64
 
 /-- A refusals key: its kind (0 a refused transaction id, 1 a member's window count, 2 the World's
-window total, as in `refusalKeyBytes`), then the id, or the member and the window, or the origin
+window total, 3 a member's meter, 4 a ring position of the recent chain heads (KERNEL-79), as in
+`refusalKeyBytes`), then the id, or the member and the window, or the origin
 and the window. The kind byte leads the key bytes, so a listing holds every `tx`, then every
 `count`, then the `total` (`Codec.Proofs.SlotOrder.refusalKeyBytes_kind_lt`). -/
 def refusalSlot (dc : Stream D) : Stream (WindowSlot D) :=
-  refine "kernel/refusal-slot" (choice 4 (refusalSlotWire dc))
+  refine "kernel/refusal-slot" (choice 5 (refusalSlotWire dc))
     (fun | ⟨0, i⟩ => some (.refusal (.tx i)) | ⟨1, (m, w)⟩ => some (.refusal (.count m w))
-         | ⟨2, (o, w)⟩ => some (.refusal (.total o w)) | ⟨3, (m, w)⟩ => some (.meter (.ticks m w)))
+         | ⟨2, (o, w)⟩ => some (.refusal (.total o w)) | ⟨3, (m, w)⟩ => some (.meter (.ticks m w))
+         | ⟨4, (o, j)⟩ => some (.chain (.ring o j)))
     (fun | .refusal (.tx i) => ⟨0, i⟩ | .refusal (.count m w) => ⟨1, (m, w)⟩ | .refusal (.total o w) => ⟨2, (o, w)⟩
-         | .meter (.ticks m w) => ⟨3, (m, w)⟩)
+         | .meter (.ticks m w) => ⟨3, (m, w)⟩ | .chain (.ring o j) => ⟨4, (o, j)⟩)
 
 /-- A refusals key's kind: the wire's choice tag and the key bytes' first byte (`refusalKeyBytes`): 0 a
 refused transaction id, 1 a member's window count, 2 the World's window total (KERNEL-55 R1). -/
@@ -172,21 +176,24 @@ def refusalKind {K : Type} : WindowSlot K → Nat
   | .refusal (.count _ _) => 1
   | .refusal (.total _ _) => 2
   | .meter (.ticks _ _) => 3
+  | .chain (.ring _ _) => 4
 
-abbrev RefusalLeafF (D : Type) : Fin 2 → Type
+abbrev RefusalLeafF (D : Type) : Fin 3 → Type
   | 0 => Nat × Nat × D
   | 1 => Nat
+  | 2 => Nat × D
 
-def refusalLeafWire (dc : Stream D) : (s : Fin 2) → Stream (RefusalLeafF D s)
+def refusalLeafWire (dc : Stream D) : (s : Fin 3) → Stream (RefusalLeafF D s)
   | 0 => product nat64 (product nat64 dc)
   | 1 => nat64
+  | 2 => product nat64 dc
 
 /-- A refusals leaf: `refused h code member` (0: its counters as u64, then the charged member,
-KERNEL-50) or `count n` (1). -/
+KERNEL-50), `count n` (1), or `head steps chain` (2: a ring leaf, KERNEL-79). -/
 def refusalLeaf (dc : Stream D) : Stream (RefusalLeaf D) :=
-  refine "kernel/refusal-leaf" (choice 2 (refusalLeafWire dc))
-    (fun | ⟨0, (h, c, m)⟩ => some (.refused h c m) | ⟨1, n⟩ => some (.count n))
-    (fun | .refused h c m => ⟨0, (h, c, m)⟩ | .count n => ⟨1, n⟩)
+  refine "kernel/refusal-leaf" (choice 3 (refusalLeafWire dc))
+    (fun | ⟨0, (h, c, m)⟩ => some (.refused h c m) | ⟨1, n⟩ => some (.count n) | ⟨2, (s, c)⟩ => some (.head s c))
+    (fun | .refused h c m => ⟨0, (h, c, m)⟩ | .count n => ⟨1, n⟩ | .head s c => ⟨2, (s, c)⟩)
 
 /-- The refusals' trie, as its listing (`kernel/refusal-order`): at most `worldMax` entries on the wire
 (a reached World holds at most `Bounds.refusalsPerWindow` per member per window, three windows kept,

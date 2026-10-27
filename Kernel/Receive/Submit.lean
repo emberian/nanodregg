@@ -81,6 +81,9 @@ def submit (X : Ctx D) (w : World D) (c : Call D) : Except (Verdict D) (Turn D �
               match checkPins X.env w c.unsigned.pins c.unsigned.rowPins c.unsigned.ranges with
               | .error r => .error (.rejected r)
               | .ok () =>
+                match checkCausal X.env w c.unsigned.causal with
+                | .error r => .error (.rejected r)
+                | .ok () =>
                   match deriveTurn X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c with
                   | .error r => .error (.refused r)
                   | .ok t =>
@@ -110,7 +113,7 @@ def rejectNames : List String :=
    "notConserved", "floorNotConserved", "refusedFinal", "refusalBudget", "keyTaken", "relationFull",
    "relationCapped", "rowParentUnpinned", "orphanRow", "rowsRemain", "keyWidth", "noRelation",
    "retractForbidden", "declareLate", "rangeTooLong", "duplicateRow", "rowShape", "missingRow",
-   "refusalsFull", "ticksBudget"]
+   "refusalsFull", "ticksBudget", "forkedPin", "pinAhead", "pinExpired"]
 
 /-- A verdict's wire name. -/
 def Verdict.name : Verdict D → String
@@ -127,6 +130,7 @@ a pin observed on the fold and stale now is stale at every World the fold reache
 (`stale_behind_forever`), so the fold settles it without a record. -/
 def Verdict.isStale : Verdict D → Bool
   | .rejected (.stale _) => true
+  | .rejected (.forkedPin _) | .rejected (.pinAhead _) | .rejected (.pinExpired _) => true
   | _ => false
 
 /-- The code a stale refusal would carry: one `judge` never records (`judge_recorded_not_stale`). -/

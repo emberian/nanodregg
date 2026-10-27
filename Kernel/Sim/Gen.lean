@@ -284,7 +284,9 @@ def countingEnv (E : Env D) : Env D :=
 re-hashing the empty digest: `World.roots` as it read before cv 01a15107-2272 (and `commitWith`
 before KERNEL-47). The same value (`roots_eq`), one more hash per further empty trie; `report` must
 count more for it than for the real `World.roots` (`<O`) on a seed whose World had two empty tries at
-once (arm `hash-count:empty-per-root`). Since KERNEL-49 (a) no insert reads an empty digest; KERNEL-35's
+once (arm `hash-count:empty-per-root`): both read on the World a turn is admitted on, so the first
+turn's genesis World (journal, window trie and rows all empty; since KERNEL-79 every step writes the
+ring, so no later World has an empty window trie). Since KERNEL-49 (a) no insert reads an empty digest; KERNEL-35's
 per-insert recomputation is planted against the requirement instead (`plantEmptyPerInsert`). -/
 def plantRootsUnshared (E : Env D) (w : World D) : D :=
   rootsDigest E (w.root E) (w.journalRoot E) (w.refusalsRoot E) (w.rowsRoot E)
@@ -336,9 +338,11 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
         match rowsRun cE w t with
         | .ok rr => some rr.1
         | .error _ => none
-      let o := dbgTrace "<O" fun _ => w'.roots cE
-      let p := dbgTrace "<P" fun _ => plantRootsUnshared cE w'
-      let roots := w'.roots E
+      -- the roots of the World the turn is admitted ON (KERNEL-79: every step writes the ring, so only
+      -- a World before its first step, genesis, has two empty tries at once, which the plant needs)
+      let o := dbgTrace "<O" fun _ => w.roots cE
+      let p := dbgTrace "<P" fun _ => plantRootsUnshared cE w
+      let roots := w.roots E
       let st := match a with
         | .ok w'' => if w''.root E == w'.root E then st
             else failWith st "hash count: the counted admission reached another root"
@@ -357,7 +361,7 @@ def countTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) : State D
       let st := if rq.map (·.hashOf (rowSpec E)) == some (w'.rowsRoot E) then st
         else failWith st "hash count: the counted rows write reached another rows root"
       let st := if o == roots then st
-        else failWith st "hash count: the counted roots are not the admitted World's"
+        else failWith st "hash count: the counted roots are not the pre-state World's"
       if p == roots then st
       else failWith st "hash count: the per-root plant reached other roots"
 
@@ -750,7 +754,7 @@ def metAtAdmit (st : State D) (what want : String) : Except (Reject D) (World D)
 def forgedTurn (P : Params D) (w : World D) (tag : String) (touches : List (Touch D)) (creates : List Cell) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" (tag.toUTF8 ++ P.env.bytes w.chain)
   let t0 : Turn D := ⟨txId, 0, w.height + 1, touches,
-    creates.zipIdx.map (fun p => (bornId P.env txId p, p.1)), [], 0, ByteArray.empty, [], [], txId, 0⟩
+    creates.zipIdx.map (fun p => (bornId P.env txId p, p.1)), [], 0, ByteArray.empty, [], [], txId, 0, none⟩
   { t0 with charge := t0.weight }
 
 /-- The value probes: forged turns no receiver derives, each refused by the kernel by name. -/
@@ -2203,7 +2207,7 @@ Its charge is its own weight; its credit is the retired cell's whole weight. -/
 def retireTurn (P : Params D) (w : World D) (id : D) : Turn D :=
   let txId := P.env.hash "nanodregg/sim/forge" ("retire-budget".toUTF8 ++ P.env.bytes w.chain)
   let t0 : Turn D := ⟨txId, w.height + 1, w.height + 1, [⟨id, pinOf P.env (w.entry P.env id), .retire⟩], [], [], 0,
-    ByteArray.empty, [], [], txId, 0⟩
+    ByteArray.empty, [], [], txId, 0, none⟩
   { t0 with charge := t0.weight }
 
 /-- The budget probe (cv 01a14ba9-cbf4, `Kernel.Proofs.Budget`), at the end of every seed, on the
@@ -2331,7 +2335,7 @@ def plantRowsRetractSeal (E : Env D) (w : World D) (t : Turn D) : Except (Reject
 /-- The counted hashes of one admitted rows turn `w → w'` whose row touches are all inserts, or all
 retracts, and which reads no range: the whole REAL `World.admit` under the counting Env (`<W` for
 inserts, `<X` for retracts), and everything its `commit` does besides the rows (`<V`, `<Y`: the cell
-write, the journal write, the refusals prune and the three roots, sharing ONE empty-digest thunk in
+write, the journal write, the refusals prune, the ring's write (KERNEL-79) and the three roots, sharing ONE empty-digest thunk in
 `commit`'s order, so the empty digest is counted where `commit` first forces it). The difference is
 the rows' share: the compiled admission's (`World.admitImpl`) one `rowsRun` in `checkWith`, and the
 rows root `commitWith` takes. Each counted result must be what
@@ -2352,7 +2356,7 @@ def countRowsTurn (E : Env D) (st : State D) (w w' : World D) (t : Turn D) (stem
         let e : Thunk D := Thunk.mk fun _ => Trie.emptyHash (trieSpec cE)
         let trie := commitTrie cE w t posts
         let journal := commitJournal cE w t
-        let refusals := pruneRefusals cE (w.height + 1) w.refusals
+        let refusals := ringPush cE w (pruneRefusals cE (w.height + 1) w.refusals)
         (trie.rootWith (trieSpec cE) e, journal.rootWith (journalSpec cE) e, refusals.rootWith (refusalSpec cE) e)
       let b := if stem then dbgTrace "<T" base else if ins then dbgTrace "<V" base else dbgTrace "<Y" base
       -- the rows run alone (`<L`) and the re-walk plant (`<M`), on the insert turns

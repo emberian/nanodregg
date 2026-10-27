@@ -130,6 +130,7 @@ def accountByAsset (X : Ctx D) : Ctx D :=
 def sys (R : Rows.Params D) : Option Mutation → Sys D
   | none => { writer := { R, X := R.ctx }, follow := R.ctx }
   | some .openLog => { writer := { R, X := R.ctx, gateLog := false }, follow := R.ctx }
+  | some .admitsForkedPin => { writer := { R, X := R.ctx, admitsForkedPin := true }, follow := R.ctx }
   | some .skipJudge => { writer := { R, X := skipJudge R.ctx }, follow := skipJudge R.ctx }
   | some .followVerifyAll =>
       { writer := { R, X := R.ctx }, follow := { R.ctx with verify := fun _ _ _ => true } }
@@ -1354,27 +1355,34 @@ def dropAnchor : List String → List String
   | ["sync", "--to", _] => ["sync"]
   | av => av
 
+/-- A chain no fold has (`forgePin`'s pin): the digest of a rows-only domain. -/
+def forgedChain (X : Ctx D) : D := X.env.hash "nanodregg/rows/forged-pin" ByteArray.empty
+
 /-- A hostile client's call: `av` parsed and planned on the World `w` as it stands, under the member
 `self` whose current and next public keys are `key` and `next`, and signed by `sign`, WITHOUT follow's
 own admission (`planUnchecked`, the range reads `signedReads` lists); `refused NAME`'s name otherwise. -/
 def forgedCall (X : Ctx D) (self : Self D) (w : World D) (key next : ByteArray)
-    (sign : ByteArray → ByteArray) (av : List String) : Except String ByteArray :=
+    (sign : ByteArray → ByteArray) (av : List String) (pinAt : Option Nat := none) : Except String ByteArray :=
   match parse (D := D) X.digestOf (av.map String.toUTF8) with
   | .error r => .error r.name
   | .ok cmd =>
     match body X self w ⟨key, next, ByteArray.empty⟩ cmd >>= fun b =>
         signedReads X w cmd >>= fun rs => planUnchecked X self w key rs b with
     | .error r => .error r.name
-    | .ok (u, _) => .ok (X.callBytes ⟨u, sign (X.callMessage u)⟩)
+    | .ok (u, _) =>
+      let u := match pinAt with
+        | some s => { u with causal := some ⟨s, forgedChain X⟩ }
+        | none => u
+      .ok (X.callBytes ⟨u, sign (X.callMessage u)⟩)
 
 /-- The actor's command planned on its follow's World as it stands (no catching up: the World of its
 last command), signed and submitted WITHOUT follow's own admission (`planUnchecked`, with the range
 reads `signedReads` lists there). The outcome is the writer's answer. -/
-def forged (who : String) (av : List String) : M D (Expect × String) := do
+def forged (who : String) (av : List String) (pinAt : Option Nat := none) : M D (Expect × String) := do
   let a ← actor who
   let R ← params
   match forgedCall (← X) a.self a.follow.world (R.pub (a.key who)) (R.pub (a.next who))
-      (R.sign (a.key who)) av with
+      (R.sign (a.key who)) av pinAt with
   | .error r => pure (.refused r, "")
   | .ok call =>
       sawCall who call
@@ -1473,6 +1481,13 @@ def runAct (l : Line) : M D (Expect × String) := do
       match ← subst argv with
       | .error e => pure (.refused e, "")
       | .ok av => forged l.actor av
+  | .forgePin argv steps => do
+      match ← subst argv with
+      | .error e => pure (.refused e, "")
+      | .ok av =>
+        let (o, out) ← forged l.actor av (some steps)
+        -- a writer that committed it: the actor's own follow re-derives the page that carries it
+        if o == .ok then ndRun l.actor ["sync"] .none else pure (o, out)
   | .carry rightDigest => do
       let st ← get
       match ← st.host.stop with

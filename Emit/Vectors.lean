@@ -40,7 +40,7 @@ namespace Nanodregg.Emit.Vectors
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Codec Nanodregg.Codec.Kernel
 
 deriving instance Repr for RowKey, RowSlot, RowLeaf, RowAct, RowTouch, RangeRead, Op, Cell, Entry, Slot, Leaf,
-  Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, MeterSlot, WindowSlot, RefusalLeaf,
+  Act, Touch, Turn, Right, AcctRef, Body, Unsigned, Call, Host.Entry, Host.Carry.Head, RefusalSlot, MeterSlot, ChainSlot, WindowSlot, RefusalLeaf,
   Refused, Step, Trie.Proof, Lang.Term, Lang.SupportPin, Lang.HoleCode, Lang.HoleROM, Lang.RelDecl, Lang.Package
 
 /-! ## Values, drawn from the simulation's generator -/
@@ -145,9 +145,13 @@ def rows (ps : List Sim.D) : G (List (RowSlot Sim.D × RowLeaf)) := do
 def rowsOf (l : List (RowSlot Sim.D × RowLeaf)) : Rows Sim.D :=
   Trie.build (rowSpec Sim.env) (rowSpec Sim.env).depth 0 l
 
+/-- A causal pin (KERNEL-79): a step count and a chain. -/
+def causalPin : G (CausalPin Sim.D) := do
+  return ⟨← nat64, ← dig⟩
+
 def turn : G (Turn Sim.D) := do
   return ⟨← dig, ← nat64, ← nat64, ← list 2 touch, ← list 1 (do return (← dig, ← cell)), ← list 2 dig, ← nat64,
-    ← bytes 8, ← list 2 rowTouch, ← list 1 rangeRead, ← dig, ← nat64⟩
+    ← bytes 8, ← list 2 rowTouch, ← list 1 rangeRead, ← dig, ← nat64, ← opt causalPin⟩
 def right (k : Nat) : G Right := do
   match k with
   | 0 => return .observe
@@ -176,7 +180,7 @@ def body (k : Nat) : G (Body Sim.D) := do
   | _ => return .createOf (← bytes 4) (← list 2 dig) (← slots)
 def unsigned (k : Nat) : G (Unsigned Sim.D) := do
   return ⟨← dig, ← dig, ← bytes 4, ← nat64, ← nat64, ← list 2 (do return (← dig, ← dig)), ← nat64, ← body k,
-    ← list 1 (do return (← rowSlot (← below 2), ← dig)), ← list 1 rangeRead⟩
+    ← list 1 (do return (← rowSlot (← below 2), ← dig)), ← list 1 rangeRead, ← opt causalPin⟩
 
 /-- A canonical trie of a few slots, each holding the leaf of its kind. -/
 def trie : G (Cells Sim.D) := do
@@ -243,6 +247,14 @@ def refusals (h : Nat) : G (List (WindowSlot Sim.D × RefusalLeaf Sim.D)) := do
     return (WindowSlot.refusal (.tx (← dig)), RefusalLeaf.refused (h + 1 - (← below 3)) (← below 40) m))
   return txs ++ countsOf h txs
 
+/-- The ring of recent heads a World at step count `steps` can hold (KERNEL-79): up to three of the
+steps before it, each at its own ring position under the World's origin, each with a drawn chain. -/
+def ringOf (o : Sim.D) (steps : Nat) : G (List (WindowSlot Sim.D × RefusalLeaf Sim.D)) := do
+  let n := min steps (← below 4)
+  (List.range n).mapM fun i => do
+    let s := steps - 1 - i
+    return (WindowSlot.chain (.ring o (ringSlot s)), RefusalLeaf.head s (← dig))
+
 /-- The canonical refusals trie of a listing (KERNEL-44). -/
 def refusalsOf (l : List (WindowSlot Sim.D × RefusalLeaf Sim.D)) : Refusals Sim.D :=
   Trie.build (refusalSpec Sim.env) (refusalSpec Sim.env).depth 0 l
@@ -266,10 +278,12 @@ def world : G (World Sim.D) := do
   let allowance ← below (2 ^ 40)
   let origin ← dig
   -- every recorded refusal cost a step that did not raise the height (`refusalsCounted`); the
-  -- window's total is filed under the origin (KERNEL-55 R1)
-  return { trie := t, journal := journalOf j, refusals := refusalsOf (r ++ totalOf h origin r),
-           rows := rowsOf rw, height := h, steps := h + (r.map refusedOne).sum + extra,
-           chain, allowance, origin }
+  -- window's total is filed under the origin (KERNEL-55 R1); the ring holds recent heads under the
+  -- origin too (KERNEL-79)
+  let steps := h + (r.map refusedOne).sum + extra
+  let ring ← ringOf origin steps
+  return { trie := t, journal := journalOf j, refusals := refusalsOf (r ++ totalOf h origin r ++ ring),
+           rows := rowsOf rw, height := h, steps, chain, allowance, origin }
 
 /-- `w` with one more refusal recorded, transaction `k` charged to `m` at height `w.height + 1` (in
 the current window), and the step it cost: the three inserts `commitRefusals` makes (the record, the
@@ -834,11 +848,14 @@ def sites : List Site :=
       (each 2 fun _ => do return journalOf (← journal ((← below 1000) + 3))) (fun t => text t.toList),
     site "kernel/proof" (proof (journalSpec Sim.env) Sim.dc Sim.dc) proofVecs text,
     site "kernel/refusal-slot" (refusalSlot Sim.dc)
-      (each 4 fun k => match k with
+      (each 5 fun k => match k with
         | 0 => do return .refusal (.tx (← dig)) | 1 => do return .refusal (.count (← dig) (← u64))
-        | 2 => do return .refusal (.total (← dig) (← u64)) | _ => do return .meter (.ticks (← dig) (← u64))) text,
+        | 2 => do return .refusal (.total (← dig) (← u64)) | 3 => do return .meter (.ticks (← dig) (← u64))
+        | _ => do return .chain (.ring (← dig) (← u64))) text,
     site "kernel/refusal-leaf" (refusalLeaf Sim.dc)
-      (each 2 fun k => if k = 0 then do return .refused (← nat64) (← nat64) (← dig) else do return .count (← nat64)) text,
+      (each 3 fun k => match k with
+        | 0 => do return .refused (← nat64) (← nat64) (← dig) | 1 => do return .count (← nat64)
+        | _ => do return .head (← nat64) (← dig)) text,
     site "kernel/refusal-order" (refusalsTrie Sim.env Sim.dc)
       (each 2 fun _ => do
         let h := (← below 1000) + 3

@@ -766,7 +766,7 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
 def rowsMk {D : Type} [Ord D] [DecidableEq D] (E : Env D) (w : World D) (tag : String) (touches : List (Touch D))
     (creates : List (D × Cell)) (rows : List (RowTouch D)) : Turn D :=
   let t0 : Turn D := ⟨E.hash "nanodregg/host-sim/rows" (tag.toUTF8 ++ E.bytes w.chain), w.height + 1,
-    w.height + 64, touches, creates, [], 0, ByteArray.empty, rows, [], E.hash "nanodregg/host-sim/rows" tag.toUTF8, 0⟩
+    w.height + 64, touches, creates, [], 0, ByteArray.empty, rows, [], E.hash "nanodregg/host-sim/rows" tag.toUTF8, 0, none⟩
   { t0 with charge := t0.weight }
 
 /-- The two rows Turns from `w` (KERNEL-46/48): a parent cell born with one declared relation (limit 3,

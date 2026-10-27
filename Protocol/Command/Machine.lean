@@ -450,6 +450,9 @@ keys it pins (`signedReads`). Every other command signs none. -/
 structure SignedReads (D : Type) where
   ranges : List (RangeRead D) := []
   points : List (RowKey D) := []
+  /-- sign no causal pin (KERNEL-79): the call may be admitted on any history where its other pins
+  hold. Every command pins follow's head unless it floats -/
+  float : Bool := false
 
 /-- Derive with the signature not yet known, pinning each cell, and each row (KERNEL-54: the
 receiver's `rowUnpinned` names the row's key), the derivation asks for. A row already pinned and
@@ -499,6 +502,9 @@ def planUnchecked (X : Ctx D) (me : Self D) (w : World D) (key : ByteArray) (rd 
       -- the range reads the command names (`signedReads`: follow's own listing at `w`); a method's
       -- range read with none signed is the receiver's `rangeUnpinned`, never derived here
       ranges := rd.ranges
+      -- the head follow planned at (KERNEL-79, PROTOCOL-85): the call is admitted only on a history
+      -- whose chain at follow's step count is follow's chain, unless the command floats
+      causal := if rd.float then none else some ⟨w.steps, w.chain⟩
       -- a ceiling no Turn exceeds (`admit_weight`), so the derivation reports the charge rather
       -- than refusing `overPrice`; the signed price is set from that charge below
       maxCharge := Kernel.Bounds.weightMax
@@ -884,6 +890,10 @@ def oneLine (s : String) : String := (s.replace "\n" " ").replace "\r" " "
 stdout beside `refused NAME` on stderr, so the name stays the verdict and the hint is text. -/
 def hint (X : Ctx D) : Refusal D → Option String
   | .reject (.stale c) => some s!"hint stale {hex X c}: this cell moved under the call; read it and run the command again"
+  -- the call's causal pin is not this World's history (KERNEL-79): withdrawn by the step it names
+  | .reject (.forkedPin n) => some s!"hint forkedPin {n}: the writer's history at step {n} is not the one this call was planned on; sync and run the command again, or compare heads (sync --to)"
+  | .reject (.pinAhead n) => some s!"hint pinAhead {n}: the writer has not reached step {n}, which this call was planned at"
+  | .reject (.pinExpired n) => some s!"hint pinExpired {n}: step {n} is older than the writer's ring of recent heads; sync and run the command again"
   -- the law's own words (at most `Lang.reasonMax` bytes), on ONE line: a law cannot add lines
   | .receive (.lawDenied l why) => some s!"hint lawDenied {hex X l}: {oneLine why}"
   -- a method's own refusal by its name (LANG-51's `refuse T "why"`: the Bell's `notResident`), as LANG

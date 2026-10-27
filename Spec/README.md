@@ -64,8 +64,10 @@ claims above are their components, and what is owed is listed beside each:
 3. *Every accepted member view or foreign receipt is justified by a history extending its explicitly
    trusted start, with prefix consistency or checkable equivocation evidence under the declared
    head-authority and comparison assumptions.* (A2′ is prefix agreement for members who compare stated
-   heads; it is not SUNDR's fork consistency, which no claim here states: a call names no prefix, so a
-   writer can admit one call on two branches; PROTOCOL-82.) Components: A1 (under `keyFaithful`), A2, A2′ (posts and
+   heads; it is not SUNDR's fork consistency, which no claim here states: a call without a causal pin
+   names no prefix, so a writer can admit it on two branches; PROTOCOL-82. A pinned call is not admitted
+   on two histories that differ before its pin, `Kernel.pinned_no_join`, KERNEL-79; no top claim
+   states it yet.) Components: A1 (under `keyFaithful`), A2, A2′ (posts and
    `sync --to`), receipts (§7), §9 under `HeadOf`. Owed: unequal positions, passed anchors and forgotten
    positions; §9's validity source chosen explicitly (signed heads give accountability, not validity).
 

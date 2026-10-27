@@ -31,6 +31,8 @@ structure Checked (E : Env D) (w : World D) (t : Turn D) (posts : List (Post D))
   bounds : checkBounds t = .ok ()
   journal : checkJournal E w t = .ok ()
   shape : checkShape t = .ok ()
+  /-- the causal pin holds on this World (KERNEL-79) -/
+  causal : checkCausal E w t.causal = .ok ()
   window : checkWindow w t = .ok ()
   steps : checkSteps w = .ok ()
   touches : ∃ raw, mapEx (touchCheck E w) t.touches = .ok raw ∧ posts = raw.reduceOption
@@ -53,14 +55,14 @@ theorem check_ok {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
     | ok pr => rw [hc] at h; cases h; exact ⟨pr.2, rfl⟩
   unfold checkWith at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, hrr, ⟨⟩, hrg, rr, hrw, ⟨⟩, h7,
+  obtain ⟨⟨⟩, h1, ⟨⟩, h2, ⟨⟩, h3, ⟨⟩, h4, ⟨⟩, hcz, raw, h5, ⟨⟩, hv, ⟨⟩, h6, ⟨⟩, hrr, ⟨⟩, hrg, rr, hrw, ⟨⟩, h7,
     ⟨⟩, h8, ⟨⟩, hk, ⟨⟩, hs, h9⟩ := h
   simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h9
   obtain ⟨h9, -⟩ := h9
   subst h9
   have ha : rowsAfter E w t = rr := by unfold rowsAfter; rw [hrw]
   rw [← ha] at hrw h7
-  exact ⟨h1, h3, h4, h2, hs, ⟨raw, h5, rfl⟩, hv, h6, h7, h8, hrr, hrg, hrw, hk⟩
+  exact ⟨h1, h3, h4, hcz, h2, hs, ⟨raw, h5, rfl⟩, hv, h6, h7, h8, hrr, hrg, hrw, hk⟩
 
 /-- Every touch of a checked turn passed `touchCheck`. -/
 theorem Checked.touch {E : Env D} {w : World D} {t : Turn D} {posts : List (Post D)}
@@ -169,14 +171,14 @@ theorem touchCheck_stale {E : Env D} {w : World D} {x : Touch D}
 stale, the turn is refused `stale` naming that cell. -/
 theorem stale_named {E : Env D} {w : World D} {t : Turn D} {pre post : List (Touch D)}
     {x : Touch D} (hb : checkBounds t = .ok ()) (hj : checkJournal E w t = .ok ())
-    (hs : checkShape t = .ok ()) (hw : checkWindow w t = .ok ())
+    (hs : checkShape t = .ok ()) (hcz : checkCausal E w t.causal = .ok ()) (hw : checkWindow w t = .ok ())
     (ht : t.touches = pre ++ x :: post) (hpre : ∀ y ∈ pre, ∃ r, touchCheck E w y = .ok r)
     (hstale : pinOf E (w.entry E x.cell) ≠ x.seen) :
     World.admit E w t = .error (.stale x.cell) := by
   have hm : mapEx (touchCheck E w) t.touches = .error (.stale x.cell) := by
     rw [ht]; exact mapEx_error_at (touchCheck_stale hstale) post hpre
   unfold World.admit check checkWith
-  simp [hb, hj, hs, hw, hm, bind, Except.bind, Except.map]
+  simp [hb, hj, hs, hcz, hw, hm, bind, Except.bind, Except.map]
 
 /-- A retry of an admitted transaction inside its window is answered `replayed` with its
 height, whatever else is true of the World now (only the static bounds and the window are

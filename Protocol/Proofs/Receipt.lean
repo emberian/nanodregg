@@ -127,7 +127,7 @@ theorem refusalsOk_fits {w : World D} (hr : w.RefusalsOk E) :
     ∀ k v, w.refusals.get (refusalSpec E) k = some v → Codec.Kernel.RefusalLeaf.Fits v := by
   intro k v hk
   have hf := hr.2 k v hk
-  rcases k with k | k <;> cases k <;> cases v <;> simp only [refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
+  rcases k with k | k | k <;> cases k <;> cases v <;> simp only [refusalFits, Bounds.counterLimit, Bounds.refusalsPerWindow, Bounds.refusalsPerWindowMax,
     Bounds.ticksPerWindow, Bounds.treeTicksMax, decide_eq_true_eq] at hf <;>
     simp only [Codec.Kernel.RefusalLeaf.Fits] <;> (try cases hf) <;> omega
 
@@ -299,6 +299,9 @@ theorem check_build {E : Env D} {w : World D} {tx : D} {nb : Nat} (hc : w.Journa
               have hf := hr.2 _ _ hrx
               simp only [refusalFits, Bounds.counterLimit, decide_eq_true_eq] at hf
               rw [if_pos ⟨by omega, by omega, refusal_prove_verifies hr.1 hrx, journal_prove_absent hc hjx⟩]
+          | head _ _ =>
+              have := hr.2 _ _ hrx
+              simp [refusalFits] at this
           | count n =>
               have := hr.2 _ _ hrx
               simp [refusalFits] at this

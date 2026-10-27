@@ -139,6 +139,11 @@ theorem settleOf_cancelled_record {D : Type} [Ord D] [DecidableEq D] {X : Ctx D}
         split at h
         · cases h; exact ⟨hh, m, rfl⟩
         · cases h
+      | head _ _ =>
+        dsimp only at h
+        simp only [Settle.ofReceipt] at h
+        repeat' split at h
+        all_goals first | cases h | (injection h with h; exact absurd h.symm cancelledCode_ne_stale)
       | count n =>
         dsimp only at h
         simp only [Settle.ofReceipt] at h

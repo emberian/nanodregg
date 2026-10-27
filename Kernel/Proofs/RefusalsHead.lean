@@ -50,6 +50,7 @@ theorem refusalLeafBytes_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {v v' : Ref
     (h : refusalLeafBytes E v = refusalLeafBytes E v') : v = v' := by
   have h0 : (⟨#[0]⟩ : ByteArray).size = 1 := rfl
   have h1 : (⟨#[1]⟩ : ByteArray).size = 1 := rfl
+  have h2 : (⟨#[2]⟩ : ByteArray).size = 1 := rfl
   cases v with
   | refused a c m =>
       cases v' with
@@ -66,6 +67,9 @@ theorem refusalLeafBytes_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {v v' : Ref
           have := congrArg ByteArray.size h
           simp only [refusalLeafBytes, ByteArray.size_append, nat64_bytes_size, h0, h1, hE.size] at this
           omega
+      | head _ _ =>
+          have := congrArg (fun b : ByteArray => b.data.toList.head?) h
+          simp [refusalLeafBytes, ByteArray.data_append] at this
   | count k =>
       cases v' with
       | refused a' c' m' =>
@@ -77,6 +81,23 @@ theorem refusalLeafBytes_inj {E : Env D} {n : Nat} (hE : E.Lawful n) {v v' : Ref
           simp only [refusalLeafBytes] at h
           obtain ⟨-, hn⟩ := bytes_append_inj h rfl
           rw [Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective hv hv' hn]
+      | head _ _ =>
+          have := congrArg (fun b : ByteArray => b.data.toList.head?) h
+          simp [refusalLeafBytes, ByteArray.data_append] at this
+  | head s c =>
+      cases v' with
+      | refused _ _ _ =>
+          have := congrArg (fun b : ByteArray => b.data.toList.head?) h
+          simp [refusalLeafBytes, ByteArray.data_append] at this
+      | count _ =>
+          have := congrArg (fun b : ByteArray => b.data.toList.head?) h
+          simp [refusalLeafBytes, ByteArray.data_append] at this
+      | head s' c' =>
+          simp only [Codec.Kernel.RefusalLeaf.Fits] at hv hv'
+          simp only [refusalLeafBytes] at h
+          obtain ⟨hs, hc⟩ := bytes_append_inj h (by simp only [ByteArray.size_append, nat64_bytes_size, h2])
+          obtain ⟨-, ha⟩ := bytes_append_inj hs rfl
+          rw [Nanodregg.Codec.Stream.nat64_lawfulOn.bytes_injective hv hv' ha, hE.bytes_inj hc]
 
 omit [DecidableEq D] in
 /-- **A refusals leaf digest determines its leaf** on the leaf codec's domain and a lawful `Env`, or

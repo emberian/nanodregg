@@ -201,16 +201,21 @@ def rangePinWire (dc : Stream D) : Stream (RangePinWire D) :=
 
 /-! ## Turns -/
 
+/-- A causal pin (KERNEL-79): the step count (u64), then the chain. -/
+def causalPin (dc : Stream D) : Stream (CausalPin D) :=
+  refine "kernel/causal-pin" (product nat64 dc) (fun (s, c) => some ⟨s, c⟩) (fun p => (p.steps, p.chain))
+
 def turn (dc : Stream D) : Stream (Turn D) :=
   refine "kernel/turn"
     (product dc (product nat64 (product nat64 (product (rawList Bounds.touchesMax (touch dc))
       (product (rawList Bounds.createsMax (product dc cell)) (product (rawList Bounds.nullifiersMax dc)
         (product nat64 (product (rawBytes Bounds.eventBytesMax)
           (product (rawList Bounds.rowsMax (rowTouch dc)) (product (rawList Bounds.rangesMax (rangeRead dc))
-            (product dc nat64)))))))))))
-    (fun (tx, nb, vu, ts, cs, ns, ch, ev, rs, qs, m, k) => some ⟨tx, nb, vu, ts, cs, ns, ch, ev, rs, qs, m, k⟩)
+            (product dc (product nat64 (option (causalPin dc))))))))))))))
+    (fun (tx, nb, vu, ts, cs, ns, ch, ev, rs, qs, m, k, cp) =>
+      some ⟨tx, nb, vu, ts, cs, ns, ch, ev, rs, qs, m, k, cp⟩)
     (fun t => (t.txId, t.notBefore, t.validUntil, t.touches, t.creates, t.nullifiers, t.charge, t.event, t.rows,
-      t.ranges, t.member, t.ticks))
+      t.ranges, t.member, t.ticks, t.causal))
 
 /-! ## Calls -/
 
@@ -309,10 +314,11 @@ def unsigned (dc : Stream D) : Stream (Unsigned D) :=
   refine "kernel/unsigned"
     (product dc (product dc (product (rawBytes callMax) (product nat64 (product nat64
       (product (rawList callMax (product dc dc)) (product nat64 (product (body dc)
-        (product (rawList callMax (product (rowKey dc) dc)) (rawList callMax (rangeRead dc)))))))))))
-    (fun (wo, m, k, nb, vu, ps, mc, b, rp, rq) => some ⟨wo, m, k, nb, vu, ps, mc, b, rp, rq⟩)
+        (product (rawList callMax (product (rowKey dc) dc)) (product (rawList callMax (rangeRead dc))
+          (option (causalPin dc))))))))))))
+    (fun (wo, m, k, nb, vu, ps, mc, b, rp, rq, cp) => some ⟨wo, m, k, nb, vu, ps, mc, b, rp, rq, cp⟩)
     (fun u => (u.world, u.member, u.key, u.notBefore, u.validUntil, u.pins, u.maxCharge, u.body, u.rowPins,
-      u.ranges))
+      u.ranges, u.causal))
 
 def call (dc : Stream D) : Stream (Call D) :=
   refine "kernel/call" (product (unsigned dc) (rawBytes callMax))

@@ -41,6 +41,10 @@ def counterLimit : Nat := 18446744073709551616
 def kindLimit : Nat := 4294967296
 /-- The widest validity window, in heights. Bounds how long a transaction id must be remembered. -/
 def windowMax : Nat := 1024
+/-- The recent chain heads a World keeps (KERNEL-79): a ring of this many, one per step, so a causal
+pin naming one of the last `pinWindow` steps is judged against the World's own chain there, and an
+older one is `pinExpired`. -/
+def pinWindow : Nat := 128
 /-- The most journal entries a World holds: every World a genesis reaches holds fewer
 (`Kernel.reach_journal_bounded`, KERNEL-33), and so does every World folded from a carry of one
 (`Receive.carry_fold_journal_bounded`), so a carry's `journalTooLong` never fires on a reached

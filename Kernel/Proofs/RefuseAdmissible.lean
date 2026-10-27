@@ -82,6 +82,8 @@ theorem refuse_admissible {X : Ctx D} {w w₁ : World D} {c : Call D} {t : Turn 
       | refused h' code m => simp at hjr
       | count n =>
         simp [req, bind, Except.bind, hst, hjn, hev.1, hev.2, hm, ht, hw.1, hw.2, hv, hu, hnb]
+      | head s ch =>
+        simp [req, bind, Except.bind, hst, hjn, hev.1, hev.2, hm, ht, hw.1, hw.2, hv, hu, hnb]
   unfold World.refuse
   rw [hok]
 

@@ -25,9 +25,9 @@ bridge, at a 32-byte digest (the deployed one).
   at a ten-byte version (`world_size_slack_tight`: a one-cell World at version `2^63`, in
   `World.CodecFits`, meets the bound with equality, and every ratio below `54/49` fails for it). Every other entry kind is below 54/49: a
   tombstone 35/32, a spent nullifier 34/32, a head 86/84, a row at most `weight + 2` over `weight ≥ 56`.
-* `refusalsBytes_le_of_fits`: on a listing `refusalsFits` admits, at most 82 bytes per refused
-  transaction and 50 per count or total (KERNEL-55 R1), so HOST bounds `refusalsBytes` from KERNEL's
-  counts alone.
+* `refusalsBytes_le_of_fits`: on a listing `refusalsFits` admits, 82 bytes per refused transaction
+  and per ring leaf (KERNEL-79) and 50 per count, total or meter leaf (KERNEL-55 R1), so HOST bounds
+  `refusalsBytes` from KERNEL's counts alone.
 -/
 
 namespace Nanodregg.Codec.Kernel
@@ -87,7 +87,7 @@ omit [Ord D] in
 theorem refusalItem_size {dc : Stream D} (hdc : ∀ d, dc.size d = 32) (p : WindowSlot D × RefusalLeaf D) :
     (product (refusalSlot dc) (refusalLeaf dc)).size p = refusalEntryBytes p := by
   obtain ⟨k, v⟩ := p
-  rcases k with k | k <;> cases k <;> cases v <;>
+  rcases k with k | k | k <;> cases k <;> cases v <;>
     simp [product, refusalSlot, refusalSlotWire, refusalLeaf, refusalLeafWire, refine, choice, tagged, nat64,
       u64, hdc, refusalEntryBytes]
 
@@ -232,20 +232,24 @@ theorem world_size_le_div [DecidableEq D] {E : Env D} {PD : D → Prop} {dc : St
 /-! ## The refusals' bytes, from their counts -/
 
 omit [Ord D] in
-theorem refusalItemTx_sum_le : ∀ l : List (WindowSlot D × RefusalLeaf D), (l.map refusalItemTx).sum ≤ l.length
+theorem refusalItemTx_sum_le : ∀ l : List (WindowSlot D × RefusalLeaf D),
+    (l.map refusalItemTx).sum + (l.map chainKeyOne).sum ≤ l.length
   | [] => by simp
   | (k, v) :: l => by
     have := refusalItemTx_sum_le l
-    rcases k with k | k <;> cases k <;> simp only [List.map_cons, List.sum_cons, List.length_cons, refusalItemTx] <;> omega
+    rcases k with k | k | k <;> cases k <;>
+      simp only [List.map_cons, List.sum_cons, List.length_cons, refusalItemTx, chainKeyOne] <;> omega
 
-/-- **On a listing `refusalsFits` admits, a refused transaction's entry is 82 bytes and every other
-entry (a member's count, the World's total) 50**: `82 · tx + 50 · (length − tx)`. So `refusalsBytes`
-is bounded by KERNEL's counts of the listing, which this module does not prove (KERNEL-55 R1's
-refusals bound, `Kernel.refusals_bounded` and `Kernel.refusals_length_le`). -/
+/-- **On a listing `refusalsFits` admits, a refused transaction's entry and a ring leaf (KERNEL-79)
+are 82 bytes and every other entry (a member's count, the World's total, a meter leaf) 50**:
+`82 · tx + 82 · ring + 50 · (length − tx − ring)`. So `refusalsBytes` is bounded by KERNEL's counts
+of the listing, which this module does not prove (KERNEL-55 R1's refusals bound,
+`Kernel.refusals_bounded` and `Kernel.refusals_length_le`). -/
 theorem refusalsBytes_eq_of_fits [DecidableEq D] {w : World D}
     (hf : refusalsFits w.height w.refusals.toList = true) :
-    refusalsBytes w = 82 * (w.refusals.toList.map refusalItemTx).sum +
-      50 * (w.refusals.toList.length - (w.refusals.toList.map refusalItemTx).sum) := by
+    refusalsBytes w = 82 * (w.refusals.toList.map refusalItemTx).sum + 82 * (w.refusals.toList.map chainKeyOne).sum +
+      50 * (w.refusals.toList.length - (w.refusals.toList.map refusalItemTx).sum -
+        (w.refusals.toList.map chainKeyOne).sum) := by
   unfold refusalsBytes
   have hall := List.all_eq_true.mp hf
   generalize w.refusals.toList = l at hall ⊢
@@ -256,14 +260,16 @@ theorem refusalsBytes_eq_of_fits [DecidableEq D] {w : World D}
     have ih := ih (fun q hq => hall q (List.mem_cons_of_mem _ hq))
     have hle := refusalItemTx_sum_le l
     obtain ⟨k, v⟩ := p
-    rcases k with k | k <;> cases k <;> cases v <;> simp_all [refusalFits, refusalEntryBytes, refusalItemTx] <;> omega
+    rcases k with k | k | k <;> cases k <;> cases v <;>
+      simp_all [refusalFits, refusalEntryBytes, refusalItemTx, chainKeyOne] <;> omega
 
-/-- The bound HOST discharges from KERNEL's counts: at most 82 bytes per entry, and 50 per entry that
-is no refused transaction's. -/
+/-- The bound HOST discharges from KERNEL's counts: 82 bytes per refused transaction and per ring
+leaf, and 50 per other entry. -/
 theorem refusalsBytes_le_of_fits [DecidableEq D] {w : World D}
     (hf : refusalsFits w.height w.refusals.toList = true) :
-    refusalsBytes w ≤ 82 * (w.refusals.toList.map refusalItemTx).sum +
-      50 * (w.refusals.toList.length - (w.refusals.toList.map refusalItemTx).sum) :=
+    refusalsBytes w ≤ 82 * (w.refusals.toList.map refusalItemTx).sum + 82 * (w.refusals.toList.map chainKeyOne).sum +
+      50 * (w.refusals.toList.length - (w.refusals.toList.map refusalItemTx).sum -
+        (w.refusals.toList.map chainKeyOne).sum) :=
   Nat.le_of_eq (refusalsBytes_eq_of_fits hf)
 
 /-! ## The slack is attained (the tooth) -/

@@ -76,17 +76,18 @@ def worldWeightMax : Nat := potentialMax / Kernel.potentialRatio.2
 three windows of entries (KERNEL's `journal_bounded`). -/
 def journalBytesMax : Nat := 72 * (3 * Kernel.Bounds.windowMax)
 
-/-- The most window-trie bytes a reached World holds (KERNEL-55 R1, KERNEL-68): at most `3 C`
-transaction entries of 82 bytes, `C + 1` count and total entries of 50, and `windowMax` meter entries
-of 50 (KERNEL's `refusals_bounded`, CODEC's `refusalsBytes_le_of_fits`), `C` = `refusalsPerWindowMax`. -/
+/-- The most window-trie bytes a reached World holds (KERNEL-55 R1, KERNEL-68, KERNEL-79): at most
+`3 C` transaction entries of 82 bytes, `C + 1` count and total entries of 50, `windowMax` meter
+entries of 50 and `pinWindow` ring entries of 82 (KERNEL's `refusals_bounded`, CODEC's
+`refusalsBytes_le_of_fits`), `C` = `refusalsPerWindowMax`. -/
 def refusalsBytesMax : Nat :=
   82 * (3 * Kernel.Bounds.refusalsPerWindowMax) +
-    50 * (Kernel.Bounds.refusalsPerWindowMax + 1 + Kernel.Bounds.windowMax)
+    50 * (Kernel.Bounds.refusalsPerWindowMax + 1 + Kernel.Bounds.windowMax) + 82 * Kernel.Bounds.pinWindow
 
 /-- **The World bound, derived** (HOST-57, KERNEL-55 ROOT Q1 = B): CODEC's size bound
 (`world_size_le_div`: `entrySlack` of the weight, plus journal, refusals and fixed bytes) at the most
-weight, journal and refusals a reached World holds. 91,965,546 bytes (KERNEL-68 added `windowMax` meter
-entries of 50 bytes to the window trie's bound). `Host.Size.reached_size_le`
+weight, journal and refusals a reached World holds. 91,976,042 bytes (KERNEL-68 added `windowMax` meter
+entries of 50 bytes to the window trie's bound, KERNEL-79 `pinWindow` ring entries of 82). `Host.Size.reached_size_le`
 proves every World the deployed writer reaches encodes within it. -/
 def worldBytesDerived : Nat :=
   Codec.Kernel.entrySlack.1 * worldWeightMax / Codec.Kernel.entrySlack.2 + journalBytesMax +

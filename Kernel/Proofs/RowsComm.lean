@@ -689,7 +689,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
       ticksUsed E w t₁.member + t₁.ticks + t₂.ticks ≤ Bounds.ticksPerWindow)
     (hfoot : RowsCommFoot t₁ t₂) (hfit : RowsFitTogether E w.rows t₁ t₂)
     (hwin : w.height + 2 ≤ t₂.validUntil) (hchg : t₁.charge + t₂.charge ≤ w.allowance)
-    (hsteps : w.steps + 2 < Bounds.counterLimit)
+    (hsteps : w.steps + 2 < Bounds.counterLimit) (hpin : PinSurvives w t₂)
     (hk₁ : Checked E w t₁ posts₁) (hk₂ : Checked E w t₂ posts₂) (hnew : w.journalAt E t₂.txId = none)
     (ha₁ : World.admit E w t₁ = .ok (commit E w t₁ posts₁)) :
     check E (commit E w t₁ posts₁) t₂ = .ok posts₂ ∧
@@ -739,7 +739,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
         if (w.height + 1) % Bounds.windowMax = 0 then (w.refusalAt E (.tx t₂.txId)).filter
           (keptRefusal (w.height + 1) (.refusal (.tx t₂.txId))) else w.refusalAt E (.tx t₂.txId) := by
       unfold World.refusalAt
-      rw [commit_refusals, pruneRefusals_get (commitMeter_canon hro.1), commitMeter_get_refusal]
+      rw [commit_refusals, ringPush_get_refusal, pruneRefusals_get (commitMeter_canon hro.1), commitMeter_get_refusal]
     have hw : ∀ hh code mb, w.refusalAt E (.tx t₂.txId) ≠ some (.refused hh code mb) := by
       intro hh code mb he; rw [he] at h; simp at h
     have hw1 : ∀ hh code mb, (commit E w t₁ posts₁).refusalAt E (.tx t₂.txId) ≠ some (.refused hh code mb) := by
@@ -760,6 +760,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
     | some lf =>
         cases lf with
         | refused hh code mb => exact absurd hra (hw1 hh code mb)
+        | head _ _ => rfl
         | count n => rfl
   -- the nullifiers
   have hnul' : checkNullifiers E (commit E w t₁ posts₁) t₂ = .ok () := by
@@ -824,6 +825,7 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
             have hf := hro.2 _ _ hg
             cases v with
             | refused _ _ _ => simp [refusalFits] at hf
+            | head _ _ => simp [refusalFits] at hf
             | count n =>
                 simp only [refusalFits, decide_eq_true_eq] at hf
                 rw [← hw1] at hf
@@ -850,10 +852,23 @@ private theorem check_after {E : Env D} {w : World D} {t₁ t₂ : Turn D} {post
         split
         · rename_i hh; exact absurd rfl hh.2
         · exact h2
+  -- the causal pin (KERNEL-79): the ring still answers its step after `t₁`'s
+  have hcausal' : checkCausal E (commit E w t₁ posts₁) t₂.causal = .ok () := by
+    have h := hk₂.causal
+    cases hp : t₂.causal with
+    | none => rfl
+    | some p =>
+      rw [hp] at h
+      obtain ⟨hle, hc⟩ := checkCausal_some_ok.mp h
+      refine checkCausal_some_ok.mpr ⟨?_, ?_⟩
+      · show p.steps ≤ w.steps + 1
+        omega
+      · rw [chainAt_admit hro.1 ha₁ hle (hpin p hp)]
+        exact hc
   suffices hw : checkWith E (commit E w t₁ posts₁) t₂ = .ok (posts₂, rr) by unfold check; rw [hw]; rfl
   unfold checkWith
   simp only [except_bind_ok]
-  exact ⟨(), hk₂.bounds, (), hwin', (), hjour, (), hk₂.shape, raw, hmap', (), hposts ▸ hk₂.value, (), hnul',
+  exact ⟨(), hk₂.bounds, (), hwin', (), hjour, (), hk₂.shape, (), hcausal', raw, hmap', (), hposts ▸ hk₂.value, (), hnul',
     (), hremain, (), hranges, rr, hrr, (), hposts ▸ hcharge, (), hcreates, (), hticks', (), hst, by rw [hposts]; rfl⟩
 
 /-! ## Two rains on one bell -/
@@ -863,7 +878,10 @@ disjoint outside the heads (`RowsCommFoot`), whose inserts fit together in every
 insert into (`RowsFitTogether`), whose windows reach the height after both, whose charges the
 budget covers together, and with room for two steps: BOTH orders admit, they hold the same cells
 and nullifiers and read the same at every rows slot, and every head has moved by the sum of both
-turns' inserts. (On canonical journals and refusals: every reached World's.) -/
+turns' inserts. (On canonical journals and refusals: every reached World's.) KERNEL-79: each turn's
+causal pin survives the other's step (`PinSurvives`: it names `w`'s head, or a ring position the step
+does not overwrite); a pin exactly `Bounds.pinWindow` behind expires under the other turn, so the order
+would matter. -/
 theorem admit_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D}
     (hjc : w.JournalCanon E) (hro : w.RefusalsOk E)
     (hfoot : RowsCommFoot t₁ t₂) (hfit : RowsFitTogether E w.rows t₁ t₂)
@@ -871,6 +889,7 @@ theorem admit_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D}
     (hchg : t₁.charge + t₂.charge ≤ w.allowance) (hsteps : w.steps + 2 < Bounds.counterLimit)
     (hmeter : t₁.member = t₂.member → 0 < t₁.ticks → 0 < t₂.ticks →
       ticksUsed E w t₁.member + t₁.ticks + t₂.ticks ≤ Bounds.ticksPerWindow)
+    (hpin₁ : PinSurvives w t₁) (hpin₂ : PinSurvives w t₂)
     (h₁ : World.admit E w t₁ = .ok w₁) (h₂ : World.admit E w t₂ = .ok w₂) :
     ∃ w₁₂ w₂₁, World.admit E w₁ t₂ = .ok w₁₂ ∧ World.admit E w₂ t₁ = .ok w₂₁ ∧
       (∀ s, rowAt E w₁₂.rows s = rowAt E w₂₁.rows s) ∧
@@ -880,10 +899,10 @@ theorem admit_comm {E : Env D} {w w₁ w₂ : World D} {t₁ t₂ : Turn D}
           sm + insA p rel t₁.rows + insA p rel t₂.rows, l, cap, wd, rt) := by
   obtain ⟨posts₁, hk₁, rfl⟩ := admit_ok h₁
   obtain ⟨posts₂, hk₂, rfl⟩ := admit_ok h₂
-  obtain ⟨hc12, hv12⟩ := check_after hjc hro hmeter hfoot hfit hwin₂ hchg hsteps hk₁ hk₂ (admit_new h₂) h₁
+  obtain ⟨hc12, hv12⟩ := check_after hjc hro hmeter hfoot hfit hwin₂ hchg hsteps hpin₂ hk₁ hk₂ (admit_new h₂) h₁
   obtain ⟨hc21, hv21⟩ := check_after hjc hro
     (fun h a b => by rw [h]; have := hmeter h.symm b a; omega)
-    (foot_symm hfoot) (fit_symm hfit) hwin₁ (by omega) hsteps
+    (foot_symm hfoot) (fit_symm hfit) hwin₁ (by omega) hsteps hpin₁
     hk₂ hk₁ (admit_new h₁) h₂
   have hd := hfoot.2.2.2.2.2.2.2.2.2.1
   have h₁₂ : World.admit E (commit E w t₁ posts₁) t₂ = .ok (commit E (commit E w t₁ posts₁) t₂ posts₂) := by
