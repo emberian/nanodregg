@@ -37,6 +37,11 @@ export async function loadKernel(factory) {
     found: (input, i) => call(K._w_found, input, i),
     join: (invitation, key) => call(K._w_join, invitation, key),
     self: (i, member, grant) => call(K._w_self, i, enc.encode(member), enc.encode(grant)),
+    // the rows' relay around a hosted tab's socket: before it (an answer of its own, or forward) and after
+    // the meter, read back from member i's own fold (World.ticksUsed)
+    meter: (i) => call(K._w_meter, i),
+    relayPre: (op) => call(K._w_relay_pre, op),
+    relayPost: (op, p, r) => call(K._w_relay_post, op, p, r),
     genesis: (b) => call(K._w_genesis, b),
     host: (op, p) => call(K._w_host, op, p),
     follow: (i, op, p) => call(K._w_follow, i, op, p),
@@ -113,13 +118,28 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null, host = null
   const ok = N.status.ok;
   const reply = (b) => ({ status: b[0], payload: b.slice(1) });
   const local = !host;
-  const toWriter = host ?? (async (op, p) => K.host(op, p));
+  // a hosted World's frames pass the tab's relay (the rows' relay lies, Web.Sim.Testground.relayPre/
+  // relayPost) on their way to the socket and back, as the tab's own writer's do inside K.host
+  const viaRelay = (send) => async (op, p) => {
+    const pre = K.relayPre(op);
+    if (pre[0] !== ok) return pre;            // no World in the kernel: its refusal is the reply
+    if (pre.length > 1) return pre.slice(1);  // the relay answered the frame itself
+    return K.relayPost(op, p, await send(op, p));
+  };
+  const toWriter = host ? viaRelay(host) : (async (op, p) => K.host(op, p));
+  // a writer the transport cannot reach is the transport's error (transport.js TransportError, nd's
+  // RunError::Host), never a reply: `null` here, and the caller ends the command or loses the reply
   const sendHost = async (who, op, p) => {
-    const r = await toWriter(op, p);
-    onFrame({ who, to: local ? 'writer' : 'host', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]], payload: r.slice(1), lied: local ? K.lied() : false });
+    let r;
+    try { r = await toWriter(op, p); } catch (e) {
+      onFrame({ who, to: local ? 'writer' : 'host', op: N.opName[op], bytes: p.length, status: 'unreachable', payload: new Uint8Array(0), lied: false });
+      lostWhy = e.message; return null;
+    }
+    onFrame({ who, to: local ? 'writer' : 'host', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]], payload: r.slice(1), lied: K.lied() });
     return r;
   };
   const sendFollow = (who, i, op, p) => { const r = K.follow(i, op, p); onFrame({ who, to: 'follow', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]] }); return r; };
+  let lostWhy = '';
   const signResult = (cu, keyI, nextI, msg) => cat(Uint8Array.of(ok), C.write(T.signResult, { key: cu.pub(keyI), next: cu.pub(nextI), signature: cu.sign(keyI, msg) }));
 
   function stepOf(b) {
@@ -144,7 +164,11 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null, host = null
         case 'precommit': st = await resume(m, st.k, cat(Uint8Array.of(ok), C.write(T.precommitResult, { next: m.custody.pub(1), pending: m.custody.pub(2) }))); break;
         case 'signNext': m.arming = true; st = await resume(m, st.k, signResult(m.custody, 1, 2, st.message)); break;
         case 'signIncoming': st = await resume(m, st.k, signResult(m.custody, 1, 2, st.message)); break;
-        case 'host': st = await resume(m, st.k, await sendHost(m.name, st.op, st.payload)); break;
+        case 'host': {
+          const r = await sendHost(m.name, st.op, st.payload);
+          if (!r) return { exit: 'client', stdout: '', stderr: `host: ${lostWhy}\n` };
+          st = await resume(m, st.k, r); break;
+        }
         case 'submit': {
           m.last = st.call;   // the attempt store's frozen bytes: what `cancel CALL` names
           if (beforeSubmit) await beforeSubmit(m, argv, st.call);
@@ -168,7 +192,7 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null, host = null
         case 'submit': case 'lookup': {
           const r = await sendHost(m.name, a === 'submit' ? N.op.submit : N.op.lookup, call);
           if (a === 'submit') sends++;
-          hostReply = r; hostSeen = statusSeen[N.statusName[r[0]]] ?? 'lost';
+          hostReply = r ?? new Uint8Array(1); hostSeen = r ? statusSeen[N.statusName[r[0]]] ?? 'lost' : 'lost';
           last = [req(a), seenI(hostSeen)]; break;
         }
         case 'confirm': case 'probe': {
@@ -203,6 +227,7 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null, host = null
     if (r[0] !== ok) return { exit: 'refused', stdout: '', stderr: `refused ${dec.decode(r.slice(1))}\n` };
     m.last = r.slice(1);
     const h = await sendHost(m.name, N.op.submit, m.last);
+    if (!h) return { exit: 'client', stdout: '', stderr: `host: ${lostWhy}\n`, forged: true };
     const said = N.statusName[h[0]];
     return { exit: said === 'ok' ? 'ok' : said, stdout: '', stderr: said === 'ok' ? '' : `${said} ${dec.decode(h.slice(1))}\n`, forged: true };
   }

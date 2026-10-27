@@ -8,7 +8,7 @@ Three processes on the writer's box, each with a PID file (`run.sh`) or a unit (
 |---|---|---|
 | `nd-supervise … -- host serve STORE` | the writer, under the supervisor's mux (bounds, deadlines, named closes) | `STATE/run/host.sock` (0600) |
 | `node testground/guestbook.mjs serve STATE/gb STATE/run/host.sock` | founder 0, a member like any other: signs the invitation (`world.json`), enrols each visitor's join token (`enroll`, `grant world … observe`) with its own follow re-deriving | `STATE/gb/guestbook.sock` |
-| `python3 ws-relay.py` | WebSocket ↔ host.sock, bytes only (parses no frame, no op); `GET /world.json`; `POST /enroll` → the guest-book | `127.0.0.1:PORT` |
+| `python3 ws-relay.py` | WebSocket ↔ host.sock, bytes only (parses no frame, no op); `GET /world.json`; `POST /enroll` and `GET /attest` → the guest-book | `127.0.0.1:PORT` |
 
 To turn it on (hbox, MEASURED 10-26 in `wt/testground-b`, PORT 18787 behind an ssh tunnel):
 
@@ -17,11 +17,29 @@ To turn it on (hbox, MEASURED 10-26 in `wt/testground-b`, PORT 18787 behind an s
     deploy/testground/run.sh genesis STATE      # the guest-book's seeds (0600) and `host genesis`
     PORT=8787 deploy/testground/run.sh start STATE
     deploy/testground/run.sh stop STATE         # each process by its PID file
+    PORT=8787 deploy/testground/run.sh serve STATE   # the same in the foreground, for systemd (units/)
+
+Under systemd (`units/nd-testground.service`, Type=simple around `run.sh serve`): the writer's
+confinement is bwrap (nd-supervise), which needs user namespaces, so leave `ProtectKernelTunables`
+and `ProcSubset=pid` OFF (bwrap writes `/proc/sys/user/max_user_namespaces` and reads
+`/proc/sys/kernel/overflowuid`; measured by the demo-box tenant, redregg `codex/TENANT.report.md`).
+The kernel build pins libuv's headers at v1.48.0 (`build.sh`), so no CPATH is needed.
 
 Then expose `127.0.0.1:PORT` as `wss://HOST/ws` (TLS and the proxy are the operator's act; nothing
 here listens beyond loopback) and open the page as `…/testground/?hosted=wss://HOST/ws&join`. Each tab
 joins over the invitation, under the sponsor key `world.json` names (`Invite.accept`), is enrolled,
 and is then a member; a second tab is a second member of the same World.
+
+**The fork (CLIENT-46).** A second writer of the SAME genesis is a fork: `run.sh fork STATE FORK`
+copies the guest-book's seeds and runs `host genesis` with STATE's label and nonce (it refuses unless
+the genesis input is byte-identical), then `PORT=8788 run.sh start FORK`. Both Worlds have one origin
+and one invitation; they part at their first different Turn. Open tab one as
+`?hosted=wss://A/ws&join&fork=wss://B/ws` and tab two as `?hosted=wss://B/ws&join`; tab two writes; in
+tab one, World ▸ Fork check ▸ "check its attestation" fetches B's guest-book's signed head (`GET
+/attest`: its `sync --attest`) and tab one's follow, cold, catches up through that position on A's
+log and is refused `forkedWorld` by name. Check from the LONGER World's tab: a position past your
+writer's tip is not reached yet. `testground/fork-run.mjs ws://A/ws ws://B/ws` is the same under node
+(the control, A's own attestation, is `shared`).
 
 **What a visitor trusts.** Its own follow, checking every reply the writer sends. **The caveat**: the
 kernel and the sponsor key come from whoever serves the page and `world.json`; until the kernel's hash

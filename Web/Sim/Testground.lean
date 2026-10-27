@@ -24,7 +24,8 @@ accept, refuse, plan, render and attempt decision is one of these exports' Lean:
 * `tg_lie NAME` — the writer tells one of the conformance rows' own lies from now on (`lies`): a
   writer plant runs `Host.serve` with the parameters `Loopback.sys` gives that mutation; a relay
   fault puts the rows' relay (`Loopback.pageFault`, `lookupLie`, `losesFirstReply`, `forwards`,
-  `cancelLie`) between the members and the writer. `honest` ends it. `tg_lies` is the menu as JSON,
+  `cancelLie`) between the members and the writer — in a hosted tab, around its socket (`tg_relay_pre`
+  before it, `tg_relay_post` after: the same two halves the tab's own writer is wrapped in). `honest` ends it. `tg_lies` is the menu as JSON,
   each lie with the row that plants it and that row's expected outcome, read off `Protocol.rows`;
   `tg_lied` says whether the relay rewrote the last frame.
 * `tg_cold I` — founder `I`'s follow starts again from the genesis World (the rows' `cold` lines).
@@ -46,6 +47,7 @@ import Host.Follow
 import Host.Cli
 import Protocol.Attempt
 import Protocol.Command.Exit
+import Lang.StdGen
 
 namespace Nanodregg.Web.Sim.Testground
 
@@ -142,6 +144,11 @@ def foundersOf : List ByteArray → Option (List (ByteArray × D))
   | k :: n :: rest => (foundersOf rest).map ((k, nextKeyDigest P.X n) :: ·)
   | [_] => none
 
+/-- The genesis World's head, as the rows bind it for a self-head seed (`Protocol.selfHeadSeed`'s
+`{@chain0}` and `{@roots0}`, `Loopback`'s binds): `chain0 HEX`, `roots0 HEX`. -/
+def head0Lines (g : World D) : List String :=
+  [s!"chain0 {Text.toHex (P.X.env.bytes g.chain)}", s!"roots0 {Text.toHex (P.X.env.bytes (g.roots P.X.env))}"]
+
 def genesisOf (argv : List ByteArray) : IO ByteArray := do
   let name :: nonce :: keys := argv | return refusedText "usage"
   let some fs := foundersOf keys | return refusedText "usage"
@@ -156,7 +163,7 @@ def genesisOf (argv : List ByteArray) : IO ByteArray := do
                     grant := founderGrantId P.X g.origin i, window := Follow.window }
           follow := { world := g } : Member }
       ground.set (some { writer := some { mem, res }, members, genesis := g })
-      let lines := Cli.genesisLines g nonce fs.length authority
+      let lines := Cli.genesisLines g nonce fs.length authority ++ head0Lines g
       return reply Protocol.Status.ok.code ("\n".intercalate lines ++ "\n").toUTF8
 
 /-- One frame through the deployed loop: a port whose queue holds the frame, served until it is
@@ -183,33 +190,59 @@ def serveOne (g : Ground) (wr : Writer) (f : Frame) : IO (Ground × Array Reply)
 /-- A lost reply, as the member's transport sees one: the connection closed, nothing said. -/
 def lostReply : ByteArray := reply Protocol.Status.closed.code ByteArray.empty
 
-/-- The writer's answer to one frame, through the relay the lie puts in front of it: a cancel the
-relay answers itself, a submit it never forwards or whose first reply it loses, a page or a lookup it
-rewrites. -/
+/-- The relay's lie, if it tells one, and the op a frame names. -/
+def faultOf (g : Ground) (op : UInt8) : Option (Protocol.Fault × Protocol.Op) :=
+  match g.lie, Op.all.find? (·.code = op) with
+  | some (.relay f), some o => some (f, o)
+  | _, _ => none
+
+/-- The relay BEFORE the writer: the answer it gives a frame itself (a cancel it answers on its own
+word, `cancelLie`; a submit it never forwards, `forwards`), or `none`: the frame goes on to the writer. -/
+def relayPre (g : Ground) (op : UInt8) : Option ByteArray := do
+  let (f, o) ← faultOf g op
+  match Protocol.Rows.Loopback.cancelLie (D := D) f o with
+  | some r => some r
+  | none => if o = .submit && !Protocol.Rows.Loopback.forwards f then some lostReply else none
+
+/-- The relay AFTER the writer: the writer's reply `r` to a forwarded frame as the member receives
+it (the first reply of a call lost, `losesFirstReply`; a page or a lookup rewritten, `pageFault`,
+`lookupLie`), and the ground with the lost call remembered. -/
+def relayPost (g : Ground) (op : UInt8) (payload r : ByteArray) : Ground × ByteArray :=
+  match faultOf g op with
+  | none => (g, r)
+  | some (f, o) =>
+    if o = .submit && Protocol.Rows.Loopback.losesFirstReply f && !g.lost.contains payload then
+      ({ g with lost := g.lost.push payload }, lostReply)
+    else if o = .log then (g, Protocol.Rows.Loopback.pageFault f r)
+    else if o = .lookup then (g, Protocol.Rows.Loopback.lookupLie f r) else (g, r)
+
+/-- The writer's answer to one frame, through the relay the lie puts in front of it: `relayPre`, the
+tab's writer (`Host.serve`), `relayPost`. A hosted tab runs the same two halves around its socket. -/
 def hostOf (op : UInt8) (payload : ByteArray) : IO ByteArray := do
   let some g ← ground.get | return refusedText "noWorld"
   let some wr := g.writer | return refusedText "noWriter"
   let g := { g with conn := g.conn + 1, lied := false }
-  let fault := match g.lie with | some (.relay f) => some f | _ => none
-  let o := Op.all.find? (·.code = op)
-  let said (g : Ground) (r : ByteArray) (lied : Bool) : IO ByteArray := do
-    ground.set (some { g with lied }); pure r
-  if let (some f, some o) := (fault, o) then
-    if let some r := Protocol.Rows.Loopback.cancelLie (D := D) f o then return ← said g r true
-    if o = .submit && !Protocol.Rows.Loopback.forwards f then return ← said g lostReply true
+  if let some r := relayPre g op then ground.set (some { g with lied := true }); return r
   let (g, rs) ← serveOne g wr ⟨UInt32.ofNat g.conn, op, payload⟩
   let r := match rs[0]? with
     | some r => reply r.status r.payload
     | none => refusedText "noReply"
-  match fault with
-  | none => said g r false
-  | some f =>
-    if o = some .submit && Protocol.Rows.Loopback.losesFirstReply f && !g.lost.contains payload then
-      said { g with lost := g.lost.push payload } lostReply true
-    else
-      let r' := if o = some .log then Protocol.Rows.Loopback.pageFault f r
-        else if o = some .lookup then Protocol.Rows.Loopback.lookupLie f r else r
-      said g r' (r' != r)
+  let (g, r') := relayPost g op payload r
+  ground.set (some { g with lied := r' != r }); return r'
+
+/-- A hosted tab's relay before its socket: `ok ‖ reply` when the relay answers the frame itself,
+`ok` alone when the frame goes on to the writer. -/
+@[export tg_relay_pre] def tgRelayPre (op : UInt8) : IO ByteArray := do
+  let some g ← ground.get | return refusedText "noWorld"
+  match relayPre g op with
+  | some r => ground.set (some { g with lied := true }); return reply Protocol.Status.ok.code r
+  | none => ground.set (some { g with lied := false }); return reply Protocol.Status.ok.code ByteArray.empty
+
+/-- A hosted tab's relay after its socket: the writer's reply `R` as the member receives it. -/
+@[export tg_relay_post] def tgRelayPost (op : UInt8) (payload r : ByteArray) : IO ByteArray := do
+  let some g ← ground.get | return refusedText "noWorld"
+  let (g, r') := relayPost g op payload r
+  ground.set (some { g with lied := r' != r }); return r'
 
 def followOf (i : Nat) (op : UInt8) (payload : ByteArray) : IO ByteArray := do
   let some g ← ground.get | return refusedText "noWorld"
@@ -298,12 +331,15 @@ indices of `Request.all` and `Seen.all` (`255`: nothing sent yet); the action's 
 def lieOf (name : String) : Option Lie := lies.find? (·.word = name)
 
 /-- From now on the writer tells the lie `NAME` (`honest`: none); answers the name, or `refused
-noLie`. -/
+noLie`. A hosted tab has no writer of its own: a writer lie there is `refused noWriter`, and a relay
+lie is told by the tab's relay around its socket (`tg_relay_pre`, `tg_relay_post`). -/
 @[export tg_lie] def tgLie (name : ByteArray) : IO ByteArray := do
   let some g ← ground.get | return refusedText "noWorld"
   let n := (String.fromUTF8? name).getD ""
   if n = "honest" then ground.set (some { g with lie := none, lost := #[] }); return reply Protocol.Status.ok.code name
   match lieOf n with
+  | some (.writer _) => if g.writer.isNone then return refusedText "noWriter" else
+      ground.set (some { g with lie := lieOf n, lost := #[] }); return reply Protocol.Status.ok.code name
   | some l => ground.set (some { g with lie := some l, lost := #[] }); return reply Protocol.Status.ok.code name
   | none => return refusedText "noLie"
 
@@ -358,14 +394,52 @@ next key `NEXT`'s public key named); `ok ‖ call` for the page to submit, or `r
     | .ok call => return reply Protocol.Status.ok.code call
     | .error r => return refusedText r
 
-/-- A row's own texts by name: the package a scene installs and the seed it creates with. -/
+/-- A package's text as `install` reads it (`Lang.Print.package`, the printer the rows' `slot` uses). -/
+def packageText (p : Lang.Package) : String := (Lang.Print.package p).getD ""
+
+section Spin
+open Nanodregg.Lang
+
+/-- `go k` counts `k` down to 0, one step per tick-charged call: `fix` of the record `{go}`. -/
+def spinGo : Term :=
+  .get (.fix (.lam (.record [("go", .fn .nat .nat)]) (.record [("go", .lam .nat
+    (.ite (.prim .eq (.var 0) (.nat 0)) (.nat 0) (.app (.get (.var 1) "go") (.prim .sub (.var 0) (.nat 1)))))]))) "go"
+
+/-- The meter's demo package (KERNEL-68, DESIGN-OBS §1): one method `spin {n}` that counts `n` down
+before it writes `n := 0`, so an invoke spends ticks in proportion to `n`; nothing else. A member
+who spins near the signed budget sixteen times in one window has spent `Bounds.ticksPerWindow`, and
+the next spin is the kernel's `ticksBudget`, naming the member. -/
+def spinPackage : Package :=
+  Std.pkgOf (.record [("n", .nat)]) []
+    [("spin", .record [("n", .nat)], [], .lam (.record []) (.lam (.record [("n", .nat)]) (.lam (.record [("n", .nat)])
+      (.lam reqTy (resultT (callsT []) (.record [("n", .app spinGo (.get (.var 1) "n"))]))))))]
+
+end Spin
+
+/-- A row's own texts by name: the package a scene installs and the seed it creates with, and the
+journey's generators (§GN, `Lang.Std`): `boundedGenerator` (GN6–GN8: `generate {max}` installs a
+record bounded at `max`) and `ownerGenerator` (GN9–GN11: `generate {}` installs a record only its
+invoker may use). -/
 def texts : List (String × String) :=
-  [("slot", Protocol.slot), ("selfHeadSeed", Protocol.selfHeadSeed)]
+  [("slot", Protocol.slot), ("selfHeadSeed", Protocol.selfHeadSeed),
+   ("boundedGenerator", packageText (Lang.Std.boundedGenerator [("n", .nat)] "n")),
+   ("ownerGenerator", packageText (Lang.Std.ownerGenerator [("n", .nat)])),
+   ("spin", packageText spinPackage)]
 
 @[export tg_text] def tgText (name : ByteArray) : ByteArray :=
   match texts.lookup ((String.fromUTF8? name).getD "") with
   | some t => reply Protocol.Status.ok.code t.toUTF8
   | none => refusedText "noText"
+
+/-- The meter, read back from founder `I`'s OWN fold (KERNEL-68: `World.ticksUsed`, the ticks its
+admitted Turns spent in the window its next Turn would land in, against `Bounds.ticksPerWindow`):
+`ticks N`, `budget M`, `height H`. Nothing here asks the writer. -/
+@[export tg_meter] def tgMeter (i : UInt32) : IO ByteArray := do
+  let some g ← ground.get | return refusedText "noWorld"
+  let some m := g.members[i.toNat]? | return refusedText "noMember"
+  let w := m.follow.world
+  return reply Protocol.Status.ok.code
+    s!"ticks {ticksUsed P.X.env w m.self.member}\nbudget {Bounds.ticksPerWindow}\nheight {w.height}\n".toUTF8
 
 /-! ## A hosted World: the follows in the tab, the writer elsewhere -/
 

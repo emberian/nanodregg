@@ -26,6 +26,9 @@ extern lean_object* tg_text(lean_object*);
 extern lean_object* tg_found(lean_object*, uint32_t);
 extern lean_object* tg_join(lean_object*, lean_object*);
 extern lean_object* tg_self(uint32_t, lean_object*, lean_object*);
+extern lean_object* tg_relay_pre(uint8_t);
+extern lean_object* tg_meter(uint32_t);
+extern lean_object* tg_relay_post(uint8_t, lean_object*, lean_object*);
 lean_object* initialize_nanodregg_Web_Sim_Testground(uint8_t builtin);
 void lean_initialize_runtime_module(void);
 void lean_io_mark_end_initialization(void);
@@ -83,6 +86,11 @@ EMSCRIPTEN_KEEPALIVE int32_t w_text(const uint8_t* p, size_t n) { return take(tg
 EMSCRIPTEN_KEEPALIVE int32_t w_found(const uint8_t* p, size_t n, uint32_t i) { return io_take(tg_found(ba(p, n), i)); }
 EMSCRIPTEN_KEEPALIVE int32_t w_join(const uint8_t* p, size_t n, const uint8_t* k, size_t kn) { return io_take(tg_join(ba(p, n), ba(k, kn))); }
 EMSCRIPTEN_KEEPALIVE int32_t w_self(uint32_t i, const uint8_t* m, size_t mn, const uint8_t* g, size_t gn) { return io_take(tg_self(i, ba(m, mn), ba(g, gn))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_meter(uint32_t i) { return io_take(tg_meter(i)); }
+EMSCRIPTEN_KEEPALIVE int32_t w_relay_pre(uint32_t op) { return io_take(tg_relay_pre((uint8_t)op)); }
+EMSCRIPTEN_KEEPALIVE int32_t w_relay_post(uint32_t op, const uint8_t* p, size_t n, const uint8_t* r, size_t rn) {
+  return io_take(tg_relay_post((uint8_t)op, ba(p, n), ba(r, rn)));
+}
 static int32_t take_string(lean_object* s) {
   free(out_buf);
   out_len = lean_string_size(s) - 1;

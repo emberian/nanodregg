@@ -14,8 +14,9 @@ the tab, so nothing this relay passes is trusted by anyone: a lie here is caught
 
 Besides the socket: `GET /world.json` (the guest-book's invitation and its sponsor key; the
 testground's trust caveat is that whoever serves this file and the page chooses both, DESIGN-
-TESTGROUND §7) and `POST /enroll` (a join token, one line to the guest-book's socket, its one-line
-JSON answer back). Python's standard library only. Listens where it is told; exposing it to the
+TESTGROUND §7), `POST /enroll` (a join token, one line to the guest-book's socket, its one-line
+JSON answer back) and `GET /attest` (the guest-book's own signed head, `sync --attest`, for a member
+of another writer of the same genesis to check: the fork demo). Python's standard library only. Listens where it is told; exposing it to the
 internet (TLS, a reverse proxy) is the operator's act, not this file's.
 """
 import argparse, asyncio, base64, hashlib, os, signal, struct, sys
@@ -74,6 +75,8 @@ class Relay:
                 n = int(hdr.get("content-length", "0"))
                 if n > ENROLL_MAX: w.write(http(b"413 Payload Too Large"))
                 else: w.write(http(b"200 OK", await self.enroll(await r.readexactly(n)), b"application/json"))
+            elif method == "GET" and path == "/attest":
+                w.write(http(b"200 OK", await self.ask(b"attest\n"), b"application/json"))
             elif method == "OPTIONS":
                 w.write(http(b"204 No Content"))
             else:
@@ -89,13 +92,17 @@ class Relay:
         tok = token.strip()
         if not tok or any(c not in b"0123456789abcdef" for c in tok):
             return b'{"refused":"badToken"}'
+        return await self.ask(b"join " + tok + b"\n")
+
+    async def ask(self, line):
+        """One line to the guest-book's socket; its one-line JSON answer back."""
         try:
             gr, gw = await asyncio.open_unix_connection(self.a.guestbook)
-            gw.write(b"join " + tok + b"\n"); await gw.drain()
-            line = await asyncio.wait_for(gr.readline(), 120)
+            gw.write(line); await gw.drain()
+            ans = await asyncio.wait_for(gr.readline(), 120)
             gw.close()
-            return line.strip() or b'{"refused":"guestbookSilent"}'
-        except Exception as e:
+            return ans.strip() or b'{"refused":"guestbookSilent"}'
+        except Exception:
             return b'{"refused":"guestbookUnreachable"}'
 
     async def ws(self, r, w, hdr):

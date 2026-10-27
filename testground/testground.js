@@ -4,7 +4,7 @@
 import factory from './kernel.mjs';
 import { loadKernel, client, genesis, custody, rand32, hex, unhex } from './nd.js';
 import { framed, wsOpen } from './transport.js';
-import { demos, runDemo, lieScenes, memberLies, runScene } from './demos.js';
+import { demos, runDemo, lieScenes, memberLies, runScene, head0Of } from './demos.js';
 
 const $ = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -115,7 +115,7 @@ async function joinHosted(url = null) {
   const kv = Object.fromEntries(text.trim().split('\n').map((l) => l.split(' ')));
   for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); }
   frames = []; cmdNo = 0; lie = 'honest'; setTray();
-  const host = framed(wsOpen(url), { closedStatus: K.table.statuses.find((x) => x.name === 'closed').code, frameMax: K.table.bounds.frameBytesMax });
+  const host = framed(wsOpen(url), { frameMax: K.table.bounds.frameBytesMax });
   const me = { name: 'you', index: +kv.index, custody: custody(K, [rand32(), rand32(), rand32()]) };
   me.nd = client(K, { host, onFrame: (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie, ...f }); renderLog(); } });
   world = { hosted: true, url, wj, origin: kv.origin, members: [me], objects: new Map(), text: '' };
@@ -139,6 +139,7 @@ function openHosted() {
     $('table', { class: 'props sunken' }, row('relay', world.url), row('origin', world.origin), row('sponsor', `${world.wj.sponsor} (the guest-book)`),
       row('you', me.id ? `member ${me.id}  grant ${me.grant}` : 'not yet enrolled')),
     $('p', { class: 'dim' }, 'The writer is a real host serve elsewhere; this tab holds your keys and your follow, which re-derives every step before custody signs. Open this page in a second tab to be a second member of the same World.'),
+    relayMenu(me), forkCheck(me),
     $('button', { class: 'btn', onclick: () => newWorld() }, 'Back to a World in this tab'));
   openWindow({ id: 'world', title: 'World — hosted', x: 110, y: 16, w: 570, body });
 }
@@ -156,9 +157,9 @@ function setLie(name) {
   const note = document.getElementById('writer-note'); if (note) note.replaceChildren(...lieNote(name));
 }
 function lieNote(name) {
-  if (name === 'honest') return ['The writer runs the deployed loop with no plant. Every member re-derives what it serves anyway.'];
+  if (name === 'honest') return [world?.hosted ? 'The relay forwards every frame as it is. Your follow re-derives what the writer serves anyway.' : 'The writer runs the deployed loop with no plant. Every member re-derives what it serves anyway.'];
   const r = rowOf(name);
-  return [$('b', { class: 'bad' }, `The writer ${lieTitle(name)}.`), ' ', r?.row ? `This is row ${r.row}'s plant; at its line ${r.line} the row expects: ` : '', r?.row ? $('code', {}, r.expect) : '',
+  return [$('b', { class: 'bad' }, `The ${world?.hosted ? 'relay' : 'writer'} ${lieTitle(name)}.`), ' ', r?.row ? `This is row ${r.row}'s plant; at its line ${r.line} the row expects: ` : '', r?.row ? $('code', {}, r.expect) : '',
     '. Run any command, or play the row\'s scene; switching back to honest does not undo what a lying writer already logged.'];
 }
 function writerMenu() {
@@ -172,6 +173,37 @@ function writerMenu() {
     $('div', { id: 'writer-note', class: 'dim' }, ...lieNote(lie)),
     $('div', {}, 'Play a row\'s scene on a fresh World: ', scenes.map((n) => $('button', { class: 'btn', title: lieTitle(n), onclick: () => playLie(n) }, n))));
 }
+// The fork across two tabs (PROTOCOL-74): another writer of this World's genesis (deploy/testground/
+// run.sh fork) has the same origin and the same guest-book founder. Its guest-book's attestation (its
+// head, signed) is checked by THIS tab's follow: cold, catching up through the attested position on
+// this writer's log, and comparing chains (`sync --check`). The other tab is any tab joined there.
+function forkCheck(me) {
+  const url = $('input', { class: 'sunken', 'aria-label': 'another writer\'s relay', value: new URLSearchParams(location.search).get('fork') ?? '', placeholder: 'ws://…/ws of another writer of this genesis', size: 34 });
+  const go = async () => {
+    let a;
+    try { a = await (await fetch(`${httpOf(url.value)}/attest`)).json(); } catch (e) { a = { refused: e.message }; }
+    if (!a.attest) { print(me, $('div', { class: 'bad' }, `no attestation from ${url.value}: ${a.refused}`)); return; }
+    K.cold(me.index);
+    print(me, $('div', { class: 'warn' }, `— the other writer's guest-book signed its head (${url.value}). Your follow forgets its World and catches up through that position on YOUR writer's log, then compares the chains.`));
+    await runIn(me, ['sync', '--check', a.attest], 'another writer\'s attestation');
+  };
+  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Fork check (another writer of this genesis)'),
+    $('div', {}, url, ' ', $('button', { class: 'btn', onclick: go }, 'check its attestation')),
+    $('div', { class: 'dim' }, 'One origin, two writers: each tab\'s follow is right about its own writer. Comparing a signed head from the other is how a member finds the fork, by name.'));
+}
+// A hosted tab's relay: the rows' relay lies, told by this tab's own relay around its socket
+// (Web.Sim.Testground.relayPre/relayPost); the writer is the real one and stays honest. A writer lie
+// needs the writer in the tab, so only the relay's are offered here.
+function relayMenu(me) {
+  const sel = $('select', { id: 'writer-lie', 'aria-label': 'what the relay does', onchange: (e) => setLie(e.target.value) },
+    $('option', { value: 'honest' }, 'is honest'),
+    K.lies.filter((l) => l.kind === 'relay').map((l) => $('option', { value: l.name }, lieTitle(l.name))));
+  sel.value = lie;
+  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Relay (between this tab and the writer)'),
+    $('div', {}, 'The relay ', sel, ' ', $('button', { class: 'btn', title: 'your follow starts again from the World the invitation made', onclick: () => { K.cold(me.index); print(me, $('div', { class: 'warn' }, '— your follow forgot its World: your next command catches up from the start, re-deriving every Turn the writer serves through this relay.')); } }, 'cold')),
+    $('div', { id: 'writer-note', class: 'dim' }, ...lieNote(lie)),
+    $('div', { class: 'dim' }, 'Try: the relay alters a Turn, press cold, then nd sync. The real writer logged the honest Turn; your follow re-derives what the relay handed it and refuses it by name.'));
+}
 function setTray() {
   const t = document.getElementById('tray-lie'); if (!t) return;
   t.textContent = lie === 'honest' ? 'writer: honest' : `writer: LYING (${lie})`;
@@ -183,7 +215,7 @@ async function playLie(name, { fresh = true, from = 0 } = {}) {
   const by = (n) => world.members.find((m) => m.name === n);
   const origin = world.text.match(/^origin (\S+)/m)[1];
   const fetchText = async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text());
-  const r = await runScene({ ...sc, steps: sc.steps.slice(from) }, { fetchText, members: world.members, origin, act: async (s, v) => {
+  const r = await runScene({ ...sc, steps: sc.steps.slice(from) }, { fetchText, members: world.members, origin, head0: head0Of(world.text), act: async (s, v) => {
     const m = s.who ? by(s.who) : null;
     if (s.say) print(m ?? world.members[0], $('div', { class: 'warn' }, `— ${s.say}`));
     if (s.lie) { setLie(s.lie); return null; }
@@ -259,12 +291,20 @@ function openTerm(m, x, y) {
   });
   const body = $('div', { class: 'term' }, out, $('div', { class: 'line' }, $('span', { class: 'prompt' }, `${m.name}$ nd`), input));
   terms.set(m.name, { out, m });
-  openWindow({ id: `term-${m.name}`, title: `${m.name}@testground — nd`, x, y, w: 520, body });
-  print(m, $('span', { class: 'dim' }, `you are ${m.name}, founder ${m.index}: member ${short(m.id)}. Your keys are in this tab; your follow re-derives every step before it signs.\n`));
+  openWindow({ id: `term-${m.name}`, title: `${m.name}@${m.world ?? 'testground'} — nd`, x, y, w: 520, body });
+  print(m, $('span', { class: 'dim' }, `you are ${m.name}, founder ${m.index}${m.world ? ` of World ${m.world}` : ''}: member ${short(m.id)}. Your keys are in this tab; your follow re-derives every step before it signs.\n`));
 }
 function print(m, ...nodes) { const t = terms.get(m.name); if (!t) return; t.out.append(...nodes); t.out.scrollTop = t.out.scrollHeight; }
 
-async function runIn(m, argv, why = '', { forge = false, quiet = false } = {}) {
+// one command at a time per member, as one terminal runs one `nd` at a time: a command typed while
+// another is in flight (the hosted join's first sync) waits for it, never interleaves its frames
+async function runIn(m, argv, why = '', opts = {}) {
+  const prev = m.queue ?? Promise.resolve();
+  let release; m.queue = new Promise((r) => { release = r; });
+  await prev;
+  try { return await runOne(m, argv, why, opts); } finally { release(); }
+}
+async function runOne(m, argv, why, { forge = false, quiet = false } = {}) {
   cmdNo++;
   const label = argv.map((a) => (a.length > 40 ? `${a.slice(0, 37)}…` : a)).join(' ');
   print(m, $('div', {}, $('b', { class: forge ? 'bad' : '' }, `${m.name}$ ${forge ? 'forge' : 'nd'} ${label}`), why ? $('span', { class: 'dim' }, `   (${why})`) : ''));
@@ -277,7 +317,7 @@ async function runIn(m, argv, why = '', { forge = false, quiet = false } = {}) {
   const ms = performance.now() - t;
   const cls = r.exit === 'ok' ? 'ok' : r.exit === 'declined' || r.exit === 'open' || r.exit === 'uncertain' ? 'warn' : 'bad';
   print(m, $('div', {}, ...linkify(r.stdout, m)), r.stderr ? $('div', { class: cls }, r.stderr) : '',
-    $('div', { class: 'dim' }, `exit ${r.exit} · ${ms.toFixed(1)} ms · ${frames.length - n0} frames`));
+    $('div', { class: 'dim' }, `exit ${r.exit} · ${ms.toFixed(1)} ms · ${frames.length - n0} frames · ${meterOf(m)}`));
   for (const id of (r.stdout.match(/^id ([0-9a-f]{64})/gm) || []).map((l) => l.slice(3))) world.objects.set(id, argv[0]);
   const hm = r.stdout.match(/^height (\d+)/m); if (hm) world.height = +hm[1];
   document.getElementById('tray-height').textContent = `${frames.length} frames · ${cmdNo} commands`;
@@ -285,6 +325,14 @@ async function runIn(m, argv, why = '', { forge = false, quiet = false } = {}) {
   for (const o of wins.values()) if (o.refresh) o.refresh();
   tourCheck(m, argv, r);
   return r;
+}
+
+// the meter (KERNEL-68), read back from the member's OWN fold (tg_meter: World.ticksUsed), not asked of the writer
+function meterOf(m) {
+  const r = (m.K ?? K).meter(m.index);
+  if (r[0] !== K.table.statuses.find((x) => x.name === 'ok').code) return '';
+  const kv = Object.fromEntries(new TextDecoder().decode(r.slice(1)).trim().split('\n').map((l) => l.split(' ')));
+  return `meter ${(+kv.ticks).toLocaleString()} of ${(+kv.budget).toLocaleString()} ticks this window`;
 }
 
 // ---------------------------------------------------------------- refusals are dialogs, by name
@@ -301,7 +349,7 @@ function refusal(m, argv, r, fs) {
       $('div', { class: 'name' }, head),
       rest.map((l) => $('div', {}, l)),
       $('div', { class: 'dim' }, `${m.name}'s nd ${argv[0]} ended ${r.exit}. The writer said: ${writerSaid}.`),
-      lie !== 'honest' ? $('div', { class: 'bad' }, `The writer is lying: it ${lieTitle(lie)}.`, (() => { const l = fs.filter((f) => f.lied).at(-1); return l ? ` The frame that lied: #${l.n} (${l.op}).` : ''; })()) : '',
+      lie !== 'honest' ? $('div', { class: 'bad' }, `${world.hosted ? "The relay between this tab and the writer" : "The writer"} is lying: it ${lieTitle(lie)}.`, (() => { const l = fs.filter((f) => f.lied).at(-1); return l ? ` The frame that lied: #${l.n} (${l.op}).` : ''; })()) : '',
       $('div', {}, explain(head))),
     $('div', { class: 'actions' }, $('button', { class: 'btn', onclick: () => d.el.querySelector('.titlebar button').click() }, 'OK')));
   const d = openWindow({ id: `dlg-${cmdNo}`, title: r.exit === 'declined' ? 'Declined' : 'Refused', x: 260 + (cmdNo % 5) * 14, y: 180 + (cmdNo % 5) * 14, w: 460, body, dialog: true });
@@ -320,6 +368,8 @@ const glossary = {
   forkedPost: 'A member posted a head naming a step of this World with a chain your own fold does not have there: two histories claim one World. The page is kept; the post is named.',
   hostContradicted: 'The writer said one thing about your call and your own follow, re-deriving on its own World, says another. The attempt stays open; the writer\'s word is shown, never acted on.',
   relationFull: 'The slot is taken: the object\'s relation holds at most one entry.',
+  forkedWorld: 'Two writers of one World: the signed head you were handed names, at its step, a chain your own follow did not fold on your writer\'s log. One of the two histories is not yours; the page that says so is refused.',
+  ticksBudget: 'The meter: this member\'s admitted Turns already spent this window\'s ticks. Every Turn names its member and its ticks, re-derived by every follower, so no writer can bill another member; a later window starts again from zero.',
 };
 function explain(name) { const w = name.split(' ').find((x) => glossary[x]); return w ? glossary[w] : ''; }
 
@@ -392,15 +442,20 @@ const tour = [
   { say: 'alice grants bob mutate on it.', argv: () => ['grant', firstObj(), world.members[1].id, 'mutate'], who: 0, done: (a) => a[0] === 'grant' },
   { say: 'bob writes through that grant, but alice writes the same slot while bob\'s signed call is on its way. Watch the dialog: the kernel names why.', argv: () => ['write', firstObj(), '0', 'bob says hi', '--via', firstGrant()], who: 1, race: true, done: (a, m) => m.name === 'bob' && a[0] === 'write' },
   { say: 'Now make the writer lie. Until now every party was the same honest program, so you could not tell trusting the writer from checking it. The writer starts flipping a byte of every event it serves; bob forgets his World and catches up from genesis, re-deriving each Turn himself.', argv: () => ['sync'], who: 1, lie: 'flipEvent', done: (a, m) => m.name === 'bob' && a[0] === 'sync' && lie !== 'honest' },
+  // one demo per axis (DESIGN-TESTGROUND §5): each is demos.js's argv, typed into the terminals
+  { say: 'A generator generating (META): a package whose method installs a package; the generated law then refuses a write past the bound it was generated at.', demo: 'generator' },
+  { say: 'The meter (OBS): every Turn names its member and the ticks it spent; bob spins until the kernel refuses him ticksBudget, and reads his meter back from his own fold.', demo: 'meter' },
+  { say: 'A time-lock on another World\'s clock (OBS): a second World opens in this tab; alice\'s lock releases only on a receipt of a call World A admitted at or past the deadline.', demo: 'timelock' },
 ];
 let tourAt = 0;
 const firstObj = () => [...world.objects.entries()].find(([, v]) => v === 'create')?.[0] ?? '';
 const firstGrant = () => [...world.objects.entries()].find(([, v]) => v === 'grant')?.[0] ?? '';
-function tourCheck(m, argv, r) { if (!world.hosted && tour[tourAt] && r.exit !== 'client' && tour[tourAt].done(argv, m)) { tourAt++; openTour(); } }
+function tourCheck(m, argv, r) { if (!world.hosted && tour[tourAt] && !tour[tourAt].demo && r.exit !== 'client' && tour[tourAt].done(argv, m)) { tourAt++; openTour(); } }
 function openTour() {
   const items = tour.map((s, i) => $('li', { class: i < tourAt ? 'done' : '' }, s.say, i === tourAt ? $('div', {},
-    $('code', {}, `${world.members[s.who].name}$ nd ${s.argv().map((a) => short(a)).join(' ')}`), ' ',
+    $('code', {}, s.demo ? `Demos ▸ ${demos[s.demo].title}` : `${world.members[s.who].name}$ nd ${s.argv().map((a) => short(a)).join(' ')}`), ' ',
     $('button', { class: 'btn', onclick: async () => {
+      if (s.demo) { if (lie !== 'honest') setLie('honest'); const r = await playDemo(s.demo); if (r.ok) { tourAt++; openTour(); } return; }
       const m = world.members[s.who];
       if (s.race) raceArmed = { member: m.name, other: world.members[0], argv: ['write', firstObj(), '0', 'alice was here first'] };
       if (s.lie) { const sc = lieScenes[s.lie]; await playLie(s.lie, { fresh: false, from: sc.steps.findIndex((x) => x.lie) }); return; }
@@ -417,19 +472,37 @@ function openDemos() {
     $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run'), $('div', { class: 'dim' }, `${d.steps.length} nd commands, typed into alice's and bob's terminals as they run`)));
   openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' }, $('ol', {}, list), $('p', { class: 'dim' }, 'Every demo is the same argv a member would type; each runs on this World, so run it after the tour or on a fresh World.')) });
 }
+// a second World in this tab (the time-lock's clock): its own kernel instance, its own writer, its
+// founders' terminals; made once per World in the tab and kept until Re-genesis
+async function secondWorld(name, names) {
+  world.extra ??= {};
+  if (world.extra[name]) return world.extra[name];
+  const KW = await loadKernel(factory);
+  const g = genesis(KW, name, names);
+  const ndW = client(KW, { onFrame: (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie: 'honest', ...f, who: `${f.who}@${name}` }); renderLog(); } });
+  for (const m of g.members) { m.K = KW; m.nd = ndW; m.world = name; }
+  world.extra[name] = { K: KW, members: g.members, origin: g.text.match(/^origin (\S+)/m)[1] };
+  g.members.forEach((m, i) => openTerm(m, 640, 120 + i * 60));
+  return world.extra[name];
+}
 async function playDemo(name) {
   const t = performance.now();
+  const d = demos[name];
+  const origin = { B: world.text.match(/^origin (\S+)/m)?.[1] };
+  const members = [...world.members];
+  for (const [w, names] of Object.entries(d.worlds ?? {})) { const x = await secondWorld(w, names); origin[w] = x.origin; members.push(...x.members); }
   const r = await runDemo(name, {
-    fetchText: async (p) => (await fetch(p)).text(),
-    members: world.members,
+    fetchText: async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text()),
+    members, origin,
     run: async (m, argv, s) => {
       if (s.say) print(m, $('div', { class: 'warn' }, `— ${s.say}`));
-      const out = await runIn(m, argv);
+      const out = await runIn(m, argv, s.again ? `again (${s.again})` : '');
       if (s.open) { const id = (out.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1]; if (id) openObject(m, id); }
       return out;
     },
   });
   print(world.members[0], $('div', { class: r.ok ? 'ok' : 'bad' }, `demo ${name}: ${r.ok ? 'every step answered as scripted' : 'stopped'} in ${((performance.now() - t) / 1000).toFixed(1)} s`));
+  return r;
 }
 
 // ---------------------------------------------------------------- desktop icons
@@ -443,4 +516,4 @@ icon('?', 'Start here', () => openTour());
 icon('▶', 'Demos', () => openDemos());
 document.getElementById('start').addEventListener('click', () => openWorld());
 if (hostedDefault() && new URLSearchParams(location.search).has('join')) { newWorld(); joinHosted(hostedDefault()); } else newWorld();
-window.testground = { K, runIn, world: () => world, frames: () => frames, hex };
+window.testground = { K, runIn, playDemo, world: () => world, frames: () => frames, hex };

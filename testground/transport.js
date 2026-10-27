@@ -2,14 +2,18 @@
 // (deploy/testground/ws-relay.py: bytes only, onto the supervisor's host.sock) or the socket itself
 // under node. The frames are host.sock's own (client/src/frame.rs): `u32le len ‖ op ‖ payload` out,
 // `u32le len ‖ status ‖ payload` back; one request in flight per connection, as nd sends them. This
-// file decides nothing: a closed connection is answered as the mux answers it, `closed ‖ reason`,
-// and the attempt loop (Protocol.Attempt.next) decides what that means.
+// file decides nothing, and it invents no reply: a writer it cannot reach, or a connection that drops
+// before the reply, is a TransportError the caller sees, as nd's `RunError::Host` (client/src/run.rs):
+// at a follow step the command ends `client` naming it; in the attempt loop it is a lost reply. (A
+// `closed` reply fabricated here was handed to follow as the writer's word, and follow named it
+// `badResult` on every command of a tab whose runtime had no WebSocket: TENANT, 10-27.)
+export class TransportError extends Error {}
 const u32 = (n) => { const o = new Uint8Array(4); new DataView(o.buffer).setUint32(0, n, true); return o; };
 
 /** A transport over a duplex that delivers byte chunks: `open(onData, onClose)` → `{ send, close }`. */
-export function framed(open, { closedStatus, frameMax }) {
+export function framed(open, { frameMax }) {
   let conn = null, buf = new Uint8Array(0), waiting = null, chain = Promise.resolve();
-  const closed = (why) => Uint8Array.of(closedStatus, ...new TextEncoder().encode(why));
+  const lost = (why) => new TransportError(why);
   const onData = (chunk) => {
     const b = new Uint8Array(buf.length + chunk.length); b.set(buf); b.set(chunk, buf.length); buf = b;
     if (buf.length < 4) return;
@@ -17,13 +21,13 @@ export function framed(open, { closedStatus, frameMax }) {
     if (n > frameMax + 1) { conn?.close(); return; }
     if (buf.length < 4 + n) return;
     const reply = buf.slice(4, 4 + n); buf = buf.slice(4 + n);
-    const w = waiting; waiting = null; w?.(reply);
+    const w = waiting; waiting = null; w?.resolve(reply);
   };
-  const onClose = () => { conn = null; buf = new Uint8Array(0); const w = waiting; waiting = null; w?.(closed('unreachable')); };
+  const onClose = () => { conn = null; buf = new Uint8Array(0); const w = waiting; waiting = null; w?.reject(lost('the writer closed the connection before its reply')); };
   async function ask(op, payload) {
-    if (!conn) { try { conn = await open(onData, onClose); } catch { return closed('unreachable'); } }
-    return new Promise((resolve) => {
-      waiting = resolve;
+    if (!conn) { try { conn = await open(onData, onClose); } catch (e) { throw lost(`unreachable: ${e.message}`); } }
+    return new Promise((resolve, reject) => {
+      waiting = { resolve, reject };
       const f = new Uint8Array(4 + 1 + payload.length);
       f.set(u32(1 + payload.length)); f[4] = op; f.set(payload, 5);
       try { conn.send(f); } catch { onClose(); }
@@ -37,6 +41,7 @@ export function framed(open, { closedStatus, frameMax }) {
 
 /** A WebSocket (a browser's, or node's global one) as a duplex. */
 export const wsOpen = (url) => (onData, onClose) => new Promise((resolve, reject) => {
+  if (typeof WebSocket === 'undefined') throw new Error('this runtime has no WebSocket (node 20: run with --experimental-websocket; node 22+ has it)');
   const ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
   ws.onmessage = (e) => onData(new Uint8Array(e.data));
   ws.onclose = () => onClose();

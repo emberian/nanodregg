@@ -3,6 +3,8 @@
 //
 //   node guestbook.mjs init DIR                 seeds into DIR/seeds (0600); prints `key HEX next HEX`
 //                                               for `host genesis` (this member is founder 0)
+//   node guestbook.mjs keys DIR                 the same two lines from seeds DIR already holds (a
+//                                               second writer of the same genesis: run.sh fork)
 //   node guestbook.mjs serve DIR HOST_SOCK      DIR/input holds `host genesis`'s `input HEX`
 //
 // `serve` follows the World from its genesis inputs (tg_found), signs an invitation to it (`invite
@@ -10,7 +12,9 @@
 // id, which the page joins over (tg_join: Invite.accept under that key). Then, on DIR/guestbook.sock,
 // one line `join HEX` (a visitor's `init` token) is answered with one JSON line: `enroll HEX` and
 // `grant world MEMBER observe --via GRANT`, each this member's own nd command, its follow re-deriving
-// and refusing by name like any member's; `{"member","grant"}` or `{"refused": NAME}`. How many it
+// and refusing by name like any member's; `{"member","grant"}` or `{"refused": NAME}`. One line
+// `attest` is answered with this member's own `sync --attest` (`{"attest": HEX}`): its head, signed,
+// which a member of another writer of the same genesis checks with `sync --check` (PROTOCOL-74). How many it
 // enrolls is the kernel's to bound (the founder grant's enroll:N, its meter), not this file's.
 import { readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
 import net from 'node:net';
@@ -31,17 +35,22 @@ if (cmd === 'init') {
   console.log(`key ${hex(K.pub(seeds[0]))} next ${hex(K.pub(seeds[1]))}`);
   process.exit(0);
 }
-if (cmd !== 'serve') { console.error('usage: guestbook.mjs init DIR | serve DIR HOST_SOCK'); process.exit(2); }
+if (cmd === 'keys') {
+  const seeds = readFileSync(`${dir}/seeds`, 'utf8').trim().split('\n').map(unhex);
+  console.log(`key ${hex(K.pub(seeds[0]))} next ${hex(K.pub(seeds[1]))}`);
+  process.exit(0);
+}
+if (cmd !== 'serve') { console.error('usage: guestbook.mjs init DIR | keys DIR | serve DIR HOST_SOCK'); process.exit(2); }
 
 writeFileSync(`${dir}/guestbook.pid`, `${process.pid}\n`);
 const seeds = readFileSync(`${dir}/seeds`, 'utf8').trim().split('\n').map(unhex);
 const input = readFileSync(`${dir}/input`, 'utf8').trim().replace(/^input /, '');
-const T = K.table, okCode = T.statuses.find((s) => s.name === 'ok').code, closed = T.statuses.find((s) => s.name === 'closed').code;
+const T = K.table, okCode = T.statuses.find((s) => s.name === 'ok').code;
 const f = K.found(unhex(input), 0);
 if (f[0] !== okCode) { console.error(`found: ${new TextDecoder().decode(f.slice(1))}`); process.exit(1); }
 const lines = Object.fromEntries(new TextDecoder().decode(f.slice(1)).trim().split('\n').map((l) => l.split(' ')));
 const me = { name: 'guestbook', index: +lines.index, id: lines.member, grant: lines.grant, custody: custody(K, seeds) };
-const host = framed(unixOpen(net, hostSock), { closedStatus: closed, frameMax: T.bounds.frameBytesMax });
+const host = framed(unixOpen(net, hostSock), { frameMax: T.bounds.frameBytesMax });
 const nd = client(K, { host });
 const run = async (argv) => { const r = await nd.run(me, argv); console.error(`guestbook$ nd ${argv[0]} … → ${r.exit} ${r.stderr.trim()}`); return r; };
 const idOf = (r) => (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1];
@@ -69,6 +78,14 @@ net.createServer((c) => {
   c.on('data', (d) => {
     buf += d; if (buf.length > 512) return c.destroy();
     const nl = buf.indexOf('\n'); if (nl < 0) return;
+    if (buf.slice(0, nl) === 'attest') {
+      queue = queue.then(async () => {
+        const a = await run(['sync', '--attest']);
+        const h = (a.stdout.match(/^attest ([0-9a-f]+)/m) || [])[1];
+        c.end(JSON.stringify(h ? { attest: h } : { refused: a.stderr.trim() || a.exit }) + '\n');
+      }).catch(() => c.end('{"refused":"guestbook"}\n'));
+      return;
+    }
     const m = buf.slice(0, nl).match(/^join ([0-9a-f]{1,400})$/);
     if (!m) return c.end('{"refused":"usage"}\n');
     queue = queue.then(async () => c.end(JSON.stringify(await enroll(m[1])) + '\n')).catch(() => c.end('{"refused":"guestbook"}\n'));
