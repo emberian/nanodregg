@@ -247,7 +247,8 @@ signs under) and its one verification path (`certified`: `threshold` DISTINCT li
 each signature verifying over the certified bytes) land here, with refusals by name. No deployed
 path PRODUCES a certificate yet (a Store holds no certify seed: cv 01a1769d, Ember's), and none
 consumes one yet (the `Carried` start, the `log`/`read` reply field, `Thin.accept`, the head law's
-`uncertified`: the next landing). What a verifier learns from `certified = .ok` is `Proofs.Head.certified_ok`; what two
+`uncertified`: the next landing). [Out of date: `host serve --certify` produces one, every `log` page
+carries one (`pageCertified`), and `adopt` consumes one (`certifiesWorld`).] What a verifier learns from `certified = .ok` is `Proofs.Head.certified_ok`; what two
 certificates at one step count mean under a quorum is `certified_intersect` and
 `certified_equivocation` there, the committee row of DESIGN-TRUST §1.3's table as a theorem over
 the object alone. -/

@@ -20,7 +20,7 @@ inductive CommandExit where
   /-- the Host's reply was `uncertain`: the attempt goes on by lookup -/
   | uncertain
   /-- the catch-up read `Bounds.pagesPerCommandMax` pages and is still behind the writer's tip:
-  what was absorbed is kept, run again (printed `behind HEIGHT TIP`) -/
+  what was absorbed is kept, run again (printed `behind STEPS TIP`: two step counts) -/
   | behind
   /-- the writer refused the call by name and did not record it (`Status.declined`, PROTOCOL-41):
   not final, the attempt stays open (printed `declined NAME`) -/

@@ -16,7 +16,7 @@ These are command forms: uppercase words stand for the member's values. Digests 
 | Health: nd receipt --health [MEMBER] | Follow catches up and reads the member's counters from its own World: its ticks in the window its next turn lands in (the meter), its recorded refusals and the World's. Output is a health receipt (the four roots and a window-trie path per counter), the head it was built at, and the three counters with their bounds; another member holding the same head checks it with Protocol.Health.check. Nothing is signed. |
 | Cancel: nd cancel CALL | Follow checks the member's own signed call can be cancelled, requests a cancel signature and sends it. A second catch-up must show the recorded cancellation before success. |
 
-Writes and invokes first sign envelopes for bounded log pages. The eventual call signs its World, member, window, pins and body. A resumed plan is re-derived; changed signed bytes are planMoved. The sponsor key during adoption remains a trust premise described in [TRUST](TRUST.md).
+Writes and invokes first sign envelopes for bounded log pages. The eventual call signs its World, member, window, pins and body. A resumed attempt resumes at its submit step with its frozen call and is not planned again. Within one run, signed bytes that differ from the re-derived plan end the command `planMoved`. The sponsor key during adoption remains a trust premise described in [TRUST](TRUST.md).
 
 The form nd read OBJ REL K [PREFIX] reads a bounded relation range. The form nd sync --to STEPS:CHAIN compares a position while catching up; --attest signs follow's head, --check ATTEST checks another member's attestation, and --post OBJ posts follow's own head. A follower already beyond the requested comparison answers ahead.
 
@@ -30,7 +30,7 @@ The [protocol rows](../Protocol/Rows.lean) exercise join, use, describe, receipt
 
 ## What nd does and does not do
 
-nd decides nothing. It sends its argv to follow and executes the steps follow returns, echoing an opaque continuation each time. The steps ask nd to sign exact bytes, to relay a request to the writer socket, to submit a frozen call, or to print the final output and exit. The step order belongs to follow, and nd stops after a fixed bound of steps.
+nd decides what follow does not. It decides which open attempt an argv resumes: the newest attempt frozen for those exact argv bytes with no `settled`, and a run that finds one drives that attempt, not a new plan (CLIENT-37). It decides that a resumed attempt ending `refused` is planned again (`client/src/run.rs` `run`). It decides nothing else about the protocol. It sends its argv to follow and executes the steps follow returns, echoing an opaque continuation each time. The steps ask nd to sign exact bytes, to relay a request to the writer socket, to submit a frozen call, or to print the final output and exit. The step order belongs to follow, and nd stops after a fixed bound of steps.
 
 Custody reads each key file only if it is regular, owned by the effective user and private to it. It signs the bytes it is handed and adds nothing. The signed call is frozen in its attempt directory before any byte leaves, so a member never signs two calls for one attempt.
 

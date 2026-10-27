@@ -23,7 +23,7 @@ reopen re-audit distinguishes nothing the MAC does not). A logged event that doe
 PROTOCOL's names, carried in the step's `done`.
 
 Refusals before the machine, by name: `undecodableCommand`, `undecodableResume`, `wrongSocket`
-(submit, lookup, read, log belong to host.sock), `unknownOp`. One refusal AFTER the machine:
+(submit, lookup, read, log, cancel belong to host.sock), `unknownOp`. One refusal AFTER the machine:
 `stepTooLarge`, a step whose reply has no wire bytes (a field past `frameBytesMax`, or a `.host`
 submit, `Protocol.Command.Wire`). That step's effects are kept: the steps it absorbed (catch-up of
 the writer's log, each re-derived) are appended, or the base it adopted is sealed, BEFORE the

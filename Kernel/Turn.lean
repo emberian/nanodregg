@@ -13,7 +13,8 @@ log with `World.admit` alone, and nothing it would have to trust. It carries
 * `creates` — cells born by this turn, each with its id (D5, KERNEL-28: one birth shape). The
   receiver computes the id: a ROM cell's is its content digest (a package's identity, and
   `World.admit` checks it: `notContentId`), an account's is keyed by its owner and denomination,
-  any other's is derived from `txId` and the index. A follower re-derives the Turn (`Receive.rederive`), so a
+  a member's is `Receive.memberId` (the digest of its join consent), any other's is derived from
+  `txId` and the index. A follower re-derives the Turn (`Receive.rederive`), so a
   writer cannot choose an id its receiver did not. A born id is never also touched
   (`Reject.bornTouched`).
 * `nullifiers` — one-time tokens; each may be spent once in the life of the World.

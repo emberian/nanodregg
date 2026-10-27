@@ -39,8 +39,8 @@ structure Authority where
   threshold : Nat
   deriving DecidableEq, Repr
 
-/-- Nobody certifies: every World that names nobody; a certificate under it is `unlisted` whoever
-signs it. -/
+/-- Nobody certifies: every World that names nobody. `certified` refuses a certificate under it
+`noAuthority` before it reads a signer (PROTOCOL-77.1). -/
 def Authority.none : Authority := ⟨[], 0⟩
 
 /-- What a genesis is made from, as CODEC's raw combinators write it: the name, HOST's nonce, the

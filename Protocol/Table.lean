@@ -16,8 +16,10 @@ the newest base's World bytes, to a thin member (PROTOCOL-14 A); challenge, prep
 author, inspect and signatures are steps of the follow machine (Lean), not wire operations; certify
 is the Host's own seal; consent frames are `host follow` (HOST-7).
 
-Each operation names the one function that answers it (`receiver`). The names are data until the
-receiving layers commit those declarations; a gate then resolves each name in the environment.
+Each operation names the declaration at the centre of its answer (`receiver`). The names are data:
+no gate resolves them yet, and `Op.receiver_injective` is the only theorem that reads them. `lookup`
+is answered by `Host.Serve.handle` from `World.journalAt` and `Receive.refusedAnswer`. `log` is
+paged by `Host.Page.kept` in the deployed writer (`Host.Deployed.pager`).
 -/
 import Codec.Layout
 import Codec.Ed25519
@@ -80,10 +82,10 @@ def effect : Op → Effect
 
 /-- The declaration that answers the operation. -/
 def receiver : Op → String
-  | submit => "Nanodregg.Kernel.Receive.receive"
-  | lookup => "Nanodregg.Kernel.World.lookup"
+  | submit => "Nanodregg.Kernel.Receive.judge"
+  | lookup => "Nanodregg.Kernel.World.journalAt"
   | read => "Nanodregg.Host.Page.basePage"
-  | log => "Nanodregg.Host.Page.build"
+  | log => "Nanodregg.Host.Page.kept"
   | command => "Nanodregg.Protocol.Command.start"
   | resume => "Nanodregg.Protocol.Command.step"
   | cancel => "Nanodregg.Kernel.Receive.cancel"
@@ -443,8 +445,8 @@ def stepsPerCommandMax : Nat := 64
 def sendsMax : Nat := 8
 /-- `log` pages one command may read while it catches up (two steps each: sign the envelope from
 the page's start, relay `log`). A follow further behind than this ends the command `behind`,
-keeping what it absorbed, and the member runs it again. With the at most four other steps of any
-command it fits `stepsPerCommandMax` (`Bounds.pages_fit_steps`). -/
+keeping what it absorbed, and the member runs it again. With the at most five other steps of any
+command (`Bounds.pages_fit_steps`: `2 · 28 + 5 ≤ 64`) it fits `stepsPerCommandMax` (`Bounds.pages_fit_steps`). -/
 def pagesPerCommandMax : Nat := 28
 /-- Steps one `log` page may carry: one follower record's worth (HOST-41), so a follower appends one
 page as one record: it IS HOST's `recordTurnsMax` (the batch codec's count bound), one source.

@@ -240,6 +240,8 @@ structure State (D : Type) [Ord D] where
   proofPlantSib : Nat := 0
   proofPlantByte : Nat := 0
 
+/-- The constructor name of `a`, the first word of its `Repr`. It is the generator's label, not a
+wire name; the wire names are `Refusal.name` and `Reject.name`. -/
 def nameOf {α : Type} [Repr α] (a : α) : String :=
   match (reprStr a).splitOn " " with
   | h :: _ => (h.splitOn ".").getLast!

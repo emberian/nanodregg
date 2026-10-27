@@ -2,7 +2,7 @@
 //! over a socket) and the workspace on disk, plus the supervisor that puts a Lean child behind a
 //! Unix socket.
 //!
-//! This crate decides nothing. Its only protocol knowledge is [`generated`], emitted from
+//! This crate decides two things about a run, in `run::run` (CLIENT-37): which open attempt an argv resumes, and whether a resumed attempt that ends `refused` is planned again. Its only other protocol knowledge is [`generated`], emitted from
 //! `Protocol/Table.lean`; the library functions take the values they need as parameters and
 //! [`table`] builds those parameters from the generated file, nowhere else.
 

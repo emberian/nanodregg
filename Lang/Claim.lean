@@ -7,9 +7,9 @@ except a relaw arm over unchanged state. Adoption is not excepted.
 `Lang.Proofs.Claim.guardedBy_sound` states the checker's meaning; the LK journey exercises
 accepted and rejected shapes.
 
-This module supplies the checker, not package admission: `Package` carries no claims field,
-and its wire/install path does not call this checker. A general helper-returned verdict or
-an equivalent inline test need not have the accepted syntax.
+This module supplies the checker. `Package` carries a claims field (LANG-93), and install calls the
+checker on each claim. A law that keeps the invariant by a helper-returned verdict or an equivalent
+inline test need not have the accepted syntax; install refuses it.
 -/
 import Lang.Subst
 

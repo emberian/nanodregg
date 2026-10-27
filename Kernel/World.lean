@@ -299,8 +299,9 @@ structure World (D : Type) [Ord D] where
   /-- transaction id ↦ (height, turn digest): the replay index, a trie with its own root, which the
   chain commits beside the cells' root (KERNEL-41) -/
   journal : Journal D
-  /-- the recorded refusals (KERNEL-44): refused transaction ids and per-member window counts, a
-  trie with its own root, committed beside the other two -/
+  /-- the recorded refusals (KERNEL-44), a trie with its own root, committed beside the other
+  three. It holds the refused transaction ids, the per-member window counts, the World's window
+  totals (KERNEL-55) and the per-member tick meter (KERNEL-68) -/
   refusals : Refusals D
   /-- the relations' heads and rows (KERNEL-46/48), a trie with its own root -/
   rows : Rows D := .empty
@@ -412,9 +413,10 @@ omit [Ord D] in
 def refusedPre (E : Env D) (r : Refused D) : String × ByteArray := (domRefused, refusedBytes E r)
 
 /-- The next chain head after an admitted Turn commits to the previous one, the Turn, and the ROOTS
-AFTER it (KERNEL-23 (d), KERNEL-41, KERNEL-47): `rd` is `rootsDigest` of the cells', journal's and
-refusals' roots. A phone that trusts one head checks `(prev, turnDigest, rd)` against it, opens `rd`
-to the three roots, then verifies cells, transaction ids or refusals against them. -/
+AFTER it (KERNEL-23 (d), KERNEL-41, KERNEL-47): `rd` is `rootsOf` the four roots, the cells', the
+journal's, the refusals' and the rows'. A phone that trusts one head checks `(prev, turnDigest, rd)`
+against it, opens `rd` to the four roots, then verifies cells, transaction ids, refusals or rows
+against them. -/
 def chainNext (E : Env D) (prev : D) (t : Turn D) (rd : D) : D :=
   headLink E prev 0 (turnDigest E t) rd
 
@@ -737,7 +739,8 @@ installs it (a package's identity IS its cell id). -/
 def romIdOf (E : Env D) (c : Cell) : D := E.hash domRomId (E.cellBytes c)
 
 /-- The id a receiver gives the `i`-th cell its transaction bears fresh: content-addressed for
-ROM, else derived from the transaction. (An account's id is keyed instead: D5b.) -/
+ROM, else derived from the transaction. An account's id is keyed instead (D5b). A member's id is
+`Receive.memberId`, the digest of its join consent. -/
 def bornId (E : Env D) (txId : D) (p : Cell × Nat) : D :=
   match p.1.discipline with
   | .rom => romIdOf E p.1
@@ -1696,13 +1699,13 @@ def checkRefusedBounds (r : Refused D) : Except (Reject D) Unit := do
   -- a cancel's signature (KERNEL-60): bounded, so `refusedBytes`' length prefix is injective
   req (r.cancel.size ≤ Bounds.cancelBytesMax) (.overBound .event)
 
-/-- A member's recorded refusals in the window of height `H`. -/
+/-- A member's recorded refusals in the window of the World's current height. -/
 def refusalCount (E : Env D) (w : World D) (m : D) : Nat :=
   match w.refusalAt E (.count m (refusalWindow w.height)) with
   | some (.count n) => n
   | _ => 0
 
-/-- The World's recorded refusals in the window of height `H`, all members together (KERNEL-55 R1). -/
+/-- The World's recorded refusals in the window of its current height, all members together (KERNEL-55 R1). -/
 def refusalTotal (E : Env D) (w : World D) : Nat :=
   match w.refusalAt E (.total w.origin (refusalWindow w.height)) with
   | some (.count n) => n

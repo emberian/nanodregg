@@ -69,7 +69,7 @@ inductive Verb
   /-- `rotate`: move the member to custody's precommitted NEXT key, precommitting the one after -/
   | rotate
   /-- `adopt INVITE KEY`: start follow from the writer's base the invitation INVITE pins, accepted only
-  if INVITE is signed by KEY, the sponsor key the member trusts out of band (`Invite.accept`), and the
+  if INVITE is signed by KEY, the sponsor key the member trusts out of band (`Invite.acceptStart`, which also takes a carried start), and the
   base's World bytes hash to the pin (thin consent, PROTOCOL-14; PROTOCOL-42) -/
   | adopt
   /-- `sync`: catch up to the writer's tip and print the height and chain reached (a follower driven
@@ -103,7 +103,7 @@ inductive Verb
   /-- `receipt CALL`: catch up, then print a RECEIPT for the signed call's transaction id against
   follow's World (its roots and the trie paths that show it committed, refused or absent,
   `Protocol.Receipt`, PROTOCOL-45), the head it was built at, and the member's settlement of the
-  call (`Protocol.Settle.ofReceipt`, PROTOCOL-46): `receipt HEX`, `head STEPS HEIGHT ROOTS`,
+  call (`Protocol.Settle.ofReceipt`, PROTOCOL-46): `receipt HEX`, `head STEPS HEIGHT ROOTS CHAIN`,
   `settle VERDICT`. The attempt store's `confirm` and `probe` (`Protocol.Attempt`).
   `receipt --health [MEMBER]`: catch up, then print a HEALTH RECEIPT for MEMBER (default: the signer)
   against follow's World (`Protocol.Health`, DESIGN-OBS §1.5): the member's ticks this window (the
@@ -431,7 +431,7 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
   | .sync, [] => .ok (.sync .tip)
   | .sync, ["--attest"] => .ok (.sync .attest)
   | .sync, ["--post", o] => do pure (.post (← digestArg digestOf o))
-  -- `STEPS:CHAIN`: a step count and the chain's hex, as `sync` prints them
+  -- `STEPS:CHAIN`: a step count and the chain's hex; `sync` prints a height, not a step count: the step count is on the `head` line of `receipt CALL` and `receipt --health`
   | .sync, ["--to", a] =>
       match a.splitOn ":" with
       | [s, c] =>

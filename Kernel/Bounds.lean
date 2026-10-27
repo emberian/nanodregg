@@ -10,6 +10,8 @@ namespace Nanodregg.Kernel
 /-- The name of each bound, carried by `Reject.overBound` on the wire. -/
 inductive Bound
   | touches | opsPerWrite | creates | nullifiers
+  /-- a call's event bytes past `Bounds.eventBytesMax`, or a cancel's signature past
+  `Bounds.cancelBytesMax` (`checkRefusedBounds`): one name for two bounds -/
   | event | slotsPerCell | slotKey | valueBytes | window | weight | counter | denoms | rows
   /-- a cell's or row's version, or a relation's floor, would reach `Bounds.counterLimit` (KERNEL-54) -/
   | version

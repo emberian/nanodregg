@@ -178,10 +178,10 @@ Seven operations exist (`Protocol/Table.lean` `Op`).
 
 | op | code | socket | effect | request payload | receiver named in the table |
 |---|---|---|---|---|---|
-| `submit` | 1 | host | write | signed call bytes | `Nanodregg.Kernel.Receive.receive` |
-| `lookup` | 2 | host | read | signed call bytes | `Nanodregg.Kernel.World.lookup` |
+| `submit` | 1 | host | write | signed call bytes | `Nanodregg.Kernel.Receive.judge` |
+| `lookup` | 2 | host | read | signed call bytes | `Nanodregg.Kernel.World.journalAt` |
 | `read` | 3 | host | read | read envelope; `start` is a byte offset | `Nanodregg.Host.Page.basePage` |
-| `log` | 4 | host | read | read envelope; `start` is a step count | `Nanodregg.Host.Page.build` |
+| `log` | 4 | host | read | read envelope; `start` is a step count | `Nanodregg.Host.Page.kept` |
 | `command` | 5 | follow | read | `commandLayout` | `Nanodregg.Protocol.Command.start` |
 | `resume` | 6 | follow | read | `resumeLayout` | `Nanodregg.Protocol.Command.step` |
 | `cancel` | 7 | host | write | `cancelEvent sig call` | `Nanodregg.Kernel.Receive.cancel` |
@@ -189,7 +189,7 @@ Seven operations exist (`Protocol/Table.lean` `Op`).
 Only `submit` and `cancel` may append to the log (`Protocol/Proofs/Table.lean` `effect_write_iff`), and both are on `host.sock` (`write_on_host`).
 Op codes and receivers are injective (`code_injective`, `receiver_injective`).
 No op code equals `hangupCode` (`hangup_not_op`).
-The receiver column is data; the declarations the writer runs are those of §2.7.
+The receiver column is data: no gate resolves it, and `receiver_injective` is the only theorem that reads it. Each name is the declaration at the centre of the answer; the declarations the writer runs are those of §2.7.
 
 ### 2.5 Payloads
 

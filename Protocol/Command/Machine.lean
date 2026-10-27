@@ -9,7 +9,7 @@ any log the result carried. A write runs
   → (page again, from the page's step count, until it is the writer's tip)
   → plan on the caught-up World → sign(callMessage u) → submit(call) → done
 
-and a `read` stops after the catch-up; `init` needs no World (sign twice, print a join token).
+and a `read` stops after the catch-up; `init` signs a join consent to follow's World's origin (PROTOCOL-79) and prints a join token.
 The first envelope is valid for follow's own height + window, every later one for the tip the last
 page stated + window. A member more than a window behind is refused `expired` with the writer's
 height and re-signs ONCE a command for that height + window (`reSign`, PROTOCOL-19); a thin member's
@@ -51,7 +51,7 @@ admitted) is its word, so follow catches up AGAIN and ends by its own settlement
 
 `k` holds only the argv, the phase and the results so far; every plan is RE-DERIVED from follow's
 World at each step and the bytes it signs are compared with the ones custody signed (`planMoved`),
-so a resumed call must match that re-derived plan (HOST-9's `resume_rederives`).
+so a resumed call must match that re-derived plan. (HOST-9 named this `resume_rederives`; no declaration has that name.)
 This does not authenticate the argv itself: adoption still requires the trusted sponsor-key
 premise `Spec.keyFaithful`. A plan is offered for signature
 only if follow's own World admits the Turn it derives (consent: `Protocol.Proofs.Command`).

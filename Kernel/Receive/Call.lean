@@ -24,7 +24,8 @@ open Nanodregg.Kernel
 
 /-- A right a grant can carry. -/
 inductive Right
-  /-- read the cell -/
+  /-- observe. No receiver reads this right on a cell. The kernel checks it only on the World
+  target, where it lets a member follow (`mayFollow`) -/
   | observe
   /-- write state slots and replace laws of a data object (on an account it authorises nothing:
   value moves only through the counted rights `transfer` and `credit`, KERNEL-60) -/
@@ -86,7 +87,7 @@ inductive Body (D : Type)
   with it), a data or programmed object by its owner (every law in force judging the occasion
   `retire`, and its relations cleared first: `World.admit`'s `rowsRemain`), an account by its owner
   once it holds nothing (balance and floor 0). Its storage comes back to the World's allowance
-  (`World.credit`, KERNEL-19); its id stays a tombstone, so nothing is born there again (`idTaken`) -/
+  (`Kernel.credit`, KERNEL-19); its id stays a tombstone, so nothing is born there again (`idTaken`) -/
   | retire (cell : D)
   /-- bear a new denomination: its WELL, a value account owned by the signer whose id is the
   denomination and whose floor is `cap`, the most that can ever be outstanding of it (LEDGER-3) -/
@@ -150,7 +151,7 @@ inductive Refusal (D : Type)
   | wrongKind (cell : D) (expected : Nat)
   /-- a slot the receive layer reads does not hold what it must -/
   | malformedCell (cell : D) (key : Nat)
-  /-- the law of package `law` refused the write, with LANG's name for why -/
+  /-- the law of package `law` refused the occasion (a birth, a write, a relaw, an adoption, an invoke or a retire), with LANG's name for why -/
   | lawDenied (law : D) (reason : String)
   /-- LANG refused for a reason that is not a law: type error, budget, method error -/
   | program (reason : String)

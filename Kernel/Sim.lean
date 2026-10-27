@@ -77,6 +77,8 @@ def toy : Gen.Params D :=
 abbrev Member := Gen.Member D
 abbrev State := Gen.State D
 
+/-- `Gen.nameOf`: the constructor name, read from `Repr`. It is the generator's label, not a wire name;
+the wire names are `Refusal.name` and `Reject.name`. -/
 def nameOf {α : Type} [Repr α] (a : α) : String := Gen.nameOf a
 def worldName : ByteArray := Gen.worldName
 def nonceOf (seed : Nat) : ByteArray := Gen.nonceOf seed
