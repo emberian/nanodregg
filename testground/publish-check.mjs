@@ -12,6 +12,16 @@ const live = process.argv.includes('--live');
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
+if (process.env.TESTGROUND_LOCAL) {
+  const { readFile } = await import('node:fs/promises');
+  await page.route(new URL(url).origin + '/**', async route => {
+    const name = new URL(route.request().url()).pathname.slice(1) || 'index.html';
+    try {
+      const body = await readFile(new URL(name, import.meta.url));
+      await route.fulfill({ body, contentType: name.endsWith('.wasm') ? 'application/wasm' : /\.m?js$/.test(name) ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.json') ? 'application/json' : 'text/html' });
+    } catch { await route.fulfill({ status: 404, body: 'not found' }); }
+  });
+}
 const logs = [];
 page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`pageerror: ${e.message}`));

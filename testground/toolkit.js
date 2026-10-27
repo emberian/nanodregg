@@ -51,3 +51,31 @@ export function tabs(items, selected=0) {
 export function submitForm(action, ...kids) {
   return element('form',{onsubmit:e=>{e.preventDefault();action();}},...kids);
 }
+
+// Preserve the user's draft and reading position across a data refresh.
+// A field's aria-label is its stable identity within this content view.
+export function refreshContent(box, content, state) {
+  const fields = root => [...root.querySelectorAll('input:not([type="range"]), textarea, select')];
+  const fieldKey = (e, i) => e.tagName + ':' + (e.getAttribute('aria-label') ?? e.name ?? i) + ':' + i;
+  const current = document.activeElement;
+  let focus = null;
+  fields(box).forEach((e, i) => {
+    const k = fieldKey(e, i);
+    state.fields ??= new Map();
+    state.fields.set(k, { value: e.value, checked: e.checked });
+    if (e === current) focus = { k, start: e.selectionStart, end: e.selectionEnd };
+  });
+  const expanded = [...box.querySelectorAll('details')].map(e => e.open);
+  const top = box.scrollTop, left = box.scrollLeft;
+  box.replaceChildren(content);
+  fields(box).forEach((e, i) => {
+    const k = fieldKey(e, i), old = state.fields?.get(k);
+    if (old) { e.value = old.value; if ('checked' in e) e.checked = old.checked; }
+    if (focus?.k === k) {
+      e.focus({ preventScroll: true });
+      if (focus.start != null && e.setSelectionRange) e.setSelectionRange(focus.start, focus.end);
+    }
+  });
+  [...box.querySelectorAll('details')].forEach((e, i) => { if (expanded[i] != null) e.open = expanded[i]; });
+  box.scrollTop = top; box.scrollLeft = left;
+}

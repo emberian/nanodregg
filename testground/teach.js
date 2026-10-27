@@ -4,7 +4,7 @@
 // file lays answers out and never decides what they mean. Words follow testground/STYLE.md.
 
 import { quoteArg } from './nd.js';
-import { tabs, submitForm } from './toolkit.js';
+import { tabs, submitForm, refreshContent } from './toolkit.js';
 
 const dec = new TextDecoder();
 const OK = 0;
@@ -127,11 +127,20 @@ export function teach(ctx) {
 
   // ---------------------------------------------------------------- the object inspector
   async function openInspector(m, id) {
+    const existing = wins.get(`obj-${id}`);
+    if (existing) { existing.focus(); return existing; }
     const w = openWindow({ id: `obj-${id}`, title: `Object ${short(id)}`, w: 640, body: $('div', {}, 'reading…') });
+    const draft = {};
+    let refreshing = false, again = false;
     w.refresh = async () => {
+      if (w.closed) return;
+      if (refreshing) { again = true; return; }
+      refreshing = true;
+      try {
       const nd = m.nd ?? ctx.nd();
       const d = await nd.run(m, ['read', id, '?']);
       const s = await nd.run(m, ['read', id]);
+      if (w.closed) return;
       if (d.exit !== 'ok') { w.setBody($('div', { class: 'bad' }, (d.stderr || '').trim(), ' ', d.stdout.trim())); return; }
       const lines = d.stdout.trim().split('\n').filter(Boolean);
       const props = {}, methods = [], calls = [], laws = [], rels = [], extraLaws = [];
@@ -188,8 +197,12 @@ export function teach(ctx) {
           ['grant', 'A cell that lets one member (or anyone) use rights on this object: observe, mutate, invoke:N.'],
           ['core', 'The package as the kernel reads it: the source lowered to plain terms (lam, record, case, …).'],
         ]));
-      w.setBody(body);
+      refreshContent(w.body, body, draft);
       void shown;
+      } finally {
+        refreshing = false;
+        if (again && !w.closed) { again = false; queueMicrotask(() => w.refresh()); }
+      }
     };
     await w.refresh();
     return w;
@@ -266,6 +279,8 @@ export function teach(ctx) {
   async function templateText(t) { return t.text ?? (await (await fetch(t.path)).text()); }
 
   async function openEditor(text = null, opts = {}) {
+    const existing = wins.get(`editor-${opts.id ?? 'main'}`);
+    if (text == null && existing) { existing.focus(); return existing; }
     const area = $('textarea', { class: 'sunken code', rows: 18, cols: 80, spellcheck: 'false', 'aria-label': 'package source' });
     const gutter = $('pre', { class: 'gutter', 'aria-hidden': 'true' });
     const syncGutter = () => { const n = area.value.split('\n').length; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); gutter.scrollTop = area.scrollTop; };
@@ -344,6 +359,8 @@ export function teach(ctx) {
     ['((. (fix (lam self (rec (go (-> nat nat))) (record (go (lam n nat (if (== n 0) 0 ((. self go) (- n 1)))))))) go) 1000)', 'recursion; try 200 ticks'],
   ];
   function openRepl() {
+    const existing = wins.get('repl');
+    if (existing) { existing.focus(); return existing; }
     const input = $('textarea', { class: 'sunken code', rows: 3, cols: 72, spellcheck: 'false', 'aria-label': 'term' }, '(+ 1 2)');
     const ticks = $('input', { class: 'sunken', size: 8, value: '10000', 'aria-label': 'ticks' });
     const hist = $('div', { class: 'repl-out sunken' });
@@ -435,6 +452,8 @@ export function teach(ctx) {
     return obj ? { pkg, obj } : { error: (r.stderr || r.exit).trim() };
   }
   async function openLesson() {
+    const existing = wins.get('lesson');
+    if (existing) { existing.focus(); return existing; }
     const m = members()[0];
     if (!lesson.obj) {
       const x = await lessonSetup(m, lessonSource);

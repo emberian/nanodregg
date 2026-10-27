@@ -59,7 +59,7 @@ const kept = {
 
 function clearDesk() { clearWindows(); }
 function newWorld() {
-  frames = []; cmdNo = 0; lie = 'honest'; setTray();
+  frames = []; logSel = -1; cmdNo = 0; lie = 'honest'; raceArmed = null; setTray();
   clearDesk(); terms.clear(); tourAt = 0; T.reset();
   const t = performance.now();
   world = genesis(K, 'testground', ['alice', 'bob']);
@@ -159,7 +159,7 @@ async function joinHosted(url = null) {
   let rec = kept.get(url), stale = null;
   if (rec && rec.origin !== wj.origin) { stale = rec; rec = null; kept.forget(url); }
   clearDesk();
-  frames = []; cmdNo = 0; lie = 'honest'; setTray();
+  frames = []; logSel = -1; cmdNo = 0; lie = 'honest'; raceArmed = null; setTray();
   const onFrame = (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie, ...f }); renderLog(); };
   world = { hosted: true, url, wj, origin: wj.origin, members: [], objects: new Map(), text: '' };
   const enter = (m) => { world.members = [m]; world.origin = m.origin; refreshIcons(); openHosted(); openLog(); openTerm(m, 700, 16); openTour(); };
@@ -387,12 +387,17 @@ function openTerm(m, x, y) {
   };
   const body = $('div', { class: 'term' }, out, submitForm(submit, $('div', { class: 'line' }, $('span', { class: 'prompt' }, `${m.name}$ nd`), input, $('button', { class: 'btn', type: 'submit' }, 'Run'))));
   terms.set(m.name, { out, m });
-  openWindow({ id: `term-${m.name}`, title: `${m.name}${m.world ? ` (World ${m.world})` : ''}`, x, y, w: 520, body });
+  openWindow({ onClose: () => terms.delete(m.name), id: `term-${m.name}`, title: `${m.name}${m.world ? ` (World ${m.world})` : ''}`, x, y, w: 520, body });
   const commands = 'Commands: create · write OBJ SLOT "TEXT" · read OBJ [?] · grant OBJ MEMBER RIGHTS · invoke OBJ METHOD "ARGUMENT" · sync · help lists every command. Quote an argument that holds a space.';
   if (world.hosted) print(m, $('span', { class: 'dim' }, `You are a member of a hosted World. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\n${commands}\n`));
   else print(m, $('span', { class: 'dim' }, `You are ${m.name}, founder ${m.index}${m.world ? ` of World ${m.world}` : ''}, member ${short(m.id)}. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\n${commands}\n`));
 }
-function print(m, ...nodes) { const t = terms.get(m.name); if (!t) return; t.out.append(...nodes); t.out.scrollTop = t.out.scrollHeight; }
+function print(m, ...nodes) {
+  const t = terms.get(m.name); if (!t) return;
+  const bottom = t.out.scrollHeight - t.out.scrollTop - t.out.clientHeight < 24;
+  t.out.append(...nodes);
+  if (bottom) t.out.scrollTop = t.out.scrollHeight;
+}
 
 // one command at a time per member, as one terminal runs one `nd` at a time: a command typed while
 // another is in flight (the hosted join's first sync) waits for it, never interleaves its frames
@@ -426,7 +431,8 @@ async function runOne(m, argv, why, { forge = false, quiet = false, typed = null
   const hm = r.stdout.match(/^height (\d+)/m); if (hm) world.height = +hm[1];
   document.getElementById('tray-height').textContent = `${frames.length} frames · ${cmdNo} commands`;
   if (r.exit !== 'ok') print(m, resultBlock(m, argv, r, frames.slice(n0)));
-  for (const o of wins.values()) if (o.refresh) o.refresh();
+  flushLog();
+  for (const o of [...wins.values()]) if (o.refresh && !o.closed) o.refresh();
   renderRoster();
   tourCheck(m, argv, r);
   return r;
@@ -503,27 +509,64 @@ function prefill(m, text) {
 }
 function openObject(m, id) { return T.openInspector(m, id); }
 // ---------------------------------------------------------------- the wire, as a scrubbable timeline
-let logSel = -1;
+let logSel = -1, logFrame = 0;
 function openLog() {
-  const w = openWindow({ id: 'log', title: 'Frames', ...(world?.hosted ? { x: 700, y: 340, w: 520 } : { x: 110, y: 560, w: 570 }), body: $('div', {}) });
-  w.refresh = renderLog; renderLog();
+  const existing = wins.get('log');
+  if (existing) { focus(existing); renderLog(); return; }
+  const scrub = $('input', { type: 'range', class: 'scrub', min: 0, max: 0, value: 0, 'aria-label': 'frame' });
+  const detail = $('div', {}), list = $('div', { class: 'log sunken', tabindex: '0', 'aria-label': 'Frames', style: 'max-height:240px;overflow:auto' });
+  const body = $('div', {}, scrub, detail, list, glossed([
+    ['frame', 'One message: member → its follow, or member → writer.'],
+    ['op', 'The request kind (command, resume, submit, lookup, log, …).'],
+    ['reply', 'The status the receiver answered with.']]));
+  const w = openWindow({ id: 'log', title: 'Frames', ...(world?.hosted ? { x: 700, y: 340, w: 520 } : { x: 110, y: 560, w: 570 }), body,
+    onClose: () => { cancelAnimationFrame(logFrame); logFrame = 0; } });
+  w.view = { scrub, detail, list, shown: new Map(), selected: null };
+  scrub.addEventListener('input', () => { logSel = +scrub.value; flushLog(); });
+  list.addEventListener('click', e => {
+    const row = e.target.closest('[data-frame]'); if (row) { logSel = +row.dataset.frame; flushLog(); }
+  });
+  list.addEventListener('keydown', e => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key) || !frames.length) return;
+    e.preventDefault();
+    const at = logSel < 0 ? frames.length - 1 : logSel;
+    logSel = e.key === 'Home' ? Math.max(0, frames.length - 200) : e.key === 'End' ? frames.length - 1
+      : Math.max(Math.max(0, frames.length - 200), Math.min(frames.length - 1, at + (e.key === 'ArrowUp' ? -1 : 1)));
+    flushLog();
+  });
+  flushLog();
 }
 function renderLog() {
-  const w = wins.get('log'); if (!w) return;
-  const scrub = $('input', { type: 'range', class: 'scrub', min: 0, max: Math.max(0, frames.length - 1), value: logSel < 0 ? frames.length - 1 : logSel, 'aria-label': 'frame' });
-  const rows = frames.slice(-200).map((f) => $('div', { class: 'row' + (f.n === logSel ? ' sel' : ''), onclick: () => { logSel = f.n; renderLog(); } },
-    $('span', {}, `#${f.n}`), $('span', {}, f.who), $('span', {}, `→${f.to}`), $('span', { class: 'x' }, f.op), $('span', { class: f.status === 'ok' ? 'ok' : 'bad' }, `${f.status} ${f.bytes}B`, f.lied ? $('b', { class: 'lied' }, ' LIED') : '', f.forged ? $('b', { class: 'lied' }, ' FORGED') : '')));
-  const sel = frames[logSel < 0 ? frames.length - 1 : logSel];
-  scrub.addEventListener('input', () => { logSel = +scrub.value; renderLog(); });
-  w.setBody($('div', {}, scrub,
-    sel ? kv([['frame', `#${sel.n} (command ${sel.cmd})`], ['from → to', `${sel.who} → ${sel.to}`], ['op', sel.op], ['bytes', sel.bytes], ['reply', sel.status],
+  if (!wins.has('log') || logFrame) return;
+  logFrame = requestAnimationFrame(() => { logFrame = 0; flushLog(); });
+}
+function flushLog() {
+  const w = wins.get('log'); if (!w?.view) return;
+  const { scrub, detail, list, shown } = w.view;
+  const follow = logSel < 0, start = Math.max(0, frames.length - 200), selected = follow ? frames.length - 1 : logSel;
+  scrub.max = Math.max(0, frames.length - 1); scrub.value = selected;
+  for (const [n, el] of shown) if (n < start || n >= frames.length) { el.remove(); shown.delete(n); }
+  for (let n = start; n < frames.length; n++) {
+    if (shown.has(n)) continue;
+    const f = frames[n], row = $('div', { class: 'row', 'data-frame': n },
+      $('span', {}, '#'+n), $('span', {}, f.who), $('span', {}, '→'+f.to),
+      $('span', { class: 'x' }, f.op), $('span', { class: f.status === 'ok' ? 'ok' : 'bad' }, f.status+' '+f.bytes+'B', f.lied ? $('b', { class: 'lied' }, ' LIED') : '', f.forged ? $('b', { class: 'lied' }, ' FORGED') : ''));
+    shown.set(n, row); list.append(row);
+  }
+  for (const [n, row] of shown) row.classList.toggle('sel', n === selected);
+  const sel = frames[selected];
+  if (w.view.selected !== sel) {
+    w.view.selected = sel;
+    detail.replaceChildren(sel ? kv([['frame', '#'+sel.n+' (command '+sel.cmd+')'], ['from → to', sel.who+' → '+sel.to], ['op', sel.op], ['bytes', sel.bytes], ['reply', sel.status],
       sel.lied ? ['lied', $('span', { class: 'bad' }, 'yes: the relay in front of the writer rewrote, answered or withheld this frame')] : null,
-      sel.lie && sel.lie !== 'honest' ? ['lie on', sel.lie] : null]) : '',
-    $('div', { class: 'log sunken', style: 'max-height:180px;overflow:auto' }, rows),
-    glossed([['frame', 'One message: member → its follow, or member → writer.'], ['op', 'The request kind (command, resume, submit, lookup, log, …).'],
-      ['reply', 'The status the receiver answered with.']])));
-  const on = w.el.querySelector('.log .row.sel'); if (on) on.scrollIntoView({ block: 'nearest' });
-  else { const l = w.el.querySelector('.log'); if (l) l.scrollTop = l.scrollHeight; }
+      sel.lie && sel.lie !== 'honest' ? ['lie on', sel.lie] : null]) : '');
+  }
+  if (follow) list.scrollTop = list.scrollHeight;
+  else {
+    const row = shown.get(selected);
+    if (row && (row.offsetTop < list.scrollTop || row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight))
+      list.scrollTop = row.offsetTop - list.offsetTop;
+  }
 }
 
 // ---------------------------------------------------------------- the first five minutes
@@ -550,11 +593,11 @@ function tourCheck(m, argv, r) {
   const s = tour[tourAt];
   if (world.hosted || !s || s.demo || !s.done(argv, m)) return;
   if (outcomeOf(r) !== s.want) return;
-  tourAt++; openTour();
+  tourAt++; openTour(false);
 }
 // A hosted tab has one member, you; the lesson that needs a second member uses a second tab.
 const hostedTour = { at: 0, cell: null, grant: null, wrote: null };
-function openHostedTour() {
+function openHostedTour(activate = true) {
   const me = world.members[0], ht = hostedTour;
   const others = world.hosted && me.id ? rosterOf(K, me).members.filter((id) => id !== me.id && id !== world.wj.sponsor) : [];
   const pick = $('select', { 'aria-label': 'member to grant' }, others.map((id) => $('option', { value: id }, short(id))));
@@ -569,12 +612,12 @@ function openHostedTour() {
       $('button', { class: 'btn', onclick: () => run(['read', ht.cell], (r) => r.exit === 'ok' && /from the second window/.test(r.stdout)) }, 'Run: nd read')]],
   ];
   const items = steps.map(([say, ctl], i) => $('li', { class: i < ht.at ? 'done' : '' }, say, i === ht.at ? $('div', {}, ctl()) : ''));
-  openWindow({ id: 'tour', title: 'Tour (hosted World)', x: 110, y: 270, w: 600, body: $('div', { class: 'tour' },
+  openWindow({ activate, id: 'tour', title: 'Tour (hosted World)', x: 110, y: 270, w: 600, body: $('div', { class: 'tour' },
     $('p', {}, 'You are one member of a World whose writer runs on a server. Other visitors are members too. This tour uses a second window as a second member.'), $('ol', {}, items),
     ht.at >= steps.length ? $('p', { class: 'ok' }, 'Done: the second member wrote your cell through your grant, and your follow checked that Turn.') : '') });
 }
-function openTour() {
-  if (world.hosted) return openHostedTour();
+function openTour(activate = true) {
+  if (world.hosted) return openHostedTour(activate);
   const items = tour.map((s, i) => $('li', { class: i < tourAt ? 'done' : '' }, s.say, i === tourAt ? $('div', {},
     $('code', {}, s.demo ? `Demos ▸ ${demos[s.demo].title}` : `${world.members[s.who].name}$ nd ${s.argv().map((a) => short(a)).join(' ')}`), ' ',
     $('button', { class: 'btn', onclick: async () => {
@@ -584,7 +627,7 @@ function openTour() {
       if (s.lie) { const sc = lieScenes[s.lie]; await playLie(s.lie, { fresh: false, from: sc.steps.findIndex((x) => x.lie) }); return; }
       await runIn(m, s.argv());
     } }, 'Run')) : ''));
-  openWindow({ id: 'tour', title: 'Tour', x: 110, y: 270, w: 570,
+  openWindow({ activate, id: 'tour', title: 'Tour', x: 110, y: 270, w: 570,
     body: $('div', { class: 'tour' },
       LIVE ? $('p', { class: 'door sunken' }, 'This World runs only in this tab. Nothing you do here reaches anyone else. ',
         $('button', { class: 'btn', onclick: () => liveDoor() }, doorLabel()), ' to work with other visitors. Its writer runs on a public server. Your follow checks each of its replies.') : '',
