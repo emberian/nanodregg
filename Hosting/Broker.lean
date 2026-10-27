@@ -230,7 +230,7 @@ def step (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) : Broke
   | .ok ask =>
     match decide b now r ask with
     | .ok (b', g) =>
-      (b', .grant g.keySlot g.charged g.upstream.host g.upstream.target g.upstream.headers g.upstream.keyHeader g.body)
+      (b', .grant g.keySlot g.charged g.upstream.host g.upstream.target g.upstream.headers g.upstream.keyHeader g.body .empty)
     | .error why => (b, .refuse why)
 
 /-- One ask as `hosting-broker` admits it (HOSTING-26): only a resident the World holds is decided
@@ -240,5 +240,60 @@ keybroker when it learns so; an ask already on its open connection meets this. -
 def admit (residents : List ByteArray) (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteArray) :
     Broker × Verdict :=
   if residents.contains r then step b r now askBytes else (b, .refuse .notResident)
+
+/-! ## The operator's daily ask cap (HOSTING-62)
+
+An allowance is a World object: the operator signs it, the decider reads it, and its meter lives in
+this process, so a restart forfeits its window (`start_window_refused`). That bounds spend per window
+for as long as the operator's World key is the operator's. The daily cap is a second bound that holds
+without the World: a number in KEYS (`asks N`, the key's own custody), a count that keybroker makes
+durable beside KEYS BEFORE every call it sends (`KEYS.asks`, as it keeps CERTIFIED before it signs),
+read back at every start. So a restart never refunds a day, and a key that can change the World's
+allowances cannot raise it. A day is `now / dayMs` on the operator clock (UTC days since the epoch);
+a clock that runs back counts against the day already reached and never resets it. -/
+
+/-- One day of the operator clock, in its milliseconds. -/
+def dayMs : Nat := 86400000
+
+/-- The daily cap: `limit` asks per day (`none`: no cap), and how many of day `day` were granted. -/
+structure Daily where
+  limit : Option Nat
+  day : Nat
+  count : Nat
+  deriving DecidableEq
+
+/-- One more ask at `now`: refused `askCap` when the day's count has reached the limit. A later day
+starts at 0. -/
+def Daily.take (d : Daily) (now : Nat) : Except Refusal Daily :=
+  match d.limit with
+  | none => .ok d
+  | some n =>
+    let c := if d.day < now / dayMs then 0 else d.count
+    if n ≤ c then .error .askCap else .ok { d with day := max d.day (now / dayMs), count := c + 1 }
+
+/-- What keybroker keeps (`KEYS.asks`): `u64le day ‖ u64le count`; nothing when there is no cap. -/
+def Daily.bytes (d : Daily) : ByteArray :=
+  if d.limit.isSome then Codec.Stream.u64.bytes d.day.toUInt64 ++ Codec.Stream.u64.bytes d.count.toUInt64 else .empty
+
+/-- The daily cap at a start, from `KEYS.asks`'s bytes: empty is day 0 with none granted; sixteen
+bytes are `bytes`'s; anything else is `none` (the decider then refuses to start). -/
+def Daily.ofBytes (limit : Option Nat) (b : ByteArray) : Option Daily :=
+  if b.size = 0 then some ⟨limit, 0, 0⟩
+  else if b.size = 16 then
+    match Codec.Stream.u64.get b 0, Codec.Stream.u64.get b 8 with
+    | .ok (d, _), .ok (c, _) => some ⟨limit, d.toNat, c.toNat⟩
+    | _, _ => none
+  else none
+
+/-- A verdict under the daily cap: a grant takes one ask of the day and carries the bytes keybroker
+must keep before it calls (`asked`); a grant the day has no ask left for is refused `askCap` and the
+broker stays as it was before the ask (the World's allowance is not charged for a call never made).
+Every other verdict passes unchanged. -/
+def daily (d : Daily) (b b' : Broker) (now : Nat) : Verdict → Broker × Daily × Verdict
+  | .grant k c hs t h kh body _ =>
+    match d.take now with
+    | .ok d' => (b', d', .grant k c hs t h kh body d'.bytes)
+    | .error why => (b, d, .refuse why)
+  | v => (b', d, v)
 
 end Nanodregg.Hosting.Broker

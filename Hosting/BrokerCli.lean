@@ -1,7 +1,7 @@
 /-
 # Hosting.BrokerCli — `hosting-broker`: keybroker's decider (HOSTING-12, HOSTING-13, HOSTING-56)
 
-    hosting-broker T0 SLOTS STORE OPERATOR [CERTIFIED]
+    hosting-broker T0 SLOTS STORE OPERATOR [CERTIFIED] [--asks LIMIT ASKS]
 
 keybroker starts it with `T0`, the operator clock (ms) at the start of this broker life, which
 `Broker.start` forfeits, and SLOTS, the comma-separated key slots its key file holds (so an
@@ -23,6 +23,13 @@ resident the World does not hold is refused `notResident`) and a `residents` by 
 socket names (`Controller.dirOf`, at most `residentsMax`, else it ends `residentsPastBound`). One
 verdict frame goes to stdout per request. Every frame is `u32le len ‖ payload`, `1 ≤ len ≤ Broker.Bounds.frameMax`. Every way it ends
 is an `Exit` by name on stderr; asks are bounded by `lifetime`.
+
+THE OPERATOR'S DAILY ASK CAP (HOSTING-62). With `--asks LIMIT ASKS` (keybroker's KEYS holds
+`asks LIMIT`; ASKS is `KEYS.asks`, the day and the count keybroker kept), every grant `Broker.admit`
+makes also takes one ask of the day (`Broker.daily`): the grant carries the new day and count as
+`asked`, which keybroker makes durable before it calls; past LIMIT the ask is refused `askCap` and
+the World's allowance is not charged. ASKS is read once, at the open: empty is a new day, sixteen
+bytes are `Daily.bytes`, anything else ends the decider `io` before any ask.
 
 THE WRITER'S CERTIFY ASKS (HOSTING-56, DESIGN-TRUST §4.4b). With CERTIFIED (the file where keybroker
 keeps the last head its certify slot signed, beside KEYS; empty when it has signed none), the decider
@@ -174,7 +181,7 @@ def emit (out : IO.FS.Stream) (v : Broker.Verdict) : IO Bool := do
   out.flush
   return true
 
-def serve (input out : IO.FS.Stream) : Nat → Follow → Broker → Certifier → IO Exit
+def serve (input out : IO.FS.Stream) (d : Daily) : Nat → Follow → Broker → Certifier → IO Exit
   | 0, _, _, _ => pure .lifetime
   | fuel + 1, f, b, cert => do
     let some hdr ← readFrame input | return .keybrokerGone
@@ -188,8 +195,9 @@ def serve (input out : IO.FS.Stream) : Nat → Follow → Broker → Certifier �
         | .ok fb => pure fb
         | .error e => return e
       let (b', v) := Broker.admit f.residents b r now ask
+      let (b', d', v) := Broker.daily d b b' now v
       unless ← emit out v do return .unencodable
-      serve input out fuel f b' cert
+      serve input out d' fuel f b' cert
     | .residents now =>
       let (f, b, cert) ← match ← refresh f b cert now with
         | .ok fb => pure fb
@@ -197,10 +205,10 @@ def serve (input out : IO.FS.Stream) : Nat → Follow → Broker → Certifier �
       let names := f.residents
       if Broker.Bounds.residentsMax < names.length then return .residentsPastBound names.length
       unless ← emit out (Broker.Verdict.residents names) do return .unencodable
-      serve input out fuel f b cert
+      serve input out d fuel f b cert
     | .reply status body =>
       unless ← emit out (Broker.reply status body) do return .unencodable
-      serve input out fuel f b cert
+      serve input out d fuel f b cert
     | .certify now =>
       let some bytes ← readFrame input | return .keybrokerGone
       let .ok bytes := bytes | return .badFrame
@@ -211,7 +219,7 @@ def serve (input out : IO.FS.Stream) : Nat → Follow → Broker → Certifier �
         | .ok (c', s) => (c', Broker.Verdict.sign s)
         | .error why => (cert, Broker.Verdict.refuse why)
       unless ← emit out v do return .unencodable
-      serve input out fuel f b cert
+      serve input out d fuel f b cert
 
 /-- The last certified head in CERTIFIED's bytes: `none` for an empty file (nothing certified yet),
 the head they are the certified bytes of, byte for byte, or `.error` for anything else. -/
@@ -249,7 +257,11 @@ def certifierAt (store : System.FilePath) (w : World D) : Option System.FilePath
 def parseSlots (s : String) : Option (List Nat) := (s.splitOn ",").mapM String.toNat?
 
 def run (t0 : Nat) (keys : List Nat) (store : System.FilePath) (operator : ByteArray)
-    (certified : Option System.FilePath) : IO Exit := do
+    (certified : Option System.FilePath) (asks : Option (Nat × System.FilePath)) : IO Exit := do
+  let d : Option Daily ← match asks with
+    | none => pure (some ⟨none, 0, 0⟩)
+    | some (n, path) => do pure (Daily.ofBytes (some n) (← IO.FS.readBinFile path))
+  let some d := d | return .io "asks: KEYS.asks is neither empty nor one day and count (16 bytes)"
   let some pid := Allow.allowanceId Host.Deployed.X.env | return .noPackage
   let some lid := Controller.lifecycleId Host.Deployed.X.env | return .noPackage
   match ← (readKey store : IO (Except (StoreFault (Host.Record.Fault (Kernel.Reject D))) Digest)) with
@@ -265,18 +277,30 @@ def run (t0 : Nat) (keys : List Nat) (store : System.FilePath) (operator : ByteA
       let held := Track.update Host.Deployed.X.env (Allow.allowanceOf pkgId operator) t.world [] ids
       let grains := Track.update Host.Deployed.X.env (Controller.residentOf lid.bytes) t.world [] ids
       let cert ← certifierAt store t.world certified
-      serve (← IO.getStdin) (← IO.getStdout) lifetime ⟨sk, seg, pkgId, operator, lid.bytes, t, held, grains⟩
+      serve (← IO.getStdin) (← IO.getStdout) d lifetime ⟨sk, seg, pkgId, operator, lid.bytes, t, held, grains⟩
         (Broker.start t0 keys (held.map (·.2))) cert
+
+/-- The arguments after OPERATOR: `[CERTIFIED] [--asks LIMIT PATH]` (the daily cap last, when
+keybroker's KEYS sets one: HOSTING-62); `none` for any other shape, a LIMIT of 0 among them. -/
+def restArgs (rest : List String) : Option (Option System.FilePath × Option (Nat × System.FilePath)) := do
+  let (rest, asks) ← match rest.reverse with
+    | path :: limit :: flag :: before =>
+      if flag = "--asks" then
+        match limit.toNat? with
+        | some n => if 0 < n then some (before.reverse, some (n, (⟨path⟩ : System.FilePath))) else none
+        | none => none
+      else some (rest, none)
+    | _ => some (rest, none)
+  match rest with
+  | [] => some (none, asks)
+  | [c] => some (some ⟨c⟩, asks)
+  | _ => none
 
 def main (args : List String) : IO UInt32 := do
   let e ← match args with
     | t0 :: slots :: store :: operator :: rest =>
-      let certified : Option (Option System.FilePath) := match rest with
-        | [] => some none
-        | [c] => some (some c)
-        | _ => none
-      match t0.toNat?, parseSlots slots, Lang.Read.unhex .empty operator.toList, certified with
-      | some t0, some keys, some op, some c => try run t0 keys store op c catch err => pure (.io (toString err))
+      match t0.toNat?, parseSlots slots, Lang.Read.unhex .empty operator.toList, restArgs rest with
+      | some t0, some keys, some op, some (c, a) => try run t0 keys store op c a catch err => pure (.io (toString err))
       | _, _, _, _ => pure .usage
     | _ => pure .usage
   IO.eprintln s!"hosting-broker: {e.name}"

@@ -127,6 +127,9 @@ inductive KeybrokerExit where
   /-- the certify slot's last-certified file (`KEYS.certified`, HOSTING-56) fails the custody checks
   or could not be made empty when absent -/
   | certifiedState
+  /-- the daily ask cap's count file (`KEYS.asks`, HOSTING-62) fails the custody checks or could not
+  be made empty when absent -/
+  | asksState
   deriving DecidableEq, Repr
 
 namespace KeybrokerExit
@@ -136,7 +139,7 @@ def all : List KeybrokerExit :=
    keyFileIo, keyFileFormat, anchorsLink, anchorsNotRegular, anchorsOwner, anchorsMode, anchorsLength,
    anchorsDir, anchorsMissing, anchorsIo, anchorsMalformed, pinsLink, pinsNotRegular, pinsOwner, pinsMode,
    pinsLength, pinsDir, pinsMissing, pinsIo, pinsMalformed, tlsConfig, socket, deciderRefused, pidFile,
-   deciderSignaled, deciderLost, sockDir, deciderMechanism, parentDeath, certifiedState]
+   deciderSignaled, deciderLost, sockDir, deciderMechanism, parentDeath, certifiedState, asksState]
 
 def code : KeybrokerExit → Nat
   | usage => 80 | keyFileLink => 81 | keyFileNotRegular => 82 | keyFileOwner => 83 | keyFileMode => 84
@@ -147,7 +150,7 @@ def code : KeybrokerExit → Nat
   | deciderSignaled => 102 | deciderLost => 104 | sockDir => 105 | deciderMechanism => 79
   | pinsLink => 140 | pinsNotRegular => 141 | pinsOwner => 142 | pinsMode => 143 | pinsLength => 144
   | pinsDir => 145 | pinsMissing => 146 | pinsIo => 147 | pinsMalformed => 148 | parentDeath => 149
-  | certifiedState => 163
+  | certifiedState => 163 | asksState => 164
 
 /-- Every own end but a signalled decider is fatal: each is a file, an argument or the build, and
 a restart reads the same one. -/

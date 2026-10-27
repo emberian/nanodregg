@@ -1,7 +1,7 @@
 // hosted-run.mjs — two members of a HOSTED World under node, each its own kernel instance as two
 // tabs would be: each joins over the guest-book's invitation, is enrolled, and they run the
 // document demo against the real `host serve` behind the relay (deploy/testground/run.sh).
-//   node hosted-run.mjs ws://127.0.0.1:8787/ws [document|basic|door] [--harness-control]
+//   node hosted-run.mjs ws://127.0.0.1:8787/ws [document|basic|door|inbox] [--harness-control]
 // Every command must answer as scripted (its exit; `basic`: ok, then the read shows bob's text), the
 // joins and first syncs included; the last line is `HOSTED <what> OK` or `HOSTED <what> RED: …`, exit
 // 1 on red (testground/build/gate.sh runs every scene on a fresh World). --harness-control adds one
@@ -11,6 +11,11 @@
 // page keeps in localStorage) resumed in a fresh kernel (a reloaded tab) syncs, finds itself in its
 // roster, and writes the object alice made before the reload; the same record with its seeds
 // forgotten does not write (the keys are what came back); kernel.json's sha256 is kernel.wasm's.
+// `inbox` is the page's "Ask the resident" (HOSTING-62, CLIENT-54) on a World with a resident
+// (`run.sh resident`, `keys`, `resident-serve`): alice rings the public Bell aimed at her own section
+// and the resident's answer arrives as its verified candidate; she retires her grant and the
+// candidate is suspended `support0 dead`. The answer must be words, not a named text such as
+// `(refused askCap)`, unless --named-ok.
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import factory from './kernel.mjs';
@@ -92,6 +97,21 @@ if (what === 'basic') {
   }
   console.log(`the relay's enrolment budget: ${JSON.stringify(budget)}`);
   if (!budget || !/enrollBudget/.test(budget.body) || !(+budget.retry > 0)) red('the relay never refused an address its enrolment budget');
+} else if (what === 'inbox') {
+  if (!wj.inbox) red('world.json names no inbox (run.sh resident)');
+  if (!alice.bellGrant) red('the guest-book gave alice no grant on the Bell');
+  const you = Object.assign(Object.create(Object.getPrototypeOf(alice)), alice, { name: 'you' });
+  const t0 = performance.now();
+  const r = await runDemo('inboxHosted', { fetchText: async (p) => readFileSync(new URL(p, import.meta.url), 'utf8'), members: [you],
+    vars: { bell: wj.inbox.bell, section: wj.inbox.section, bellGrant: alice.bellGrant, q: '"Write one short sentence for the first section of a document about lighthouses."' },
+    run: async (m, argv) => show(m, argv) });
+  if (!r.ok) red(`the inbox demo stopped at ${JSON.stringify(r.at?.say ?? r.at?.argv?.toString() ?? '')}`);
+  const row = r.results.map((x) => x.stdout).find((o) => /verified/.test(o)) ?? '';
+  const value = (row.match(/\(value "((?:[^"\\]|\\.)*)"\)/) || [])[1];
+  console.log(`the resident's answer, as the section's candidate (${((performance.now() - t0) / 1000).toFixed(1)} s): ${JSON.stringify(value)}`);
+  if (!row.includes(`(by #${wj.inbox.resident})`)) red(`the candidate is not by the resident's member: ${row}`);
+  if (!value) red(`no candidate value in ${row}`);
+  if (value.startsWith('(') && !process.argv.includes('--named-ok')) red(`the answer is a named text, not a model's words: ${value}`);
 } else {
   const r = await runDemo('document', { fetchText: async (p) => readFileSync(new URL(p, import.meta.url), 'utf8'), members: [alice, bob],
     run: async (m, argv) => show(m, argv) });

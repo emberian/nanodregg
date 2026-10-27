@@ -54,6 +54,14 @@
 //! the domain is pairwise disjoint from every other a key signs under (`Protocol.Proofs.Domains`).
 //! `keybroker --certify-pub KEYS` prints the certify public key (`certify HEX`), for `host genesis
 //! --certifier HEX --threshold 1`.
+//!
+//! THE OPERATOR'S DAILY ASK CAP (HOSTING-62). KEYS may also hold the line `asks N` (N ≥ 1, decimal):
+//! at most N asks a day are sent upstream, whatever the World's allowances say. The count lives in
+//! ASKS (`KEYS.asks`, 0600 beside KEYS, made empty when absent), which the decider reads at its start
+//! (`--asks N ASKS`, ASKS read-only to it). A grant under the cap carries `asked`, the day and count
+//! the decider reached; keybroker FIRST replaces ASKS by those bytes durably (`askState` if it
+//! cannot: nothing is sent), and only then calls. So a restart reads back every ask it sent and never
+//! refunds the day. Past N the decider refuses `askCap` and charges no allowance.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -336,17 +344,26 @@ fn parse_seed(hex: &[u8]) -> Option<Seed> {
     Some(seed)
 }
 
-/// `SLOT KEY` per line: a decimal slot, one space, the key's bytes (printable ASCII, no space); and
-/// at most once the certify slot's line, `certify HEX`. A `certify.next` line is refused: the next
-/// seed has its own custody (DESIGN-TRUST §4.4c). At least one provider key.
-fn parse_keys(text: &[u8]) -> Option<(Keys, Option<Seed>)> {
+/// `SLOT KEY` per line: a decimal slot, one space, the key's bytes (printable ASCII, no space); at
+/// most once the certify slot's line, `certify HEX`; and at most once the daily ask cap, `asks N`
+/// (HOSTING-62). A `certify.next` line is refused: the next seed has its own custody (DESIGN-TRUST
+/// §4.4c). At least one provider key.
+fn parse_keys(text: &[u8]) -> Option<(Keys, Option<Seed>, Option<u32>)> {
     let mut keys = Keys::new();
     let mut certify = None;
+    let mut asks = None;
     for line in text.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
         let sp = line.iter().position(|b| *b == b' ')?;
         let (word, key) = (&line[..sp], &line[sp + 1..]);
         if word == b"certify.next" {
             return None;
+        }
+        if word == b"asks" {
+            let n: u32 = std::str::from_utf8(key).ok()?.parse().ok()?;
+            if n == 0 || key.first() == Some(&b'0') || asks.replace(n).is_some() {
+                return None;
+            }
+            continue;
         }
         if word == b"certify" {
             if certify.replace(parse_seed(key)?).is_some() {
@@ -365,7 +382,7 @@ fn parse_keys(text: &[u8]) -> Option<(Keys, Option<Seed>)> {
     if keys.is_empty() {
         None
     } else {
-        Some((keys, certify))
+        Some((keys, certify, asks))
     }
 }
 
@@ -384,10 +401,12 @@ fn key_pair(seed: &Seed) -> Option<ring::signature::Ed25519KeyPair> {
     ring::signature::Ed25519KeyPair::from_seed_unchecked(seed.as_slice()).ok()
 }
 
-/// `KEYS.certified`: beside KEYS, so the writer's sandbox hides it with KEYS' directory.
-fn state_path(keys: &Path) -> Option<PathBuf> {
+/// `KEYS.<suffix>` (`certified`, `asks`): beside KEYS, so a sandbox that hides KEYS' directory hides
+/// it too.
+fn state_path(keys: &Path, suffix: &str) -> Option<PathBuf> {
     let mut name = keys.file_name()?.to_os_string();
-    name.push(".certified");
+    name.push(".");
+    name.push(suffix);
     Some(keys.with_file_name(name))
 }
 
@@ -398,7 +417,7 @@ fn certify_pub(keys_path: &Path) -> End {
         Ok(t) => t,
         Err(e) => return key_file_end(&e),
     };
-    let Some((_, Some(seed))) = parse_keys(&text) else {
+    let Some((_, Some(seed), _)) = parse_keys(&text) else {
         return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
     };
     let Some(cur) = key_pair(&seed) else {
@@ -427,6 +446,8 @@ struct Shared {
     group: u32,
     /// the writer's certify slot, when KEYS holds one
     certify: Option<Certifier>,
+    /// the daily ask cap's count file (`KEYS.asks`), when KEYS sets `asks N`
+    asks: Option<PathBuf>,
 }
 
 fn run() -> End {
@@ -455,20 +476,34 @@ fn run() -> End {
         Ok(t) => t,
         Err(e) => return key_file_end(&e),
     };
-    let Some((keys, seed)) = parse_keys(&text) else {
+    let Some((keys, seed, asks_limit)) = parse_keys(&text) else {
         return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
     };
     // the certify slot: its key pair, and the last certified head's file, made empty when absent
     let certify = match seed {
         None => None,
         Some(seed) => {
-            let (Some(pair), Some(state)) = (key_pair(&seed), state_path(&keys_path)) else {
+            let (Some(pair), Some(state)) = (key_pair(&seed), state_path(&keys_path, "certified"))
+            else {
                 return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
             };
-            if let Err(e) = certified_state(&state) {
-                return End::File(e, keybroker_exit::CERTIFIED_STATE);
+            if !private_state(&state) {
+                return End::File("certifiedState", keybroker_exit::CERTIFIED_STATE);
             }
             Some(Certifier { pair, state })
+        }
+    };
+    // the daily ask cap: its count file, made empty when absent (HOSTING-62)
+    let asks = match asks_limit {
+        None => None,
+        Some(n) => {
+            let Some(state) = state_path(&keys_path, "asks") else {
+                return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
+            };
+            if !private_state(&state) {
+                return End::File("asksState", keybroker_exit::ASKS_STATE);
+            }
+            Some((n, state))
         }
     };
     let anchors = match custody::read_public(&PathBuf::from(anchors_path), 1..=ANCHORS_MAX) {
@@ -511,6 +546,9 @@ fn run() -> End {
     if let Some(c) = &certify {
         read.push(c.state.clone());
     }
+    if let Some((_, a)) = &asks {
+        read.push(a.clone());
+    }
     let policy = Policy {
         read,
         write: vec![],
@@ -534,6 +572,10 @@ fn run() -> End {
     ];
     if let Some(c) = &certify {
         dargs.push(c.state.as_os_str());
+    }
+    let asks_n = asks.as_ref().map(|(n, _)| OsString::from(n.to_string()));
+    if let (Some(n), Some((_, a))) = (&asks_n, &asks) {
+        dargs.extend([std::ffi::OsStr::new("--asks"), n.as_os_str(), a.as_os_str()]);
     }
     let mut cmd = match command(&policy, decider.as_os_str(), &dargs) {
         Ok(c) => c,
@@ -563,6 +605,7 @@ fn run() -> End {
         peer,
         group,
         certify,
+        asks: asks.map(|(_, a)| a),
     });
     // the writer's socket, before any resident's: it lives as long as keybroker
     if shared.certify.is_some() {
@@ -837,11 +880,28 @@ fn ask_once(sh: &Shared, resident: &[u8], ask: &[u8]) -> Option<Answer> {
             headers,
             key_header,
             body,
+            asked,
             ..
         } => {
             let Some(key) = sh.keys.get(&key_slot) else {
                 return Some(refused(BrokerRefusal::KeyMissing));
             };
+            // the day's count first, durably; only then the call (HOSTING-62). A grant that carries a
+            // count with no cap set, or none with one, is the decider out of turn.
+            match (&sh.asks, asked.is_empty()) {
+                (None, true) => {}
+                (Some(state), false) => {
+                    let (Some(dir), Some(name)) =
+                        (state.parent(), state.file_name().and_then(|n| n.to_str()))
+                    else {
+                        return Some(refused(BrokerRefusal::AskState));
+                    };
+                    if nanodregg_client::fsx::replace(dir, name, &asked).is_err() {
+                        return Some(refused(BrokerRefusal::AskState));
+                    }
+                }
+                _ => return None,
+            }
             let req = Call {
                 host: &host,
                 target: &target,
@@ -990,20 +1050,21 @@ fn split_response(resp: &[u8]) -> Option<(u32, &[u8])> {
     Some((code, &resp[end + 4..]))
 }
 
-/// The last certified head's file: there and private (the custody checks, 0600), or made empty
-/// (durably, 0600) when absent. A file that fails the checks ends keybroker by name.
-fn certified_state(state: &Path) -> Result<(), &'static str> {
+/// A state file beside KEYS (the last certified head, the day's ask count): there and private (the
+/// custody checks, 0600), or made empty (durably, 0600) when absent. `false` ends keybroker by the
+/// file's name.
+fn private_state(state: &Path) -> bool {
     match custody::read_private(state, 0..=FRAME_MAX as usize) {
-        Ok(_) => Ok(()),
+        Ok(_) => true,
         Err(Refused::Io(e)) if e.kind() == ErrorKind::NotFound => {
             let (Some(dir), Some(name)) =
                 (state.parent(), state.file_name().and_then(|n| n.to_str()))
             else {
-                return Err("certifiedState");
+                return false;
             };
-            nanodregg_client::fsx::create_once(dir, name, &[]).map_err(|_| "certifiedState")
+            nanodregg_client::fsx::create_once(dir, name, &[]).is_ok()
         }
-        Err(_) => Err("certifiedState"),
+        Err(_) => false,
     }
 }
 

@@ -11,7 +11,8 @@ pipe and socket a frame is `u32le len ‖ payload`, `1 ≤ len ≤ Bounds.frameM
               residents 2 atMs : u64                    (which sockets to serve: HOSTING-26)
               reply    3  status : u32, body            (the upstream's answer to a grant: HOSTING-29)
               certify  4  atMs : u64                    (followed by the writer's certified bytes, unread: HOSTING-56)
-    verdict   grant    1  keySlot : u32, charged : u64, host, target, headers, keyHeader, body
+    verdict   grant    1  keySlot : u32, charged : u64, host, target, headers, keyHeader, body, asked
+                                                   (`asked`: the bytes keybroker keeps in KEYS.asks first: HOSTING-62)
               refuse   2  brokerRefusal : Refusal
               residents 3 names : list                  (the answer to `residents`)
               reply    4  text                          (the reply text Lean read from a 200 body)
@@ -150,6 +151,12 @@ inductive Refusal
   /-- keybroker: the certified head could not be made durable beside KEYS before signing; nothing
   was signed -/
   | certifyState
+  /-- the operator's daily ask cap (`asks N` in KEYS, `Broker.Daily`) is spent for this day; the
+  World's allowance was not charged (HOSTING-62) -/
+  | askCap
+  /-- keybroker: the day's ask count could not be made durable beside KEYS (`KEYS.asks`) before the
+  call; nothing was sent (HOSTING-62) -/
+  | askState
   deriving DecidableEq, Repr
 
 namespace Refusal
@@ -158,7 +165,8 @@ def all : List Refusal :=
   [noAllowance, allowanceMalformed, clockRegressed, badAsk, modelNotAllowed, tokensZero, tokensOver,
    messagesMalformed, textNotUtf8, overSpend, requestTooLarge, keyMissing, keyEchoed, upstreamFailed, busy,
    allowanceAmbiguous, noProvider, tlsCertificate, tlsHostname, tlsProtocol, peerRefused, notResident,
-   replyMalformed, pinMismatch, badCertify, notOnFold, notYet, regressed, unanchored, certifyState]
+   replyMalformed, pinMismatch, badCertify, notOnFold, notYet, regressed, unanchored, certifyState,
+   askCap, askState]
 
 def code : Refusal → UInt8
   | noAllowance => 0 | allowanceMalformed => 1 | clockRegressed => 2 | badAsk => 3
@@ -168,7 +176,7 @@ def code : Refusal → UInt8
   | tlsCertificate => 17 | tlsHostname => 18 | tlsProtocol => 19 | peerRefused => 20
   | notResident => 21 | replyMalformed => 22 | pinMismatch => 23
   | badCertify => 24 | notOnFold => 25 | notYet => 26 | regressed => 27 | unanchored => 28
-  | certifyState => 29
+  | certifyState => 29 | askCap => 30 | askState => 31
 
 def name : Refusal → String
   | noAllowance => "noAllowance" | allowanceMalformed => "allowanceMalformed"
@@ -183,6 +191,7 @@ def name : Refusal → String
   | replyMalformed => "replyMalformed" | pinMismatch => "pinMismatch"
   | badCertify => "badCertify" | notOnFold => "notOnFold" | notYet => "notYet"
   | regressed => "regressed" | unanchored => "unanchored" | certifyState => "certifyState"
+  | askCap => "askCap" | askState => "askState"
 
 def ofCode? (b : UInt8) : Option Refusal := all.find? (·.code == b)
 
@@ -201,7 +210,10 @@ structure Ask where
 inductive Verdict
   /-- call the upstream over TLS verified for `host`: `POST target`, `Host: host`, the `headers`
   lines, `keyHeader: <the slot's key>`, `body` -/
+  /- `asked`: what keybroker keeps in `KEYS.asks` before the call (`Broker.Daily.bytes`), empty when
+  the operator set no daily cap (HOSTING-62) -/
   | grant (keySlot : UInt32) (charged : Nat) (host target headers keyHeader body : ByteArray)
+      (asked : ByteArray)
   | refuse (why : Refusal)
   /-- the resident grains whose sockets keybroker must serve, by socket name (`Controller.dirOf`) -/
   | residents (names : List ByteArray)
@@ -252,7 +264,7 @@ def requestCases : Tagged :=
 
 def verdictCases : Tagged :=
   [("grant", 1, [.u32 "keySlot", .u64 "charged", .bytes "host", .bytes "target", .bytes "headers",
-     .bytes "keyHeader", .bytes "body"]),
+     .bytes "keyHeader", .bytes "body", .bytes "asked"]),
    ("refuse", 2, [refusalField]),
    ("residents", 3, [.list "names"]),
    ("reply", 4, [.bytes "text"]),
@@ -314,10 +326,11 @@ def decodeRequest (b : ByteArray) : Except Codec.Refusal Request :=
     | ⟨⟨3, _⟩, (t, ())⟩ => .certify t.toNat
 
 def verdictWire? : Verdict → Option VerdictTy
-  | .grant k c hs t h kh b => do
+  | .grant k c hs t h kh b a => do
     if hc : c < 2 ^ 64 then
       let hs ← bytes? hs; let t ← bytes? t; let h ← bytes? h; let kh ← bytes? kh; let b ← bytes? b
-      pure ⟨⟨0, by decide⟩, (k, ⟨c, hc⟩, hs, t, h, kh, b, ())⟩
+      let a ← bytes? a
+      pure ⟨⟨0, by decide⟩, (k, ⟨c, hc⟩, hs, t, h, kh, b, a, ())⟩
     else none
   | .refuse why => pure ⟨⟨1, by decide⟩, (⟨why.code, contains_of_mem why⟩, ())⟩
   | .residents names => do
@@ -332,7 +345,7 @@ def verdictWire? : Verdict → Option VerdictTy
     pure ⟨⟨5, by decide⟩, (c, ())⟩
 
 def verdictOf : VerdictTy → Verdict
-  | ⟨⟨0, _⟩, (k, c, hs, t, h, kh, b, ())⟩ => .grant k c.toNat hs.val t.val h.val kh.val b.val
+  | ⟨⟨0, _⟩, (k, c, hs, t, h, kh, b, a, ())⟩ => .grant k c.toNat hs.val t.val h.val kh.val b.val a.val
   | ⟨⟨1, _⟩, (why, ())⟩ => .refuse ((Refusal.ofCode? why.val).get (refusal_of_contains _ why.property))
   | ⟨⟨2, _⟩, (ns, ())⟩ => .residents (ns.val.toList.map (·.val))
   | ⟨⟨3, _⟩, (t, ())⟩ => .reply t.val
