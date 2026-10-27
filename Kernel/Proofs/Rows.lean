@@ -762,15 +762,35 @@ theorem rowStep_retract_absent {E : Env D} {w : World D} {t : Turn D} {r r' : Ro
       rw [Trie.get_insert_ne (rowSpec E) _ _ (fun e => by cases e), hget, if_pos rfl]
     · simp at h
 
+/-- A keep step at a row slot (a pin with no edit) leaves the rows as they were. -/
+theorem rowStep_keep {E : Env D} {w : World D} {t : Turn D} {r r' : Rows D} {x : RowTouch D}
+    {key : RowKey D} (h : rowStep E w t r x = .ok r') (hs : x.slot = .row key) (hact : x.act = .keep) :
+    r' = r := by
+  obtain ⟨slot, seen, act⟩ := x
+  simp only at hs hact
+  subst hs hact
+  unfold rowStep rowStepOn at h; simp only [headOfOn_trie] at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+  split at h
+  · simp at h
+  · simp only [except_bind_ok] at h
+    obtain ⟨⟨⟩, -, h⟩ := h
+    obtain ⟨⟨⟩, -, h⟩ := h
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    exact h.symm
+
 /-- Every row touch of a turn, in order (slots distinct): the touch `τ` at `.row key` decides the slot.
-The fold reached it at some canonical rows `r0`, its step left `r1`, and the rows at the end hold at
-`.row key` what `r1` does (no later touch names the slot or, being a row, the head). -/
+The fold reached it at some canonical rows `r0` holding at `.row key` what the fold started from
+(no earlier touch names the slot), its step left `r1`, and the rows at the end hold at `.row key`
+what `r1` does (no later touch names the slot or, being a row, the head). -/
 theorem foldRows_touch_get {E : Env D} {w : World D} {t : Turn D} {τ : RowTouch D} {key : RowKey D}
     (hs : τ.slot = .row key) :
     ∀ (l : List (RowTouch D)) (acc rr : Rows D × Nat), Trie.Canon (rowSpec E) 0 acc.1 →
       (l.map RowTouch.slot).Nodup → l.foldlM (rowStepFreed E w t) acc = .ok rr → τ ∈ l →
       ∃ r0 r1, Trie.Canon (rowSpec E) 0 r0 ∧ rowStep E w t r0 τ = .ok r1 ∧
-        rr.1.get (rowSpec E) (.row key) = r1.get (rowSpec E) (.row key)
+        rr.1.get (rowSpec E) (.row key) = r1.get (rowSpec E) (.row key) ∧
+        r0.get (rowSpec E) (.row key) = acc.1.get (rowSpec E) (.row key)
   | [], _, _, _, _, _, hm => by simp at hm
   | y :: rest, acc, rr, hc, hn, h, hm => by
       rw [List.foldlM_cons, except_bind_ok] at h
@@ -783,18 +803,24 @@ theorem foldRows_touch_get {E : Env D} {w : World D} {t : Turn D} {τ : RowTouch
       have hc1 := (rowStep_weight hc hstep).2
       simp only [List.map_cons, List.nodup_cons] at hn
       rcases List.mem_cons.mp hm with rfl | hm'
-      · exact ⟨acc.1, r1, hc, hstep, foldRows_get_out rest _ rr hc1 h2 fun x hx _ =>
-          ⟨fun e => hn.1 (by rw [hs, e]; exact List.mem_map_of_mem hx), fun _ _ e => by cases e⟩⟩
-      · exact foldRows_touch_get hs rest _ rr hc1 hn.2 h2 hm'
+      · exact ⟨acc.1, r1, hc, hstep, foldRows_get_out rest _ rr hc1 h2 (fun x hx _ =>
+          ⟨fun e => hn.1 (by rw [hs, e]; exact List.mem_map_of_mem hx), fun _ _ e => by cases e⟩), rfl⟩
+      · obtain ⟨r0, r1', hc0, hs0, hget, hpre⟩ := foldRows_touch_get hs rest _ rr hc1 hn.2 h2 hm'
+        exact ⟨r0, r1', hc0, hs0, hget, hpre.trans (rowStep_get_out hc hstep fun _ =>
+          ⟨fun e => hn.1 (by rw [← e, ← hs]; exact List.mem_map_of_mem hm'), fun _ _ e => by cases e⟩)⟩
 
 /-- **An admitted row touch decides its slot.** A turn admitted to `w'` from canonical rows, and its
-row touch `τ` at `.row key`: the step of `τ` (at the canonical rows the turn's fold had reached) left
-`r1`, and `w'` holds at `.row key` exactly what `r1` does. -/
+row touch `τ` at `.row key`: the step of `τ` ran at the canonical rows `r0` the turn's fold had
+reached, which hold at `.row key` exactly what `w` held (no earlier touch of the turn names the
+slot), it left `r1`, and `w'` holds at `.row key` exactly what `r1` does. So each act's corollary
+reads off `w` and `w'` alone: `admit_insert_row`, `admit_upsert_row`, `admit_retract_row`, and
+`admit_keep_row` (the slot is what `w` held). -/
 theorem admit_row_touch {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
     (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} (hτ : τ ∈ t.rows)
     (hs : τ.slot = .row key) :
     ∃ r0 r1, Trie.Canon (rowSpec E) 0 r0 ∧ rowStep E w t r0 τ = .ok r1 ∧
-      rowAt E w'.rows (.row key) = r1.get (rowSpec E) (.row key) := by
+      rowAt E w'.rows (.row key) = r1.get (rowSpec E) (.row key) ∧
+      r0.get (rowSpec E) (.row key) = rowAt E w.rows (.row key) := by
   obtain ⟨_, hk, hw'⟩ := admit_rows ha
   have hrun := hk.rows
   rw [rowsRun_eq] at hrun
@@ -806,9 +832,9 @@ theorem admit_row_touch {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCa
     rw [except_bind_ok] at hrun
     obtain ⟨acc, hf, he⟩ := hrun
     simp only [pure, Except.pure, Except.ok.injEq] at he
-    obtain ⟨r0, r1, hc0, hstep, hget⟩ :=
+    obtain ⟨r0, r1, hc0, hstep, hget, hpre⟩ :=
       foldRows_touch_get hs t.rows (w.rows, 0) acc hr (nodup_of_find_none hfind) hf hτ
-    refine ⟨r0, r1, hc0, hstep, ?_⟩
+    refine ⟨r0, r1, hc0, hstep, ?_, hpre⟩
     unfold rowAt
     rw [hw', ← he, dropHeads_get_out t (fun _ _ _ _ e => by cases e) acc
       (foldRows_weight t.rows (w.rows, 0) acc hr hf).2]
@@ -820,7 +846,7 @@ theorem admit_upsert_row {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsC
     (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} {amt : Nat} {v : ByteArray}
     (hτ : τ ∈ t.rows) (hs : τ.slot = .row key) (hact : τ.act = .upsert amt v) :
     ∃ ver, rowAt E w'.rows (.row key) = some (.row amt v ver) := by
-  obtain ⟨_, _, -, hstep, hget⟩ := admit_row_touch hr ha hτ hs
+  obtain ⟨_, _, -, hstep, hget, -⟩ := admit_row_touch hr ha hτ hs
   rw [hget]
   exact rowStep_upsert_get hstep hs hact
 
@@ -829,7 +855,7 @@ theorem admit_insert_row {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsC
     (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} {amt : Nat} {v : ByteArray}
     (hτ : τ ∈ t.rows) (hs : τ.slot = .row key) (hact : τ.act = .insert amt v) :
     ∃ ver, rowAt E w'.rows (.row key) = some (.row amt v ver) := by
-  obtain ⟨_, _, -, hstep, hget⟩ := admit_row_touch hr ha hτ hs
+  obtain ⟨_, _, -, hstep, hget, -⟩ := admit_row_touch hr ha hτ hs
   rw [hget]
   exact rowStep_insert_get hstep hs hact
 
@@ -838,6 +864,16 @@ touch retracting `.row key`: `w'` holds no row there. -/
 theorem admit_retract_row {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
     (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} (hτ : τ ∈ t.rows)
     (hs : τ.slot = .row key) (hact : τ.act = .retract) : rowAt E w'.rows (.row key) = none := by
-  obtain ⟨_, _, hc0, hstep, hget⟩ := admit_row_touch hr ha hτ hs
+  obtain ⟨_, _, hc0, hstep, hget, -⟩ := admit_row_touch hr ha hτ hs
   rw [hget]
   exact rowStep_retract_absent hc0 hstep hs hact
+
+/-- **An admitted keep leaves its row as the World held it.** A turn admitted to `w'` from canonical
+rows, and its row touch keeping `.row key` (a pin, no edit): `w'` holds at `.row key` exactly what `w`
+did. -/
+theorem admit_keep_row {E : Env D} {w w' : World D} {t : Turn D} (hr : w.RowsCanon E)
+    (ha : World.admit E w t = .ok w') {τ : RowTouch D} {key : RowKey D} (hτ : τ ∈ t.rows)
+    (hs : τ.slot = .row key) (hact : τ.act = .keep) : rowAt E w'.rows (.row key) = rowAt E w.rows (.row key) := by
+  obtain ⟨_, _, -, hstep, hget, hpre⟩ := admit_row_touch hr ha hτ hs
+  rw [hget, rowStep_keep hstep hs hact]
+  exact hpre

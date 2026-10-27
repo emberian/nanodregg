@@ -51,11 +51,13 @@ staged conjuncts; `host_step_folds_tooth_wrong_op` — an arm at any op that doe
 no call, an arm at a `submit` frame that takes a step `World.step` accepts: it `Commits` (so
 `staged_rooted` holds of it), every other conjunct holds of `[s]`, and only `Honest` refuses it; `host_step_folds_tooth_censor` — at any `Ctx` meeting the
 premise (the deployed one), an arm that records a refusal of a call `judge` would ADMIT, again a
-machine that `Commits`, refused only by `Honest`. `kept_refutable` — `Kept` is not every World.
+machine that `Commits`, refused only by `Honest`; its premises hold at every admissible call with
+refusal budget left (`Kernel.Receive.refuse_admissible`). `kept_refutable` — `Kept` is not every World.
 -/
 import Host.Proofs.Serve
 import Host.Proofs.Deployed
 import Kernel.Proofs.Rederive
+import Kernel.Proofs.RefuseAdmissible
 import Kernel.Proofs.Origin
 import Protocol.Proofs.Invite
 import Protocol.Proofs.Command
@@ -491,8 +493,9 @@ which `World.refuse` accepts on `w`. A machine equal to the writer's except that
 frame's code records `r` wherever `World.refuse` accepts it `Commits` to `World.step`; at a `submit`
 frame `[.refusal r]` meets every other conjunct of the step theorem, and the step theorem fails of
 it: the one step it staged is a refusal `judge` did not record. So `Honest` alone refuses it. The
-premises' joint satisfiability (a refusal record of an admissible call's event that `World.refuse`
-accepts on the same World) is not witnessed in Lean. -/
+premises hold together at every call `judge` admits while the member and the World have refusal
+budget left (`Kernel.Receive.refuse_admissible`: `refusedOf X c v` meets `he`, `hk` and `hr`), so the
+tooth fires wherever the writer could admit. -/
 theorem host_step_folds_tooth_censor (X : Ctx D) (hX : ∀ b c, X.decodeCall b = some c → X.callBytes c = b)
     (w w₁ w' : World D) (out : Out (Step D × D)) (q : Request Frame) (c : Call D) (t : Turn D)
     (r : Refused D) (st : UInt8) (p : ByteArray)
