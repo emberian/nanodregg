@@ -116,7 +116,8 @@ open Nanodregg.Hosting Nanodregg.Hosting.Resident
 /-- The resident's act on the pending rings a tick read (deployed: `Hosting.Resident.actOn`). -/
 abbrev RingAct := Where → Shape → Mem → List Ring → Prog Tick
 
-/-- `Hosting.Resident.readP` with the act a parameter. -/
+/-- `Hosting.Resident.readP` with the act a parameter: the act IS the filling of the tick's `serve` hole
+(`Hosting.Resident.fill`), so the System chooses how the hole is filled. -/
 def readPWith (act : RingAct) (w : Where) (sh : Shape) (m : Mem) : Prog Tick :=
   .cmd (.read sh) fun
   | .error e => .say s!"read {e}" (.done (retry m s!"read {e}"))
@@ -126,7 +127,7 @@ def readPWith (act : RingAct) (w : Where) (sh : Shape) (m : Mem) : Prog Tick :=
     else
     match readOut sh r with
     | .error (x, d) => .done (.stop x d)
-    | .ok pending => act w sh m pending
+    | .ok pending => act w sh (m.prune pending) pending
 
 /-- `Hosting.Resident.tickP` with the act a parameter: the resident's tick around `act`. -/
 def tickWith (act : RingAct) (w : Where) (m : Mem) : Prog Tick :=
@@ -166,7 +167,7 @@ def bellShape : Shape :=
   ⟨0, { key := pendingKey, val := pendingVal, limit := 64, sum := none, cap := 0, retract := true, guard := none },
    rfl, rfl⟩
 def bellRing : Ring := ⟨5, .empty, "ring".toUTF8, none⟩
-def bellMem : Mem := ⟨some bellShape, none, 0⟩
+def bellMem : Mem := ⟨some bellShape, none, 0, []⟩
 
 /-- **The ask-first resident**: its act asks before keeping the intent. -/
 def askFirstResident (d : ByteArray → ByteArray) : System Codec.Digest := { deployed d with ringAct := askFirst }

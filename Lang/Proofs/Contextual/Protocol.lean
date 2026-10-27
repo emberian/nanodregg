@@ -21,8 +21,8 @@ interaction exactly when its NAME does not depend on the response: a naming disc
 of the calculus), `Coin.no_foresight`, `Coin.response_indexed_names_have_foresight`,
 `Coin.response_dependent_succeeds`; the scalar illustration `separate_witnesses_bounded`. The scalar
 matchers and the private Negotiation `World` went with PROT-6, replaced by Std.offer's deployed fuse
-(`Lang/StdOffer.lean`). The relation to nano's own
-free program over effects: `nano_runs_iff`, `nano_interp_agrees`, `nano_interp_runs`.
+(`Lang/StdOffer.lean`). The deployed resident's tick is a term of this calculus with holes
+(`Hosting.Resident.Prog`, filled by `Lang.Contextual.Slot`).
 -/
 import Lang.Proofs.Contextual.ProtocolTyping
 

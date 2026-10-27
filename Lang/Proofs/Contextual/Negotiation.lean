@@ -16,7 +16,7 @@ shared-parameter theorems) went with PROT-6, replaced by Std.offer's deployed fu
 (`Lang/StdOffer.lean`). The private delivery model (`External`, `Internal`, `Consistent`,
 `internal_once_not_external_once`, `exactly_once_needs_reply_and_dedupe`) and
 `lost_reply_keeps_obligation` went with PROT-5: the deployed objects state the failures
-(`Hosting.Proofs.ContextualFailures`: `submit_at_most_once`, `lost_ask_keeps_obligation`,
+(`Hosting.Proofs.LostReply`: `submit_at_most_once`, `lost_ask_keeps_obligation`,
 `lost_reply_policy`).
 -/
 import Lang.Proofs.Contextual.Protocol

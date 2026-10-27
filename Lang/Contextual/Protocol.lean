@@ -22,14 +22,15 @@ retract of its row. A linear `Val` kind here would be a second count of the same
 deployed reader. Its executed prefix is a history (`Hist`), possibly ending in a call
 whose reply was lost (`inflight`), and a re-substitution must leave every hole the history has
 already entered alone (`Dispatched`). The deployed lost reply is the resident's `AskEnd.lost` and
-the kernel's journal-first retry; what each does with it is `Hosting.Proofs.ContextualFailures`
-(PROT-5: one Boolean per peer, `Nano.Peer.reliable`).
+the kernel's journal-first retry; what each does with it is `Hosting.Proofs.LostReply`
+(PROT-5: one Boolean per peer, `Peer.reliable`).
 
 The shape generalises minidregg's `Theory/IndexedProgram.lean` (restated in Lean core, law 11): its
 `IxSignature`/`Program` gain a third constructor `hole`, its `Algebra` a hole case, its interpreter
-a `stuck` outcome (doc 2 section 7: partiality visible in the result type). Nano's own free program
-over effects (`Hosting.Resident.Prog`) is the instance with a trivial index and no holes
-(`Proofs.Contextual.Protocol.nano_runs_iff`, `nano_interp_agrees`).
+a `stuck` outcome (doc 2 section 7: partiality visible in the result type). A hole filled when the
+run reaches it, from candidates under live supports, is `Lang.Contextual.Slot`; the deployed
+resident's tick (`Hosting.Resident.Prog`) is a term of this calculus at a trivial index with two such
+holes (`serve`, `use`), run by `Slot.interp`.
 
 The judgment `Ω;Γ;Δ ⊢ P : Protocol(i, A) ⊣ Φ` is `HasProt sp Ω Γ Q Φ Δ P`: `Γ` the reusable facts
 (hypothetical: derivability is not current availability, `admits`), `Δ` the linear tokens (a bag:
@@ -38,7 +39,7 @@ bound). Substitution is SINGLE-PASS: `subst σ` replaces each hole by its fillin
 substitute into the filling, so a filling's own holes stay open under the same `σ`. Definitions only. The statements (`HasProt`, `Runs`, `Reach`, `Started`, `Dispatched`, `SubBag`,
 `Fills`, `SubstOK`, ...) are in `Lang.Proofs.Contextual.ProtocolTyping`; the theorems are in
 `Lang.Proofs.Contextual.Protocol`, `Lang.Proofs.Contextual.Negotiation` and
-`Hosting.Proofs.ContextualFailures`.
+`Hosting.Proofs.LostReply`.
 -/
 
 namespace Nanodregg.Lang.Contextual.Protocol

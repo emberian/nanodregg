@@ -79,12 +79,15 @@ def recorder (o : Oracle) : Handler (StateM (Nat × List Ev)) where
 
 /-- A wrong interpreter, kept only as the subject of a tooth (`interpTwice_no_path`): it performs a
 command node's call twice. Nothing calls it. -/
-def Prog.interpTwice {M : Type → Type} [Monad M] {α : Type} (h : Handler M) : Prog α → M α
-  | .done a => pure a
-  | .cmd c k => do let _ ← h.cmd c; let x ← h.cmd c; (k x).interpTwice h
-  | .keep r t k => do let b ← h.keep r t; (k b).interpTwice h
-  | .forget k => do let b ← h.forget; (k b).interpTwice h
-  | .ask r q k => do let e ← h.ask r q; (k e).interpTwice h
-  | .say s k => do h.say s; k.interpTwice h
+def Prog.interpTwice {M : Type → Type} [Monad M] (h : Handler M) : Prog Tick → M Tick :=
+  Lang.Contextual.Protocol.fold (S := sig) (Hole := fun _ => Hole) (A := fun _ => Tick) (C := fun _ => M Tick)
+    { ret := fun a => pure a
+      call := fun op k => match op, k with
+        | Eff.cmd c, k => do let _ ← h.cmd c; let x ← h.cmd c; k x
+        | Eff.keep r t, k => do let b ← h.keep r t; k b
+        | Eff.forget, k => do let b ← h.forget; k b
+        | Eff.ask r q, k => do let e ← h.ask r q; k e
+        | Eff.say s, k => do h.say s; k ()
+      hole := fun _ => pure (.stop .bellShape "holes") }
 
 end Nanodregg.Hosting.Resident

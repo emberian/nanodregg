@@ -52,15 +52,18 @@ import Hosting.Proofs.Resident
 namespace Nanodregg.Hosting.Proofs.ResidentRun
 
 open Nanodregg.Hosting Nanodregg.Hosting.Resident
+open Nanodregg.Lang.Contextual.Slot
 
-/-- A path through a tree: the effects it performs, with SOME result for each, and its end. -/
-inductive Runs {α : Type} : Prog α → List Ev → α → Prop
-  | done (a : α) : Runs (.done a) [] a
+/-- A path through a tick's term: the effects it performs, with SOME result for each, and its end;
+a hole's path is the path of its filling (`fill`, the deployed slots). -/
+inductive Runs : Prog Tick → List Ev → Tick → Prop
+  | done (a : Tick) : Runs (.done a) [] a
   | cmd {c k es a} (x : Except String Reply) : Runs (k x) es a → Runs (.cmd c k) (.cmd c x :: es) a
   | keep {r t k es a} (b : Bool) : Runs (k b) es a → Runs (.keep r t k) (.keep r t b :: es) a
   | forget {k es a} (b : Bool) : Runs (k b) es a → Runs (.forget k) (.forget b :: es) a
   | ask {r q k es a} (x : AskEnd) : Runs (k x) es a → Runs (.ask r q k) (.ask r q x :: es) a
-  | say {s k es a} : Runs k es a → Runs (.say s k) (.say s :: es) a
+  | say {s k es a} : Runs (k ()) es a → Runs (.sayK s k) (.say s :: es) a
+  | hole {h es a} : Runs (fill h) es a → Runs (.hole h) es a
 
 @[simp] theorem core_nil : core [] = [] := rfl
 @[simp] theorem core_say (s : String) (es : List Ev) : core (.say s :: es) = core es := by
@@ -74,6 +77,9 @@ inductive Runs {α : Type} : Prog α → List Ev → α → Prop
 @[simp] theorem core_ask (r : Ring) (q : Broker.Ask) (x : AskEnd) (es : List Ev) :
     core (.ask r q x :: es) = .ask r q x :: core es := by simp [core, Ev.quiet]
 
+theorem core_append (l₁ l₂ : List Ev) : core (l₁ ++ l₂) = core l₁ ++ core l₂ := by
+  simp [core, List.filter_append]
+
 /-! ## Retries: the vocabulary -/
 
 /-- An effect that did not settle, so the tick it ends is a retry (`retry`): a member command that
@@ -83,6 +89,7 @@ def Unsettled : Ev → Prop
   | .cmd (.invoke _ _ _) x => match x with
     | .error _ => True
     | .ok rr => rr.exit ≠ Protocol.CommandExit.ok.code ∧ rr.exit ≠ Protocol.CommandExit.refused.code
+  | .cmd (.probe _) x => probeGone x = none
   | .cmd _ x => match x with
     | .error _ => True
     | .ok rr => rr.exit ≠ Protocol.CommandExit.ok.code
@@ -118,6 +125,22 @@ theorem done_retried {m : Mem} {why : String} {es : List Ev} {a : Tick} (h : Run
     es = [] ∧ Retried m.retries a := by
   cases h; exact ⟨rfl, retry_retried m why⟩
 
+/-- The probes of the cells `cs` a waiting ring's answer cites, `gone` the cells found gone so far,
+then the `use` slot's effects: nothing when the queue stops, else one forget. A probe that does not
+settle ends it. -/
+def ProbesCore (r : Ring) (p : List Ring) : List ByteArray → List ByteArray → List Ev → Prop
+  | [], gone, rest => if useChoice r p gone = .stop then rest = [] else ∃ b, rest = [.forget b]
+  | c :: cs, gone, rest => ∃ y rest', rest = .cmd (.probe c) y :: rest' ∧
+      match probeGone y with
+      | some true => ProbesCore r p cs (c :: gone) rest'
+      | some false => ProbesCore r p cs gone rest'
+      | none => rest' = []
+
+/-- What follows the re-read `p` of a refused answer for `r`: a ring that still waits has the cells
+its answer cites probed, then the `use` slot; a ring that left is forgotten. -/
+def RefusedCore (r : Ring) (p : List Ring) (rest : List Ev) : Prop :=
+  if r ∈ p then ProbesCore r p (aimCells r) [] rest else ∃ b, rest = [.forget b]
+
 /-- What follows an invoke for ring `r` that answered `x`: taken (exit ok) → one forget; refused →
 the re-read, and a forget ONLY when the re-read listed the rings and `r` is no longer among them
 (a refused answer whose ring still waits keeps its text); anything else (a transport failure,
@@ -129,7 +152,7 @@ def DeliverAfter (sh : Shape) (r : Ring) : Except String Reply → List Ev → P
     else if rr.exit = Protocol.CommandExit.refused.code then
       ∃ y rest', rest = .cmd (.reread sh) y :: rest' ∧
         match readRings sh y with
-        | some p => if r ∈ p then rest' = [] else ∃ b, rest' = [.forget b]
+        | some p => RefusedCore r p rest'
         | none => rest' = []
     else rest = []
 
@@ -153,22 +176,22 @@ def ActCore (c : Conf) (sh : Shape) (k : Option (Ring × ByteArray)) (p : List R
   | .ask r => es = [.keep r intentText false] ∨
       ∃ x rest, es = .keep r intentText true :: .ask r (askOf c r) x :: rest ∧ AfterAsk sh r x rest
 
-/-- The read at `sh`, then (if it returned rings) the act on them. -/
-def ReadCore (c : Conf) (sh : Shape) (k : Option (Ring × ByteArray)) (es : List Ev) : Prop :=
+/-- The read at `sh`, then (if it returned rings) the act on the rings whose answer stands. -/
+def ReadCore (c : Conf) (sh : Shape) (m : Mem) (es : List Ev) : Prop :=
   ∃ y rest, es = .cmd (.read sh) y :: rest ∧
     match readRings sh y with
     | none => rest = []
-    | some p => ActCore c sh k p rest
+    | some p => ActCore c sh m.kept (live m p) rest
 
 /-- A tick's effects: with a shape, the read and the act; without one, the describe first, then
 (if the description read as a bell) the read and the act at the shape it read. -/
 def TickCore (c : Conf) (m : Mem) (es : List Ev) : Prop :=
   match m.shape with
-  | some sh => ReadCore c sh m.kept es
+  | some sh => ReadCore c sh m es
   | none => ∃ y rest, es = .cmd .describe y :: rest ∧
       match describedShape c y with
       | none => rest = []
-      | some sh => ReadCore c sh m.kept rest
+      | some sh => ReadCore c sh m rest
 
 /-! ## The order -/
 
@@ -177,6 +200,178 @@ theorem forgetThen_core {n : Tick} {es : List Ev} {a : Tick} (h : Runs (forgetTh
   unfold forgetThen at h
   cases h with
   | forget b h => cases b <;> simp at h <;> cases h <;> exact ⟨_, rfl⟩
+
+/-- The `serve` slot's choice is `decideTick` over the rings whose answer stands: the kept ring's
+answer while it waits and stands, else an ask about the lowest such ring, else idling. -/
+theorem serveChoice_eq (m : Mem) (p : List Ring) : serveChoice m p = decideTick (live m p) m.kept := by
+  have hu : ∀ q, q ∈ p → serveSlot.usable (serveHolds m p) (Act.ask q) = stands m q := by
+    intro q hq
+    cases hs : stands m q <;> simp [Slot.usable, Slot.dead, serveSlot, serveHolds, hq, hs]
+  have hmap : (p.map Act.ask).filter (serveSlot.usable (serveHolds m p)) = (live m p).map Act.ask := by
+    rw [List.filter_map]
+    unfold live
+    congr 1
+    apply List.filter_congr
+    intro q hq
+    simp only [Function.comp_apply]
+    exact hu q hq
+  have hidle : serveSlot.usable (serveHolds m p) Act.idle = true := by
+    simp [Slot.usable, Slot.dead, serveSlot]
+  have hlive : ∀ r, r ∈ live m p ↔ r ∈ p ∧ stands m r = true := by
+    intro r; simp [live, List.mem_filter]
+  unfold serveChoice Slot.alternatives serveOrder decideTick
+  cases hk : m.kept with
+  | none =>
+    simp only [List.nil_append, List.filter_append, hmap, List.filter_cons, hidle, if_true,
+      List.filter_nil]
+    cases live m p <;> rfl
+  | some kt =>
+    obtain ⟨r, t⟩ := kt
+    simp only [List.singleton_append, List.filter_append, hmap, List.filter_cons, hidle, if_true,
+      List.filter_nil]
+    have ha : serveSlot.usable (serveHolds m p) (Act.answer r t) = decide (r ∈ live m p) := by
+      have := hlive r
+      by_cases h1 : r ∈ p <;> by_cases h2 : stands m r = true <;>
+        simp_all [Slot.usable, Slot.dead, serveSlot, serveHolds]
+    rw [ha]
+    by_cases hr : r ∈ live m p
+    · simp [hr]
+    · simp only [hr, decide_false, Bool.false_eq_true, if_false]
+      cases live m p <;> rfl
+
+/-- Dropping the withdrawn rings that left `pending` changes the standing of no ring in it. -/
+theorem stands_prune (m : Mem) {p : List Ring} {r : Ring} (hr : r ∈ p) :
+    stands (m.prune p) r = stands m r := by
+  unfold stands Mem.prune
+  have : ∀ l : List (Ring × String),
+      (l.filter fun x => decide (x.1 ∈ p)).any (fun x => x.1 == r) = l.any (fun x => x.1 == r) := by
+    intro l
+    induction l with
+    | nil => rfl
+    | cons x l ih =>
+      by_cases hx : x.1 ∈ p
+      · simp [hx, ih]
+      · have hne : (x.1 == r) = false := by
+          simp only [beq_eq_false_iff_ne]; intro he; exact hx (he ▸ hr)
+        simp [hx, ih, hne]
+  simp only [this]
+
+/-- Dropping the withdrawn rings that left `pending` changes no ring's standing in it. -/
+theorem live_prune (m : Mem) (p : List Ring) : live (m.prune p) p = live m p := by
+  unfold live
+  apply List.filter_congr
+  intro r hr
+  exact stands_prune m hr
+
+/-- What follows a refused answer, by the `use` slot: nothing but its line when the queue stops,
+else one forget. -/
+theorem useP_core {m : Mem} {r : Ring} {n line : String} {p : List Ring} {gone : List ByteArray}
+    {es : List Ev} {a : Tick} (h : Runs (useP m r n line p gone) es a) :
+    if useChoice r p gone = .stop then core es = [] else ∃ b, core es = [.forget b] := by
+  unfold useP at h
+  cases hc : useChoice r p gone with
+  | closed =>
+    rw [hc] at h
+    cases h with | say h => obtain ⟨b, hb⟩ := forgetThen_core h; exact ⟨b, by simp [hb]⟩
+  | withdraw c =>
+    rw [hc] at h
+    cases h with | say h => obtain ⟨b, hb⟩ := forgetThen_core h; exact ⟨b, by simp [hb]⟩
+  | stop => rw [hc] at h; cases h; rfl
+
+/-- A ring no longer pending closes the `use` slot. -/
+theorem useChoice_gone {r : Ring} {p : List Ring} {gone : List ByteArray} (hr : r ∉ p) :
+    useChoice r p gone = .closed := by
+  simp [useChoice, Slot.alternatives, useOrder, Slot.usable, Slot.dead, useSlot, useHolds, hr]
+
+theorem probes_core {sh : Shape} {m : Mem} {r : Ring} {n line : String} {p : List Ring} :
+    ∀ {cs gone : List ByteArray} {es : List Ev} {a : Tick},
+      Runs (probesP sh m r n line p cs gone) es a → ProbesCore r p cs gone (core es)
+  | [], gone, es, a, h => by
+    simp only [probesP] at h
+    cases h with | hole h => exact useP_core h
+  | c :: cs, gone, es, a, h => by
+    simp only [probesP] at h
+    cases h with
+    | cmd y h =>
+      rename_i es'
+      refine ⟨y, core es', by simp, ?_⟩
+      dsimp only at h
+      cases hy : probeGone y with
+      | none =>
+        rw [hy] at h
+        cases h with | say h => cases h; rfl
+      | some b =>
+        cases b
+        · rw [hy] at h; exact probes_core h
+        · rw [hy] at h; exact probes_core h
+
+theorem refused_core {sh : Shape} {m : Mem} {r : Ring} {n line : String} {p : List Ring} {es : List Ev}
+    {a : Tick} (h : Runs (refusedP sh m r n line p) es a) : RefusedCore r p (core es) := by
+  unfold refusedP at h
+  unfold RefusedCore
+  split at h
+  · rename_i hr
+    rw [if_pos hr]
+    exact probes_core h
+  · rename_i hr
+    rw [if_neg hr]
+    cases h with
+    | hole h =>
+      have hc := useP_core h
+      rw [useChoice_gone hr] at hc
+      simpa using hc
+
+/-- Every path through the probes: the settled probes, then either an unsettled probe and a retry, or
+a path of the `use` hole's filling at the cells found gone. -/
+theorem probesP_path {sh : Shape} {m : Mem} {r : Ring} {n line : String} {p : List Ring} :
+    ∀ {cs gone : List ByteArray} {es : List Ev} {a : Tick},
+      Runs (probesP sh m r n line p cs gone) es a →
+      ∃ pre rest, es = pre ++ rest ∧ (∀ e ∈ pre, ∃ c y, e = .cmd (.probe c) y ∧ probeGone y ≠ none) ∧
+        ((∃ c y s why, rest = [.cmd (.probe c) y, .say s] ∧ probeGone y = none ∧ a = retry m why) ∨
+          ∃ gone', Runs (useP m r n line p gone') rest a)
+  | [], gone, es, a, h => by
+    simp only [probesP] at h
+    cases h with | hole h => exact ⟨[], es, rfl, by simp, .inr ⟨gone, h⟩⟩
+  | c :: cs, gone, es, a, h => by
+    simp only [probesP] at h
+    cases h with
+    | cmd y h =>
+      dsimp only at h
+      cases hy : probeGone y with
+      | none =>
+        rw [hy] at h
+        cases h with
+        | say h => cases h; exact ⟨[], _, rfl, by simp, .inl ⟨c, y, _, _, rfl, hy, rfl⟩⟩
+      | some b =>
+        have step : ∀ {es' : List Ev}, (∃ pre rest, es' = pre ++ rest ∧
+            (∀ e ∈ pre, ∃ c y, e = .cmd (.probe c) y ∧ probeGone y ≠ none) ∧
+            ((∃ c y s why, rest = [.cmd (.probe c) y, .say s] ∧ probeGone y = none ∧ a = retry m why) ∨
+              ∃ gone', Runs (useP m r n line p gone') rest a)) →
+            ∃ pre rest, .cmd (.probe c) y :: es' = pre ++ rest ∧
+              (∀ e ∈ pre, ∃ c y, e = .cmd (.probe c) y ∧ probeGone y ≠ none) ∧
+              ((∃ c y s why, rest = [.cmd (.probe c) y, .say s] ∧ probeGone y = none ∧ a = retry m why) ∨
+                ∃ gone', Runs (useP m r n line p gone') rest a) := by
+          rintro es' ⟨pre, rest, rfl, hpre, hr⟩
+          refine ⟨.cmd (.probe c) y :: pre, rest, rfl, ?_, hr⟩
+          intro e he
+          rcases List.mem_cons.mp he with rfl | he
+          · exact ⟨c, y, rfl, by simp [hy]⟩
+          · exact hpre e he
+        cases b
+        · rw [hy] at h; exact step (probesP_path h)
+        · rw [hy] at h; exact step (probesP_path h)
+
+/-- Every path after a refused answer's re-read: a ring that left goes to `use` with nothing probed;
+a ring that waits goes through the probes. -/
+theorem refusedP_path {sh : Shape} {m : Mem} {r : Ring} {n line : String} {p : List Ring} {es : List Ev}
+    {a : Tick} (h : Runs (refusedP sh m r n line p) es a) :
+    ∃ pre rest, es = pre ++ rest ∧ (∀ e ∈ pre, ∃ c y, e = .cmd (.probe c) y ∧ probeGone y ≠ none) ∧
+      ((∃ c y s why, rest = [.cmd (.probe c) y, .say s] ∧ probeGone y = none ∧ a = retry m why) ∨
+        ∃ gone', Runs (useP m r n line p gone') rest a) := by
+  unfold refusedP at h
+  split at h
+  · exact probesP_path h
+  · cases h with | hole h => exact ⟨[], es, rfl, by simp, .inr ⟨[], h⟩⟩
 
 theorem deliver_core {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
     {a : Tick} (h : Runs (deliverP sh m r t) es a) : DeliverCore sh r t (core es) := by
@@ -224,14 +419,7 @@ theorem deliver_core {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : Lis
                   cases h; rfl
                 · rename_i p hp
                   simp only [hp, Except.toOption]
-                  split at h
-                  · rename_i hr
-                    simp only [hr, if_true]
-                    cases h; rfl
-                  · rename_i hr
-                    simp only [hr, if_false]
-                    cases h with
-                    | say h => obtain ⟨b, hb⟩ := forgetThen_core h; exact ⟨b, by simp [hb]⟩
+                  exact refused_core h
         · rename_i href
           simp only [href, if_false]
           cases h with | say h => cases h; rfl
@@ -251,10 +439,11 @@ theorem answered_core {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : Li
         exact .inr ⟨_, by simp, deliver_core h⟩
 
 theorem actOn_core {w : Where} {sh : Shape} {m : Mem} {p : List Ring} {es : List Ev} {a : Tick}
-    (h : Runs (actOn w sh m p) es a) : ActCore w.conf sh m.kept p (core es) := by
+    (h : Runs (actOn w sh m p) es a) : ActCore w.conf sh m.kept (live m p) (core es) := by
   unfold actOn at h
+  rw [serveChoice_eq] at h
   unfold ActCore
-  rcases hd : decideTick p m.kept with _ | ring | ⟨ring, t⟩
+  rcases hd : decideTick (live m p) m.kept with _ | ring | ⟨ring, t⟩
   · rw [hd] at h
     simp only at h ⊢
     cases hk : m.kept with
@@ -293,7 +482,7 @@ theorem actOn_core {w : Where} {sh : Shape} {m : Mem} {p : List Ring} {es : List
     exact deliver_core h
 
 theorem read_core {w : Where} {sh : Shape} {m : Mem} {es : List Ev} {a : Tick}
-    (h : Runs (readP w sh m) es a) : ReadCore w.conf sh m.kept (core es) := by
+    (h : Runs (readP w sh m) es a) : ReadCore w.conf sh m (core es) := by
   unfold readP at h
   cases h with
   | cmd y h =>
@@ -317,7 +506,8 @@ theorem read_core {w : Where} {sh : Shape} {m : Mem} {es : List Ev} {a : Tick}
           cases h; rfl
         · rename_i p hp
           simp only [hp, Except.toOption]
-          exact actOn_core h
+          cases h with
+          | hole h => simpa [fill, live_prune] using actOn_core h
 
 /-- **The order of a tick's effects**, on every path of the tree `tick` performs: `TickCore`. -/
 theorem tick_order {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (tickP w m) es a) :
@@ -358,6 +548,44 @@ theorem tick_order {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (ti
 
 /-! ## Counted: what the order says, stated on its own -/
 
+theorem probesCore_mem {r : Ring} {p : List Ring} :
+    ∀ {cs gone : List ByteArray} {l : List Ev}, ProbesCore r p cs gone l →
+      ∀ e ∈ l, (∃ b, e = .forget b) ∨ ∃ c y, e = .cmd (.probe c) y
+  | [], gone, l, h => by
+    intro e he
+    simp only [ProbesCore] at h
+    split at h
+    · subst h; cases he
+    · obtain ⟨b, rfl⟩ := h; simp at he; exact .inl ⟨b, he⟩
+  | c :: cs, gone, l, h => by
+    intro e he
+    simp only [ProbesCore] at h
+    obtain ⟨y, rest', rfl, h'⟩ := h
+    rcases List.mem_cons.mp he with rfl | he
+    · exact .inr ⟨c, y, rfl⟩
+    · split at h'
+      · exact probesCore_mem h' e he
+      · exact probesCore_mem h' e he
+      · subst h'; cases he
+
+theorem refusedCore_mem {r : Ring} {p : List Ring} {l : List Ev} (h : RefusedCore r p l) :
+    ∀ e ∈ l, (∃ b, e = .forget b) ∨ ∃ c y, e = .cmd (.probe c) y := by
+  unfold RefusedCore at h
+  split at h
+  · exact probesCore_mem h
+  · obtain ⟨b, rfl⟩ := h; intro e he; simp at he; exact .inl ⟨b, he⟩
+
+/-- Forgets and probes ask nothing, invoke nothing, describe nothing. -/
+theorem quiet_counts {l : List Ev} (h : ∀ e ∈ l, (∃ b, e = .forget b) ∨ ∃ c y, e = .cmd (.probe c) y) :
+    asks l = [] ∧ invokes l = [] ∧ describes l = 0 := by
+  induction l with
+  | nil => simp [asks, invokes, describes]
+  | cons e l ih =>
+    obtain ⟨ha, hi, hd⟩ := ih (fun e he => h e (List.mem_cons_of_mem _ he))
+    simp only [asks, invokes, describes] at ha hi hd
+    rcases h e List.mem_cons_self with ⟨b, rfl⟩ | ⟨c, y, rfl⟩ <;>
+      simp [asks, invokes, describes, ha, hi, hd]
+
 theorem deliver_counts {sh : Shape} {r : Ring} {t : ByteArray} {es : List Ev}
     (h : DeliverCore sh r t es) : asks es = [] ∧ invokes es = [(r, t)] ∧ describes es = 0 ∧
       ∃ x rest, es = .cmd (.invoke sh r t) x :: rest := by
@@ -371,9 +599,9 @@ theorem deliver_counts {sh : Shape} {r : Ring} {t : ByteArray} {es : List Ev}
       · split at hr
         · obtain ⟨y, rest', rfl, hr'⟩ := hr
           split at hr'
-          · split at hr'
-            · subst hr'; simp [asks, invokes, describes]
-            · obtain ⟨b, rfl⟩ := hr'; simp [asks, invokes, describes]
+          · obtain ⟨ha, hi, hd⟩ := quiet_counts (refusedCore_mem hr')
+            simp only [asks, invokes, describes] at ha hi hd
+            simp [asks, invokes, describes, ha, hi, hd]
           · subst hr'; simp [asks, invokes, describes]
         · subst hr; simp [asks, invokes, describes]
   obtain ⟨ha, hi, hd⟩ := this
@@ -427,14 +655,14 @@ theorem act_counts {c : Conf} {sh : Shape} {k : Option (Ring × ByteArray)} {p :
         · exact .inr ⟨r, t, by simpa [invokes] using hi, .inr ⟨x, y, rest', hd, ht, rfl⟩⟩
 
 /-- What a read and its act ask and invoke. -/
-theorem read_counts {c : Conf} {sh : Shape} {k : Option (Ring × ByteArray)} {es : List Ev}
-    (h : ReadCore c sh k es) :
+theorem read_counts {c : Conf} {sh : Shape} {m : Mem} {es : List Ev}
+    (h : ReadCore c sh m es) :
     describes es = 0 ∧
-    (asks es = [] ∨ ∃ r y p x post, readRings sh y = some p ∧ decideTick p k = .ask r ∧
+    (asks es = [] ∨ ∃ r y p x post, readRings sh y = some p ∧ decideTick (live m p) m.kept = .ask r ∧
       asks es = [r] ∧ es = .cmd (.read sh) y :: .keep r intentText true :: .ask r (askOf c r) x :: post) ∧
     (invokes es = [] ∨ ∃ r t, invokes es = [(r, t)] ∧
-      ((∃ y p, readRings sh y = some p ∧ decideTick p k = .answer r t ∧ asks es = []) ∨
-       ∃ y p x z post, readRings sh y = some p ∧ decideTick p k = .ask r ∧ askText x = some t ∧
+      ((∃ y p, readRings sh y = some p ∧ decideTick (live m p) m.kept = .answer r t ∧ asks es = []) ∨
+       ∃ y p x z post, readRings sh y = some p ∧ decideTick (live m p) m.kept = .ask r ∧ askText x = some t ∧
          es = .cmd (.read sh) y :: .keep r intentText true :: .ask r (askOf c r) x ::
            .keep r t true :: .cmd (.invoke sh r t) z :: post)) := by
   obtain ⟨y, rest, rfl, hr⟩ := h
@@ -453,18 +681,19 @@ theorem read_counts {c : Conf} {sh : Shape} {k : Option (Ring × ByteArray)} {es
 
 /-- **The tick's effects, counted** (every path):
 - at most one describe, and only when no shape was known;
-- at most one ask: for a ring `r` that `decideTick` chose from the rings the tick's read returned
+- at most one ask: for a ring `r` that `decideTick` chose from the rings the tick's read returned whose answer
+  stands (`live`)
   (`ask_is_head`: the head, so the lowest pending), right after the intent was kept for `r`;
 - at most one invoke: of the kept answer the decision named (no ask on that path), or of the text
   this tick's ask ended with (`askText`), right after that text was kept (the intent replaced). -/
 theorem tick_counts {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (tickP w m) es a) :
     describes (core es) ≤ 1 ∧ (0 < describes (core es) → m.shape = none) ∧
     (asks (core es) = [] ∨ ∃ r sh y p x pre post, readRings sh y = some p ∧
-      decideTick p m.kept = .ask r ∧ asks (core es) = [r] ∧
+      decideTick (live m p) m.kept = .ask r ∧ asks (core es) = [r] ∧
       core es = pre ++ .cmd (.read sh) y :: .keep r intentText true :: .ask r (askOf w.conf r) x :: post) ∧
     (invokes (core es) = [] ∨ ∃ r t, invokes (core es) = [(r, t)] ∧
-      ((∃ sh y p, readRings sh y = some p ∧ decideTick p m.kept = .answer r t ∧ asks (core es) = []) ∨
-       ∃ sh y p x z pre post, readRings sh y = some p ∧ decideTick p m.kept = .ask r ∧
+      ((∃ sh y p, readRings sh y = some p ∧ decideTick (live m p) m.kept = .answer r t ∧ asks (core es) = []) ∨
+       ∃ sh y p x z pre post, readRings sh y = some p ∧ decideTick (live m p) m.kept = .ask r ∧
          askText x = some t ∧
          core es = pre ++ .cmd (.read sh) y :: .keep r intentText true :: .ask r (askOf w.conf r) x ::
            .keep r t true :: .cmd (.invoke sh r t) z :: post)) := by
@@ -521,6 +750,79 @@ theorem forgetThen_next {n : Tick} {m' : Mem} {es : List Ev} (h : Runs (forgetTh
     · simp at h; cases h
     · simp at h; cases h; exact ⟨rfl, rfl⟩
 
+/-- What `use` hands the next tick holds no kept answer: every path that goes on forgot it. -/
+theorem useP_kept {m m' : Mem} {r : Ring} {n line : String} {p : List Ring} {gone : List ByteArray}
+    {es : List Ev} (h : Runs (useP m r n line p gone) es (.next m')) (K : Option (Ring × ByteArray)) :
+    m'.kept = keptAfter K es := by
+  unfold useP at h
+  cases hc : useChoice r p gone with
+  | closed =>
+    rw [hc] at h
+    cases h with | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
+  | withdraw c =>
+    rw [hc] at h
+    cases h with | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
+  | stop => rw [hc] at h; cases h
+
+/-- A ring that still waits, with every cell its answer cites there, stops the queue. -/
+theorem useChoice_stop {r : Ring} {p : List Ring} {gone : List ByteArray} (hr : r ∈ p)
+    (hn : ∀ c ∈ aimCells r, c ∉ gone) : useChoice r p gone = .stop := by
+  unfold useChoice Slot.alternatives useOrder
+  have hw : ((aimCells r).map UseCand.withdraw).filter (useSlot.usable (useHolds r p gone)) = [] := by
+    rw [List.filter_eq_nil_iff]
+    intro x hx
+    obtain ⟨c, hc, rfl⟩ := List.mem_map.mp hx
+    simp [Slot.usable, Slot.dead, useSlot, useHolds, hn c hc]
+  have hcl : useSlot.usable (useHolds r p gone) .closed = false := by
+    simp [Slot.usable, Slot.dead, useSlot, useHolds, hr]
+  have hst : useSlot.usable (useHolds r p gone) .stop = true := by simp [Slot.usable, Slot.dead, useSlot]
+  rw [List.filter_append, List.filter_append, hw]
+  simp only [List.filter_cons, List.filter_nil, hcl, hst]
+  rfl
+
+/-- A ring that still waits, a cell its answer cites found gone, is withdrawn by the first such cell. -/
+theorem useChoice_withdraw {r : Ring} {p : List Ring} {gone : List ByteArray} (hr : r ∈ p)
+    {c : ByteArray} (hc : (aimCells r).find? (fun x => gone.any fun g => decide (g = x)) = some c) :
+    useChoice r p gone = .withdraw c := by
+  unfold useChoice Slot.alternatives useOrder
+  have hf : ((aimCells r).map UseCand.withdraw).filter (useSlot.usable (useHolds r p gone)) =
+      ((aimCells r).filter (fun x => gone.any fun g => decide (g = x))).map UseCand.withdraw := by
+    rw [List.filter_map]
+    congr 1
+    apply List.filter_congr
+    intro x _
+    cases hx : gone.any (fun g => decide (g = x)) <;> simp [Slot.usable, Slot.dead, useSlot, useHolds, hr, hx]
+  have hh : ((aimCells r).filter (fun x => gone.any fun g => decide (g = x))).head? = some c := by
+    rw [List.head?_filter]; exact hc
+  obtain ⟨post, hpost⟩ : ∃ post, (aimCells r).filter (fun x => gone.any fun g => decide (g = x)) = c :: post := by
+    cases h' : (aimCells r).filter (fun x => gone.any fun g => decide (g = x)) with
+    | nil => rw [h'] at hh; cases hh
+    | cons x xs => rw [h'] at hh; cases hh; exact ⟨xs, rfl⟩
+  have hcl : useSlot.usable (useHolds r p gone) .closed = false := by
+    simp [Slot.usable, Slot.dead, useSlot, useHolds, hr]
+  have hst : useSlot.usable (useHolds r p gone) .stop = true := by simp [Slot.usable, Slot.dead, useSlot]
+  rw [List.filter_append, List.filter_append, hf, hpost]
+  simp only [List.filter_cons, List.filter_nil, hcl, hst]
+  rfl
+
+theorem keptAfter_probes {K : Option (Ring × ByteArray)} {pre l : List Ev}
+    (h : ∀ e ∈ pre, ∃ c y, e = .cmd (.probe c) y ∧ probeGone y ≠ none) :
+    keptAfter K (pre ++ l) = keptAfter K l := by
+  induction pre with
+  | nil => rfl
+  | cons e pre ih =>
+    obtain ⟨c, y, rfl, -⟩ := h e List.mem_cons_self
+    simp only [List.cons_append, keptAfter]
+    exact ih (fun e he => h e (List.mem_cons_of_mem _ he))
+
+theorem refusedP_kept {sh : Shape} {m m' : Mem} {r : Ring} {n line : String} {p : List Ring}
+    {es : List Ev} (h : Runs (refusedP sh m r n line p) es (.next m')) : m'.kept = keptAfter m.kept es := by
+  obtain ⟨pre, rest, rfl, hpre, hr⟩ := refusedP_path h
+  rw [keptAfter_probes hpre]
+  rcases hr with ⟨c, y, s, why, rfl, -, hr⟩ | ⟨gone, hr⟩
+  · obtain rfl := retry_next hr.symm; rfl
+  · exact useP_kept hr _
+
 theorem deliver_kept {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
     (h : Runs (deliverP sh m r t) es (.next m')) : m'.kept = keptAfter m.kept es := by
   unfold deliverP at h
@@ -547,10 +849,7 @@ theorem deliver_kept {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : 
                 · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
                 · split at h
                   · cases h
-                  · split at h
-                    · cases h
-                    · cases h with
-                      | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
+                  · exact refusedP_kept h
           · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
 
 /-- **An abandoned ring does not stop the queue** (cv 01a1682e-7f9d, LANG-76): an answer refused
@@ -586,15 +885,18 @@ theorem deliver_gone_continues {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray}
             rw [hra] at hp
             simp only [Except.toOption, Option.some.injEq] at hp
             subst hp
-            simp only [hra, if_neg hr] at h
+            simp only [hra, refusedP, if_neg hr] at h
             cases h with
-            | say h =>
-              unfold forgetThen at h
+            | hole h =>
+              simp only [fill, useP, useChoice_gone hr] at h
               cases h with
-              | forget b h =>
-                cases b
-                · simp at h; cases h; exact .inr rfl
-                · simp at h; cases h; exact .inl rfl
+              | say h =>
+                unfold forgetThen at h
+                cases h with
+                | forget b h =>
+                  cases b
+                  · simp at h; cases h; exact .inr rfl
+                  · simp at h; cases h; exact .inl rfl
         · cases hp
 
 theorem answered_kept {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
@@ -656,7 +958,7 @@ theorem read_kept {w : Where} {sh : Shape} {m m' : Mem} {es : List Ev}
       · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
       · split at h
         · cases h
-        · exact actOn_kept h
+        · cases h with | hole h => simpa [fill] using actOn_kept h
 
 /-- **The kept answer follows the volume**: on every path a tick goes on from (`.next m'`), the
 answer it hands the next tick is what its successful keeps and forgets leave, in order, from the
@@ -707,6 +1009,27 @@ theorem forgetThen_settled {n : Tick} {es : List Ev} {a : Tick} (h : Runs (forge
   subst he; exact hu
 
 /-- `deliver r t`: a path holding an unsettled effect ends a retry. -/
+theorem refusedP_retry {sh : Shape} {m : Mem} {r : Ring} {n line : String} {p : List Ring}
+    {es : List Ev} {a : Tick} (h : Runs (refusedP sh m r n line p) es a)
+    (hu : ∃ e ∈ core es, Unsettled e) : Retried m.retries a := by
+  obtain ⟨pre, rest, rfl, hpre, hr⟩ := refusedP_path h
+  rcases hr with ⟨c, y, s, why, rfl, -, rfl⟩ | ⟨gone, hr⟩
+  · exact retry_retried m why
+  · exfalso
+    obtain ⟨e, he, hue⟩ := hu
+    rw [core_append] at he
+    rcases List.mem_append.mp he with he | he
+    · obtain ⟨c, y, rfl, hy⟩ := hpre e (List.mem_filter.mp he).1
+      exact hy hue
+    · have hc := useP_core hr
+      split at hc
+      · rw [hc] at he; cases he
+      · obtain ⟨b, hb⟩ := hc
+        rw [hb] at he
+        simp at he
+        subst he
+        exact hue
+
 theorem deliver_retry {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : List Ev} {a : Tick}
     (h : Runs (deliverP sh m r t) es a) (hu : ∃ e ∈ core es, Unsettled e) : Retried m.retries a := by
   unfold deliverP at h
@@ -738,12 +1061,13 @@ theorem deliver_retry {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : Li
                 · rename_i hx
                   split at h
                   · cases h; simp [Unsettled, href, hx] at hu
-                  · split at h
-                    · cases h; simp [Unsettled, href, hx] at hu
-                    · cases h with
-                      | say h =>
-                        obtain ⟨b, hb⟩ := forgetThen_core h
-                        simp [hb, Unsettled, href, hx] at hu
+                  · obtain ⟨e, he, hue⟩ := hu
+                    rw [core_cmd, core_cmd] at he
+                    rcases List.mem_cons.mp he with rfl | he
+                    · simp [Unsettled, href] at hue
+                    rcases List.mem_cons.mp he with rfl | he
+                    · simp [Unsettled, hx] at hue
+                    exact refusedP_retry h ⟨e, he, hue⟩
           · cases h with | say h => exact (done_retried h).2
 
 theorem answered_retry {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : List Ev} {a : Tick}
@@ -816,7 +1140,11 @@ theorem read_retry {w : Where} {sh : Shape} {m : Mem} {es : List Ev} {a : Tick}
       · rename_i hx
         split at h
         · cases h; simp [Unsettled, hx] at hu
-        · exact actOn_retry h (unsettled_cons (by simpa [Unsettled] using hx) hu)
+        · cases h with
+          | hole h =>
+            simp only [fill] at h
+            have := actOn_retry h (unsettled_cons (by simpa [Unsettled] using hx) hu)
+            exact this
 
 /-- **A tick that did not settle ends a retry**: on every path of `tick` holding an unsettled effect
 (`Unsettled`: a member command failed or answered an exit that does not settle it, `declined NAME`
@@ -864,6 +1192,26 @@ theorem forgetThen_lt {n : Tick} {m' : Mem} {es : List Ev} (hn : ∀ m'', n = .n
 
 theorem retriesMax_pos : 0 < retriesMax := by decide
 
+/-- Every memory `use` hands on has its retries reset. -/
+theorem useP_lt {m m' : Mem} {r : Ring} {n line : String} {p : List Ring} {gone : List ByteArray}
+    {es : List Ev} (h : Runs (useP m r n line p gone) es (.next m')) : m'.retries < retriesMax := by
+  unfold useP at h
+  cases hc : useChoice r p gone with
+  | closed =>
+    rw [hc] at h
+    cases h with | say h => exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
+  | withdraw c =>
+    rw [hc] at h
+    cases h with | say h => exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
+  | stop => rw [hc] at h; cases h
+
+theorem refusedP_lt {sh : Shape} {m m' : Mem} {r : Ring} {n line : String} {p : List Ring}
+    {es : List Ev} (h : Runs (refusedP sh m r n line p) es (.next m')) : m'.retries < retriesMax := by
+  obtain ⟨pre, rest, rfl, -, hr⟩ := refusedP_path h
+  rcases hr with ⟨c, y, s, why, rfl, -, hr⟩ | ⟨gone, hr⟩
+  · exact retry_lt hr.symm
+  · exact useP_lt hr
+
 theorem deliver_lt {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
     (h : Runs (deliverP sh m r t) es (.next m')) : m'.retries < retriesMax := by
   unfold deliverP at h
@@ -888,10 +1236,7 @@ theorem deliver_lt {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : Li
                 · cases h with | say h => exact done_retry_lt h
                 · split at h
                   · cases h
-                  · split at h
-                    · cases h
-                    · cases h with
-                      | say h => exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
+                  · exact refusedP_lt h
           · cases h with | say h => exact done_retry_lt h
 
 theorem answered_lt {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
@@ -943,7 +1288,7 @@ theorem read_lt {w : Where} {sh : Shape} {m m' : Mem} {es : List Ev}
       · cases h with | say h => exact done_retry_lt h
       · split at h
         · cases h
-        · exact actOn_lt h
+        · cases h with | hole h => simp only [fill] at h; exact actOn_lt h
 
 /-- **Every memory a tick hands on is below the bound** (`m'.retries < retriesMax`), so
 `no_refusal_repeats_forever` applies from every tick a process reaches, not only its first. -/
@@ -974,8 +1319,6 @@ inductive Ticks (w : Where) : Mem → List (List Ev) → Prop
   | next {m m' : Mem} {es : List Ev} {ess : List (List Ev)} :
       Runs (tickP w m) es (.next m') → Ticks w m' ess → Ticks w m (es :: ess)
 
-theorem core_append (l₁ l₂ : List Ev) : core (l₁ ++ l₂) = core l₁ ++ core l₂ := by
-  simp [core, List.filter_append]
 
 /-- **No refusal repeats forever** (HOSTING-48; COLLATION A13). In any chain of ticks from a memory
 below the bound (the start's `retries = 0`; every memory a tick hands on, `tick_lt`), if every tick
@@ -1043,8 +1386,9 @@ theorem order_refuses_invoke_other (sh sh' : Shape) (r r' : Ring) (t t' : ByteAr
   simp only [List.cons.injEq, Ev.cmd.injEq, Cmd.invoke.injEq] at h
   exact hne (by rw [h.1.1.2.1, h.1.1.2.2])
 
-/-- A refused answer whose ring the re-read still lists is never followed by a forget: the kept
-text stays for the restart. -/
+/-- A refused answer whose ring the re-read still lists is never followed directly by a forget: the
+cells its answer cites are probed first, and with none of them gone the kept text stays for the
+restart. -/
 theorem order_refuses_forget_while_pending (sh : Shape) (r : Ring) (t : ByteArray) (rr : Reply)
     (href : rr.exit = Protocol.CommandExit.refused.code) (y : Except String Reply) (p : List Ring)
     (hp : readRings sh y = some p) (hr : r ∈ p) (b : Bool) :
@@ -1056,7 +1400,18 @@ theorem order_refuses_forget_while_pending (sh : Shape) (r : Ring) (t : ByteArra
   obtain ⟨y', rest', h', hd'⟩ := hd
   simp only [List.cons.injEq, Ev.cmd.injEq, true_and] at h'
   obtain ⟨rfl, rfl⟩ := h'
-  simp [hp, hr] at hd'
+  simp only [hp, RefusedCore, if_pos hr] at hd'
+  cases hc : aimCells r with
+  | nil =>
+    rw [hc] at hd'
+    have hs := useChoice_stop (gone := []) hr (fun c h => by simp [hc] at h)
+    rw [ProbesCore, if_pos hs] at hd'
+    cases hd'
+  | cons c cs =>
+    rw [hc] at hd'
+    simp only [ProbesCore] at hd'
+    obtain ⟨y', rest', h', -⟩ := hd'
+    cases h'
 
 theorem order_refuses_invoke_unkept (c : Conf) (sh : Shape) (p : List Ring) (r : Ring)
     (t : ByteArray) (y : Except String Reply) (rest : List Ev) :
@@ -1098,13 +1453,13 @@ theorem deliver_runs {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {arg : St
 /-- For every ring `decideTick` asks about and every answer the broker could give, a path keeps the
 intent, asks, keeps the answer and invokes it. -/
 theorem ask_path_exists {w : Where} {sh : Shape} {m : Mem} {p : List Ring} {r : Ring}
-    (hd : decideTick p m.kept = .ask r) (ans : Broker.Answer) :
+    (hd : decideTick (live m p) m.kept = .ask r) (ans : Broker.Answer) :
     ∃ es a, Runs (actOn w sh m p) es a ∧ asks (core es) = [r] ∧
       invokes (core es) = [(r, answerText ans)] := by
   obtain ⟨arg, harg⟩ :=
     Option.isSome_iff_exists.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some r (answerText ans))
   unfold actOn
-  rw [hd]
+  rw [serveChoice_eq, hd]
   let t := answerText ans
   refine ⟨[.keep r intentText true, .ask r (askOf w.conf r) (.answered ans),
     .say s!"asked; answer {t.size} bytes", .keep r t true, .cmd (.invoke sh r t) (.error "e"),
@@ -1122,52 +1477,169 @@ theorem ask_path_exists {w : Where} {sh : Shape} {m : Mem} {p : List Ring} {r : 
 /-- `tick` is the tree performed by the deployed handler, by definition. -/
 theorem tick_def (w : Where) (m : Mem) : tick w m = (tickP w m).interp (ioHandler w) := rfl
 
+/-- `p`'s holes nest at most `n` deep on every path: a hole's filling fits one less. -/
+inductive Fits : Nat → Prog Tick → Prop
+  | ret {n : Nat} (a : Tick) : Fits n (.done a)
+  | call {n : Nat} {op : Eff} {k : (r : Eff.Resp op) → Prog Tick} :
+      (∀ r, Fits n (k r)) → Fits n (Lang.Contextual.Protocol.Prot.call (S := sig) (i := ()) op k)
+  | hole {n : Nat} {h : Hole} : Fits n (fill h) → Fits (n + 1) (.hole h)
+
+theorem Fits.mono {n : Nat} {p : Prog Tick} (h : Fits n p) : Fits (n + 1) p := by
+  induction h with
+  | ret a => exact .ret a
+  | call _ ih => exact .call ih
+  | hole _ ih => exact .hole ih
+
+/-- Walk a term node by node: each call's continuation at every result, each `if` and `match`. -/
+macro "fits_walk" : tactic => `(tactic| repeat (first
+  | exact Fits.ret _
+  | (apply Fits.call; intro x; dsimp only)
+  | split))
+
+theorem forgetThen_fits (n : Nat) (t : Tick) : Fits n (forgetThen t) := by
+  unfold forgetThen; fits_walk
+
+theorem useP_fits (n : Nat) (m : Mem) (r : Ring) (k line : String) (p : List Ring)
+    (gone : List ByteArray) : Fits n (useP m r k line p gone) := by
+  unfold useP
+  split <;> first | exact Fits.ret _ | (apply Fits.call; intro _; exact forgetThen_fits _ _)
+
+theorem probesP_fits (n : Nat) (sh : Shape) (m : Mem) (r : Ring) (k line : String) (p : List Ring) :
+    ∀ (cs gone : List ByteArray), Fits (n + 1) (probesP sh m r k line p cs gone)
+  | [], gone => by simp only [probesP]; exact Fits.hole (useP_fits _ _ _ _ _ _ _)
+  | c :: cs, gone => by
+    simp only [probesP]
+    apply Fits.call
+    intro y
+    dsimp only
+    split
+    · exact probesP_fits n sh m r k line p cs _
+    · exact probesP_fits n sh m r k line p cs _
+    · exact Fits.call fun _ => Fits.ret _
+
+theorem refusedP_fits (n : Nat) (sh : Shape) (m : Mem) (r : Ring) (k line : String) (p : List Ring) :
+    Fits (n + 1) (refusedP sh m r k line p) := by
+  unfold refusedP
+  split
+  · exact probesP_fits _ _ _ _ _ _ _ _ _
+  · exact Fits.hole (useP_fits _ _ _ _ _ _ _)
+
+theorem deliverP_fits (n : Nat) (sh : Shape) (m : Mem) (r : Ring) (t : ByteArray) :
+    Fits (n + 1) (deliverP sh m r t) := by
+  unfold deliverP
+  repeat (first
+    | exact Fits.ret _
+    | exact forgetThen_fits _ _
+    | exact refusedP_fits _ _ _ _ _ _ _
+    | (apply Fits.call; intro x; dsimp only)
+    | split)
+
+theorem answeredP_fits (n : Nat) (sh : Shape) (m : Mem) (r : Ring) (t : ByteArray) :
+    Fits (n + 1) (answeredP sh m r t) := by
+  unfold answeredP
+  repeat (first
+    | exact Fits.ret _
+    | exact deliverP_fits _ _ _ _ _
+    | (apply Fits.call; intro x; dsimp only)
+    | split)
+
+theorem actOn_fits (n : Nat) (w : Where) (sh : Shape) (m : Mem) (p : List Ring) :
+    Fits (n + 1) (actOn w sh m p) := by
+  unfold actOn
+  repeat (first
+    | exact Fits.ret _
+    | exact forgetThen_fits _ _
+    | exact deliverP_fits _ _ _ _ _
+    | exact answeredP_fits _ _ _ _ _
+    | (apply Fits.call; intro x; dsimp only)
+    | split)
+
+theorem readP_fits (n : Nat) (w : Where) (sh : Shape) (m : Mem) : Fits (n + 2) (readP w sh m) := by
+  unfold readP
+  repeat (first
+    | exact Fits.ret _
+    | (apply Fits.hole; exact actOn_fits _ _ _ _ _)
+    | (apply Fits.call; intro x; dsimp only)
+    | split)
+
+/-- **Every tick fits `holesMax`**: `serve`'s filling holds `use`, whose filling holds no hole. -/
+theorem tickP_fits (w : Where) (m : Mem) : Fits holesMax (tickP w m) := by
+  unfold tickP holesMax
+  repeat (first
+    | exact Fits.ret _
+    | exact readP_fits _ _ _ _
+    | (apply Fits.call; intro x; dsimp only)
+    | split)
+
+theorem interpN_call {M : Type → Type} [Monad M] [LawfulMonad M] (h : Handler M) (n : Nat) (op : Eff)
+    (k : (r : Eff.Resp op) → Prog Tick) :
+    Prog.interpN h n (Lang.Contextual.Protocol.Prot.call (S := sig) (i := ()) op k) =
+      h.call op >>= fun r => Prog.interpN h n (k r) := by
+  unfold Prog.interpN
+  have : Lang.Contextual.Slot.interp (W := Empty) (fun op => h.call op) (fun hl => .ok (fill hl)) n
+      (Lang.Contextual.Protocol.Prot.call (S := sig) (i := ()) op k) =
+      h.call op >>= fun r =>
+        Lang.Contextual.Slot.interp (W := Empty) (fun op => h.call op) (fun hl => .ok (fill hl)) n (k r) := by
+    cases n <;> rfl
+  rw [this, bind_assoc]
+
 /-- **The interpreter performs exactly a path** (HOSTING-37): at the recording handler, whatever
-results the oracle gives, `interp` appends to the trace exactly one event per node it passes, in
-tree order, with the result it continued on, and ends with the path's end: the appended events
-and the value are a `Runs` path. A node performed twice, skipped, or continued on another result
-would append a trace that is no path (`two_calls_no_path`). -/
-theorem interp_runs (o : Oracle) {α : Type} (p : Prog α) (n : Nat) (es : List Ev) :
-    ∃ es', ((p.interp (recorder o)).run (n, es)).2.2 = es ++ es' ∧
-      Runs p es' ((p.interp (recorder o)).run (n, es)).1 := by
-  induction p generalizing n es with
-  | done a => exact ⟨[], by simp [Prog.interp]; rfl, Runs.done a⟩
-  | cmd c k ih =>
-    obtain ⟨es', h1, h2⟩ := ih (o.cmd n) (n + 1) (es ++ [.cmd c (o.cmd n)])
-    exact ⟨.cmd c (o.cmd n) :: es', by simpa [Prog.interp, recorder] using h1,
-      by simpa [Prog.interp, recorder] using Runs.cmd (o.cmd n) h2⟩
-  | keep r t k ih =>
-    obtain ⟨es', h1, h2⟩ := ih (o.keep n) (n + 1) (es ++ [.keep r t (o.keep n)])
-    exact ⟨.keep r t (o.keep n) :: es', by simpa [Prog.interp, recorder] using h1,
-      by simpa [Prog.interp, recorder] using Runs.keep (o.keep n) h2⟩
-  | forget k ih =>
-    obtain ⟨es', h1, h2⟩ := ih (o.forget n) (n + 1) (es ++ [.forget (o.forget n)])
-    exact ⟨.forget (o.forget n) :: es', by simpa [Prog.interp, recorder] using h1,
-      by simpa [Prog.interp, recorder] using Runs.forget (o.forget n) h2⟩
-  | ask r q k ih =>
-    obtain ⟨es', h1, h2⟩ := ih (o.ask n) (n + 1) (es ++ [.ask r q (o.ask n)])
-    exact ⟨.ask r q (o.ask n) :: es', by simpa [Prog.interp, recorder] using h1,
-      by simpa [Prog.interp, recorder] using Runs.ask (o.ask n) h2⟩
-  | say s k ih =>
-    obtain ⟨es', h1, h2⟩ := ih (n + 1) (es ++ [.say s])
-    exact ⟨.say s :: es', by simpa [Prog.interp, recorder] using h1,
-      by simpa [Prog.interp, recorder] using Runs.say h2⟩
+results the oracle gives, `interpN` appends to the trace exactly one event per effect it passes,
+in term order, with the result it continued on, filling each hole by `fill` as it reaches it, and
+ends with the path's end: the appended events and the value are a `Runs` path, for every term whose
+holes fit the bound. A node performed twice, skipped, or continued on another result would append a
+trace that is no path (`interpTwice_no_path`). -/
+theorem interp_runs (o : Oracle) {n : Nat} {p : Prog Tick} (hf : Fits n p) (c : Nat) (es : List Ev) :
+    ∃ es', ((p.interpN (recorder o) n).run (c, es)).2.2 = es ++ es' ∧
+      Runs p es' ((p.interpN (recorder o) n).run (c, es)).1 := by
+  induction hf generalizing c es with
+  | @ret n a =>
+    have : (Prog.interpN (recorder o) n (.done a)).run (c, es) = (a, (c, es)) := by cases n <;> rfl
+    exact ⟨[], by rw [this]; simp, by rw [this]; exact Runs.done a⟩
+  | @call n op k _ ih =>
+    rw [interpN_call]
+    cases op with
+    | cmd cm =>
+      obtain ⟨es', h1, h2⟩ := ih (o.cmd c) (c + 1) (es ++ [.cmd cm (o.cmd c)])
+      exact ⟨.cmd cm (o.cmd c) :: es', by simpa [Handler.call, recorder] using h1,
+        by simpa [Handler.call, recorder] using Runs.cmd (o.cmd c) h2⟩
+    | keep r t =>
+      obtain ⟨es', h1, h2⟩ := ih (o.keep c) (c + 1) (es ++ [.keep r t (o.keep c)])
+      exact ⟨.keep r t (o.keep c) :: es', by simpa [Handler.call, recorder] using h1,
+        by simpa [Handler.call, recorder] using Runs.keep (o.keep c) h2⟩
+    | forget =>
+      obtain ⟨es', h1, h2⟩ := ih (o.forget c) (c + 1) (es ++ [.forget (o.forget c)])
+      exact ⟨.forget (o.forget c) :: es', by simpa [Handler.call, recorder] using h1,
+        by simpa [Handler.call, recorder] using Runs.forget (o.forget c) h2⟩
+    | ask r q =>
+      obtain ⟨es', h1, h2⟩ := ih (o.ask c) (c + 1) (es ++ [.ask r q (o.ask c)])
+      exact ⟨.ask r q (o.ask c) :: es', by simpa [Handler.call, recorder] using h1,
+        by simpa [Handler.call, recorder] using Runs.ask (o.ask c) h2⟩
+    | say s =>
+      obtain ⟨es', h1, h2⟩ := ih () (c + 1) (es ++ [.say s])
+      exact ⟨.say s :: es', by simpa [Handler.call, recorder] using h1,
+        by simpa [Handler.call, recorder] using Runs.say h2⟩
+  | @hole n hl _ ih =>
+    obtain ⟨es', h1, h2⟩ := ih c es
+    exact ⟨es', h1, Runs.hole h2⟩
 
 /-- So every order theorem holds of what the interpreter performs: the tick's recorded trace is
 `TickCore` (and `tick_counts`, `kept_follows` follow the same way). -/
 theorem interp_order (o : Oracle) (w : Where) (m : Mem) :
     TickCore w.conf m (core (((tickP w m).interp (recorder o)).run (0, [])).2.2) := by
-  obtain ⟨es', h1, h2⟩ := interp_runs o (tickP w m) 0 []
+  obtain ⟨es', h1, h2⟩ := interp_runs o (tickP_fits w m) 0 []
+  unfold Prog.interp
   rw [h1]
   simpa using tick_order h2
 
 /-- Tooth: an interpreter that performs a node's call twice (`interpTwice`) records, for some tree
 and every oracle, a trace that is no path of that tree: `interp_runs` refutes it. -/
 theorem interpTwice_no_path (o : Oracle) :
-    ¬ Runs (Prog.cmd .describe fun _ => .done ())
-      (((Prog.cmd .describe fun _ => .done ()).interpTwice (recorder o)).run (0, [])).2.2 () := by
+    ¬ Runs (Prog.cmd .describe fun _ => .done (.stop .lifetime ""))
+      (((Prog.cmd .describe fun _ => .done (.stop .lifetime "")).interpTwice (recorder o)).run (0, [])).2.2
+      (.stop .lifetime "") := by
   intro h
-  simp only [Prog.interpTwice, recorder] at h
+  simp only [Prog.interpTwice, Lang.Contextual.Protocol.fold, recorder] at h
   cases h with
   | cmd _ h => cases h
 

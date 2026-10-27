@@ -587,6 +587,7 @@ theorem resident_argv_on_stdio (conf : Resident.Conf) (c : Resident.Cmd) :
   | describe => exact ⟨"read", _, hr, rfl⟩
   | read sh => exact ⟨"read", _, hr, rfl⟩
   | reread sh => exact ⟨"read", _, hr, rfl⟩
+  | probe x => exact ⟨"read", _, hr, rfl⟩
   | invoke sh r t =>
     unfold Resident.Cmd.argv
     dsimp only

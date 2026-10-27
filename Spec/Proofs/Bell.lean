@@ -21,7 +21,7 @@ Inhabited: `inhabited_bell_ringer` (an accepted Bell's `answer` over a waiting r
 
 **(2) ONE CHARGED ASK, RIGHT AFTER THE INTENT** (`Bell.oneAsk`, the resident half, over the resident's
 act on the rings a tick read, the field `ringAct`, deployed `Hosting.Resident.actOn`; `tickWith act`
-is the deployed tick around it, `tickWith_actOn`): every
+is the deployed tick around it, `tickWith_actOn`: the act is the filling of the tick's `serve` hole): every
 path of the act asks at most once, about the ring the decision chose, immediately after the intent
 `(unanswered restart)` was kept for it; and along any chain of ticks of one process, between two
 spent asks about one ring an effect freed it. Top: `top_bell_oneAsk` (`act_counts`, `actOn_core`,
@@ -361,8 +361,48 @@ open Nanodregg.Hosting Nanodregg.Hosting.Resident Nanodregg.Hosting.Proofs.Resid
 variable {D : Type} [Ord D] [DecidableEq D]
 
 
-/-- The deployed tick is `tickWith actOn`. -/
-theorem tickWith_actOn (w : Where) (m : Mem) : tickWith actOn w m = tickP w m := rfl
+/-- The deployed read with `actOn` as its act has the paths of the deployed read, whose `serve`
+hole `fill` fills with `actOn`. -/
+theorem readPWith_actOn {w : Where} {sh : Shape} {m : Mem} {es : List Ev} {a : Tick}
+    (h : Runs (readPWith actOn w sh m) es a) : Runs (readP w sh m) es a := by
+  unfold readPWith at h
+  unfold readP
+  cases h with
+  | cmd y h =>
+    refine Runs.cmd y ?_
+    rcases y with e | rr
+    · exact h
+    · dsimp only at h ⊢
+      by_cases hx : rr.exit ≠ Protocol.CommandExit.ok.code
+      · rw [if_pos hx] at h ⊢; exact h
+      · rw [if_neg hx] at h ⊢
+        cases ho : readOut sh rr with
+        | error xd => rw [ho] at h; obtain ⟨x, d⟩ := xd; exact h
+        | ok p => rw [ho] at h; exact Runs.hole h
+
+/-- The deployed tick has the paths of `tickWith actOn`: `actOn` is the `serve` hole's filling. -/
+theorem tickWith_actOn {w : Where} {m : Mem} {es : List Ev} {a : Tick}
+    (h : Runs (tickWith actOn w m) es a) : Runs (tickP w m) es a := by
+  unfold tickWith at h
+  unfold tickP
+  cases hs : m.shape with
+  | some sh => rw [hs] at h; exact readPWith_actOn h
+  | none =>
+    rw [hs] at h
+    cases h with
+    | cmd y h =>
+      refine Runs.cmd y ?_
+      rcases y with e | rr
+      · exact h
+      · dsimp only at h ⊢
+        by_cases hx : rr.exit ≠ Protocol.CommandExit.ok.code
+        · rw [if_pos hx] at h ⊢; exact h
+        · rw [if_neg hx] at h ⊢
+          cases ho : describeOut w.conf rr with
+          | ok sh =>
+            rw [ho] at h
+            cases h with | say h => exact Runs.say (readPWith_actOn h)
+          | error xd => rw [ho] at h; obtain ⟨x, d⟩ := xd; exact h
 
 /-- A chain of ticks of one process life (`ResidentRun.Ticks`) of the tick around `act`. -/
 inductive TicksWith (act : RingAct) (w : Where) : Mem → List (List Ev) → Prop
@@ -376,19 +416,20 @@ theorem ticksWith_actOn {w : Where} {m : Mem} {ess : List (List Ev)} (h : TicksW
     Ticks w m ess := by
   induction h with
   | nil m => exact .nil m
-  | last h => exact .last h
-  | next h _ ih => exact .next h ih
+  | last h => exact .last (tickWith_actOn h)
+  | next h _ ih => exact .next (tickWith_actOn h) ih
 
 /-- **ONE CHARGED ASK, RIGHT AFTER THE INTENT** (§6 (2), the resident half). (a) Every path of the
 act on the rings a tick read (any reply, any keep result, any ask end) asks at most once: when it
-asks, it asks about the ring the decision chose (`decideTick`), and its effects begin with the
+asks, it asks about the ring the `serve` slot chose (`serveChoice`: `decideTick` over the rings whose
+answer stands, `serveChoice_eq`), and its effects begin with the
 intent `(unanswered restart)` kept for that ring, successfully, and then the ask. (b) Along any
 chain of ticks of one process around the act, between two asks about one ring, the first spent
 (it left in full: the meter was charged), an effect freed the ring (an `ok` answer or a read that
 no longer lists it). -/
 def Bell.oneAsk (S : System D) : Prop :=
   (∀ (w : Where) (sh : Shape) (m : Mem) (p : List Ring) (es : List Ev) (a : Tick), Runs (S.ringAct w sh m p) es a →
-    asks (core es) = [] ∨ ∃ r x post, decideTick p m.kept = .ask r ∧ asks (core es) = [r] ∧
+    asks (core es) = [] ∨ ∃ r x post, serveChoice m p = .ask r ∧ asks (core es) = [r] ∧
       core es = .keep r intentText true :: .ask r (askOf w.conf r) x :: post) ∧
   (∀ (w : Where) (m : Mem) (ess : List (List Ev)) (r : Ring) (pre mid post : List Ev) (q q' : Broker.Ask)
     (x x' : AskEnd), TicksWith S.ringAct w m ess →
@@ -397,7 +438,7 @@ def Bell.oneAsk (S : System D) : Prop :=
 
 /-- **TOP (§6 (2)).** The deployed resident's act (`actOn`, inside the deployed tick). -/
 theorem top_bell_oneAsk (d : ByteArray → ByteArray) : Bell.oneAsk (deployed d) :=
-  ⟨fun _ _ _ _ _ _ h => (act_counts (actOn_core h)).2.1,
+  ⟨fun _ _ m p _ _ h => by simpa only [serveChoice_eq] using (act_counts (actOn_core h)).2.1,
    fun _ _ _ _ _ _ _ _ _ _ _ hT hc hx => bell_resident_conforms (ticksWith_actOn hT) hc hx⟩
 
 

@@ -23,9 +23,11 @@ anything. It reads `pkg/resident.conf`, ONE Lang data value at `Bell.confTy`. Th
      (`derivePins`); the resident names no pin.
 4. The bell taking the answer forgets it. A refusal is judged by the bell's rows: if the ring is
    no longer pending (answered already: the `rings` guard refuses `rung: answered`), the answer is
-   forgotten; if it is still pending, the resident ends `answerRefused NAME` (`program` for a
-   method's check such as `notResident`, `grantRight` for a grant without the right). The kept
-   text stays, so a restart answers again but never asks again.
+   forgotten; if it is still pending, the resident probes each cell the answer cites (an aimed
+   ring's `via` grant and target, `read CELL ?`): a cell found gone WITHDRAWS the answer by that
+   cell's name and the queue goes on (the `use` hole); with every cited cell there, the resident ends
+   `answerRefused NAME` (`program` for a method's check such as `notResident`, `grantRight` for a
+   grant without the right). The kept text stays, so a restart answers again but never asks again.
 A transport failure on either socket, and every member reply that did not settle (a describe or read
 that did not answer `ok`; an answer that came back neither `ok` nor `refused`: `uncertain`, `behind`,
 `declined`, `client`, `open`, `hostContradicted`, `pageIo`; a refusal whose re-read failed), is logged
@@ -52,10 +54,11 @@ landing of an unsettled answer cannot take a re-rung ring at the same key with a
 answer carries the ring's text and the `rings` guard refuses it unless that is the ring's own
 (`rung: text`, LANG-59); with the same text it is the same-text case above.
 `answerRefused` stops the whole queue, not one ring: a restart re-delivers the kept ring first and
-stops again until the operator acts. That is right for every refusal known to reach it (the
-resident is not the bell's, the grant lacks `invoke:0`, `rings` is full until the owner
-retires), each of which refuses every ring alike; a refusal that singled out one ring would block
-the rest behind it, and would need a refused marker to skip it. A ring RETIRED between the read and the
+stops again until the operator acts. That is right for every refusal known to reach it with every
+cited cell there (the resident is not the bell's, the grant lacks `invoke:0`, `rings` is full until
+the owner retires), each of which refuses every ring alike. A refusal that singles out one ring by a
+dead cell of its aim withdraws that ring (`Mem.withdrawn`, by the cell's name) and the queue goes on
+(`Proofs.ResidentSlots.use_withdraws`, `serve_repairs`; agent_hole H4 runs it). A ring RETIRED between the read and the
 answer (LANG-76: anyone may abandon an unanswered ring past its patience) is not one: its answer is
 refused, the re-read no longer lists it, and the answer is forgotten and the queue goes on
 (`Proofs.ResidentRun.deliver_gone_continues`; resident_bell Q7 runs it). K = `pending`'s limit is complete:
@@ -73,6 +76,7 @@ import Hosting.Resident.Bell
 import Hosting.Resident.Sockets
 import Protocol.Command.Exit
 import Host.File
+import Lang.Contextual.Slot
 
 namespace Nanodregg.Hosting.Resident
 
@@ -133,6 +137,9 @@ def stop (e : Exit) (detail : String) : IO UInt32 := do
 /-- An absolute path in argv, as text. -/
 def pathOf (b : ByteArray) : Option System.FilePath := (String.fromUTF8? b).map System.FilePath.mk
 
+/-- A refused command's stderr as one line. -/
+def refusalLine (r : Reply) : String := ((String.fromUTF8? r.stderr).getD "?").trimAsciiEnd.toString
+
 /-- The refusal's name in a refused command's stderr (`refused NAME …`, `StdioRefusal`). -/
 def refusedName (stderr : ByteArray) : String :=
   match (String.fromUTF8? stderr).map (·.splitOn " ") with
@@ -145,6 +152,14 @@ structure Mem where
   kept : Option (Ring × ByteArray)
   /-- ticks in a row that ended on a retry (`retry`); a tick that settles sets it to 0 -/
   retries : Nat := 0
+  /-- the rings whose answer was WITHDRAWN, each with the support its refusal named (the `use`
+  slot); a ring leaves the list when it is no longer pending (`serve` prunes it) -/
+  withdrawn : List (Ring × String) := []
+
+/-- The memory with the withdrawn rings that are no longer in `pending` dropped: a ring that left the
+queue is no longer withdrawn (if it is rung again, it is a new ring). -/
+def Mem.prune (m : Mem) (pending : List Ring) : Mem :=
+  { m with withdrawn := m.withdrawn.filter fun x => decide (x.1 ∈ pending) }
 
 /-- Ticks in a row that may end on a retry before the resident ends `retryExhausted`: re-delivering
 never asks, but nothing may repeat forever (law 4: a static bound on everything). 32 ticks at
@@ -303,36 +318,109 @@ inductive Cmd
   | invoke (sh : Shape) (r : Ring) (t : ByteArray)
   /-- `pending` again, after a refused answer, to judge the refusal -/
   | reread (sh : Shape)
+  /-- `read CELL ?`, after a refused answer whose ring still waits: is a cell the answer cites still
+  there (a retired or never-created cell is refused `missingCell`) -/
+  | probe (c : ByteArray)
 
 /-- The argv a command sends (an unprintable answer sends nothing: `deliverP` never builds that
 node, and `answerArg_some` says it cannot arise). -/
 def Cmd.argv (c : Conf) : Cmd → List ByteArray
   | .describe => describeArgv c
   | .read sh | .reread sh => pendingArgv c sh
+  | .probe x => ["read".toUTF8, hexOf x, "?".toUTF8]
   | .invoke sh r t => match answerArg r t with
     | some a => invokeArgv c sh r.to a
     | none => []
 
-/-- One tick as a tree of effects (HOSTING-35): each node is ONE effect on the world outside the
-process, and its continuation is what the tick does with that effect's result. `Prog.interp`
-performs it (the deployed path: `tick` below is `(tickP w m).interp (ioHandler w)`); `Proofs.ResidentRun.Runs` is every path
-through it, over every result each effect could have, and `tick_order` is the order of effects
-on every path. A continuation never returns into its caller: every node is in tail position, so the
-tree is the tick's whole control flow and nothing runs between two nodes but pure code. -/
-inductive Prog (α : Type) where
-  | done (a : α)
-  /-- one command on the member socket: `c.argv` -/
-  | cmd (c : Cmd) (k : Except String Reply → Prog α)
-  /-- keep `(r, t)` durably (`keep`) -/
-  | keep (r : Ring) (t : ByteArray) (k : Bool → Prog α)
-  /-- forget the kept answer durably (`forget`) -/
-  | forget (k : Bool → Prog α)
-  /-- one ask on the broker socket -/
-  | ask (r : Ring) (q : Broker.Ask) (k : AskEnd → Prog α)
-  /-- one line on stderr -/
-  | say (s : String) (k : Prog α)
+/-! ## The tick as an open protocol
 
-/-- What performs each kind of node, in a monad `M`. -/
+The tick is a term of the open calculus (`Lang.Contextual.Protocol.Prot`) at the resident's
+signature `sig` (its five effects, each one call on the world outside the process; trivially
+indexed) with the hole type `Hole`. A node is ONE effect and its continuation is what the tick does
+with that effect's result, or a HOLE: a decision the tick leaves to a SLOT (`Lang.Contextual.Slot`),
+filled when the run reaches it from the candidates whose supports hold in what the run has just read
+(`fill`). Two holes:
+- `serve`, after the read: which ring the tick acts on. Its candidates, in the chooser's order: the
+  kept ring's answer, an ask for each pending ring lowest first, and idling. A ring's candidate cites
+  two supports: the ring is pending in this read, and its answer was not withdrawn. So the kept ring is
+  answered first while it waits, then the lowest waiting ring is asked about (`serveChoice_eq`: this
+  is `decideTick` over the rings whose answer stands).
+- `use`, after a refused answer, the re-read and, when the ring still waits, a probe of each cell the
+  answer cites (`read CELL ?`): what follows. Its candidates: the slot is CLOSED (the ring is no longer
+  pending: the answer landed, or the ring was retired); the answer is WITHDRAWN by the name of a cell
+  of the ring's aim that the probe found gone (the `via` grant or the target; a retired cell is a
+  tombstone, so the failure is permanent); or the queue STOPS (`answerRefused`), when every cell the
+  ring cites is there: the refusal is then not this ring's alone, and refuses every ring alike. The
+  member's refusal line does not name the cell (`refused missingCell`), so the resident reads the World. A withdrawn ring is skipped by every later `serve` while it is pending, and
+  the queue goes on to the next ring: repair without a restart.
+`Prog.interp` runs the term by the calculus's interpreter (`Slot.interp`), each hole filled by `fill`.
+`Proofs.ResidentRun.Runs` is every path through it, over every result each effect could have; a hole's
+path is its filling's. -/
+
+/-- The resident's effects. -/
+inductive Eff
+  /-- one command on the member socket: `c.argv` -/
+  | cmd (c : Cmd)
+  /-- keep `(r, t)` durably (`keep`) -/
+  | keep (r : Ring) (t : ByteArray)
+  /-- forget the kept answer durably (`forget`) -/
+  | forget
+  /-- one ask on the broker socket -/
+  | ask (r : Ring) (q : Broker.Ask)
+  /-- one line on stderr -/
+  | say (s : String)
+
+/-- Each effect's result. -/
+def Eff.Resp : Eff → Type
+  | .cmd _ => Except String Reply
+  | .keep _ _ => Bool
+  | .forget => Bool
+  | .ask _ _ => AskEnd
+  | .say _ => Unit
+
+open Nanodregg.Lang.Contextual.Protocol in
+/-- The resident's signature: its effects, trivially indexed. -/
+def sig : Sig Unit where
+  Op := fun _ => Eff
+  Resp := fun op => Eff.Resp op
+  next := fun _ _ => ()
+
+/-- The resident's holes, each named by what the run had read when it reached it. -/
+inductive Hole
+  /-- which ring to act on, among the rings `pending` this tick read -/
+  | serve (w : Where) (sh : Shape) (m : Mem) (pending : List Ring)
+  /-- what follows the refusal (stderr `line`, name `n`) of the answer for `ring`, the re-read having
+  listed `pending` and the probes having found the cells `gone` -/
+  | use (sh : Shape) (m : Mem) (ring : Ring) (n line : String) (pending : List Ring) (gone : List ByteArray)
+
+open Nanodregg.Lang.Contextual.Protocol in
+/-- A tick's term: an open protocol at `sig` with the resident's holes. -/
+abbrev Prog (α : Type) := Prot sig (fun _ => Hole) (fun _ => α) ()
+
+open Nanodregg.Lang.Contextual.Protocol in
+@[match_pattern] abbrev Prog.done {α : Type} (a : α) : Prog α := Prot.ret (i := ()) a
+open Nanodregg.Lang.Contextual.Protocol in
+@[match_pattern] abbrev Prog.cmd {α : Type} (c : Cmd) (k : Except String Reply → Prog α) : Prog α :=
+  Prot.call (S := sig) (i := ()) (Eff.cmd c) k
+open Nanodregg.Lang.Contextual.Protocol in
+@[match_pattern] abbrev Prog.keep {α : Type} (r : Ring) (t : ByteArray) (k : Bool → Prog α) : Prog α :=
+  Prot.call (S := sig) (i := ()) (Eff.keep r t) k
+open Nanodregg.Lang.Contextual.Protocol in
+@[match_pattern] abbrev Prog.forget {α : Type} (k : Bool → Prog α) : Prog α :=
+  Prot.call (S := sig) (i := ()) Eff.forget k
+open Nanodregg.Lang.Contextual.Protocol in
+@[match_pattern] abbrev Prog.ask {α : Type} (r : Ring) (q : Broker.Ask) (k : AskEnd → Prog α) : Prog α :=
+  Prot.call (S := sig) (i := ()) (Eff.ask r q) k
+open Nanodregg.Lang.Contextual.Protocol in
+/-- A `say` node as a pattern: its continuation takes the effect's `()` result. -/
+@[match_pattern] abbrev Prog.sayK {α : Type} (s : String) (k : Unit → Prog α) : Prog α :=
+  Prot.call (S := sig) (i := ()) (Eff.say s) k
+/-- One line on stderr, then `k`. -/
+abbrev Prog.say {α : Type} (s : String) (k : Prog α) : Prog α := Prog.sayK s fun _ => k
+open Nanodregg.Lang.Contextual.Protocol in
+@[match_pattern] abbrev Prog.hole {α : Type} (h : Hole) : Prog α := Prot.hole (i := ()) h
+
+/-- What performs each kind of effect, in a monad `M`. -/
 structure Handler (M : Type → Type) where
   cmd : Cmd → M (Except String Reply)
   keep : Ring → ByteArray → M Bool
@@ -340,15 +428,13 @@ structure Handler (M : Type → Type) where
   ask : Ring → Broker.Ask → M AskEnd
   say : String → M Unit
 
-/-- Perform a tree by a handler: each node's ONE call, then its continuation on the result
-(`Proofs.ResidentRun.interp_runs`: at the recording handler, the calls are exactly a path). -/
-def Prog.interp {M : Type → Type} [Monad M] {α : Type} (h : Handler M) : Prog α → M α
-  | .done a => pure a
-  | .cmd c k => do let x ← h.cmd c; (k x).interp h
-  | .keep r t k => do let b ← h.keep r t; (k b).interp h
-  | .forget k => do let b ← h.forget; (k b).interp h
-  | .ask r q k => do let e ← h.ask r q; (k e).interp h
-  | .say s k => do h.say s; k.interp h
+/-- The handler's one call for an effect. -/
+def Handler.call {M : Type → Type} (h : Handler M) : (op : Eff) → M (Eff.Resp op)
+  | .cmd c => h.cmd c
+  | .keep r t => h.keep r t
+  | .forget => h.forget
+  | .ask r q => h.ask r q
+  | .say s => h.say s
 
 /-- The deployed handler: the member socket, the volume, the broker socket, stderr. -/
 def ioHandler (w : Where) : Handler IO where
@@ -358,6 +444,105 @@ def ioHandler (w : Where) : Handler IO where
   ask _ q := Resident.ask w.broker q
   say s := Resident.say s
 
+/-! ## The two slots -/
+
+open Nanodregg.Lang.Contextual.Slot
+
+/-- What a `serve` candidate cites. -/
+inductive ServeFact
+  /-- the ring is pending in this tick's read -/
+  | pending (r : Ring)
+  /-- the ring's answer was not withdrawn -/
+  | stands (r : Ring)
+
+/-- The `serve` slot: each act on a ring cites that ring pending and its answer standing; idling cites
+nothing; every act passes the judge. -/
+def serveSlot : Slot ServeFact Act where
+  supports := fun
+    | .answer r _ => [.pending r, .stands r]
+    | .ask r => [.pending r, .stands r]
+    | .idle => []
+  judge := fun _ => true
+
+/-- Whether ring `r`'s answer stands: it is not among the withdrawn. -/
+def stands (m : Mem) (r : Ring) : Bool := !(m.withdrawn.any fun x => x.1 == r)
+
+/-- What a `serve` support says at this read. -/
+def serveHolds (m : Mem) (pending : List Ring) : ServeFact → Bool
+  | .pending r => decide (r ∈ pending)
+  | .stands r => stands m r
+
+/-- The chooser's order: the kept ring's answer, an ask for each pending ring lowest first, idling. -/
+def serveOrder (m : Mem) (pending : List Ring) : List Act :=
+  (match m.kept with
+   | some (r, t) => [Act.answer r t]
+   | none => []) ++ pending.map Act.ask ++ [Act.idle]
+
+/-- The act the `serve` slot fills: its first usable candidate (idling is always usable). -/
+def serveChoice (m : Mem) (pending : List Ring) : Act :=
+  (serveSlot.alternatives (serveHolds m pending) (serveOrder m pending)).headD .idle
+
+/-- The rings pending in this read whose answer stands. -/
+def live (m : Mem) (pending : List Ring) : List Ring := pending.filter (stands m)
+
+/-- The cells a ring's answer cites beyond the ring itself: for an aimed ring, the grant the Bell holds
+on the target (`via`) and the target; none for a plain ring. -/
+def aimCells (r : Ring) : List ByteArray :=
+  match r.to with
+  | some a => [a.via, a.target]
+  | none => []
+
+/-- What a probe of a cell (`read CELL ?`) says: `some true`, the cell is gone (refused `missingCell`:
+retired, a tombstone, or never created); `some false`, it is there (`ok`, or refused for another
+reason); `none`, unsettled (a transport failure or another exit: the tick is retried). -/
+def probeGone : Except String Reply → Option Bool
+  | .error _ => none
+  | .ok r =>
+    if r.exit = Protocol.CommandExit.ok.code then some false
+    else if r.exit = Protocol.CommandExit.refused.code then some (refusedName r.stderr == "missingCell")
+    else none
+
+/-- What follows a refused answer. -/
+inductive UseCand
+  /-- the ring left `pending`: the answer is forgotten -/
+  | closed
+  /-- the ring waits, and the cell `c` its answer cites is gone: withdrawn by that name -/
+  | withdraw (c : ByteArray)
+  /-- every cell the ring cites is there: the refusal is not this ring's alone, and the queue stops
+  (`answerRefused`) -/
+  | stop
+  deriving DecidableEq
+
+/-- What a `use` candidate cites. -/
+inductive UseFact
+  /-- the ring is no longer pending -/
+  | left
+  /-- the ring is still pending -/
+  | waits
+  /-- the cell `c` was probed and is gone -/
+  | gone (c : ByteArray)
+
+/-- The `use` slot for ring `r`. -/
+def useSlot : Slot UseFact UseCand where
+  supports := fun
+    | .closed => [.left]
+    | .withdraw c => [.waits, .gone c]
+    | .stop => []
+  judge := fun _ => true
+
+/-- What a `use` support says, given the re-read and the cells the probes found gone. -/
+def useHolds (r : Ring) (pending : List Ring) (gone : List ByteArray) : UseFact → Bool
+  | .left => decide (r ∉ pending)
+  | .waits => decide (r ∈ pending)
+  | .gone c => gone.any fun g => decide (g = c)
+
+/-- The chooser's order: closed, then a withdrawal by each cell the ring cites, then stop. -/
+def useOrder (r : Ring) : List UseCand := [.closed] ++ (aimCells r).map .withdraw ++ [.stop]
+
+/-- What the `use` slot fills: its first usable candidate (stop is always usable). -/
+def useChoice (r : Ring) (pending : List Ring) (gone : List ByteArray) : UseCand :=
+  (useSlot.alternatives (useHolds r pending gone) (useOrder r)).headD .stop
+
 /-- The intent kept before an ask: a restart that finds it answers the ring with it and never asks
 again. -/
 def intentText : ByteArray := fit (named "unanswered restart")
@@ -366,13 +551,35 @@ def intentText : ByteArray := fit (named "unanswered restart")
 def forgetThen (next : Tick) : Prog Tick :=
   .forget fun ok => if ok then .done next else .done (.stop .volume "forget")
 
+/-- After a refused answer whose ring still waits: probe each cell the answer cites (`read CELL ?`),
+collecting those found gone, then the `use` hole. A probe that does not settle ends the tick on a
+retry, the answer still kept. -/
+def probesP (sh : Shape) (m : Mem) (ring : Ring) (n line : String) (pending : List Ring) :
+    List ByteArray → List ByteArray → Prog Tick
+  | [], gone => .hole (.use sh m ring n line pending gone)
+  | c :: cs, gone => .cmd (.probe c) fun y =>
+    match probeGone y with
+    | some true => probesP sh m ring n line pending cs (c :: gone)
+    | some false => probesP sh m ring n line pending cs gone
+    | none =>
+      .say s!"answer refused ({line}); probe of {Lang.Print.hex c} unsettled" <|
+        .done (retry m s!"answer refused {n} ({line}); probe unsettled")
+
+/-- After a refused answer and the re-read `pending`: a ring that still waits has the cells its answer
+cites probed first; then the `use` hole. -/
+def refusedP (sh : Shape) (m : Mem) (ring : Ring) (n line : String) (pending : List Ring) : Prog Tick :=
+  if ring ∈ pending then probesP sh m ring n line pending (aimCells ring) []
+  else .hole (.use sh m ring n line pending [])
+
 /-- Invoke `answer` for the kept ring `ring` with `t`; what the tick does next.
 
 A refusal is judged by the bell's ROWS, not by its name: the member surface names a method's check
 only as `program`, and a kernel refusal of the retract names the row, not the reason. So after any
 refusal the resident reads `pending` again. If the ring is still pending, the bell refused THIS
-answer: the resident ends `answerRefused NAME` with the text still kept. Otherwise the ring was
-answered (a delivery that landed but whose reply was lost), and the kept answer is forgotten. -/
+answer: the resident probes the cells the answer cites (`probesP`) and the `use` hole decides
+(withdraw by the name of a gone cell, or stop `answerRefused NAME` with the text still kept).
+Otherwise the ring was answered (a delivery that landed but whose reply was lost), or retired, and the
+kept answer is forgotten. -/
 def deliverP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :=
   match answerArg ring t with
   | none => .done (.stop .bellShape "answer unprintable (unreachable: answerArg_some)")
@@ -385,7 +592,7 @@ def deliverP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :=
         forgetThen (.next { m with kept := none, retries := 0 })
     else if r.exit = Protocol.CommandExit.refused.code then
       let n := refusedName r.stderr
-      let line := ((String.fromUTF8? r.stderr).getD "?").trimAsciiEnd.toString
+      let line := refusalLine r
       let unread (why : String) : Prog Tick :=
         .say s!"answer refused ({line}); state unread {why}" <|
           .done (retry m s!"answer refused {n} ({line}); state unread {why}")
@@ -395,11 +602,7 @@ def deliverP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :=
         if rr.exit ≠ Protocol.CommandExit.ok.code then unread s!"exit {rr.exit}" else
         match readOut sh rr with
         | .error (x, d) => .done (.stop x d)
-        | .ok pending =>
-          if ring ∈ pending then .done (.stop .answerRefused s!"{n} ({line})")
-          else
-            .say s!"answer refused ({line}); the ring is no longer pending" <|
-              forgetThen (.next { m with kept := none, retries := 0 })
+        | .ok pending => refusedP sh m ring n line pending
     else .say s!"answer unsettled exit {r.exit}" (.done (retry m s!"answer exit {r.exit}"))
 
 /-- After the ask: say how it went and keep the answer `t` (the intent replaced), then deliver. -/
@@ -410,7 +613,7 @@ def answeredP (sh : Shape) (m : Mem) (ring : Ring) (t : ByteArray) : Prog Tick :
 
 /-- What the tick does with the pending rings it read: `decideTick`'s act. -/
 def actOn (w : Where) (sh : Shape) (m : Mem) (pending : List Ring) : Prog Tick :=
-  match decideTick pending m.kept with
+  match serveChoice m pending with
   | .idle =>
     if m.kept.isSome then forgetThen (.next { m with kept := none, retries := 0 })
     else .done (.next { m with kept := none, retries := 0 })
@@ -435,7 +638,7 @@ def readP (w : Where) (sh : Shape) (m : Mem) : Prog Tick :=
     else
     match readOut sh r with
     | .error (x, d) => .done (.stop x d)
-    | .ok pending => actOn w sh m pending
+    | .ok pending => .hole (.serve w sh m pending)
 
 /-- One tick: the shape once, then the read and the act. -/
 def tickP (w : Where) (m : Mem) : Prog Tick :=
@@ -454,6 +657,41 @@ def tickP (w : Where) (m : Mem) : Prog Tick :=
           .say s!"bell answer method {sh.answer} pending limit {sh.pending.limit}" <|
             readP w sh { m with shape := some sh }
         | .error (x, d) => .done (.stop x d)
+
+/-- What follows the refused answer `t` for `ring`: the `use` slot's choice. -/
+def useP (m : Mem) (ring : Ring) (n line : String) (pending : List Ring) (gone : List ByteArray) :
+    Prog Tick :=
+  match useChoice ring pending gone with
+  | .closed =>
+    .say s!"answer refused ({line}); the ring is no longer pending" <|
+      forgetThen (.next { m with kept := none, retries := 0 })
+  | .withdraw c =>
+    .say s!"answer withdrawn {ring.notBefore} {Lang.Print.hex ring.ringer}: its support {Lang.Print.hex c} is gone ({line})" <|
+      forgetThen (.next { m with kept := none, retries := 0, withdrawn := (ring, Lang.Print.hex c) :: m.withdrawn })
+  | .stop => .done (.stop .answerRefused s!"{n} ({line})")
+
+/-- Fill a hole: `serve` by the act the slot chooses, the withdrawn rings that left `pending`
+dropped; `use` by `useP`. -/
+def fill : Hole → Prog Tick
+  | .serve w sh m pending =>
+    actOn w sh (m.prune pending) pending
+  | .use _ m ring n line pending gone => useP m ring n line pending gone
+
+/-- How deep holes nest in one tick: `serve`'s filling holds `use`, whose filling holds none. -/
+def holesMax : Nat := 2
+
+/-- Perform a tick's term by a handler, holes nesting at most `n` deep: the calculus's interpreter,
+each hole filled by `fill` when it is reached. A term whose holes nest deeper ends `bellShape holes`. -/
+def Prog.interpN {M : Type → Type} [Monad M] (h : Handler M) (n : Nat) (p : Prog Tick) : M Tick := do
+  match ← Lang.Contextual.Slot.interp (W := Empty) (fun op => h.call op) (fun hl => .ok (fill hl)) n p with
+  | .done _ a => pure a
+  | .withdrawn _ _ e => nomatch e
+  | .bound _ _ => pure (.stop .bellShape "holes")
+
+/-- Perform a tick's term at `holesMax`, which every tick fits (`Proofs.ResidentRun.tickP_fits`), so
+no tick ends `bellShape holes`. -/
+def Prog.interp {M : Type → Type} [Monad M] (h : Handler M) (p : Prog Tick) : M Tick :=
+  p.interpN h holesMax
 
 /-- One tick, performed. -/
 def tick (w : Where) (m : Mem) : IO Tick := (tickP w m).interp (ioHandler w)

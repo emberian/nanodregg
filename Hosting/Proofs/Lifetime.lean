@@ -28,6 +28,21 @@ open Nanodregg.Hosting Nanodregg.Hosting.Resident Nanodregg.Hosting.Proofs.Resid
 theorem forgetThen_shape {n : Tick} {m' : Mem} {es : List Ev} (h : Runs (forgetThen n) es (.next m')) :
     n = .next m' := (forgetThen_next h).1
 
+theorem useP_shape {m m' : Mem} {r : Ring} {n line : String} {p : List Ring} {gone : List ByteArray}
+    {es : List Ev} (h : Runs (useP m r n line p gone) es (.next m')) : m'.shape = m.shape := by
+  unfold useP at h
+  split at h
+  · cases h with | say h => have hn := forgetThen_shape h; cases hn; rfl
+  · cases h with | say h => have hn := forgetThen_shape h; cases hn; rfl
+  · cases h
+
+theorem refusedP_shape {sh : Shape} {m m' : Mem} {r : Ring} {n line : String} {p : List Ring}
+    {es : List Ev} (h : Runs (refusedP sh m r n line p) es (.next m')) : m'.shape = m.shape := by
+  obtain ⟨pre, rest, rfl, -, hr⟩ := refusedP_path h
+  rcases hr with ⟨c, y, s, why, rfl, -, hr⟩ | ⟨gone, hr⟩
+  · obtain rfl := retry_next hr.symm; rfl
+  · exact useP_shape hr
+
 theorem deliver_shape {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
     (h : Runs (deliverP sh m r t) es (.next m')) : m'.shape = m.shape := by
   unfold deliverP at h
@@ -52,10 +67,7 @@ theorem deliver_shape {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es :
                 · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
                 · split at h
                   · cases h
-                  · split at h
-                    · cases h
-                    · cases h with
-                      | say h => have hn := forgetThen_shape h; cases hn; rfl
+                  · exact refusedP_shape h
           · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
 
 theorem answered_shape {sh : Shape} {m m' : Mem} {r : Ring} {t : ByteArray} {es : List Ev}
@@ -109,7 +121,7 @@ theorem read_shape {w : Where} {sh : Shape} {m m' : Mem} {es : List Ev}
       · cases h with | say h => obtain ⟨rfl, rfl⟩ := done_retry h; rfl
       · split at h
         · cases h
-        · exact actOn_shape h
+        · cases h with | hole h => exact actOn_shape (m := m.prune _) h
 
 /-- **The shape a tick hands on** is the one it was given, or the one its own describe (its first
 effect) read. -/
@@ -141,7 +153,8 @@ theorem tick_shape {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w m)
 /-! ## The shape each invoke is sent at -/
 
 theorem deliverAfter_mem {sh : Shape} {r : Ring} {x : Except String Reply} {rest : List Ev}
-    (h : DeliverAfter sh r x rest) : ∀ e ∈ rest, (∃ b, e = .forget b) ∨ ∃ y, e = .cmd (.reread sh) y := by
+    (h : DeliverAfter sh r x rest) : ∀ e ∈ rest, (∃ b, e = .forget b) ∨ (∃ y, e = .cmd (.reread sh) y) ∨
+      ∃ c y, e = .cmd (.probe c) y := by
   intro e he
   unfold DeliverAfter at h
   split at h
@@ -151,11 +164,11 @@ theorem deliverAfter_mem {sh : Shape} {r : Ring} {x : Except String Reply} {rest
     · split at h
       · obtain ⟨y, rest', rfl, hr'⟩ := h
         rcases List.mem_cons.mp he with rfl | he
-        · exact .inr ⟨y, rfl⟩
+        · exact .inr (.inl ⟨y, rfl⟩)
         · split at hr'
-          · split at hr'
-            · subst hr'; cases he
-            · obtain ⟨b, rfl⟩ := hr'; simp at he; exact .inl ⟨b, he⟩
+          · rcases refusedCore_mem hr' e he with hb | hc
+            · exact .inl hb
+            · exact .inr (.inr hc)
           · subst hr'; cases he
       · subst h; cases he
 
@@ -164,8 +177,9 @@ theorem deliverCore_invoke {sh sh' : Shape} {r r' : Ring} {t t' : ByteArray} {x 
   obtain ⟨x₀, rest, rfl, hr⟩ := h
   rcases List.mem_cons.mp he with he | he
   · cases he; rfl
-  · rcases deliverAfter_mem hr _ he with ⟨b, hb⟩ | ⟨y, hy⟩
+  · rcases deliverAfter_mem hr _ he with ⟨b, hb⟩ | ⟨y, hy⟩ | ⟨c, y, hy⟩
     · cases hb
+    · cases hy
     · cases hy
 
 theorem deliverCore_keep {sh : Shape} {r r' : Ring} {t t' : ByteArray} {b : Bool} {es : List Ev}
@@ -174,11 +188,12 @@ theorem deliverCore_keep {sh : Shape} {r r' : Ring} {t t' : ByteArray} {b : Bool
   intro he
   rcases List.mem_cons.mp he with he | he
   · cases he
-  · rcases deliverAfter_mem hr _ he with ⟨b, hb⟩ | ⟨y, hy⟩
+  · rcases deliverAfter_mem hr _ he with ⟨b, hb⟩ | ⟨y, hy⟩ | ⟨c, y, hy⟩
     · cases hb
     · cases hy
+    · cases hy
 
-theorem readCore_invoke {c : Conf} {sh sh' : Shape} {k : Option (Ring × ByteArray)} {r : Ring}
+theorem readCore_invoke {c : Conf} {sh sh' : Shape} {k : Mem} {r : Ring}
     {t : ByteArray} {x : Except String Reply} {es : List Ev} (h : ReadCore c sh k es)
     (he : Ev.cmd (.invoke sh' r t) x ∈ es) : sh' = sh := by
   obtain ⟨y, rest, rfl, hr⟩ := h
@@ -446,7 +461,7 @@ theorem tick_keeps_ok {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs 
       · exact absurd he (deliverCore_keep hr)
       · rename_i r₀ hd
         have hr₀ : RingOk r₀ := readRings_ok hp r₀
-          (mem_of_head (ask_is_head hd).1)
+          (List.mem_filter.mp (mem_of_head (ask_is_head hd).1)).1
         have hint : intentText.size ≤ Lang.Bounds.bytesMax :=
           textMax_bytes (Nanodregg.Hosting.Proofs.Resident.fit_size _).2
         rcases hr with rfl | ⟨x', rest', rfl, ha⟩

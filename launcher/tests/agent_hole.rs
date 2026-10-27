@@ -21,6 +21,10 @@
 //!   caller's points (`Std.hole`'s `(reads (facts 3))`), which no derivation can choose.
 //! - H3, withdrawn by name: the operator revokes G; `rejudge` suspends the candidate
 //!   `support0 dead`, and `select` of it is refused `select: refused support0 dead`.
+//! - H4, the resident withdraws by name (the `use` hole): with G retired, a ring aimed through G and
+//!   then a plain ring. The first is asked about once, its answer refused; the resident probes the
+//!   cells it cites, finds G gone and withdraws it by that name (`... its support <G> is gone`);
+//!   the plain ring is answered in the same process, the first stays pending and is never asked again.
 //!
 //! The standing row runs the FAKE provider (`hello back`, HOSTING-27: "the real upstream is never in a
 //! test"). `a_real_model_fills_the_section` runs the same tour on the real model, OPT-IN, never
@@ -420,10 +424,84 @@ fn tour(provider: Provider) -> String {
         "H3: the select is refused by name: {}",
         both(&o)
     );
+    if !real {
+        h4(&w, &b, &s, &gs, &aim, &answers, &log);
+    }
     drop(gl);
     drop(kb);
     drop(members);
     text
+}
+
+/// H4, a ring through a retired grant is withdrawn by name and the queue goes on: with `gs` retired
+/// (H3), a ring aimed through it, then a plain ring. The resident asks about the first, its answer is
+/// refused (`refused missingCell`: the member's line names no cell, MEASURED), the resident probes the
+/// cells the answer cites (`read CELL ?`), finds the grant gone, and the `use` slot WITHDRAWS the answer
+/// by that name (`resident: answer withdrawn ... its support <cell> is gone (<the line>)`); the second
+/// ring is asked about and answered in the same process. The first stays pending, never asked again;
+/// no `answerRefused`.
+fn h4(
+    w: &World,
+    b: &str,
+    s: &str,
+    gs: &str,
+    aim: &str,
+    answers: &dyn Fn() -> Vec<String>,
+    log: &dyn Fn() -> String,
+) {
+    w.run(&[
+        "invoke",
+        b,
+        "4",
+        &format!("(record (text \"through a retired grant\") (to {aim}))"),
+    ]);
+    w.run(&["sync"]);
+    w.run(&[
+        "invoke",
+        b,
+        "4",
+        "(record (text \"a plain question\") (to none))",
+    ]);
+    until(
+        "H4: the plain ring is answered past the withdrawn one",
+        150,
+        || {
+            w.run(&["sync"]);
+            answers().len() == 2
+        },
+        &|| format!("pending {}\n{}", w.run(&["read", b, "pending", "64"]), log()),
+    );
+    let l = log();
+    let withdrawn: Vec<&str> = l
+        .lines()
+        .filter(|x| x.contains("resident: answer withdrawn"))
+        .collect();
+    assert_eq!(withdrawn.len(), 1, "H4: one withdrawal:\n{l}");
+    let named = withdrawn[0];
+    assert!(
+        named.contains(&format!("its support {gs} is gone"))
+            || named.contains(&format!("its support {s} is gone")),
+        "H4: the withdrawal names the aim's via or target: {named}"
+    );
+    eprintln!("H4 (measured): {named}");
+    assert!(!l.contains("answerRefused"), "H4: the queue stopped:\n{l}");
+    let pending = w.run(&["read", b, "pending", "64"]);
+    assert!(
+        pending.contains("through a retired grant") && !pending.contains("a plain question"),
+        "H4: the withdrawn ring waits, the plain one was answered: {pending}"
+    );
+    assert!(
+        answers().iter().any(|t| t.as_bytes() == REPLY),
+        "H4: the plain ring's answer"
+    );
+    // more ticks: the withdrawn ring is never asked about again while it waits
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    assert_eq!(
+        log().matches("resident: asked; answer").count(),
+        3,
+        "H4: three asks in all (H2, the withdrawn ring once, the plain ring):\n{}",
+        log()
+    );
 }
 
 #[test]

@@ -1,8 +1,8 @@
 /-
-# Hosting.Proofs.ContextualFailures — lost replies over the deployed objects (PROT-5, LANG-75.16)
+# Hosting.Proofs.LostReply — lost replies over the deployed objects (PROT-5, LANG-75.16)
 
 The protocol calculus's `Hist.inflight` is a dispatched call whose reply was lost. In the deployed
-system that state has two owners, and they differ in one Boolean (`Nano.Peer.reliable`, Barwell
+system that state has two owners, and they differ in one Boolean (`Peer.reliable`, Barwell
 et al.'s reliable roles; Graversen–Montesi–Peressotti's at-most-once with the frame identity = the
 call digest):
 
@@ -31,11 +31,10 @@ exact retry (a client re-sending the bytes whose reply it lost). This module rep
 calculus's private delivery model (`External`, `Internal`, `Consistent` and the theorems over them,
 deleted): the deployed objects state the failures themselves.
 -/
-import Hosting.Proofs.ContextualNano
 import Hosting.Proofs.BellConform
 import Kernel.Proofs.Journal
 
-namespace Nanodregg.Lang.Contextual.Protocol.Failures
+namespace Nanodregg.Hosting.Proofs.LostReply
 
 /-! ## The kernel: an exact retry is recognised, never re-admitted -/
 
@@ -79,7 +78,36 @@ end Kernel
 section Resident
 
 open Nanodregg.Hosting Nanodregg.Hosting.Resident Nanodregg.Hosting.Proofs.ResidentRun
-open Nanodregg.Hosting.Proofs.BellConform Nanodregg.Lang.Contextual.Protocol.Nano
+open Nanodregg.Hosting.Proofs.BellConform
+
+/-- The resident's two peers: the member's kernel (every `cmd` goes to it through the member socket)
+and keybroker (every `ask`). The volume and stderr are the resident's own, not peers. -/
+inductive Peer
+  | kernel
+  | broker
+deriving DecidableEq, Repr
+
+/-- One Boolean per peer: may a request whose reply was lost be sent again? The kernel is RELIABLE:
+an exact retry of a signed call is `replayed` from the journal at the height it committed
+(`submit_at_most_once`), and the resident's re-delivery is a fresh call the bell's `answered` guard
+refuses after the first landed. Keybroker is UNRELIABLE: it charges the meter per ask and
+deduplicates nothing, so a spent ask is never sent again. -/
+def Peer.reliable : Peer → Bool
+  | .kernel => true
+  | .broker => false
+
+/-- The ring an effect asks peer `p` about: an invoke of an answer (the kernel), an ask (keybroker). -/
+def Peer.req : Peer → Ev → Option Ring
+  | .kernel, .cmd (.invoke _ r _) _ => some r
+  | .broker, .ask r _ _ => some r
+  | _, _ => none
+
+/-- The effect's reply was lost: a command whose reply never came back, an ask that ended `lost`
+(it left in full, so it is spent). -/
+def lostReply : Ev → Bool
+  | .cmd _ (.error _) => true
+  | .ask _ _ (.lost _) => true
+  | _ => false
 
 /-- A reliable peer's lost reply leaves the request kept: on every path of a tick that goes on, an
 effect to `p` about ring `r` whose reply was lost leaves an answer for `r` kept, and every later
@@ -181,7 +209,7 @@ private theorem act_lost {c : Conf} {sh : Shape} {k : Option (Ring × ByteArray)
 private theorem tick_lost {c : Conf} {m : Mem} {l : List Ev} (h : TickCore c m l) {sh' : Shape}
     {r : Ring} {t : ByteArray} {s : String} (hm : Ev.cmd (.invoke sh' r t) (.error s) ∈ l) :
     keptAfter m.kept l = some (r, t) := by
-  have read_lost : ∀ {sh : Shape} {l : List Ev}, ReadCore c sh m.kept l →
+  have read_lost : ∀ {sh : Shape} {l : List Ev}, ReadCore c sh m l →
       Ev.cmd (.invoke sh' r t) (.error s) ∈ l → keptAfter m.kept l = some (r, t) := by
     intro sh l h hm
     obtain ⟨y, rest, rfl, hr⟩ := h
@@ -278,4 +306,4 @@ theorem lost_ask_keeps_obligation {w : Where} {m : Mem} {es : List Ev} {a : Tick
 
 end Resident
 
-end Nanodregg.Lang.Contextual.Protocol.Failures
+end Nanodregg.Hosting.Proofs.LostReply
