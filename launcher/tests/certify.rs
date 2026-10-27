@@ -188,14 +188,27 @@ fn seal_certify(store: &Path, sock: &Path) -> (String, String) {
 fn the_certify_key_signs_only_heads_of_the_deciders_fold() {
     let d = dir("cert");
     let seed = "1d".repeat(32);
-    let next = "2e".repeat(32);
     let keys = d.join("keys");
+    // The next seed never lives in KEYS (DESIGN-TRUST §4.4c): a file that carries one is refused.
     fs::write(
         &keys,
-        format!("7 provider-key\ncertify {seed}\ncertify.next {next}\n"),
+        format!(
+            "7 provider-key\ncertify {seed}\ncertify.next {}\n",
+            "2e".repeat(32)
+        ),
     )
     .unwrap();
     fs::set_permissions(&keys, fs::Permissions::from_mode(0o600)).unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_keybroker"))
+        .args(["--certify-pub", keys.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !o.status.success() && err(&o).contains("keyFileFormat"),
+        "a KEYS file holding the next seed: {}",
+        err(&o)
+    );
+    fs::write(&keys, format!("7 provider-key\ncertify {seed}\n")).unwrap();
     let anchors = Pki::new().anchors(&d, 0o644);
     let o = Command::new(env!("CARGO_BIN_EXE_keybroker"))
         .args(["--certify-pub", keys.to_str().unwrap()])
@@ -204,11 +217,6 @@ fn the_certify_key_signs_only_heads_of_the_deciders_fold() {
     assert!(o.status.success(), "--certify-pub: {}", err(&o));
     let pubs = text(&o);
     let certifier = line(&pubs, "certify ").to_owned();
-    assert_ne!(
-        line(&pubs, "next "),
-        certifier,
-        "the next key is another key"
-    );
 
     // A World whose authority is the certify key, its writer and the founder's follower.
     let root = nanodregg_devtools::scratch(&format!("kbz{}", std::process::id()));

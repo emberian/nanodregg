@@ -132,9 +132,10 @@ def headStep (w : World D) (r : ByteArray) :
 
 /-- Read what was appended until nothing is new, at most `n` reads; the Turns absorbed (a recorded
 refusal moves no cell, `Kernel.refuse_frame`, so only the log's Turns are read) and the head after
-every record (a record of refusals only moves no cell, but it is a step: its head is kept). -/
-def catchUp (keys : Keys) (seg : Segs) : Nat → Tail (World D) → List (Turn D) → List Head →
-    IO (Except Exit (Tail (World D) × List (Turn D) × List Head))
+every record with the record's step pairs (a record of refusals only moves no cell, but it is a step:
+its head is kept; the certifier checks each head's link from the one before over those pairs). -/
+def catchUp (keys : Keys) (seg : Segs) : Nat → Tail (World D) → List (Turn D) → List (List (Step D × D) × Head) →
+    IO (Except Exit (Tail (World D) × List (Turn D) × List (List (Step D × D) × Head)))
   | 0, _, _, _ => pure (.error .behind)
   | n + 1, t, acc, hs => do
     match ← Tail.next keys Host.Deployed.c headStep seg t with
@@ -143,7 +144,7 @@ def catchUp (keys : Keys) (seg : Segs) : Nat → Tail (World D) → List (Turn D
       if outs.isEmpty && t'.pos.offset == t.pos.offset then pure (.ok (t', acc, hs))
       else
         let turns := Step.turns ((outs.toList.map (·.1)).flatten.map Prod.fst)
-        catchUp keys seg n t' (acc ++ turns) (hs ++ outs.toList.map (·.2))
+        catchUp keys seg n t' (acc ++ turns) (hs ++ outs.toList)
 
 /-- A catch-up's effect on what the broker follows: the tail reached and both readers re-read over
 the Turns absorbed (`Proofs.Residents.absorbTurns_tracks`). -/
@@ -161,7 +162,7 @@ def refresh (f : Follow) (b : Broker) (cert : Certifier) (now : Nat) :
   match ← catchUp f.keys f.seg drainMax f.tail [] [] with
   | .error e => pure (.error e)
   | .ok (t, turns, hs) =>
-    let cert := hs.foldl Certify.Certifier.absorb cert
+    let cert := hs.foldl (Certify.Certifier.absorb Host.Deployed.X.env) cert
     if turns.isEmpty then return .ok ({ f with tail := t }, b, cert)
     let f' := f.absorbTurns t turns
     pure (.ok (f', b.follow now (f'.held.map (·.2)), cert))

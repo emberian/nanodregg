@@ -141,6 +141,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .forgeBase => { writer := { R, X := R.ctx, forgeBase := true }, follow := R.ctx }
   | some .forgeCertificate => { writer := { R, X := R.ctx, forgeCertificate := true }, follow := R.ctx }
   | some .forkCertificate => { writer := { R, X := R.ctx, forkCertificate := true }, follow := R.ctx }
+  | some .stripCertificate => { writer := { R, X := R.ctx, stripCertificate := true }, follow := R.ctx }
   | some .unstatedExpiry => { writer := { R, X := R.ctx, unstatedExpiry := true }, follow := R.ctx }
   | some .forgottenRefused => { writer := { R, X := R.ctx, forgottenRefused := true }, follow := R.ctx }
   | some .nonceRepeats => { writer := { R, X := R.ctx }, follow := R.ctx, nonceRepeats := true }

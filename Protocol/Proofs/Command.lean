@@ -1393,6 +1393,15 @@ theorem codeName_mem {k : Nat} {n : String} (h : codeName k = some n) :
   · exact List.mem_append_right _ (List.mem_of_getElem? h)
 
 omit [Ord D] [DecidableEq D] in
+/-- The fork verdicts' names are in `hintNames` (out of `hintNames_complete`, whose one budget the
+whole constructor list shares). -/
+theorem hintNames_forks (r : Refusal D)
+    (h : r.name ∈ ["forkedPost", "postBeyondPage", "forkedCertified", "uncertifiedPage"]) :
+    r.name ∈ hintNames := by
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+  rcases h with h | h | h | h <;> rw [h] <;> simp [hintNames, hintReps, Refusal.name]
+
+omit [Ord D] [DecidableEq D] in
 /-- **Every refusal follow's machine prints is in `hintNames`, but the Host's word**: the table a hint
 is read against misses no name Lean's own refusals produce. -/
 theorem hintNames_complete (r : Refusal D) (h : ∀ n, r ≠ .host n) : r.name ∈ hintNames := by
@@ -1426,6 +1435,10 @@ theorem hintNames_complete (r : Refusal D) (h : ∀ n, r ≠ .host n) : r.name �
       cases a <;> simp [Refusal.name, Head.Refusal.name, Head.Refusal.all, hintNames, hintReps]
   | certified a =>
       cases a <;> simp [Refusal.name, Head.CertRefusal.name, Head.CertRefusal.all, hintNames, hintReps]
+  | forkedPost _ _ => exact hintNames_forks _ (by simp [Refusal.name])
+  | postBeyondPage _ _ _ => exact hintNames_forks _ (by simp [Refusal.name])
+  | forkedCertified _ => exact hintNames_forks _ (by simp [Refusal.name])
+  | uncertifiedPage _ => exact hintNames_forks _ (by simp [Refusal.name])
   | _ => simp [Refusal.name, hintNames, hintReps]
 
 /-- **The hint is read iff** the payload is at most `Bounds.hintBytesMax` bytes and its first line

@@ -241,6 +241,8 @@ inductive Mutation
   /-- the writer certifies its base under a head with ANOTHER chain than its own fold holds there: a
   genuine signature on a head of another history (PROTOCOL-81) -/
   | forkCertificate
+  /-- `log` pages carry no certificate: a relay that strips the writer's (PROTOCOL-84) -/
+  | stripCertificate
   /-- the writer refuses an expired envelope by the name alone, stating no height (PROTOCOL-12's
   shape, before PROTOCOL-19) -/
   | unstatedExpiry
@@ -1885,6 +1887,21 @@ def selfHeadPageRow : Row where
     ok "operator" ["sync"]])
   plant := .measured "the pre-PROTOCOL-83 scanner (touched head objects read from the World after the page; no position check): lines 10 and 13 end ok (MEASURED on hbox, PROTOCOL-83)"
 
+/-- PROTOCOL-84: under an authority that certifies, a log page with no certificate is refused
+`uncertifiedPage` by name (page kept), never compared on nothing. The rows' World is certified by the
+writer's key (threshold 1) and every honest page carries the writer's certificate, so the honest run
+ends `ok` everywhere; the plant (`stripCertificate`: log pages carry none, a stripping relay) is
+caught at the first log page (line 1, the sponsor's enroll). -/
+def strippedCertificateRow : Row where
+  name := "strippedCertificate"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "write"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "operator" ["sync"]])
+  plant := .caught .stripCertificate 1 (.refused "uncertifiedPage")
+
 /-- PROTOCOL-77.1 (DESIGN-TRUST T3b, the consumers): the rows' World names the writer's certify key as
 its one certifier (threshold 1, `Writer.authority`), so a thin member adopts a base only when the
 writer's certificate of that base's head verifies under the genesis authority and certifies exactly
@@ -1931,6 +1948,7 @@ def rows : List Row :=
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow, forkRow, selfHeadRow, selfHeadPageRow, certifiedRow, certifiedPageRow, rerunRow]
+   forgedRefusalRow, forkRow, selfHeadRow, selfHeadPageRow, certifiedRow, certifiedPageRow, rerunRow,
+   strippedCertificateRow]
 
 end Nanodregg.Protocol

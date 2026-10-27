@@ -57,6 +57,8 @@ structure Params (D : Type) [Ord D] where
   /-- the writer certifies a head of its base's step count with another chain (a plant: a genuine
   signature on a head of another history, PROTOCOL-81) -/
   forkCertificate : Bool := false
+  /-- `log` pages carry no certificate (a plant: a relay that strips it, PROTOCOL-84) -/
+  stripCertificate : Bool := false
   /-- an `expired` refusal states the name alone, no height (a plant: the shape before
   PROTOCOL-19, which leaves a follower more than a window behind unable to catch up) -/
   unstatedExpiry : Bool := false
@@ -215,7 +217,9 @@ def pager (P : Params D) (m : Mem) (r : Resident (World D)) : Deferred → IO (U
     -- `lieTip` hides the log after the page, so a base after the page too (a consistent lie)
     let baseSteps := if P.lieBase then r.world.steps
       else if P.lieTip then min r.sealed.steps a.steps else r.sealed.steps
-    let cert ← certificate P m r
+    -- `forgeCertificate` forges the BASE's certificate a thin joiner adopts (the read page); a log
+    -- page carries the honest one, or none under `stripCertificate`
+    let cert ← if P.stripCertificate then pure ByteArray.empty else certificate { P with forgeCertificate := false } m r
     match Page.bytes a (if P.lieTip then a.steps else r.world.steps) r.world.height baseSteps r.sealed.digest
         (Page.pageCert cert) with
     | .ok b => pure (Status.ok.code, b)

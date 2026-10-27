@@ -36,10 +36,12 @@
 //! decides nothing: every verdict is the decider's, and every way it ends is a name on stderr. One
 //! ask at a time per resident (`busy`).
 //!
-//! THE WRITER'S CERTIFY KEY (HOSTING-56, DESIGN-TRUST §4.4b). KEYS may also hold the lines
-//! `certify HEX` and `certify.next HEX` (two Ed25519 seeds, 64 lowercase hex digits each, both or
-//! neither; `next` is fresh OS randomness the operator made, never derived, committed in advance
-//! for the key's rotation). With them, keybroker binds ONE more socket, `SOCKDIR/.writer/certify.sock`
+//! THE WRITER'S CERTIFY KEY (HOSTING-56, DESIGN-TRUST §4.4b). KEYS may also hold the line
+//! `certify HEX` (an Ed25519 seed, 64 lowercase hex digits). The NEXT seed, the one a rotation
+//! brings in, never lives in KEYS: a thief of this file would hold it with the current one, and
+//! pre-commitment protects a rotation only from an adversary without the successor secret
+//! (DESIGN-TRUST §4.4c, HOSTING-60). A KEYS file with a `certify.next` line is refused
+//! `keyFileFormat`. With `certify`, keybroker binds ONE more socket, `SOCKDIR/.writer/certify.sock`
 //! (0600 in a 0700 directory of its own: the writer, `host serve --certify`, runs as the key holder;
 //! a leading dot, so no grain name can take it), whose peer must be keybroker's own uid. The writer
 //! sends one frame, the certified bytes of a head; keybroker puts `certify atMs` in front, unread,
@@ -50,8 +52,8 @@
 //! nothing is signed), then signs `CERTIFY_DOMAIN ‖ bytes` with the certify seed and answers
 //! `signed` with the public key. The seed signs nothing else: no path signs raw bytes with it, and
 //! the domain is pairwise disjoint from every other a key signs under (`Protocol.Proofs.Domains`).
-//! `keybroker --certify-pub KEYS` prints the certify public key and the next one (`certify HEX`,
-//! `next HEX`), for `host genesis --certifier HEX --threshold 1`.
+//! `keybroker --certify-pub KEYS` prints the certify public key (`certify HEX`), for `host genesis
+//! --certifier HEX --threshold 1`.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -322,12 +324,6 @@ type Keys = BTreeMap<u32, Zeroizing<Vec<u8>>>;
 /// An Ed25519 seed.
 type Seed = Zeroizing<[u8; 32]>;
 
-/// The writer's certify slot: the current seed and the pre-committed next one (HOSTING-56).
-struct CertifySeeds {
-    current: Seed,
-    next: Seed,
-}
-
 /// 64 lowercase hexadecimal digits as a seed.
 fn parse_seed(hex: &[u8]) -> Option<Seed> {
     if hex.len() != 64 {
@@ -341,21 +337,19 @@ fn parse_seed(hex: &[u8]) -> Option<Seed> {
 }
 
 /// `SLOT KEY` per line: a decimal slot, one space, the key's bytes (printable ASCII, no space); and
-/// the certify slot's two lines, `certify HEX` and `certify.next HEX`, both or neither, each once.
-/// At least one provider key.
-fn parse_keys(text: &[u8]) -> Option<(Keys, Option<CertifySeeds>)> {
+/// at most once the certify slot's line, `certify HEX`. A `certify.next` line is refused: the next
+/// seed has its own custody (DESIGN-TRUST §4.4c). At least one provider key.
+fn parse_keys(text: &[u8]) -> Option<(Keys, Option<Seed>)> {
     let mut keys = Keys::new();
-    let (mut current, mut next) = (None, None);
+    let mut certify = None;
     for line in text.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
         let sp = line.iter().position(|b| *b == b' ')?;
         let (word, key) = (&line[..sp], &line[sp + 1..]);
-        let seat = match word {
-            b"certify" => Some(&mut current),
-            b"certify.next" => Some(&mut next),
-            _ => None,
-        };
-        if let Some(seat) = seat {
-            if seat.replace(parse_seed(key)?).is_some() {
+        if word == b"certify.next" {
+            return None;
+        }
+        if word == b"certify" {
+            if certify.replace(parse_seed(key)?).is_some() {
                 return None;
             }
             continue;
@@ -368,11 +362,6 @@ fn parse_keys(text: &[u8]) -> Option<(Keys, Option<CertifySeeds>)> {
             return None;
         }
     }
-    let certify = match (current, next) {
-        (Some(current), Some(next)) => Some(CertifySeeds { current, next }),
-        (None, None) => None,
-        _ => return None,
-    };
     if keys.is_empty() {
         None
     } else {
@@ -402,21 +391,20 @@ fn state_path(keys: &Path) -> Option<PathBuf> {
     Some(keys.with_file_name(name))
 }
 
-/// `keybroker --certify-pub KEYS`: the certify slot's public key and the next one's, one line each.
+/// `keybroker --certify-pub KEYS`: the certify slot's public key.
 fn certify_pub(keys_path: &Path) -> End {
     use ring::signature::KeyPair as _;
     let text = match custody::read_private(keys_path, 1..=KEYFILE_MAX) {
         Ok(t) => t,
         Err(e) => return key_file_end(&e),
     };
-    let Some((_, Some(seeds))) = parse_keys(&text) else {
+    let Some((_, Some(seed))) = parse_keys(&text) else {
         return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
     };
-    let (Some(cur), Some(next)) = (key_pair(&seeds.current), key_pair(&seeds.next)) else {
+    let Some(cur) = key_pair(&seed) else {
         return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
     };
     println!("certify {}", hex(cur.public_key().as_ref()));
-    println!("next {}", hex(next.public_key().as_ref()));
     End::Printed
 }
 
@@ -467,15 +455,14 @@ fn run() -> End {
         Ok(t) => t,
         Err(e) => return key_file_end(&e),
     };
-    let Some((keys, seeds)) = parse_keys(&text) else {
+    let Some((keys, seed)) = parse_keys(&text) else {
         return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
     };
     // the certify slot: its key pair, and the last certified head's file, made empty when absent
-    let certify = match seeds {
+    let certify = match seed {
         None => None,
-        Some(seeds) => {
-            let (Some(pair), Some(state)) = (key_pair(&seeds.current), state_path(&keys_path))
-            else {
+        Some(seed) => {
+            let (Some(pair), Some(state)) = (key_pair(&seed), state_path(&keys_path)) else {
                 return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
             };
             if let Err(e) = certified_state(&state) {

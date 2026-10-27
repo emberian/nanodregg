@@ -20,7 +20,8 @@ opened is tied to that head (`anchored`). A grant (`decide`) is:
 - the step count is not past the decider's tip (`notYet`: the writer asks again), and the head is
   one the fold holds (`notOnFold`).
 
-ANCHORING. Within one decider life every head comes from one fold, so each extends the one before.
+ANCHORING. Within one decider life every head comes from one fold, and the decider checks that each
+extends the one before (`linked`, the kernel's chain link over the record's step pairs).
 Across a restart the decider opens the Store again; a thief of the writer process could have
 rewritten its files. The decider is anchored at the open when it holds no certified head, when the
 opened World's head IS the last certified one, or when the step pairs between them, read from the
@@ -90,12 +91,27 @@ def Certifier.opened (E : Env D) (w : World D) (last : Option (Head D)) (pairs :
       | none => true
       | some l => decide (h = l) || (match pairs with | some ps => anchoredBy E l w ps | none => false) }
 
-/-- One more record end of the decider's own fold: its head joins the window (the oldest leaves past
-`headsMax`), and a fold that reaches the last certified head WITH that head is anchored. A certifier
-holding no head is anchored at its open or never (a last-certified file it could not read). -/
-def Certifier.absorb (c : Certifier D) (h : Head D) : Certifier D :=
-  { c with heads := (c.heads ++ [h]).drop (c.heads.length + 1 - headsMax),
-           anchored := c.anchored || (match c.last with | some l => decide (h = l) | none => false) }
+/-- `h` is `t`'s next head along the step pairs `ps`: one World, `ps.length` steps on, and the
+kernel's chain link (`chainOf`) over the pairs from `t`'s chain reaching `h`'s. -/
+def linked (E : Env D) (t h : Head D) (ps : List (Step D × D)) : Bool :=
+  decide (t.origin = h.origin ∧ t.steps + ps.length = h.steps ∧ chainOf E t.chain ps = h.chain)
+
+/-- One more record end of the decider's own fold, its step pairs `ps` and the head after them. The
+decider checks the link itself (`linked`: the kernel's `chainOf` from the window's tip over the
+record's pairs reaches the head), so its window is ONE line of heads whatever the Store's files say
+(`Proofs.Certify.absorb_line`). Linked, the head joins the window (the oldest leaves past
+`headsMax`), and a fold that reaches the last certified head WITH that head is anchored. Not linked
+(a corrupt or rewritten fold), the window restarts at the head and the decider is unanchored: it
+certifies nothing more this life. A certifier holding no head is anchored at its open or never. -/
+def Certifier.absorb (E : Env D) (c : Certifier D) (p : List (Step D × D) × Head D) : Certifier D :=
+  let (ps, h) := p
+  match c.heads.getLast? with
+  | some t =>
+    if linked E t h ps then
+      { c with heads := (c.heads ++ [h]).drop (c.heads.length + 1 - headsMax),
+               anchored := c.anchored || (match c.last with | some l => decide (h = l) | none => false) }
+    else { c with heads := [h], anchored := false }
+  | none => { c with heads := [h], anchored := false }
 
 /-- THE decision for one certify ask: the bytes to sign, and the certifier that has certified them. -/
 def decide (X : Ctx D) (c : Certifier D) (b : ByteArray) : Except Broker.Refusal (Certifier D × ByteArray) := do

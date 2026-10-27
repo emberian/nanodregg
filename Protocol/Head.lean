@@ -490,6 +490,21 @@ page is not compared here. -/
   | some (s, c) => if anchorCheck X.env s c w.steps w.chain ts = .forked then some s else none
   | none => none
 
+/-- Why a page's certificate is not the writer's, under an authority that certifies (PROTOCOL-84): it
+is absent (`absent`: a relay stripped it, or the writer has no producer), or `certified` refuses it
+by name. `none` when it verifies, or when the authority certifies nothing (`Authority.none`: an empty
+certificate is the honest shape there). Read under follow's OWN World's authority, as `pageCertified`
+reads it. -/
+def pageUncertified (X : Ctx D) (w : World D) (b : ByteArray) : Option String :=
+  match authorityOf w with
+  | none => none
+  | some auth =>
+    if auth.threshold = 0 then none
+    else if b.isEmpty then some "absent"
+    else match certified X auth w.origin b with
+      | .ok _ => none
+      | .error r => some r.name
+
 /-- The certified head when it sits AT or behind follow's position before the page (`steps ≤
 w.steps`): `anchorCheck` cannot reach it, follow's own Store answers it (`Host.Follow.behindOr`). -/
 def behindCertified (X : Ctx D) (w : World D) (b : ByteArray) : Option (Nat × ByteArray) :=

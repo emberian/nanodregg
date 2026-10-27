@@ -161,6 +161,12 @@ inductive Refusal (D : Type)
   or forged it (PROTOCOL-83; `Proofs.Head.pagePostFault_beyond`). Page kept, command ended by name,
   the evidence on stdout -/
   | postBeyondPage (steps pos : Nat) (member : ByteArray)
+  /-- under an authority that certifies (threshold > 0), a log page carried no certificate, or one
+  that `Head.certified` refuses (`why`: `absent` or the checker's name), so follow could not compare
+  the writer's signed head with its own fold (PROTOCOL-84; `Head.pageUncertified`). The page is KEPT
+  (it is lawful on follow's fold), the command ends by name, `why` on stdout: an unavailable
+  comparison is said, never passed over -/
+  | uncertifiedPage (why : String)
   /-- a page carried the writer's CERTIFICATE of a head (`Head.pageCertified`: it verifies under
   follow's own World's authority) at a position follow's own fold holds with ANOTHER chain
   (PROTOCOL-81; `Proofs.Head.forkedCertified_forked` on the page, `Host.Follow.behindOr` behind it).
@@ -224,6 +230,7 @@ def Refusal.name : Refusal D → String
   | .ahead _ => "ahead"
   | .forkedPost .. => "forkedPost"
   | .postBeyondPage .. => "postBeyondPage"
+  | .uncertifiedPage _ => "uncertifiedPage"
   | .forkedCertified _ => "forkedCertified"
   | .attest r => r.name
   | .certified r => r.name
@@ -236,6 +243,7 @@ def Refusal.evidence : Refusal D → String
   | .forkedPost s m => s!"forkedPost {s} {Text.toHex m}\n"
   | .postBeyondPage s p m => s!"postBeyondPage {s} {p} {Text.toHex m}\n"
   | .forkedCertified s => s!"forkedCertified {s}\n"
+  | .uncertifiedPage why => s!"uncertifiedPage {why}\n"
   | _ => ""
 /-- A fork verdict: `refused NAME` on stderr as every refusal, its evidence on stdout. -/
 def forkRefused (r : Refusal D) : Reply :=
@@ -603,7 +611,7 @@ def pinOf (verified : Option (Nat × ByteArray)) (baseSteps : Nat) (baseDigest :
 
 /-- The names follow's own verdicts on a fork print. No writer refusal prints one (`hostName`). -/
 def ownVerdictNames : List String :=
-  ["forkedWorld", "forkedPost", "postBeyondPage", "forkedCertified", "chainMismatch", "ahead"]
+  ["forkedWorld", "forkedPost", "postBeyondPage", "forkedCertified", "uncertifiedPage", "chainMismatch", "ahead"]
 
 /-- A writer's refusal name as follow prints it (`refused NAME`): the bytes the writer sent when they
 are one word of 1 to 64 ASCII letters and digits that is not one of follow's own fork verdicts, else
@@ -1140,7 +1148,9 @@ def absorbSync (X : Ctx D) (me : Self D) (cmd : Cmd D) (w : World D) (evs : List
 the page, in log order, with a fault (`Head.pagePostFault`): `forkedPost` when follow's fold reached
 its step count on this page with another chain, `postBeyondPage` when it names a step past its own
 position; else `forkedCertified` when the writer's certificate the page carries (`cert`, PROTOCOL-81)
-certifies a head follow's fold reached on this page with another chain (`Head.forkedCertified`). Each
+certifies a head follow's fold reached on this page with another chain (`Head.forkedCertified`); else
+`uncertifiedPage` when the World's authority certifies and the page's certificate is absent or not
+the writer's (`Head.pageUncertified`, PROTOCOL-84). Each
 is a `forkRefused`: the name on stderr, the evidence on stdout. The page itself is kept by the caller
 (`moved`: it is lawful on follow's fold; the fork is the poster's or the writer's), and the next
 command proceeds past the post. A top-level function, not a match in `step`: `step_world`'s blanket
@@ -1154,7 +1164,10 @@ through it: they read it by `postOr_cases` and the elims beside it. -/
   | none =>
     match Head.forkedCertified X w ts cert with
     | some s => forkRefused (D := D) (.forkedCertified s)
-    | none => r
+    | none =>
+      match Head.pageUncertified X w cert with
+      | some why => forkRefused (D := D) (.uncertifiedPage why)
+      | none => r
 
 /-- `shared` or `unreached` at the tip: the anchor's step count against follow's. `start` refused to
 begin past the anchor (`ahead`), and every page on the way compared the chain there
@@ -1212,7 +1225,7 @@ def hintReps : List (Refusal Nat) :=
   [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
    .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
    .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0, .forkedPost 0 .empty,
-   .postBeyondPage 0 0 .empty, .forkedCertified 0] ++
+   .postBeyondPage 0 0 .empty, .forkedCertified 0, .uncertifiedPage ""] ++
   Head.Refusal.all.map Refusal.attest ++ Head.CertRefusal.all.map Refusal.certified ++
   ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
     .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :

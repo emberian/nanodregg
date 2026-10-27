@@ -392,7 +392,8 @@ def runResident (verb : String) (r₀ : Resident (World D))
   return exitCode exit
 
 /-- `host serve STORE [--retain N] [--certify SOCK]`: with `--certify`, every base a seal installs is
-certified through keybroker's writer socket SOCK and `base.cert` replaced (`Host.Certify`, HOST-80). -/
+certified through keybroker's writer socket SOCK and `base.cert` replaced (`Host.Certify`, HOST-80), and
+a Store that holds no certificate yet has its newest base certified at the start (PROTOCOL-84). -/
 def serveVerb (store : String) (retain : Retain) (certify : Option String := none) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
   | .error f => refuseStore f
@@ -405,7 +406,15 @@ def serveVerb (store : String) (retain : Retain) (certify : Option String := non
         ← IO.mkRef #[wr.opening.sealed.offset], wr.generation⟩
       let ck := fileCheckpoint store keys c world recorder.mark originChain wr
       let ck ← match certify with
-        | some sock => pure (Certify.certifying ck (← Certify.start store sock lifetimeFrames))
+        | some sock => do
+          let queue ← Certify.start store sock lifetimeFrames
+          -- a Store with no certificate yet (a fresh genesis): its newest base is certified now, not at
+          -- the next seal, so under an authority that certifies no honest page goes out without one
+          -- (followers refuse such a page `uncertifiedPage`, PROTOCOL-84)
+          if (← readCert store).isEmpty then
+            let file ← IO.FS.readBinFile (basePath store)
+            if let .ok w := world.decode (worldBytesOf file wr.opening.sealed.bytes) then queue w
+          pure (Certify.certifying ck queue)
         | none => pure ck
       let code ← runResident "serve" wr.opening.resident fun port =>
         restarts (serve (machine X) recorder keys.segment ck c

@@ -25,7 +25,10 @@ theorem postOr_cases (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) 
       (∃ p, Head.pagePostFault X w w' ts = some (.beyond, p) ∧
         postOr X w ts w' b r = forkRefused (D := D) (.postBeyondPage p.steps p.pos (X.env.bytes p.member))) ∨
       (∃ s, Head.pagePostFault X w w' ts = none ∧ Head.forkedCertified X w ts b = some s ∧
-        postOr X w ts w' b r = forkRefused (D := D) (.forkedCertified s)) := by
+        postOr X w ts w' b r = forkRefused (D := D) (.forkedCertified s)) ∨
+      (∃ why, Head.pagePostFault X w w' ts = none ∧ Head.forkedCertified X w ts b = none ∧
+        Head.pageUncertified X w b = some why ∧
+        postOr X w ts w' b r = forkRefused (D := D) (.uncertifiedPage why)) := by
   unfold postOr
   cases hf : Head.pagePostFault X w w' ts with
   | some q =>
@@ -35,14 +38,17 @@ theorem postOr_cases (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) 
     · exact .inr (.inr (.inl ⟨p, rfl, rfl⟩))
   | none =>
     cases hc : Head.forkedCertified X w ts b with
-    | none => exact .inl rfl
-    | some s => exact .inr (.inr (.inr ⟨s, rfl, rfl, rfl⟩))
+    | none =>
+      cases hu : Head.pageUncertified X w b with
+      | none => exact .inl rfl
+      | some why => exact .inr (.inr (.inr (.inr ⟨why, rfl, rfl, rfl, rfl⟩)))
+    | some s => exact .inr (.inr (.inr (.inl ⟨s, rfl, rfl, rfl⟩)))
 
 /-- A reply `postOr` hands back that is not a refused end is the reply it was given. -/
 theorem postOr_eq_elim {X : Ctx D} {w : World D} {ts : List (Kernel.Step D × D)} {w' : World D}
     {b : ByteArray} {r r' : Reply} (h : postOr X w ts w' b r = r')
     (hne : ∀ o e, r' ≠ .done CommandExit.refused.code.toUInt8 o e) : postOr X w ts w' b r = r ∧ r = r' := by
-  rcases postOr_cases X w ts w' b r with hp | ⟨_, -, hp⟩ | ⟨_, -, hp⟩ | ⟨_, -, -, hp⟩
+  rcases postOr_cases X w ts w' b r with hp | ⟨_, -, hp⟩ | ⟨_, -, hp⟩ | ⟨_, -, -, hp⟩ | ⟨_, -, -, -, hp⟩
   · exact ⟨hp, hp ▸ h⟩
   all_goals (rw [hp] at h; exact absurd h.symm (hne _ _))
 
@@ -50,7 +56,7 @@ theorem postOr_eq_elim {X : Ctx D} {w : World D} {ts : List (Kernel.Step D × D)
 theorem postOr_cont_elim {X : Ctx D} {w : World D} {ts : List (Kernel.Step D × D)} {w' : World D}
     {b : ByteArray} {r : Reply} {k : ByteArray} (hk : (postOr X w ts w' b r).cont = some k) :
     postOr X w ts w' b r = r ∧ r.cont = some k := by
-  rcases postOr_cases X w ts w' b r with hp | ⟨_, -, hp⟩ | ⟨_, -, hp⟩ | ⟨_, -, -, hp⟩
+  rcases postOr_cases X w ts w' b r with hp | ⟨_, -, hp⟩ | ⟨_, -, hp⟩ | ⟨_, -, -, hp⟩ | ⟨_, -, -, -, hp⟩
   · rw [hp] at hk; exact ⟨hp, hk⟩
   all_goals (rw [hp] at hk; simp [forkRefused, Reply.cont] at hk)
 

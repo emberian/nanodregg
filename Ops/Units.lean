@@ -456,7 +456,7 @@ def keybrokerAction : KeybrokerExit → String
   | .keyFileLink | .keyFileNotRegular | .keyFileOwner | .keyFileMode | .keyFileLength | .keyFileIo =>
     "the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a)"
   | .keyFileDir => "a directory above the provider key file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
-  | .keyFileFormat => "the provider key file is not `SLOT KEY` lines, or repeats a slot, or holds one of `certify HEX` / `certify.next HEX` without the other (64 hex digits each, HOSTING-56): rewrite it"
+  | .keyFileFormat => "the provider key file is not `SLOT KEY` lines, or repeats a slot, or its `certify HEX` line is not 64 hex digits or repeats, or it holds a `certify.next` line (the next seed has its own custody, HOSTING-60): rewrite it"
   | .anchorsLink | .anchorsNotRegular | .anchorsOwner | .anchorsMode | .anchorsLength | .anchorsIo | .anchorsMissing =>
     "the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a)"
   | .anchorsDir => "a directory above the anchors file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
