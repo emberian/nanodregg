@@ -87,6 +87,10 @@ impl CloseReason {
 /// The child wire's hang-up byte (Protocol.hangupCode): connection ended, payload = its CloseReason name.
 pub const HANGUP: u8 = 255;
 
+/// The frame wire's version (Protocol.wireBytes, PROTOCOL-87): every request carries these bytes
+/// right after its op; a server at another version answers `refused wireVersion N expected M`.
+pub const WIRE_VERSION: [u8; 4] = [0xfa, 0x84, 0x19, 0x3c];
+
 /// Why custody refused a step (Protocol.CustodyRefusal).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustodyRefusal {

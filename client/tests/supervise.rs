@@ -123,7 +123,7 @@ fn a_confined_lean_host_answers_within_the_deadline() {
     };
     conn.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     let t = std::time::Instant::now();
-    frame::write(
+    frame::request(
         &mut conn,
         table::LIMITS,
         nanodregg_client::generated::host_op::READ,
@@ -603,3 +603,104 @@ fn a_launch_refused_before_the_child_leaves_no_socket() {
         sock.display()
     );
 }
+
+/// PROTOCOL-87's row: the real `host serve`, under the real `nd-supervise`, reads a request's
+/// version before anything else. A request carrying another wire's four bytes, and one too short to
+/// carry any, are each answered `refused wireVersion N expected M` by name, whatever op and payload
+/// follow; the CONTROL, the same request at this wire's version, reaches the writer's own decoder
+/// (`undecodableCall`, declined), so the refusal above is the version's and not a broken path.
+#[test]
+fn a_request_at_another_wire_is_refused_by_name() {
+    use nanodregg_client::generated::{WIRE_VERSION, host_op, status};
+    let host = nanodregg_devtools::lean_bin("host");
+    let ws = std::env::temp_dir().join(format!("nd-sup-wire-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join("ws")).unwrap();
+    let ws = ws.canonicalize().unwrap();
+    let store = ws.join("store");
+    let g = Command::new(&host)
+        .arg("genesis")
+        .arg(&store)
+        .arg("plant")
+        .output()
+        .unwrap();
+    assert!(g.status.success(), "plant: genesis failed: {g:?}");
+    let sock = ws.join("w.sock");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_nd-supervise"));
+    c.arg(&sock)
+        .arg("--hide")
+        .arg(ws.join("ws"))
+        .arg("--exec")
+        .arg(&host)
+        .arg("--write")
+        .arg(&store)
+        .arg("--")
+        .arg(&host)
+        .arg("serve")
+        .arg(&store);
+    let _sup = common::Supervisor::hold(
+        c.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+        ws.join("sup.pid"),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut conn = loop {
+        if let Ok(s) = UnixStream::connect(&sock) {
+            break s;
+        }
+        assert!(std::time::Instant::now() < deadline, "supervisor never bound");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    conn.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let ours = hex(&WIRE_VERSION);
+    let mut other = WIRE_VERSION;
+    other[0] ^= 0xff;
+    let mut ask = |payload: &[u8]| {
+        frame::write(&mut conn, table::LIMITS, host_op::LOOKUP, payload).unwrap();
+        let f = frame::read(&mut conn, table::LIMITS).unwrap();
+        (f.op, String::from_utf8_lossy(&f.payload).into_owned())
+    };
+    let mut foreign = other.to_vec();
+    foreign.extend_from_slice(b"not a call");
+    assert_eq!(
+        ask(&foreign),
+        (
+            status::REFUSED,
+            format!("wireVersion {} expected {ours}", hex(&other))
+        ),
+        "another wire's version"
+    );
+    assert_eq!(
+        ask(b"abc"),
+        (status::REFUSED, format!("wireVersion none expected {ours}")),
+        "a request too short to carry a version"
+    );
+    // the refusal reads the version alone: another payload behind the same foreign bytes, the same answer
+    let mut foreign2 = other.to_vec();
+    foreign2.extend_from_slice(&[0u8; 300]);
+    assert_eq!(
+        ask(&foreign2).1,
+        format!("wireVersion {} expected {ours}", hex(&other))
+    );
+    let mut control = WIRE_VERSION.to_vec();
+    control.extend_from_slice(b"not a call");
+    assert_eq!(
+        ask(&control),
+        (status::DECLINED, "undecodableCall".to_owned()),
+        "CONTROL: this wire's version reaches the writer's decoder"
+    );
+    // the client's own writer sends this wire's version
+    frame::request(&mut conn, table::LIMITS, host_op::LOOKUP, b"not a call").unwrap();
+    let f = frame::read(&mut conn, table::LIMITS).unwrap();
+    assert_eq!(
+        (f.op, f.payload.as_slice()),
+        (status::DECLINED, &b"undecodableCall"[..])
+    );
+    drop(conn);
+    let _ = std::fs::remove_dir_all(&ws);
+}
+

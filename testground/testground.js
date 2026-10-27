@@ -5,7 +5,7 @@ import factory from './kernel.mjs';
 import { compositor } from './compositor.js';
 import { element as $, confirmAction, submitForm, listen, disposeEvents } from './toolkit.js';
 import { loadKernel, client, genesis, hex, quoteArg } from './nd.js';
-import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
+import { joinIn, resumeIn, rosterOf, worldOf, httpOf, wireCheck } from './hosted.mjs';
 import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf, questionText } from './demos.js';
 import { teach } from './teach.js';
 import { residentDriver } from './resident.js';
@@ -165,6 +165,8 @@ async function joinHosted(url = null) {
   if (!url) return;
   let wj;
   try { wj = await worldOf(url); } catch (e) { openJoin(url, `Cannot read the World: ${e.message}`); return; }
+  const otherWire = await wireCheck(K, url);
+  if (otherWire) { openJoin(url, otherWire); return; }
   // a saved membership of a World this relay no longer serves (a new genesis: a new origin) is not resumed
   let rec = kept.get(url), stale = null;
   if (rec && rec.origin !== wj.origin) { stale = rec; rec = null; kept.forget(url); }

@@ -75,7 +75,7 @@ impl Child {
     fn ask(&mut self, (op, payload): (u8, Vec<u8>)) -> io::Result<Step> {
         let max = frame::child_max(table::LIMITS);
         let bad = |e: frame::FrameError| io::Error::new(io::ErrorKind::InvalidData, e.to_string());
-        frame::write_child(&mut self.0, max, 0, op, &payload).map_err(bad)?;
+        frame::child_request(&mut self.0, max, 0, op, &payload).map_err(bad)?;
         let b = frame::read_body(&mut self.0, max).map_err(bad)?;
         let (_, status, reply) = frame::child_parts(&b).map_err(bad)?;
         sockets::step(status, reply)

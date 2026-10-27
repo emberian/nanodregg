@@ -5,6 +5,7 @@ import Protocol.Envelope
 import Protocol.Command.Stdio
 import Codec.Layout
 import Protocol.Frames
+import Protocol.Version
 import Hosting.Plan
 
 /-!
@@ -730,6 +731,9 @@ def file : Except String String := do
      byteModule "status" Status.all Status.code,
      closeReasonEnum,
      s!"/// The child wire's hang-up byte (Protocol.hangupCode): connection ended, payload = its CloseReason name.\npub const HANGUP: u8 = {hangupCode};",
+     "/// The frame wire's version (Protocol.wireBytes, PROTOCOL-87): every request carries these bytes\n" ++
+       "/// right after its op; a server at another version answers `refused wireVersion N expected M`.\n" ++
+       s!"pub const WIRE_VERSION: [u8; {versionBytes}] = [{", ".intercalate (wireBytes.toList.map fun b => s!"0x{wireHex (ByteArray.mk #[b])}")}];",
      custodyRefusalEnum,
      byteModule "step" Step.all Step.code,
      byteModule "supervisor_exit" SupervisorExit.all (fun s => s.code.toUInt8),

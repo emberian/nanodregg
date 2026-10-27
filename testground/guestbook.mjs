@@ -70,7 +70,7 @@ const f = K.found(unhex(input), 0);
 if (f[0] !== okCode) { console.error(`found: ${new TextDecoder().decode(f.slice(1))}`); process.exit(1); }
 const lines = Object.fromEntries(new TextDecoder().decode(f.slice(1)).trim().split('\n').map((l) => l.split(' ')));
 const me = { name: 'guestbook', index: +lines.index, id: lines.member, grant: lines.grant, custody: custody(K, seeds) };
-const host = framed(unixOpen(net, hostSock), { frameMax: T.bounds.frameBytesMax });
+const host = framed(unixOpen(net, hostSock), { frameMax: T.bounds.frameBytesMax, wire: T.wireVersion });
 const nd = client(K, { host });
 const run = async (argv) => { const r = await nd.run(me, argv); console.error(`guestbook$ nd ${argv[0]} … → ${r.exit} ${r.stderr.trim()}`); return r; };
 const idOf = (r) => (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1];

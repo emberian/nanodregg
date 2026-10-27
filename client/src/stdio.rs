@@ -87,8 +87,8 @@ pub fn answer(
     }
 }
 
-/// Serve the mux's child wire until stdin closes: `u32le conn ‖ op ‖ payload` in, `u32le conn ‖
-/// status ‖ payload` out; a hang-up frame is skipped. Requests are answered in order.
+/// Serve the mux's child wire until stdin closes: `u32le conn ‖ op ‖ version ‖ payload` in, `u32le
+/// conn ‖ status ‖ payload` out; a hang-up frame is skipped. Requests are answered in order.
 pub fn serve(mut r: impl Read, mut w: impl Write, at: &Place, custody: &Custody) -> io::Result<()> {
     let max = frame::child_max(table::LIMITS);
     let bad = |e: frame::FrameError| io::Error::new(io::ErrorKind::InvalidData, e.to_string());
@@ -102,7 +102,15 @@ pub fn serve(mut r: impl Read, mut w: impl Write, at: &Place, custody: &Custody)
         if op == HANGUP {
             continue;
         }
-        let reply = answer(op, payload, at, custody, STDIO_VERBS);
+        // the version first (PROTOCOL-87): a request at another wire is refused by name, unread
+        let reply = match frame::unwire(payload) {
+            Ok(payload) => answer(op, payload, at, custody, STDIO_VERBS),
+            Err(why) => CommandReply {
+                exit: command_exit::REFUSED,
+                stdout: Vec::new(),
+                stderr: format!("refused {why}\n").into_bytes(),
+            },
+        };
         let bytes = reply
             .encode()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{e:?}")))?;

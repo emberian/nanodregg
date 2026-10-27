@@ -36,13 +36,27 @@ fn exchange(s: &UnixStream, reply: Duration, op: u8, payload: &[u8]) -> io::Resu
         _ => e,
     };
     let mut d = Deadline::within(s, reply);
-    frame::write(&mut d, LIMITS, op, payload)
+    frame::request(&mut d, LIMITS, op, payload)
         .map_err(io_err)
         .map_err(timeout)?;
     let f = frame::read(&mut d, LIMITS)
         .map_err(io_err)
         .map_err(timeout)?;
+    wire_refused(f.op, &f.payload)?;
     Ok((f.op, f.payload))
+}
+
+/// A server's `refused wireVersion N expected M` (PROTOCOL-87) ends the exchange as the transport's
+/// error, by that name: the server read nothing past the version, so no step of either side may take
+/// the reply as a verdict on the request. It names the remedy, since no retry can succeed.
+fn wire_refused(status: u8, payload: &[u8]) -> io::Result<()> {
+    if status == g::status::REFUSED && payload.starts_with(b"wireVersion ") {
+        return Err(io::Error::other(format!(
+            "refused {}: this nd and the server it reached were built from different commits; run one build of both",
+            String::from_utf8_lossy(payload)
+        )));
+    }
+    Ok(())
 }
 
 /// `follow.sock`; each exchange bounded by its `Duration` (nd passes `table::REPLY`).

@@ -2513,3 +2513,60 @@ way. `Bounds.logReplyFramingBytes` grows by 1428, so `Host.Page.budget` (`pageBy
 **Meta-critique.** The obvious fix was "check page certificates under the World after the page". It fixes the page that contains the rotation and fails every earlier page of a catch-up. The KERI rule (a commitment is already authority to the key that opens it) fixes both, and is what the kernel act already checks.
 
 **What changed shape.** The certificate wire format (a `keys` list), `CertRefusal` (`otherKey`), `certificateBytesMax` and `pageBytesMax`. Every `base.cert` written before this commit is refused `badCertificate`; the re-genesis KERNEL-79 forces makes new ones.
+
+## PROTOCOL-87 · Every request carries the frame wire's version after its op, and a server reads it first: another version is `refused wireVersion N expected M` (2026-10-27, OPS; OVERLOOKED-20261027 A9, A5; CROSS-LAYER: HOST's two loops, CLIENT's frame writer and `nd --stdio`, the testground's transport, HOSTING's resident)
+
+**The gap (READ).** The package wire has a version byte (LANG-60, now 10); the frame and command wire had none. A
+member built at another commit reached the writer with `op ‖ payload` and was answered by whichever decoder first
+failed: `undecodableCall`, `badTag`, `shapeMismatch`, or a `badResult` on the member's side for a reply whose layout
+moved (TENANT's 10-27 finding was one of these). Nothing said "you are at another version".
+
+**Decision.**
+1. A request on either socket is `u32le len ‖ op ‖ version ‖ payload`, `version` = `Protocol.wireBytes`, four
+   bytes. Replies carry none: a reply answers a request accepted at the server's version, and the one reply a
+   request at another version gets, `refused ‖ UTF-8`, has the shape every version shares.
+2. The version is COMPUTED (`Protocol.Version`): the first four bytes of the digest of the op, status, step,
+   close-reason and custody-refusal tables, the hang-up byte, the frame bound, the content-addressed tags
+   (`Codec.Tag.of`) of every payload codec in `Protocol.Frames`, of the deployed call, turn and World codecs, and
+   the kernel's refusal code table. Nobody bumps it; a change to any of those moves it (as `Codec.Tag`'s doctrine).
+3. `host serve` runs `(machine X).wired`, `host follow`'s loop runs `wiredReply` before `answer`, and `nd --stdio`
+   runs `frame::unwire` before its surface check: each reads the four bytes before anything else and answers
+   another version `refused wireVersion N expected M` (N `none` for a request too short to carry one). The child
+   wire's hang-up, which only the supervisor writes, carries no version and passes.
+4. Writers: `nd` (`frame::request`, both sockets), `nd --init`'s follower (`frame::child_request`), the resident's
+   member socket (`Hosting.Resident.Sockets`), store-plants' founder frames, `probe`, and the testground's
+   `transport.js` (`framed(…, { wire: table.wireVersion })`; the kernel's table carries it). Relays (`nd-attach`,
+   the mux, `ws-relay.py`) parse nothing and pass the bytes.
+
+**Theorems.** `Protocol.Proofs.Version`: `unwire_versioned` (a client's request reads back as its payload),
+`unwire_other` (another version is the refusal of its version field), `unwire_reads_only_version` (two requests
+with one foreign version field are answered alike, whatever follows it: no field after the version is decoded),
+`unwire_ours`. `Host.Proofs.Wired`: `wiredReply_other`, `wired_other` (whatever machine `host serve` wraps and
+whatever the World, a foreign-version frame is the version refusal), `wired_ours`, `wired_versioned`.
+
+**Rows.** `client/tests/supervise.rs` `a_request_at_another_wire_is_refused_by_name`: the real `host serve` under
+the real nd-supervise answers a request carrying another wire's four bytes, and one too short to carry any,
+`refused wireVersion N expected M` (N `none` for the short one), the same text for two different payloads behind
+one foreign version; CONTROL: the same request at this version reaches the writer's decoder (`declined
+undecodableCall`), and `frame::request` sends this version. `client/tests/stdio.rs`: `nd --stdio` refuses a
+command at another wire by the same name. The page and the publish step: `GET /wire.json` on the relay asks the
+running writer (a request with no version, refused `wireVersion none expected M`); `testground/hosted.mjs`
+`wireCheck` refuses to join a writer at another wire in a sentence; `publish.sh` refuses to publish a page whose
+`kernel.json` `wire` (read from the built kernel by build.sh) is not the live writer's; `host version` prints it.
+
+**CRITIQUE.** (1) Four bytes: two wires collide with probability 2^-32 per pair; a collision decodes as a malformed
+frame does today, by a later name. An adversary gains nothing (it can send any bytes either way). (2) The stamp
+covers what `wireMessage` lists. A wire element outside it (a refine's accepted set, a layout read by hand rather than
+through `Protocol.Frames`) moves no version; the list is one place to add it, not a theorem that it is complete.
+(3) The in-process simulators (`Host.Sim`, the rows, the testground's in-tab writer) call the inner machine and
+`Follow.answer` directly, unversioned: they are not on a wire. The version check is therefore exercised only by the
+deployed loops and the rows that run them. (4) Every client of every older build is now refused on its first
+request, which is the point; there is no grace period.
+
+**Meta-critique.** The brief offered a `hello` frame. A per-connection handshake would give the mux connection state
+it does not have and a second message for every client; four bytes on each request say the same thing to the side
+that decides, and make "checked before any other field" a property of each frame rather than of a session.
+
+**What changed shape.** Every request frame (four bytes after the op): every client and server re-emit together;
+nothing deployed is compatible. `client/src/generated.rs` and `launcher/src/generated.rs` gain `WIRE_VERSION`.
+The testground kernel's table gains `wireVersion`, kernel.json gains `wire`, the relay `/wire.json`. Every Store keeps its format; no re-genesis. `protocol!`.

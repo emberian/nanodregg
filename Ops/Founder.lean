@@ -69,9 +69,9 @@ is in `w` (distinct `i < windowMax / 2`, distinct `validUntil`, distinct txId), 
 def create (w : World D) (i : Nat) (state : Slots := []) : Call D :=
   createAs (founderId X w.origin 0) w i state
 
-/-- A `lookup` frame toward `host serve`: the same call bytes (Protocol.Op.lookup). -/
+/-- A `lookup` frame toward `host serve`: the same call bytes (Protocol.Op.lookup), after this wire's version. -/
 def lookupFrame (c : Call D) : ByteArray :=
-  encodeFrame { conn := 1, op := Protocol.Op.lookup.code, payload := X.callBytes c }
+  encodeFrame { conn := 1, op := Protocol.Op.lookup.code, payload := Protocol.versioned (X.callBytes c) }
 
 /-- A `log` frame toward `host serve` (Protocol.Op.log): founder 0's read envelope for the World
 `origin`, from height `start`, good for heights `[0, Bounds.windowMax]`, naming founder 0's own
@@ -85,10 +85,10 @@ def logFrame (origin : D) (start : Nat) : Option ByteArray := do
     { world := origin, member := me, grant, start, notBefore := 0, validUntil, key,
       signature := Ed25519.sign seed msg }
   let p ← Protocol.Envelope.bytes X e
-  pure (encodeFrame { conn := 1, op := Protocol.Op.log.code, payload := p })
+  pure (encodeFrame { conn := 1, op := Protocol.Op.log.code, payload := Protocol.versioned p })
 
 /-- A `submit` frame toward `host serve`. -/
 def submitFrame (c : Call D) : ByteArray :=
-  encodeFrame { conn := 1, op := Protocol.Op.submit.code, payload := X.callBytes c }
+  encodeFrame { conn := 1, op := Protocol.Op.submit.code, payload := Protocol.versioned (X.callBytes c) }
 
 end Nanodregg.Ops.Founder

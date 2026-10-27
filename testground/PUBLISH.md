@@ -45,8 +45,11 @@ refuses a dirty tree's kernel, and a commit that is not on `origin/main`.
 
 `publish.sh OUT LIVE [REPO]` copies the files the browser loads, `kernel.json`, writes
 `deployment.json` (`live`, `repo`) and the branch README (both hashes, the door), and refuses unless
-`kernel.json`'s sha256 is `kernel.wasm`'s, the tree was clean, the commit is on `origin/main`, and the
-live World's `world.json` answers. `LIVE` = `none` publishes no door.
+`kernel.json`'s sha256 is `kernel.wasm`'s, the tree was clean, the commit is on `origin/main`, the
+live World's `world.json` answers, and its `wire.json` (the running writer's own answer to a request with
+no version, PROTOCOL-87) names the wire `kernel.json` says the kernel speaks: a box at another commit is
+never published behind a page that cannot join it (rebuild the tenant at the commit first). The page
+makes the same check before it joins and says so in a sentence. `LIVE` = `none` publishes no door.
 
 ## 4. Check the live page (Chromium, Playwright from ~/tools/playwright)
 

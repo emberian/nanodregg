@@ -328,6 +328,7 @@ def table : String := jobj [
   ("settleSeen", jarr (Attempt.settleWords.filterMap fun w => (Attempt.settleSeen w).map fun s =>
       jarr [jstr w, jstr s.name])),
   ("attemptActions", jarr (Attempt.Action.all.map fun a => jobj [("name", jstr a.name), ("code", toString a.code.toNat)])),
+  ("wireVersion", jstr (Protocol.wireHex Protocol.wireBytes)),
   ("bounds", jobj [("frameBytesMax", toString Bounds.frameBytesMax), ("argvBytesMax", toString Bounds.argvBytesMax),
       ("stepsPerCommandMax", toString Bounds.stepsPerCommandMax), ("sendsMax", toString Bounds.sendsMax)])]
 

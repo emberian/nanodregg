@@ -8,8 +8,10 @@
 #
 # It refuses (and writes nothing) unless the kernel can be tied to a commit a visitor can fetch:
 # kernel.json's sha256 is kernel.wasm's, its tree was clean, and its commit is on REPO's main as this
-# clone last fetched it (origin/main). And unless LIVE answers: its world.json names an origin (a `self`
-# deployment's host is not known here; its tarball is checked on the box).
+# clone last fetched it (origin/main). And unless LIVE answers: its world.json names an origin, and its
+# wire.json (the running writer's own answer, deploy/testground/ws-relay.py) names the frame wire
+# kernel.json says the kernel speaks (PROTOCOL-87): a box at another commit is never published behind a
+# page that cannot join it (a `self` deployment's host is not known here; its tarball is one build).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd); tg=$root/testground
 out=${1:?usage: publish.sh OUT LIVE [REPO]}; live=${2:?usage: publish.sh OUT LIVE [REPO]}
@@ -27,6 +29,9 @@ if [ "$live" != none ] && [ "$live" != self ]; then
   http=$(printf '%s' "$live" | sed -e 's|^ws|http|' -e 's|/ws$||')
   origin=$(curl -sf -m 15 "$http/world.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["origin"])') \
     || die "the live World does not answer: $http/world.json"
+  theirs=$(curl -sf -m 15 "$http/wire.json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("wire") or "")') \
+    || die "the live World does not answer: $http/wire.json"
+  [ "$theirs" = "$(kj wire)" ] || die "the page speaks wire $(kj wire), the live World's writer ${theirs:-states none}: rebuild the box's tenant at $commit (PUBLISH.md, flag day) or publish with LIVE=none"
 fi
 
 mkdir -p "$out"

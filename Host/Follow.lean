@@ -131,47 +131,53 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       | .ok r => pure r
       | .error f => return (.sealFailed f, { r with pending := none })
     let some f ← port.recv | finish .eof r
-    let (fs', p, status, payload) :=
-      answer X Codec.Deployed.digestCodec ⟨world, World.steps, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, (← dl.get).download, (← dl.get).verified⟩ f
-    -- follow's memory moves only once the step's effects are durable: `verified` never names a base
-    -- the follower's own durable World has not crossed (PROTOCOL-47, HOST-12)
-    -- the writer's certified head a log page carries, at or behind follow's position before the
-    -- page (PROTOCOL-81): follow's own Store answers it, on an empty page too (the caught-up case)
-    let cert := match resumeFrame.decode f.payload with
-      | .ok (_, res, ()) => Head.behindCertified X r.world (Command.frameCertificate res.1)
-      | .error _ => none
-    match p with
-    | .steps [] =>
-      let (status, payload) ← behindOr keys files r [] cert (status, payload)
-      dl.set fs'.memory
-      port.send ⟨f.conn, status, payload⟩
-      loop keys me store ck files port dl fuel { r with world := fs'.world }
-    | .steps ts =>
-      let (status, payload) ← behindOr keys files r (Head.behindPosts X r.world fs'.world ts) cert (status, payload)
-      match ← append recorder keys.segment ck c store r fs'.world ts.toArray with
-      | .error e =>
-        port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
-        finish e r
-      | .ok r =>
+    -- the version first (PROTOCOL-87): a command at another wire is refused by name, follow never reads it
+    match wiredReply f with
+    | .error reply =>
+      port.send reply
+      loop keys me store ck files port dl fuel r
+    | .ok f =>
+      let (fs', p, status, payload) :=
+        answer X Codec.Deployed.digestCodec ⟨world, World.steps, keys.worldDigest, c.worldBytesMax⟩ me ⟨r.world, (← dl.get).download, (← dl.get).verified⟩ f
+      -- follow's memory moves only once the step's effects are durable: `verified` never names a base
+      -- the follower's own durable World has not crossed (PROTOCOL-47, HOST-12)
+      -- the writer's certified head a log page carries, at or behind follow's position before the
+      -- page (PROTOCOL-81): follow's own Store answers it, on an empty page too (the caught-up case)
+      let cert := match resumeFrame.decode f.payload with
+        | .ok (_, res, ()) => Head.behindCertified X r.world (Command.frameCertificate res.1)
+        | .error _ => none
+      match p with
+      | .steps [] =>
+        let (status, payload) ← behindOr keys files r [] cert (status, payload)
         dl.set fs'.memory
         port.send ⟨f.conn, status, payload⟩
-        loop keys me store ck files port dl fuel r
-    | .adopt w' =>
-      let r ← match r.pending with
-        | none => pure r
-        | some pd => match ← settle pd with
-          | .ok sealed => pure { r with sealed, pending := none }
-          | .error e => return (.sealFailed e, { r with pending := none })
-      match ← ck.adopt r.world w' r.pos with
-      | .error e =>
-        port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
-        return (.sealFailed e, { r with pending := none })
-      | .ok (bytes, digest, ix) =>
-        let sealed : Sealed := ⟨r.pos.offset, bytes, (recorder.mark w').1,
-          (recorder.mark w').2, digest, ix⟩
-        dl.set fs'.memory
-        port.send ⟨f.conn, status, payload⟩
-        loop keys me store ck files port dl fuel
-          { r with world := w', sealed, index := #[], pending := none }
+        loop keys me store ck files port dl fuel { r with world := fs'.world }
+      | .steps ts =>
+        let (status, payload) ← behindOr keys files r (Head.behindPosts X r.world fs'.world ts) cert (status, payload)
+        match ← append recorder keys.segment ck c store r fs'.world ts.toArray with
+        | .error e =>
+          port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
+          finish e r
+        | .ok r =>
+          dl.set fs'.memory
+          port.send ⟨f.conn, status, payload⟩
+          loop keys me store ck files port dl fuel r
+      | .adopt w' =>
+        let r ← match r.pending with
+          | none => pure r
+          | some pd => match ← settle pd with
+            | .ok sealed => pure { r with sealed, pending := none }
+            | .error e => return (.sealFailed e, { r with pending := none })
+        match ← ck.adopt r.world w' r.pos with
+        | .error e =>
+          port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩
+          return (.sealFailed e, { r with pending := none })
+        | .ok (bytes, digest, ix) =>
+          let sealed : Sealed := ⟨r.pos.offset, bytes, (recorder.mark w').1,
+            (recorder.mark w').2, digest, ix⟩
+          dl.set fs'.memory
+          port.send ⟨f.conn, status, payload⟩
+          loop keys me store ck files port dl fuel
+            { r with world := w', sealed, index := #[], pending := none }
 
 end Nanodregg.Host.Follow

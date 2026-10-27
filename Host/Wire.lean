@@ -11,6 +11,7 @@ means the mux is broken, and the Host stops by name rather than guess where the 
 import Host.Batch
 import Host.Log
 import Protocol.Table
+import Protocol.Version
 
 namespace Nanodregg.Host
 
@@ -76,6 +77,26 @@ where
       let chunk ← s.read (n - acc.size).toUSize
       if chunk.isEmpty then return none
       go fuel (acc ++ chunk)
+
+/-- A request frame with its version read FIRST (PROTOCOL-87): a frame of the child wire's own (a
+hang-up: written only by the supervisor, carrying no version) passes as it is; any other frame
+whose bytes after the op do not begin with this wire's version (`Protocol.unwire`) is the reply
+`refused wireVersion N expected M` to its connection, and nothing after the version is read;
+otherwise the frame with the version taken off. -/
+def wiredReply (f : Frame) : Except Reply Frame :=
+  match Protocol.childKindOf? f.op with
+  | some .request | none =>
+    match Protocol.unwire f.payload with
+    | .error why => .error ⟨f.conn, Protocol.Status.refused.code, why.toUTF8⟩
+    | .ok p => .ok { f with payload := p }
+  | some _ => .ok f
+
+/-- A machine whose every request has its version read first (`wiredReply`): what `host serve` runs.
+The machine it wraps (`Host.Serve.machine`) sees only frames at this wire's version, unversioned. -/
+def Machine.wired {W T N : Type} (m : Machine W T Frame N) : Machine W T Frame N :=
+  { m with handle := fun w f => match wiredReply f with
+      | .error r => .reply r.status r.payload
+      | .ok f => m.handle w f }
 
 /-- Read one request frame. -/
 def readFrame (s : IO.FS.Stream) : IO (Except Stop Frame) := do

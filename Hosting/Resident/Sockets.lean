@@ -2,7 +2,7 @@
 # Hosting.Resident.Sockets — the resident's two sockets, through `Host.Sock` (HOSTING-27)
 
 - The member socket (`nd --stdio` behind nd-supervise, HOSTING-20/25): one command per connection.
-  The request frame is `u32le len ‖ Op.command ‖ commandLayout(argv)`, where `len` counts the op byte
+  The request frame is `u32le len ‖ Op.command ‖ version ‖ commandLayout(argv)` (PROTOCOL-87), where `len` counts the op byte
   (the client's frame). The reply frame is `u32le len ‖ status ‖ commandReplyLayout`, the `done`
   step's exit, stdout and stderr. Every layout is `Protocol.Table`'s, through the one codec.
 - The broker socket (keybroker, HOSTING-12): one ask per connection, `u32le len ‖ ask`, answered
@@ -72,7 +72,7 @@ def command (path : String) (argv : List ByteArray) : IO (Except String Reply) :
   let some p := commandPayload argv | return .error "argvPastBound"
   let r ← (do
       let c ← Conn.connect path memberMs.toUInt32
-      c.writeAll (le32 (p.size + 1) ++ ByteArray.mk #[Protocol.Op.command.code] ++ p)
+      c.writeAll (le32 (p.size + 1 + Protocol.versionBytes) ++ ByteArray.mk #[Protocol.Op.command.code] ++ Protocol.versioned p)
       readBody c.stream Protocol.Bounds.frameBytesMax).toBaseIO
   pure <| match r with
     | .error e => .error s!"io {e}"

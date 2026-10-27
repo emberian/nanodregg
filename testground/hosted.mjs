@@ -12,6 +12,19 @@ import { framed, wsOpen } from './transport.js';
 const dec = new TextDecoder();
 export const httpOf = (ws) => ws.replace(/^ws/, 'http').replace(/\/ws$/, '');
 export const worldOf = async (url) => (await fetch(`${httpOf(url)}/world.json`)).json();
+
+/** Whether the relay's RUNNING writer speaks this kernel's frame wire (PROTOCOL-87): null when it
+ * does, else the plain sentence the page shows instead of joining. `/wire.json` is the writer's own
+ * answer (deploy/testground/ws-relay.py asks it); a writer at another wire would refuse every frame
+ * `wireVersion`, so a page that cannot match it does not try. */
+export async function wireCheck(K, url) {
+  let w;
+  try { w = await (await fetch(`${httpOf(url)}/wire.json`)).json(); } catch (e) { w = { refused: e.message }; }
+  const mine = K.table.wireVersion;
+  if (w.wire === mine) return null;
+  if (w.wire) return `This page speaks wire version ${mine}. The World at ${httpOf(url)} speaks wire version ${w.wire}. They were built from different commits, so this page cannot join that World until one of them is rebuilt.`;
+  return `The World at ${httpOf(url)} did not say which wire version it speaks (${w.refused ?? w.writer ?? 'no answer'}). This page speaks wire version ${mine} and does not join a World it cannot match.`;
+}
 const okOf = (K) => K.table.statuses.find((s) => s.name === 'ok').code;
 const kvOf = (b) => Object.fromEntries(dec.decode(b).trim().split('\n').map((l) => l.split(' ')));
 
@@ -25,7 +38,7 @@ export function accept(K, invitation, sponsorKey) {
 
 /** A member of the World at `url` in kernel K, its writer frames over the relay's WebSocket. */
 function memberIn(K, url, { name, index, origin, seeds, onFrame }) {
-  const host = framed(wsOpen(url), { frameMax: K.table.bounds.frameBytesMax });
+  const host = framed(wsOpen(url), { frameMax: K.table.bounds.frameBytesMax, wire: K.table.wireVersion });
   const m = { name, index, origin, custody: custody(K, seeds), K, host };
   m.nd = client(K, { host, onFrame });
   return m;
@@ -80,6 +93,8 @@ export function rosterOf(K, m) {
 /** Under node: a member in its own kernel instance, as a second tab would be; joined, then synced. */
 export async function joinMember(factory, url, wj, name) {
   const K = await loadKernel(factory);
+  const bad = await wireCheck(K, url);
+  if (bad) throw new Error(bad);
   const t0 = performance.now();
   const m = await joinIn(K, url, wj, name);
   const s = await m.nd.run(m, ['sync']);
@@ -90,6 +105,8 @@ export async function joinMember(factory, url, wj, name) {
 /** Under node: a returning visitor, a FRESH kernel instance (a reloaded tab) resumed from a record. */
 export async function resumeMember(factory, rec, name) {
   const K = await loadKernel(factory);
+  const bad = await wireCheck(K, rec.relay);
+  if (bad) throw new Error(bad);
   const t0 = performance.now();
   const m = resumeIn(K, rec, name);
   const s = await m.nd.run(m, ['sync']);

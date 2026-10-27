@@ -8,7 +8,7 @@ Three processes on the writer's box, each with a PID file (`run.sh`) or a unit (
 |---|---|---|
 | `nd-supervise … -- host serve STORE` | the writer, under the supervisor's mux (bounds, deadlines, named closes) | `STATE/run/host.sock` (0600) |
 | `node testground/guestbook.mjs serve STATE/gb STATE/run/host.sock` | founder 0, a member like any other: signs the invitation (`world.json`), enrols each visitor's join token (`enroll`, `grant world … observe`) with its own follow re-deriving | `STATE/gb/guestbook.sock` |
-| `python3 ws-relay.py` | WebSocket ↔ host.sock, bytes only (parses no frame, no op); `GET /world.json`; `POST /enroll` and `GET /attest` → the guest-book | `127.0.0.1:PORT` |
+| `python3 ws-relay.py` | WebSocket ↔ host.sock, bytes only (parses no frame, no op); `GET /world.json`; `GET /wire.json` (the running writer's frame wire, asked of it, PROTOCOL-87); `POST /enroll` and `GET /attest` → the guest-book | `127.0.0.1:PORT` |
 
 To turn it on (hbox, MEASURED 10-26 in `wt/testground-b`, PORT 18787 behind an ssh tunnel):
 

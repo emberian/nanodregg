@@ -28,7 +28,7 @@ fn text(o: &Output) -> String {
 }
 
 fn ask(s: &mut UnixStream, op: u8, payload: &[u8]) -> CommandReply {
-    frame::write(s, table::LIMITS, op, payload).unwrap();
+    frame::request(s, table::LIMITS, op, payload).unwrap();
     let f = frame::read(s, table::LIMITS).unwrap();
     assert_eq!(f.op, status::OK, "a stdio reply is always a done step");
     CommandReply::decode(&f.payload).unwrap()
@@ -244,6 +244,26 @@ fn a_resident_runs_world_verbs_through_nd_stdio_and_nothing_else() {
             (command_exit::REFUSED, "refused undecodable\n".to_owned())
         );
     }
+    // Another wire (PROTOCOL-87): the version is read before the op and the payload, and refused by name.
+    let mut other = nanodregg_client::generated::WIRE_VERSION;
+    other[0] ^= 0xff;
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    frame::write(&mut s, table::LIMITS, follow_op::COMMAND, &[&other[..], &read_cmd[..]].concat()).unwrap();
+    let f = frame::read(&mut s, table::LIMITS).unwrap();
+    assert_eq!(f.op, status::OK, "a stdio reply is always a done step");
+    let rep = CommandReply::decode(&f.payload).unwrap();
+    assert_eq!(
+        (rep.exit, err(&rep)),
+        (
+            command_exit::REFUSED,
+            format!(
+                "refused wireVersion {} expected {}\n",
+                hex(&other),
+                hex(&nanodregg_client::generated::WIRE_VERSION)
+            )
+        ),
+        "a member at another wire"
+    );
     // A word naming a file is text: nd never opens it.
     let canary = root.join("canary");
     std::fs::write(&canary, b"CANARY-BYTES-7f3a").unwrap();

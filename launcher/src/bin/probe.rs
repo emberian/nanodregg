@@ -114,7 +114,7 @@ fn nd(rest: &str) -> String {
     let Ok(c) = (Command { argv }).encode() else {
         return "bad-nd".into();
     };
-    if frame::write(&mut s, table::LIMITS, follow_op::COMMAND, &c).is_err() {
+    if frame::request(&mut s, table::LIMITS, follow_op::COMMAND, &c).is_err() {
         return "denied write".into();
     }
     let f = match frame::read(&mut s, table::LIMITS) {

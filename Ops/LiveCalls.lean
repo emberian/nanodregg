@@ -56,6 +56,7 @@ def run : List String → IO UInt32
     IO.FS.createDirAll d
     IO.FS.writeFile (d / "genesis.args") ("\n".intercalate (label :: Founder.genesisArgs) ++ "\n")
     IO.FS.writeFile (d / "op") s!"{Protocol.Op.submit.code}\n"
+    IO.FS.writeFile (d / "wire") (Protocol.wireHex Protocol.wireBytes ++ "\n")
     let some inv := Founder.invitation label | IO.eprintln "live-calls: the invitation does not fit"; return 1
     IO.FS.writeFile (d / "invitation") (Protocol.Text.toHex inv ++ "\n")
     IO.FS.writeFile (d / "sponsor.key") (Protocol.Text.toHex Founder.key ++ "\n")

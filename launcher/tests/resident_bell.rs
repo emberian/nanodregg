@@ -120,7 +120,7 @@ fn member_cmd(sock: &Path, argv: &[&str]) -> (u8, String, String) {
     }
     .encode()
     .unwrap();
-    frame::write(&mut s, table::LIMITS, follow_op::COMMAND, &c).unwrap();
+    frame::request(&mut s, table::LIMITS, follow_op::COMMAND, &c).unwrap();
     let f = frame::read(&mut s, table::LIMITS).unwrap();
     assert_eq!(f.op, status::OK, "the member socket's reply status");
     let r = CommandReply::decode(&f.payload).unwrap();
@@ -159,7 +159,7 @@ fn behind_proxy(
             let Ok(f) = frame::read(&mut s, table::LIMITS) else {
                 continue;
             };
-            let argv = NdCommand::decode(&f.payload).unwrap().argv;
+            let argv = NdCommand::decode(frame::unwire(&f.payload).unwrap()).unwrap().argv;
             if argv.first().map(Vec::as_slice) == Some(b"invoke".as_slice()) {
                 invokes.fetch_add(1, Ordering::SeqCst);
                 let r = CommandReply {

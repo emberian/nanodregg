@@ -84,7 +84,7 @@ fn nd_via(sock: &Path, argv: &[&str]) -> Result<(u8, String), String> {
     }
     .encode()
     .unwrap();
-    frame::write(&mut s, table::LIMITS, follow_op::COMMAND, &c).map_err(|e| e.to_string())?;
+    frame::request(&mut s, table::LIMITS, follow_op::COMMAND, &c).map_err(|e| e.to_string())?;
     let f = frame::read(&mut s, table::LIMITS).map_err(|e| format!("read {e}"))?;
     if f.op != status::OK {
         return Err(format!(
@@ -253,7 +253,7 @@ fn each_resident_grain_gets_its_member_socket_and_a_removed_one_loses_it() {
     let read = NdCommand {
         argv: vec![b"read".to_vec(), obj.as_bytes().to_vec()],
     };
-    frame::write(
+    frame::request(
         &mut &waiting[0],
         table::LIMITS,
         follow_op::COMMAND,
@@ -333,7 +333,7 @@ fn a_stranger_on_the_member_socket_is_refused_by_name() {
     assert_eq!(mode, 0o660, "a group socket for another uid");
     let mut s = UnixStream::connect(&sock).unwrap();
     s.set_read_timeout(Some(table::REPLY)).unwrap();
-    let _ = frame::write(&mut s, table::LIMITS, follow_op::COMMAND, b"x");
+    let _ = frame::request(&mut s, table::LIMITS, follow_op::COMMAND, b"x");
     let f = frame::read(&mut s, table::LIMITS).unwrap();
     assert_eq!((f.op, f.payload), (status::CLOSED, b"peerRefused".to_vec()));
 }

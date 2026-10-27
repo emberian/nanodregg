@@ -249,6 +249,39 @@ pub fn write(w: &mut impl Write, limits: Limits, op: u8, payload: &[u8]) -> Resu
     write_body(w, limits.frame_bytes_max, &[&[op], payload])
 }
 
+/// Write one REQUEST frame, `op ‖ WIRE_VERSION ‖ payload` (PROTOCOL-87: a server reads the version
+/// before anything else and answers another `refused wireVersion N expected M`), refusing a body past
+/// the bound before writing anything. Replies and relayed frames go through [`write`] unchanged.
+pub fn request(
+    w: &mut impl Write,
+    limits: Limits,
+    op: u8,
+    payload: &[u8],
+) -> Result<(), FrameError> {
+    write_body(w, limits.frame_bytes_max, &[&[op], &g::WIRE_VERSION, payload])
+}
+
+/// A request's bytes after its op, the version read first (`Protocol.unwire`): what follows it when
+/// it is this wire's, else the refusal's text, read off the version field alone.
+pub fn unwire(b: &[u8]) -> Result<&[u8], String> {
+    match b.split_first_chunk::<{ g::WIRE_VERSION.len() }>() {
+        Some((v, rest)) if *v == g::WIRE_VERSION => Ok(rest),
+        Some((v, _)) => Err(wire_refusal(Some(v))),
+        None => Err(wire_refusal(None)),
+    }
+}
+
+/// `wireVersion N expected M` (`Protocol.wireRefusal`): N the four bytes a request carried, as hex,
+/// or `none` for a request too short to carry them; M this wire's.
+pub fn wire_refusal(got: Option<&[u8]>) -> String {
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    format!(
+        "wireVersion {} expected {}",
+        got.map_or_else(|| "none".to_owned(), hex),
+        hex(&g::WIRE_VERSION)
+    )
+}
+
 /// The child wire's bound for a client frame bound: the body plus the connection id.
 pub fn child_max(limits: Limits) -> u32 {
     limits.frame_bytes_max.saturating_add(g::CONN_BYTES)
@@ -266,6 +299,20 @@ pub fn child_parts(body: &[u8]) -> Result<(u32, u8, &[u8]), FrameError> {
 /// The child-wire frame `conn ‖ byte ‖ payload` under `max` (`Host.Wire.encodeFrame`).
 pub fn child_frame(max: u32, conn: u32, byte: u8, payload: &[u8]) -> Result<Vec<u8>, FrameError> {
     encode_body(max, &[&conn.to_le_bytes(), &[byte], payload])
+}
+
+/// Write one child-wire REQUEST, `conn ‖ op ‖ WIRE_VERSION ‖ payload`, to a Lean child with no mux in
+/// between (`nd --init`'s follower, CLIENT-26).
+pub fn child_request(
+    w: &mut impl Write,
+    max: u32,
+    conn: u32,
+    op: u8,
+    payload: &[u8],
+) -> Result<(), FrameError> {
+    let bytes = encode_body(max, &[&conn.to_le_bytes(), &[op], &g::WIRE_VERSION, payload])?;
+    w.write_all(&bytes).map_err(FrameError::Io)?;
+    w.flush().map_err(FrameError::Io)
 }
 
 /// Write one child-wire frame in a single `write_all`.

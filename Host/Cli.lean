@@ -24,6 +24,9 @@
                                                    one receiver (`notPreRotated` otherwise), appended,
                                                    and a base sealed after it; `serve --certify` then
                                                    certifies that base under the new key
+    host version                                   `wire HEX`: the frame wire this binary speaks
+                                                   (`Protocol.wireBytes`, PROTOCOL-87); a member
+                                                   at another is refused `wireVersion`
     host certified INPUT_HEX CERT                  the stranger's check (Protocol.Certified): the
                                                    head CERT certifies under the authority the
                                                    genesis input commits; no Store read
@@ -106,7 +109,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32 --certifier-next HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host rotate-certifier STORE SEED NEXT_HEX | host serve STORE [--retain N] [--certify SOCK] | host seal STORE [--retain N] [--certify SOCK] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host certified INPUT_HEX CERT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
+  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32 --certifier-next HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host rotate-certifier STORE SEED NEXT_HEX | host version | host serve STORE [--retain N] [--certify SOCK] | host seal STORE [--retain N] [--certify SOCK] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host certified INPUT_HEX CERT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -437,7 +440,7 @@ def serveVerb (store : String) (retain : Retain) (certify : Option String := non
           pure (Certify.certifying ck queue)
         | none => pure ck
       let code ← runResident "serve" wr.opening.resident fun port =>
-        restarts (serve (machine X) recorder keys.segment ck c
+        restarts (serve (machine X).wired recorder keys.segment ck c
             (fileStore wr) (pager keys files) port limits fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
       return code
@@ -617,6 +620,7 @@ def verb : List String → IO UInt32
     Check.run store (some a)
   | ["export", store, out] => exportVerb store out
   | ["certified", input, cert] => certifiedVerb input cert
+  | ["version"] => do IO.println s!"wire {Protocol.wireHex Protocol.wireBytes}"; return 0
   | ["import", store, name, inp, "--digest", d] => importVerb store name inp (.digest d) none
   | ["import", store, name, inp, "--digest", d, "--nonce", n] => importVerb store name inp (.digest d) (some n)
   | ["import", store, name, inp, "--nonce", n, "--digest", d] => importVerb store name inp (.digest d) (some n)

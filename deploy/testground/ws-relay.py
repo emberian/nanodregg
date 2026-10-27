@@ -16,8 +16,12 @@ the tab, so nothing this relay passes is trusted by anyone: a lie here is caught
 Besides the socket: `GET /world.json` (the guest-book's invitation and its sponsor key; the
 testground's trust caveat is that whoever serves this file and the page chooses both, DESIGN-
 TESTGROUND §7), `POST /enroll` (a join token, one line to the guest-book's socket, its one-line
-JSON answer back) and `GET /attest` (the guest-book's own signed head, `sync --attest`, for a member
-of another writer of the same genesis to check: the fork demo). Python's standard library only.
+JSON answer back), `GET /attest` (the guest-book's own signed head, `sync --attest`, for a member
+of another writer of the same genesis to check: the fork demo) and `GET /wire.json` (the frame wire
+the RUNNING writer speaks, PROTOCOL-87: the relay sends host.sock one request with no version, which
+every writer refuses `wireVersion none expected M` before reading anything else, and answers
+`{"wire":"M"}`; a page refuses to join a writer at another wire, and testground/build/publish.sh
+refuses to publish one). Python's standard library only.
 
 Abuse: `POST /enroll` spends one of the World's enrolments (the guest-book's grant: enrollMax, 256),
 so each client address gets `--enroll-per-hour` of them (a sliding hour), refused `429` with
@@ -27,13 +31,14 @@ guest-book keeps its own floor of the grant for the operator (guestbook.mjs). Co
 the box's (nftables) and `--max-conns`. Listens where it is told; exposing it to the
 internet (TLS, a reverse proxy) is the operator's act, not this file's.
 """
-import argparse, asyncio, base64, collections, hashlib, os, signal, struct, sys, time
+import argparse, asyncio, base64, collections, hashlib, json, os, signal, struct, sys, time
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MSG_MAX = 1 << 21          # a tab's message: one host.sock frame at most (frameBytesMax + header)
 HEAD_MAX = 8192
 ENROLL_MAX = 512
 ADDRS_MAX = 65536          # addresses the enrolment budget remembers; the oldest is dropped past it
+LOOKUP_OP = 2              # Protocol.Op.lookup's byte: the one request /wire.json sends, with no version
 
 def http(status, body=b"", ctype=b"text/plain; charset=utf-8", extra=b""):
     return (b"HTTP/1.1 " + status + b"\r\nContent-Type: " + ctype + b"\r\n" + extra + b"Content-Length: " +
@@ -101,6 +106,8 @@ class Relay:
                     w.write(http(b"429 Too Many Requests", b'{"refused":"enrollBudget"}', b"application/json",
                                  b"Retry-After: " + str(wait).encode() + b"\r\n"))
                 else: w.write(http(b"200 OK", await self.enroll(await r.readexactly(n)), b"application/json"))
+            elif method == "GET" and path == "/wire.json":
+                w.write(http(b"200 OK", await self.wire(), b"application/json"))
             elif method == "GET" and path == "/attest":
                 w.write(http(b"200 OK", await self.ask(b"attest\n"), b"application/json"))
             elif method == "OPTIONS":
@@ -112,6 +119,22 @@ class Relay:
             print(f"relay: {path}: {e!r}", file=sys.stderr)
         finally:
             w.close()
+
+    async def wire(self):
+        """The running writer's wire version, in its own words: one versionless request (a `lookup`
+        with nothing after the op), whose one reply is `refused ‖ wireVersion none expected M`."""
+        try:
+            hr, hw = await asyncio.open_unix_connection(self.a.host_sock)
+            hw.write(struct.pack("<I", 1) + bytes([LOOKUP_OP])); await hw.drain()
+            (n,) = struct.unpack("<I", await asyncio.wait_for(hr.readexactly(4), 30))
+            body = await asyncio.wait_for(hr.readexactly(min(n, 4096)), 30)
+            hw.close()
+        except Exception:
+            return b'{"refused":"writerUnreachable"}'
+        said = body[1:].decode("utf-8", "replace").split(" ")
+        if len(said) == 4 and said[:2] == ["wireVersion", "none"] and said[2] == "expected":
+            return json.dumps({"wire": said[3]}).encode()
+        return json.dumps({"wire": "", "writer": body[1:].decode("utf-8", "replace")[:200]}).encode()
 
     async def enroll(self, token):
         """One join token to the guest-book's socket; its one-line answer back."""

@@ -3,7 +3,8 @@
 PREFIX-NNN.bin, default `call`; `grain` is the resident grain's two calls) to a
 unit's client socket, one at a time, and print each reply's status byte.
 
-A client frame is `u32le len ‖ op ‖ payload` with len counting the op byte (client/src/frame.rs);
+A client frame is `u32le len ‖ op ‖ version ‖ payload` with len counting the op byte (client/src/frame.rs;
+the version is live-calls' `wire` file, PROTOCOL-87);
 a reply is `u32le len ‖ status ‖ payload`. Each reply has a deadline; a closed socket or a missed
 deadline is printed by name and ends the feed with exit 1. Decides nothing: the harness judges.
 """
@@ -33,13 +34,15 @@ def main():
     prefix = sys.argv[5] if len(sys.argv) == 6 else "call"
     with open(os.path.join(calls, "op")) as f:
         op = int(f.read().strip())
+    with open(os.path.join(calls, "wire")) as f:
+        version = bytes.fromhex(f.read().strip())
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(REPLY_SECONDS)
     s.connect(sock)
     for i in range(lo, hi):
         with open(os.path.join(calls, "%s-%03d.bin" % (prefix, i)), "rb") as f:
             payload = f.read()
-        s.sendall(struct.pack("<I", 1 + len(payload)) + bytes([op]) + payload)
+        s.sendall(struct.pack("<I", 1 + len(version) + len(payload)) + bytes([op]) + version + payload)
         try:
             (n,) = struct.unpack("<I", read_exact(s, 4))
             body = read_exact(s, n)

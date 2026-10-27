@@ -26,7 +26,7 @@ fn held(root: &Path, name: &str, c: &mut Command) -> Supervisor {
 }
 
 fn ask(s: &mut UnixStream, l: Limits, op: u8, p: &[u8]) -> Result<Frame, FrameError> {
-    frame::write(s, l, op, p)?;
+    frame::request(s, l, op, p)?;
     frame::read(s, l)
 }
 

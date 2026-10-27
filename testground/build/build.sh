@@ -104,9 +104,12 @@ half_wasm() {
   # kernel.json: what the page shows a visitor beside the sha256 it computes of the bytes it loaded —
   # the commit the pack's C came from and how it was built, so the tab's kernel ties to a commit
   # (two links of one tree are one sha256: the objects are content-named and the link order sorted)
-  local commit state; { read -r commit; read -r state; } < "$work/pack/commit"
-  printf '{"commit":"%s","tree":"%s","sha256":"%s","bytes":%s,"lean":"%s","emcc":"%s"}\n' "$commit" "$state" \
-    "$(sha256sum < "$root/testground/kernel.wasm" | cut -c1-64)" "$(wc -c < "$root/testground/kernel.wasm" | tr -d ' ')" \
+  local commit state wire; { read -r commit; read -r state; } < "$work/pack/commit"
+  # the frame wire the kernel speaks (its table's wireVersion, PROTOCOL-87), read from the built kernel
+  wire=$(cd "$root/testground" && node --input-type=module -e "import f from './kernel.mjs'; import { loadKernel } from './nd.js'; console.log((await loadKernel(f)).table.wireVersion)")
+  [[ $wire =~ ^[0-9a-f]{8}$ ]] || { echo "build.sh: the kernel states no wire version ($wire)" >&2; exit 1; }
+  printf '{"commit":"%s","tree":"%s","sha256":"%s","bytes":%s,"wire":"%s","lean":"%s","emcc":"%s"}\n' "$commit" "$state" \
+    "$(sha256sum < "$root/testground/kernel.wasm" | cut -c1-64)" "$(wc -c < "$root/testground/kernel.wasm" | tr -d ' ')" "$wire" \
     "$tag" "$(emcc --version | head -1 | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)" > "$root/testground/kernel.json"
   cat "$root/testground/kernel.json"
   ls -la "$root/testground/kernel.wasm"; echo "gzip: $(gzip -9 -c "$root/testground/kernel.wasm" | wc -c) bytes"
