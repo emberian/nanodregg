@@ -549,6 +549,10 @@ def Mode.program : Mode → Program D
 /-- A method's refusal by name (LANG-51): `program "m: refused why"`. -/
 def refusedBy (v m why : String) : Bool := v.startsWith "refused program" && (v.splitOn s!"{m}: refused {why}").length > 1
 
+/-- A program refusal whose payload is exactly `why` (the verdict prints it quoted). -/
+def refusedProgramWith (v why : String) : Bool :=
+  v.startsWith "refused program" && v.endsWith s!"\"{why}\""
+
 /-- A refusal by a law, with `why` in its reason. -/
 def deniedWith (v why : String) : Bool := v.startsWith "refused lawDenied" && (v.splitOn why).length > 1
 
@@ -1935,7 +1939,7 @@ def callRows (mode : Mode) (r0 : Run) (a : Sim.Member) : Run := Id.run do
   else
     r := note { rc8 with log := r.log, bad := r.bad }
       s!"LC8 A invokes the relay, which composes \{n 1} for the Sink's \{n, note}: {vc8}; the relay's hits {hitsOf Sim.env r.st.host oS} (the tree failed whole)"
-      (vc8.startsWith "refused program" && (vc8.splitOn "arguments:").length > 1 &&
+      (refusedProgramWith vc8 "arguments: decode Nanodregg.Codec.Refusal.truncated 8 4" &&
         hitsOf Sim.env r.st.host oS == some 0)
   return r
 
@@ -2240,7 +2244,7 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
     (v8 == "admitted" && hole_selectedOf Sim.env r8.st.host obj == some (some c2))
   -- LH8b B (not the chooser) selects
   let (_, v8b, _) := go prog r (call r b "select" (hole_selectArg c2) (pinCand r.st.host c2 ++ pinFact r.st.host f2))
-  r := note r s!"LH8b B selects c2: {v8b}" (v8b.startsWith "refused grantRight" || refusedBy v8b "select" "notChooser")
+  r := note r s!"LH8b B selects c2: {v8b}" (v8b.startsWith "refused grantRight")
   -- LH8p: a pruning reason is a live posted token; withdrawing it releases the branch.
   let (rP, vP, _) := go prog r (call r a "prune" (hole_pruneArg c2 f1 p1' "policy")
     (pinCand r.st.host c2 ++ pinFact r.st.host f1 ++ pinFact r.st.host f2))
@@ -2306,7 +2310,7 @@ def holeRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (contextual : Bool := f
       hole_statusOf r11.st.host obj dC c2 == some "verified" && headCount r11.st.host obj 0 == some 3)
   -- LH11b B prunes (not the chooser): the guard refuses it
   let (_, v11b, _) := go prog r (call r b "prune" (hole_pruneArg c2 f1 p1' "mine") (pinCand r.st.host c2))
-  r := note r s!"LH11b B prunes c2: {v11b}" (v11b.startsWith "refused grantRight" || refusedBy v11b "prune" "notChooser")
+  r := note r s!"LH11b B prunes c2: {v11b}" (v11b.startsWith "refused grantRight")
   let some dLog := p.rels.lookup "fills" | return note r "LH12 no activity log" false
   let some dPending := p.rels.lookup "pending" | return note r "LH12 no activity cursor" false
   let dispatchKey := Data.record [("agent", .digest (Sim.dc.bytes b.id)), ("notBefore", .nat dispatchAt)]
@@ -2542,7 +2546,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   -- The same checked artifact outside its signed window refuses by name.
   let expired := { r with st := { r.st with host := { r.st.host with height := fresh.unsigned.validUntil + 1 } } }
   let (_, ve, _) := go prog expired fresh
-  r := note r s!"P8 deadline: {ve}" (ve.startsWith "rejected outsideWindow" || ve.startsWith "refused outsideWindow")
+  r := note r s!"P8 deadline: {ve}" (ve.startsWith "rejected outsideWindow")
   let late := { r with st := { r.st with host := { r.st.host with height := 99999 } } }
   let (_, vl, _) := go prog late (commit late chosen selected)
   r := note r s!"P8 contract deadline: {vl}" (refusedBy vl "commit" "closed")
@@ -2727,7 +2731,7 @@ def journey (bell : String) (mode : Mode) : Run := Id.run do
   -- L6 an ill-typed package
   let c6 := Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id]) (.install illBytes)
   let (r6, v6, _) := go prog r c6
-  r := note r6 s!"L6 install ill-typed: {v6}" (v6.startsWith "refused program")
+  r := note r6 s!"L6 install ill-typed: {v6}" (refusedProgramWith v6 "illTyped declared @top")
   -- LV (LANG-60) the package wire's version: Owned's LANG-59 bytes (no version byte) and Owned's
   -- current bytes at the previous version are each refused `lang/package-version/N` at install and at decode,
   -- where the old bytes used to be read; the current bytes begin with the current version

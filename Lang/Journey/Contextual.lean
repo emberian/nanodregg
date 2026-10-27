@@ -94,6 +94,12 @@ def resultName {α : Type} : Except (Refusal Sim.D) α → String
   | .error (.program why) => why
   | .error e => e.name
 
+/-- A refusal by the hole law `codeChosen`, with exactly `why` as its reason. -/
+def lawDeniedWith {α : Type} (r : Except (Refusal Sim.D) α) (why : String) : Bool :=
+  match r with
+  | .error (.lawDenied _ w) => w == why
+  | _ => false
+
 def outputNat : Except (Refusal Sim.D)
     (Slots × List (Body Sim.D) × List (RowSlot Sim.D × RowAct) × Nat) → Option Nat
   | .ok (_, _, [(_, .upsert _ bytes)], _) =>
@@ -163,13 +169,13 @@ def boundaryRows : List (String × Bool) := Id.run do
     ("cell-law-unpinned", match selectHole Sim.digestOf governed good (3 : Sim.D) (contractCode (.cellLaw (Sim.dc.bytes 78) lawA)) with
       | .error why => decide (why = .unpinned [.cellLaw (Sim.dc.bytes 78) lawA]) | .ok _ => false),
     ("management-bootstrap", (invoke b p blocked "choose_code" choice chosen).isOk),
-    ("management-authority", (invoke b p blocked "choose_code" choice chosen 2 |> resultName) != "ok"),
-    ("management-accepted", (invoke b p blocked "choose_code" choice chosen 1 true |> resultName) != "ok"),
-    ("management-deadline", (invoke b p blocked "choose_code" choice chosen (validUntil := 1001) |> resultName) != "ok"),
-    ("management-hole-name", (invoke b p extraView "choose_code"
-      (.record [("hole", .nat 1), ("index", .nat 0)]) chosen |> resultName) != "ok"),
-    ("management-candidate-index", (invoke b p blocked "choose_code"
-      (.record [("hole", .nat 0), ("index", .nat 99)]) chosen |> resultName) != "ok"),
+    ("management-authority", lawDeniedWith (invoke b p blocked "choose_code" choice chosen 2) "codeChosen: notChooser"),
+    ("management-accepted", lawDeniedWith (invoke b p blocked "choose_code" choice chosen 1 true) "codeChosen: accepted"),
+    ("management-deadline", lawDeniedWith (invoke b p blocked "choose_code" choice chosen (validUntil := 1001)) "codeChosen: closed"),
+    ("management-hole-name", lawDeniedWith (invoke b p extraView "choose_code"
+      (.record [("hole", .nat 1), ("index", .nat 0)]) chosen) "codeChosen: unknownHole"),
+    ("management-candidate-index", lawDeniedWith (invoke b p blocked "choose_code"
+      (.record [("hole", .nat 0), ("index", .nat 99)]) chosen) "codeChosen: unknownCandidate"),
     -- the refusal names the row the caller did not pin: the hypothesis's fact row (DESIGN-CTX §2.3)
     ("omitted-context-pin", (invoke b p (view (some 0) none false) "execute" (.nat 7) .nat |> resultName) ==
       s!"execute: refused holeUnpinnedRow 2 {hexOf (factKeyAt 1)}"),

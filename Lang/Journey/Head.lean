@@ -162,6 +162,9 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   r := note r s!"HD4 a post at \{height 9, steps 22}: more steps, a lower height: {v6}" (deniedWith v6 "head: badHead")
   let (_, v7) := invoke w0 H [hpkg] 0 (hdForkArg R2 21)
   r := note r s!"HD5 a fork naming the held roots as the other poster's: {v7}" (deniedWith v7 "head: badFork")
+  -- HD5b the steps arm of badFork: the held roots named, other roots, but not at the held step count
+  let (_, v7b) := invoke w0 H [hpkg] 0 (hdForkArg R3 22)
+  r := note r s!"HD5b a fork naming the held roots, with other roots, at step 22 not the held 21: {v7b}" (deniedWith v7b "head: badFork")
   r := note r s!"HD2–HD5 left the head as HD0 posted it: {held w0 H == some (.at worldA C2 11 R2 21)}"
     (held w0 H == some (.at worldA C2 11 R2 21))
   -- HD5c / HD6 the honest fork, then the frozen head

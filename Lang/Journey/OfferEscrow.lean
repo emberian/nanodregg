@@ -141,7 +141,7 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   -- LE5 a post whose grant is smaller than its leg: refused, no row, nothing moved
   let (rp5, vp5) := post r0' a ox [gA, α, acct a.id α, acct ox α] (lvPostArg 2 "buyer" 5 10 6 α gA a.id 7 β)
   r := note r s!"LE5 A posts X's offer 2 with leg 6 α through its grant of transfer 5: {vp5}; offer 2 present {present rp5.st.host ox 2}"
-    (vp5.startsWith "refused" && !present rp5.st.host ox 2 && bal rp5.st.host ox α == 5 &&
+    (vp5.startsWith "refused transferSpent" && !present rp5.st.host ox 2 && bal rp5.st.host ox α == 5 &&
       bal rp5.st.host a.id α == 15)
   -- LE7 (LANG-82) the judge reads the legs: on the World before LE1, B posts Y's offer 3 (seller [8,12],
   -- compliant with X's at price 9) giving 1 β where X wants 7 β; the fuse naming it is refused by name,
