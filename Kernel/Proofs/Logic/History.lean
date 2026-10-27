@@ -15,7 +15,10 @@ force admitted, for every body kind, proved once.
   "no invoke" outright; a history counts every invoke it holds. Steps that judge it record what the judge saw (`e = some (look, pkg,
   laws, req, old, new, calls)`): the signed `write` of it (over a canonical cell), the signed `law`
   of it (the `relaw` judgement, over the unchanged state), the signed `invoke` of it, and an invoke
-  of it NESTED in another call's tree (`Dispatched`; the order laws are its route's price).
+  of it NESTED in another call's tree (`Dispatched`; the order laws are its route's price), and the
+  signed `retire` of it (KERNEL-70: judged by the package and the cell's laws on the occasion
+  `retire`, old = new; it ends at the tombstone). After a retirement every step is `dead` (a turn at
+  a World holding the tombstone) or a refusal, and records nothing (`object_history_of_dead`).
 * `ObjectHistory X obj w w' tr`: the Kleene star; `tr` is the judged steps, in order.
 * `object_step_none`, `object_step_some`: a step that records nothing keeps `obj`'s entry; a
   judged step's `old` is the live state, the laws in force passed `old → new` (`write_judged`,
@@ -24,7 +27,7 @@ force admitted, for every body kind, proved once.
 * `object_history_of_honest`: THE TOTALITY at the log: an honest folded log from a canonical World
   (`CellsCanon`, from genesis by `genesis_cellsCanon`/`fold_cellsCanon`) is an `ObjectHistory` of
   every object live at its start (`object_turn_cases` per turn: no receiver but write, law and
-  invoke writes an object). For an object born inside the log, split the log at its birth (the
+  invoke writes an object, and none but its owner's signed `retire` ends one). For an object born inside the log, split the log at its birth (the
   object must be live at the history's start).
 * `object_history_chain`: THE LIFT: for a `NoRef` law `t` (field `ℓ` of the package `p` that the law
   id reads as in every judged step's view) in force at every judged step, the history projects to
@@ -38,7 +41,7 @@ the lift holds together, through `Lang.program`, on a signed invoke whose run mo
 the counter's `NoRef` law in force); `write_history_witnessed` (a write step, at a data object);
 `object_history_needs_inForce` (on that write history, whose step no law judged, a law that admits
 nothing has no chain: drop the in-force premise and the conclusion is false); the steps' own: `write_needs_canon` (`write`'s canonicity),
-`law_slots_need_bound`, `effect_at_object_needs_kind` (the totality), `effectsPinned_unlawful_ord`
+`law_slots_need_bound`, `effect_at_object_needs_owner` (the totality's retire arm), `effectsPinned_unlawful_ord`
 (`nested`'s order laws). `object_history_runs`: each judged step's calls are its run's;
 `object_history_start`: a history with a judged step starts at a live object whose state reads.
 -/
@@ -112,6 +115,18 @@ inductive ObjectStep (X : Ctx D) (obj : D) :
         method args r (min budget wk.pool) = .ok (s, calls, rows, used) →
       lawsOf X obj cell = .ok laws →
       ObjectStep X obj w w' (some (pinned X.env w c.unsigned.pins, some p, laws, r, stateOf cell, s, calls))
+  /-- the signed `retire` of `obj` (KERNEL-70): judged by every law in force (the package's, then the
+  cell's) on the occasion `retire`, from its last state to the same state; it ends at the tombstone -/
+  | retire {w w' : World D} {c : Call D} {t : Turn D} {cell : Cell} {pkg : Option D} {laws : List D} :
+      receive X w c = .ok t → World.admit X.env w t = .ok w' → c.unsigned.body = .retire obj →
+      w.live X.env obj = some cell → cell.kind = kindObject →
+      packageOf X obj cell = .ok pkg → lawsOf X obj cell = .ok laws →
+      w'.entry X.env obj = some .tomb →
+      ObjectStep X obj w w' (some (pinned X.env w c.unsigned.pins, pkg, laws,
+        reqOf c.unsigned obj c.unsigned.member .retire, stateOf cell, stateOf cell, []))
+  /-- any admitted turn at a World where `obj` is retired: the tombstone stays (`fold_tomb_stays`) -/
+  | dead {w w' : World D} {t : Turn D} :
+      World.admit X.env w t = .ok w' → w.entry X.env obj = some .tomb → ObjectStep X obj w w' none
 
 /-- **A history of the World around `obj`**, from `w` to `w'`: the judged steps, in order. -/
 inductive ObjectHistory (X : Ctx D) (obj : D) :
@@ -138,6 +153,10 @@ theorem object_step_none {X : Ctx D} {obj : D} {w w' : World D} (h : ObjectStep 
       have he := call_frame hc ha (.cell obj) hf
       unfold World.live World.entry
       rw [he]
+  | @dead _ _ t ha ht =>
+      have hf : World.fold X.env w [.turn t] = .ok w' := by
+        exact fold_cons_ok.mpr ⟨w', ha, rfl⟩
+      unfold World.live; rw [fold_tomb_stays hf ht, ht]
 
 omit [Ord D] in
 private theorem invokeRun_occasion {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
@@ -150,9 +169,11 @@ private theorem invokeRun_occasion {X : Ctx D} {look : Pinned D} {c : Call D} {a
   rw [← h.2.2]; rfl
 
 /-- **A judged step.** Its `old` is the object's live state; the laws in force (the package's and the
-cell's) admitted `old → new` under its request, in its view; a law change or adoption keeps the
-state; an invoke's package ran `old → new` on the method its request names, returning its calls (a
-write or a law returns none); the object is live after it, with a state that reads `new` at every
+cell's) admitted `old → new` under its request, in its view; a law change, an adoption or a
+retirement keeps the state; a step judged by no package (a write, a law) or a retirement returns no
+calls; outside a retirement, a step judged by a package `q` is an invoke: `q` ran `old → new` on the
+method its request names, returning its calls. A retirement (KERNEL-70) ends at the object's
+tombstone; every other judged step leaves the object live, with a state that reads `new` at every
 key. -/
 theorem object_step_some {X : Ctx D} {obj : D} {w w' : World D} {look : Pinned D} {pkg : Option D}
     {laws : List D} {r : Req D} {old new : Slots} {calls : List (Body D)}
@@ -160,24 +181,28 @@ theorem object_step_some {X : Ctx D} {obj : D} {w w' : World D} {look : Pinned D
     {cell : Cell} (hl : w.live X.env obj = some cell) :
     old = stateOf cell ∧ X.program.judge look pkg laws old new r = .ok () ∧
       (∀ ls, r.occasion = .relaw ls ∨ r.occasion = .adopt ls → new = old) ∧
-      (pkg = none → calls = []) ∧
-      (∀ q, pkg = some q → ∃ rv method args fuel rows used, r.occasion = .invoke method ∧
+      (r.occasion = .retire → new = old) ∧
+      (pkg = none ∨ r.occasion = .retire → calls = []) ∧
+      (r.occasion ≠ .retire → ∀ q, pkg = some q → ∃ rv method args fuel rows used, r.occasion = .invoke method ∧
         X.program.run look rv q old method args r fuel = .ok (new, calls, rows, used)) ∧
-      ∃ cell', w'.live X.env obj = some cell' ∧ ∀ k, (stateOf cell').get k = new.get k := by
+      (r.occasion = .retire → w'.entry X.env obj = some .tomb) ∧
+      (r.occasion ≠ .retire → ∃ cell', w'.live X.env obj = some cell' ∧ ∀ k, (stateOf cell').get k = new.get k) := by
   cases h with
   | @write _ _ c t edits via cell₀ principal laws hc ha hb hl₀ hcan hau hlw =>
       rw [hl] at hl₀; cases hl₀
       obtain ⟨principal', laws', -, hau', hlw', hj, cell', hl', -, hk⟩ := write_next_slots hc ha hb hl hcan
       rw [hau] at hau'; cases hau'
       rw [hlw] at hlw'; cases hlw'
-      refine ⟨rfl, hj, fun ls hls => ?_, fun _ => rfl, fun q hq => by simp at hq, cell', hl', hk⟩
+      refine ⟨rfl, hj, fun ls hls => ?_, fun h => (by cases h), fun _ => rfl, fun _ q hq => by simp at hq,
+        fun h => (by cases h), fun _ => ⟨cell', hl', hk⟩⟩
       rcases hls with h | h <;> cases h
   | @law _ _ c t laws' via cell₀ principal laws hc ha hb hl₀ hau hlw =>
       rw [hl] at hl₀; cases hl₀
       obtain ⟨principal', laws'', -, hau', hlw', hrel, -, cell', hl', hk⟩ := law_next_slots hc ha hb hl
       rw [hau] at hau'; cases hau'
       rw [hlw] at hlw'; cases hlw'
-      exact ⟨rfl, hrel, fun _ _ => rfl, fun _ => rfl, fun q hq => by simp at hq, cell', hl', hk⟩
+      exact ⟨rfl, hrel, fun _ _ => rfl, fun _ => rfl, fun _ => rfl, fun _ q hq => by simp at hq,
+        fun h => (by cases h), fun _ => ⟨cell', hl', hk⟩⟩
   | @invoke _ _ c t method args budget via cell₀ p r s calls rows used laws hc ha hb hr hp hlw =>
       have hl₀ := invokeRun_live hr
       rw [hl] at hl₀; cases hl₀
@@ -185,7 +210,9 @@ theorem object_step_some {X : Ctx D} {obj : D} {w w' : World D} {look : Pinned D
       rw [hlw] at hlw'; cases hlw'
       obtain ⟨cell', hl', hk⟩ := invoke_next_slots hc ha hb hr hp
       have ho := invokeRun_occasion hr
-      refine ⟨rfl, hj, fun ls hls => ?_, fun h => by simp at h, fun q hq => ?_, cell', hl', hk⟩
+      refine ⟨rfl, hj, fun ls hls => ?_, fun h => (by rw [ho] at h; cases h),
+        fun h => h.elim (fun h => by simp at h) (fun h => by rw [ho] at h; cases h),
+        fun _ q hq => ?_, fun h => (by rw [ho] at h; cases h), fun _ => ⟨cell', hl', hk⟩⟩
       · rw [ho] at hls; rcases hls with h | h <;> cases h
       · cases hq; exact ⟨_, method, args, _, rows, used, ho, hp⟩
   | nested hc ha hd hr hp hlw =>
@@ -201,9 +228,18 @@ theorem object_step_some {X : Ctx D} {obj : D} {w w' : World D} {look : Pinned D
       obtain ⟨rfl, rfl, rfl, rfl⟩ := hp₁
       rw [hlw] at hlw₁; cases hlw₁
       have ho := invokeRun_occasion hr
-      refine ⟨rfl, hj, fun ls hls => ?_, fun h => by simp at h, fun q hq => ?_, cell', hl', hk⟩
+      refine ⟨rfl, hj, fun ls hls => ?_, fun h => (by rw [ho] at h; cases h),
+        fun h => h.elim (fun h => by simp at h) (fun h => by rw [ho] at h; cases h),
+        fun _ q hq => ?_, fun h => (by rw [ho] at h; cases h), fun _ => ⟨cell', hl', hk⟩⟩
       · rw [ho] at hls; rcases hls with h | h <;> cases h
       · cases hq; exact ⟨_, _, _, _, _, _, ho, hp⟩
+  | @retire _ _ c t cell₀ pkg laws hc ha hb hl₀ hk₀ hpk hlw ht =>
+      rw [hl] at hl₀; cases hl₀
+      obtain ⟨pkg', laws', -, hpk', hlw', hj⟩ := retire_next hc hb hl hk₀
+      rw [hpk] at hpk'; cases hpk'
+      rw [hlw] at hlw'; cases hlw'
+      exact ⟨rfl, hj, fun ls hls => (by rcases hls with h | h <;> cases h), fun _ => rfl, fun _ => rfl,
+        fun h => absurd rfl h, fun _ => ht, fun h => absurd rfl h⟩
 
 /-- A judged step happened at a World holding the object live. -/
 theorem object_step_live {X : Ctx D} {obj : D} {w w' : World D}
@@ -214,6 +250,38 @@ theorem object_step_live {X : Ctx D} {obj : D} {w w' : World D}
   | law _ _ _ hl => exact ⟨_, hl⟩
   | invoke _ _ _ hr => exact ⟨_, invokeRun_live hr⟩
   | nested _ _ _ hr => exact ⟨_, invokeRun_live hr⟩
+  | retire _ _ _ hl _ _ _ _ => exact ⟨_, hl⟩
+
+/-- **After its retirement an object has no judged step**: a history from a World where `obj` is not
+live records nothing (a judged step needs it live, `object_step_live`, and a step that records
+nothing keeps it not live, `object_step_none`). -/
+theorem object_history_dead {X : Ctx D} {obj : D} {w w' : World D}
+    {tr : List (Pinned D × Option D × List D × Req D × Slots × Slots × List (Body D))}
+    (h : ObjectHistory X obj w w' tr) (hl : w.live X.env obj = none) : tr = [] := by
+  induction h with
+  | nil => rfl
+  | @cons w w₁ w' e rest hs _ ih =>
+      cases e with
+      | none => exact ih ((object_step_none hs).trans hl)
+      | some x =>
+          obtain ⟨cell, hc⟩ := object_step_live hs
+          rw [hl] at hc; cases hc
+
+/-- **A World where `obj` is retired is a history of it with no judged step**: every step of a fold
+from its tombstone is `dead` (a turn) or a refusal, and the tombstone stays (`fold_tomb_stays`). -/
+theorem object_history_of_dead {X : Ctx D} {obj : D} :
+    ∀ {w w' : World D} {l : List (Step D)}, World.fold X.env w l = .ok w' →
+      w.entry X.env obj = some .tomb → ObjectHistory X obj w w' []
+  | w, w', [], hf, _ => by
+      simp only [World.fold, Except.ok.injEq] at hf; subst hf; exact .nil _
+  | w, w', s :: rest, hf, ht => by
+      obtain ⟨w₁, hs, hr⟩ := fold_cons_ok.mp hf
+      have hstep : ObjectStep X obj w w₁ none := by
+        cases s with
+        | turn t => exact .dead hs ht
+        | refusal r => exact .refusal hs
+      have ht₁ : w₁.entry X.env obj = some .tomb := fold_tomb_stays (l := [s]) (fold_cons_ok.mpr ⟨w₁, hs, rfl⟩) ht
+      exact .cons hstep (object_history_of_dead hr ht₁)
 
 /-! ## The totality, at the log -/
 
@@ -251,8 +319,8 @@ theorem object_history_of_honest [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D
       obtain ⟨w₁, hadm, ⟨c, -, hc, -⟩, hfr, hhr⟩ := fold_honest_cons hf hh
       have hadm : World.admit X.env w t = .ok w₁ := hadm
       have hcan₁ := admit_cellsCanon hcan hadm
-      rcases object_turn_cases hc hadm hl hk with ⟨hkeep, hnc, hnw, hnl, hni⟩ | ⟨edits, via, hb⟩ |
-          ⟨laws', via, hb⟩ | ⟨n, wk, a, method, args, budget, via, hd⟩
+      rcases object_turn_cases hc hadm hl hk with ⟨hkeep, hnc, hnw, hnl, -, hni⟩ | ⟨edits, via, hb⟩ |
+          ⟨laws', via, hb⟩ | hb | ⟨n, wk, a, method, args, budget, via, hd⟩
       · have hstep : ObjectStep X obj w w₁ none := .keep hc hadm hkeep hnc hnw hnl hni
         obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ ((object_step_none hstep).trans hl) hk
         exact ⟨tr, .cons hstep htr⟩
@@ -263,6 +331,9 @@ theorem object_history_of_honest [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D
       · obtain ⟨principal, laws, -, hau, hlw, -, -, cell', hl', -⟩ := law_next_slots hc hadm hb hl
         obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
         exact ⟨_, .cons (.law hc hadm hb hl hau hlw) htr⟩
+      · obtain ⟨pkg, laws, -, hpk, hlw, -⟩ := retire_next hc hb hl hk
+        have ht := retire_next_tomb hc hadm hb
+        exact ⟨_, .cons (.retire hc hadm hb hl hk hpk hlw ht) (object_history_of_dead hfr ht)⟩
       · obtain ⟨cell₀, p, r, s, calls, rows, used, laws, hr, hp, hlw, -, cell', hl', -⟩ :=
           invoke_tree_slots hc hadm hd
         obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ hl' ((admit_kind hadm hl hl').trans hk)
@@ -315,17 +386,20 @@ private theorem reqData_occasion (bytesOf : D → ByteArray) (r : Req D) :
   simp [Lang.reqData, Lang.Data.field, Lang.Row.find?]
 
 omit [Ord D] [DecidableEq D] in
-/-- A request whose occasion field is a `relaw` or an `adopt` injection IS a law change or adoption. -/
+/-- A request whose occasion field is a `relaw`, an `adopt` or a `retire` injection IS a law change,
+an adoption or a retirement. -/
 private theorem occasion_relaw {bytesOf : D → ByteArray} {r : Req D} {ℓ : Lang.Label} {x : Lang.Data}
-    (h : (Lang.reqData bytesOf r).field "occasion" = some (.inj ℓ x)) (hℓ : ℓ = "relaw" ∨ ℓ = "adopt") :
-    ∃ ls, r.occasion = .relaw ls ∨ r.occasion = .adopt ls := by
+    (h : (Lang.reqData bytesOf r).field "occasion" = some (.inj ℓ x))
+    (hℓ : ℓ = "relaw" ∨ ℓ = "adopt" ∨ ℓ = "retire") :
+    (∃ ls, r.occasion = .relaw ls ∨ r.occasion = .adopt ls) ∨ r.occasion = .retire := by
   rw [reqData_occasion] at h
   cases ho : r.occasion with
-  | relaw ls => exact ⟨ls, .inl rfl⟩
-  | adopt ls => exact ⟨ls, .inr rfl⟩
-  | birth => rw [ho] at h; simp [Lang.occasionData] at h; obtain ⟨rfl, -⟩ := h; rcases hℓ with h | h <;> exact absurd h (by decide)
-  | write => rw [ho] at h; simp [Lang.occasionData] at h; obtain ⟨rfl, -⟩ := h; rcases hℓ with h | h <;> exact absurd h (by decide)
-  | invoke m => rw [ho] at h; simp [Lang.occasionData] at h; obtain ⟨rfl, -⟩ := h; rcases hℓ with h | h <;> exact absurd h (by decide)
+  | relaw ls => exact .inl ⟨ls, .inl rfl⟩
+  | adopt ls => exact .inl ⟨ls, .inr rfl⟩
+  | retire => exact .inr rfl
+  | birth => rw [ho] at h; simp [Lang.occasionData] at h; obtain ⟨rfl, -⟩ := h; rcases hℓ with h | h | h <;> exact absurd h (by decide)
+  | write => rw [ho] at h; simp [Lang.occasionData] at h; obtain ⟨rfl, -⟩ := h; rcases hℓ with h | h | h <;> exact absurd h (by decide)
+  | invoke m => rw [ho] at h; simp [Lang.occasionData] at h; obtain ⟨rfl, -⟩ := h; rcases hℓ with h | h | h <;> exact absurd h (by decide)
 
 /-- **THE LIFT: a World's history around an object is a history of every law in force.** At a lawful
 `Ctx` running the language (`Lang.program` over its own codec), take a law `t` that mentions no closure
@@ -354,13 +428,13 @@ theorem object_history_chain {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful
   intro w w' tr h
   induction h with
   | nil w => exact fun _ _ o _ _ => ⟨[], .nil o, rfl⟩
-  | @cons w w₁ w' e rest hs _ ih =>
+  | @cons w w₁ w' e rest hs hrest ih =>
       intro hin cell o hl ho
       cases e with
       | none => exact ih hin ((object_step_none hs).trans hl) ho
       | some x =>
           obtain ⟨look, pkg, laws, r, old, new, calls⟩ := x
-          obtain ⟨hold, hj, hkeep, -, -, cell', hl', hk⟩ := object_step_some hs hl
+          obtain ⟨hold, hj, hkeep, hkeepR, -, -, htomb, hlive⟩ := object_step_some hs hl
           obtain ⟨hmem, hpk⟩ := hin _ (List.mem_cons_self ..)
           rw [hprog] at hj
           have hj' : Lang.judgeContextual X.env.bytes X.digestOf look pkg laws old new r = .ok () := hj
@@ -370,26 +444,39 @@ theorem object_history_chain {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful
           rw [hold, ho] at ho'
           cases ho'
           have hadm := hall ℓ hℓ t hf hlaw hnr []
+          by_cases hrt : r.occasion = .retire
+          · have hl₁ : w₁.live X.env obj = none := by unfold World.live; rw [htomb hrt]
+            have hnil := object_history_dead hrest hl₁
+            subst hnil
+            refine ⟨[(Lang.reqData X.env.bytes r, n)], .cons ⟨hadm, fun ℓ' x' hocc hℓ' => ?_⟩ (.nil _),
+              by simp only [Option.toList_some, List.append_nil, List.map_cons, List.map_nil, hn]⟩
+            rw [hkeepR hrt, hold, ho] at hn
+            cases hn
+            rfl
+          obtain ⟨cell', hl', hk⟩ := hlive hrt
           have hn' : Lang.readState X.digestOf (Lang.recordRow p.state) (stateOf cell') = .ok n :=
             (Lang.readState_get hk).trans hn
           obtain ⟨steps, hch, hfa⟩ := ih (fun e he => hin e (List.mem_cons_of_mem _ he)) hl' hn'
           refine ⟨(Lang.reqData X.env.bytes r, n) :: steps, .cons ⟨hadm, fun ℓ' x' hocc hℓ' => ?_⟩ hch,
             by simp only [Option.toList_some, List.singleton_append, List.map_cons, hn, hfa]⟩
-          obtain ⟨ls, hls⟩ := occasion_relaw hocc hℓ'
-          have hno := hkeep ls hls
+          have hno : new = old := by
+            rcases occasion_relaw hocc hℓ' with ⟨ls, hls⟩ | hrt
+            · exact hkeep ls hls
+            · exact hkeepR hrt
           rw [hno, hold, ho] at hn
           cases hn
           rfl
 
 /-- **What each judged step ran.** Along an `ObjectHistory`, a step judged by no package (a write, a
-law) returned no calls; a step judged by a package `q` (an invoke, signed or nested) is a run of
-`q`, in the step's view, from the step's old state to its new state, of the method its request
-names, returning the step's calls. -/
+law) or a retirement returned no calls; any other step judged by a package `q` (an invoke, signed or
+nested) is a run of `q`, in the step's view, from the step's old state to its new state, of the
+method its request names, returning the step's calls. (A retirement of a programmed object is judged
+by its package as a law, on the occasion `retire`, and runs no method: KERNEL-70.) -/
 theorem object_history_runs {X : Ctx D} {obj : D} :
     ∀ {w w' : World D} {tr : List (Pinned D × Option D × List D × Req D × Slots × Slots × List (Body D))},
-      ObjectHistory X obj w w' tr → ∀ e ∈ tr, (e.2.1 = none → e.2.2.2.2.2.2 = []) ∧
-        ∀ q, e.2.1 = some q → ∃ rv method args fuel rows used, e.2.2.2.1.occasion = .invoke method ∧
-          X.program.run e.1 rv q e.2.2.2.2.1 method args e.2.2.2.1 fuel = .ok (e.2.2.2.2.2.1, e.2.2.2.2.2.2, rows, used) := by
+      ObjectHistory X obj w w' tr → ∀ e ∈ tr, (e.2.1 = none ∨ e.2.2.2.1.occasion = .retire → e.2.2.2.2.2.2 = []) ∧
+        (e.2.2.2.1.occasion ≠ .retire → ∀ q, e.2.1 = some q → ∃ rv method args fuel rows used, e.2.2.2.1.occasion = .invoke method ∧
+          X.program.run e.1 rv q e.2.2.2.2.1 method args e.2.2.2.1 fuel = .ok (e.2.2.2.2.2.1, e.2.2.2.2.2.2, rows, used)) := by
   intro w w' tr h
   induction h with
   | nil => simp
@@ -401,7 +488,7 @@ theorem object_history_runs {X : Ctx D} {obj : D} :
           rcases List.mem_cons.mp hx with rfl | hx
           · obtain ⟨look, pkg, laws, r, old, new, calls⟩ := x
             obtain ⟨cell, hl⟩ := object_step_live hs
-            obtain ⟨hold, -, -, hn, hq, -⟩ := object_step_some hs hl
+            obtain ⟨hold, -, -, -, hn, hq, -⟩ := object_step_some hs hl
             exact ⟨hn, hq⟩
           · exact ih x hx
 

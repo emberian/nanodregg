@@ -129,7 +129,8 @@ def rowbarStated : List (Mutation × String × String) :=
    -- 6.069 since KERNEL-68 (a Turn record 40 bytes larger; THE BAR's measured tail is 20 invokes,
    -- not 23, to stay under the seal floor): the stale base reads the whole segment over a shorter tail;
    -- 6.070 since LANG-89 (a package is one node larger: the grades child)
-   (.staleBase, "reopen-bytes-per-byte-past-base", "6.070")]
+   -- 6.083 since KERNEL-70 (the occasion sum prints retire, every Std law carries a retire arm)
+   (.staleBase, "reopen-bytes-per-byte-past-base", "6.083")]
 
 /-- THE BAR under each rowbar plant: its counts must move to their stated values, above the honest
 ones, and the mutation must have happened (`staleBase`: a measured reopen was handed an older base). -/

@@ -15,6 +15,11 @@ canonical only when the cell is. So the write's link rests on a World invariant,
   (`write_judged`), and `obj` is live in `w'` with a state that reads that, key by key.
 * `law_next_slots`: a signed `law` turn changes only law slots: `obj` is live in `w'` and its state
   reads, key by key, what it read before (no canonicity premise: law keys are below `stateBase`).
+* `retire_next`, `retire_next_tomb` (KERNEL-70): a signed `retire` of a live object, derived: its
+  owner signed it, every law in force (its package's, then its cell's) judged the occasion `retire`
+  over its last state, unchanged; admitted, `w'` holds its tombstone. `retire_final`: every later
+  fold keeps it (every grant over the object is dead); `retire_frees_credit`: the allowance gains
+  the object's weight, once, plus its heads'.
 
 Tooth: `write_needs_canon`: on a cell holding key 16 twice, the edit-free write's own `diffOps` is
 one `set` (distinct keys, so `checkShape` admits it) that re-sets the FIRST entry to the second
@@ -24,6 +29,8 @@ canonicity premise is load-bearing, and `CellsCanon` is what discharges it. `law
 -/
 import Kernel.Proofs.InvokeNext
 import Kernel.Proofs.Rooted
+import Kernel.Proofs.Versions
+import Kernel.Proofs.Weight
 
 namespace Nanodregg.Kernel.Receive
 
@@ -414,6 +421,137 @@ theorem law_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {o
       omega
   · rw [if_neg hk, if_neg hk]
 
+
+/-- The touch a derived `retire` of `obj` leaves on `obj`: a signed retire's Turn touches `obj`, pinned,
+with the act `retire`, and its receiver's check passed at the pinned view. -/
+private theorem retire_derived {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {obj : D}
+    (hc : receive X w c = .ok t) (hb : c.unsigned.body = .retire obj) :
+    (∃ a : At D, a.actor = c.unsigned.member ∧ retireCheck X (pinned X.env w c.unsigned.pins) c a obj = .ok ()) ∧
+      (∃ q ∈ c.unsigned.pins, q.1 = obj) ∧ ∃ x ∈ t.touches, x.cell = obj ∧ x.act = .retire := by
+  obtain ⟨r, hr, hs⟩ := receive_root hc
+  rw [hb] at hr
+  have hw := stepped_draft hr
+  unfold retire at hw
+  simp only [except_bind_ok] at hw
+  obtain ⟨⟨⟩, hchk, hd⟩ := hw
+  simp only [pure, Except.pure, Except.ok.injEq] at hd
+  rw [← hd] at hs
+  obtain ⟨-, -, htouch, -, -, -, -, -, -, hpins⟩ := sealTurn_ok hs
+  obtain ⟨q, hq, hqe⟩ := hpins (obj, .retire) (List.mem_singleton_self _)
+  refine ⟨⟨_, rfl, hchk⟩, ⟨q, hq, hqe⟩, { cell := q.1, seen := q.2, act := actFor [(obj, Act.retire)] q.1 }, ?_, hqe, ?_⟩
+  · rw [htouch]; exact List.mem_map.mpr ⟨q, hq, rfl⟩
+  · simp only; rw [hqe]; exact actFor_single
+
+/-- **A retirement is its owner's and judged** (KERNEL-70). A signed `retire` of a live object `obj`,
+derived from `w`: the object's owner slot names the signer's member, and every law in force (the
+package, then the cell's laws) judged the occasion `retire` from the object's last state to the
+same state. Admitted, it leaves `obj`'s tombstone (`retire_next_tomb`). -/
+theorem retire_next {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {obj : D} {cell : Cell}
+    (hc : receive X w c = .ok t) (hb : c.unsigned.body = .retire obj) (hl : w.live X.env obj = some cell)
+    (hk : cell.kind = kindObject) :
+    ∃ pkg laws,
+      slotDigest X obj cell slotOwner = .ok c.unsigned.member ∧
+      packageOf X obj cell = .ok pkg ∧ lawsOf X obj cell = .ok laws ∧
+      X.program.judge (pinned X.env w c.unsigned.pins) pkg laws (stateOf cell) (stateOf cell)
+        (reqOf c.unsigned obj c.unsigned.member .retire) = .ok () := by
+  obtain ⟨⟨a, ha, hchk⟩, ⟨q, hq, hxc⟩, -⟩ := retire_derived hc hb
+  have hlook : pinned X.env w c.unsigned.pins obj = .ok (some cell) := by
+    have hany : (c.unsigned.pins.any fun p => decide (p.1 = obj)) = true :=
+      List.any_eq_true.mpr ⟨q, hq, by simpa using hxc⟩
+    simp [pinned, hany, hl]
+  simp only [retireCheck, hlook] at hchk
+  obtain ⟨cell₀, hcell, hchk⟩ := except_bind_ok.mp hchk
+  simp only [Except.ok.injEq] at hcell
+  subst hcell
+  have hng : kindObject ≠ kindGrant := by decide
+  rw [if_neg (by rw [hk]; exact hng), if_pos hk] at hchk
+  simp only [except_bind_ok] at hchk
+  obtain ⟨owner, hown, ⟨⟩, hreq, pkg, hpkg, laws, hlaws, hj⟩ := hchk
+  rw [req_ok, decide_eq_true_eq] at hreq
+  subst hreq
+  rw [ha] at hown hj
+  exact ⟨pkg, laws, hown, hpkg, hlaws, hj⟩
+
+/-- **An admitted retirement leaves a tombstone** (KERNEL-70), under a lawful `Ord`: a signed
+`retire` of `obj`, derived from `w` and admitted to `w'`, leaves `obj`'s tombstone in `w'`, which every
+later fold keeps (`fold_tomb_stays`). -/
+theorem retire_next_tomb [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D} {c : Call D}
+    {t : Turn D} {obj : D} (hc : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
+    (hb : c.unsigned.body = .retire obj) : w'.entry X.env obj = some .tomb := by
+  obtain ⟨-, -, x, hx, rfl, hact⟩ := retire_derived hc hb
+  exact admit_retire_tomb ha hx hact
+
+/-- **A retirement is final: every grant over the retired object is dead** (KERNEL-70). After an
+admitted `retire` of `obj`, every World a fold reaches holds its tombstone and no live cell at its id:
+whatever grants on it remain (their issuers may still retire them and take their storage back) and
+whoever signs through them, no admitted turn writes, invokes, relaws or re-creates `obj` again — a
+derivation that reads it finds no cell (`missingCell`, or `stale` for a call pinned at its last live
+entry), and `World.admit` never advances a tombstone (`fold_tomb_stays`) nor bears a cell at a taken
+id (`idTaken`). -/
+theorem retire_final [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' w'' : World D} {c : Call D}
+    {t : Turn D} {obj : D} {l : List (Step D)} (hc : receive X w c = .ok t)
+    (ha : World.admit X.env w t = .ok w') (hb : c.unsigned.body = .retire obj)
+    (hf : World.fold X.env w' l = .ok w'') :
+    w''.entry X.env obj = some .tomb ∧ w''.live X.env obj = none := by
+  have ht := fold_tomb_stays hf (retire_next_tomb hc ha hb)
+  exact ⟨ht, by unfold World.live; rw [ht]⟩
+
+/-- **A retirement gives the object's storage back, once** (KERNEL-70 through KERNEL-19's credit):
+a signed `retire` of `obj`, derived from `w` and admitted to `w'`, leaves the World's allowance at
+what it was, plus the weight of `obj`'s entry, plus what the turn's row touches give back (a retired
+object's relation heads leave with it: `rowsAfter`), less the turn's charge. -/
+theorem retire_frees_credit [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}
+    {c : Call D} {t : Turn D} {obj : D} (hc : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
+    (hb : c.unsigned.body = .retire obj) :
+    w'.allowance + t.charge =
+      w.allowance + ((w.entry X.env obj).map Entry.weight).getD 0 + (rowsAfter X.env w t).2 := by
+  obtain ⟨r, hr, hs⟩ := receive_root hc
+  rw [hb] at hr
+  have hw := stepped_draft hr
+  unfold retire at hw
+  simp only [except_bind_ok] at hw
+  obtain ⟨⟨⟩, -, hd⟩ := hw
+  simp only [pure, Except.pure, Except.ok.injEq] at hd
+  rw [← hd] at hs
+  obtain ⟨-, -, htouch, -⟩ := sealTurn_ok hs
+  have hof : ∀ x ∈ t.touches, x.act = .retire → x.cell = obj := by
+    intro x hx hxa
+    rw [htouch] at hx
+    obtain ⟨q, -, rfl⟩ := List.mem_map.mp hx
+    simp only [actFor, List.find?] at hxa ⊢
+    by_cases hq : obj = q.1
+    · exact hq.symm
+    · simp [hq] at hxa
+  have hact : ∀ x ∈ t.touches, x.act = .keep ∨ x.act = .retire := by
+    intro x hx
+    rw [htouch] at hx
+    obtain ⟨q, -, rfl⟩ := List.mem_map.mp hx
+    simp only [actFor, List.find?]
+    by_cases hq : obj = q.1 <;> simp [hq]
+  rw [admit_retire ha hact]
+  obtain ⟨-, -, x, hx, hxc, hxa⟩ := retire_derived hc hb
+  have hnd : (t.touches.map Touch.cell).Nodup := by
+    obtain ⟨posts, hk, -⟩ := admit_ok ha
+    have hshape := hk.shape
+    unfold checkShape at hshape
+    simp only [except_bind_ok] at hshape
+    obtain ⟨⟨⟩, hnd, -⟩ := hshape
+    exact firstDup_none (noDup_none hnd)
+  have hndf : ((t.touches.filter fun x => x.act == .retire).map Touch.cell).Nodup :=
+    hnd.sublist ((List.filter_sublist (l := t.touches)).map _)
+  have hall : ∀ y ∈ t.touches.filter (fun x => x.act == .retire), y.cell = obj := fun y hy => by
+    obtain ⟨hy, hya⟩ := List.mem_filter.mp hy
+    exact hof y hy (by simpa using hya)
+  have hxf : x ∈ t.touches.filter (fun x => x.act == .retire) := List.mem_filter.mpr ⟨hx, by simp [hxa]⟩
+  generalize t.touches.filter (fun x => x.act == .retire) = F at hndf hall hxf
+  match F, hndf, hall, hxf with
+  | [], _, _, hxf => cases hxf
+  | [y], _, hall, _ => simp [hall y (List.mem_singleton_self _)]
+  | y :: z :: _, hndf, hall, _ =>
+      have hy := hall y (by simp)
+      have hz := hall z (by simp)
+      simp only [List.map_cons, List.nodup_cons, List.mem_cons, not_or] at hndf
+      exact absurd (hy.trans hz.symm) hndf.1.1
 
 /-! ## Tooth -/
 

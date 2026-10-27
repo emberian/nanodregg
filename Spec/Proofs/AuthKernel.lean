@@ -58,7 +58,8 @@ def NodeEffect (X : Ctx D) (look : Pinned D) (c : Call D) (a : D) (b : Body D) (
   (∃ cl, readKind look e.1 kindGrant = .ok cl ∧
       (e.2 = .retire ∧ slotDigest X e.1 cl grantIssuer = .ok a ∨
         LedgerSpend e.1 cl e.2 ∧ granteeHolds X look e.1 cl a true = .ok ())) ∨
-  (∃ cl, readKind look e.1 kindAccount = .ok cl ∧ AccountMove X look a b e.1)
+  (∃ cl, readKind look e.1 kindAccount = .ok cl ∧
+      (AccountMove X look a b e.1 ∨ e.2 = .retire ∧ slotDigest X e.1 cl slotOwner = .ok a))
 
 /-- **Where an effect of `c`'s walk on `w` comes from**: a receiver the walk dispatched (the signed
 body as the signer, or a callable body), and either that receiver, if not an invoke, derived it, or
@@ -277,19 +278,52 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
       intro e he
       rw [← hd] at he
       exact carve_node hcv e he
-  | revoke g =>
+  | retire x =>
       have hd := stepped_draft h
-      unfold revoke at hd
+      unfold retire at hd
       simp only [except_bind_ok] at hd
-      obtain ⟨cell, hc, issuer, hiss, ⟨⟩, hie, hd⟩ := hd
-      rw [req_ok, decide_eq_true_eq] at hie
-      rw [hie] at hiss
+      obtain ⟨⟨⟩, hchk, hd⟩ := hd
       simp only [pure, Except.pure, Except.ok.injEq] at hd
       intro e he
       rw [← hd] at he
       simp only [List.mem_singleton] at he
       subst he
-      exact .inr (.inr (.inl ⟨cell, hc, .inl ⟨rfl, hiss⟩⟩))
+      cases hl : look x with
+      | error err =>
+          simp only [retireCheck, hl] at hchk
+          obtain ⟨_, h1, -⟩ := except_bind_ok.mp hchk; cases h1
+      | ok o =>
+      cases o with
+      | none =>
+          simp only [retireCheck, hl] at hchk
+          obtain ⟨_, h1, -⟩ := except_bind_ok.mp hchk; cases h1
+      | some cell =>
+      simp only [retireCheck, hl] at hchk
+      obtain ⟨cl, hcl, hchk⟩ := except_bind_ok.mp hchk
+      simp only [Except.ok.injEq] at hcl
+      subst hcl
+      have hrk : ∀ k, cell.kind = k → readKind look x k = .ok cell := fun k hk => by
+        simp [readKind, hl, hk]
+      by_cases hg : cell.kind = kindGrant
+      · rw [if_pos hg] at hchk
+        simp only [except_bind_ok] at hchk
+        obtain ⟨issuer, hiss, hie⟩ := hchk
+        rw [req_ok, decide_eq_true_eq] at hie
+        rw [hie] at hiss
+        exact .inr (.inr (.inl ⟨cell, hrk _ hg, .inl ⟨rfl, hiss⟩⟩))
+      rw [if_neg hg] at hchk
+      by_cases ho : cell.kind = kindObject
+      · exact .inl ⟨cell, hrk _ ho⟩
+      rw [if_neg ho] at hchk
+      by_cases ha : cell.kind = kindAccount
+      · rw [if_pos ha] at hchk
+        simp only [except_bind_ok] at hchk
+        obtain ⟨owner, hown, ⟨⟩, hoe, -⟩ := hchk
+        rw [req_ok, decide_eq_true_eq] at hoe
+        rw [hoe] at hown
+        exact .inr (.inr (.inr ⟨cell, hrk _ ha, .inr ⟨rfl, hown⟩⟩))
+      rw [if_neg ha] at hchk
+      cases hchk
   | issue cap =>
       have hd := stepped_draft h
       unfold issue at hd
@@ -314,8 +348,8 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
       rw [hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact .inr (.inr (.inr ⟨scell, hks, hmove _ (.inl rfl)⟩))
-      · exact .inr (.inr (.inr ⟨dcell, hkd, hmove _ (.inr rfl)⟩))
+      · exact .inr (.inr (.inr ⟨scell, hks, .inl (hmove _ (.inl rfl))⟩))
+      · exact .inr (.inr (.inr ⟨dcell, hkd, .inl (hmove _ (.inr rfl))⟩))
       · exact spendVia_node (.inr (.inl rfl)) hx hsp e he
   | credit well acctR amount via =>
       intro e he
@@ -329,8 +363,8 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
       rw [hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact .inr (.inr (.inr ⟨wcell, hkw, hmove _ (.inl rfl)⟩))
-      · exact .inr (.inr (.inr ⟨acell, hka, hmove _ (.inr rfl)⟩))
+      · exact .inr (.inr (.inr ⟨wcell, hkw, .inl (hmove _ (.inl rfl))⟩))
+      · exact .inr (.inr (.inr ⟨acell, hka, .inl (hmove _ (.inr rfl))⟩))
       · exact spendVia_node (.inr (.inr rfl)) hx hsp e he
 
 /-! ## The walk -/

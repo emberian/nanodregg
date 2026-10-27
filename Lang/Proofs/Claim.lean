@@ -126,7 +126,7 @@ theorem chain_keeps {S : Ty} {ib b : Term} (hg : Term.guardedBy (.lam S ib) 1 0 
 
 theorem keeps_guarded (S : Ty) (ib : Term) :
     Term.guardedBy (.lam S ib) 1 0 (Std.lawBody (Std.keeps S (.lam S ib))) = true := by
-  simp [Std.keeps, Std.lawOf, Std.lawCase, Std.lawCase5, Std.lawBody, Std.guard, Std.okT, Std.refusedT,
+  simp [Std.keeps, Std.lawOf, Std.lawCase, Std.lawCase6, Std.lawBody, Std.guard, Std.okT, Std.refusedT,
     Term.guardedBy, Term.guardedArms, Std.At.new]
 
 theorem isLaw_keeps (S : Ty) (inv : Term) : IsLaw (Std.keeps S inv) := ⟨_, _, _, _, rfl⟩
@@ -135,6 +135,6 @@ theorem noRef_keeps (S : Ty) {inv : Term} (h : NoRef inv) : NoRef (Std.keeps S i
   have hc : NoRef (Std.guard (.app inv (Std.At.new ⟨1⟩)) "invariant" Std.okT) := by
     simp only [Std.guard, NoRef, Std.At.new]
     exact ⟨⟨h, trivial⟩, NoRefStd.okT_, NoRefStd.refusedT_⟩
-  exact NoRefStd.lawOf_ hc hc NoRefStd.okT_ hc
+  exact NoRefStd.lawOf_ hc hc NoRefStd.okT_ hc hc
 
 end Nanodregg.Lang

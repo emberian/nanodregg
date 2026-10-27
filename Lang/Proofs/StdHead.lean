@@ -9,6 +9,7 @@ Over the reference semantics, never by evaluating the term. An admitted write or
 * from `at` to `forked`: names the held roots at the held step count, with other roots
   (`head_at_fork`, L5);
 * from `forked`: changes nothing (`head_forked_frozen`, L3).
+A head admits no retirement (`head_retire_refused`): it is permanent.
 The states are data at `headStateTy` with their scalars in the language's bounds (what `readState`
 reads: `readState_conforms`).
 -/
@@ -190,5 +191,13 @@ theorem head_at_fork {rq occ : Data} {h s s' : Nat} {c r held other w w' : ByteA
   subst e1 e1' e2 e2' e3 e3'
   simp at hd1 hd2 hd3
   exact ⟨hd1, hd2, hd3⟩
+
+/-- **A head is permanent**: the head law admits no retirement (its retire arm is `refused
+"retire"`), so the kernel's `retireCheck` never ends a head object others' receipts name. -/
+theorem head_retire_refused {rq n o x : Data} (ho : rq.field "occasion" = some (.inj "retire" x)) :
+    ¬ Admits lib headLaw rq n o := by
+  rintro ⟨cenv, w, hb⟩
+  simp only [headLaw, lawOf, lawBody] at hb
+  exact refusedT_not_ok (lawCase_retire rfl ho hb)
 
 end Nanodregg.Lang.Std

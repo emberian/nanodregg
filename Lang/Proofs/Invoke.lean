@@ -63,6 +63,7 @@ theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : r
   cases hr : r.occasion with
   | birth => exact .inj rfl (.record .nil)
   | write => exact .inj rfl (.record .nil)
+  | retire => exact .inj rfl (.record .nil)
   | relaw ls =>
     rw [hr] at ho; simp only [occasionOk, decide_eq_true_eq] at ho
     exact .inj rfl (.bytes ho)

@@ -21,8 +21,8 @@ open Nanodregg.Ledger.Escrow
 
 /-! ## The lazy escrow -/
 
-/-- A law that judges no invoke: births and adoptions still `open`, writes and law changes `frozen`. -/
-def esLazyLaw : Term := Std.lawOf5 stateTy startC startC frozenC frozenC (fun _ => Std.okT)
+/-- A law that judges no invoke: births and adoptions still `open`, writes, law changes and retirement `frozen`. -/
+def esLazyLaw : Term := Std.lawOf6 stateTy startC startC frozenC frozenC frozenC (fun _ => Std.okT)
 
 /-- The methods, `refund` spending `"refund"`: the two payouts are two nullifiers. -/
 def esLazyMethods : List (Label × Ty × List Ty × Term) :=

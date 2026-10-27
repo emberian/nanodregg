@@ -63,7 +63,7 @@ private theorem pair_steps {digestOf : ByteArray → Option D} {bytesOf : D → 
         exact ⟨e', List.mem_cons_of_mem _ he', h4, h5⟩
 
 /-- **The escrow pays out at most once over the history the World admits.** Along any
-`ObjectHistory` of one object (its signed and nested invokes, writes, law changes, every other turn
+`ObjectHistory` of one object (its signed and nested invokes, writes, law changes, its retirement, every other turn
 and recorded refusal) whose every judged step was judged by the package `pkg`, read as `escrow` in
 that step's view, at most one call the invokes return is a payout, at a lawful `Ctx` whose program
 is the language over its own codec. -/
@@ -89,7 +89,9 @@ theorem escrow_invokes_one_payout {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.L
     exact Std.chain_mono (R := Std.Step [] law) (fun _ _ _ hs => hs.1) hc
   refine payoutCalls_le_one ps hca (fun x hx => ?_)
   obtain ⟨e, he, hcalls, hn⟩ := hpair x hx
-  obtain ⟨rv, method, args, fuel, rows, used, -, hrun⟩ := (hruns e he).2 pkg (hpkg e he).1
+  by_cases hrt : e.2.2.2.1.occasion = .retire
+  · rw [hcalls, (hruns e he).1 (.inr hrt)]; simp
+  obtain ⟨rv, method, args, fuel, rows, used, -, hrun⟩ := (hruns e he).2 hrt pkg (hpkg e he).1
   rw [hcalls]
   exact runCalls_payout (escrow_program_calls hX hprog (hpkg e he).2 hrun) hn
 

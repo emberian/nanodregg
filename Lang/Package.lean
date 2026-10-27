@@ -67,10 +67,12 @@ def Package.effectOf (p : Package) (ℓ : Label) : Effect := (Row.find? ℓ p.ef
 
 /-- Which act is judged (KERNEL's `Occasion`): a birth (the seed is `old = new`), a write, a law
 replacement by the listed law ids (their digest bytes concatenated in order; the state is unchanged),
-or an invoke of method `i`. A law cases on it; the checker requires one arm per label, so a law
+an invoke of method `i`, or a retirement (the object's end, judged over its last state, `old = new`;
+a law that refuses it makes the object permanent). A law cases on it; the checker requires one arm per label, so a law
 written with `case` has no default arm. -/
 def occasionTy : Ty :=
-  .sum [("adopt", .bytes), ("birth", .record []), ("invoke", .nat), ("relaw", .bytes), ("write", .record [])]
+  .sum [("adopt", .bytes), ("birth", .record []), ("invoke", .nat), ("relaw", .bytes),
+    ("retire", .record []), ("write", .record [])]
 
 /-- What a law and a method see of the call: the signing member, whose authority it uses, the
 object judged or run on (`self`: a method names its own accounts by it, LANG-25), the call's

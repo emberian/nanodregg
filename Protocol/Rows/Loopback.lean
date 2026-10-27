@@ -376,7 +376,7 @@ def sawOp (op : Op) : M D Unit :=
 def kindName : Body D → String
   | .enroll .. => "enroll" | .rotate .. => "rotate" | .install .. => "install"
   | .create .. => "create" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
-  | .grant .. => "grant" | .revoke .. => "revoke"
+  | .grant .. => "grant" | .retire .. => "retire"
   | .issue .. => "issue" | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
 
 /-- What an invoke's run costs, measured on the World the call was planned on (the actor's

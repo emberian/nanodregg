@@ -650,7 +650,7 @@ def forgottenPlants (failures : IO.Ref Nat) : IO Unit := do
   let kw : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "lookup".toUTF8) (2 ^ 40)
   let callUntil (v : Nat) : Receive.Call Kernel.Sim.D :=
     { unsigned := { world := kw.origin, member := 0, key := ByteArray.empty, notBefore := 0, validUntil := v, pins := [],
-                    maxCharge := 0, body := .revoke 0 },
+                    maxCharge := 0, body := .retire 0 },
       signature := ByteArray.empty }
   -- plant-lookup-forgotten (KERNEL-33): the same dead call at the World heights either side of
   -- `journalForgets` (notBefore 0 + 2 * windowMax): `expired` just below, `uncertain forgotten` at it
@@ -733,7 +733,7 @@ def refusalPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
   let kw : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "refused".toUTF8) (2 ^ 40)
   let c : Receive.Call Kernel.Sim.D :=
     { unsigned := { world := kw.origin, member := 7, key := ByteArray.empty, notBefore := 0, validUntil := 100, pins := [],
-                    maxCharge := 0, body := .revoke 0 },
+                    maxCharge := 0, body := .retire 0 },
       signature := ByteArray.empty }
   let lookupOn (v : World Kernel.Sim.D) : String :=
     match handle kx v ⟨0, Protocol.Op.lookup.code, kx.callBytes c⟩ with
@@ -1580,7 +1580,7 @@ def run (args : List String) : IO UInt32 := do
   let kw : World Kernel.Sim.D := World.genesis kx.env (kx.env.hash "nanodregg/host-sim/origin/v1" "lookup".toUTF8) (2 ^ 40)
   let callUntil (v : Nat) : Receive.Call Kernel.Sim.D :=
     { unsigned := { world := kw.origin, member := 0, key := ByteArray.empty, notBefore := 0, validUntil := v, pins := [],
-                    maxCharge := 0, body := .revoke 0 },
+                    maxCharge := 0, body := .retire 0 },
       signature := ByteArray.empty }
   let lookupAt (v : Nat) : String :=
     match handle kx kw ⟨0, Protocol.Op.lookup.code, kx.callBytes (callUntil v)⟩ with

@@ -230,7 +230,7 @@ theorem fillFields_getArg (vals : List Val) : ∀ (r : List (Label × Ty)),
 `boundedPackageWith r f (var 4)` with the literal `max` gives `boundedPackage r f max`. -/
 theorem fill_boundedPackage (r : List (Label × Ty)) (f : Label) (m : Nat) :
     fillPackage [.nat m] (boundedPackageWith r f (.var 4)) = boundedPackage r f m := by
-  simp [fillPackage, boundedPackageWith, boundedPackage, boundedWith, lawOf, lawCase, lawCase5, allOf, guards,
+  simp [fillPackage, boundedPackageWith, boundedPackage, boundedWith, lawOf, lawCase, lawCase6, allOf, guards,
     guard, okT, refusedT, At.newF, At.new, setMethod, resultT, callsT, natT, Term.fill, Term.fillFields,
     Val.lit?, fillFields_getArg]
 
@@ -269,7 +269,7 @@ theorem allowlistLaw_one (S : Ty) (i : ByteArray) : allowlistLaw S [i] = allowli
 /-- **The template at a member is `ownedPackage` at that member.** -/
 theorem fill_ownedPackage (r : List (Label × Ty)) (i : ByteArray) :
     fillPackage [.digest i] (ownedPackageWith r (.var 4)) = ownedPackage r i := by
-  simp [fillPackage, ownedPackageWith, ownedPackage, allowlistWith, lawOf, lawCase, lawCase5, allOf, guards,
+  simp [fillPackage, ownedPackageWith, ownedPackage, allowlistWith, lawOf, lawCase, lawCase6, allOf, guards,
     guard, okT, refusedT, anyOf, At.reqF, At.req, setMethod, resultT, callsT, Term.fill, Term.fillFields,
     Val.lit?, fillFields_getArg]
 

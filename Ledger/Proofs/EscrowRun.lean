@@ -91,7 +91,7 @@ theorem escrow_noRef : NoRef escrow.body := by
   refine ⟨?_, ?_, ?_, ?_, trivial⟩
   · simp [mth, methods, NoRef, NoRefRow, resultT, callsT, someCallT, depositCall, transferT, ofT, st, rq,
       someD, someB, keep, phaseT, slotLabels]
-  · exact lawOf5_ (allOf_ (by simp [hp])) (allOf_ (by simp [hp])) refusedT_ refusedT_
+  · exact lawOf6_ (allOf_ (by simp [hp])) (allOf_ (by simp [hp])) refusedT_ refusedT_ refusedT_
       (by simp [invokeC, Std.guard, NoRef, methodClause, methodIs, refusedT_, allOf_, anyOf_, notT_, hp, hq,
         At.payload, natT])
   · simp [mth, methods, NoRef, NoRefRow, resultT, callsT, someCallT, payoutCall, transferT, ofT, st, rq,

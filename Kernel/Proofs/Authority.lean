@@ -347,12 +347,12 @@ and the Turn spends one of it: its effect appends `left - 1` to that grant's led
 A PUBLIC ENROLMENT POOL is possible (KERNEL-26): a World grant carrying `enroll n` whose grantee is
 the World is held by every enrolled member, so any member may sponsor through it until its count
 is spent; it is still carved from a founder's count (`grant_carves`) and rooted (`grant_rooted`). -/
-theorem enroll_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {key : ByteArray}
-    {next : D} {possession : ByteArray} {via : D} {d : Draft D}
-    (h : enroll X look c a key next possession via = .ok d) :
+theorem enroll_authorized {X : Ctx D} {look : Pinned D} {a : At D} {key : ByteArray}
+    {next origin : D} {join : ByteArray} {via : D} {d : Draft D}
+    (h : enroll X look a key next origin join via = .ok d) :
     (∃ p, Chain X look (worldId X) (.enroll 0) true via a.actor p) ∧
       ∃ cell i left, readKind look via kindGrant = .ok cell ∧ enrollLeft via cell = .ok (i, left) ∧
-        0 < left ∧ X.verify key (possessionMessage X a.actor next key) possession = true ∧
+        0 < left ∧ X.verify key (joinMessage X origin a.actor next key) join = true ∧
         d.effects = [(via, .write [.set (enrollBase + i) (countBytes (left - 1))])] ∧ d.nullifiers = [] := by
   unfold enroll at h
   simp only [except_bind_ok] at h
@@ -362,6 +362,26 @@ theorem enroll_authorized {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} 
   simp only [pure, Except.pure, Except.ok.injEq] at h
   subst h
   exact ⟨⟨p, walk_chain hw⟩, cell, i, left, hc, hl, hu, hv, by simp, rfl⟩
+
+omit [Ord D] in
+/-- **A member is its consent** (PROTOCOL-79). A derived enrolment's join verifies under the
+enrolled key over `joinMessage` of the World it names (that World is the receiving one:
+`receive_join_world`), and the one cell it bears is at `memberId`, the digest of that consent: a
+second enrolment of the same consent bears the same id, which `World.checkCreates` refuses
+`idTaken`. -/
+theorem enroll_join_bound {X : Ctx D} {look : Pinned D} {a : At D} {key : ByteArray}
+    {next origin : D} {join : ByteArray} {via : D} {d : Draft D}
+    (h : enroll X look a key next origin join via = .ok d) :
+    X.verify key (joinMessage X origin a.actor next key) join = true ∧
+      d.creates.map Prod.fst = [memberId X origin a.actor next key] := by
+  obtain ⟨_, _, _, _, _, _, _, hv, -, -⟩ := enroll_authorized h
+  refine ⟨hv, ?_⟩
+  unfold enroll at h
+  simp only [except_bind_ok] at h
+  obtain ⟨_, _, _, _, _, _, ⟨⟩, _, h⟩ := h
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  subst h
+  rfl
 
 omit [Ord D] in
 /-- **World rights are rooted at genesis.** A derived grant on the World, or one carrying an

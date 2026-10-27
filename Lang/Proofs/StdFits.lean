@@ -133,28 +133,31 @@ theorem isState_prints {k : Nat} {t : Term} {states : List Label} (s : Label) (h
 
 /-! ## The law skeleton -/
 
-theorem lawOf5_prints {M N : Nat} {S : Ty} {birth adopt relaw write invoke : At → Term} (hS : TyPrints M S)
+theorem lawOf6_prints {M N : Nat} {S : Ty} {birth adopt relaw retire write invoke : At → Term}
+    (hS : TyPrints M S)
     (hb : Prints N 4 (birth ⟨1⟩)) (ha : Prints N 4 (adopt ⟨1⟩)) (hr : Prints N 4 (relaw ⟨1⟩))
-    (hw : Prints N 4 (write ⟨1⟩)) (hi : Prints N 4 (invoke ⟨1⟩)) :
-    Prints (max (M + 2) (max 9 (N + 5))) 0 (lawOf5 S birth adopt relaw write invoke) := by
-  have hcase : Prints (N + 2) 3 (lawCase5 birth adopt relaw write invoke) := by
+    (hrt : Prints N 4 (retire ⟨1⟩)) (hw : Prints N 4 (write ⟨1⟩)) (hi : Prints N 4 (invoke ⟨1⟩)) :
+    Prints (max (M + 2) (max 9 (N + 5))) 0 (lawOf6 S birth adopt relaw retire write invoke) := by
+  have hcase : Prints (N + 2) 3 (lawCase6 birth adopt relaw retire write invoke) := by
     refine prints_case ((prints_get (prints_var (k := 3) (i := 0) (by omega)) (by decide)).mono
       (by have := hb.pos; omega)) ?_ (by simp [listMax_eq])
     exact arms_cons ⟨show labelOk "adopt" = true by decide, ha⟩ (arms_cons ⟨show labelOk "birth" = true by decide, hb⟩
       (arms_cons ⟨show labelOk "invoke" = true by decide, hi⟩ (arms_cons ⟨show labelOk "relaw" = true by decide, hr⟩
-      (arms_cons ⟨show labelOk "write" = true by decide, hw⟩ arms_nil))))
+      (arms_cons ⟨show labelOk "retire" = true by decide, hrt⟩
+      (arms_cons ⟨show labelOk "write" = true by decide, hw⟩ arms_nil)))))
   have hN := hb.pos
-  have h2 : Prints (max 6 (N + 2) + 1) 2 (.lam reqTy (lawCase5 birth adopt relaw write invoke)) :=
+  have h2 : Prints (max 6 (N + 2) + 1) 2 (.lam reqTy (lawCase6 birth adopt relaw retire write invoke)) :=
     prints_lam (reqTy_prints.mono (by omega)) (hcase.mono (by omega))
-  have h1 : Prints (max (M + 1) (max 7 (N + 3) + 1)) 1 (.lam S (.lam reqTy (lawCase5 birth adopt relaw write invoke))) :=
+  have h1 : Prints (max (M + 1) (max 7 (N + 3) + 1)) 1 (.lam S (.lam reqTy (lawCase6 birth adopt relaw retire write invoke))) :=
     (prints_lam (k := 1) (hS.mono (M := max M (max 7 (N + 3))) (by omega)) (h2.mono (by omega))).mono (by omega)
   exact (prints_lam (k := 0) (hS.mono (M := max (M + 1) (max 8 (N + 4))) (by omega)) (h1.mono (by omega))).mono (by omega)
 
-theorem lawOf_prints {M N : Nat} {S : Ty} {birth adopt relaw change : At → Term} (hS : TyPrints M S)
+theorem lawOf_prints {M N : Nat} {S : Ty} {birth adopt relaw retire change : At → Term}
+    (hS : TyPrints M S)
     (hb : Prints N 4 (birth ⟨1⟩)) (ha : Prints N 4 (adopt ⟨1⟩)) (hr : Prints N 4 (relaw ⟨1⟩))
-    (hc : Prints N 4 (change ⟨1⟩)) :
-    Prints (max (M + 2) (max 9 (N + 5))) 0 (lawOf S birth adopt relaw change) :=
-  lawOf5_prints hS hb ha hr hc hc
+    (hrt : Prints N 4 (retire ⟨1⟩)) (hc : Prints N 4 (change ⟨1⟩)) :
+    Prints (max (M + 2) (max 9 (N + 5))) 0 (lawOf S birth adopt relaw retire change) :=
+  lawOf6_prints hS hb ha hr hrt hc hc
 
 /-! ## The laws -/
 
@@ -171,7 +174,7 @@ theorem allowlistLaw_prints {M : Nat} {S : Ty} (ids : List ByteArray) (hS : TyPr
       exact (prints_prim .deq (reqF_prints (by decide) (by decide)) (prints_digest 4 i)).mono (by omega)
   have hc := allOf1_prints (w := "not on the allowlist") hl (by omega)
   unfold allowlistLaw
-  exact (lawOf_prints hS hc hc hc hc).mono (by omega)
+  exact (lawOf_prints hS hc hc hc hc hc).mono (by omega)
 
 /-- A machine's text is nested `e + 11` deep (`e` edges), or its state type's depth plus 2. -/
 theorem machineLaw_prints {M : Nat} {S : Ty} {f : Label} {states : List Label} {initial : Label}
@@ -198,7 +201,7 @@ theorem machineLaw_prints {M : Nat} {S : Ty} {f : Label} {states : List Label} {
   have hfrozen : Prints (6 + edges.length) 4 (refusedT "a machine changes only by its methods") :=
     (refusedT_prints 4 _).mono (by omega)
   unfold machineLaw
-  exact (lawOf5_prints hS hstart hstart hfrozen hfrozen hinv).mono (by omega)
+  exact (lawOf6_prints hS hstart hstart hfrozen hfrozen hfrozen hinv).mono (by omega)
 
 theorem all1 {P : Term × String → Prop} {a : Term × String} (ha : P a) : ∀ p ∈ [a], P p := by simpa using ha
 
@@ -319,7 +322,8 @@ theorem quorumLaw_prints {M : Nat} {S : Ty} (T : Ty) (members : List ByteArray) 
     exact (guards_prints (N := 10 + members.length) (all2 (n1.mono (by omega)) (hlt.mono (by omega))) (h1.mono (by omega))
       (by omega)).mono (by simp; omega)
   unfold quorumLaw
-  exact (lawOf_prints hS hfresh hfresh hrelaw hchange).mono (by omega)
+  exact (lawOf_prints hS hfresh hfresh hrelaw ((refusedT_prints 4 "quorum").mono (by omega)) hchange).mono
+    (by omega)
 
 /-! ## The checked generators' output has a text, and it reads back
 

@@ -400,11 +400,11 @@ def lawPackage (l verdict : String) : String :=
 
 def permitAll : String := lawPackage "permit" s!"(inj {verdictTy} ok (record))"
 /-- Admits a birth and its own adoption (KERNEL-27: a new law judges the state it is adopted over
-under `adopt`) and refuses every other act: writes, invokes and its own replacement. A deny-all law
+under `adopt`) and refuses every other act: writes, invokes, its own replacement and a retirement. A deny-all law
 cannot be adopted at all, so this is what "deny the newcomer and the repair" is. -/
 def sealedLaw : String :=
   let no := s!"(inj {verdictTy} refused \"sealed\")"
-  lawPackage "sealed" s!"(case (. r occasion) (adopt x (inj {verdictTy} ok (record))) (birth x (inj {verdictTy} ok (record))) (invoke x {no}) (relaw x {no}) (write x {no}))"
+  lawPackage "sealed" s!"(case (. r occasion) (adopt x (inj {verdictTy} ok (record))) (birth x (inj {verdictTy} ok (record))) (invoke x {no}) (relaw x {no}) (retire x {no}) (write x {no}))"
 def hermesLaw : String := lawPackage "hermes" s!"(inj {verdictTy} ok (record))"
 
 /-- THE BAR's programmed object: a counter whose method `add n` adds to its total, judged by one
@@ -1657,10 +1657,10 @@ def staleRefusingRow : Row where
   name := "staleRefusing"
   replaces := []
   ops := settled
-  kinds := ["enroll", "install", "create", "grant", "write", "revoke"]
+  kinds := ["enroll", "install", "create", "grant", "write", "retire"]
   drive := .members (welcome ++ [
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"],
-      expect := .declined "stale", fault := .race "sponsor" ["revoke", "@g"] },
+      expect := .declined "stale", fault := .race "sponsor" ["retire", "@g"] },
     { actor := "newcomer", act := .rerun, expect := .refused "stale" }])
   plant := .measured "receive-first staleBehind: line 7 declined stale, the settlement open"
 

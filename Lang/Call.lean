@@ -96,7 +96,7 @@ def callData (A : Option Ty) : Body D → Option Data
         ("once", optData Data.bytes once), ("src", acctRefData bytesOf src),
         ("via", optData (digestData bytesOf) via)]))
   | .install pkg => some (.inj "install" (.record [("pkg", .bytes pkg)]))
-  | .enroll .. | .rotate .. | .create .. | .write .. | .law .. | .revoke .. | .issue .. =>
+  | .enroll .. | .rotate .. | .create .. | .write .. | .law .. | .retire .. | .issue .. =>
       none
 
 end

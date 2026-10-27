@@ -158,7 +158,7 @@ def lifeRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r6 s!"DC6 A selects B's text: {v6}; selected {hole_selectedOf Sim.env r6.st.host obj == some (some cB)}; text {textOf r6.st.host cB}"
     (v6 == "admitted" && hole_selectedOf Sim.env r6.st.host obj == some (some cB))
   -- DC7 A revokes B's grant: the justification is withdrawn; the next judgment says so by name
-  let (r7, v7, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, gB]) (.revoke gB))
+  let (r7, v7, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, gB]) (.retire gB))
   r := note r7 s!"DC7 A revokes B's grant: {v7}" (v7 == "admitted")
   let (r8, v8, _) := go prog r (call r a none "rejudge" (candArg cB) (pinCand r.st.host cB ++ pinFact r.st.host gBb) [gB])
   r := note r8 s!"DC8 A rejudges B's text: {v8}; status {status r8.st.host cB}"

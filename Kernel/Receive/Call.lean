@@ -54,9 +54,10 @@ inductive AcctRef (D : Type)
 /-- What a call asks for, one constructor per operation kind. -/
 inductive Body (D : Type)
   /-- the signer sponsors a new member with `key`, precommitting the digest of its next key;
-  `possession` is the new key's signature over the enrolment; `via` is the signer's World grant
-  carrying `Right.enroll`, whose count the enrolment spends -/
-  | enroll (key : ByteArray) (next : D) (possession : ByteArray) (via : D)
+  `join` is the new key's consent to join World `origin` through this sponsor (its signature over
+  `joinMessage`, PROTOCOL-79: the consent names the World, so it joins one World once); `via` is
+  the signer's World grant carrying `Right.enroll`, whose count the enrolment spends -/
+  | enroll (key : ByteArray) (next : D) (origin : D) (join : ByteArray) (via : D)
   /-- the signer's member moves to `key`, which must be the precommitted one, and precommits
   `next`; the call is signed by `key` -/
   | rotate (key : ByteArray) (next : D)
@@ -75,8 +76,12 @@ inductive Body (D : Type)
   that grant's principal, attenuated). A grant on the World (`worldId`) is how a member may
   follow (`observe`) and enrol (`enroll n`); it always has a parent -/
   | grant (target : D) (grantee : D) (rights : List Right) (parent : Option D)
-  /-- retire a grant the signer issued -/
-  | revoke (grant : D)
+  /-- retire `cell` (KERNEL-70): a grant by its issuer (a revocation: every chain through it dies
+  with it), a data or programmed object by its owner (every law in force judging the occasion
+  `retire`, and its relations cleared first: `World.admit`'s `rowsRemain`), an account by its owner
+  once it holds nothing (balance and floor 0). Its storage comes back to the World's allowance
+  (`World.credit`, KERNEL-19); its id stays a tombstone, so nothing is born there again (`idTaken`) -/
+  | retire (cell : D)
   /-- bear a new denomination: its WELL, a value account owned by the signer whose id is the
   denomination and whose floor is `cap`, the most that can ever be outstanding of it (LEDGER-3) -/
   | issue (cap : Nat)
@@ -128,8 +133,11 @@ inductive Refusal (D : Type)
   | unknownKey (member : D)
   /-- a rotation to a key whose digest is not the precommitted one -/
   | notPrecommitted (member : D)
-  /-- the enrolled key did not sign its own enrolment -/
-  | badPossession
+  /-- the enrolled key's join does not verify: it did not consent to this join (PROTOCOL-79) -/
+  | badJoin
+  /-- the enrolled key consented to join ANOTHER World (its join names another origin than the
+  call's, PROTOCOL-79): a consent is per World, so one carried from World A joins nothing in B -/
+  | otherWorld
   /-- the derivation needed a cell the caller did not pin -/
   | unpinned (cell : D)
   | missingCell (cell : D)
@@ -170,6 +178,12 @@ inductive Refusal (D : Type)
   or `credit` on it (KERNEL-60: so no grant carries two ledgers, and no carve can skip one) -/
   | rightTarget (target : D)
   | notIssuer (grant : D)
+  /-- a retirement of an object or an account by another than its owner (KERNEL-70) -/
+  | notOwner (cell : D)
+  /-- a retirement of an account that still holds value: a nonzero balance or floor (KERNEL-70) -/
+  | valueRemains (cell : D)
+  /-- a retirement of a cell no act retires: a member, a package or the World's authority (KERNEL-70) -/
+  | notRetirable (cell : D)
   | grantTooDeep
   | overPrice (charge : Nat)
   /-- a logged step is not what its own event derives on the World before it: the event does not
@@ -229,7 +243,8 @@ def Refusal.name {D : Type} : Refusal D → String
   | .badSignature => "badSignature"
   | .unknownKey _ => "unknownKey"
   | .notPrecommitted _ => "notPrecommitted"
-  | .badPossession => "badPossession"
+  | .badJoin => "badJoin"
+  | .otherWorld => "otherWorld"
   | .unpinned _ => "unpinned"
   | .missingCell _ => "missingCell"
   | .wrongKind _ _ => "wrongKind"
@@ -250,6 +265,9 @@ def Refusal.name {D : Type} : Refusal D → String
   | .creditSpent _ => "creditSpent"
   | .rightTarget _ => "rightTarget"
   | .notIssuer _ => "notIssuer"
+  | .notOwner _ => "notOwner"
+  | .valueRemains _ => "valueRemains"
+  | .notRetirable _ => "notRetirable"
   | .grantTooDeep => "grantTooDeep"
   | .overPrice _ => "overPrice"
   | .eventMismatch => "eventMismatch"
@@ -311,6 +329,9 @@ inductive Occasion (D : Type)
   | adopt (laws : List D)
   /-- `invoke` of method `method` -/
   | invoke (method : Nat)
+  /-- `retire` of the object (KERNEL-70): the laws in force judge its end over its last state (`old =
+  new`); a law that refuses it makes the object permanent -/
+  | retire
   deriving DecidableEq
 
 /-- Who a call acts for, as member ids: `agent` signed; `principal` is whose authority it
@@ -424,7 +445,11 @@ def retryPres {D : Type} (t : Turn D) (l : List (Step D)) : List (String × Byte
 
 def domWorld : String := "nanodregg/kernel/world/v1"
 def domNextKey : String := "nanodregg/kernel/next-key/v1"
-def tagPossession : ByteArray := "nanodregg/kernel/possession/v1".toUTF8
+/-- The domain a join consent begins with (PROTOCOL-79; replaces the World-free
+`nanodregg/kernel/possession/v1`, which named the sponsor and not the World). -/
+def domJoin : ByteArray := "nanodregg/kernel/join/v1".toUTF8
+/-- The domain of a member's id: the digest of the join it consented to (PROTOCOL-79). -/
+def domMemberId : String := "nanodregg/kernel/member-id/v1"
 
 variable {D : Type} [Ord D]
 
@@ -467,15 +492,26 @@ def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domNextKey key
 
 /-- The call signature's domain (KERNEL-42): every message a member key signs begins with its own
 domain, so a call's signature is never one over another protocol's message (a read envelope, a
-possession proof, an identity probe): `Protocol.Proofs.Domains`. -/
+join consent, an identity probe): `Protocol.Proofs.Domains`. -/
 def domCall : ByteArray := "nanodregg/kernel/call-signature".toUTF8
 
 /-- What a call's signature is over: `domCall`, then the call's canonical unsigned bytes. -/
 def Ctx.callMessage (X : Ctx D) (u : Unsigned D) : ByteArray := domCall ++ X.unsignedBytes u
 
-/-- What a new key signs to prove its holder asked to be enrolled by this sponsor. -/
-def possessionMessage (X : Ctx D) (sponsor : D) (next : D) (key : ByteArray) : ByteArray :=
-  tagPossession ++ X.env.bytes sponsor ++ X.env.bytes next ++ key
+/-- What a new key signs to consent to join World `origin` through `sponsor`, precommitting `next`
+(PROTOCOL-79). Possession of `key` needs no World: ANY signature `key` makes shows it, so a join
+that verifies under `key` is also its holder's possession proof. What needs the World is the
+CONSENT: a consent naming only the sponsor (the old `possession/v1` message) let that sponsor enrol
+the key again in a carried World, where its member id survives (KERNEL-40), without the holder's
+new consent. -/
+def joinMessage (X : Ctx D) (origin sponsor next : D) (key : ByteArray) : ByteArray :=
+  domJoin ++ X.env.bytes origin ++ X.env.bytes sponsor ++ X.env.bytes next ++ key
+
+/-- A member's id: the digest of the join it consented to (PROTOCOL-79). Content-addressed, so the
+same consent enrolled again in the same World names the same id, which is taken (`idTaken`): one
+consent, one member. -/
+def memberId (X : Ctx D) (origin sponsor next : D) (key : ByteArray) : D :=
+  X.env.hash domMemberId (joinMessage X origin sponsor next key)
 
 /-- What `effects` do to `cell`: the act of the effect on it, `keep` when there is none
 (`effectsPinned` has made the effect cells distinct, so "the first" is "the only"). -/
@@ -525,6 +561,11 @@ def Body.callable : Body D → Bool
   | .invoke .. | .transfer .. | .account .. | .credit .. | .grant .. | .install .. => true
   | _ => false
 
+/-- The World an enrolment's join names (PROTOCOL-79); `none` for every other Body. -/
+def Body.joinOrigin : Body D → Option D
+  | .enroll _ _ origin _ _ => some origin
+  | _ => none
+
 /-- The body is an invoke (the one receiver that derives calls through `sub`). -/
 def Body.isInvoke : Body D → Bool
   | .invoke .. => true
@@ -534,7 +575,7 @@ def Body.isInvoke : Body D → Bool
 def Body.kindName : Body D → String
   | .enroll .. => "enroll" | .rotate .. => "rotate" | .install .. => "install"
   | .create .. => "create" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
-  | .grant .. => "grant" | .revoke .. => "revoke" | .issue .. => "issue"
+  | .grant .. => "grant" | .retire .. => "retire" | .issue .. => "issue"
   | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
 
 /-- What row effects do to row slot `s`: `keep` when there is none. -/

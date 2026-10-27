@@ -16,6 +16,8 @@ The law `head` is the one decision (every change, whatever method wrote it):
   a lower height at a higher step count is `badHead` (an honest fold never lowers its height);
 * `at` → `forked`: only naming the held roots at the held step count, with other roots (`badFork`);
 * `forked` → anything else: `forkedHead` (frozen).
+A relaw is refused `relaw`, and a retirement `retire`: a head is an anchor other Worlds' receipts
+are checked against, so it is permanent (KERNEL-70).
 A receipt is checked against an `at` head (`Protocol.Foreign.check`, by its height and roots; the
 chain is for comparing folds, PROTOCOL-75); a forked head checks none.
 -/
@@ -75,7 +77,8 @@ def headSeed (a : At) : Term :=
 
 /-- The law: `head`. -/
 def headLaw : Term :=
-  lawOf headStateTy headSeed headSeed (fun _ => refusedT "relaw") headChange
+  lawOf headStateTy headSeed headSeed (fun _ => refusedT "relaw") (fun _ => refusedT "retire")
+    headChange
 
 /-- `post (arg : headAtTy)`: the head becomes `at arg`. -/
 def headPost : Term :=

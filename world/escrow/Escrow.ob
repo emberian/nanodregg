@@ -20,7 +20,7 @@
                 (via (none digest)))))
   (law escrow
     (on (adopt birth) (all ((is Phase old.phase open) "notOpen") ((is Phase new.phase open) "notOpen")))
-    (on (relaw write) (refuse "frozen"))
+    (on (relaw retire write) (refuse "frozen"))
     (on invoke m
       (check ((not (any (is Phase old.phase refunded) (is Phase old.phase released))) "settled")
         (if (== m (index deposit))

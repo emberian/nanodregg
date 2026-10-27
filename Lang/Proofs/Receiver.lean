@@ -262,16 +262,17 @@ theorem popcount_ {t : Term} {cnt : Nat} (ht : NoRef t) : NoRef (popcount t cnt)
 theorem at_ (a : At) : NoRef a.old ∧ NoRef a.new ∧ NoRef a.req ∧ NoRef a.payload :=
   ⟨trivial, trivial, trivial, trivial⟩
 
-theorem lawOf_ {S : Ty} {b ad rl c : At → Term} (hb : NoRef (b ⟨1⟩)) (had : NoRef (ad ⟨1⟩))
-    (hrl : NoRef (rl ⟨1⟩)) (hc : NoRef (c ⟨1⟩)) : NoRef (lawOf S b ad rl c) := by
-  simp only [lawOf, lawCase, lawCase5, NoRef, NoRefRow]
-  exact ⟨trivial, had, hb, hc, hrl, hc, trivial⟩
+theorem lawOf_ {S : Ty} {b ad rl rt c : At → Term} (hb : NoRef (b ⟨1⟩)) (had : NoRef (ad ⟨1⟩))
+    (hrl : NoRef (rl ⟨1⟩)) (hrt : NoRef (rt ⟨1⟩)) (hc : NoRef (c ⟨1⟩)) :
+    NoRef (lawOf S b ad rl rt c) := by
+  simp only [lawOf, lawCase, lawCase6, NoRef, NoRefRow]
+  exact ⟨trivial, had, hb, hc, hrl, hrt, hc, trivial⟩
 
-theorem lawOf5_ {S : Ty} {b ad rl wr iv : At → Term} (hb : NoRef (b ⟨1⟩)) (had : NoRef (ad ⟨1⟩))
-    (hrl : NoRef (rl ⟨1⟩)) (hwr : NoRef (wr ⟨1⟩)) (hiv : NoRef (iv ⟨1⟩)) :
-    NoRef (lawOf5 S b ad rl wr iv) := by
-  simp only [lawOf5, lawCase5, NoRef, NoRefRow]
-  exact ⟨trivial, had, hb, hiv, hrl, hwr, trivial⟩
+theorem lawOf6_ {S : Ty} {b ad rl rt wr iv : At → Term} (hb : NoRef (b ⟨1⟩)) (had : NoRef (ad ⟨1⟩))
+    (hrl : NoRef (rl ⟨1⟩)) (hrt : NoRef (rt ⟨1⟩)) (hwr : NoRef (wr ⟨1⟩)) (hiv : NoRef (iv ⟨1⟩)) :
+    NoRef (lawOf6 S b ad rl rt wr iv) := by
+  simp only [lawOf6, lawCase6, NoRef, NoRefRow]
+  exact ⟨trivial, had, hb, hiv, hrl, hrt, hwr, trivial⟩
 
 end NoRefStd
 
@@ -279,7 +280,7 @@ open Std NoRefStd in
 theorem noRef_ownerSigns (S : Ty) : NoRef (ownerSigns S) := by
   have : NoRef (allOf [(.prim .deq ((⟨1⟩ : At).reqF "agent") ((⟨1⟩ : At).reqF "principal"),
       "not signed by the owner")]) := allOf_ (by simp)
-  exact lawOf_ this this this this
+  exact lawOf_ this this this this this
 
 open Std NoRefStd in
 theorem noRef_allowlist (S : Ty) (ids : List ByteArray) : NoRef (allowlistLaw S ids) := by
@@ -287,13 +288,13 @@ theorem noRef_allowlist (S : Ty) (ids : List ByteArray) : NoRef (allowlistLaw S 
       "not on the allowlist")]) := allOf_ (by
         simp only [List.mem_singleton, forall_eq]
         exact anyOf_ (by simp))
-  exact lawOf_ this this this this
+  exact lawOf_ this this this this this
 
 open Std NoRefStd in
 theorem noRef_bounded (S : Ty) (f : Label) (max : Nat) : NoRef (bounded S f max) := by
   have : NoRef (allOf [(.prim .le ((⟨1⟩ : At).newF f) (natT max), s!"{f} over the bound")]) :=
     allOf_ (by simp)
-  exact lawOf_ this this okT_ this
+  exact lawOf_ this this okT_ okT_ this
 
 open Std NoRefStd in
 theorem noRef_quorumLaw (S T : Ty) (ms : List ByteArray) (k : Nat) (g : Label) :
@@ -316,7 +317,7 @@ theorem noRef_quorumLaw (S T : Ty) (ms : List ByteArray) (k : Nat) (g : Label) :
     guards_ (all_cons hmem all_nil) (allOf_ (all_cons hq (all_cons hpl all_nil)))
   unfold quorumLaw
   try simp only []
-  refine lawOf_ (allOf_ (by simp)) (allOf_ (by simp)) hrelaw ?_
+  refine lawOf_ (allOf_ (by simp)) (allOf_ (by simp)) hrelaw refusedT_ ?_
   refine guards_ (all_cons hmem (all_cons ⟨trivial, trivial⟩ all_nil)) ?_
   refine ⟨notT_ (eqAt_ trivial trivial), ?_, ?_⟩
   · exact allOf_ (all_cons hq (all_cons hps (all_cons ⟨trivial, trivial⟩ all_nil)))
@@ -330,7 +331,7 @@ open Std NoRefStd in
 theorem noRef_windowedLaw (S T : Ty) (W limit : Nat) (g : Label) : NoRef (windowedLaw S T W limit g) := by
   unfold windowedLaw
   try simp only []
-  refine lawOf_ ?_ ?_ okT_ ?_
+  refine lawOf_ ?_ ?_ okT_ okT_ ?_
   · exact guards_ (by simp) (allOf_ (by simp))
   · exact guards_ (by simp) (allOf_ (by simp))
   · refine guards_ (by simp) ⟨⟨trivial, trivial⟩, allOf_ ?_, allOf_ ?_⟩
@@ -354,7 +355,7 @@ theorem noRef_machineLaw (S : Ty) (f : Label) (states : List Label) (initial : L
   try simp only []
   have hs : NoRef (allOf [(isState states ((⟨1⟩ : At).newF f) initial, s!"{f} does not start at {initial}")]) :=
     allOf_ (by simpa using noRef_isState states (t := (⟨1⟩ : At).newF f) (by simp) initial)
-  refine lawOf5_ hs hs refusedT_ refusedT_ (allOf_ ?_)
+  refine lawOf6_ hs hs refusedT_ refusedT_ refusedT_ (allOf_ ?_)
   simp only [List.mem_singleton, forall_eq]
   refine anyOf_ ?_
   simp only [List.mem_map]
@@ -368,9 +369,10 @@ theorem noRef_machineLaw (S : Ty) (f : Label) (states : List Label) (initial : L
 /-- A law term of the shape the receiver's run reads (`runLaw_ref_admits`): `λ old. λ new. λ req. b`. -/
 def IsLaw (t : Term) : Prop := ∃ A B C b, t = .lam A (.lam B (.lam C b))
 
-theorem isLaw_lawOf {S : Ty} {b ad rl c : Std.At → Term} : IsLaw (Std.lawOf S b ad rl c) :=
+theorem isLaw_lawOf {S : Ty} {b ad rl rt c : Std.At → Term} : IsLaw (Std.lawOf S b ad rl rt c) :=
   ⟨_, _, _, _, rfl⟩
-theorem isLaw_lawOf5 {S : Ty} {b ad rl wr iv : Std.At → Term} : IsLaw (Std.lawOf5 S b ad rl wr iv) :=
+theorem isLaw_lawOf6 {S : Ty} {b ad rl rt wr iv : Std.At → Term} :
+    IsLaw (Std.lawOf6 S b ad rl rt wr iv) :=
   ⟨_, _, _, _, rfl⟩
 
 /-! ## The leftovers of LANG-4's vacuity read (LANG-55)
@@ -574,6 +576,25 @@ theorem judgeOne_quorum_relaw {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq
   cases hx
   exact ⟨hms, hk1, hk2, o, ho, hm, hk, hs⟩
 
+/-- **A quorum package refuses a retirement, as the receiver runs it**: an object judged by a package
+holding `quorumLaw` is never retired (`Std.quorum_retire_refused`): the kernel's `retireCheck` runs
+this judge, so a retirement of it is `lawDenied` (or a fault), never admitted. -/
+theorem judgeOne_quorum_retire_refused {S T : Ty} {ms : List ByteArray} {k : Nat} {g ℓq : Label}
+    {laws : List (Label × Term)} {methods : List (Label × Ty × List Ty × Term)}
+    {look : Pinned D} {law : D} {old new : Kernel.Slots} {r : Req D}
+    (hid : digestOf (bytesOf law) = some law)
+    (hp : readPackage look law = .ok (Std.pkgOf S laws methods))
+    {t : Term} (hqc : Std.quorum S T ms k g = .ok t) (hq : (ℓq, t) ∈ laws)
+    (hocc : r.occasion = .retire) :
+    judgeOne bytesOf digestOf look law old new r ≠ .ok () := by
+  intro h
+  obtain ⟨rfl, -⟩ := Std.quorum_ok hqc
+  obtain ⟨o, n, -, -, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp h
+  obtain ⟨lib, ha⟩ := hall _ hq (noRef_quorumLaw S T ms k g) isLaw_lawOf
+  have hro := reqData_occasion bytesOf r
+  rw [hocc] at hro; simp only [occasionData] at hro
+  exact Std.quorum_retire_refused hro ha
+
 /-- **A machine package, as the receiver runs it** (HOSTING's grain lifecycle is one): an invoke
 of method `m` the receiver admits moved the machine field along an edge `(a, m, b)`. -/
 theorem judgeOne_machine_invoke {S : Ty} {f ℓm : Label} {states : List Label} {initial : Label}
@@ -588,7 +609,7 @@ theorem judgeOne_machine_invoke {S : Ty} {f ℓm : Label} {states : List Label} 
     ∃ o n, readState digestOf (recordRow S) old = .ok o ∧ readState digestOf (recordRow S) new = .ok n ∧
       ∃ a b, (a, m, b) ∈ edges ∧ (∃ y, o.field f = some (.inj a y)) ∧ ∃ y, n.field f = some (.inj b y) := by
   obtain ⟨o, n, ho, hn, hall⟩ := judgeOne_pkgOf_admits bytesOf digestOf hid hp h
-  obtain ⟨lib, ha⟩ := hall _ hq (noRef_machineLaw S f states initial edges) isLaw_lawOf5
+  obtain ⟨lib, ha⟩ := hall _ hq (noRef_machineLaw S f states initial edges) isLaw_lawOf6
   have hro := reqData_occasion bytesOf r
   rw [hocc] at hro; simp only [occasionData] at hro
   obtain ⟨a, m', b, he, hx, hoa, hnb⟩ := Std.machine_invoke ha hro

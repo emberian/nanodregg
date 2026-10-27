@@ -236,7 +236,7 @@ fn a_section_repairs_across_a_revoked_contributor() {
     assert!(state.contains(&c1), "selected: {state}");
 
     // The grant revoked: the justification is withdrawn, and the next judgment says so by name.
-    a.ok(&["revoke", &g1]);
+    a.ok(&["retire", &g1]);
     a.ok(&[
         "invoke",
         &obj,

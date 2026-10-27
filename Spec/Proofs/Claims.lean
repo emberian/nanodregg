@@ -136,7 +136,8 @@ def Integrity.value (S : System D) : Prop :=
 
 /-- **B3. Law (what an object's author is promised), for `NoRef` laws.** Along an audited log, an
 object live at the start has a history of judged steps (`ObjectHistory`), its package never
-changes, and EVERY history of it between the two Worlds in whose judged steps a `NoRef` law `t` of
+changes while it lives (at the end it is live with the same package, or retired: its owner's signed
+`retire`, judged by its laws on the occasion `retire`, left a tombstone, KERNEL-70), and EVERY history of it between the two Worlds in whose judged steps a `NoRef` law `t` of
 its package is in force is a chain of steps the law's reference meaning admits (`Std.Step [] t`,
 the `BigStep` semantics), each paired with the request that made it. Every history, not some: a
 judged step carries the view of the call that made it, and a step of another call reaching the same
@@ -151,7 +152,8 @@ def Integrity.law (S : System D) : Prop :=
     ∀ {w w' : World D} {l : List (Step D)}, Audited S w l w' → CellsCanon S.X.env w →
     ∀ {cell : Cell}, w.live S.X.env obj = some cell → cell.kind = kindObject →
       (∃ tr, ObjectHistory S.X obj w w' tr) ∧
-        (∃ cell', w'.live S.X.env obj = some cell' ∧ packageOf S.X obj cell' = packageOf S.X obj cell) ∧
+        ((∃ cell', w'.live S.X.env obj = some cell' ∧ packageOf S.X obj cell' = packageOf S.X obj cell) ∨
+          w'.entry S.X.env obj = some .tomb) ∧
         ∀ tr, ObjectHistory S.X obj w w' tr →
           (∀ e ∈ tr, law ∈ e.2.1.toList ++ e.2.2.1 ∧ Lang.readPackage e.1 law = .ok p) →
           ∀ {o : Lang.Data}, Lang.readState S.X.digestOf (Lang.recordRow p.state) (stateOf cell) = .ok o →

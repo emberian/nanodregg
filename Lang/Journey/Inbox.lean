@@ -158,7 +158,7 @@ def lifeRows (r0 : Run) (a b : Sim.Member) (bell : String) : Run := Id.run do
   r := note r11 s!"LI7 A selects the agent's text: {v11}; selected {hole_selectedOf Sim.env r11.st.host sec == some (some cand)}"
     (v11 == "admitted" && hole_selectedOf Sim.env r11.st.host sec == some (some cand))
   -- LI8 A revokes the bell's grant: the candidate's support is dead; rejudge says so by name; select refuses
-  let (r12, v12, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, gB]) (.revoke gB))
+  let (r12, v12, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, gB]) (.retire gB))
   r := note r12 s!"LI8 A revokes the bell's grant on the section: {v12}" (v12 == "admitted")
   let (r13, v13, _) := go prog r (secCall r a "rejudge" (Doc.candArg cand) (pinCand r.st.host cand ++ pinFact r.st.host) [gB])
   r := note r13 s!"LI8b A rejudges the agent's text: {v13}; status {status r13.st.host cand}"

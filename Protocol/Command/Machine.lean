@@ -315,7 +315,7 @@ def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
 
 /-- The phases whose result is custody's: 1 (an envelope's or init's signature, by `sign` or
 `signIncoming`), 2 for `init`
-only (its possession signature; every other verb's phase 2 is a `log` reply), 3 (a call's
+only (its join signature; every other verb's phase 2 is a `log` reply), 3 (a call's
 signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature), 8 (an
 invitation's signature). -/
 def custodyPhase (isInit : Bool) (phase : UInt8) : Bool :=
@@ -369,7 +369,7 @@ def invokedPackage (X : Ctx D) (w : World D) (obj : D) : Except (Refusal D) D :=
 at its package's type: `Lang.seedOf`, `Lang.argsOf`); `s` is the key it is signed with (for
 `rotate`: the next key, and the pending key it precommits). -/
 def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except (Refusal D) (Body D)
-  | .enroll j => .ok (.enroll j.key j.next j.possession me.grant)
+  | .enroll j => .ok (.enroll j.key j.next j.origin j.join me.grant)
   | .install p => .ok (.install p)
   | .create none ls => .ok (.create none ls [])
   | .create (some (p, t)) ls => match Lang.seedOf X.digestOf (worldLook X.env w) p t with
@@ -388,7 +388,7 @@ def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except
         | .cell c => c
         | .account r => r.resolve X
       .ok (.grant target (g.getD (worldId X)) rs via)
-  | .revoke g => .ok (.revoke g)
+  | .retire x => .ok (.retire x)
   | .rotate => .ok (.rotate s.key (nextKeyDigest X s.next))
   | .issue cap => .ok (.issue cap)
   | .account a o => .ok (.account a (o.getD me.member))
@@ -1416,19 +1416,20 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
       | .error r => same (custodyEnd X cmd st r)
       | .ok result =>
       match cmd, st.phase, st.acc with
-      -- init: learn the key, sign the possession, print the token
+      -- init: learn the key, sign the join to follow's World (PROTOCOL-79), print the token
       | .init sponsor, 1, [] =>
           match Signed.ofBytes result with
           | none => same (refused (D := D) .badResult)
           | some s =>
               same (again 2 [result] fun k =>
-                .sign (possessionMessage X sponsor (nextKeyDigest X s.next) s.key) k)
+                .sign (joinMessage X w.origin sponsor (nextKeyDigest X s.next) s.key) k)
       | .init _, 2, [first] =>
           match Signed.ofBytes first, Signed.ofBytes result with
           | some s0, some s1 =>
               if s1.key = s0.key then
                 same (printed s!"join {Text.toHex (Join.bytes X.env.bytes
-                  { key := s0.key, next := nextKeyDigest X s0.next, possession := s1.signature })}\n")
+                  { key := s0.key, next := nextKeyDigest X s0.next, origin := w.origin,
+                    join := s1.signature })}\n")
               else same (refused (D := D) .badResult)
           | _, _ => same (refused (D := D) .badResult)
       -- every other verb: the envelope, signed; ask for the log (page `pages` of this command)

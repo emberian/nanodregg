@@ -38,9 +38,11 @@ theorem top_integrity_law (d : ByteArray → ByteArray) : Integrity.law (deploye
   intro obj law p fs ℓ t hb hℓ hfind hlaw hnr w w' l ha hcan cell hl hk
   rw [audited_deployed] at ha
   obtain ⟨tr, htr⟩ := object_history_of_honest ha.1 ha.2 hcan hl hk
-  obtain ⟨cell', hl', -, -, hpk⟩ := fold_package_fixed ha.1 ha.2 hl hk
-  exact ⟨⟨tr, htr⟩, ⟨cell', hl', hpk⟩, fun tr' htr' hin _ ho =>
+  refine ⟨⟨tr, htr⟩, ?_, fun tr' htr' hin _ ho =>
     object_history_chain (deployed_ctx_lawful _) rfl hb hℓ hfind hlaw hnr htr' hin hl ho⟩
+  rcases fold_package_fixed ha.1 ha.2 hl hk with ⟨cell', hl', -, -, hpk⟩ | ht
+  · exact .inl ⟨cell', hl', hpk⟩
+  · exact .inr ht
 
 /-- A step on a settle-phase (4) continuation keeps follow's state: every arm it can reach is `same`. -/
 theorem step_phase4_keeps {D : Type} [Ord D] [DecidableEq D] {X : Ctx D} {dc : Codec.Stream D}

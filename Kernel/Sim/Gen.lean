@@ -42,7 +42,7 @@ def methods : ByteArray := "methods".toUTF8
 
 /-- The acts `freeze` refuses. -/
 def frozenAct {D : Type} : Occasion D → Bool
-  | .write | .invoke _ => true
+  | .write | .invoke _ | .retire => true
   | .birth | .relaw _ | .adopt _ => false
 
 /-- `b` cut into digests of `width` bytes (a short tail is dropped). -/
@@ -1262,7 +1262,7 @@ def act (P : Params D) (st : State D) : State D :=
       let (key, st) := freshKey st "m"
       let (nk, st) := freshKey st "n"
       let X := P.ctx
-      let possession := P.sign key (possessionMessage X sp.id (nextKeyDigest X (P.pub nk)) (P.pub key))
+      let join := P.sign key (joinMessage X w.origin sp.id (nextKeyDigest X (P.pub nk)) (P.pub key))
       let hs := holdOf st sp.id
       let (chain, expect, st) : List D × Expect × State D := match hs.chain with
         | _ :: _ =>
@@ -1276,7 +1276,7 @@ def act (P : Params D) (st : State D) : State D :=
       | [] => st
       | via :: _ =>
           let c := signed P st sp sp.key (S.pinsFor P.env w (sp.id :: chain))
-            (.enroll (P.pub key) (nextKeyDigest X (P.pub nk)) possession via)
+            (.enroll (P.pub key) (nextKeyDigest X (P.pub nk)) w.origin join via)
           let (st, t) := submit P st c expect "enroll"
           match t with
           | some t =>
@@ -1433,12 +1433,12 @@ def act (P : Params D) (st : State D) : State D :=
           let (gid, obj, ge, iss) := g
           let issuer := (st.members.find? fun m => m.id = iss).getD (founder0 P st)
           let st := match st.members.find? fun m => m.id ≠ iss with
-            | some m => (submit P st (signed P st m m.key (S.pinsFor P.env w [m.id, gid]) (.revoke gid))
+            | some m => (submit P st (signed P st m m.key (S.pinsFor P.env w [m.id, gid]) (.retire gid))
                 (.refused "notIssuer") "revoke-not-issuer").1
             | none => st
           let w := st.host
           let back := ((w.entry P.env gid).map Entry.weight).getD 0
-          let (st, t) := submit P st (signed P st issuer issuer.key (S.pinsFor P.env w [issuer.id, gid]) (.revoke gid))
+          let (st, t) := submit P st (signed P st issuer issuer.key (S.pinsFor P.env w [issuer.id, gid]) (.retire gid))
             .ok "revoke"
           match t with
           | some t =>
@@ -1814,6 +1814,108 @@ def probeStateOrder (P : Params D) (st : State D) : State D :=
       carryExpect (planted [(stateBase, nat 0), (stateBase + 1, nat 1)]) st st.host c
         "state-order-run-control" "ok"
 
+/-- The join is bound to the World (PROTOCOL-79), on the carry probe's two Worlds: a newcomer's join
+consent signed for the exported World `w` still verifies under its key in the carried World `w'`
+(possession needs no World: `join-carried:possession`), yet a founder's enrolment of it into `w'` is
+refused `otherWorld` (`join-carried:otherWorld`: the consent named the old origin, and a carry keeps
+the sponsor's member id, KERNEL-40, so before PROTOCOL-79 it enrolled there). The same key's consent
+signed over `w'`'s origin is admitted (`join-new:ok`); enrolled again by a second call carrying THE
+SAME consent, it is `idTaken` (`join-again:idTaken`: the member's id is the consent's digest, so one
+consent is one member). Nothing is committed to the Host's World. -/
+def probeJoinCarried (P : Params D) (st : State D) (w w' : World D) : State D :=
+  let X := P.ctx
+  let f := founder0 P st
+  let chain := (holdOf st f.id).chain
+  match chain with
+  | [] => st
+  | via :: _ =>
+    let (key, st) := freshKey st "jc"
+    let (nk, st) := freshKey st "jn"
+    let next := nextKeyDigest X (P.pub nk)
+    let consent := fun (o : D) => P.sign key (joinMessage X o f.id next (P.pub key))
+    -- an enrolment into `wa`, of the consent naming `o`, its pins on `wa`; `cap` tells two calls apart
+    let enrolOf := fun (wa : World D) (o : D) (cap : Nat) =>
+      let u : Unsigned D :=
+        { world := wa.origin, member := f.id, key := P.pub f.key, notBefore := 0,
+          validUntil := wa.height + 1 + 100, pins := S.pinsFor P.env wa (f.id :: chain),
+          maxCharge := cap, body := .enroll (P.pub key) next o (consent o) via }
+      ({ unsigned := u, signature := P.sign f.key (X.callMessage u) } : Call D)
+    let st := if X.verify (P.pub key) (joinMessage X w.origin f.id next (P.pub key)) (consent w.origin)
+      then meet st "join-carried:possession"
+      else failWith st "probe join-carried: the consent signed for the exported World does not verify under its key"
+    let st := carryExpect P st w' (enrolOf w' w.origin 1000000) "join-carried" "otherWorld"
+    -- the admitted join and its replay need two enrolments left on the founder's own grant
+    let hs := holdOf st f.id
+    if !(hs.enrolls && 2 ≤ hs.left) then st else
+    match Receive.submit X w' (enrolOf w' w'.origin 1000000) with
+    | .error v => failWith st s!"probe join-new: expected ok, got {vname v}"
+    | .ok (_, w'') =>
+        let st := { st with refusedAsExpected := st.refusedAsExpected + 1,
+                            seen := "join-new:ok" :: "ok" :: st.seen }
+        carryExpect P st w'' (enrolOf w'' w'.origin 999999) "join-again" "idTaken"
+
+/-- Retirement (KERNEL-70), on branches of the Host's World (nothing committed): a data object's
+retirement by a member that does not own it is `notOwner` (`retire-object:notOwner`); by its owner it
+is admitted and gives the World back exactly the object's weight with its counter
+(`retire-object:ok`, `admit_retire`); a write pinned at the object's last live entry is then `stale`
+(`retire-read:stale`: the tombstone has its own pin, KERNEL-54); an object under `freeze` is not
+retired (`retire-frozen:lawDenied`: the laws in force judge the occasion `retire`). A well still holds
+its cap as floor, so retiring it is `valueRemains` (`retire-well:valueRemains`); an empty account is
+retired by its owner (`retire-account:ok`) and its keyed id is never reborn: opening it again is
+`idTaken` (`account-reborn:idTaken`: an id is a digest of its birth's inputs, the tombstone keeps
+it). A member is `notRetirable` (`retire-member:notRetirable`). -/
+def probeRetire (P : Params D) (st : State D) : State D :=
+  let X := P.ctx
+  let f := founder0 P st
+  let w := st.host
+  let on := fun (wa : World D) (m : Member D) (ids : List D) (b : Body D) =>
+    signed P { st with host := wa } m m.key (S.pinsFor P.env wa (m.id :: ids)) b
+  let other := st.members.find? fun m => m.id ≠ f.id
+  -- a member is retired by nothing
+  let st := carryExpect P st w (on w f [] (.retire f.id)) "retire-member" "notRetirable"
+  -- a data object, born on a branch
+  match Receive.submit X w (on w f [] (.create none [] [(stateBase, nat 1)])) with
+  | .error v => failWith st s!"probe retire: the create was refused {vname v}"
+  | .ok (t, w1) =>
+    let obj := (createdIds t).headD P.zero
+    let st := match other with
+      | some m => carryExpect P st w1 (on w1 m [obj] (.retire obj)) "retire-object" "notOwner"
+      | none => st
+    let st := match Receive.submit X w1 (on w1 f [obj] (.retire obj)) with
+      | .error v => failWith st s!"probe retire-object: expected ok, got {vname v}"
+      | .ok (t2, w2) =>
+          let back := ((w1.entry P.env obj).map Entry.weight).getD 0
+          if !(w2.allowance + t2.charge = w1.allowance + back ∧ 0 < back ∧ w2.entry P.env obj = some Entry.tomb) then
+            failWith st s!"probe retire-object: allowance {w2.allowance} + charge {t2.charge} ≠ {w1.allowance} + {back}"
+          else
+            let st := { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "retire-object:ok" :: "ok" :: st.seen }
+            -- the write a member signed while the object was live, pinned at that entry
+            let late := on w1 f [obj] (.write obj [(0, some (nat 2))] none)
+            carryExpect P st w2 late "retire-read" "stale"
+    -- an object under `freeze`
+    let st := match st.freezePkg with
+      | none => st
+      | some fz => match Receive.submit X w (on w f [fz] (.create none [fz] [])) with
+        | .error v => failWith st s!"probe retire-frozen: the create was refused {vname v}"
+        | .ok (t, wf) =>
+            let o := (createdIds t).headD P.zero
+            carryExpect P st wf (on wf f [o, fz] (.retire o)) "retire-frozen" "lawDenied"
+    -- a well holds its cap as floor; an empty account is retired once, and never reborn
+    match Receive.submit X w (on w f [] (.issue 5)) with
+    | .error v => failWith st s!"probe retire: the issue was refused {vname v}"
+    | .ok (t, wi) =>
+      let well := (createdIds t).headD P.zero
+      let st := carryExpect P st wi (on wi f [well] (.retire well)) "retire-well" "valueRemains"
+      match Receive.submit X wi (on wi f [] (.account well f.id)) with
+      | .error v => failWith st s!"probe retire: the account was refused {vname v}"
+      | .ok (t, wa) =>
+        let acct := (createdIds t).headD P.zero
+        match Receive.submit X wa (on wa f [acct] (.retire acct)) with
+        | .error v => failWith st s!"probe retire-account: expected ok, got {vname v}"
+        | .ok (_, wr) =>
+          let st := { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "retire-account:ok" :: "ok" :: st.seen }
+          carryExpect P st wr (on wr f [] (.account well f.id)) "account-reborn" "idTaken"
+
 /-- The carry probe (KERNEL-29), at the end of every seed: the Host's World is carried under a new
 nonce. The carried World holds the same trie, allowance, height and journal (`carry_carried`)
 under a new origin; the last logged call is answered `replayed` at its height (`carry_replayed`:
@@ -1857,7 +1959,8 @@ def probeCarry (P : Params D) (st : State D) : State D :=
       let old := signed P st f f.key (S.pinsFor P.env w [f.id]) (.create none [] [])
       let st := carryExpect P st w' old "carry-old-world" "wrongWorld"
       let fresh := signed P { st with host := w' } f f.key (S.pinsFor P.env w' [f.id]) (.create none [] [])
-      carryExpect P st w' fresh "carry-new" "ok"
+      let st := carryExpect P st w' fresh "carry-new" "ok"
+      probeJoinCarried P st w w'
 
 /-! ### Refusals (KERNEL-44, KERNEL-47): recorded, final, bounded, and only when authenticated -/
 
@@ -2818,6 +2921,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   let st := probeSigDomain P st
   let st := probeStateOrder P st
   let st := probeCarry P st
+  let st := probeRetire P st
   let st := probeCarryBudget P st
   let st := match ((probeRows P seed).run).run st with
     | (.ok (), st) => st
@@ -2887,7 +2991,10 @@ def plantedArms : List String :=
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed",
    "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
-   "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-root", "verify-count:once", "retain:canonical",
+   "carry-old-world:wrongWorld", "carry-new:ok", "join-carried:possession", "join-carried:otherWorld",
+   "join-new:ok", "join-again:idTaken", "retire-member:notRetirable", "retire-object:notOwner",
+   "retire-object:ok", "retire-read:stale", "retire-frozen:lawDenied", "retire-well:valueRemains",
+   "retire-account:ok", "account-reborn:idTaken", "sig-bare:badSignature", "hash-count:empty-per-root", "verify-count:once", "retain:canonical",
    "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
    "race-loser:stale", "race-loser-declined:declined", "race-law:lawDenied",
    "refusal-aba-stale:stale", "refusal-aba-declined:declined", "refusal-aba-plant:returned",

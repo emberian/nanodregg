@@ -9,7 +9,7 @@ the package field produces exactly `Admits` (`Std.runLaw_ref_admits`).
 * `escrow_invoke`: an admitted invoke is method 0 `open → held` signed by the depositor, or 1
   `held → refunded` by the beneficiary or the arbiter, or 2 `held → released` by the depositor or
   the arbiter. `escrow_start`: a birth or adoption is at `open`. `escrow_frozen`: no write, no
-  law change.
+  law change, no retirement.
 * `escrow_absorbing`: from `released` or `refunded` nothing is admitted.
 * `escrow_law_payout_once`: along ANY chain of law-admitted acts (`Lang.Proofs.Chain`'s `Chain`),
   from any state, at most one is a payout (an invoke of method 1 or 2): `chain_count` of
@@ -114,8 +114,8 @@ theorem escrow_invoke {rq n o x : Data} (h : Admits lib law rq n o)
     (x = .nat release ∧ PhaseIs o "held" ∧ PhaseIs n "released" ∧
       (Signs rq o "depositor" ∨ Signs rq o "arbiter")) := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [law, Std.lawOf5, Std.lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := Std.lawCase5_arm rfl ho hb
+  simp only [law, Std.lawOf6, Std.lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := Std.lawCase6_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   obtain ⟨_, hrest⟩ := Std.guard_ok hbody
   rcases bigStep_ite_ok hrest with ⟨h0, hr⟩ | ⟨_, hr⟩
@@ -141,29 +141,29 @@ theorem escrow_start {rq n o : Data} {ℓ : Label} {x : Data} (h : Admits lib la
     (ho : rq.field "occasion" = some (.inj ℓ x)) (hℓ : ℓ = "birth" ∨ ℓ = "adopt") :
     PhaseIs o "open" ∧ PhaseIs n "open" := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [law, Std.lawOf5, Std.lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := Std.lawCase5_arm rfl ho hb
+  simp only [law, Std.lawOf6, Std.lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := Std.lawCase6_arm rfl ho hb
   have hl : ∀ p ∈ [(isPh ((⟨1⟩ : At).oldF "phase") "open", "notOpen"),
       (isPh ((⟨1⟩ : At).newF "phase") "open", "notOpen")], BigStep lib (x.toVal :: LawEnv rq n o cenv) p.1 (.ok (.bool true)) := by
     rcases hℓ with rfl | rfl <;> (simp [Row.find?] at hf; subst hf; exact Std.allOf_ok hbody)
   exact ⟨Std.isState_true (d := o) (i := 3) rfl (hl (isPh ((⟨1⟩ : At).oldF "phase") "open", "notOpen") (by simp)),
     Std.isState_true (d := n) (i := 2) rfl (hl (isPh ((⟨1⟩ : At).newF "phase") "open", "notOpen") (by simp))⟩
 
-/-- **No write and no law change is admitted.** -/
+/-- **No write, no law change and no retirement is admitted.** -/
 theorem escrow_frozen {rq n o : Data} {ℓ : Label} {x : Data}
-    (ho : rq.field "occasion" = some (.inj ℓ x)) (hℓ : ℓ = "write" ∨ ℓ = "relaw") :
+    (ho : rq.field "occasion" = some (.inj ℓ x)) (hℓ : ℓ = "write" ∨ ℓ = "relaw" ∨ ℓ = "retire") :
     ¬ Admits lib law rq n o := by
   rintro ⟨cenv, w, hb⟩
-  simp only [law, Std.lawOf5, Std.lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := Std.lawCase5_arm rfl ho hb
-  rcases hℓ with rfl | rfl <;> (simp [Row.find?] at hf; subst hf; exact Std.refusedT_not_ok hbody)
+  simp only [law, Std.lawOf6, Std.lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := Std.lawCase6_arm rfl ho hb
+  rcases hℓ with rfl | rfl | rfl <;> (simp [Row.find?] at hf; subst hf; exact Std.refusedT_not_ok hbody)
 
-/-- An admitted act names one of the five occasions (`Std.lawOf5_occasion`: the escrow's law is a
-`lawOf5`). -/
+/-- An admitted act names one of the six occasions (`Std.lawOf6_occasion`: the escrow's law is a
+`lawOf6`). -/
 theorem escrow_occasion {rq n o : Data} (h : Admits lib law rq n o) :
     ∃ ℓ x, rq.field "occasion" = some (.inj ℓ x) ∧
-      (ℓ = "adopt" ∨ ℓ = "birth" ∨ ℓ = "invoke" ∨ ℓ = "relaw" ∨ ℓ = "write") :=
-  Std.lawOf5_occasion h
+      (ℓ = "adopt" ∨ ℓ = "birth" ∨ ℓ = "invoke" ∨ ℓ = "relaw" ∨ ℓ = "retire" ∨ ℓ = "write") :=
+  Std.lawOf6_occasion h
 
 /-- **Settled is absorbing**: from `released` or `refunded` the law admits nothing. -/
 theorem escrow_absorbing {rq n o : Data} (hs : Settled o) : ¬ Admits lib law rq n o := by
@@ -173,14 +173,15 @@ theorem escrow_absorbing {rq n o : Data} (hs : Settled o) : ¬ Admits lib law rq
     intro p hp hq
     rcases hs with hs | hs <;> rcases hq with rfl | rfl <;>
       exact absurd (phase_unique hs hp) (by decide)
-  rcases hℓ with rfl | rfl | rfl | rfl | rfl
+  rcases hℓ with rfl | rfl | rfl | rfl | rfl | rfl
   · exact notLive _ (escrow_start h ho (.inr rfl)).1 (.inl rfl)
   · exact notLive _ (escrow_start h ho (.inl rfl)).1 (.inl rfl)
   · rcases escrow_invoke h ho with ⟨_, a, _⟩ | ⟨_, a, _⟩ | ⟨_, a, _⟩
     · exact notLive _ a (.inl rfl)
     · exact notLive _ a (.inr rfl)
     · exact notLive _ a (.inr rfl)
-  · exact escrow_frozen ho (.inr rfl) h
+  · exact escrow_frozen ho (.inr (.inl rfl)) h
+  · exact escrow_frozen ho (.inr (.inr rfl)) h
   · exact escrow_frozen ho (.inl rfl) h
 
 /-! ## At most one payout -/
@@ -240,7 +241,7 @@ theorem escrow_deposit_first {o : Data} {steps : List (Data × Data)} (h : Chain
   | @cons o rq n rest ha hr ih =>
     obtain ⟨ℓ, x, hocc, hℓ⟩ := escrow_occasion ha
     have notHeld : PhaseIs o "held" → False := fun hh => absurd (phase_unique ho hh) (by decide)
-    rcases hℓ with rfl | rfl | rfl | rfl | rfl
+    rcases hℓ with rfl | rfl | rfl | rfl | rfl | rfl
     · have := (escrow_start ha hocc (.inr rfl)).2
       have hinv : invoked rq = none := by simp [invoked, hocc]
       simp [depositFirst, hinv, isPayout, ih this]
@@ -252,7 +253,8 @@ theorem escrow_deposit_first {o : Data} {steps : List (Data × Data)} (h : Chain
         simp [depositFirst, hinv]
       · exact (notHeld hh).elim
       · exact (notHeld hh).elim
-    · exact (escrow_frozen hocc (.inr rfl) ha).elim
+    · exact (escrow_frozen hocc (.inr (.inl rfl)) ha).elim
+    · exact (escrow_frozen hocc (.inr (.inr rfl)) ha).elim
     · exact (escrow_frozen hocc (.inl rfl) ha).elim
 
 /-! ## The package: built, checked, printed, and the refusal names -/
@@ -351,14 +353,14 @@ private def expected (p q : Label) (m : Nat) (who : Role) : String :=
   else "noMethod"
 
 /-- **The names on the wire**: every phase pair, method index 0..3 and signer role, `runLaw`'s
-verdict is `expected`; a birth or adoption is `ok` exactly at `open`, else `notOpen`; a write
-or law change is `frozen`. -/
+verdict is `expected`; a birth or adoption is `ok` exactly at `open`, else `notOpen`; a write,
+a law change or a retirement is `frozen`. -/
 theorem escrow_verdicts :
     (∀ p ∈ phaseLabels, ∀ q ∈ phaseLabels, ∀ m ∈ [0, 1, 2, 3], ∀ who ∈ Role.all,
       verdictIs (expected p q m who) (lawOn (rqD who (occD (some m) "")) (termsD q) (termsD p)) = true) ∧
     (∀ p ∈ phaseLabels, ∀ ℓ ∈ ["birth", "adopt"],
       verdictIs (if p = "open" then "ok" else "notOpen") (lawOn (rqD .stranger (occD none ℓ)) (termsD p) (termsD p)) = true) ∧
-    (∀ p ∈ phaseLabels, ∀ q ∈ phaseLabels, ∀ ℓ ∈ ["write", "relaw"],
+    (∀ p ∈ phaseLabels, ∀ q ∈ phaseLabels, ∀ ℓ ∈ ["write", "relaw", "retire"],
       verdictIs "frozen" (lawOn (rqD .depositor (occD none ℓ)) (termsD q) (termsD p)) = true) := by
   decide +kernel
 

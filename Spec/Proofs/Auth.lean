@@ -98,6 +98,14 @@ inductive Authorized (X : Ctx D) (w : World D) (c : Call D) (id : D) (cell : Cel
   | account {after : Option Cell} {n : Nat} {wk : Walk D} {actor : D} {b : Body D} :
       cell.kind = kindAccount → Dispatched X w c n wk actor b →
       AccountMove X (pinned X.env w c.unsigned.pins) actor b id → Authorized X w c id cell after
+  /-- KERNEL-70: the object's owner signed its retirement (every law in force judged it); it ends -/
+  | objectRetired :
+      cell.kind = kindObject → c.unsigned.body = .retire id →
+      slotDigest X id cell slotOwner = .ok c.unsigned.member → Authorized X w c id cell none
+  /-- KERNEL-70: the account's owner retired it (it held nothing); it ends -/
+  | accountRetired {n : Nat} {wk : Walk D} {actor : D} {b : Body D} :
+      cell.kind = kindAccount → Dispatched X w c n wk actor b →
+      slotDigest X id cell slotOwner = .ok actor → Authorized X w c id cell none
 
 /-- **B1. Authority confinement.** Along an audited log from a World whose cells are canonical,
 every step that changes a cell live at the World it is taken from is a Turn, derived by the
@@ -124,8 +132,8 @@ theorem step_authorized [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' :
   by_cases hrom : cell.discipline = .rom
   · exact absurd (admit_rom ha hl hrom) hne
   by_cases hk : cell.kind = kindObject
-  · rcases object_turn_cases hc ha hl hk with ⟨hkeep, hnc, hnw, hnl, hni⟩ | ⟨edits, via, hb⟩ |
-        ⟨laws', via, hb⟩ | ⟨n, wk, a, method, args, budget, via, hd⟩
+  · rcases object_turn_cases hc ha hl hk with ⟨hkeep, hnc, hnw, hnl, -, hni⟩ | ⟨edits, via, hb⟩ |
+        ⟨laws', via, hb⟩ | hb | ⟨n, wk, a, method, args, budget, via, hd⟩
     · exact absurd ((object_step_none (.keep hc ha hkeep hnc hnw hnl hni)).trans hl) hne
     · obtain ⟨principal, laws, -, hau, -⟩ := write_next_slots hc ha hb hl (hcan _ _ hl)
       obtain ⟨owner, ho, hx⟩ := ownerAuthority_exercises hau
@@ -133,6 +141,10 @@ theorem step_authorized [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' :
     · obtain ⟨principal, laws, -, hau, -⟩ := law_next_slots hc ha hb hl
       obtain ⟨owner, ho, hx⟩ := ownerAuthority_exercises hau
       exact .objectLaw hk hb ho hx
+    · obtain ⟨-, -, hown, -, -, -⟩ := retire_next hc hb hl hk
+      have hn : w'.live X.env id = none := by unfold World.live; rw [retire_next_tomb hc ha hb]
+      rw [hn]
+      exact .objectRetired hk hb hown
     · obtain ⟨cell₀, p, r, s, calls, rows, used, laws, hr, -⟩ := invoke_tree_slots hc ha hd
       have hl₀ := invokeRun_live hr
       rw [hl] at hl₀
@@ -175,7 +187,12 @@ theorem step_authorized [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' :
     rw [hl', postWrite_eq hp]
     exact .grantSpent hkind hd hh hbase hll hu0 hu hi
   · obtain ⟨rfl, hkind⟩ := readKind_live hka hl
-    exact .account hkind hd hmove
+    rcases hmove with hmove | ⟨hret, hown⟩
+    · exact .account hkind hd hmove
+    · have hnone := admit_retired ha hx (hxa.trans hret)
+      rw [hxc] at hnone
+      rw [hnone]
+      exact .accountRetired hkind hd hown
 
 /-- **B1 of every system whose kernel is the kernel**: each step of the audited log is a refusal
 (which keeps every cell, `refuse_live`) or the kernel's derived and admitted Turn
@@ -338,6 +355,8 @@ theorem floor_integrity_authority (d : ByteArray → ByteArray) :
           | grantRetired hk' => exact absurd (hk.symm.trans hk') (by decide)
           | grantSpent hk' => exact absurd (hk.symm.trans hk') (by decide)
           | account hk' => exact absurd (hk.symm.trans hk') (by decide)
+          | objectRetired _ hb' => rw [hb] at hb'; cases hb'
+          | accountRetired hk' => exact absurd (hk.symm.trans hk') (by decide)
 
 /-! ## Inhabited: the owner's write changes its object under the deployed kernel -/
 

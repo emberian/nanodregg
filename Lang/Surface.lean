@@ -690,9 +690,9 @@ def methodSx (c : Ctx) (p : Nat) (xs : List SExp) : P (Ty × SExp × Ty × List 
     L p [A p "lam", A p "arg", ← tyAt p A', L p [A p "lam", A p "req", ← tyAt p reqTy, b]]]]
   pure (methodTy c.state A' ks R E h.edits, sx, res, bounds, h.effect)
 
-def occasions : List Label := ["adopt", "birth", "invoke", "relaw", "write"]
+def occasions : List Label := ["adopt", "birth", "invoke", "relaw", "retire", "write"]
 
-/-- A law from its `(on …)` clauses and its `else`, which is required unless all five acts are written. -/
+/-- A law from its `(on …)` clauses and its `else`, which is required unless all six acts are written. -/
 def lawSx (c : Ctx) (p : Nat) (ℓ : String) (xs : List SExp) : P SExp := do
   let cl := { c with place := .law }
   let sc := ["req", "new", "old"]

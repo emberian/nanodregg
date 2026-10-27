@@ -439,11 +439,15 @@ theorem readPackage_live {E : Env D} {w w' : World D} {P : D} (h : w.live E P = 
 
 theorem invokedPackage_at {X : Ctx D} {w : World D} {obj P : D} {pc : Cell} {pk : D}
     (hp : PackageAt X w obj P pc) (h : invokedPackage X w obj = .ok pk) : pk = P := by
-  obtain ⟨⟨cell, hl, -, hpk⟩, -, -⟩ := hp
-  unfold invokedPackage at h
-  rw [hl] at h
-  simp only [hpk, bind, Except.bind, requireMethods] at h
-  cases h; rfl
+  obtain ⟨⟨cell, hl, -, hpk⟩ | ht, -, -⟩ := hp
+  · unfold invokedPackage at h
+    rw [hl] at h
+    simp only [hpk, bind, Except.bind, requireMethods] at h
+    cases h; rfl
+  · have hl : w.live X.env obj = none := by unfold World.live; rw [ht]
+    unfold invokedPackage at h
+    rw [hl] at h
+    cases h
 
 /-- **The `core` line of a description is the package cell's bytes**: the one line of `describeText`
 in `core` form is the hex of slot 0 of the live cell at the object's package. -/
@@ -651,7 +655,7 @@ theorem describe_shape {X : Ctx D} {w : World D} {obj : D} {o e : ByteArray} {sh
     obtain rfl := Option.some.inj hi
     rw [Lang.Print.readTy_ty hwf hpty] at hty
     obtain ⟨pc, b, hrk, hrom, -, -⟩ := Lang.readPackage_ok.mp hrp
-    exact ⟨P, pc, pk, sg, ⟨⟨cell, hl, hk, hpk⟩, (readKind_worldLook hrk).1, hrom⟩, hrp, hres,
+    exact ⟨P, pc, pk, sg, ⟨.inl ⟨cell, hl, hk, hpk⟩, (readKind_worldLook hrk).1, hrom⟩, hrp, hres,
       Except.ok.inj hty, hcore P pk hpk hrp⟩
   · simp only [List.mem_singleton] at hlm
     subst hlm

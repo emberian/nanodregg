@@ -123,12 +123,12 @@ theorem getVar_digest {i : Nat} {d : Data} {f : Label} {s : ByteArray} (hi : env
 
 /-! ## The law skeleton -/
 
-/-- An admitted `lawCase5` ran the arm of the request's occasion, on its payload. -/
-theorem lawCase5_arm {b ad rl wr iv : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
+/-- An admitted `lawCase6` ran the arm of the request's occasion, on its payload. -/
+theorem lawCase6_arm {b ad rl rt wr iv : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj ℓ x))
-    (h : BigStep lib env (lawCase5 b ad rl wr iv) (.ok v)) :
+    (h : BigStep lib env (lawCase6 b ad rl rt wr iv) (.ok v)) :
     ∃ body, Row.find? ℓ [("adopt", ad ⟨1⟩), ("birth", b ⟨1⟩), ("invoke", iv ⟨1⟩), ("relaw", rl ⟨1⟩),
-      ("write", wr ⟨1⟩)] = some body ∧
+      ("retire", rt ⟨1⟩), ("write", wr ⟨1⟩)] = some body ∧
       BigStep lib (x.toVal :: env) body (.ok v) := by
   obtain ⟨ℓ', w, body, hs, hf, hb⟩ := bigStep_case_ok h
   obtain ⟨y, hy, hv⟩ := bigStep_getVar hr hs
@@ -137,20 +137,20 @@ theorem lawCase5_arm {b ad rl wr iv : At → Term} {rq : Data} {ℓ : Label} {x 
   cases hy'; subst hw
   exact ⟨body, hf, hb⟩
 
-theorem lawCase_arm {b ad rl c : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
+theorem lawCase_arm {b ad rl rt c : At → Term} {rq : Data} {ℓ : Label} {x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj ℓ x))
-    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl rt c) (.ok v)) :
     ∃ body, Row.find? ℓ [("adopt", ad ⟨1⟩), ("birth", b ⟨1⟩), ("invoke", c ⟨1⟩), ("relaw", rl ⟨1⟩),
-      ("write", c ⟨1⟩)] = some body ∧
+      ("retire", rt ⟨1⟩), ("write", c ⟨1⟩)] = some body ∧
       BigStep lib (x.toVal :: env) body (.ok v) :=
-  lawCase5_arm hr ho h
+  lawCase6_arm hr ho h
 
 /-- Which arm the change clause is: a write or an invoke. -/
 def IsChange (o : Data) : Prop := (∃ x, o = .inj "write" x) ∨ (∃ x, o = .inj "invoke" x)
 
-theorem lawCase_change {b ad rl c : At → Term} {rq occ : Data} {v : Val}
+theorem lawCase_change {b ad rl rt c : At → Term} {rq occ : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some occ) (hc : IsChange occ)
-    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl rt c) (.ok v)) :
     ∃ x : Data, BigStep lib (x.toVal :: env) (c ⟨1⟩) (.ok v) := by
   rcases hc with ⟨x, rfl⟩ | ⟨x, rfl⟩
   · obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
@@ -158,24 +158,31 @@ theorem lawCase_change {b ad rl c : At → Term} {rq occ : Data} {v : Val}
   · obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
     simp [Row.find?] at hf; subst hf; exact ⟨x, hb⟩
 
-theorem lawCase_birth {b ad rl c : At → Term} {rq x : Data} {v : Val}
+theorem lawCase_birth {b ad rl rt c : At → Term} {rq x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj "birth" x))
-    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl rt c) (.ok v)) :
     BigStep lib (x.toVal :: env) (b ⟨1⟩) (.ok v) := by
   obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
   simp [Row.find?] at hf; subst hf; exact hb
 
-theorem lawCase_relaw {b ad rl c : At → Term} {rq x : Data} {v : Val}
+theorem lawCase_relaw {b ad rl rt c : At → Term} {rq x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj "relaw" x))
-    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl rt c) (.ok v)) :
     BigStep lib (x.toVal :: env) (rl ⟨1⟩) (.ok v) := by
   obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
   simp [Row.find?] at hf; subst hf; exact hb
 
-theorem lawCase_adopt {b ad rl c : At → Term} {rq x : Data} {v : Val}
+theorem lawCase_adopt {b ad rl rt c : At → Term} {rq x : Data} {v : Val}
     (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj "adopt" x))
-    (h : BigStep lib env (lawCase b ad rl c) (.ok v)) :
+    (h : BigStep lib env (lawCase b ad rl rt c) (.ok v)) :
     BigStep lib (x.toVal :: env) (ad ⟨1⟩) (.ok v) := by
+  obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
+  simp [Row.find?] at hf; subst hf; exact hb
+
+theorem lawCase_retire {b ad rl rt c : At → Term} {rq x : Data} {v : Val}
+    (hr : env[0]? = some rq.toVal) (ho : rq.field "occasion" = some (.inj "retire" x))
+    (h : BigStep lib env (lawCase b ad rl rt c) (.ok v)) :
+    BigStep lib (x.toVal :: env) (rt ⟨1⟩) (.ok v) := by
   obtain ⟨body, hf, hb⟩ := lawCase_arm hr ho h
   simp [Row.find?] at hf; subst hf; exact hb
 
@@ -583,6 +590,15 @@ theorem quorum_adopt_fresh {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label
   have hc := allOf_ok (lawCase_adopt rfl ho hb) _ (List.mem_singleton_self _)
   exact eq_field_lit (d := n) (i := 2) rfl hc
 
+/-- **A quorum admits no retirement**: a quorum object is not ended by one signer; the quorum may
+relaw it first (`quorum_relaw_needs_k`) to laws that admit one. -/
+theorem quorum_retire_refused {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {rq n o x : Data}
+    (ho : rq.field "occasion" = some (.inj "retire" x)) :
+    ¬ Admits lib (quorumLaw S T ms k g) rq n o := by
+  rintro ⟨cenv, w, hb⟩
+  simp only [quorumLaw, lawOf, lawBody] at hb
+  exact refusedT_not_ok (lawCase_retire rfl ho hb)
+
 /-- **Quorum on a change** (a write or an invoke): the act is by a member, the new approvals are a
 mask over the members, and it is exactly one of
 * a COMMIT: the guarded field changes, to the value the old proposal named, with `k` approvals,
@@ -902,8 +918,8 @@ theorem machine_birth {S : Ty} {f : Label} {states : List Label} {initial : Labe
     (h : Admits lib (machineLaw S f states initial edges) rq n o)
     (ho : rq.field "occasion" = some (.inj "birth" x)) : ∃ y, n.field f = some (.inj initial y) := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [machineLaw, lawOf5, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
+  simp only [machineLaw, lawOf6, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase6_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   exact isState_true (d := n) (i := 2) rfl (allOf_ok hbody _ (List.mem_singleton_self _))
 
@@ -914,8 +930,8 @@ theorem machine_adopt {S : Ty} {f : Label} {states : List Label} {initial : Labe
     (h : Admits lib (machineLaw S f states initial edges) rq n o)
     (ho : rq.field "occasion" = some (.inj "adopt" x)) : ∃ y, n.field f = some (.inj initial y) := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [machineLaw, lawOf5, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
+  simp only [machineLaw, lawOf6, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase6_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   exact isState_true (d := n) (i := 2) rfl (allOf_ok hbody _ (List.mem_singleton_self _))
 
@@ -928,8 +944,8 @@ theorem machine_invoke {S : Ty} {f : Label} {states : List Label} {initial : Lab
     ∃ a m b, (a, m, b) ∈ edges ∧ x = .nat m ∧ (∃ y, o.field f = some (.inj a y)) ∧
       ∃ y, n.field f = some (.inj b y) := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [machineLaw, lawOf5, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
+  simp only [machineLaw, lawOf6, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase6_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   obtain ⟨c, hc, hct⟩ := anyOf_true (allOf_ok hbody _ (List.mem_singleton_self _))
   obtain ⟨⟨a, m, b⟩, he, rfl⟩ := List.mem_map.1 hc
@@ -950,8 +966,8 @@ theorem machine_write_refused {S : Ty} {f : Label} {states : List Label} {initia
     (ho : rq.field "occasion" = some (.inj "write" x)) :
     ¬ Admits lib (machineLaw S f states initial edges) rq n o := by
   rintro ⟨cenv, w, hb⟩
-  simp only [machineLaw, lawOf5, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
+  simp only [machineLaw, lawOf6, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase6_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   exact refusedT_not_ok hbody
 
@@ -961,8 +977,19 @@ theorem machine_relaw_refused {S : Ty} {f : Label} {states : List Label} {initia
     (ho : rq.field "occasion" = some (.inj "relaw" x)) :
     ¬ Admits lib (machineLaw S f states initial edges) rq n o := by
   rintro ⟨cenv, w, hb⟩
-  simp only [machineLaw, lawOf5, lawBody] at hb
-  obtain ⟨body, hf, hbody⟩ := lawCase5_arm rfl ho hb
+  simp only [machineLaw, lawOf6, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase6_arm rfl ho hb
+  simp [Row.find?] at hf; subst hf
+  exact refusedT_not_ok hbody
+
+/-- **A machine admits no retirement**: a machine object is permanent. -/
+theorem machine_retire_refused {S : Ty} {f : Label} {states : List Label} {initial : Label}
+    {edges : List (Label × Nat × Label)} {rq n o x : Data}
+    (ho : rq.field "occasion" = some (.inj "retire" x)) :
+    ¬ Admits lib (machineLaw S f states initial edges) rq n o := by
+  rintro ⟨cenv, w, hb⟩
+  simp only [machineLaw, lawOf6, lawBody] at hb
+  obtain ⟨body, hf, hbody⟩ := lawCase6_arm rfl ho hb
   simp [Row.find?] at hf; subst hf
   exact refusedT_not_ok hbody
 

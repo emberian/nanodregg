@@ -16,7 +16,7 @@ open Nanodregg.Bench.WorstCut
 
 /-- The call of tail step `i` on `w`: the revoke of `grants[i]`. -/
 def revokeCall (w : World D) (m : Who) (grants : Array D) (i : Nat) : Except String (Call D) :=
-  if h : i < grants.size then let g := grants[i]; .ok (call w m [m.id, g] (.revoke g))
+  if h : i < grants.size then let g := grants[i]; .ok (call w m [m.id, g] (.retire g))
   else .error s!"no grant left to retire at step {i} (the base holds {grants.size})"
 
 /-- Bear grants of `obj` to the founder (`mutate`, unparented: the founder acts as itself) until

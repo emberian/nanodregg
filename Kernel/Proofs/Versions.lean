@@ -592,7 +592,7 @@ private theorem touchCheck_retire {E : Env D} {w : World D} {x : Touch D} {r : O
   · cases h
 
 /-- **Under a lawful `Ord`, a turn that retires a cell leaves its tombstone.** -/
-private theorem admit_retire_tomb [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {w w' : World D}
+theorem admit_retire_tomb [Std.TransOrd D] [Std.LawfulEqOrd D] {E : Env D} {w w' : World D}
     {t : Turn D} (h : World.admit E w t = .ok w') {x : Touch D} (hx : x ∈ t.touches)
     (hret : x.act = .retire) : w'.entry E x.cell = some .tomb := by
   obtain ⟨posts, hk, rfl⟩ := admit_ok h
@@ -724,6 +724,13 @@ private theorem rowPre_ps_ne {a b : Option RowLeaf × Nat} (ha : SFit a) (hb : S
     intro h
     simp only [rowPre, Prod.mk.injEq] at h
     exact hl (rowLeafBytes_row_inj h1' h1 h2' h2 h3' h3 h.2).symm
+
+/-- **A tombstone stays one along the fold** (KERNEL-70: a retired object is never reborn). -/
+theorem fold_tomb_stays {E : Env D} {w w' : World D} {l : List (Step D)}
+    (h : World.fold E w l = .ok w') {c : D} (h0 : w.entry E c = some .tomb) : w'.entry E c = some .tomb := by
+  rcases fold_entryStep c h with he | hadv
+  · rw [← he]; exact h0
+  · rw [h0] at hadv; exact absurd hadv eAdv_tomb
 
 /-- A tombstone at the end of a stretch of the fold was a tombstone all along from where it first
 appears: if the end is not one, no World before it was. -/

@@ -160,7 +160,7 @@ def acctRef (k : Nat) : G (AcctRef Sim.D) := do
   if k = 0 then return .well (← dig) else return .of (← dig) (← dig)
 def body (k : Nat) : G (Body Sim.D) := do
   match k with
-  | 0 => return .enroll (← bytes 4) (← dig) (← bytes 4) (← dig)
+  | 0 => return .enroll (← bytes 4) (← dig) (← dig) (← bytes 4) (← dig)
   | 1 => return .rotate (← bytes 4) (← dig)
   | 2 => return .install (← bytes 4)
   | 3 => return .create (← opt dig) (← list 2 dig) (← slots)
@@ -168,7 +168,7 @@ def body (k : Nat) : G (Body Sim.D) := do
   | 5 => return .law (← dig) (← list 2 dig) (← opt dig)
   | 6 => return .invoke (← dig) (← nat64) (← bytes 4) (← nat64) (← opt dig)
   | 7 => return .grant (← dig) (← dig) (← list 3 (do right (← below 6))) (← opt dig)
-  | 8 => return .revoke (← dig)
+  | 8 => return .retire (← dig)
   | 9 => return .issue (← nat64)
   | 10 => return .account (← dig) (← dig)
   | 11 => return .transfer (← acctRef (← below 2)) (← acctRef (← below 2)) (← nat64) (← opt dig) (← opt (bytes 4))

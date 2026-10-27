@@ -246,7 +246,7 @@ def tallyFresh : Term :=
   .lam T (.lam T (.lam reqTy (.case (.get (.var 0) "occasion")
     [("adopt", ok), ("birth", .ite (.prim .eq (.get (.var 2) "approvals") (.nat 0)) ok (refused "seeded")),
      ("invoke", .ite (.prim .eq (.var 0) (.nat 1)) (refused "method b is closed") ok),
-     ("relaw", ok), ("write", ok)])))
+     ("relaw", ok), ("retire", ok), ("write", ok)])))
 
 /-- `set state n req = {approvals = state.approvals, total = n}`, as both methods `a` and `b`. -/
 def tallySet : Term := Std.methodOf T .nat [("approvals", .get (.var 2) "approvals"), ("total", .var 1)]
@@ -259,7 +259,8 @@ def tally : Package :=
 
 def frozenLaw : Term :=
   .lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
-    [("adopt", ok), ("birth", ok), ("invoke", ok), ("relaw", refused "laws are frozen"), ("write", ok)])))
+    [("adopt", ok), ("birth", ok), ("invoke", ok), ("relaw", refused "laws are frozen"),
+     ("retire", ok), ("write", ok)])))
 
 def frozen : Package :=
   { imports := [], state := .record [], iface := .record [("frozen", lawTy (.record []))],
@@ -268,7 +269,8 @@ def frozen : Package :=
 /-- A law that may govern an object from its birth but refuses to be added to one later. -/
 def birthOnly : Package :=
   let law := Term.lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
-    [("adopt", refused "only at birth"), ("birth", ok), ("invoke", ok), ("relaw", ok), ("write", ok)])))
+    [("adopt", refused "only at birth"), ("birth", ok), ("invoke", ok), ("relaw", ok), ("retire", ok),
+     ("write", ok)])))
   { imports := [], state := .record [], iface := .record [("birthOnly", lawTy (.record []))],
     body := .record [("birthOnly", law)], methods := [], laws := ["birthOnly"] }
 
@@ -276,7 +278,8 @@ def birthOnly : Package :=
 def onlyTo (to : ByteArray) : Package :=
   let law := Term.lam (.record []) (.lam (.record []) (.lam reqTy (.case (.get (.var 0) "occasion")
     [("adopt", ok), ("birth", ok), ("invoke", ok),
-     ("relaw", .ite (.prim .beq (.var 0) (.bytes to)) ok (refused "not the agreed laws")), ("write", ok)])))
+     ("relaw", .ite (.prim .beq (.var 0) (.bytes to)) ok (refused "not the agreed laws")), ("retire", ok),
+     ("write", ok)])))
   { imports := [], state := .record [], iface := .record [("onlyTo", lawTy (.record []))],
     body := .record [("onlyTo", law)], methods := [], laws := ["onlyTo"] }
 
@@ -680,6 +683,7 @@ def cappedTallyText : String := s!"
                     (inj {verdictText} refused \"closed\"))
                 (inj {verdictText} refused \"not the decider\")))
           (relaw x (inj {verdictText} ok (record)))
+          (retire x (inj {verdictText} ok (record)))
           (write x (inj {verdictText} ok (record)))))))))
 "
 
@@ -2489,7 +2493,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   let oldPlan := commit r 0 a.id
   let preRevoke := r
   let (r', vr, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, providers[0]!])
-    (.revoke providers[0]!))
+    (.retire providers[0]!))
   r := note r' s!"P8.2 withdraw provider 0: {vr}" (vr == "admitted")
   let (_, stale, _) := go prog r oldPlan
   -- The plan signed before the revoke pins g0 at its live version, which the revoke moved: the kernel
@@ -2516,7 +2520,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   -- the method's read does.
   let (s1, vs1, _) := go prog preRevoke (invoke preRevoke "select" (hole_selectArg (Sim.dc.bytes a.id))
       (pinC preRevoke.st.host a.id ++ pinF preRevoke.st.host g0) (Sim.S.pinsFor preRevoke.st.host [g0]))
-  let (s2, vs2, _) := go prog s1 (Sim.signed s1.st a a.key (Sim.S.pinsFor s1.st.host [a.id, g0]) (.revoke g0))
+  let (s2, vs2, _) := go prog s1 (Sim.signed s1.st a a.key (Sim.S.pinsFor s1.st.host [a.id, g0]) (.retire g0))
   let (_, vs3, _) := go prog s2 (invoke s2 "commit" (p8Arg asset a.id cap)
       (pinC s2.st.host a.id ++ pinF s2.st.host g0)
       (Sim.S.pinsFor s2.st.host [asset, accountId X a.id asset, cap, g0]))

@@ -139,7 +139,7 @@ def offerGuard (theta : List Label) (d : RelDecl) : Term :=
     ("invoke", .ite (.prim .eq (.var 0) (.nat offerTakeIx)) okT
       (.ite (.prim .eq (.var 0) (.nat offerWithdrawIx)) okT
         (.ite (.prim .eq (.var 0) (.nat offerFuseIx)) okT (refusedT "notConsumer")))),
-    ("relaw", refusedT "notConsumer"), ("write", refusedT "notConsumer")]
+    ("relaw", refusedT "notConsumer"), ("retire", refusedT "notConsumer"), ("write", refusedT "notConsumer")]
   .lam offerStateTy (.lam reqTy (.lam (guardInTy d) (.case (.get (.var 0) "edit") [
     ("insert", guard (offerTermsOk fs (.get (.get (.var 0) "val") "terms")) "badTerms" okT),
     ("retract", consumer),

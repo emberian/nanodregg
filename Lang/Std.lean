@@ -7,10 +7,11 @@ commits to the expanded terms. Nothing here runs at admission: the receiver runs
 like any other law (`Lang.Law.runLaw`). What each law MEANS is a theorem in `Lang.Proofs.Std`,
 proved over the reference semantics (`BigStep`), never by evaluating the term.
 
-Every law is built by `lawOf S birth relaw change`, which cases on `req.occasion` with an arm for
-every act (KERNEL's `Occasion`, LANG-19): the birth clause judges the seed, the relaw clause the
-replacement of a data object's laws (it sees the new law ids' bytes), the change clause every write
-and invoke. There is no default arm: each law states what it does at a birth and at a relaw.
+Every law is built by `lawOf S birth adopt relaw retire change`, which cases on `req.occasion` with
+an arm for every act (KERNEL's `Occasion`, LANG-19): the birth clause judges the seed, the relaw
+clause the replacement of a data object's laws (it sees the new law ids' bytes), the retire clause
+the object's end (over its last state, `old = new`, KERNEL-70), the change clause every write and
+invoke. There is no default arm: each law states what it does at a birth, a relaw and a retirement.
 
 Clauses are written against `At`, which knows how many binders sit between the law's three
 arguments and the clause, so a clause may open a `case` of its own (`At.under`) and still name
@@ -108,21 +109,25 @@ def need (c : Bool) (e : StdRefusal) : Except StdRefusal Unit := if c then .ok (
 payload is `var 0` and the clause sits at depth 1; the `adopt` and `relaw` clauses also receive the
 incoming laws' bytes (`At.payload`). `adopt` is this law judging the state it is being ADDED over
 (KERNEL-27: after the laws in force admitted `relaw laws'`, each incoming law judges the unchanged
-state); `relaw` is this law, in force, judging its replacement. -/
-def lawCase5 (birth adopt relaw write invoke : At → Term) : Term :=
+state); `relaw` is this law, in force, judging its replacement; `retire` is this law, in force,
+judging the object's end over its last state (`old = new`, KERNEL-70: a law that refuses it makes
+the object permanent). -/
+def lawCase6 (birth adopt relaw retire write invoke : At → Term) : Term :=
   let a : At := ⟨1⟩
   .case (.get (.var 0) "occasion")
-    [("adopt", adopt a), ("birth", birth a), ("invoke", invoke a), ("relaw", relaw a), ("write", write a)]
+    [("adopt", adopt a), ("birth", birth a), ("invoke", invoke a), ("relaw", relaw a),
+     ("retire", retire a), ("write", write a)]
 
 /-- A law with one clause per act. -/
-def lawOf5 (S : Ty) (birth adopt relaw write invoke : At → Term) : Term :=
-  .lam S (.lam S (.lam reqTy (lawCase5 birth adopt relaw write invoke)))
+def lawOf6 (S : Ty) (birth adopt relaw retire write invoke : At → Term) : Term :=
+  .lam S (.lam S (.lam reqTy (lawCase6 birth adopt relaw retire write invoke)))
 
 /-- The common case: writes and invokes judged alike, as a CHANGE. -/
-def lawCase (birth adopt relaw change : At → Term) : Term := lawCase5 birth adopt relaw change change
+def lawCase (birth adopt relaw retire change : At → Term) : Term :=
+  lawCase6 birth adopt relaw retire change change
 
-def lawOf (S : Ty) (birth adopt relaw change : At → Term) : Term :=
-  .lam S (.lam S (.lam reqTy (lawCase birth adopt relaw change)))
+def lawOf (S : Ty) (birth adopt relaw retire change : At → Term) : Term :=
+  .lam S (.lam S (.lam reqTy (lawCase birth adopt relaw retire change)))
 
 /-! ## Authority narrowing
 
@@ -134,27 +139,29 @@ only NARROWS that authority. So there is no "owner acts" law (it would re-check 
 against a copy of the owner in state, a twin) and no "anyone" law (strangers never reach a law). -/
 
 /-- The signer is the principal, so no delegate acts through a grant. With KERNEL-25 that is
-"only the owner's own key"; before it, an invoke without a grant has principal = signer = anyone. -/
+"only the owner's own key"; before it, an invoke without a grant has principal = signer = anyone.
+A retirement is the same clause: only the owner's own key ends the object. -/
 def ownerSigns (S : Ty) : Term :=
   let c (a : At) := allOf [(.prim .deq (a.reqF "agent") (a.reqF "principal"), "not signed by the owner")]
-  lawOf S c c c c
+  lawOf S c c c c c
 
-/-- Only the listed members (`agent`, the signer) may create, change or re-law the object.
+/-- Only the listed members (`agent`, the signer) may create, change, re-law or retire the object.
 `allowlistLaw` is the unchecked term (what the theorems are about); `allowlist` refuses more than
 `idsMax` ids. The membership test is a chain one level deep per id, so the cap keeps the law's text
 within the reader's depth (`Lang.Proofs.StdFits`). -/
 def allowlistLaw (S : Ty) (ids : List ByteArray) : Term :=
   let listed (a : At) := anyOf (ids.map fun i => .prim .deq (a.reqF "agent") (.digest i))
   let c (a : At) := allOf [(listed a, "not on the allowlist")]
-  lawOf S c c c c
+  lawOf S c c c c c
 
 /-- The one-member allowlist with its member a TERM at the clause's depth (4), so a GENERATOR can
-write it from a digest it holds — its own invoker's id (`Std.ownerGenerator`, LANG-88).
+write it from a digest it holds — its own invoker's id (`Std.ownerGenerator`, LANG-88). A
+retirement is the same clause: only the member may end the object.
 `allowlistLaw S [i] = allowlistWith S (.digest i)` (`allowlistLaw_one`). -/
 def allowlistWith (S : Ty) (idT : Term) : Term :=
   let listed (a : At) := anyOf [.prim .deq (a.reqF "agent") idT]
   let c (a : At) := allOf [(listed a, "not on the allowlist")]
-  lawOf S c c c c
+  lawOf S c c c c c
 
 /-- The most ids an allowlist names. -/
 def idsMax : Nat := 256
@@ -169,10 +176,11 @@ def allowlist (S : Ty) (ids : List ByteArray) : Except StdRefusal Term := do
 bound is a term at the clause's depth (4: the law's three binders and the arm's), so a GENERATOR
 can splice it from its argument (`Std.boundedGenerator`, LANG-87). The refusal names the field, not
 the bound: a nano program cannot write a number as text, and the bound is in the law's text and the
-generation's receipt. -/
+generation's receipt. A relaw and a retirement are admitted: the bound is over states, and neither
+changes the state (KERNEL-27, KERNEL-70: `old = new`). -/
 def boundedWith (S : Ty) (f : Label) (maxT : Term) : Term :=
   let c (a : At) := allOf [(.prim .le (a.newF f) maxT, s!"{f} over the bound")]
-  lawOf S c c (fun _ => okT) c
+  lawOf S c c (fun _ => okT) (fun _ => okT) c
 
 /-- Natural field `f` is at most `max` in every state the object reaches, its seed included. -/
 def bounded (S : Ty) (f : Label) (max : Nat) : Term := boundedWith S f (natT max)
@@ -195,7 +203,9 @@ were written under the previous laws, not the quorum's, so they prove nothing (L
 "adopt = relaw arm", let an owner forge them; KERNEL-27 judges only ADDED laws on adopt, so a relaw
 that keeps the quorum is not re-judged by it). Any member may
 propose, which resets every approval: a member can stall the quorum (liveness, not safety).
-`quorum` refuses duplicate members (one member, two votes), `k` outside `1 ≤ k ≤ members`, and
+A RETIREMENT is refused `quorum`: a quorum object is not ended by one signer (the kernel lets only
+its owner retire it); the quorum may relaw it, with its approvals, to laws that admit a retirement
+first. `quorum` refuses duplicate members (one member, two votes), `k` outside `1 ≤ k ≤ members`, and
 more than `membersMax` = 63 members (a mask bit is a natural below `2^64`). `quorumLaw` is the unchecked term,
 what the theorems are about. -/
 
@@ -266,7 +276,7 @@ def quorumLaw (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) 
   let relawC (a : At) := guards [(isMember members a, "not a member")]
     (allOf [(quorate a, "no quorum"), (proposedLaws a, "not the proposal")])
   let fresh (a : At) := allOf [(reset a, "approvals at birth")]
-  lawOf S fresh fresh relawC change
+  lawOf S fresh fresh relawC (fun _ => refusedT "quorum") change
 
 def quorum (S T : Ty) (members : List ByteArray) (k : Nat) (guarded : Label) : Except StdRefusal Term := do
   need (members.length ≤ membersMax) .tooManyMembers
@@ -280,7 +290,8 @@ State fields: `count : nat`, `epoch : nat`. The call's signed window (`notBefore
 which `World.admit` enforces) must lie inside one epoch, `notBefore / W`, and the state's epoch is
 that one; within it `count` rises by one for each change of `guarded`, up to `limit`; a later epoch
 restarts it (at most `limit` there too). No clock holder: the epoch is read from the window the
-signer committed to. `windowed` refuses `W = 0`; `windowedLaw` is the unchecked term. -/
+signer committed to. A relaw and a retirement are admitted: neither changes the state, so neither
+changes `guarded`. `windowed` refuses `W = 0`; `windowedLaw` is the unchecked term. -/
 
 def windowedLaw (S T : Ty) (W limit : Nat) (guarded : Label) : Term :=
   let e (a : At) := Term.prim .div (a.reqF "notBefore") (natT W)
@@ -290,7 +301,7 @@ def windowedLaw (S T : Ty) (W limit : Nat) (guarded : Label) : Term :=
   let inc (a : At) := Term.ite (eqAt T (a.newF guarded) (a.oldF guarded)) (natT 0) (natT 1)
   let fresh (a : At) := guards (inOneEpoch a) (allOf [(.prim .eq (a.newF "count") (natT 0), "count at birth")])
   lawOf S fresh fresh
-    (fun _ => okT)
+    (fun _ => okT) (fun _ => okT)
     (fun a => guards (inOneEpoch a)
       (.ite (.prim .eq (a.newF "epoch") (a.oldF "epoch"))
         (allOf [(.prim .eq (a.newF "count") (.prim .add (a.oldF "count") (inc a)), "count not bumped"),
@@ -308,7 +319,8 @@ def windowed (S T : Ty) (W limit : Nat) (guarded : Label) : Except StdRefusal Te
 Field `f` is a sum of empty records over `states`. A birth starts at `initial`; an invoke of method
 `m` moves `f` from `a` to `b` only along an edge `(a, m, b)`; a write or a relaw is refused (for a
 programmed object the kernel refuses both before any law runs, `hasMethods`: the arm is defence in
-depth). `stepTo` is the method that takes the edge. -/
+depth), and so is a retirement (the same `frozen` clause: a machine changes only by its methods, so
+a machine object is permanent). `stepTo` is the method that takes the edge. -/
 
 /-- The type of a machine field over `states`. -/
 def stateTy (states : List Label) : Ty := .sum (Row.sort (states.map fun s => (s, .record [])))
@@ -321,8 +333,8 @@ def machineLaw (S : Ty) (f : Label) (states : List Label) (initial : Label)
     (edges : List (Label × Nat × Label)) : Term :=
   let frozen (_ : At) := refusedT "a machine changes only by its methods"
   let start (a : At) := allOf [(isState states (a.newF f) initial, s!"{f} does not start at {initial}")]
-  lawOf5 S start start
-    frozen frozen
+  lawOf6 S start start
+    frozen frozen frozen
     (fun a => allOf [(anyOf (edges.map fun (x, m, y) =>
       andT (.prim .eq a.payload (natT m))
         (andT (isState states (a.oldF f) x) (isState states (a.newF f) y))), "no edge")])
@@ -428,11 +440,14 @@ abbrev LawEnv (rq n o : Data) (E : Env) : Env := rq.toVal :: n.toVal :: o.toVal 
 
 /-! ## Invariants kept: the certifying shape of a `keeps` claim (LANG-83, `Lang.Claim`) -/
 
-/-- `keeps S inv`: every birth, adoption, write and invoke is refused `invariant` unless `inv new`
-(`inv` a closed `fn S bool`); a law change admits (the state is unchanged, KERNEL-27). In certifying
-shape for the claim `keeps` (`Term.guardedBy`; `Lang.Proofs.Claim.keeps_guarded`). -/
+/-- `keeps S inv`: every birth, adoption, retirement, write and invoke is refused `invariant` unless
+`inv new` (`inv` a closed `fn S bool`); a law change admits (the state is unchanged, KERNEL-27). A
+retirement judges `inv` over the last state (`old = new`, KERNEL-70), which the law has kept, so it
+admits every retirement of a state the law reached; it is the guarded clause rather than `ok` so the
+law stays in certifying shape for the claim `keeps` (`Term.guardedBy` excepts only the relaw arm;
+`Lang.Proofs.Claim.keeps_guarded`). -/
 def keeps (S : Ty) (inv : Term) : Term :=
   let c (a : At) := guard (.app inv a.new) "invariant" okT
-  lawOf S c c (fun _ => okT) c
+  lawOf S c c (fun _ => okT) c c
 
 end Nanodregg.Lang.Std

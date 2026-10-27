@@ -25,11 +25,12 @@ import Lang.Journey.Contextual
 namespace Nanodregg.Lang.Journey.Law
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Lang.Journey
 
-/-- A law package with one law that admits every act: the contract `cellLaw g L` names it. -/
+/-- A law package with one law that admits every act, a retirement included: the contract
+`cellLaw g L` names it. -/
 def openLaw : Package :=
   { imports := [], state := .record [], iface := .record [("open", lawTy (.record []))],
     body := .record [("open", Std.lawOf (.record []) (fun _ => Std.okT) (fun _ => Std.okT)
-      (fun _ => Std.okT) (fun _ => Std.okT))],
+      (fun _ => Std.okT) (fun _ => Std.okT) (fun _ => Std.okT))],
     methods := [], laws := ["open"] }
 
 /-- The ROM: context `[bool, nat]`, result `nat`, three candidates `var 1` (the nat argument), each

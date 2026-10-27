@@ -188,7 +188,7 @@ def rowSlotText : RowSlot D → String
 
 /-- The verb of a call body and what it names. -/
 def bodyText : Body D → String
-  | .enroll _ _ _ via => s!"enroll via {hexOf via}"
+  | .enroll _ _ _ _ via => s!"enroll via {hexOf via}"
   | .rotate _ _ => "rotate"
   | .install pkg => s!"install {pkg.size} bytes"
   | .create pkg laws state => s!"create {(pkg.map hexOf).getD "data"} laws {laws.length} slots {state.length}"
@@ -196,7 +196,7 @@ def bodyText : Body D → String
   | .law obj laws _ => s!"law {hexOf obj} laws {laws.length}"
   | .invoke obj m _ budget _ => s!"invoke {hexOf obj} method {m} budget {budget}"
   | .grant t g rights _ => s!"grant {hexOf t} to {hexOf g} rights {rights.length}"
-  | .revoke g => s!"revoke {hexOf g}"
+  | .retire c => s!"retire {hexOf c}"
   | .issue cap => s!"issue cap {cap}"
   | .account a o => s!"account {hexOf a} owner {hexOf o}"
   | .transfer _ _ amount _ _ => s!"transfer {amount}"

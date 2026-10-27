@@ -113,8 +113,10 @@ theorem receive_of {X : Ctx D} {w : World D} {c : Call D} {obj : D} {method : Na
   have hd : deriveWithTicks X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c =
       .ok (d, poolOf c.unsigned.body - wk.pool) := by
     unfold deriveWithTicks; rw [hb] at hi ⊢; simp only [dispatch, hi, Except.map]
-  unfold receive receiveWith deriveTurn
-  simp only [h0, hs, hk', hd, bind, Except.bind]
+  have hj : req (c.unsigned.body.joinOrigin.all (· = w.origin)) Refusal.otherWorld =
+      (Except.ok () : Except (Refusal D) Unit) := by simp [req, hb, Body.joinOrigin]
+  unfold receive deriveTurn
+  simp only [h0, hs, hj, hk', hd, bind, Except.bind]
 
 end
 

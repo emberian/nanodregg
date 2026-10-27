@@ -7,7 +7,7 @@ decoded state and of the request, a method by `apply4` with its rows first: `rec
 decoded state holds one of exactly these values: the case split is exhaustive by the type.
 
 LANG's `Proofs.Std` proves `machineLaw`'s spec in general (`machine_birth`, `machine_invoke`,
-`machine_write_refused`, `machine_relaw_refused`); these pin THIS package: the edges Hosting passes,
+`machine_write_refused`, `machine_relaw_refused`, `machine_retire_refused`); these pin THIS package: the edges Hosting passes,
 resolved to the method indices `Event.index` names, decide `step`.
 
 There is no owner law: authority is KERNEL's gate (KERNEL-25, `invoke_authorized`).
@@ -55,11 +55,12 @@ private def bytesIs (b : ByteArray) : Outcome → Bool
   | .value (.bytes c) _ => c == b
   | _ => false
 
-/-- The four acts a law is told about (LANG ID-1). -/
+/-- The acts a law is told about (LANG ID-1; the retirement, KERNEL-70). -/
 private def birthD : Data := .inj "birth" unitD
 private def invokeD (m : Nat) : Data := .inj "invoke" (.nat m)
 private def writeD : Data := .inj "write" unitD
 private def relawD : Data := .inj "relaw" (.bytes .empty)
+private def retireD : Data := .inj "retire" unitD
 
 private def rqD (occasion : Data) (principal : ByteArray := .empty) : Data :=
   .record [("agent", .digest .empty), ("notBefore", .nat 0), ("occasion", occasion),
@@ -130,11 +131,13 @@ theorem phase_invoke :
       verdictIs (step p e == some q) (lawOn "phase" (rqD (invokeD e.index)) (stD q) (stD p)) = true := by
   decide +kernel
 
-/-- A write or a law change is refused, whatever the phases. -/
+/-- A write, a law change or a retirement is refused, whatever the phases (a grain's lifecycle
+object is permanent). -/
 theorem phase_frozen :
     ∀ p ∈ Phase.all, ∀ q ∈ Phase.all,
       (verdictIs false (lawOn "phase" (rqD writeD) (stD q) (stD p)) &&
-       verdictIs false (lawOn "phase" (rqD relawD) (stD q) (stD p))) = true := by
+       verdictIs false (lawOn "phase" (rqD relawD) (stD q) (stD p)) &&
+       verdictIs false (lawOn "phase" (rqD retireD) (stD q) (stD p))) = true := by
   decide +kernel
 
 /-- Method `e`, as `runMethod` runs it, writes `phase := target p e` and keeps `kind` and `entry`,

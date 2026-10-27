@@ -192,7 +192,7 @@ def headRows (r0 : Run) (b : Sim.Member) (rA0 : Run) (a : Sim.Member) (acceptTex
   let (ra4, va4, tg) := go prog ra3 (Sim.signed ra3.st b b.key (Sim.S.pinsFor ra3.st.host [b.id, Acc, HA])
     (.grant Acc HA [.invoke 0] none))
   let some G := tg.bind fun t => (createdIds t).head? | return note r s!"RC1 B's grant: {va4}" false
-  let (ra5, va5, _) := go prog ra4 (Sim.signed ra4.st b b.key (Sim.S.pinsFor ra4.st.host [b.id, G]) (.revoke G))
+  let (ra5, va5, _) := go prog ra4 (Sim.signed ra4.st b b.key (Sim.S.pinsFor ra4.st.host [b.id, G]) (.retire G))
   let cellArg (c : D) : Option ByteArray :=
     Wire.encodeData (.record [("cell", .digest)]) (.record [("cell", .digest (hdDig c))])
   -- acceptor methods, labels ascending: 0 accept, 1 distrust, 2 trust

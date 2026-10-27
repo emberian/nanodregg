@@ -27,11 +27,12 @@ def le100 : Term := .lam S (.prim .le (.get (.var 0) "total") (.nat 100))
 def boundedKeeps : Term := law3 (.ite (.app le100 (.var 1)) ok (refused "over 100"))
 
 /-- Under `case req.occasion`: var 3 = old, var 2 = new, var 1 = req, var 0 = the payload. The
-`write` arm admits without the test. -/
+`write` arm admits without the test (the `retire` arm tests, like every arm but `relaw`). -/
 def leaky : Term :=
   let test := Term.ite (.app le100 (.var 2)) ok (refused "over 100")
   .lam S (.lam S (.lam reqTy (.case (.get (.var 0) "occasion")
-    [("adopt", test), ("birth", test), ("invoke", test), ("relaw", ok), ("write", ok)])))
+    [("adopt", test), ("birth", test), ("invoke", test), ("relaw", ok), ("retire", test),
+     ("write", ok)])))
 
 /-- A law that returns whatever verdict its new state holds at `flag`. -/
 def readsVerdict : Term := law3 (.get (.var 1) "flag")

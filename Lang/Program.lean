@@ -285,11 +285,12 @@ def occasionData : Occasion D → Data
   | .relaw ls => .inj "relaw" (.bytes (ls.foldl (fun acc l => acc ++ bytesOf l) .empty))
   | .adopt ls => .inj "adopt" (.bytes (ls.foldl (fun acc l => acc ++ bytesOf l) .empty))
   | .invoke m => .inj "invoke" (.nat m)
+  | .retire => .inj "retire" (.record [])
 
 /-- The occasion fits the language's data: a method index is a natural, a law list's bytes one
 byte value. -/
 def occasionOk : Occasion D → Bool
-  | .birth | .write => true
+  | .birth | .write | .retire => true
   | .relaw ls | .adopt ls => decide ((ls.foldl (fun acc l => acc ++ bytesOf l) .empty).size ≤ Bounds.bytesMax)
   | .invoke m => decide (m < Bounds.natLimit)
 

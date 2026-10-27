@@ -31,18 +31,19 @@ variable {lib : List Term}
 /-! ## Invariants -/
 
 /-- **`bounded`, over a history**: from a state where `f` is a natural at most `max`, every state
-the chain reaches has it so (`bounded_spec` on a birth, adoption, write or invoke; a relaw keeps
-the state). -/
+the chain reaches has it so (`bounded_spec` on a birth, adoption, write or invoke; a relaw and a
+retirement keep the state). -/
 theorem bounded_reached {S : Ty} {f : Label} {max : Nat} {o : Data} {steps : List (Data × Data)}
     (h : Chain (Step lib (bounded S f max)) o steps) (h0 : ∃ m, o.field f = some (.nat m) ∧ m ≤ max) :
     ∀ s ∈ steps, ∃ m, s.2.field f = some (.nat m) ∧ m ≤ max := by
   refine chain_invariant (fun d => ∃ m, d.field f = some (.nat m) ∧ m ≤ max) (fun rq n o hs ho => ?_) h h0
-  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf5_occasion hs.1
-  rcases hℓ with rfl | rfl | rfl | rfl | rfl
+  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf6_occasion hs.1
+  rcases hℓ with rfl | rfl | rfl | rfl | rfl | rfl
   · exact bounded_spec hs.1 hocc (.inr (.inr ⟨x, rfl⟩))
   · exact bounded_spec hs.1 hocc (.inr (.inl ⟨x, rfl⟩))
   · exact bounded_spec hs.1 hocc (.inl (.inr ⟨x, rfl⟩))
   · rw [hs.2 _ _ hocc (.inl rfl)]; exact ho
+  · rw [hs.2 _ _ hocc (.inr (.inr rfl))]; exact ho
   · exact bounded_spec hs.1 hocc (.inl (.inl ⟨x, rfl⟩))
 
 private theorem pow2_pos : ∀ k, 0 < pow2 k
@@ -51,30 +52,32 @@ private theorem pow2_pos : ∀ k, 0 < pow2 k
 
 /-- **`quorum`, over a history**: every state the chain reaches holds its approvals as a mask over
 the members (`quorum_birth_empty`, `quorum_adopt_fresh`, `quorum_change`; a relaw keeps the
-state), from a state that does. -/
+state; `quorum_retire_refused` leaves no retirement), from a state that does. -/
 theorem quorum_mask_reached {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Label} {o : Data}
     {steps : List (Data × Data)} (h : Chain (Step lib (quorumLaw S T ms k g)) o steps)
     (h0 : ∃ b, o.field "approvals" = some (.nat b) ∧ b < pow2 ms.length) :
     ∀ s ∈ steps, ∃ b, s.2.field "approvals" = some (.nat b) ∧ b < pow2 ms.length := by
   refine chain_invariant (fun d => ∃ b, d.field "approvals" = some (.nat b) ∧ b < pow2 ms.length)
     (fun rq n o hs ho => ?_) h h0
-  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf5_occasion hs.1
-  rcases hℓ with rfl | rfl | rfl | rfl | rfl
+  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf6_occasion hs.1
+  rcases hℓ with rfl | rfl | rfl | rfl | rfl | rfl
   · exact ⟨0, quorum_adopt_fresh hs.1 hocc, pow2_pos _⟩
   · exact ⟨0, quorum_birth_empty hs.1 hocc, pow2_pos _⟩
   · exact (quorum_change hs.1 hocc (.inr rfl)).2.1
   · rw [hs.2 _ _ hocc (.inl rfl)]; exact ho
+  · exact (quorum_retire_refused hocc hs.1).elim
   · exact (quorum_change hs.1 hocc (.inl rfl)).2.1
 
 /-- **`windowed`, over a history**: every state the chain reaches has a count at most `limit`
-(`windowed_fresh`, `windowed_counts`; a relaw keeps the state), from a state that does. -/
+(`windowed_fresh`, `windowed_counts`; a relaw and a retirement keep the state), from a state that
+does. -/
 theorem windowed_count_reached {S T : Ty} {W limit : Nat} {g : Label} {o : Data}
     {steps : List (Data × Data)} (h : Chain (Step lib (windowedLaw S T W limit g)) o steps)
     (h0 : ∃ c, o.field "count" = some (.nat c) ∧ c ≤ limit) :
     ∀ s ∈ steps, ∃ c, s.2.field "count" = some (.nat c) ∧ c ≤ limit := by
   refine chain_invariant (fun d => ∃ c, d.field "count" = some (.nat c) ∧ c ≤ limit)
     (fun rq n o hs ho => ?_) h h0
-  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf5_occasion hs.1
+  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf6_occasion hs.1
   have hc : ∀ ℓ', ℓ' = "write" ∨ ℓ' = "invoke" → rq.field "occasion" = some (.inj ℓ' x) →
       ∃ c, n.field "count" = some (.nat c) ∧ c ≤ limit := by
     intro ℓ' hl ho'
@@ -82,11 +85,12 @@ theorem windowed_count_reached {S T : Ty} {W limit : Nat} {g : Label} {o : Data}
     rcases hcase with ⟨_, _, _, _, _, _, hle⟩ | ⟨_, _, _, _, _, _, hle⟩
     · exact ⟨c, hcn, hle⟩
     · exact ⟨c, hcn, hle⟩
-  rcases hℓ with rfl | rfl | rfl | rfl | rfl
+  rcases hℓ with rfl | rfl | rfl | rfl | rfl | rfl
   · exact ⟨0, windowed_fresh hs.1 hocc (.inr rfl), Nat.zero_le _⟩
   · exact ⟨0, windowed_fresh hs.1 hocc (.inl rfl), Nat.zero_le _⟩
   · exact hc _ (.inr rfl) hocc
   · rw [hs.2 _ _ hocc (.inl rfl)]; exact ho
+  · rw [hs.2 _ _ hocc (.inr (.inr rfl))]; exact ho
   · exact hc _ (.inl rfl) hocc
 
 /-- The states a machine reaches from `initial` along its edges. -/
@@ -96,7 +100,8 @@ inductive Reach (edges : List (Label × Nat × Label)) (initial : Label) : Label
 
 /-- **A machine, over a history**: from a state at a reachable state, every state the chain
 reaches is at a state reachable from `initial` along the edges (`machine_birth`, `machine_adopt`,
-`machine_invoke`; `machine_write_refused` and `machine_relaw_refused` leave no other step). -/
+`machine_invoke`; `machine_write_refused`, `machine_relaw_refused` and `machine_retire_refused`
+leave no other step). -/
 theorem machine_reached {S : Ty} {f : Label} {states : List Label} {initial : Label}
     {edges : List (Label × Nat × Label)} {o : Data} {steps : List (Data × Data)}
     (h : Chain (Step lib (machineLaw S f states initial edges)) o steps)
@@ -104,8 +109,8 @@ theorem machine_reached {S : Ty} {f : Label} {states : List Label} {initial : La
     ∀ s ∈ steps, ∃ b y, s.2.field f = some (.inj b y) ∧ Reach edges initial b := by
   refine chain_invariant (fun d => ∃ a y, d.field f = some (.inj a y) ∧ Reach edges initial a)
     (fun rq n o hs ho => ?_) h h0
-  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf5_occasion hs.1
-  rcases hℓ with rfl | rfl | rfl | rfl | rfl
+  obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf6_occasion hs.1
+  rcases hℓ with rfl | rfl | rfl | rfl | rfl | rfl
   · obtain ⟨y, hy⟩ := machine_adopt hs.1 hocc
     exact ⟨initial, y, hy, .start⟩
   · obtain ⟨y, hy⟩ := machine_birth hs.1 hocc
@@ -118,6 +123,7 @@ theorem machine_reached {S : Ty} {f : Label} {states : List Label} {initial : La
     subst ha
     exact ⟨b, y', hyb, .edge hr he⟩
   · exact (machine_relaw_refused hocc hs.1).elim
+  · exact (machine_retire_refused hocc hs.1).elim
   · exact (machine_write_refused hocc hs.1).elim
 
 /-! ## A potential: at most `limit` changes per epoch -/
@@ -147,7 +153,7 @@ open Classical in
 /-- **At most `limit` changes per epoch** (the induction `windowed_counts` promised): along any
 chain of `windowed` steps with no birth, from any state, at most `limit` steps land in epoch `e`
 (their new state's epoch) and change the guarded field `g` (from the state before them). An epoch
-never goes back (`windowed_counts`), a relaw or adoption keeps the state, and the count rises by
+never goes back (`windowed_counts`), a relaw, an adoption or a retirement keeps the state, and the count rises by
 one per change inside an epoch: the potential is the count at `e`. The birth is excluded because a
 `Chain` does not know an object is born once (KERNEL's history does). -/
 theorem windowed_per_epoch {S T : Ty} {W limit : Nat} {g : Label} (e : Nat) {o : Data}
@@ -159,7 +165,7 @@ theorem windowed_per_epoch {S T : Ty} {W limit : Nat} {g : Label} (e : Nat) {o :
       (if n.field "epoch" = some (.nat e) ∧ n.field g ≠ o.field g then 1 else 0) + epochPot e limit o ≤
         epochPot e limit n := by
     intro rq n o hs hm
-    obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf5_occasion hs.1
+    obtain ⟨ℓ, x, hocc, hℓ⟩ := lawOf6_occasion hs.1
     have keep : n = o → (if n.field "epoch" = some (.nat e) ∧ n.field g ≠ o.field g then 1 else 0) +
         epochPot e limit o ≤ epochPot e limit n := by
       rintro rfl
@@ -175,11 +181,12 @@ theorem windowed_per_epoch {S T : Ty} {W limit : Nat} {g : Label} (e : Nat) {o :
       · rcases hinc with ⟨rfl, hg⟩ | ⟨rfl, hg⟩ <;>
           simp only [epochPot, hoe, hne, hcn, Option.some.injEq, Data.nat.injEq] <;>
           (repeat' split) <;> first | omega | (simp_all; done) | (simp_all; omega)
-    rcases hℓ with rfl | rfl | rfl | rfl | rfl
-    · exact keep (hs.2 _ _ hocc (.inr rfl))
+    rcases hℓ with rfl | rfl | rfl | rfl | rfl | rfl
+    · exact keep (hs.2 _ _ hocc (.inr (.inl rfl)))
     · exact (hnb (rq, n) hm x hocc).elim
     · exact change (.inr rfl)
     · exact keep (hs.2 _ _ hocc (.inl rfl))
+    · exact keep (hs.2 _ _ hocc (.inr (.inr rfl)))
     · exact change (.inl rfl)
   exact Nat.le_trans (Nat.le_add_right _ _)
     (chain_sum (epochPot e limit) (fun _ n o => if n.field "epoch" = some (.nat e) ∧ n.field g ≠ o.field g then 1 else 0)
@@ -192,7 +199,7 @@ theorem ownerSigns_every {S : Ty} {o : Data} {steps : List (Data × Data)} (h : 
     ∀ s ∈ steps, ∃ sg, s.1.field "agent" = some (.digest sg) ∧ s.1.field "principal" = some (.digest sg) :=
   chain_each (fun rq _ => ∃ sg, rq.field "agent" = some (.digest sg) ∧ rq.field "principal" = some (.digest sg))
     (fun _ _ _ hs => by
-      obtain ⟨ℓ, x, hocc, -⟩ := lawOf5_occasion hs.1
+      obtain ⟨ℓ, x, hocc, -⟩ := lawOf6_occasion hs.1
       exact ownerSigns_spec hs.1 hocc) h
 
 /-- **`allowlist`, over a history**: every step was signed by a listed member (`allowlist_spec`). -/
@@ -201,7 +208,7 @@ theorem allowlist_every {ids : List ByteArray} {S : Ty} {o : Data} {steps : List
     ∀ s ∈ steps, ∃ m ∈ ids, s.1.field "agent" = some (.digest m) :=
   chain_each (fun rq _ => ∃ m ∈ ids, rq.field "agent" = some (.digest m))
     (fun _ _ _ hs => by
-      obtain ⟨ℓ, x, hocc, -⟩ := lawOf5_occasion hs.1
+      obtain ⟨ℓ, x, hocc, -⟩ := lawOf6_occasion hs.1
       exact allowlist_spec hs.1 hocc) h
 
 /-- **`quorum`'s law changes, over a history**: every relaw step was by a member, with `k`
@@ -227,28 +234,30 @@ theorem quorum_commits_every {S T : Ty} {ms : List ByteArray} {k : Nat} {g : Lab
         o'.field "proposal" = some (.inj "set" ng) ∧ n.field "approvals" = some (.nat 0) :=
   chain_always _ (fun _ _ _ hs _ _ ho hl hchg => quorum_change_needs_k hs.1 ho hl hchg) h
 
-/-- **`windowed`'s epochs, over a history**: every step other than a relaw was signed for a window
-inside one epoch, and its new state records that epoch (`windowed_lands_in_epoch`). -/
+/-- **`windowed`'s epochs, over a history**: every step other than a relaw or a retirement (both
+keep the state, and `windowed` admits both in any window) was signed for a window inside one
+epoch, and its new state records that epoch (`windowed_lands_in_epoch`). -/
 theorem windowed_epochs_every {S T : Ty} {W limit : Nat} {g : Label} {o : Data}
     {steps : List (Data × Data)} (h : Chain (Step lib (windowedLaw S T W limit g)) o steps) :
-    ∀ s ∈ steps, ∀ ℓ x, s.1.field "occasion" = some (.inj ℓ x) → ℓ ≠ "relaw" →
+    ∀ s ∈ steps, ∀ ℓ x, s.1.field "occasion" = some (.inj ℓ x) → ℓ ≠ "relaw" → ℓ ≠ "retire" →
       ∃ nb vu, s.1.field "notBefore" = some (.nat nb) ∧ s.1.field "validUntil" = some (.nat vu) ∧
         vu / W = nb / W ∧ s.2.field "epoch" = some (.nat (nb / W)) :=
-  chain_each (fun rq n => ∀ ℓ x, rq.field "occasion" = some (.inj ℓ x) → ℓ ≠ "relaw" →
+  chain_each (fun rq n => ∀ ℓ x, rq.field "occasion" = some (.inj ℓ x) → ℓ ≠ "relaw" → ℓ ≠ "retire" →
       ∃ nb vu, rq.field "notBefore" = some (.nat nb) ∧ rq.field "validUntil" = some (.nat vu) ∧
         vu / W = nb / W ∧ n.field "epoch" = some (.nat (nb / W)))
-    (fun _ _ _ hs ℓ x ho hr => by
-    obtain ⟨ℓ', x', ho', hℓ⟩ := lawOf5_occasion hs.1
+    (fun _ _ _ hs ℓ x ho hr hrt => by
+    obtain ⟨ℓ', x', ho', hℓ⟩ := lawOf6_occasion hs.1
     rw [ho] at ho'
     injection ho' with ho'
     injection ho' with hℓℓ
     subst hℓℓ
     refine windowed_lands_in_epoch hs.1 ho ?_
-    rcases hℓ with h | h | h | h | h
+    rcases hℓ with h | h | h | h | h | h
     · exact .inr (.inl h)
     · exact .inl h
     · exact .inr (.inr (.inr h))
     · exact (hr h).elim
+    · exact (hrt h).elim
     · exact .inr (.inr (.inl h))) h
 
 /-! ## Teeth -/
@@ -267,7 +276,7 @@ private theorem ok_of_matches {x : Except Fault (Except ByteArray Unit)} (h : (x
   match x, h with
   | .ok (.ok ()), _ => rfl
 
-private theorem keeps_of {ℓ : Label} {y n o : Data} (hℓ : ℓ ≠ "relaw" ∧ ℓ ≠ "adopt") :
+private theorem keeps_of {ℓ : Label} {y n o : Data} (hℓ : ℓ ≠ "relaw" ∧ ℓ ≠ "adopt" ∧ ℓ ≠ "retire") :
     LawKeeps (rqOn (.inj ℓ y)) n o := by
   intro ℓ' x ho hl
   have : (rqOn (.inj ℓ y)).field "occasion" = some (.inj ℓ y) := rfl
@@ -275,9 +284,10 @@ private theorem keeps_of {ℓ : Label} {y n o : Data} (hℓ : ℓ ≠ "relaw" �
   injection ho with ho
   injection ho with ho
   subst ho
-  rcases hl with rfl | rfl
+  rcases hl with rfl | rfl | rfl
   · exact (hℓ.1 rfl).elim
-  · exact (hℓ.2 rfl).elim
+  · exact (hℓ.2.1 rfl).elim
+  · exact (hℓ.2.2 rfl).elim
 
 /-- **A chain exists**: `bounded total ≤ 100` admits a birth at 0 and then a write to 100, so the
 schemes' premise is met by a real two-step history. -/

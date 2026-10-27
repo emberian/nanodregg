@@ -22,7 +22,7 @@ namespace Nanodregg.Protocol.Command
 verb does not compile until its author decides its arm, so the surface never widens by default. -/
 def Verb.onStdio : Verb → Bool
   | .init | .rotate | .adopt | .invite => false
-  | .enroll | .install | .create | .write | .law | .invoke | .grant | .revoke | .read | .sync
+  | .enroll | .install | .create | .write | .law | .invoke | .grant | .retire | .read | .sync
   | .issue | .account | .transfer | .credit | .receipt | .cancel => true
 
 /-- The verbs a resident may run through `nd --stdio`. -/

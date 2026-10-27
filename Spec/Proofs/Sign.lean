@@ -6,7 +6,7 @@ constructors, `sign`, `signNext` and `signIncoming`. Their arms in `Command.step
 
 * `sign`: an envelope (`envelopeMessage`: every catch-up page, the `expired` re-sign, `cancel`'s
   second catch-up), an adopt envelope (`adoptEnvelope`, an `envelopeMessage` too), `init`'s
-  possession proof (`possessionMessage`), an invitation (`Invite.message`), a head attestation
+  join consent (`joinMessage`, PROTOCOL-79), an invitation (`Invite.message`), a head attestation
   (`Head.message`, `sync --attest`), a cancel (`cancelMessage`), and a call (`callMessage u`, at
   the tip of a write's catch-up). (`start` also signs `whoami`; `System` has no `start` field.)
 * `signNext`: only `rotate`'s call (`callMessage u`, phase 5).
@@ -23,7 +23,7 @@ claims say so:
   system's kernel.
 * `Consent.signShapes`: every message follow offers is one of six shapes, each its own domain
   (`Protocol.Proofs.Domains`): that planned call, an envelope of the member's own World, member and
-  grant, a possession proof, an invitation, a head attestation, or a cancel.
+  grant, a join consent, an invitation, a head attestation, or a cancel.
 
 **Premises.** None. What is OWED is named, not assumed: the argv (and custody's `Signed` result
 the continuation carries, whose key is `u.key`) are client-held bytes, the relay's under an arbitrary
@@ -78,8 +78,8 @@ def Consent.signs (S : System D) : Prop :=
           ⟨u, ByteArray.empty⟩ = .ok t ∧ S.admit f'.world t = .ok w'
 
 /-- **C(i), every arm. Every message follow offers custody is one of six shapes**: a call planned
-as in `Consent.signs`, an envelope of the member's own World, member and grant, a possession
-proof, an invitation, a head attestation, or a cancel. -/
+as in `Consent.signs`, an envelope of the member's own World, member and grant, a join
+consent, an invitation, a head attestation, or a cancel. -/
 def Consent.signShapes (S : System D) : Prop :=
   ∀ (me : Command.Self D) (f f' : Command.Follow D) (kb res msg k : ByteArray) (p : Command.Persist D)
     (r : Command.Reply),
@@ -92,7 +92,7 @@ def Consent.signShapes (S : System D) : Prop :=
       Command.plan S.X me f'.world sg.key rs b = .ok u ∧ msg = S.X.callMessage u) ∨
     (∃ start notBefore validUntil,
       msg = Envelope.message S.X me.world me.member me.grant start notBefore validUntil) ∨
-    (∃ sponsor next key, msg = possessionMessage S.X sponsor next key) ∨
+    (∃ origin sponsor next key, msg = joinMessage S.X origin sponsor next key) ∨
     (∃ u, msg = Invite.message u) ∨ (∃ u, msg = Head.message u) ∨ (∃ c, msg = S.X.cancelMessage c)
 
 end Claims
@@ -122,7 +122,7 @@ def Shape (X : Ctx D) (me : Self D) (w : World D) (kb msg : ByteArray) : Prop :=
   Planned X me w kb msg ∨
     (∃ start notBefore validUntil,
       msg = Envelope.message X me.world me.member me.grant start notBefore validUntil) ∨
-    (∃ sponsor next key, msg = possessionMessage X sponsor next key) ∨
+    (∃ origin sponsor next key, msg = joinMessage X origin sponsor next key) ∨
     (∃ u, msg = Invite.message u) ∨ (∃ u, msg = Head.message u) ∨ (∃ c, msg = X.cancelMessage c)
 
 omit [Ord D] [DecidableEq D] in
@@ -267,8 +267,8 @@ theorem shape_envelopeMessage {a b : Nat} : Shape X me w kb (envelopeMessage X m
 theorem shape_adoptEnvelope {a b : Nat} : Shape X me w kb (adoptEnvelope X me a b) :=
   .inr (.inl ⟨_, _, _, rfl⟩)
 
-theorem shape_possession {s n : D} {key : ByteArray} : Shape X me w kb (possessionMessage X s n key) :=
-  .inr (.inr (.inl ⟨_, _, _, rfl⟩))
+theorem shape_join {o s n : D} {key : ByteArray} : Shape X me w kb (joinMessage X o s n key) :=
+  .inr (.inr (.inl ⟨_, _, _, _, rfl⟩))
 
 theorem shape_invite {u : ByteArray} : Shape X me w kb (Invite.message u) :=
   .inr (.inr (.inr (.inl ⟨_, rfl⟩)))
@@ -371,7 +371,7 @@ theorem step_asks {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {m
         | with_reducible exact envelopeSign_shape ha
         | (obtain rfl := asks_sign ha; with_reducible exact shape_envelopeMessage)
         | (obtain rfl := asks_sign ha; with_reducible exact shape_adoptEnvelope)
-        | (obtain rfl := asks_sign ha; with_reducible exact shape_possession)
+        | (obtain rfl := asks_sign ha; with_reducible exact shape_join)
         | (obtain rfl := asks_sign ha; with_reducible exact shape_invite)
         | (obtain rfl := asks_sign ha; with_reducible exact shape_planned hst ‹_› ‹_› ‹_› ‹_›)
         | (obtain rfl := asks_signNext ha; with_reducible exact shape_planned_rotate hst ‹_› ‹_› ‹_›)
@@ -388,12 +388,12 @@ theorem shape_call {X : Ctx D} {me : Self D} {w : World D} {kb msg : ByteArray} 
       ∃ t w', deriveTurn X (pinned X.env w u.pins) (rowView X.env w u) ⟨u, ByteArray.empty⟩ = .ok t ∧
         World.admit X.env w t = .ok w' := by
   subst hv
-  rcases hs with ⟨st, cmd, sg, rs, b, u, hst, hp, hb, hr, hpl, hm⟩ | ⟨s, n, vu, he⟩ | ⟨sp, nx, key, he⟩ |
+  rcases hs with ⟨st, cmd, sg, rs, b, u, hst, hp, hb, hr, hpl, hm⟩ | ⟨s, n, vu, he⟩ | ⟨o, sp, nx, key, he⟩ |
       ⟨u, he⟩ | ⟨u, he⟩ | ⟨c, he⟩
   · obtain ⟨hmem, -, -, t, w', hd, ha⟩ := plan_admits hpl
     exact ⟨st, cmd, sg, rs, b, u, hst, hp, hb, hr, hpl, hm, hmem, t, w', hd, ha⟩
   · exact absurd he.symm (envelope_call_disjoint X v me.world me.member me.grant s n vu)
-  · exact absurd he (call_not_possession X v sp nx key)
+  · exact absurd he (call_not_join X v o sp nx key)
   · exact absurd he.symm (invite_not_call X v u)
   · exact absurd he.symm (head_not_call X v u)
   · exact absurd he.symm (cancel_not_call X c v)
@@ -478,12 +478,12 @@ theorem floor_consent_signShapes (d : ByteArray → ByteArray) : ¬ Consent.sign
   intro h
   rcases h wMe ⟨wGenesis, none, none⟩ ⟨wGenesis, none, none⟩ kSync .empty .empty .empty (.steps [])
       (.sign .empty .empty) (relaySigner_signs d _ _ _) (.inl rfl) with
-    ⟨-, -, -, -, -, u, -, -, -, -, -, he⟩ | ⟨s, n, v, he⟩ | ⟨sp, nx, key, he⟩ | ⟨u, he⟩ | ⟨u, he⟩ | ⟨c, he⟩
+    ⟨-, -, -, -, -, u, -, -, -, -, -, he⟩ | ⟨s, n, v, he⟩ | ⟨o, sp, nx, key, he⟩ | ⟨u, he⟩ | ⟨u, he⟩ | ⟨c, he⟩
   · exact empty_ne_append (by decide) he
   · unfold Envelope.message at he
     simp only [ByteArray.append_assoc] at he
     exact empty_ne_append (by decide) he
-  · unfold possessionMessage at he
+  · unfold joinMessage at he
     simp only [ByteArray.append_assoc] at he
     exact empty_ne_append (by decide) he
   · exact empty_ne_append (by decide) he

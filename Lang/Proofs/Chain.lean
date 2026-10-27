@@ -8,10 +8,10 @@ each such statement is a scheme applied to per-step lemmas.
 
 `Chain R o steps`: `(request, new state)` pairs from the state `o`, each an `R`-step over the state
 the previous one left. Two step relations matter: `Admits lib law` (the law alone: a derivation to
-`ok`, so a law that faults or refuses never steps) and `Step lib law` (that, and a law change or
-adoption keeps the state, `LawKeeps`: KERNEL's `law_judged` judges `relaw` and `adopt` over the
-object's unchanged state). A `Step` chain is an `Admits` chain (`chain_mono`); the schemes hold
-for every relation.
+`ok`, so a law that faults or refuses never steps) and `Step lib law` (that, and a law change, an
+adoption or a retirement keeps the state, `LawKeeps`: KERNEL's `law_judged` judges `relaw` and
+`adopt` over the object's unchanged state, and `retireCheck` judges `retire` over its last state).
+A `Step` chain is an `Admits` chain (`chain_mono`); the schemes hold for every relation.
 
 * `chain_mono`: a chain of stronger steps is a chain of weaker ones;
 * `chain_invariant`: a state predicate every step preserves holds at every state the chain reaches;
@@ -36,10 +36,11 @@ namespace Nanodregg.Lang.Std
 
 open Nanodregg.Lang
 
-/-- A law change (`relaw`) or adoption (`adopt`) keeps the state: the kernel judges both over the
-object's unchanged state (`Kernel.Proofs.law_judged`). -/
+/-- A law change (`relaw`), an adoption (`adopt`) or a retirement (`retire`) keeps the state: the
+kernel judges each over the object's unchanged state (`Kernel.Proofs.law_judged`; a retirement,
+`Kernel.Receive.retireCheck`, over its last state, `old = new`). -/
 def LawKeeps (rq n o : Data) : Prop :=
-  ∀ ℓ x, rq.field "occasion" = some (.inj ℓ x) → (ℓ = "relaw" ∨ ℓ = "adopt") → n = o
+  ∀ ℓ x, rq.field "occasion" = some (.inj ℓ x) → (ℓ = "relaw" ∨ ℓ = "adopt" ∨ ℓ = "retire") → n = o
 
 /-- One step of a law's history from `o` to `n` under request `rq`. -/
 def Step (lib : List Term) (law : Term) (rq n o : Data) : Prop :=
@@ -159,14 +160,14 @@ private theorem find_label_mem {α : Type} {ℓ : Label} {b : α} :
     · rename_i hk; subst hk; simp
     · exact List.mem_cons_of_mem _ (find_label_mem h)
 
-/-- An admitted step of a five-armed law (`lawOf5`, and so `lawOf`) names one of the five
+/-- An admitted step of a six-armed law (`lawOf6`, and so `lawOf`) names one of the six
 occasions. -/
-theorem lawOf5_occasion {lib : List Term} {S : Ty} {b ad rl wr iv : At → Term} {rq n o : Data}
-    (h : Admits lib (lawOf5 S b ad rl wr iv) rq n o) :
+theorem lawOf6_occasion {lib : List Term} {S : Ty} {b ad rl rt wr iv : At → Term} {rq n o : Data}
+    (h : Admits lib (lawOf6 S b ad rl rt wr iv) rq n o) :
     ∃ ℓ x, rq.field "occasion" = some (.inj ℓ x) ∧
-      (ℓ = "adopt" ∨ ℓ = "birth" ∨ ℓ = "invoke" ∨ ℓ = "relaw" ∨ ℓ = "write") := by
+      (ℓ = "adopt" ∨ ℓ = "birth" ∨ ℓ = "invoke" ∨ ℓ = "relaw" ∨ ℓ = "retire" ∨ ℓ = "write") := by
   obtain ⟨cenv, w, hb⟩ := h
-  simp only [lawOf5, lawBody, lawCase5] at hb
+  simp only [lawOf6, lawBody, lawCase6] at hb
   obtain ⟨ℓ, y, body, hd, hf, _⟩ := case_field (d := rq) (i := 0) rfl hb
   have hm := find_label_mem hf
   simp at hm

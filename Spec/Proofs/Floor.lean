@@ -349,10 +349,15 @@ theorem floor_integrity_law (d : ByteArray → ByteArray) : ¬ Integrity.law (ra
           have ha' : Audited (rawWriter d) w₁ [.turn tw] w₂ :=
             ⟨by simp only [System.fold, System.step, hs],
               ⟨c, decide_eq_true_eq.mp hd, htw, fun _ _ => trivial⟩⟩
-          obtain ⟨-, ⟨cell'', hl'', hpk⟩, -⟩ :=
+          obtain ⟨-, hpkg, -⟩ :=
             h (obj := obj) (law := oneDigest) (p := pkg0) (fs := [("law", law0)]) (ℓ := "law") (t := law0)
               rfl (by simp [pkg0]) (by simp [Lang.Row.find?]) ⟨_, _, _, _, rfl⟩
               (by simp [law0, Lang.NoRef]) ha' hcan hl hk
+          rcases hpkg with ⟨cell'', hl'', hpk⟩ | ht
+          rotate_left
+          · have h0 : w₂.live Xd.env obj = none := by
+              unfold World.live; rw [show w₂.entry Xd.env obj = some .tomb from ht]
+            rw [hl'] at h0; cases h0
           have hl₂ : w₂.live Xd.env obj = some cell'' := hl''
           have hpk' : packageOf Xd obj cell'' = packageOf Xd obj cell := hpk
           rw [hl'] at hl₂

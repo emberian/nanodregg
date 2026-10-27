@@ -125,9 +125,11 @@ def invokeC (a : At) : Term :=
 def startC (a : At) : Term :=
   allOf [(isPh (a.oldF "phase") "open", "notOpen"), (isPh (a.newF "phase") "open", "notOpen")]
 
+/-- A relaw, a retirement and a write: refused `frozen` (an escrow changes only by its methods, and
+is never ended: KERNEL-70). -/
 def frozenC (_ : At) : Term := refusedT "frozen"
 
-def law : Term := Std.lawOf5 stateTy startC startC frozenC frozenC invokeC
+def law : Term := Std.lawOf6 stateTy startC startC frozenC frozenC frozenC invokeC
 
 /-! ## The package -/
 

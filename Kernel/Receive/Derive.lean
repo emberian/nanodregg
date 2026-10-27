@@ -82,16 +82,22 @@ def spendEnroll (g : D) (cell : Cell) (units : Nat) (short : Refusal D) :
     Except (Refusal D) (Option (D × Act)) := spendAt enrollBase g cell units short
 
 /-- Enrolment is a right (KERNEL-16): the sponsor acts through a World grant chain carrying
-`enroll`, rooted at a founder's genesis grant, and spends one of its own grant's count. -/
-def enroll (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (key : ByteArray) (next : D)
-    (possession : ByteArray) (via : D) : Except (Refusal D) (Draft D) := do
+`enroll`, rooted at a founder's genesis grant, and spends one of its own grant's count. The new key
+consented to this join (PROTOCOL-79): its join verifies under the key over `joinMessage` of the
+World it names (`badJoin`); that the World it names is the receiving one is `receive`'s check
+(`otherWorld`), so the derivation stays blind to the World's name (KERNEL-40). The member is born at
+`memberId`, the digest of that consent, so the same consent enrolled twice is `World.admit`'s
+`idTaken`. -/
+def enroll (X : Ctx D) (look : Pinned D) (a : At D) (key : ByteArray) (next : D)
+    (origin : D) (join : ByteArray) (via : D) : Except (Refusal D) (Draft D) := do
   let _ ← walk X look (worldId X) (.enroll 0) true grantDepthMax via a.actor
   let g ← readKind look via kindGrant
   let spend ← spendEnroll via g 1 (.enrollSpent via)
-  req (X.verify key (possessionMessage X a.actor next key) possession) .badPossession
+  req (X.verify key (joinMessage X origin a.actor next key) join) .badJoin
   let slots := slotsOf [(slotKey, key), (slotNext, X.env.bytes next),
     (slotSponsor, X.env.bytes a.actor)]
-  pure ⟨bornAt X c a.base [{ kind := kindMember, discipline := .ram, slots }], spend.toList, [], []⟩
+  pure ⟨[(memberId X origin a.actor next key, { kind := kindMember, discipline := .ram, slots })],
+    spend.toList, [], []⟩
 
 /-- Signed by the new key; the new key's digest must be the one precommitted. -/
 def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D) :
@@ -321,12 +327,41 @@ def grant (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (target grantee 
     (parent.map fun p => (grantParent, X.env.bytes p)).toList ++ rightSlots rights)
   pure ⟨bornAt X c a.base [{ kind := kindGrant, discipline := .appendOnly, slots }], carve.toList, [], []⟩
 
-/-- The issuer retires a grant; every chain through it dies with it. -/
-def revoke (X : Ctx D) (look : Pinned D) (a : At D) (g : D) : Except (Refusal D) (Draft D) := do
-  let cell ← readKind look g kindGrant
-  let issuer ← slotDigest X g cell grantIssuer
-  req (issuer = a.actor) (.notIssuer g)
-  pure ⟨[], [(g, .retire)], [], []⟩
+/-- Who may retire the pinned live cell `x` (KERNEL-70), by its kind: a grant its issuer
+(`notIssuer`); an object its owner (`notOwner`), every law in force (the package's, then the extra
+laws) judging the occasion `retire` over its last state; an account its owner (`notOwner`), once
+its balance and floor are both 0 (`valueRemains`), so a retirement moves no value. Nothing retires a
+member, a package or the authority (`notRetirable`): a member roots authority (the owner of cells,
+the issuer of grants) that no cell lists, so its end would leave grants nobody can revoke. -/
+def retireCheck (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (x : D) :
+    Except (Refusal D) Unit := do
+  let cell ← match look x with
+    | .error e => .error e
+    | .ok none => .error (.missingCell x)
+    | .ok (some cell) => .ok cell
+  if cell.kind = kindGrant then
+    let issuer ← slotDigest X x cell grantIssuer
+    req (issuer = a.actor) (.notIssuer x)
+  else if cell.kind = kindObject then
+    let owner ← slotDigest X x cell slotOwner
+    req (owner = a.actor) (.notOwner x)
+    let pkg ← packageOf X x cell
+    let laws ← lawsOf X x cell
+    X.program.judge look pkg laws (stateOf cell) (stateOf cell) (reqOf c.unsigned x a.actor .retire)
+  else if cell.kind = kindAccount then
+    let owner ← slotDigest X x cell slotOwner
+    req (owner = a.actor) (.notOwner x)
+    match Value.ofCell cell with
+    | some v => req (decide (v.balance = 0 ∧ v.floor = 0)) (.valueRemains x)
+    | none => .error (.malformedCell x Value.balanceKey)
+  else .error (.notRetirable x)
+
+/-- `retire x` (KERNEL-70): `retireCheck`, then the one effect, the retirement of `x`. The kernel
+credits its weight back to the World's allowance (KERNEL-19) and leaves a tombstone; a retired
+object's relation heads leave with it, and an object still holding rows is `rowsRemain`. -/
+def retire (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (x : D) : Except (Refusal D) (Draft D) := do
+  retireCheck X look c a x
+  pure ⟨[], [(x, .retire)], [], []⟩
 
 /-- A receiver's Draft, and the walk past its fresh births. -/
 def stepped (wk : Walk D) (d : Except (Refusal D) (Draft D)) : Except (Refusal D) (Draft D × Walk D) :=
@@ -335,7 +370,7 @@ def stepped (wk : Walk D) (d : Except (Refusal D) (Draft D)) : Except (Refusal D
 /-- One receiver of a call's tree, as `actor`; `sub` derives an invoke's calls one level down. -/
 def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D) :
     Body D → Except (Refusal D) (Draft D × Walk D)
-  | .enroll key next possession via => stepped wk (enroll X look c ⟨actor, wk.born⟩ key next possession via)
+  | .enroll key next origin join via => stepped wk (enroll X look ⟨actor, wk.born⟩ key next origin join via)
   | .rotate key next => stepped wk (rotate X look c key next)
   | .install pkg => stepped wk (install X look c ⟨actor, wk.born⟩ pkg)
   | .create pkg laws state => stepped wk (create X look c ⟨actor, wk.born⟩ pkg laws state)
@@ -344,7 +379,7 @@ def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : 
   | .invoke obj method args budget via => invoke X look rv c sub wk actor obj method args budget via
   | .grant target grantee rights parent =>
       stepped wk (grant X look c ⟨actor, wk.born⟩ target grantee rights parent)
-  | .revoke g => stepped wk (revoke X look ⟨actor, wk.born⟩ g)
+  | .retire x => stepped wk (retire X look c ⟨actor, wk.born⟩ x)
   | .issue cap => stepped wk (issue X c ⟨actor, wk.born⟩ cap)
   | .account asset owner => stepped wk (account X asset owner)
   | .transfer src dst amount via once => stepped wk (transfer X look ⟨actor, wk.born⟩ src dst amount via once)
@@ -396,9 +431,15 @@ def receiveWith (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Ex
 
 /-- THE derivation: a signed call against a World, through the caller's pins only. The FIRST
 check is the World the call names (KERNEL-24): a call for another World is `wrongWorld`, never
-`badSignature` or `unknownKey`, whatever else is wrong with it. -/
+`badSignature` or `unknownKey`, whatever else is wrong with it. Past the signature, the World an
+enrolment's join names (PROTOCOL-79): a consent to join another World is `otherWorld`. Then
+`receiveWith`'s key rule and tree, which read the World's name nowhere
+(`Kernel.Proofs.Carry.receiveWith_world`). -/
 def receive (X : Ctx D) (w : World D) (c : Call D) : Except (Refusal D) (Turn D) := do
   req (c.unsigned.world = w.origin) .wrongWorld
-  receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+  checkSignature X c
+  req (c.unsigned.body.joinOrigin.all (· = w.origin)) .otherWorld
+  keyRule (pinned X.env w c.unsigned.pins) c.unsigned
+  deriveTurn X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
 
 end Nanodregg.Kernel.Receive

@@ -23,5 +23,5 @@
       (if (== m (index release))
           (all ((not old.released) "settled") (new.released "badPhase"))
           ok))
-    (on (relaw write) (refuse "frozen"))
+    (on (relaw retire write) (refuse "frozen"))
     (else ok)))

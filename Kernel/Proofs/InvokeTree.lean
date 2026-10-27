@@ -22,11 +22,11 @@ Proved here, of the same definitions:
   of `obj` on `w'` runs on it.
 * THE TOTALITY (KERNEL-28): `effect_at_object`: an effect of a signed call's derivation at a cell its
   pins read as an object is the signed `write` or `law` of it, or the own write of an invoke of it the
-  walk dispatched; every other receiver (enroll, rotate, grant, revoke, transfer, credit; install,
+  walk dispatched, or its signed `retire` (KERNEL-70); every other receiver (enroll, rotate, grant, transfer, credit; install,
   create, issue, account have no effect) writes a cell it read as a grant, a member or an account,
   by its own `readKind` (a cell has one kind). `object_turn_cases`: so a derived and admitted turn
-  keeps a live object, or is its signed write or law, or dispatched an invoke of it. Tooth
-  `effect_at_object_needs_kind`: `revoke` without its kind check retires an object.
+  keeps a live object, or is its signed write, law or retire, or dispatched an invoke of it. Tooth
+  `effect_at_object_needs_owner`: `retire` without its owner check retires another's object.
 * THE TOTALITY AT A GRANT (KERNEL-30): `effect_at_grant`: an effect at a cell the pins read as a
   grant is its revocation's retirement or ONE `spendAt` append to one counted ledger
   (`LedgerSpend`); `Kernel.Proofs.LedgerNext` lifts it to the World (`grant_turn_cell`) and proves
@@ -619,12 +619,14 @@ a credit line); births are not effects. -/
 private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
     {wk : Walk D} {actor : D} {b : Body D} {r : Draft D × Walk D}
     (hi : b.isInvoke = false) (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v)
+    (hr : ∀ x, b ≠ .retire x)
     (h : dispatch X look rv c sub wk actor b = .ok r) : ∀ e ∈ r.1.effects, OtherEffect look e := by
   cases b with
   | invoke => simp [Body.isInvoke] at hi
   | write o e v => exact absurd rfl (hw o e v)
   | law o ls v => exact absurd rfl (hl o ls v)
-  | enroll key next possession via =>
+  | retire x => exact absurd rfl (hr x)
+  | enroll key next origin join via =>
       have hd := stepped_draft h
       unfold enroll at hd
       simp only [except_bind_ok] at hd
@@ -677,17 +679,6 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       intro e he
       rw [← hd] at he
       exact checkParent_at hcv e he
-  | revoke g =>
-      have hd := stepped_draft h
-      unfold revoke at hd
-      simp only [except_bind_ok] at hd
-      obtain ⟨cell, hc, issuer, -, ⟨⟩, -, hd⟩ := hd
-      simp only [pure, Except.pure, Except.ok.injEq] at hd
-      intro e he
-      rw [← hd] at he
-      simp only [List.mem_singleton] at he
-      subst he
-      exact ⟨⟨kindGrant, cell, by decide, hc⟩, fun _ _ => .inl rfl⟩
   | issue cap =>
       have hd := stepped_draft h
       unfold issue at hd
@@ -743,12 +734,12 @@ private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c m) wk a b = .ok r →
       EffectsAt X w c r.1.effects)
     {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D} (hd : Dispatched X w c n wk a b)
-    (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v)
+    (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v) (hrt : ∀ x, b ≠ .retire x)
     (h : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r) :
     EffectsAt X w c r.1.effects := by
   cases hb : b.isInvoke with
-  | false => exact fun e he => .inl (dispatch_other hb hw hl h e he)
+  | false => exact fun e he => .inl (dispatch_other hb hw hl hrt h e he)
   | true =>
   cases b with
   | invoke obj method args budget via =>
@@ -806,25 +797,27 @@ private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (
 
 private theorem dispatched_effects {X : Ctx D} {w : World D} {c : Call D} :
     ∀ n {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D}, Dispatched X w c n wk a b →
-      (∀ o e v, b ≠ .write o e v) → (∀ o ls v, b ≠ .law o ls v) →
+      (∀ o e v, b ≠ .write o e v) → (∀ o ls v, b ≠ .law o ls v) → (∀ x, b ≠ .retire x) →
       dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r →
       EffectsAt X w c r.1.effects := by
   intro n
   induction n with
-  | zero => exact fun hd hw hl h => dispatched_effects_step 0 (fun _ h => absurd h (by omega)) hd hw hl h
+  | zero => exact fun hd hw hl hrt h => dispatched_effects_step 0 (fun _ h => absurd h (by omega)) hd hw hl hrt h
   | succ m ih =>
-      exact fun hd hw hl h => dispatched_effects_step (m + 1) (fun m' hm => by
+      exact fun hd hw hl hrt h => dispatched_effects_step (m + 1) (fun m' hm => by
         obtain rfl : m' = m := by omega
         intro wk' a' b' r' hd' hc h'
         exact ih hd' (fun o e v he => by subst he; simp [Body.callable] at hc)
-          (fun o ls v he => by subst he; simp [Body.callable] at hc) h') hd hw hl h
+          (fun o ls v he => by subst he; simp [Body.callable] at hc)
+          (fun x he => by subst he; simp [Body.callable] at hc) h') hd hw hl hrt h
 
-/-- **The totality: no receiver but `write`, `law` and `invoke` writes an object.** An effect of a
-signed call's derivation on `w` at a cell that `w`'s pinned view reads as an object (`kindObject`) is
-the signed call's own `write` or `law` of that object, or the own state write of an invoke of it
-that the call's walk dispatched (at any depth). Every other receiver writes a cell it read as a
-grant, a member or an account, and a cell has one kind. -/
+/-- **The totality: no receiver but `write`, `law`, `retire` and `invoke` has an effect at an
+object.** An effect of a signed call's derivation on `w` at a cell that `w`'s pinned view reads as an
+object (`kindObject`) is the signed call's own `write` or `law` of that object, its signed `retire`
+of it (KERNEL-70: the effect is the retirement), or the own state write of an invoke of it that the
+call's walk dispatched (at any depth). Every other receiver writes a cell it read as a grant, a
+member or an account, and a cell has one kind. -/
 theorem effect_at_object {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
     (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
@@ -833,6 +826,7 @@ theorem effect_at_object {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × 
     (hk : readKind (pinned X.env w c.unsigned.pins) e.1 kindObject = .ok cell) :
     (∃ edits via, c.unsigned.body = .write e.1 edits via) ∨
       (∃ laws via, c.unsigned.body = .law e.1 laws via) ∨
+      (c.unsigned.body = .retire e.1 ∧ e.2 = .retire) ∨
       ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke e.1 method args budget via) := by
   have hother : ¬ ReadOther (pinned X.env w c.unsigned.pins) e.1 := by
     rintro ⟨k, cl, hne, hcl⟩
@@ -860,13 +854,23 @@ theorem effect_at_object {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × 
       simp only [writeOf, List.mem_singleton] at he
       subst he
       exact .inr (.inl ⟨laws, via, rfl⟩)
+  | retire x =>
+      rw [hb] at hR
+      have hd := stepped_draft hR
+      simp only [retire, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, hd⟩ := hd
+      rw [← hd] at he
+      simp only [List.mem_singleton] at he
+      subst he
+      exact .inr (.inr (.inl ⟨rfl, rfl⟩))
   | _ =>
       have hroot := Dispatched.root (X := X) (w := w) (c := c)
       rw [hb] at hroot hR
-      rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h) hR e he with
+      rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h)
+          (fun _ h => by cases h) hR e he with
         h | h
       · exact absurd h.1 hother
-      · exact .inr (.inr h.2)
+      · exact .inr (.inr (.inr h.2))
 
 /-- **The totality at a grant** (KERNEL-30): an effect of a signed call's derivation on `w` at a cell
 `w`'s pinned view reads as a grant is its revocation's retirement, or ONE append to one of its counted
@@ -897,10 +901,20 @@ theorem effect_at_grant {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × W
       simp only [writeOf, List.mem_singleton] at he
       subst he
       exact (notObj cl hko).elim
+  | retire x =>
+      rw [hb] at hR
+      have hd := stepped_draft hR
+      simp only [retire, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, hd⟩ := hd
+      rw [← hd] at he
+      simp only [List.mem_singleton] at he
+      subst he
+      exact .inl rfl
   | _ =>
       have hroot := Dispatched.root (X := X) (w := w) (c := c)
       rw [hb] at hroot hR
-      rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h) hR e he with
+      rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h)
+          (fun _ h => by cases h) hR e he with
         h | ⟨⟨cl, hko⟩, -⟩
       · exact h.2 cell hk
       · exact (notObj cl hko).elim
@@ -921,9 +935,11 @@ theorem object_turn_cases {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     (hk : cell.kind = kindObject) :
     ((∀ x ∈ t.touches, x.cell = obj → x.act = .keep) ∧ obj ∉ createdIds t ∧
         (∀ edits via, c.unsigned.body ≠ .write obj edits via) ∧ (∀ laws via, c.unsigned.body ≠ .law obj laws via) ∧
+        c.unsigned.body ≠ .retire obj ∧
         ∀ n wk a method args budget via, ¬ Dispatched X w c n wk a (.invoke obj method args budget via)) ∨
       (∃ edits via, c.unsigned.body = .write obj edits via) ∨
       (∃ laws via, c.unsigned.body = .law obj laws via) ∨
+      c.unsigned.body = .retire obj ∨
       ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke obj method args budget via) := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
   obtain ⟨-, d, _k, hd, hs⟩ := receiveWith_sealed hw
@@ -945,8 +961,12 @@ theorem object_turn_cases {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
       have hany : (c.unsigned.pins.any fun p => decide (p.1 = e.1)) = true :=
         List.any_eq_true.mpr ⟨q, hq, by simpa using hqe⟩
       simp [readKind, pinned, hany, hl, hk]
-    exact .inr (effect_at_object hR he hrk)
-  · refine .inl ⟨fun x hx hxc => ?_, ?_, fun edits via hb => ?_, fun laws via hb => ?_,
+    rcases effect_at_object hR he hrk with h | h | ⟨h, -⟩ | h
+    · exact .inr (.inl h)
+    · exact .inr (.inr (.inl h))
+    · exact .inr (.inr (.inr (.inl h)))
+    · exact .inr (.inr (.inr (.inr h)))
+  · refine .inl ⟨fun x hx hxc => ?_, ?_, fun edits via hb => ?_, fun laws via hb => ?_, fun hb => ?_,
       fun n wk a method args budget via hd => ?_⟩
     · rw [htouch] at hx
       obtain ⟨q', -, rfl⟩ := List.mem_map.mp hx
@@ -965,6 +985,11 @@ theorem object_turn_cases {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
       have hm : ∃ a, (obj, a) ∈ R.1.effects := by rw [hef]; simp [writeOf]
       obtain ⟨a, ham⟩ := hm
       exact hex ⟨(obj, a), ham, rfl⟩
+    · rw [hb] at hR
+      have hd := stepped_draft hR
+      simp only [retire, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, _, hd⟩ := hd
+      exact hex ⟨(obj, .retire), by rw [← hd]; simp, rfl⟩
     · obtain ⟨r, hr, l₁, l₂, hl₁⟩ := dispatched_ok hR hd
       simp only [dispatch] at hr
       obtain ⟨-, cell₀, p₀, rq₀, new₀, calls₀, rows₀, used₀, -, -, -, -, -, -, -, hdc⟩ := invoke_ok hr
@@ -980,27 +1005,26 @@ theorem object_turn_cases {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
       obtain ⟨a, ham⟩ := hm
       exact hex ⟨(obj, a), ham, rfl⟩
 
-/-! ## Tooth: the totality rests on each receiver's kind check -/
+/-! ## Tooth: a retirement rests on its owner check -/
 
-/-- `revoke` with its kind check deleted: it retires whatever cell the pins hold at `g`. -/
-private def revokeAnyKind (look : Pinned D) (g : D) : Except (Refusal D) (Draft D) :=
-  match look g with
-  | .ok (some _) => .ok ⟨[], [(g, .retire)], [], []⟩
-  | _ => .error (.missingCell g)
+/-- `retire` with its checks deleted: it retires whatever cell the pins hold at `x`. -/
+private def retireAnyOwner (look : Pinned D) (x : D) : Except (Refusal D) (Draft D) :=
+  match look x with
+  | .ok (some _) => .ok ⟨[], [(x, .retire)], [], []⟩
+  | _ => .error (.missingCell x)
 
 omit [Ord D] in
-/-- **Tooth: a receiver that wrote an object cell would break the totality.** Over a view reading
-`g` as an object, `revoke` refuses `wrongKind` (its `readKind … kindGrant`), while the same receiver
-without that check derives the retirement of the object: an effect at a cell read as an object that
-is no `write`, `law` or invoke of it. Every receiver `effect_at_object` admits carries such a check. -/
-theorem effect_at_object_needs_kind (X : Ctx D) (a : At D) {look : Pinned D} {g : D} {cell : Cell}
-    (hg : look g = .ok (some cell)) (hk : cell.kind = kindObject) :
-    readKind look g kindObject = .ok cell ∧
-      revoke X look a g = .error (.wrongKind g kindGrant) ∧
-      ∃ d, revokeAnyKind look g = .ok d ∧ (g, Act.retire) ∈ d.effects := by
-  have hne : cell.kind ≠ kindGrant := by rw [hk]; decide
-  refine ⟨by simp [readKind, hg, hk], by simp [revoke, readKind, hg, hne, bind, Except.bind],
-    ⟨⟨[], [(g, .retire)], [], []⟩, by simp [revokeAnyKind, hg], by simp⟩⟩
+/-- **Tooth: the owner check is what keeps a retirement the owner's** (KERNEL-70). Over a view reading
+`x` as an object whose owner slot names another than the actor, `retire` refuses `notOwner`, while the
+same receiver without its owner check derives the retirement of the object. -/
+theorem effect_at_object_needs_owner (X : Ctx D) (c : Call D) (a : At D) {look : Pinned D} {x o : D}
+    {cell : Cell} (hg : look x = .ok (some cell)) (hk : cell.kind = kindObject)
+    (ho : slotDigest X x cell slotOwner = .ok o) (hne : o ≠ a.actor) :
+    retire X look c a x = .error (.notOwner x) ∧
+      ∃ d, retireAnyOwner look x = .ok d ∧ (x, Act.retire) ∈ d.effects := by
+  have hng : kindObject ≠ kindGrant := by decide
+  refine ⟨?_, ⟨⟨[], [(x, .retire)], [], []⟩, by simp [retireAnyOwner, hg], by simp⟩⟩
+  simp [retire, retireCheck, hg, hk, hng, ho, hne, req, bind, Except.bind]
 
 /-! ## Tooth: the order laws are load-bearing -/
 

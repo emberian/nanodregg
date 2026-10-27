@@ -53,7 +53,7 @@ theorem receive_checkSignature {X : Ctx D} {w : World D} {c : Call D}
     obtain rfl := checkSignature_error hs
     exfalso
     by_cases hwo : c.unsigned.world = w.origin
-    · exact hb (by simp [receive, receiveWith, req, hwo, hs, bind, Except.bind])
+    · exact hb (by simp [receive, req, hwo, hs, bind, Except.bind])
     · exact hw (by simp [receive, req, hwo, bind, Except.bind])
 
 /-- **The carried bit is the same verify**: a verdict `submit` reached with `verified` set was

@@ -24,7 +24,8 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 /-- Every verb. -/
 inductive Verb
-  /-- `init SPONSOR`: a join token for SPONSOR to enroll (key, next-key digest, possession) -/
+  /-- `init SPONSOR`: a join token for SPONSOR to enroll into follow's World (key, next-key digest,
+  the World's origin, the key's join consent over them: PROTOCOL-79) -/
   | init
   /-- `enroll TOKEN`: sponsor a new member -/
   | enroll
@@ -55,8 +56,9 @@ inductive Verb
   `observe`, `mutate`, `invoke:N`, `enroll:N`, `transfer:N`, `credit:N`, comma-separated; PARENT is the
   grant attenuated -/
   | grant
-  /-- `revoke GRANT` -/
-  | revoke
+  /-- `retire CELL`: retire a grant the signer issued, or an object or an empty account it owns
+  (KERNEL-70) -/
+  | retire
   /-- `read OBJ [KEY=VALUE…]`: print the object's state slots; each `KEY=VALUE` must hold.
   `read OBJ ?`: print the object's self-description, its methods with their indices and argument
   types, its laws and its relations (`Command.Describe`, PROTOCOL-44).
@@ -120,13 +122,13 @@ inductive Verb
 namespace Verb
 
 def all : List Verb :=
-  [init, enroll, install, create, write, law, invoke, grant, revoke, read, rotate, adopt, sync, issue, account,
+  [init, enroll, install, create, write, law, invoke, grant, retire, read, rotate, adopt, sync, issue, account,
    transfer, credit, invite, receipt, cancel]
 
 def word : Verb → String
   | init => "init" | enroll => "enroll" | install => "install"
   | create => "create" | write => "write" | law => "law" | invoke => "invoke"
-  | grant => "grant" | revoke => "revoke" | read => "read" | rotate => "rotate" | adopt => "adopt"
+  | grant => "grant" | retire => "retire" | read => "read" | rotate => "rotate" | adopt => "adopt"
   | sync => "sync" | issue => "issue" | account => "account" | transfer => "transfer" | credit => "credit"
   | invite => "invite" | receipt => "receipt" | cancel => "cancel"
 
@@ -134,11 +136,13 @@ def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
 end Verb
 
-/-- A join token: what a newcomer hands its sponsor. -/
+/-- A join token: what a newcomer hands its sponsor: its key, its next key's digest, the World it
+consents to join, and its consent (`Receive.joinMessage`, PROTOCOL-79). -/
 structure Join (D : Type) where
   key : ByteArray
   next : D
-  possession : ByteArray
+  origin : D
+  join : ByteArray
   deriving DecidableEq
 
 /-- What a grant is over: the World, an object (or any cell) by id, or a value account by its
@@ -187,7 +191,7 @@ inductive Cmd (D : Type)
   | invoke (obj : D) (method : Nat) (args : String) (reads : InvokeReads) (via : Option D)
   /-- `grantee = none` is `anyone` (the World as grantee, KERNEL-26) -/
   | grant (target : GrantTarget D) (grantee : Option D) (rights : List Right) (via : Option D)
-  | revoke (grant : D)
+  | retire (cell : D)
   | read (obj : D) (expect : List (Nat × ByteArray))
   /-- `read OBJ ?` -/
   | describe (obj : D)
@@ -256,7 +260,7 @@ def usage : Verb → String
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
   | .invoke => "invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--pin [OBJ/]REL KEY]... [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
-  | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...] | read OBJ ? | read OBJ REL K [PREFIX]" | .rotate => "rotate"
+  | .retire => "retire CELL" | .read => "read OBJ [KEY=VALUE...] | read OBJ ? | read OBJ REL K [PREFIX]" | .rotate => "rotate"
   | .adopt => "adopt INVITE KEY" | .sync => "sync [--to STEPS:CHAIN | --attest | --check ATTEST | --post OBJ]"
   | .issue => "issue CAP"
   | .account => "account ASSET [--owner OWNER]"
@@ -270,10 +274,10 @@ def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
 variable {D : Type}
 
-/-- The join token's bytes: `key ‖ next ‖ possession`, each `u32le len ‖ bytes`. -/
+/-- The join token's bytes: `key ‖ next ‖ origin ‖ join`, each `u32le len ‖ bytes`. -/
 def Join.bytes (dbytes : D → ByteArray) (j : Join D) : ByteArray :=
   let f (b : ByteArray) := Codec.Stream.u32.bytes b.size.toUInt32 ++ b
-  f j.key ++ f (dbytes j.next) ++ f j.possession
+  f j.key ++ f (dbytes j.next) ++ f (dbytes j.origin) ++ f j.join
 
 def Join.ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (Join D) :=
   let field (i : Nat) : Option (ByteArray × Nat) :=
@@ -283,8 +287,9 @@ def Join.ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (J
   do
     let (key, i) ← field 0
     let (nb, i) ← field i
-    let (possession, i) ← field i
-    if i = b.size then some { key, next := ← digestOf nb, possession } else none
+    let (ob, i) ← field i
+    let (join, i) ← field i
+    if i = b.size then some { key, next := ← digestOf nb, origin := ← digestOf ob, join } else none
 
 section
 variable (digestOf : ByteArray → Option D)
@@ -412,7 +417,7 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       let grantee ← if m = "anyone" then pure none else some <$> digestArg digestOf m
       pure (.grant target grantee (← mapEx rightArg (rs.splitOn ","))
         (← viaArg digestOf .grant via))
-  | .revoke, [g] => .revoke <$> digestArg digestOf g
+  | .retire, [x] => .retire <$> digestArg digestOf x
   | .read, [o, "?"] => .describe <$> digestArg digestOf o
   -- a first argument with `=` is an expectation; one without is a relation's label
   | .read, o :: r :: k :: p =>

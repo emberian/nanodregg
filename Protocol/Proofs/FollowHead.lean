@@ -10,18 +10,23 @@ PROTOCOL-67).
 
 - `genesisWorld_atGenesis`: every genesis World is one adopt may replace (the honest joiner's,
   before its adopt); `carryWorld_atGenesis` / `carry_genesis_atGenesis`: so is a World carried at
-  height 0 (a re-invited member's, readers A21); `atGenesis_object`: such a World holds no live object.
+  height 0 (a re-invited member's, readers A21); `atGenesis_object`: such a World holds no live object;
+  `atGenesis_tomb`: nor a tombstone.
 
 - `absorbStep_object_head`: one re-derived event keeps a live object live, an object, with its
-  `packageOf` (KERNEL-64's `submit_object_head`; a refusal changes no cell, `refuse_live`).
+  `packageOf`, or retires it, leaving its tombstone (KERNEL-64's `submit_object_head`, KERNEL-70; a
+  refusal changes no cell, `refuse_live`).
 - `absorbStep_rom`: one re-derived event keeps a live ROM cell, identical (`Frame.admit_rom`).
 - `step_world`: one frame leaves follow's World as it was, or `absorbPage`s events its result
   carries (`frameEvents`, a function of the frame's bytes), or adopts at a World `atGenesis`.
 - `step_keeps`: any property of follow's World that every re-derived event keeps, and that
   `atGenesis` refutes, is kept by every step of follow's machine.
 - `PackageAt`/`step_packageAt`: the instance HOSTING's member socket reads (HOSTING-42 trigger (ii)):
-  a live object with package `P`, whose package cell is live and ROM, stays so, the same cell, across
-  every step follow takes (`absorbStep_packageAt` per event, `packageAt_atGenesis` for the adopt).
+  an object that reads package `P` while it lives (live with it, or retired: KERNEL-70), whose
+  package cell is live and ROM, stays so, the same cell, across every step follow takes
+  (`absorbStep_packageAt` per event, `packageAt_atGenesis` for the adopt). A retired object is
+  invoked nowhere (`invokedPackage` reads only a live cell), so every package an invoke of it reads
+  is `P` (`Hosting.Proofs.invokedPackage_at`).
 
 What is not claimed: anything over a bare `World.fold` (KERNEL-64: a hand-made Turn may write slot
 0), nor across a process restart (follow reopens its Store by the writer's own fold, HOST-22: the
@@ -61,6 +66,26 @@ theorem atGenesis_object {E : Env D} {w : World D} (h : atGenesis w = true) {c :
         have hk := hall _ (Trie.mem_of_getAt (trieSpec E) 0 w.trie _ _ hg)
         simp only [genesisLeaf, Bool.or_eq_true, beq_iff_eq] at hk
         rcases hk with (hk | hk) | hk <;> rw [hk] <;> decide
+
+/-- A World adopt may replace (`atGenesis`) holds no tombstone: each of its leaves is a live
+member, grant or authority cell (`genesisLeaf`). -/
+theorem atGenesis_tomb {E : Env D} {w : World D} (h : atGenesis w = true) {c : D} :
+    w.entry E c ≠ some .tomb := by
+  intro ht
+  unfold atGenesis at h
+  simp only [Bool.and_eq_true, List.all_eq_true] at h
+  obtain ⟨-, hall⟩ := h
+  unfold World.entry at ht
+  cases hg : w.trie.get (trieSpec E) (.cell c) with
+  | none => simp [hg] at ht
+  | some l =>
+    cases l with
+    | spent => simp [hg] at ht
+    | entry e =>
+      simp only [hg, Option.some.injEq] at ht
+      subst ht
+      have hk := hall _ (Trie.mem_of_getAt (trieSpec E) 0 w.trie _ _ hg)
+      simp [genesisLeaf] at hk
 
 omit [Ord D] in
 /-- What `insertAll` lists is what the map listed or one of the inserted entries. -/
@@ -115,20 +140,22 @@ theorem carry_genesis_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance 
   simp only [atGenesis, Bool.and_eq_true] at h
   exact carryWorld_atGenesis X name' nonce' g.origin rfl h.2
 
-/-- **One re-derived event keeps a live object's package** (KERNEL-64 at follow's step). -/
+/-- **One re-derived event keeps a live object's package, or retires it** (KERNEL-64 at follow's
+step; KERNEL-70: its owner's signed `retire` leaves a tombstone). -/
 theorem absorbStep_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}
     {e : ByteArray} {s : Kernel.Step D} {obj : D} {cell : Cell}
     (h : absorbStep X w e = .ok (s, w')) (hl : w.live X.env obj = some cell) (hk : cell.kind = kindObject) :
-    ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
-      packageOf X obj cell' = packageOf X obj cell := by
+    (∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
+      packageOf X obj cell' = packageOf X obj cell) ∨ w'.entry X.env obj = some .tomb := by
   obtain ⟨ev, -, hr⟩ := absorbStep_ok.mp h
   rcases rederive_ok hr with ⟨b, c, t, -, -, hs, rfl⟩ | ⟨b, c, v, r, -, -, hj, rfl⟩ |
       ⟨sig, b, c, v, r, -, -, hco, rfl⟩
-  · obtain ⟨cell', hl', hk', hlo, -⟩ := submit_object_head hs hl hk
-    have hp := hlo slotPackage (by simp [slotPackage, lawBase])
-    exact ⟨cell', hl', hk', by unfold packageOf; rw [hp]⟩
-  · exact ⟨cell, (refuse_live (judge_recorded hj).2.2.2 obj).trans hl, hk, rfl⟩
-  · exact ⟨cell, (refuse_live (cancel_recorded hco).2.2.2 obj).trans hl, hk, rfl⟩
+  · rcases submit_object_head hs hl hk with ⟨cell', hl', hk', hlo, -⟩ | ht
+    · have hp := hlo slotPackage (by simp [slotPackage, lawBase])
+      exact .inl ⟨cell', hl', hk', by unfold packageOf; rw [hp]⟩
+    · exact .inr ht
+  · exact .inl ⟨cell, (refuse_live (judge_recorded hj).2.2.2 obj).trans hl, hk, rfl⟩
+  · exact .inl ⟨cell, (refuse_live (cancel_recorded hco).2.2.2 obj).trans hl, hk, rfl⟩
 
 /-- **One re-derived event keeps a live ROM cell** (`Frame.admit_rom`; a refusal changes no cell). -/
 theorem absorbStep_rom {X : Ctx D} {w w' : World D} {e : ByteArray} {s : Kernel.Step D} {c : D}
@@ -219,27 +246,35 @@ theorem step_keeps {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
 
 end keeps
 
-/-- A live object with package `P`, whose package cell `pc` is live and ROM: what a description and
-an invoke of the object both read (`describe`, `invokedPackage`, `Lang.readPackage`). -/
+/-- An object that reads package `P` while it lives (a live object with package `P`, or retired, a
+tombstone: KERNEL-70), whose package cell `pc` is live and ROM: what a description and an invoke of
+the object both read (`describe`, `invokedPackage`, `Lang.readPackage`); a retired object is read by
+neither. -/
 def PackageAt (X : Ctx D) (w : World D) (obj P : D) (pc : Cell) : Prop :=
-  (∃ cell, w.live X.env obj = some cell ∧ cell.kind = kindObject ∧ packageOf X obj cell = .ok (some P)) ∧
+  ((∃ cell, w.live X.env obj = some cell ∧ cell.kind = kindObject ∧ packageOf X obj cell = .ok (some P)) ∨
+      w.entry X.env obj = some .tomb) ∧
     w.live X.env P = some pc ∧ pc.discipline = .rom
 
 /-- One re-derived event keeps `PackageAt` (`absorbStep_object_head`, `absorbStep_rom`). -/
 theorem absorbStep_packageAt [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D}
     {e : ByteArray} {s : Kernel.Step D} {obj P : D} {pc : Cell} (hp : PackageAt X w obj P pc)
     (hs : absorbStep X w e = .ok (s, w')) : PackageAt X w' obj P pc := by
-  obtain ⟨⟨cell, hl, hk, hpk⟩, hpl, hrom⟩ := hp
-  obtain ⟨cell', hl', hk', hpk'⟩ := absorbStep_object_head hs hl hk
-  exact ⟨⟨cell', hl', hk', hpk'.trans hpk⟩, absorbStep_rom hs hpl hrom, hrom⟩
+  obtain ⟨ho, hpl, hrom⟩ := hp
+  refine ⟨?_, absorbStep_rom hs hpl hrom, hrom⟩
+  rcases ho with ⟨cell, hl, hk, hpk⟩ | ht
+  · rcases absorbStep_object_head hs hl hk with ⟨cell', hl', hk', hpk'⟩ | ht'
+    · exact .inl ⟨cell', hl', hk', hpk'.trans hpk⟩
+    · exact .inr ht'
+  · exact .inr (fold_tomb_stays (fold_cons_ok (rest := []).mpr ⟨w', absorbStep_step hs, rfl⟩) ht)
 
-/-- A World holding a live object is not one adopt may replace. -/
+/-- A World holding a live object, or a tombstone, is not one adopt may replace. -/
 theorem packageAt_atGenesis {X : Ctx D} {w : World D} {obj P : D} {pc : Cell}
     (hp : PackageAt X w obj P pc) : atGenesis w = false := by
-  obtain ⟨⟨cell, hl, hk, -⟩, -, -⟩ := hp
   cases hg : atGenesis w
   · rfl
-  · exact absurd hk (atGenesis_object hg hl)
+  · rcases hp.1 with ⟨cell, hl, hk, -⟩ | ht
+    · exact absurd hk (atGenesis_object hg hl)
+    · exact absurd ht (atGenesis_tomb hg)
 
 /-- **Follow's World keeps an object's package, and the package's ROM cell, across every step it
 takes** (HOSTING-42 trigger (ii), at follow's own machine). -/

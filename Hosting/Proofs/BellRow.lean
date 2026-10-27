@@ -262,7 +262,17 @@ theorem answered_row_committed [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} 
   rcases journal_committed hX absorbStep_packageAt packageAt_atGenesis hr hpat hjc hrc hc hfresh hj with
     ⟨hbS, v, v', t, hqv, hrv, hrcv, ha, rfl⟩ | h2
   · have hqv' := hqv
-    obtain ⟨⟨cl, hl, -, hpo⟩, hpl, -⟩ := hqv'
+    obtain ⟨hlo, hpl, -⟩ := hqv'
+    obtain ⟨cl, hl, -, hpo⟩ : ∃ cl, v.live X.env o = some cl ∧ cl.kind = kindObject ∧
+        packageOf X o cl = .ok (some P) := by
+      rcases hlo with h | ht
+      · exact h
+      · -- a retired bell (KERNEL-70) derives no invoke: the invoke's run reads it live
+        obtain ⟨_, _, _, _, _, _, _, hir, -⟩ :=
+          Lang.dispatched_invoke_rows hrcv (dispatched_of_signed (X := X) (w := v) hb)
+        have h0 := invokeRun_live hir
+        have hn : v.live X.env o = none := by unfold World.live; rw [ht]
+        rw [hn] at h0; cases h0
     have hrp' : Lang.readPackage (worldLook X.env v) P = .ok pk :=
       (readPackage_live (hpl.trans hpat.2.1.symm)).trans hrp
     obtain ⟨nb, x, k, y, to, kb, vb, ver, h1, h2, h3, h4, h5⟩ :=

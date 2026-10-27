@@ -30,6 +30,7 @@ born inside a log is live at the World after its creating turn, and the theorem 
 import Kernel.Proofs.InvokeTree
 import Kernel.Proofs.Rederive
 import Kernel.Proofs.WriteNext
+import Kernel.Proofs.Versions
 
 namespace Nanodregg.Kernel.Receive
 
@@ -134,17 +135,19 @@ private theorem admit_writeOf_slots {E : Env D} {w w' : World D} {t : Turn D} {o
   · obtain ⟨hl', -⟩ := admit_live_write ha hl hex (fun x hx hxc => by rw [hall x hx hxc, if_neg he])
     exact ⟨_, hl', rfl, fun k hk => get_applyOps_ne ops cell.slots hk⟩
 
-/-- **One derived turn keeps an object's head.** A signed call derived from `w` and admitted to `w'`,
-and an object live in `w`: the object is live in `w'`, an object, its package and owner slots (below
-`lawBase`) read what they read, and when it has a package every slot below `stateBase` (its laws
-too) does. -/
+/-- **One derived turn keeps an object's head, or retires it.** A signed call derived from `w` and
+admitted to `w'`, and an object live in `w`: the object is live in `w'`, an object, its package and
+owner slots (below `lawBase`) read what they read, and when it has a package every slot below
+`stateBase` (its laws too) does; or the turn was its owner's signed `retire` and its entry in `w'` is a
+tombstone (KERNEL-70). -/
 theorem turn_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D} {c : Call D}
     {t : Turn D} {obj : D} {cell : Cell}
     (hc : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w') (hl : w.live X.env obj = some cell)
     (hk : cell.kind = kindObject) :
-    ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
+    (∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
       (∀ k, k < lawBase → cell'.slots.get k = cell.slots.get k) ∧
-      (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k) := by
+      (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k)) ∨
+      w'.entry X.env obj = some .tomb := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
   obtain ⟨-, d, _k, hd, hs⟩ := receiveWith_sealed hw
   replace hd := derive_of_withTicks hd
@@ -165,12 +168,27 @@ theorem turn_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' 
       have hany : (c.unsigned.pins.any fun p => decide (p.1 = e.1)) = true :=
         List.any_eq_true.mpr ⟨q, hq, by simpa using hqe⟩
       simp [readKind, pinned, hany, hl, hk]
+    by_cases hret : e.2 = .retire
+    · -- the owner's signed retire: the touch at the object retires it, and admission tombs it
+      right
+      have hnd : (R.1.effects.map Prod.fst).Nodup := firstDup_none (sealTurn_firstDup hs)
+      obtain ⟨q, hq, hqe⟩ := hpins e he
+      have hx : ∃ x ∈ t.touches, x.cell = e.1 ∧ x.act = .retire := by
+        rw [htouch]
+        refine ⟨_, List.mem_map.mpr ⟨q, hq, rfl⟩, hqe, ?_⟩
+        simp only
+        rw [hqe, ← hret]
+        exact actFor_of_nodup hnd he
+      obtain ⟨x, hx, hxc, hxa⟩ := hx
+      rw [← hxc]
+      exact admit_retire_tomb ha hx hxa
+    left
     -- the act the turn's derivation leaves at the object, and the keys it can reach
     obtain ⟨ops, hmem, hlaw, hprog⟩ : ∃ ops : List Op,
         (e.1, if ops.isEmpty then Act.keep else .write ops) ∈ R.1.effects ∧ (∀ o ∈ ops, lawBase ≤ o.key) ∧
           (cell.slots.get slotPackage ≠ none → ∀ o ∈ ops, stateBase ≤ o.key) := by
       have hsl : lawBase ≤ stateBase := by simp [lawBase, stateBase]
-      rcases effect_at_object hR he hrk with ⟨edits, via, hb⟩ | ⟨laws', via, hb⟩ |
+      rcases effect_at_object hR he hrk with ⟨edits, via, hb⟩ | ⟨laws', via, hb⟩ | ⟨-, hr⟩ |
           ⟨n, wk, a, method, args, budget, via, hd⟩
       · rw [hb] at hR
         obtain ⟨cell₀, -, -, hko, -, -, -, -, hdeq⟩ := write_judged (stepped_draft hR)
@@ -186,6 +204,7 @@ theorem turn_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' 
         refine ⟨diffOps (lawSlotsOf cell) (lawSlots X laws'), by rw [hef]; simp [writeOf],
           diffOps_lower (fun p hp => lawSlotsOf_keys hp) (fun p hp => lawSlots_keys hp),
           fun hne => absurd (packageOf_none hp) hne⟩
+      · exact absurd hr hret
       · obtain ⟨r', hr', l₁, l₂, hl₁⟩ := dispatched_ok hR hd
         simp only [dispatch] at hr'
         obtain ⟨-, cell₀, p, rq, s, calls, rows, used, hir, -, -, -, -, hst, -, hdc⟩ := invoke_ok hr'
@@ -227,16 +246,17 @@ theorem turn_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' 
       exact actFor_none (fun e he he' => hex ⟨e, he, he'⟩)
     obtain ⟨posts, hk', -⟩ := admit_ok ha
     have hframe := admit_frame ha hkeep (live_not_created hk' hl)
-    refine ⟨cell, ?_, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
+    refine .inl ⟨cell, ?_, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
     unfold World.live; rw [hframe]; exact hl
 
 /-- **`submit` keeps an object's head**: `turn_object_head` of the Host's decision. -/
 theorem submit_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D} {c : Call D}
     {t : Turn D} {obj : D} {cell : Cell}
     (h : submit X w c = .ok (t, w')) (hl : w.live X.env obj = some cell) (hk : cell.kind = kindObject) :
-    ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
+    (∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
       (∀ k, k < lawBase → cell'.slots.get k = cell.slots.get k) ∧
-      (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k) :=
+      (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k)) ∨
+      w'.entry X.env obj = some .tomb :=
   have hs := submit_ok h
   turn_object_head hs.2.1 hs.2.2 hl hk
 
@@ -248,37 +268,44 @@ theorem step_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' 
     {s : Step D} {obj : D} {cell : Cell}
     (hs : World.step X.env w s = .ok w') (hh : Honest X w [s]) (hl : w.live X.env obj = some cell)
     (hk : cell.kind = kindObject) :
-    ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
+    (∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
       (∀ k, k < lawBase → cell'.slots.get k = cell.slots.get k) ∧
-      (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k) := by
+      (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k)) ∨
+      w'.entry X.env obj = some .tomb := by
   cases s with
   | refusal r =>
       have hrf : World.refuse X.env w r = .ok w' := hs
-      exact ⟨cell, (refuse_live hrf obj).trans hl, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
+      exact .inl ⟨cell, (refuse_live hrf obj).trans hl, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
   | turn t =>
       obtain ⟨c, -, hc, -⟩ := hh
       exact turn_object_head hc hs hl hk
 
-/-- **THE FOLD: an object's head is fixed along every honest folded log.** For any log the follower
-takes from `w` to `w'` (every Turn what `receive` derives from its own event, every refusal
-re-judged: `Honest`), an object live in `w` is live in `w'`, an object, with the package and owner
-slots it had in `w`; and an object that had a package in `w` has, in `w'`, every slot below
-`stateBase` (package, owner, laws) it had. -/
+/-- **THE FOLD: an object's head is fixed along every honest folded log while it lives.** For any log
+the follower takes from `w` to `w'` (every Turn what `receive` derives from its own event, every
+refusal re-judged: `Honest`), an object live in `w` is live in `w'`, an object, with the package and
+owner slots it had in `w`, and an object that had a package in `w` has, in `w'`, every slot below
+`stateBase` (package, owner, laws) it had; or its owner retired it along the log and its entry in
+`w'` is a tombstone (KERNEL-70: a tombstone stays one, `fold_tomb_stays`). -/
 theorem honest_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} :
     ∀ {w w' : World D} {l : List (Step D)}, World.fold X.env w l = .ok w' → Honest X w l →
       ∀ {cell : Cell}, w.live X.env obj = some cell → cell.kind = kindObject →
-        ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
+        (∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
           (∀ k, k < lawBase → cell'.slots.get k = cell.slots.get k) ∧
-          (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k)
+          (cell.slots.get slotPackage ≠ none → ∀ k, k < stateBase → cell'.slots.get k = cell.slots.get k)) ∨
+          w'.entry X.env obj = some .tomb
   | w, w', [], hf, _, cell, hl, hk => by
       simp only [World.fold, Except.ok.injEq] at hf
       subst hf
-      exact ⟨cell, hl, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
+      exact .inl ⟨cell, hl, hk, fun _ _ => rfl, fun _ _ _ => rfl⟩
   | w, w', s :: rest, hf, hh, cell, hl, hk => by
       obtain ⟨w₁, hs, h1, hfr, hhr⟩ := fold_honest_cons hf hh
-      obtain ⟨cell₁, hl₁, hk₁, hlo₁, hst₁⟩ := step_object_head hs h1 hl hk
-      obtain ⟨cell₂, hl₂, hk₂, hlo₂, hst₂⟩ := honest_object_head hfr hhr hl₁ hk₁
-      refine ⟨cell₂, hl₂, hk₂, fun k hlt => (hlo₂ k hlt).trans (hlo₁ k hlt), fun hne k hlt => ?_⟩
+      rcases step_object_head hs h1 hl hk with ⟨cell₁, hl₁, hk₁, hlo₁, hst₁⟩ | ht
+      rotate_left
+      · exact .inr (fold_tomb_stays hfr ht)
+      rcases honest_object_head hfr hhr hl₁ hk₁ with ⟨cell₂, hl₂, hk₂, hlo₂, hst₂⟩ | ht
+      rotate_left
+      · exact .inr ht
+      refine .inl ⟨cell₂, hl₂, hk₂, fun k hlt => (hlo₂ k hlt).trans (hlo₁ k hlt), fun hne k hlt => ?_⟩
       have hne₁ : cell₁.slots.get slotPackage ≠ none := by
         rw [hlo₁ slotPackage (by simp [slotPackage, lawBase])]; exact hne
       exact (hst₂ hne₁ k hlt).trans (hst₁ hne k hlt)
@@ -286,17 +313,20 @@ theorem honest_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj
 /-- **A live object's package is fixed under the follower's fold** (HOSTING-42's trigger (ii)): at
 every World an honest log folds to from `w` (every log the follower takes), an object live in `w` is
 live, with the same `slotPackage` bytes and so the same `packageOf` (the same package id, or the same
-data object, or the same malformed-slot refusal). Over a log that is not `Honest` the fact is not
-claimed. -/
+data object, or the same malformed-slot refusal), or retired: a tombstone (KERNEL-70). Over a log
+that is not `Honest` the fact is not claimed. -/
 theorem fold_package_fixed [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {obj : D} {w w' : World D}
     {l : List (Step D)} {cell : Cell}
     (h : World.fold X.env w l = .ok w') (hh : Honest X w l) (hl : w.live X.env obj = some cell)
     (hk : cell.kind = kindObject) :
-    ∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
-      cell'.slots.get slotPackage = cell.slots.get slotPackage ∧ packageOf X obj cell' = packageOf X obj cell := by
-  obtain ⟨cell', hl', hk', hlo, -⟩ := honest_object_head h hh hl hk
+    (∃ cell', w'.live X.env obj = some cell' ∧ cell'.kind = kindObject ∧
+      cell'.slots.get slotPackage = cell.slots.get slotPackage ∧ packageOf X obj cell' = packageOf X obj cell) ∨
+      w'.entry X.env obj = some .tomb := by
+  rcases honest_object_head h hh hl hk with ⟨cell', hl', hk', hlo, -⟩ | ht
+  rotate_left
+  · exact .inr ht
   have hp := hlo slotPackage (by simp [slotPackage, lawBase])
-  refine ⟨cell', hl', hk', hp, ?_⟩
+  refine .inl ⟨cell', hl', hk', hp, ?_⟩
   unfold packageOf
   rw [hp]
 

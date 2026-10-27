@@ -955,7 +955,7 @@ private def rtCall (v : Nat) : Call UInt8 :=
       validUntil := v
       pins := []
       maxCharge := 0
-      body := .revoke 0 }
+      body := .retire 0 }
   { unsigned := u, signature := ByteArray.empty }
 
 private def rtCtx : Ctx UInt8 where

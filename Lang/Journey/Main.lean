@@ -9,6 +9,7 @@ import Lang.Journey.Doc
 import Lang.Journey.ContextualLaw
 import Lang.Journey.Inbox
 import Lang.Journey.Effect
+import Lang.Journey.Retire
 
 open Nanodregg.Lang.Journey
 

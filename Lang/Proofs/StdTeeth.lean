@@ -33,6 +33,7 @@ private def write : Data := .inj "write" (.record [])
 private def birth : Data := .inj "birth" (.record [])
 private def relaw (laws : String) : Data := .inj "relaw" (.bytes (b laws))
 private def adopt (laws : String) : Data := .inj "adopt" (.bytes (b laws))
+private def retire : Data := .inj "retire" (.record [])
 
 /-! ## quorum: 2 of {a, b, c} over `total` -/
 
@@ -83,6 +84,10 @@ theorem quorum_relaws : admits (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L")))
 theorem quorum_relaw_only_the_proposal :
     refusedWith "not the proposal" (runLaw [] q (qs 3 (.inj "laws" (.bytes (b "L"))) 5)
       (qs 3 (.inj "laws" (.bytes (b "L"))) 5) (req "a" "a" (relaw "M"))) = true := by
+  decide +kernel
+/-- A quorum object is not retired, by a member or with every approval. -/
+theorem quorum_retire_refused_quorate :
+    refusedWith "quorum" (runLaw [] q (qs 3 (set 9) 5) (qs 3 (set 9) 5) (req "a" "a" retire)) = true := by
   decide +kernel
 theorem quorum_relaw_not_by_set_approvals :
     refusedWith "not the proposal" (runLaw [] q (qs 3 (set 9) 5) (qs 3 (set 9) 5) (req "a" "a" (relaw "L"))) = true := by
@@ -194,6 +199,24 @@ theorem allowlist_adopts :
   decide +kernel
 theorem ownerSigns_adopts :
     admits (runLaw [] (ownerSigns OS) (os "a" 0) (os "a" 0) (req "a" "a" (adopt "L"))) = true := by
+  decide +kernel
+/-- The authority laws judge a retirement by its signer: the owner's own key and a listed member
+end the object, a delegate and a stranger do not. -/
+theorem ownerSigns_retires :
+    admits (runLaw [] (ownerSigns OS) (os "a" 7) (os "a" 7) (req "a" "a" retire)) = true := by
+  decide +kernel
+theorem ownerSigns_retire_delegate :
+    refusedWith "not signed by the owner" (runLaw [] (ownerSigns OS) (os "a" 7) (os "a" 7) (req "d" "a" retire)) = true := by
+  decide +kernel
+theorem allowlist_retires :
+    admits (runLaw [] al (os "a" 0) (os "a" 0) (req "b" "b" retire)) = true := by
+  decide +kernel
+theorem allowlist_retire_refuses :
+    refusedWith "not on the allowlist" (runLaw [] al (os "a" 0) (os "a" 0) (req "c" "c" retire)) = true := by
+  decide +kernel
+/-- `bounded` admits a retirement: its bound is over states, and a retirement changes none. -/
+theorem bounded_retires :
+    admits (runLaw [] (bounded OS "total" 100) (os "a" 5) (os "a" 5) (req "a" "a" retire)) = true := by
   decide +kernel
 theorem ownerSigns_adopt_delegate :
     refusedWith "not signed by the owner" (runLaw [] (ownerSigns OS) (os "a" 0) (os "a" 0) (req "d" "a" (adopt "L"))) = true := by

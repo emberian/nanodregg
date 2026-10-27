@@ -240,7 +240,7 @@ def acctRef (dc : Stream D) : Stream (AcctRef D) :=
     (fun | .well a => ⟨0, a⟩ | .of o a => ⟨1, (o, a)⟩)
 
 abbrev BodyF (D : Type) : Fin 13 → Type
-  | 0 => ByteArray × D × ByteArray × D
+  | 0 => ByteArray × D × D × ByteArray × D
   | 1 => ByteArray × D
   | 2 => ByteArray
   | 3 => Option D × List D × Slots
@@ -255,7 +255,7 @@ abbrev BodyF (D : Type) : Fin 13 → Type
   | 12 => D × AcctRef D × Nat × Option D
 
 def bodyWire (dc : Stream D) : (s : Fin 13) → Stream (BodyF D s)
-  | 0 => product (rawBytes callMax) (product dc (product (rawBytes callMax) dc))
+  | 0 => product (rawBytes callMax) (product dc (product dc (product (rawBytes callMax) dc)))
   | 1 => product (rawBytes callMax) dc
   | 2 => rawBytes callMax
   | 3 => product (option dc) (product (rawList callMax dc) slots)
@@ -273,7 +273,7 @@ def bodyWire (dc : Stream D) : (s : Fin 13) → Stream (BodyF D s)
 def body (dc : Stream D) : Stream (Body D) :=
   refine "kernel/body" (choice 13 (bodyWire dc))
     (fun
-      | ⟨0, (k, n, p, v)⟩ => some (.enroll k n p v)
+      | ⟨0, (k, n, o, j, v)⟩ => some (.enroll k n o j v)
       | ⟨1, (k, n)⟩ => some (.rotate k n)
       | ⟨2, p⟩ => some (.install p)
       | ⟨3, (p, ls, s)⟩ => some (.create p ls s)
@@ -281,13 +281,13 @@ def body (dc : Stream D) : Stream (Body D) :=
       | ⟨5, (o, ls, v)⟩ => some (.law o ls v)
       | ⟨6, (o, m, a, b, v)⟩ => some (.invoke o m a b v)
       | ⟨7, (t, g, r, p)⟩ => some (.grant t g r p)
-      | ⟨8, g⟩ => some (.revoke g)
+      | ⟨8, x⟩ => some (.retire x)
       | ⟨9, cap⟩ => some (.issue cap)
       | ⟨10, (a, o)⟩ => some (.account a o)
       | ⟨11, (s, d, n, v, o)⟩ => some (.transfer s d n v o)
       | ⟨12, (w, a, n, v)⟩ => some (.credit w a n v))
     (fun
-      | .enroll k n p v => ⟨0, (k, n, p, v)⟩
+      | .enroll k n o j v => ⟨0, (k, n, o, j, v)⟩
       | .rotate k n => ⟨1, (k, n)⟩
       | .install p => ⟨2, p⟩
       | .create p ls s => ⟨3, (p, ls, s)⟩
@@ -295,7 +295,7 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .law o ls v => ⟨5, (o, ls, v)⟩
       | .invoke o m a b v => ⟨6, (o, m, a, b, v)⟩
       | .grant t g r p => ⟨7, (t, g, r, p)⟩
-      | .revoke g => ⟨8, g⟩
+      | .retire x => ⟨8, x⟩
       | .issue cap => ⟨9, cap⟩
       | .account a o => ⟨10, (a, o)⟩
       | .transfer s d n v o => ⟨11, (s, d, n, v, o)⟩

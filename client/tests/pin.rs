@@ -148,7 +148,7 @@ fn pinned_live_point_read_refuses_a_revoked_grant() {
     ok(&["invoke", &obj, "1", "(record)", "--range", "facts", "4"]);
     // The grant revoked (its cell a tombstone): the SAME command, re-planned at follow's World,
     // pins the row and the method's live read sees the cell dead and refuses by its own name.
-    ok(&["revoke", &gr]);
+    ok(&["retire", &gr]);
     let (e, o) = refused(&["invoke", &obj, "2", "(record)", "--pin", "facts", &cell]);
     assert_eq!(e, "refused program\n");
     assert!(o.contains("grantDead"), "{o}");
