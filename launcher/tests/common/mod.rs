@@ -81,6 +81,9 @@ pub fn dir(name: &str) -> Scratch {
         "real" => 'a',
         // certify.rs (HOSTING-56): the writer's certify slot
         "cert" => 'z',
+        // agent_hole.rs (HOSTING-58): the fake provider's tour and the real one's
+        "hole" => 'd',
+        "holer" => 'v',
         other => panic!("plant: dir({other}) has no socket-directory letter"),
     };
     let socks = short_dir(&letter.to_string());

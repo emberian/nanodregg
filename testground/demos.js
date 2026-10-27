@@ -25,7 +25,7 @@ export const demos = {
         argv: (v) => ['invoke', v.doc, '9', `(record (cand #${v.g1}))`, '--pin', 'candidates', `(record (cand #${v.g1}))`, '--pin', 'facts', `(record (cell #${v.g1}))`] },
       { who: 'alice', argv: (v) => ['read', v.doc, 'candidates', '8'] },
       { who: 'alice', say: 'alice revokes bob\'s grant. The fact that supports his text is now dead. Method 5 re-checks the candidate.',
-        argv: (v) => ['revoke', v.g1] },
+        argv: (v) => ['retire', v.g1] },
       { who: 'alice', argv: (v) => ['invoke', v.doc, '5', `(record (cand #${v.g1}))`, '--pin', 'candidates', `(record (cand #${v.g1}))`, '--pin', 'facts', `(record (cell #${v.g1}))`] },
       { who: 'alice', say: 'The candidate is suspended. Its row names the dead support.',
         argv: (v) => ['read', v.doc, 'candidates', '8'] },
@@ -117,6 +117,48 @@ demos.timelock = {
   ],
 };
 
+// AGENT (HOSTING-53, HOSTING-58; DESIGN-AGENT A1/A2): the Bell as an agent's inbox, filling a hole of
+// the document. alice rings her Bell AIMED at a section; the answer is delivered to the section's
+// `propose` in the same Turn, under the grant alice gave the Bell OBJECT, and the revoke withdraws
+// it by name. In this tab the answerer is SCRIPTED: bob is the Bell's resident and types the answer
+// the hosted resident would send (its argv: the ring's key and aim echoed, the section's fact row
+// pinned with --pin OBJ/REL). The real model answers only hosted, opt-in (launcher/tests/agent_hole.rs).
+const aimOf = (v) => `(some (record (cand #${v.gS}) (method 3) (target #${v.doc}) (via #${v.gS})))`;
+demos.inbox = {
+  title: 'An inbox for an agent: a question answered into a document (scripted answerer)',
+  texts: { bell: 'world/resident/Bell', lib0: 'world/doc/Section.lib0', lib1: 'world/doc/Section.lib1', lib2: 'world/doc/Section.lib2', section: 'world/doc/Section' },
+  steps: [
+    { who: 'alice', say: 'alice installs the Bell (a queue of questions, rings) and creates one. Its answerer (resident) is bob. Here bob types the answers (a scripted answerer).',
+      argv: (v) => ['install', v.text.bell], bind: 'bellPkg' },
+    { who: 'alice', argv: (v) => ['create', '--pkg', v.bellPkg, `(record (open true) (resident #${v.bob}))`], bind: 'bell', open: 'bell' },
+    { who: 'alice', argv: (v) => ['grant', v.bell, v.bob, 'observe,invoke:0'], bind: 'gA' },
+    { who: 'alice', say: 'alice installs the section package and creates a section. She chooses its text.',
+      argv: (v) => ['install', v.text.lib0] },
+    { who: 'alice', argv: (v) => ['install', v.text.lib1] },
+    { who: 'alice', argv: (v) => ['install', v.text.lib2] },
+    { who: 'alice', argv: (v) => ['install', v.text.section], bind: 'section' },
+    { who: 'alice', argv: (v) => ['create', '--pkg', v.section, `(record (accepted false) (acceptor #${v.alice}) (cap 2000) (chooser #${v.alice}) (closes 100000) (selected none))`], bind: 'doc', open: 'doc' },
+    { who: 'alice', say: 'alice grants the Bell object, not bob, the right to propose a text (invoke:3). She posts that grant as a fact. The answer cites the fact as its support.',
+      argv: (v) => ['grant', v.doc, v.bell, 'invoke:3'], bind: 'gS' },
+    { who: 'alice', argv: (v) => ['invoke', v.doc, '2', `(record (cell #${v.gS}) (pin #${v.gS}))`] },
+    { who: 'alice', say: 'alice rings the Bell. The ring names the section as the place for the answer (an aim).',
+      argv: (v) => ['invoke', v.bell, '4', `(record (text "what should the first section say?") (to ${aimOf(v)}))`] },
+    { who: 'bob', say: 'bob reads the pending ring: its key and its aim.',
+      argv: (v) => ['read', v.bell, 'pending', '64'], grab: { nb: /\(notBefore (\d+)\)/ }, says: `(target #` },
+    { who: 'bob', say: 'bob answers with the argv a hosted resident sends. The answer repeats the aim; the Bell refuses an answer without it (rung: text). --pin names the section\'s fact row (SECTION/facts) the support reads. One Turn answers the ring and adds the candidate.',
+      argv: (v) => ['invoke', v.bell, '0', `(record (notBefore ${v.nb}) (ringText "what should the first section say?") (ringer #${v.alice}) (text "a lamp on the stair") (to ${aimOf(v)}))`,
+        '--pin', `${v.doc}/facts`, `(record (cell #${v.gS}))`, '--via', v.gA] },
+    { who: 'alice', say: 'The section holds the answer as a candidate. Its author (by) is bob, the signer. Its status is verified.',
+      argv: (v) => ['read', v.doc, 'candidates', '8'], says: 'verified' },
+    { who: 'alice', say: 'alice revokes the Bell\'s grant on the section and judges the candidate again (rejudge). It is suspended (support0 dead).',
+      argv: (v) => ['retire', v.gS] },
+    { who: 'alice', argv: (v) => ['invoke', v.doc, '5', `(record (cand #${v.gS}))`, '--pin', 'candidates', `(record (cand #${v.gS}))`, '--pin', 'facts', `(record (cell #${v.gS}))`] },
+    { who: 'alice', argv: (v) => ['read', v.doc, 'candidates', '8'], says: 'support0 dead' },
+    { who: 'alice', say: 'alice tries to choose the answer as the section\'s text. It is refused (support0 dead).',
+      argv: (v) => ['invoke', v.doc, '9', `(record (cand #${v.gS}))`, '--pin', 'candidates', `(record (cand #${v.gS}))`, '--pin', 'facts', `(record (cell #${v.gS}))`], expect: 'refused', says: 'support0 dead' },
+  ],
+};
+
 const hexOf = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 /** A receipt as `nd receipt` prints it: `receipt HEX`, `head STEPS HEIGHT ROOTS CHAIN`, `settled …`. */
 export function receiptOf(out) {
@@ -129,7 +171,7 @@ export function receiptOf(out) {
 // `members` holds every World's members (a member of a second World carries its own kernel and
 // client); `origin` names each World's origin (`origin.A`). A step may bind its call (`call`: the
 // attempt store's frozen bytes, as `cancel`/`receipt` take them), a receipt (`receipt`), method
-// numbers (`method`), and check a word in its output (`says`) or a refusal's name (`refusal`).
+// numbers (`method`), a pattern's group (`grab`), and check a word in its output (`says`) or a refusal's name (`refusal`).
 export async function runDemo(name, { fetchText, members, run, origin = {}, idOfText = null }) {
   const d = demos[name];
   const v = { text: {}, origin };
@@ -152,6 +194,8 @@ export async function runDemo(name, { fetchText, members, run, origin = {}, idOf
     if (s.method) for (const [k, label] of Object.entries(s.method)) {
       const mm = r.stdout.match(new RegExp(`^method (\\d+) ${label} `, 'm')); if (mm) v[k] = mm[1];
     }
+    // `grab`: names bound to the first group of a pattern in the output (the ring's notBefore)
+    if (s.grab) for (const [k, re] of Object.entries(s.grab)) { const g = (r.stdout.match(re) || [])[1]; if (!g) return { ok: false, at: s, results, v }; v[k] = g; }
     if (s.call) v[s.call] = hexOf(m.last);
     if (s.receipt) { const x = receiptOf(r.stdout); if (!x) return { ok: false, at: s, results, v }; v[s.receipt] = x; }
     if (r.exit !== (s.expect ?? 'ok')) return { ok: false, at: s, results, v };

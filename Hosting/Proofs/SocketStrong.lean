@@ -747,21 +747,21 @@ theorem delivered_answer_committed_strong [Std.TransOrd D] [Std.LawfulEqOrd D] {
   obtain ⟨P, pc, pk, sg, hpat, hrp, hres, harg, hbell⟩ := describe_shape hdesc hshape
   -- the invoke's run: a planned call, committed
   obtain ⟨txt, htxt⟩ := Option.isSome_iff_exists.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some r t)
-  have hv : (Resident.Cmd.invoke sh r t).argv w.conf = Resident.invokeArgv w.conf sh txt := by
+  have hv : (Resident.Cmd.invoke sh r t).argv w.conf = Resident.invokeArgv w.conf sh r.to txt := by
     unfold Resident.Cmd.argv
     dsimp only
     rw [htxt]
   rw [hv] at hri
-  have hinv : ∀ cmd, Command.parse X.digestOf (Resident.invokeArgv w.conf sh txt) = .ok cmd →
+  have hinv : ∀ cmd, Command.parse X.digestOf (Resident.invokeArgv w.conf sh r.to txt) = .ok cmd →
       ∃ obj m a rg via, cmd = .invoke obj m a rg via := by
     intro cmd hp
-    obtain ⟨o, g, -, -, rfl⟩ := invokeArgv_parse hp
+    obtain ⟨o, g, -, -, rg, rfl, -⟩ := invokeArgv_parse hp
     exact ⟨_, _, _, _, _, rfl⟩
   obtain ⟨gf, hgf, acc, ⟨wp, hrp', cmd, s, rs, b, u, sig, hp, hb, hrs, hpl, hacc, hrt⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
     run_invoke_ok (w₀ := fi₀.world) hinv hri (.refl _) start_contOf (fun _ _ => start_ne_ok) (by simp [hok])
   rw [hacc] at hcb
   cases hcb
-  obtain ⟨o, g, ho, hg, rfl⟩ := invokeArgv_parse hp
+  obtain ⟨o, g, ho, hg, rg, rfl, -⟩ := invokeArgv_parse hp
   rw [hbd] at ho
   cases ho
   obtain ⟨pk', args, hpk', hargs, rfl⟩ := body_invoke hb

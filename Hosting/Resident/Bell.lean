@@ -24,8 +24,10 @@ member socket:
   (`rung: answered`, `rung: text`), so exactly-once is a check on the row as it is, and an aim cannot
   be dropped or altered by the resident. For an aimed ring the bell's `answer` also makes ONE nested
   call, the forward of T to the aim's target (`Lang.Proofs.Bell.answer_run`): answered is delivered,
-  in the same Turn. The resident neither reads nor pins the target: the aim it echoes is judged by
-  the guard, the forward by the kernel's authority on the Bell object's grant (`via`).
+  in the same Turn. The resident reads nothing of the target: the aim it echoes is judged by the
+  guard, the forward by the kernel's authority on the Bell object's grant (`via`). It pins ONE row of
+  the target, the fact the forward's support cites (`forwardPin`, HOSTING-58: a hole's facts are the
+  caller's points), whose key is a function of the aim.
 
 Everything it reads and writes is Lang's one reader and one printer. It holds no copy of either.
 
@@ -353,7 +355,18 @@ def describeArgv (c : Conf) : List ByteArray := ["read".toUTF8, hexOf c.bell, "?
 /-- `read OBJ pending K`, K = `pending`'s declared limit (the range read refuses past it). -/
 def pendingArgv (c : Conf) (sh : Shape) : List ByteArray :=
   ["read".toUTF8, hexOf c.bell, "pending".toUTF8, (toString sh.pending.limit).toUTF8]
-def invokeArgv (c : Conf) (sh : Shape) (arg : String) : List ByteArray :=
-  ["invoke".toUTF8, hexOf c.bell, (toString sh.answer).toUTF8, arg.toUTF8, "--via".toUTF8, hexOf c.grant]
+/-- The row an aimed answer pins beside what its derivation asks for (HOSTING-58): the target's fact
+row the forward's support cites (`Lang.Bell.forwardRel` at `Lang.Bell.forwardKey a.via`), as
+`--pin TARGET/REL KEY` (a row of another object, CLIENT-50). A hole reads its facts as the caller's points, which no derivation can
+choose; the key is a function of the aim alone, so the resident still reads nothing of the target. -/
+def forwardPin : Option Aim → List ByteArray
+  | none => []
+  | some a => match Print.data (Lang.Bell.forwardKey a.via) with
+    | some k => ["--pin".toUTF8, (Print.hex a.target ++ "/" ++ Lang.Bell.forwardRel).toUTF8, k.toUTF8]
+    | none => []
+
+def invokeArgv (c : Conf) (sh : Shape) (to : Option Aim) (arg : String) : List ByteArray :=
+  ["invoke".toUTF8, hexOf c.bell, (toString sh.answer).toUTF8, arg.toUTF8] ++ forwardPin to ++
+    ["--via".toUTF8, hexOf c.grant]
 
 end Nanodregg.Hosting.Resident

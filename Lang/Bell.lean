@@ -199,6 +199,16 @@ def proposalData (cand via y : ByteArray) : Data :=
   .record [("cand", .digest cand), ("s0", .inj "some" (.record [("cell", .digest via), ("pin", .digest via)])),
     ("s1", .inj "none" (.record [])), ("value", .bytes y)]
 
+/-- The relation of the target whose row the forward's support cites: `Std.hole`'s `facts`. -/
+def forwardRel : String := "facts"
+
+/-- The key of that row: the forward's support is the Bell's grant `via` itself (`proposalData`'s
+`s0 = {cell via, pin via}`), so the target's `propose` judges it by the fact row at `cell via`. A
+hole's facts are read as the CALLER's points (`Std.holeFactsView`: complete observation of the keys
+the caller pinned, never a derivation's ask), so the answer's signer pins this row of the target
+(`--pin TARGET/facts KEY`, HOSTING-58); without it the forward is refused `unpinned support0`. -/
+def forwardKey (via : ByteArray) : Data := .record [("cell", .digest via)]
+
 /-- The call data `answer` returns for an aim `{cand, method, target, via}` and the answer `y`: the
 invoke of `target` at `method` with `proposalData cand via y`, budget 100000, via `via`. -/
 def forwardData (cand : ByteArray) (method : Nat) (target via y : ByteArray) : Data :=

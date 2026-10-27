@@ -40,6 +40,7 @@ cargo:launcher:resident	hosting-controller,hosting-broker,host,hosting-drive,hos
 cargo:launcher:grain	hosting-controller,host,hosting-broker,hosting-residents	exit 0	nobin RED
 cargo:launcher:sock	host-sock-probe	exit 0	nobin RED
 cargo:launcher:resident_bell	resident,hosting-controller,hosting-broker,host,hosting-residents	exit 0	nobin RED
+cargo:launcher:agent_hole	resident,hosting-controller,hosting-broker,host,hosting-residents	exit 0	nobin RED
 cargo:launcher:members	hosting-residents,host,hosting-broker,hosting-controller	exit 0	nobin RED
 cargo:launcher:certify	host,hosting-broker,hosting-residents	exit 0	nobin RED
 cargo-untraced:launcher:fence	host,hosting-broker,hosting-residents	exit 0	nobin RED

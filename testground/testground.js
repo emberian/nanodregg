@@ -565,6 +565,7 @@ const tour = [
   { say: 'A generator: a package whose method installs another package. The generated package has the law n <= 100; setting n = 101 is refused (lawDenied).', demo: 'generator' },
   { say: 'The meter: each Turn records its member and its ticks (evaluator steps). bob repeats an expensive call until his ticks for the window run out (ticksBudget).', demo: 'meter' },
   { say: 'A time lock: a second World (A) runs in this tab. alice\'s lock releases only with a receipt showing that A admitted a call at or after the deadline height.', demo: 'timelock' },
+  { say: 'An inbox for an agent: alice rings her Bell (a queue of questions) and names a section of a document as the place for the answer. The answer becomes a proposed text of that section (a candidate) in the same Turn. Her revoke of the Bell\'s grant suspends it (support0 dead). Here bob types the answer (a scripted answerer); on a hosted World a model answers.', demo: 'inbox' },
 ];
 let tourAt = 0;
 const firstObj = () => [...world.objects.entries()].find(([, v]) => v === 'create')?.[0] ?? '';

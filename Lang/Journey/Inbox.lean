@@ -89,8 +89,9 @@ def lifeRows (r0 : Run) (a b : Sim.Member) (bell : String) : Run := Id.run do
   let (r4, v4, t4) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host (a.id :: libIds)) (.install qb))
   let some spkg := t4.bind fun t => (createdIds t).head? | return note r4 s!"LI2 A installs the section: {v4}" false
   let some dC := q.rels.lookup "candidates" | return note r "LI2 no candidates" false
-  let some dF := q.rels.lookup "facts" | return note r "LI2 no facts" false
-  let factsIndex := (q.rels.map (·.1)).idxOf "facts"
+  -- the target's relation the forward's support cites (`Bell.forwardRel`), as the resident pins it
+  let some dF := q.rels.lookup Bell.forwardRel | return note r "LI2 no facts" false
+  let factsIndex := (q.rels.map (·.1)).idxOf Bell.forwardRel
   let propose := q.methods.idxOf "propose"
   let seedData : List (Label × Data) :=
     [("accepted", .bool false), ("acceptor", .digest (Sim.dc.bytes a.id)), ("cap", .nat 2000),
@@ -106,7 +107,7 @@ def lifeRows (r0 : Run) (a b : Sim.Member) (bell : String) : Run := Id.run do
   r := note r6 s!"LI3 A grants the bell object propose on the section: {v6}" (v6 == "admitted")
   let gBb := Sim.dc.bytes gB
   let secb := Sim.dc.bytes sec
-  let factKey : Data := .record [("cell", .digest gBb)]
+  let factKey : Data := Bell.forwardKey gBb
   let pinFact (w : World D) := hole_pinAt sec w factsIndex dF factKey
   let pinCand (w : World D) (cand : ByteArray) := hole_pinAt sec w 0 dC (.record [("cand", .digest cand)])
   let status (w : World D) (cand : ByteArray) := hole_statusOf w sec dC cand

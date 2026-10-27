@@ -245,27 +245,73 @@ theorem ofHex_hex (b : ByteArray) : Text.ofHex (Lang.Print.hex b) = some b := by
   rw [String.toList_ofList, ← Array.foldr_toList, unhex_hexChars]
   congr 1
 
+/-- The reads of an invoke whose tail is one `--pin REL KEY`: that one point, no range. -/
+private theorem readsArg_pin (v : Verb) (r k : String) :
+    readsArg v ["--pin", r, k] = .ok { points := [(r, k)] } := by
+  rw [readsArg.eq_def]
+  split
+  · rename_i h; simp at h
+  · rw [pinsArg.eq_def]
+    simp only [pinsArg]
+    rfl
+
+/-- The reads an answer's invoke signs for the aim `to` (HOSTING-58): none for an unaimed ring; for an
+aimed one at most the target's fact row the forward's support cites, named `TARGET/facts`
+(`Lang.Bell.forwardRel` of the aim's target, CLIENT-50's `--pin OBJ/REL`). -/
+def ForwardReads (to : Option Resident.Aim) (rg : InvokeReads) : Prop :=
+  rg.range = none ∧ ∀ p ∈ rg.points, ∃ a, to = some a ∧
+    p.1 = Lang.Print.hex a.target ++ "/" ++ Lang.Bell.forwardRel
+
 omit [Ord D] [DecidableEq D] in
 /-- **The resident's invoke, as follow reads it**: whenever follow parses the argv the resident
 sends for an answer, it is `invoke` of the object the config's `bell` names, at the method index the
 description read (`sh.answer`), with exactly the argument text the resident printed, no range read,
-through the grant the config names. -/
-theorem invokeArgv_parse {X : Ctx D} {c : Resident.Conf} {sh : Resident.Shape} {a : String}
-    {cmd : Command.Cmd D} (h : Command.parse X.digestOf (Resident.invokeArgv c sh a) = .ok cmd) :
+through the grant the config names; the only rows it pins are the aim's target's fact row
+(`ForwardReads`, HOSTING-58). -/
+theorem invokeArgv_parse {X : Ctx D} {c : Resident.Conf} {sh : Resident.Shape} {to : Option Resident.Aim}
+    {a : String} {cmd : Command.Cmd D} (h : Command.parse X.digestOf (Resident.invokeArgv c sh to a) = .ok cmd) :
     ∃ o g, X.digestOf c.bell = some o ∧ X.digestOf c.grant = some g ∧
-      cmd = .invoke o sh.answer a {} (some g) := by
+      ∃ rg, cmd = .invoke o sh.answer a rg (some g) ∧ ForwardReads to rg := by
   unfold Command.parse Resident.invokeArgv Resident.hexOf at h
   split at h
   · cases h
   have hv : Verb.ofWord? "invoke" = some .invoke := by decide
-  have hsv : splitVia ["--via", Lang.Print.hex c.grant] = ([], ["--via", Lang.Print.hex c.grant]) := by
-    simp [splitVia]
-  simp only [List.zipIdx, mapEx, fromUTF8_toUTF8', hv, bind, Except.bind, pure, Except.pure] at h
   have hn : (toString sh.answer).toNat? = some sh.answer := Nat.toNat?_repr _
-  simp only [parseVerb, hsv, readsArg, pinsArg, viaArg, digestArg, numArg, ofHex_hex, hn] at h
-  cases hb : X.digestOf c.bell <;> cases hg : X.digestOf c.grant <;>
-    simp [hb, hg, Option.bind, bind, Except.bind, pure, Except.pure, Except.map] at h
-  exact ⟨_, _, rfl, rfl, h.symm⟩
+  cases hto : to with
+  | none =>
+    have hsv : splitVia ["--via", Lang.Print.hex c.grant] = ([], ["--via", Lang.Print.hex c.grant]) := by
+      simp [splitVia]
+    simp only [hto, Resident.forwardPin, List.append_nil, List.cons_append, List.nil_append] at h
+    simp only [List.zipIdx, mapEx, fromUTF8_toUTF8', hv, bind, Except.bind, pure, Except.pure] at h
+    simp only [parseVerb, hsv, readsArg, pinsArg, viaArg, digestArg, numArg, ofHex_hex, hn] at h
+    cases hb : X.digestOf c.bell <;> cases hg : X.digestOf c.grant <;>
+      simp [hb, hg, Option.bind, bind, Except.bind, pure, Except.pure, Except.map] at h
+    exact ⟨_, _, rfl, rfl, _, h.symm, rfl, by simp⟩
+  | some am =>
+    simp only [hto, Resident.forwardPin] at h
+    split at h
+    · rename_i k _
+      have hsv : splitVia ["--pin", Lang.Print.hex am.target ++ "/" ++ Lang.Bell.forwardRel, k, "--via",
+          Lang.Print.hex c.grant] = (["--pin", Lang.Print.hex am.target ++ "/" ++ Lang.Bell.forwardRel, k],
+          ["--via", Lang.Print.hex c.grant]) := by
+        simp [splitVia]
+      simp only [List.cons_append, List.nil_append] at h
+      simp only [List.zipIdx, mapEx, fromUTF8_toUTF8', hv, bind, Except.bind, pure, Except.pure] at h
+      simp only [parseVerb, hsv, readsArg_pin, viaArg, digestArg, numArg, ofHex_hex, hn] at h
+      cases hb : X.digestOf c.bell <;> cases hg : X.digestOf c.grant <;>
+        simp [hb, hg, Option.bind, bind, Except.bind, pure, Except.pure, Except.map] at h
+      refine ⟨_, _, rfl, rfl, _, h.symm, rfl, ?_⟩
+      intro p hp
+      simp only [List.mem_singleton] at hp
+      exact ⟨am, rfl, by rw [hp]⟩
+    · have hsv : splitVia ["--via", Lang.Print.hex c.grant] = ([], ["--via", Lang.Print.hex c.grant]) := by
+        simp [splitVia]
+      simp only [List.append_nil, List.cons_append, List.nil_append] at h
+      simp only [List.zipIdx, mapEx, fromUTF8_toUTF8', hv, bind, Except.bind, pure, Except.pure] at h
+      simp only [parseVerb, hsv, readsArg, pinsArg, viaArg, digestArg, numArg, ofHex_hex, hn] at h
+      cases hb : X.digestOf c.bell <;> cases hg : X.digestOf c.grant <;>
+        simp [hb, hg, Option.bind, bind, Except.bind, pure, Except.pure, Except.map] at h
+      exact ⟨_, _, rfl, rfl, _, h.symm, rfl, by simp⟩
 
 /-- An invoke's call body on follow's World: the object's package, and the argument TEXT read at that
 package's method by `Lang.argsOf`. -/
@@ -631,22 +677,22 @@ theorem delivered_answer_committed {X : Ctx D} {dc : Codec.Stream D} {B : Thin.B
       · exact .inr (by rw [hc]; simp)
   · -- the member's side: the premise names a follower run of exactly this argv
     obtain ⟨txt, htxt⟩ := Option.isSome_iff_exists.mp (Nanodregg.Hosting.Proofs.Resident.answerArg_some r t)
-    have hv : (Resident.Cmd.invoke sh r t).argv w.conf = Resident.invokeArgv w.conf sh txt := by
+    have hv : (Resident.Cmd.invoke sh r t).argv w.conf = Resident.invokeArgv w.conf sh r.to txt := by
       unfold Resident.Cmd.argv
       dsimp only
       rw [htxt]
     obtain ⟨f₀, fe, hrun⟩ := stdioLeg_event hs hi hok
     rw [hv] at hrun
-    have hinv : ∀ cmd, Command.parse X.digestOf (Resident.invokeArgv w.conf sh txt) = .ok cmd →
+    have hinv : ∀ cmd, Command.parse X.digestOf (Resident.invokeArgv w.conf sh r.to txt) = .ok cmd →
         ∃ obj m a rg via, cmd = .invoke obj m a rg via := by
       intro cmd hp
-      obtain ⟨o, g, -, -, rfl⟩ := invokeArgv_parse hp
+      obtain ⟨o, g, -, -, rg, rfl, -⟩ := invokeArgv_parse hp
       exact ⟨_, _, _, _, _, rfl⟩
     obtain ⟨gf, -, acc, ⟨wp, -, cmd, s, rs, b, u, sig, hp, hb, hr, hpl, hacc, -⟩, cb, c, hh, td, hcb, hdc, hset⟩ :=
       run_invoke_ok (w₀ := f₀.world) hinv hrun (.refl _) start_contOf (fun _ _ => start_ne_ok) (by simp [hok])
     rw [hacc] at hcb
     cases hcb
-    obtain ⟨o, g, ho, hg, rfl⟩ := invokeArgv_parse hp
+    obtain ⟨o, g, ho, hg, rg, rfl, -⟩ := invokeArgv_parse hp
     obtain ⟨pk, args, hpk, hargs, rfl⟩ := body_invoke hb
     obtain ⟨hmem, -, hbody, -⟩ := plan_admits hpl
     have htx : txIdOf X c = txIdOf X ⟨u, sig⟩ := by unfold txIdOf; rw [hX _ _ hdc]

@@ -310,7 +310,7 @@ def Cmd.argv (c : Conf) : Cmd → List ByteArray
   | .describe => describeArgv c
   | .read sh | .reread sh => pendingArgv c sh
   | .invoke sh r t => match answerArg r t with
-    | some a => invokeArgv c sh a
+    | some a => invokeArgv c sh r.to a
     | none => []
 
 /-- One tick as a tree of effects (HOSTING-35): each node is ONE effect on the world outside the
