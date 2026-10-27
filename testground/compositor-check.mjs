@@ -47,6 +47,8 @@ try {
   await page.locator('[data-window="test-a"] input').focus();await page.keyboard.press('ArrowLeft');assert.equal((await state()).x,before.x-1);
   await page.evaluate(()=>openTest('transient',{dialog:true}));await page.keyboard.press('Escape');assert.equal(await page.locator('[data-window="transient"]').count(),0);
   report.keyboard=true;
+  await page.evaluate(()=>{const a=wm.wins.get('test-a');wm.focus(a);openTest('background',{activate:false});});
+  assert(await page.evaluate(()=>+wm.wins.get('test-a').el.style.zIndex > +wm.wins.get('background').el.style.zIndex),'background content stays below active window');
   await page.evaluate(()=>wm.clear());await page.evaluate(()=>openTest());
   assert.deepEqual(await state(),await page.evaluate(()=>JSON.parse(localStorage.getItem('nd-testground/layout/1/test'))));
   await page.setViewportSize({width:360,height:480});await page.waitForTimeout(50);

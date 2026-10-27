@@ -4,7 +4,7 @@ const clamp = (n,a,b) => Math.max(a,Math.min(n,b));
 const rect = o => ({x:o.x,y:o.y,w:o.w,h:o.h});
 const key = k => 'nd-testground/layout/1/'+k;
 const saved = k => { try { const r=JSON.parse(localStorage.getItem(key(k))); return r && ['x','y','w','h'].every(k=>Number.isFinite(r[k])) ? r:null; } catch { return null; } };
-export function compositor({desk,tasks,$}) {
+export function compositor({desk,tasks,$,dispose=()=>{}}) {
   const wins=new Map();
   let active=null, cascade=0, gesture=null;
   const bounds=()=>({w:desk.clientWidth,h:desk.clientHeight});
@@ -47,7 +47,7 @@ export function compositor({desk,tasks,$}) {
     if(!wins.has(o.id))return;
     const hadFocus=o.el.contains(document.activeElement)||active===o;
     if(gesture?.o===o)endGesture();
-    remember(o);wins.delete(o.id);o.closed=true;o.life.abort();o.el.remove();o.task.remove();o.onClose?.();
+    remember(o);wins.delete(o.id);o.closed=true;o.life.abort();dispose(o.el);dispose(o.task);o.el.remove();o.task.remove();o.onClose?.();
     if(hadFocus)successor();
   }
   function minimize(o){if(gesture?.o===o)endGesture();o.minimized=true;paint(o);successor();}
@@ -72,10 +72,12 @@ export function compositor({desk,tasks,$}) {
     const task=$('button',{type:'button',title,'data-window':id},title),pos=cascade++%8,life=new AbortController();
     const o={id,kind,title,el,bar,body:bodyBox,task,minW,minH,minimized:false,closed:false,life,onClose,transient:dialog,
       ...constrain({minW,minH},saved(kind)??{x:x??110+pos*26,y:y??16+pos*22,w,h:h??defaultH}),
-      setBody(b){if(!o.closed&&b!=null)bodyBox.replaceChildren(b);},
+      setBody(b){if(!o.closed&&b!=null){for(const child of bodyBox.children)dispose(child);bodyBox.replaceChildren(b);}},
       setTitle(t){o.title=t;titleEl.textContent=t;task.textContent=t;el.setAttribute('aria-label',t);task.title=t;},
       close:()=>close(o),focus:()=>focus(o,true)};
-    wins.set(id,o);desk.append(el);tasks.append(task);paint(o);if(activate)focus(o);else stack();return o;
+    wins.set(id,o);
+    if(!activate&&active){wins.delete(active.id);wins.set(active.id,active);}
+    desk.append(el);tasks.append(task);paint(o);if(activate)focus(o);else stack();return o;
   }
   function snap(o,r,edge,b,others){
     const xs=[0,b.w],ys=[0,b.h],threshold=8;

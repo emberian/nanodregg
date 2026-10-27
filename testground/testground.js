@@ -3,7 +3,7 @@
 // kernel's table; this file lays it out and never decides what it means.
 import factory from './kernel.mjs';
 import { compositor } from './compositor.js';
-import { element as $, confirmAction, submitForm } from './toolkit.js';
+import { element as $, confirmAction, submitForm, listen, disposeEvents } from './toolkit.js';
 import { loadKernel, client, genesis, hex, quoteArg } from './nd.js';
 import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
 import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf } from './demos.js';
@@ -17,11 +17,14 @@ const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'Wh
 
 // ---------------------------------------------------------------- the window manager
 const desk = document.getElementById('desktop'), tasks = document.getElementById('tasks');
-const { wins, focus, openWindow, clear: clearWindows } = compositor({ desk, tasks, $ });
+const { wins, focus, openWindow, clear: clearWindows } = compositor({ desk, tasks, $, dispose: disposeEvents });
 
 // ---------------------------------------------------------------- the World in this tab
 const boot = document.getElementById('boot-line');
 let K, nd, world, frames = [], cmdNo = 0, raceArmed = null, lie = 'honest', forging = false;
+let activity = null;
+const stopped = Symbol('stopped');
+const yieldUI = () => new Promise(resolve => { const timer = setTimeout(resolve, 40); requestAnimationFrame(() => { clearTimeout(timer); setTimeout(resolve, 0); }); });
 const t0 = performance.now();
 // The kernel is fetched once, hashed, and those bytes are the module instantiated: the sha256 the World
 // window shows is of the kernel this tab runs. kernel.json (build.sh) names the commit it was built from;
@@ -40,7 +43,7 @@ const loadMs = performance.now() - t0;
 document.getElementById('boot').remove();
 // the teaching windows (teach.js): every member of every World in the tab
 const allMembers = () => [...(world?.members ?? []), ...Object.values(world?.extra ?? {}).flatMap((x) => x.members)];
-const T = teach({ $, K: () => K, nd: () => nd, openWindow, wins, runIn: (...a) => runIn(...a), members: allMembers, short,
+const T = teach({ $, readIn: (m, argv) => inMember(m, () => (m.nd ?? nd).run(m, argv)), K: () => K, nd: () => nd, openWindow, wins, runIn: (...a) => runIn(...a), members: allMembers, short,
   prefill: (...a) => prefill(...a), splitArgv: (s) => splitArgv(s),
   raceArm: (m, other, argv) => { raceArmed = { member: m.name, other, argv }; } });
 
@@ -59,6 +62,11 @@ const kept = {
 
 function clearDesk() { clearWindows(); }
 function newWorld() {
+  if (activity) {
+    activity.cancelled = true;
+    activity.status.textContent = 'Stopping after the current command. Start the new World when it finishes.';
+    return false;
+  }
   frames = []; logSel = -1; cmdNo = 0; lie = 'honest'; raceArmed = null; setTray();
   clearDesk(); terms.clear(); tourAt = 0; T.reset();
   const t = performance.now();
@@ -151,6 +159,7 @@ function openJoin(value = hostedDefault() || LIVE || 'ws://127.0.0.1:8787/ws', e
   return w;
 }
 async function joinHosted(url = null) {
+  if (activity) { activity.status.textContent = 'Cancel the demo before joining another World.'; return; }
   if (url == null) return openJoin();
   if (!url) return;
   let wj;
@@ -265,7 +274,7 @@ function writerMenu() {
   return $('fieldset', { class: 'writer' }, $('legend', {}, 'Writer'),
     $('div', {}, 'The writer ', sel, ' ', $('span', { class: 'dim' }, 'reset follow (cold): '), world.members.map((m) => $('button', { class: 'btn', title: `reset ${m.name}'s follow to genesis`, onclick: () => { K.cold(m.index); print(m, $('div', { class: 'warn' }, `${m.name}'s follow is reset to genesis. Its next command replays and re-checks every Turn.`)); } }, m.name))),
     $('div', { id: 'writer-note', class: 'dim' }, ...lieNote(lie)),
-    $('div', {}, 'Run a row\'s scene on a new World: ', scenes.map((n) => $('button', { class: 'btn', title: lieTitle(n), onclick: () => playLie(n) }, n))));
+    $('div', {}, 'Run a row\'s scene on a new World: ', scenes.map((n) => confirmAction(n, 'Discard this local World and its commands?', () => playLie(n)))));
 }
 // The fork across two tabs (PROTOCOL-74): another writer of this World's genesis (deploy/testground/
 // run.sh fork) has the same origin and the same guest-book founder. Its guest-book's attestation (its
@@ -306,13 +315,58 @@ function setTray() {
   t.textContent = lie === 'honest' ? 'writer: honest' : `writer: LYING (${lie})`;
   t.className = lie === 'honest' ? '' : 'bad';
 }
-async function playLie(name, { fresh = true, from = 0 } = {}) {
+async function withActivity(name, total, action) {
+  if (activity) { wins.get('activity')?.focus(); return { ok: false, busy: true }; }
+  const status = $('span', { role: 'status', 'aria-live': 'polite' }, 'Starting.'),
+    progress = $('progress', { max: Math.max(1, total), value: 0, 'aria-label': 'Commands completed' });
+  const job = { name, total, done: 0, turns: 0, cancelled: false, status };
+  const cancel = $('button', { class: 'btn', onclick: () => {
+    job.cancelled = true; cancel.disabled = true; status.textContent = 'Stopping after the current command.';
+  } }, 'Cancel');
+  const w = openWindow({ id: 'activity', title: 'Demo: '+name, w: 420, h: 190,
+    body: $('div', {}, progress, $('p', {}, status), cancel),
+    onClose: () => { job.cancelled = true; } });
+  activity = job;
+  job.run = async (action) => {
+    await yieldUI();
+    if (job.cancelled) throw stopped;
+    status.textContent = 'Command '+(job.done+1)+' running. '+job.turns+' Turns completed.';
+    const r = await action();
+    job.done++;
+    job.turns += (r?.stdout?.match(/^tx /gm) ?? []).length;
+    progress.value = job.done;
+    status.textContent = job.done+' commands completed. '+job.turns+' Turns completed.'+(job.cancelled ? ' Stopping.' : '');
+    await yieldUI();
+    if (job.cancelled) throw stopped;
+    return r;
+  };
+  try {
+    const result = await action(job);
+    status.textContent = (result.ok ? 'Complete. ' : 'Stopped. ')+job.done+' commands completed. '+job.turns+' Turns completed.';
+    return result;
+  } catch (e) {
+    if (e === stopped) { status.textContent = 'Cancelled. '+job.done+' commands completed. Completed Turns remain in the World.'; return { ok: false, cancelled: true }; }
+    status.textContent = 'Stopped: '+e.message;
+    throw e;
+  } finally {
+    cancel.disabled = true;
+    if (activity === job) activity = null;
+    if (!w.closed) w.setTitle('Demo: '+name);
+  }
+}
+async function playLie(name, opts = {}) {
+  if (activity) { wins.get('activity')?.focus(); return { ok: false, busy: true }; }
+  if (opts.fresh !== false) newWorld();
+  const sc = lieScenes[name] ?? memberLies[name];
+  return withActivity(name, sc.steps.length, job => playLieSequence(name, { ...opts, fresh: false }, job));
+}
+async function playLieSequence(name, { fresh = true, from = 0 } = {}, job) {
   const sc = lieScenes[name] ?? memberLies[name];
   if (fresh) newWorld();
   const by = (n) => world.members.find((m) => m.name === n);
   const origin = world.text.match(/^origin (\S+)/m)[1];
   const fetchText = async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text());
-  const r = await runScene({ ...sc, steps: sc.steps.slice(from) }, { fetchText, members: world.members, origin, head0: head0Of(world.text), act: async (s, v) => {
+  const r = await runScene({ ...sc, steps: sc.steps.slice(from) }, { fetchText, members: world.members, origin, head0: head0Of(world.text), act: async (s, v) => job.run(async () => {
     const m = s.who ? by(s.who) : null;
     if (s.say) print(m ?? world.members[0], $('div', { class: 'warn' }, s.say));
     if (s.lie) { setLie(s.lie); return null; }
@@ -320,9 +374,10 @@ async function playLie(name, { fresh = true, from = 0 } = {}) {
     if (s.forge) return runIn(m, s.forge(v), 'hostile client: signed without the follow\'s check', { forge: true, quiet: true });
     if (s.cancel) return runIn(m, ['cancel', hex(by(s.cancel).last)], '', { quiet: s.check });
     return runIn(m, s.argv(v), '', { quiet: s.check || s.expect });
-  } });
+  }) });
   const row = rowOf(name) ?? {};
   if (r.ok) caught(name, r, row, (r.r && world.members.find((x) => x.name === sc.steps.find((x) => x.check)?.who)) || world.members.find((x) => x.name === 'bob') || world.members[0]); else print(world.members[0], $('div', { class: 'bad' }, `scene ${name} stopped: ${r.r?.exit} ${r.r?.stderr ?? ''}`));
+  return r;
 }
 // the verdict of a scene's checked line: what the member's own follow said, beside what the row expects
 function caught(name, r, row, m) {
@@ -375,7 +430,7 @@ function openTerm(m, x, y) {
   const out = $('div', { class: 'out sunken', 'aria-live': 'polite' });
   const input = $('input', { class: 'sunken', 'aria-label': `${m.name}'s nd command`, placeholder: 'create   ·   write OBJ 0 hello   ·   read OBJ ?', autocomplete: 'off', spellcheck: 'false' });
   const hist = []; let hi = 0;
-  input.addEventListener('keydown', (e) => {
+  listen(input, 'keydown', (e) => {
     if (e.key === 'ArrowUp') { hi = Math.max(0, hi - 1); input.value = hist[hi] ?? ''; e.preventDefault(); }
     if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] ?? ''; e.preventDefault(); }
   });
@@ -401,13 +456,20 @@ function print(m, ...nodes) {
 
 // one command at a time per member, as one terminal runs one `nd` at a time: a command typed while
 // another is in flight (the hosted join's first sync) waits for it, never interleaves its frames
-async function runIn(m, argv, why = '', opts = {}) {
-  const prev = m.queue ?? Promise.resolve();
-  let release; m.queue = new Promise((r) => { release = r; });
+async function inMember(m, action) {
+  const session = world, prev = m.queue ?? Promise.resolve();
+  let release; m.queue = new Promise(r => { release = r; });
   await prev;
-  try { return await runOne(m, argv, why, opts); } finally { release(); }
+  try {
+    if (session !== world) return { exit: 'client', stdout: '', stderr: 'The World changed before this command ran.\n' };
+    return await action();
+  } finally { release(); }
+}
+async function runIn(m, argv, why = '', opts = {}) {
+  return inMember(m, () => runOne(m, argv, why, opts));
 }
 async function runOne(m, argv, why, { forge = false, quiet = false, typed = null } = {}) {
+  const session = world;
   cmdNo++;
   // the command as typed, or as the terminal would read it back; a long argument (a package text)
   // is shown folded, and "edit" puts the whole command in the input
@@ -422,6 +484,7 @@ async function runOne(m, argv, why, { forge = false, quiet = false, typed = null
   const via = m.nd ?? nd;
   try { r = forge ? await via.forge(m, argv) : await via.run(m, argv); } catch (e) { r = { exit: 'client', stdout: '', stderr: `${e.message}\n` }; }
   forging = false;
+  if (session !== world) return r;
   const ms = performance.now() - t;
   const cls = r.exit === 'ok' ? 'ok' : r.exit === 'declined' || r.exit === 'open' || r.exit === 'uncertain' ? 'warn' : 'bad';
   print(m, $('div', {}, ...linkify(r.stdout, m)), r.stderr ? $('div', { class: cls }, r.stderr) : '',
@@ -432,6 +495,8 @@ async function runOne(m, argv, why, { forge = false, quiet = false, typed = null
   document.getElementById('tray-height').textContent = `${frames.length} frames · ${cmdNo} commands`;
   if (r.exit !== 'ok') print(m, resultBlock(m, argv, r, frames.slice(n0)));
   flushLog();
+  await yieldUI();
+  if (session !== world) return r;
   for (const o of [...wins.values()]) if (o.refresh && !o.closed) o.refresh();
   renderRoster();
   tourCheck(m, argv, r);
@@ -507,7 +572,7 @@ function prefill(m, text) {
   const w = wins.get(`term-${m.name}`); if (!w) return;
   focus(w); const input = w.el.querySelector('input'); input.value = text; input.focus();
 }
-function openObject(m, id) { return T.openInspector(m, id); }
+function openObject(m, id, opts) { return T.openInspector(m, id, opts); }
 // ---------------------------------------------------------------- the wire, as a scrubbable timeline
 let logSel = -1, logFrame = 0;
 function openLog() {
@@ -522,11 +587,11 @@ function openLog() {
   const w = openWindow({ id: 'log', title: 'Frames', ...(world?.hosted ? { x: 700, y: 340, w: 520 } : { x: 110, y: 560, w: 570 }), body,
     onClose: () => { cancelAnimationFrame(logFrame); logFrame = 0; } });
   w.view = { scrub, detail, list, shown: new Map(), selected: null };
-  scrub.addEventListener('input', () => { logSel = +scrub.value; flushLog(); });
-  list.addEventListener('click', e => {
+  listen(scrub, 'input', () => { logSel = +scrub.value; flushLog(); });
+  listen(list, 'click', e => {
     const row = e.target.closest('[data-frame]'); if (row) { logSel = +row.dataset.frame; flushLog(); }
   });
-  list.addEventListener('keydown', e => {
+  listen(list, 'keydown', e => {
     if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key) || !frames.length) return;
     e.preventDefault();
     const at = logSel < 0 ? frames.length - 1 : logSel;
@@ -662,6 +727,11 @@ async function secondWorld(name, names) {
   return world.extra[name];
 }
 async function playDemo(name) {
+  if (world.hosted) return { ok: false, hosted: true };
+  const d = demos[name];
+  return withActivity(d.title, d.steps.reduce((n, s) => n + (s.repeat ?? 1), 0), job => playDemoSequence(name, job));
+}
+async function playDemoSequence(name, job) {
   const t = performance.now();
   const d = demos[name];
   const origin = { B: world.text.match(/^origin (\S+)/m)?.[1] };
@@ -670,12 +740,12 @@ async function playDemo(name) {
   const r = await runDemo(name, {
     fetchText: async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text()),
     members, origin, idOfText: T.idOfText,
-    run: async (m, argv, s) => {
+    run: async (m, argv, s) => job.run(async () => {
       if (s.say) print(m, $('div', { class: 'warn' }, s.say));
       const out = await runIn(m, argv, s.again ? `repeat ${s.again}` : '');
-      if (s.open) { const id = (out.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1]; if (id) openObject(m, id); }
+      if (s.open) { const id = (out.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1]; if (id) openObject(m, id, { activate: false }); }
       return out;
-    },
+    }),
   });
   print(world.members[0], $('div', { class: r.ok ? 'ok' : 'bad' }, `demo ${name}: ${r.ok ? 'every step as expected' : 'stopped'}, ${((performance.now() - t) / 1000).toFixed(1)} s`));
   return r;
@@ -684,7 +754,7 @@ async function playDemo(name) {
 // ---------------------------------------------------------------- desktop icons
 const icons = document.getElementById('icons');
 // one click opens (a double click is the same click twice: the window is focused, not rebuilt)
-const icon = (glyph, label, act, id = null) => icons.append($('button', { class: 'icon', ...(id ? { id } : {}), onclick: act }, $('span', { class: 'glyph' }, glyph), $('span', { class: 'label' }, label)));
+const icon = (glyph, label, act, id = null) => icons.append($('button', { class: 'icon', ...(id ? { id } : {}), onclick: act }, $('span', { class: 'glyph', 'aria-hidden': 'true' }, glyph), $('span', { class: 'label' }, label)));
 icon('◆', 'World', () => openWorld());
 icon('a', 'alice', () => openTerm(world.members[0]), 'icon-m0');
 icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]), 'icon-m1');
@@ -702,4 +772,4 @@ const q = new URLSearchParams(location.search);
 newWorld();
 if (q.has('live') && LIVE) liveDoor();
 else if (hostedDefault() && q.has('join')) joinHosted(hostedDefault());
-window.testground = { desktop: { wins, openWindow, focus }, K, runIn, playDemo, world: () => world, frames: () => frames, hex, kernel: { sha256: kernelSha, built }, deployment, roster: () => (world.hosted ? rosterOf(K, world.members[0]) : null), T };
+window.testground = { desktop: { wins, openWindow, focus }, activity: () => activity && ({ name: activity.name, done: activity.done, turns: activity.turns, cancelled: activity.cancelled }), K, runIn, playDemo, world: () => world, frames: () => frames, hex, kernel: { sha256: kernelSha, built }, deployment, roster: () => (world.hosted ? rosterOf(K, world.members[0]) : null), T };

@@ -178,3 +178,5 @@ details.terms dd, p, code { overflow-wrap: anywhere; }
 
 fieldset { min-inline-size: 0; }
 .props { table-layout: fixed; }
+progress { width: 100%; min-height: 24px; accent-color: var(--focus); }
+.log { position: relative; }

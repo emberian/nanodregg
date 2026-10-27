@@ -4,7 +4,7 @@
 // file lays answers out and never decides what they mean. Words follow testground/STYLE.md.
 
 import { quoteArg } from './nd.js';
-import { tabs, submitForm, refreshContent } from './toolkit.js';
+import { tabs, submitForm, refreshContent, listen } from './toolkit.js';
 
 const dec = new TextDecoder();
 const OK = 0;
@@ -126,10 +126,10 @@ export function teach(ctx) {
   }
 
   // ---------------------------------------------------------------- the object inspector
-  async function openInspector(m, id) {
+  async function openInspector(m, id, { activate = true } = {}) {
     const existing = wins.get(`obj-${id}`);
-    if (existing) { existing.focus(); return existing; }
-    const w = openWindow({ id: `obj-${id}`, title: `Object ${short(id)}`, w: 640, body: $('div', {}, 'reading…') });
+    if (existing) { if (activate) existing.focus(); return existing; }
+    const w = openWindow({ activate, id: `obj-${id}`, title: `Object ${short(id)}`, w: 640, body: $('div', {}, 'reading…') });
     const draft = {};
     let refreshing = false, again = false;
     w.refresh = async () => {
@@ -137,9 +137,8 @@ export function teach(ctx) {
       if (refreshing) { again = true; return; }
       refreshing = true;
       try {
-      const nd = m.nd ?? ctx.nd();
-      const d = await nd.run(m, ['read', id, '?']);
-      const s = await nd.run(m, ['read', id]);
+      const d = await ctx.readIn(m, ['read', id, '?']);
+      const s = await ctx.readIn(m, ['read', id]);
       if (w.closed) return;
       if (d.exit !== 'ok') { w.setBody($('div', { class: 'bad' }, (d.stderr || '').trim(), ' ', d.stdout.trim())); return; }
       const lines = d.stdout.trim().split('\n').filter(Boolean);
@@ -241,7 +240,7 @@ export function teach(ctx) {
     const name = (r.match(/^\((\S+)/) || [])[1] ?? r;
     const out = $('div', {});
     const list = async () => {
-      const x = await (m.nd ?? ctx.nd()).run(m, ['read', obj, name, '16']);
+      const x = await ctx.readIn(m, ['read', obj, name, '16']);
       out.replaceChildren(pre((x.exit === 'ok' ? x.stdout : x.stderr).trim() || '(no rows)'));
     };
     return $('div', {}, $('code', {}, r), ' ', $('button', { class: 'btn', onclick: list }, 'list rows'), out);
@@ -284,7 +283,7 @@ export function teach(ctx) {
     const area = $('textarea', { class: 'sunken code', rows: 18, cols: 80, spellcheck: 'false', 'aria-label': 'package source' });
     const gutter = $('pre', { class: 'gutter', 'aria-hidden': 'true' });
     const syncGutter = () => { const n = area.value.split('\n').length; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); gutter.scrollTop = area.scrollTop; };
-    area.addEventListener('input', syncGutter); area.addEventListener('scroll', syncGutter);
+    listen(area, 'input', syncGutter); listen(area, 'scroll', syncGutter);
     const out = $('div', {});
     const who = $('select', { 'aria-label': 'install as' }, members().map((m) => $('option', { value: m.name }, m.name)));
     const pick = $('select', { 'aria-label': 'template', onchange: async () => { const t = templates[pick.value]; if (t) { area.value = await templateText(t); syncGutter(); state.seed = t.seed; state.needs = t.needs ?? []; } } },
@@ -375,7 +374,7 @@ export function teach(ctx) {
       } else row = kv([['term', $('code', {}, input.value)], ['result', $('b', { class: 'bad' }, r.text)]]);
       hist.prepend(row);
     };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run('eval'); } });
+    listen(input, 'keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run('eval'); } });
     const body = $('div', {},
       $('div', {}, input),
       submitForm(() => run('eval'), $('button', { class: 'btn', type: 'submit' }, 'Evaluate'), ' ', $('button', { class: 'btn', onclick: () => run('type') }, 'Type'), ' ticks ', ticks, ' ',
@@ -464,7 +463,7 @@ export function teach(ctx) {
     const arg = $('textarea', { class: 'sunken code', rows: 1, spellcheck: 'false', 'aria-label': 'argument' }, '(record (n 7))');
     const statePane = $('div', {}), resultPane = $('div', {}, $('p', { class: 'dim' }, 'Call set to see the change.')), lawPane = $('div', {}), taskPane = $('div', {});
     const readState = async () => {
-      const r = await (m.nd ?? ctx.nd()).run(m, ['read', lesson.obj]);
+      const r = await ctx.readIn(m, ['read', lesson.obj]);
       statePane.replaceChildren(kv([['object', idLink(m, lesson.obj)], ['package', idLink(m, lesson.pkg), lesson.pkg === lesson.first ? ' (the first one)' : ' (installed from your edit)'],
         ['current state', $('b', {}, r.stdout.trim() || r.stderr.trim())], ['state type', $('code', {}, '(rec (n nat))')]]));
       return r.stdout.trim();
@@ -674,6 +673,6 @@ export function teach(ctx) {
   }
 
   // a new World: the tutorial starts again at step 1 with no bindings
-  const reset = () => { tut.at = 0; tut.v = {}; tut.done.clear(); Object.assign(lesson, { pkg: null, obj: null, first: null, predicted: null, refusedBy: null, pointed: null, repaired: false, log: [] }); };
+  const reset = () => { sources.clear(); tut.at = 0; tut.v = {}; tut.done.clear(); Object.assign(lesson, { pkg: null, obj: null, first: null, predicted: null, refusedBy: null, pointed: null, repaired: false, log: [] }); };
   return { openLesson, openId, openPackage, openGrant, openInventory, cellOf, idLink, openInspector, openEditor, openRepl, openGrammar, openTurn, openTutorial, remember, idOfText, reset, steps, templates, parseLine };
 }
