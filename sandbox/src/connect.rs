@@ -26,6 +26,11 @@ pub(crate) fn entry(p: &Path) -> Result<PathBuf, ConfineError> {
     };
     let dir = crate::canonical(parent)?;
     let sock = dir.join(name);
+    // the socket's own name is a policy string too (sandbox-exec's profile quotes it)
+    match name.to_str() {
+        Some(t) if !t.contains(['"', '\\']) => {}
+        _ => return Err(ConfineError::UnnameablePath(sock)),
+    }
     let m = fs::symlink_metadata(&sock).map_err(missing)?;
     if m.file_type().is_symlink() {
         return Err(ConfineError::ConnectLink(sock));

@@ -71,6 +71,8 @@ pub fn policy(r: &Roots<'_>, p: &PlanPaths<'_>) -> Policy {
         exec: all(r.root, p.exec),
         hidden: all(r.root, p.hidden),
         connect,
+        // a launch frame names no Landlock ABI: grains run at the sandbox floor (ABI 3)
+        landlock_abi: 0,
     }
 }
 
@@ -156,6 +158,9 @@ pub fn failure_of(e: &ConfineError) -> LaunchFailure {
         ConfineError::ConnectMode { .. } => LaunchFailure::ConnectMode,
         ConfineError::ConnectDir(_) => LaunchFailure::ConnectDir,
         ConfineError::Connector(_) => LaunchFailure::SpawnFailed,
+        ConfineError::ConnectOverlap { .. } => LaunchFailure::ConnectOverlap,
+        ConfineError::Privileged(_) => LaunchFailure::Privileged,
+        ConfineError::LandlockAbi { .. } => LaunchFailure::LandlockAbi,
     }
 }
 

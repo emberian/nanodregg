@@ -164,15 +164,27 @@ theorem plant_hosted_is_key_holder :
 
 /-- A node that shares its socket with a group renders `--group ${ND_GID}` before `--`, inside
 nd-supervise's own options (CLIENT-21: after `--` it would be the child's argument); one that does
-not, renders nothing between `--exec HOST` and its `--hide`s (its socket stays 0600). -/
+not, renders nothing between `--exec HOST` and its ABI requirement and `--hide`s (its socket stays
+0600). -/
 theorem ofNode_group (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
     (n.group = true → u.exec.take 8 = [.lit (supervisor n), .lit n.sock, .lit "--write", .lit n.store,
       .lit "--exec", .lit (hostExe n), .lit "--group", .var envGid]) ∧
-    (n.group = false → u.exec.drop 6 = n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++ [.lit "--", .lit (hostExe n)] ++ n.args) := by
+    (n.group = false → u.exec.drop 6 = n.abiArgs ++ n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++
+      [.lit "--", .lit (hostExe n)] ++ n.args) := by
   obtain rfl := ofNode_ok n u h
   constructor
   · intro hg; simp [Node.exec, hg]
   · intro hg; simp [Node.exec, hg]
+
+/-- A node requiring Landlock ABI `k` renders `--landlock-abi k` among nd-supervise's own options:
+after `--exec HOST` (and the group), before every `--hide` and the `--` that starts the Host's
+argv (after it, it would be the Host's argument and the floor would launch). -/
+theorem ofNode_landlock_abi (n : Node) (u : Service) (h : Service.ofNode n = .ok u) (hk : n.landlockAbi ≠ 0) :
+    u.exec.drop 6 = (if n.group then [.lit "--group", .var envGid] else []) ++
+      [.lit "--landlock-abi", .lit (toString n.landlockAbi)] ++
+      n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++ [.lit "--", .lit (hostExe n)] ++ n.args := by
+  obtain rfl := ofNode_ok n u h
+  simp [Node.exec, Node.abiArgs, hk]
 
 /-- The grain-launch unit stops on a controller end iff HOSTING's table calls it fatal. -/
 theorem mem_launchPrevent_controller (e : ControllerExit) :

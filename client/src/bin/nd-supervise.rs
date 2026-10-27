@@ -1,5 +1,6 @@
-//! `nd-supervise SOCKET [--group GID [--peer UID]] (--hide|--read|--write|--exec|--connect PATH)… --
-//! /ABS/PROGRAM [ARG]…` (`--peer`: only that uid in GID connects, others closed `peerRefused`)
+//! `nd-supervise SOCKET [--group GID [--peer UID]] [--landlock-abi N] (--hide|--read|--write|--exec|--connect PATH)… --
+//! /ABS/PROGRAM [ARG]…` (`--peer`: only that uid in GID connects, others closed `peerRefused`;
+//! `--landlock-abi N`: refuse to launch below Landlock ABI N, the production writer's 6, CLIENT-52)
 //!
 //! Binds SOCKET (mode 0600; with `--group GID`, mode 0660 group GID, refused unless SOCKET's
 //! directory passes `custody::check_shared_dir` with group GID: HOSTING-17 §7's nd-hosted follower,
@@ -27,7 +28,7 @@ use signal_hook::consts::SIGTERM;
 use signal_hook::iterator::Signals;
 use signal_hook::low_level::emulate_default_handler;
 
-const USAGE: &str = "usage: nd-supervise SOCKET [--group GID [--peer UID]] (--hide|--read|--write|--exec|--connect PATH)... -- /ABS/PROGRAM [ARG]...";
+const USAGE: &str = "usage: nd-supervise SOCKET [--group GID [--peer UID]] [--landlock-abi N] (--hide|--read|--write|--exec|--connect PATH)... -- /ABS/PROGRAM [ARG]...";
 
 struct Args {
     socket: PathBuf,
@@ -46,6 +47,11 @@ fn parse(mut argv: impl Iterator<Item = OsString>) -> Result<Args, String> {
     loop {
         let list = match argv.next() {
             Some(a) if a == "--" => break,
+            Some(a) if a == "--landlock-abi" && policy.landlock_abi == 0 => {
+                let n = argv.next().ok_or(USAGE)?;
+                policy.landlock_abi = n.to_str().and_then(|n| n.parse().ok()).ok_or(USAGE)?;
+                continue;
+            }
             Some(a) if (a == "--group" && group.is_none()) || (a == "--peer" && peer.is_none()) => {
                 let n = argv.next().ok_or(USAGE)?;
                 let n: u32 = n.to_str().and_then(|n| n.parse().ok()).ok_or(USAGE)?;
@@ -108,8 +114,13 @@ fn run() -> Result<ExitCode, String> {
     // Caught before the child exists, so no peer is ever served by a supervisor SIGTERM ends unheard.
     let mut term = Signals::new([SIGTERM]).map_err(|e| format!("nd-supervise: SIGTERM: {e}"))?;
     let args: Vec<&std::ffi::OsStr> = a.args.iter().map(OsString::as_os_str).collect();
-    let mut child = command(&a.policy, &a.program, &args)
-        .map_err(|e| format!("nd-supervise: {e}"))?
+    let confined = command(&a.policy, &a.program, &args).map_err(|e| format!("nd-supervise: {e}"));
+    // What the kernel enforces, every launch, so a partial profile is never silent (CLIENT-52).
+    say_line(&format!(
+        "nd-supervise: confine: {}",
+        nanodregg_sandbox::confinement()
+    ));
+    let mut child = confined?
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

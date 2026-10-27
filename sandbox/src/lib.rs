@@ -52,6 +52,10 @@ pub struct Policy {
     /// checked before launch; Linux exposes its parent directory (which must hold that socket and
     /// nothing else: the socket's owner keeps it so), macOS allows connecting to that path alone.
     pub connect: Vec<PathBuf>,
+    /// The Landlock ABI this launch requires (Linux; 0: the floor, 3). The production writer asks
+    /// for 6, the ABI that scopes signals and abstract sockets (CLIENT-52): below it the launch is
+    /// refused `LandlockAbi`, never run with less. `confinement()` reports what the kernel has.
+    pub landlock_abi: u32,
 }
 
 impl Policy {
@@ -79,6 +83,24 @@ pub enum ConfineError {
     MechanismMissing(&'static str),
     /// The connector of a child with `connect` entries could not be made (Linux).
     Connector(io::Error),
+    /// The launcher holds a privilege a child would inherit: root, or a permitted or effective
+    /// capability (Linux). Confinement assumes an unprivileged identity; it never drops one.
+    Privileged(String),
+    /// The kernel's Landlock ABI is below the policy's `landlock_abi` (Linux).
+    LandlockAbi {
+        /// What the kernel offers (0: no Landlock).
+        have: u32,
+        /// What the launch requires.
+        need: u32,
+    },
+    /// A connect socket's directory lies under or contains a WRITE grant: the child could place a
+    /// link at the granted name (CLIENT-52).
+    ConnectOverlap {
+        /// The connect socket's directory.
+        connect: PathBuf,
+        /// The write grant it overlaps.
+        allowed: PathBuf,
+    },
     /// A path cannot be named safely to the mechanism (not UTF-8, or a quote or backslash).
     UnnameablePath(PathBuf),
     /// A policy path does not exist (allowing or hiding nothing would pass silently).
@@ -132,6 +154,19 @@ impl std::fmt::Display for ConfineError {
             Self::Unsupported => write!(f, "confine: no confinement on this platform"),
             Self::MechanismMissing(p) => write!(f, "confine: {p} is missing"),
             Self::Connector(e) => write!(f, "confine: connector: {e}"),
+            Self::Privileged(w) => write!(f, "confine: privileged launcher: {w}"),
+            Self::LandlockAbi { have, need } => {
+                write!(
+                    f,
+                    "confine: landlock ABI {have}, the policy requires {need}"
+                )
+            }
+            Self::ConnectOverlap { connect, allowed } => write!(
+                f,
+                "confine: connect directory {} overlaps write grant {}",
+                connect.display(),
+                allowed.display()
+            ),
             Self::UnnameablePath(p) => write!(f, "confine: cannot name {}", p.display()),
             Self::PathMissing(p, e) => write!(f, "confine: {}: {e}", p.display()),
             Self::ProgramOutside { program, canonical } => write!(
@@ -317,17 +352,39 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
             canonical: r.program.clone(),
         });
     }
+    // A connect socket's directory never meets a write grant: there the child could replace the
+    // granted name with a link the connector would follow (CRIT-SANDBOX).
+    for (_, sock) in &r.connect {
+        if let Some(dir) = sock.parent()
+            && let Some(w) = r.write.iter().find(|w| overlap(w, dir))
+        {
+            return Err(ConfineError::ConnectOverlap {
+                connect: dir.to_path_buf(),
+                allowed: w.clone(),
+            });
+        }
+    }
+    // Every grant the child gets, the implicit ones (the floor, the loader manifest) included.
+    // macOS's floor `/` is a literal (the root's listing only, `listing_only`); every other entry,
+    // an explicit `/` grant included, is the tree it names.
     #[cfg(target_os = "linux")]
-    let floor: Vec<PathBuf> = linux::FLOOR.iter().map(PathBuf::from).collect();
+    let floor: Vec<(PathBuf, bool)> = linux::FLOOR
+        .iter()
+        .map(|p| (PathBuf::from(p), false))
+        .chain(linux::loaders().into_iter().map(|p| (p, false)))
+        .collect();
     #[cfg(not(target_os = "linux"))]
-    let floor: Vec<PathBuf> = FLOOR.iter().map(|(p, _)| PathBuf::from(p)).collect();
-    let floor = floor.into_iter();
-    let allowed: Vec<PathBuf> = [r.program.clone()]
+    let floor: Vec<(PathBuf, bool)> = FLOOR
+        .iter()
+        .map(|(p, subtree)| (PathBuf::from(p), !subtree && *p == "/"))
+        .collect();
+    let allowed: Vec<(PathBuf, bool)> = [r.program.clone()]
         .into_iter()
         .chain(r.read.iter().cloned())
         .chain(r.write.iter().cloned())
         .chain(r.exec.iter().cloned())
         .chain(r.connect.iter().map(|(_, s)| s.clone()))
+        .map(|p| (p, false))
         .chain(floor)
         .collect();
     // An executable FILE granted to run (the program, an `exec` file) exposes that one inode, read
@@ -344,12 +401,11 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
         })
         .collect();
     for hidden in all(&policy.hidden)? {
-        // `/` in the macOS floor is its listing only (a literal), so it exposes no file under it.
         let inside_only =
             |a: &PathBuf| runnable.contains(&a) && a != &hidden && a.starts_with(&hidden);
-        if let Some(a) = allowed
+        if let Some((a, _)) = allowed
             .iter()
-            .find(|a| a.as_os_str() != "/" && overlap(a, &hidden) && !inside_only(a))
+            .find(|(a, listing_only)| !listing_only && overlap(a, &hidden) && !inside_only(a))
         {
             return Err(ConfineError::Exposed {
                 hidden,
@@ -364,9 +420,12 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
 pub fn command(policy: &Policy, program: &OsStr, args: &[&OsStr]) -> Result<Command, ConfineError> {
     let r = resolve(policy, program)?;
     #[cfg(target_os = "linux")]
-    let mut c = linux::command(&r)?;
+    let mut c = linux::command(&r, policy.landlock_abi)?;
     #[cfg(not(target_os = "linux"))]
     let mut c = {
+        if rustix::process::geteuid().is_root() {
+            return Err(ConfineError::Privileged("euid 0".into()));
+        }
         let mut c = platform(&r)?;
         if !Path::new(MECHANISM).is_file() {
             return Err(ConfineError::MechanismMissing(MECHANISM));
@@ -376,6 +435,32 @@ pub fn command(policy: &Policy, program: &OsStr, args: &[&OsStr]) -> Result<Comm
     };
     c.args(args);
     Ok(c)
+}
+
+/// What this platform's confinement enforces right now, one line for a launcher's log (CLIENT-52):
+/// on Linux the kernel's Landlock ABI and whether it is the full profile (ABI 6: signals and
+/// abstract sockets scoped) or partial (named by what is missing); on macOS the mechanism.
+pub fn confinement() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let have = linux::landlock_abi();
+        let (want, floor) = (linux::ABI_WANTED, linux::ABI_REQUIRED);
+        if have >= want {
+            format!(
+                "landlock ABI {have}: full (seccomp allow-list, signals and abstract sockets scoped)"
+            )
+        } else if have >= floor {
+            format!(
+                "landlock ABI {have}: PARTIAL, below {want} (signals and abstract sockets not scoped by Landlock; seccomp's own self-signal rule only)"
+            )
+        } else {
+            format!("landlock ABI {have}: below {floor}, nothing launches")
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        MECHANISM.to_string()
+    }
 }
 
 /// A unix stream socket connected to `path`: through the connector when this process is a confined
@@ -436,7 +521,7 @@ fn platform(r: &Resolved) -> Result<Command, ConfineError> {
         let write: String = r.write.iter().map(|p| sub(p)).collect();
         profile += &format!("(allow file-write*{write})");
     }
-    for (s, _) in &r.connect {
+    for (_, s) in &r.connect {
         profile += &format!(
             "(allow network-outbound (remote unix-socket (path-literal \"{}\")))",
             s.display()

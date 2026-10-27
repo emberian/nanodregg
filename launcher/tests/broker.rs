@@ -793,7 +793,7 @@ fn a_decider_that_never_ran_its_own_end_stops_keybroker_by_name() {
 
 /// The other half of HOSTING-23 (VACUITY-READER-H4): a decider KILLED by a signal is
 /// `deciderSignaled` (102, restart: the OOM killer), never the mechanism's fatal 79. The "decider"
-/// is a script that SIGKILLs itself, under the real confinement (a signal to itself is allowed).
+/// is the probe placed as `killself`, which SIGKILLs itself, under the real confinement (a signal to itself is allowed).
 #[test]
 fn a_decider_killed_by_a_signal_is_restarted_not_stopped() {
     use nanodregg_launcher::broker_generated::keybroker_exit;
@@ -802,11 +802,10 @@ fn a_decider_killed_by_a_signal_is_restarted_not_stopped() {
     let anchors = Pki::new().anchors(&d, 0o644);
     let empty = d.join("empty-store");
     nanodregg_devtools::mkdirs(&empty).unwrap();
-    let src = d.join("killself.src");
-    fs::write(&src, b"#!/bin/sh\nkill -9 $$\n").unwrap();
-    fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
+    // the probe placed as `killself` SIGKILLs itself (no interpreter: a `#!` script would need its
+    // shell granted exec, which the sandbox no longer infers)
     let decider = d.join("killself");
-    place_exe(&src, &decider);
+    place_exe(Path::new(env!("CARGO_BIN_EXE_probe")), &decider);
     let (err, got) = ends_with(&d, &keys, &anchors, &empty, me(&d).0, &decider);
     assert!(err.contains("keybroker: deciderSignaled"), "stderr: {err}");
     assert_eq!(

@@ -337,6 +337,9 @@ pub mod wire {
         ConnectOwner,
         ConnectMode,
         ConnectDir,
+        ConnectOverlap,
+        Privileged,
+        LandlockAbi,
     }
 
     impl LaunchFailure {
@@ -356,6 +359,9 @@ pub mod wire {
                 LaunchFailure::ConnectOwner => 11,
                 LaunchFailure::ConnectMode => 12,
                 LaunchFailure::ConnectDir => 13,
+                LaunchFailure::ConnectOverlap => 14,
+                LaunchFailure::Privileged => 15,
+                LaunchFailure::LandlockAbi => 16,
             }
         }
 
@@ -375,6 +381,9 @@ pub mod wire {
                 11 => Some(LaunchFailure::ConnectOwner),
                 12 => Some(LaunchFailure::ConnectMode),
                 13 => Some(LaunchFailure::ConnectDir),
+                14 => Some(LaunchFailure::ConnectOverlap),
+                15 => Some(LaunchFailure::Privileged),
+                16 => Some(LaunchFailure::LandlockAbi),
                 _ => None,
             }
         }
@@ -396,6 +405,9 @@ pub mod wire {
                 LaunchFailure::ConnectOwner => "connectOwner",
                 LaunchFailure::ConnectMode => "connectMode",
                 LaunchFailure::ConnectDir => "connectDir",
+                LaunchFailure::ConnectOverlap => "connectOverlap",
+                LaunchFailure::Privileged => "privileged",
+                LaunchFailure::LandlockAbi => "landlockAbi",
             }
         }
     }

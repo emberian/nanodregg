@@ -15,7 +15,8 @@
  * names a descriptor, the connect is asked of the launcher over it instead. The wire is the sandbox
  * crate's (`linux::ask`): the path as one seqpacket message; the reply a u32le errno (0: connected)
  * with the connected, non-blocking socket as SCM_RIGHTS. One ask at a time (a mutex), so two threads
- * never read each other's reply. Errors read as before: `connect: … (errno 13)` for a path the
+ * never read each other's reply; the reply is bounded by the connection's timeout, and a reply that
+ * came too late is read and dropped before the next ask. Errors read as before: `connect: … (errno 13)` for a path the
  * launcher's policy does not grant, the connect's own errno otherwise.
  */
 #include <lean/lean.h>
@@ -89,28 +90,50 @@ static lean_obj_res conn_ok(int fd, uint32_t ms) {
 
 #ifdef __linux__
 static pthread_mutex_t nd_connector_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Replies owed for asks that timed out (under the lock): each is read and dropped, its socket
+ * closed, before the next ask is sent, so a late reply never answers a later ask. */
+static unsigned nd_connector_owed = 0;
 
-/* The connected socket at `path` from the launcher's connector `k`, or -1 with errno set. */
-static int nd_connector_ask(int k, const char *path, size_t n) {
-  pthread_mutex_lock(&nd_connector_lock);
-  ssize_t sent;
-  do sent = send(k, path, n, MSG_NOSIGNAL); while (sent < 0 && errno == EINTR);
-  if (sent != (ssize_t)n) { int e = sent < 0 ? errno : EPROTO; pthread_mutex_unlock(&nd_connector_lock); errno = e; return -1; }
-  uint8_t code[4];
+/* One reply from `k` into `code`, its socket (or -1) into `*fd`, waited for until `end`. */
+static ssize_t nd_connector_reply(int k, uint8_t code[4], int *fd, int64_t end) {
+  *fd = -1;
+  int r = ready(k, POLLIN, end);
+  if (r <= 0) { errno = r == 0 ? ETIMEDOUT : errno; return -1; }
   union { struct cmsghdr h; char b[CMSG_SPACE(sizeof(int))]; } ctl;
-  struct iovec io = { code, sizeof code };
+  struct iovec io = { code, 4 };
   struct msghdr m;
   memset(&m, 0, sizeof m);
   m.msg_iov = &io; m.msg_iovlen = 1; m.msg_control = ctl.b; m.msg_controllen = sizeof ctl.b;
   ssize_t got;
   do got = recvmsg(k, &m, MSG_CMSG_CLOEXEC); while (got < 0 && errno == EINTR);
-  int e = got < 0 ? errno : 0;
-  pthread_mutex_unlock(&nd_connector_lock);
-  if (got < 0) { errno = e; return -1; }
-  int fd = -1;
+  if (got < 0) return -1;
   for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c != NULL; c = CMSG_NXTHDR(&m, c))
     if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len == CMSG_LEN(sizeof(int)))
-      memcpy(&fd, CMSG_DATA(c), sizeof fd);
+      memcpy(fd, CMSG_DATA(c), sizeof *fd);
+  return got;
+}
+
+/* The connected socket at `path` from the launcher's connector `k`, or -1 with errno set; the
+ * reply is waited for at most the connection's timeout `ms` (ETIMEDOUT past it). */
+static int nd_connector_ask(int k, const char *path, size_t n, uint32_t ms) {
+  int64_t end = now_ms() + ms;
+  uint8_t code[4];
+  int fd;
+  pthread_mutex_lock(&nd_connector_lock);
+  while (nd_connector_owed > 0) {
+    ssize_t got = nd_connector_reply(k, code, &fd, end);
+    if (got < 0) { int e = errno; pthread_mutex_unlock(&nd_connector_lock); errno = e; return -1; }
+    if (fd >= 0) close(fd);
+    nd_connector_owed--;
+  }
+  ssize_t sent;
+  do sent = send(k, path, n, MSG_NOSIGNAL); while (sent < 0 && errno == EINTR);
+  if (sent != (ssize_t)n) { int e = sent < 0 ? errno : EPROTO; pthread_mutex_unlock(&nd_connector_lock); errno = e; return -1; }
+  ssize_t got = nd_connector_reply(k, code, &fd, end);
+  int e = got < 0 ? errno : 0;
+  if (got < 0 && e == ETIMEDOUT) nd_connector_owed++;
+  pthread_mutex_unlock(&nd_connector_lock);
+  if (got < 0) { errno = e; return -1; }
   if (got != 4) { if (fd >= 0) close(fd); errno = EPROTO; return -1; }
   uint32_t err = (uint32_t)code[0] | (uint32_t)code[1] << 8 | (uint32_t)code[2] << 16 | (uint32_t)code[3] << 24;
   if (err != 0) { if (fd >= 0) close(fd); errno = (int)err; return -1; }
@@ -141,7 +164,7 @@ LEAN_EXPORT lean_obj_res nd_unix_connect(b_lean_obj_arg path, uint32_t ms, lean_
 #ifdef __linux__
   int k = nd_connector();
   if (k >= 0) {
-    int fd = nd_connector_ask(k, s, n);
+    int fd = nd_connector_ask(k, s, n, ms);
     if (fd < 0) return nd_io_errno("connect", errno);
     return conn_ok(fd, ms);
   }

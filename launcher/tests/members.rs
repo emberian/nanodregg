@@ -637,16 +637,27 @@ fn a_member_that_always_crashes_is_named_crash_loop_and_left_unbound() {
 
 /// A decider answering whatever `DIR/frame` holds at each ask (a stub: python, one frame per
 /// request), so the test moves the World's answer between ticks by renaming one file.
-fn steered(r: &Roots, names: &[&String]) -> (PathBuf, PathBuf) {
+fn steered(r: &Roots, names: &[&String]) -> (Vec<std::ffi::OsString>, PathBuf) {
     let dir = r.base.0.join("steer");
     nanodregg_devtools::mkdirs(&dir).unwrap();
     steer(&dir, names);
-    let sh = r.base.0.join("steer.py");
-    // its `#!` interpreter is executable confined (the sandbox grants a program's interpreters)
-    let py = "#!/usr/bin/python3 -I\nimport struct,sys\ni,o=sys.stdin.buffer,sys.stdout.buffer\nwhile True:\n h=i.read(4)\n if len(h)<4: break\n i.read(struct.unpack('<I',h)[0])\n o.write(open(sys.argv[1]+'/frame','rb').read()); o.flush()\n";
-    fs::write(&sh, py).unwrap();
-    fs::set_permissions(&sh, fs::Permissions::from_mode(0o700)).unwrap();
-    (sh, dir)
+    let py = "import struct,sys\ni,o=sys.stdin.buffer,sys.stdout.buffer\nwhile True:\n h=i.read(4)\n if len(h)<4: break\n i.read(struct.unpack('<I',h)[0])\n o.write(open(sys.argv[1]+'/frame','rb').read()); o.flush()\n";
+    (python_c(py, &dir), dir)
+}
+
+/// A python decider as nd-members runs it: the program `/usr/bin/python3` (granted exec by name;
+/// the sandbox infers no `#!` interpreter), the arguments `-I -c CODE DIR` (`sys.argv[1]` = DIR).
+const PY: &str = "/usr/bin/python3";
+fn python_c(code: &str, dir: &Path) -> Vec<std::ffi::OsString> {
+    ["-I", "-c", code]
+        .into_iter()
+        .map(std::ffi::OsString::from)
+        .chain([dir.as_os_str().to_os_string()])
+        .collect()
+}
+
+fn os(a: &[std::ffi::OsString]) -> Vec<&std::ffi::OsStr> {
+    a.iter().map(|a| a.as_os_str()).collect()
 }
 
 /// The steered decider's next answer: `names`.
@@ -673,15 +684,15 @@ fn a_held_removal_stalls_no_birth_and_is_killed_at_its_grace() {
     for g in [&w.r1, &w.r2, &r3] {
         w.provision(&r, g);
     }
-    let (sh, dir) = steered(&r, &[&w.r1, &w.r2]);
+    let (py, dir) = steered(&r, &[&w.r1, &w.r2]);
     let c = argv_over(
         &w,
         &r,
         uid(&r.member.0),
         &dir,
         &nd(),
-        &sh,
-        &[dir.as_os_str()],
+        Path::new(PY),
+        &os(&py),
     );
     let m = Members::spawn(c, &r);
     let served = |g: &str| nd_via(&r.sock(g), &["sync"]).is_ok_and(|(e, _)| e == command_exit::OK);
@@ -776,20 +787,14 @@ fn ends(c: &mut Command) -> (String, Option<i32>) {
 
 /// A decider that prints `frame` once, then sleeps (one Python process: a confined child forks
 /// nothing, CLIENT-48).
-fn stub(r: &Roots, names: Vec<Vec<u8>>) -> (PathBuf, PathBuf) {
+fn stub(r: &Roots, names: Vec<Vec<u8>>) -> (Vec<std::ffi::OsString>, PathBuf) {
     let dir = r.base.0.join("stub");
     nanodregg_devtools::mkdirs(&dir).unwrap();
     let mut f = Vec::new();
     write_frame(&mut f, &Verdict::Residents { names }.encode().unwrap()).unwrap();
     fs::write(dir.join("frame"), f).unwrap();
-    let sh = r.base.0.join("stub.py");
-    fs::write(
-        &sh,
-        "#!/usr/bin/python3 -I\nimport sys,time\nsys.stdout.buffer.write(open(sys.argv[1]+'/frame','rb').read()); sys.stdout.flush()\ntime.sleep(30)\n",
-    )
-    .unwrap();
-    fs::set_permissions(&sh, fs::Permissions::from_mode(0o700)).unwrap();
-    (sh, dir)
+    let py = "import sys,time\nsys.stdout.buffer.write(open(sys.argv[1]+'/frame','rb').read()); sys.stdout.flush()\ntime.sleep(30)\n";
+    (python_c(py, &dir), dir)
 }
 
 /// Every own end by name and code (`members_exit`, Lean's `Hosting.MembersExit`), and a World past
@@ -925,15 +930,15 @@ fn nd_members_ends_by_name() {
     let (l, c) = ends(&mut argv(&w, &r, me, Path::new("/usr/bin/false"), &[]));
     assert_eq!(c, Some(i32::from(members_exit::DECIDER_MECHANISM)), "{l}");
     // a name that is not a grain directory name, and a World past the bound
-    let (sh, dir) = stub(&r, vec![b"../x".to_vec()]);
+    let (py, dir) = stub(&r, vec![b"../x".to_vec()]);
     let (l, c) = ends(&mut argv_over(
         &w,
         &r,
         me,
         &dir,
         &nd(),
-        &sh,
-        &[dir.as_os_str()],
+        Path::new(PY),
+        &os(&py),
     ));
     assert_eq!(
         c,
@@ -943,15 +948,15 @@ fn nd_members_ends_by_name() {
     let past: Vec<Vec<u8>> = (0..1025)
         .map(|i| format!("{i:064x}").into_bytes())
         .collect();
-    let (sh, dir) = stub(&r, past);
+    let (py, dir) = stub(&r, past);
     let (l, c) = ends(&mut argv_over(
         &w,
         &r,
         me,
         &dir,
         &nd(),
-        &sh,
-        &[dir.as_os_str()],
+        Path::new(PY),
+        &os(&py),
     ));
     assert_eq!(
         c,
@@ -965,9 +970,9 @@ fn nd_members_ends_by_name() {
     let at: Vec<Vec<u8>> = (0..1024)
         .map(|i| format!("{i:064x}").into_bytes())
         .collect();
-    let (sh, dir) = stub(&r, at);
+    let (py, dir) = stub(&r, at);
     let run = Logged::spawn(
-        argv_over(&w, &r, me, &dir, &nd(), &sh, &[dir.as_os_str()]),
+        argv_over(&w, &r, me, &dir, &nd(), Path::new(PY), &os(&py)),
         r.base.0.join("bound.pid"),
     );
     until(

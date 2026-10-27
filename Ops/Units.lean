@@ -87,6 +87,10 @@ structure Node where
   file and renders no flag. A follower is the archive and never takes it: the default is `none`, and a
   follow node that sets it is refused -/
   retain : Option Nat := none
+  /-- the Landlock ABI nd-supervise must find or refuse to launch (`--landlock-abi N`, CLIENT-52);
+  `0` renders no flag (the sandbox's floor, ABI 3). The production units ask for 6, the ABI that
+  scopes signals and abstract sockets to the confined child -/
+  landlockAbi : Nat := 0
   deriving Repr
 
 inductive Refusal where
@@ -156,13 +160,17 @@ structure Service where
 def supervisor (n : Node) : String := n.bin ++ "/nd-supervise"
 def hostExe (n : Node) : String := n.bin ++ "/host"
 
+/-- `--landlock-abi N` when the node requires an ABI above the floor, else nothing. -/
+def Node.abiArgs (n : Node) : List Arg :=
+  if n.landlockAbi = 0 then [] else [.lit "--landlock-abi", .lit (toString n.landlockAbi)]
+
 /-- nd-supervise's grammar applied to the node: socket, `--write STORE`, `--exec HOST` (the
 program must lie under a read or exec entry, CLIENT's `ProgramOutside`; without it every unit
 exits 64 refusedAtLaunch, found by running the rendered argv on hbox), every `--hide`, `--`, the
 host program and its arguments. -/
 def Node.exec (n : Node) : List Arg :=
   [.lit (supervisor n), .lit n.sock, .lit "--write", .lit n.store, .lit "--exec", .lit (hostExe n)] ++
-  (if n.group then [.lit "--group", .var envGid] else []) ++
+  (if n.group then [.lit "--group", .var envGid] else []) ++ n.abiArgs ++
   n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++ [.lit "--", .lit (hostExe n)] ++ n.args
 
 /-- Every path checks, or the first that does not. -/
@@ -211,6 +219,78 @@ def spaced (xs : List String) : String := " ".intercalate xs
 `Hosting.startIntervalSeconds`) is HOSTING's: nd-members applies the same one per resident. -/
 def stopSeconds : Nat := 10
 
+/-! ## The production confinement profile (CLIENT-52)
+
+A system unit runs nd-supervise and its confined child inside the service manager's own sandbox:
+CRIT-SANDBOX's third change, an explicit profile whose prerequisites the unit enforces. These are
+the lines `deploy/live/confined-unit.sh` reads back out of the rendered writer unit and runs the
+writer (and the probe, `sandbox-probe`) under, so the measured profile is the shipped one.
+
+- Mounts: the whole tree read-only but the Store and the socket's directory (`ReadWritePaths`), the
+  Store not executable (`NoExecPaths`: the ELF loader cannot map a file the child wrote, the one
+  path the sandbox alone leaves, sandbox/tests/probe.rs), no home, a private /tmp, /dev and IPC.
+- Kernel surface: the service manager's syscall filter (`@system-service @sandbox`: Landlock and
+  seccomp are what nd-supervise's child calls), no namespaces, no realtime, no SUID/SGID, no W^X
+  mappings, native syscalls only, no capability in the bounding set, AF_UNIX only, no IP.
+- Finite resources: memory, tasks, open files and the size of one file. The Store's total size is
+  NOT a unit property: `/srv/nd/store` is its own fixed-size filesystem (RUNBOOK §2), because
+  `MemoryMax` bounds no write and systemd before 258 has no directory quota.
+
+The numbers: `MemoryMax` is twice what a writer at `worldBytesDerived` (~88 MiB encoded) was seen to
+need with headroom for one 16 MiB record batch; `LimitFSIZE` is well above the largest base file
+(`baseRecordMax`, ~88 MiB) and a sealed segment; `LimitNOFILE` above nd-supervise's 73 (CLIENT-28)
+plus the Host's Store files. -/
+
+def profileMemoryMax : String := "2G"
+def profileTasksMax : Nat := 64
+def profileNoFile : Nat := 1024
+def profileFileSize : String := "4G"
+
+/-- The directory a path names its file in (`/run/nd-follow/%i.sock` → `/run/nd-follow`). -/
+def dirOf (p : String) : String :=
+  ((System.FilePath.mk p).parent.map (·.toString)).getD p
+
+/-- The writable paths of a node's unit: its Store, and its socket's directory unless systemd makes
+that directory (`RuntimeDirectory=`, writable by construction). -/
+def Node.writable (n : Node) : List String :=
+  [n.store] ++ (match n.runtime with | some _ => [] | none => [dirOf n.sock])
+
+/-- The profile's lines for a system unit (`User=` set); a user unit gets none (a user manager
+cannot apply most of them). -/
+def Node.profile (n : Node) : List String :=
+  if n.user.isNone then [] else [
+    "ProtectSystem=strict",
+    s!"ReadWritePaths={spaced n.writable}",
+    s!"NoExecPaths={n.store}",
+    "ProtectHome=yes",
+    "PrivateTmp=yes",
+    "PrivateDevices=yes",
+    "PrivateIPC=yes",
+    "ProtectProc=invisible",
+    "ProcSubset=pid",
+    "ProtectKernelTunables=yes",
+    "ProtectKernelModules=yes",
+    "ProtectKernelLogs=yes",
+    "ProtectControlGroups=yes",
+    "ProtectClock=yes",
+    "ProtectHostname=yes",
+    "RestrictRealtime=yes",
+    "RestrictSUIDSGID=yes",
+    "LockPersonality=yes",
+    "MemoryDenyWriteExecute=yes",
+    "RemoveIPC=yes",
+    "SystemCallArchitectures=native",
+    "SystemCallFilter=@system-service @sandbox",
+    "SystemCallErrorNumber=EPERM",
+    "CapabilityBoundingSet=",
+    "RestrictNamespaces=yes",
+    "IPAddressDeny=any",
+    "RestrictAddressFamilies=AF_UNIX",
+    s!"MemoryMax={profileMemoryMax}",
+    s!"TasksMax={profileTasksMax}",
+    s!"LimitNOFILE={profileNoFile}",
+    s!"LimitFSIZE={profileFileSize}"]
+
 def Service.systemd (u : Service) : String :=
   let n := u.node
   let env := match n.role with
@@ -237,7 +317,7 @@ def Service.systemd (u : Service) : String :=
     s!"RestartSec={Hosting.restartSeconds}",
     s!"RestartPreventExitStatus={spaced (u.prevent.map toString)}",
     "UMask=0077",
-    "NoNewPrivileges=yes",
+    "NoNewPrivileges=yes"] ++ n.profile ++ [
     s!"TimeoutStopSec={stopSeconds}",
     "",
     "[Install]",
@@ -517,7 +597,8 @@ def Broker.systemd (b : Broker) : Except Refusal String := do
 /-- The writer's node: a system unit, user `nd`. -/
 def writer : Node :=
   { name := "nd-host-serve", role := .serve, bin := "/opt/nd/bin", store := "/srv/nd/store",
-    socket := Hosting.hostSockName, hide := ["/srv/nd/ws", "/home"], user := some "nd", runtime := some "nd" }
+    socket := Hosting.hostSockName, hide := ["/srv/nd/ws", "/home"], user := some "nd", runtime := some "nd",
+    landlockAbi := 6 }
 
 /-- A member machine: a user unit, the member's own follow Store, its workspace hidden. -/
 def member : Node :=
@@ -533,7 +614,7 @@ def hostedFollower : Node :=
   { name := "nd-hosted-follow", role := .follow, bin := "/opt/nd/bin",
     store := "/srv/nd-hosted/worlds/%i/store", socket := "/run/nd-follow/%i.sock",
     hide := ["/etc/nd", "/home"], user := some "nd-hosted", envDir := "/etc/nd/hosted",
-    template := true, group := true }
+    template := true, group := true, landlockAbi := 6 }
 
 /-- The follower sockets' directory: owned by the hosted user, group the writer's user, 02710
 (CLIENT-21 refuses any other shape at launch, `sharedDirRefused` / `groupMismatch`). -/

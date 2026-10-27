@@ -17,6 +17,9 @@
 //!   and layout code), then print `ok <exit> <stdout>` (or `<stderr>` when the exit is not OK),
 //!   newlines as `|`.
 //!
+//! Placed under the name `killself` it SIGKILLs itself at once (the launcher tests' signalled
+//! decider and controller, CLIENT-52: a compiled program, so no `#!` interpreter needs an exec grant).
+//!
 //! It finds itself by argv[0] (no /proc: the sandbox grants none). Exit 3 when it cannot write its own volume.
 //!
 //! Run in `nd`'s place by nd-members (`launcher/tests/members.rs`, HOSTING-32) it is started as
@@ -176,6 +179,18 @@ fn attempt(op: &str, path: &str, recv: &Path) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<PathBuf> = std::env::args_os().map(PathBuf::from).collect();
+    // Placed as `killself`, the probe is the decider or controller that a signal ends: it SIGKILLs
+    // itself at once (a signal to itself is what the confinement allows), so a launcher test sees
+    // a child killed by a signal with no interpreter involved.
+    if args
+        .first()
+        .and_then(|a| a.file_name())
+        .is_some_and(|n| n == "killself")
+    {
+        let _ =
+            rustix::process::kill_process(rustix::process::getpid(), rustix::process::Signal::KILL);
+        return ExitCode::from(2);
+    }
     let (pkg, vol) = match args.as_slice() {
         [_, flag, ws, ..] if flag.as_os_str() == "--stdio" => (ws.clone(), ws.clone()),
         [me, ..] => {

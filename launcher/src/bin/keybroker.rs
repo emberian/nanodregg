@@ -387,6 +387,7 @@ fn run() -> End {
         exec: vec![decider.clone()],
         hidden: vec![keys_path.clone()],
         connect: vec![],
+        landlock_abi: 0,
     };
     let t0 = OsString::from(now_ms().to_string());
     let slots = OsString::from(

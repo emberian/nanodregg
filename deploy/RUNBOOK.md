@@ -55,7 +55,22 @@ Writer's node (systemd system unit, `deploy/units/linux/nd-host-serve.service`, 
 `emit-units deploy/units` from Host.Status and Protocol.SupervisorExit; `gates/generated.tsv`
 refuses a unit file that differs from the tables):
 
-    nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
+    nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --landlock-abi 6 --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
+
+THE PRODUCTION PROFILE (CLIENT-52). The writer's and the hosted follower's units carry the confinement
+profile `Ops.Units.Node.profile` renders: the tree read-only but the Store (and the follower's socket
+directory), the Store `NoExecPaths`, no home, private /tmp, /dev and IPC, the kernel-surface lines
+(`SystemCallFilter=@system-service @sandbox`, `RestrictNamespaces=yes`, `MemoryDenyWriteExecute=yes`,
+`CapabilityBoundingSet=`, `RestrictAddressFamilies=AF_UNIX`, `IPAddressDeny=any`, …) and finite
+resources (`MemoryMax=2G`, `TasksMax=64`, `LimitNOFILE=1024`, `LimitFSIZE=4G`). `--landlock-abi 6`
+makes nd-supervise refuse to launch on a kernel below Landlock ABI 6 (Debian 13's 6.12; exit 64,
+`confine: landlock ABI 5, the policy requires 6` on stderr), never run with less; every start logs
+`nd-supervise: confine: landlock ABI N: full|PARTIAL …`. nd-supervise itself refuses to run as root or
+holding a capability (`privileged`). THE STORE'S TOTAL SIZE IS THE OPERATOR'S: `/srv/nd/store` (and each
+`/srv/nd-hosted/worlds/<label>/store`) is its own fixed-size filesystem or carries an XFS/ext4 project
+quota, because no unit line bounds total writes (`MemoryMax` bounds memory, `LimitFSIZE` one file).
+`deploy/live/confined-unit.sh` runs the writer, and with `PROBE=1` the sandbox probe, under exactly
+these lines read back out of the rendered unit.
 
 RETENTION (HOST-64, KERNEL-44 Part 2). The unit above keeps every file, the default: no `--retain` is rendered. To
 keep only the newest N segment files, set the node's `retain` in Ops/Units.lean (`Node.retain := some N`) and

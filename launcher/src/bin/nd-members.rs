@@ -255,6 +255,7 @@ fn run() -> End {
         exec: vec![decider_path.clone()],
         hidden: [members, state].into_iter().chain(hidden).collect(),
         connect: vec![],
+        landlock_abi: 0,
     };
     let dargs: Vec<&OsStr> = dargs.iter().map(OsString::as_os_str).collect();
     let spawned = command(&policy, decider_path.as_os_str(), &dargs)

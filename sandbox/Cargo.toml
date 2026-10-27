@@ -10,7 +10,7 @@ description = "Launch a child under one confinement shape, and read a custody fi
 path = "src/lib.rs"
 
 [dependencies]
-rustix = { version = "=1.1.2", default-features = false, features = ["std", "fs", "process", "net"] }
+rustix = { version = "=1.1.2", default-features = false, features = ["std", "fs", "process", "net", "thread", "event"] }
 zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
 # Linux self-confinement (CLIENT-48): Landlock rules and seccomp programs built in the launcher,
@@ -20,12 +20,15 @@ landlock = { version = "=0.4.5", default-features = false }
 seccompiler = { version = "=0.4.0", default-features = false }
 libc = { version = "=0.2.190", default-features = false }
 
+# src/bin/sandbox-probe.rs: the probe plant tests/probe.rs runs confined (CLIENT-52).
+
 [dev-dependencies]
 nanodregg-devtools = { path = "../devtools" }
 
 [lints.rust]
-# deny, not forbid: exactly two sites allow it (the pre-exec step in linux.rs, the connector's
-# descriptor claim in connector.rs), each with its SAFETY argument.
+# deny, not forbid: the library allows it at its few sites (the pre-exec step and the ABI query in
+# linux.rs, the connector's descriptor claim in connector.rs), each with its SAFETY argument; the
+# probe plant (src/bin/sandbox-probe.rs) allows it whole, for its raw system calls.
 unsafe_code = "deny"
 missing_docs = "warn"
 

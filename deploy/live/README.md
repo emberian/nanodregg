@@ -14,8 +14,10 @@ in `/sys/kernel/security/lsm`). Without it every launch is `MechanismMissing` (e
 fallback. The runs below until 2026-10-27 were made under the retired bwrap mechanism
 (`/usr/local/libexec/nd-bwrap`).
 
-On Linux the sandbox does not filter exec (`EXEC_FILTERED = false`, b487eef): `--exec` bounds what
-is visible, not what may run.
+Since CLIENT-48 Linux filters exec: Landlock lets a child execute only its program, its `--exec`
+entries and the runtime manifest's loader. `confined-unit.sh` runs the writer under the production
+profile read out of the rendered writer unit (CLIENT-52); `PROBE=1 confined-unit.sh` runs the sandbox
+probe (`sandbox-probe`) there instead and prints each refused operation.
 
 ## Run 1 — burst5-a, 2026-10-17 10:22Z (main 4ae6608 + fd1d4b2 binaries, built on hbox)
 

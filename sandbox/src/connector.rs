@@ -8,13 +8,14 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use crate::linux::CONNECTOR_ENV;
 
 /// The connector, one ask at a time (an ask is a send and its reply; two threads interleaving would
-/// read each other's).
-pub(crate) struct Connector(Mutex<OwnedFd>);
+/// read each other's), with the count of replies owed to asks that timed out (`linux::ask`).
+pub(crate) struct Connector(Mutex<(OwnedFd, u32)>);
 
 impl Connector {
     pub(crate) fn ask(&self, path: &Path) -> io::Result<OwnedFd> {
-        let fd = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        crate::linux::ask(&fd, path)
+        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let (fd, owed) = &mut *held;
+        crate::linux::ask(fd, owed, path)
     }
 }
 
@@ -37,7 +38,7 @@ pub(crate) fn get() -> io::Result<Option<&'static Connector>> {
         #[allow(unsafe_code)]
         let fd = unsafe { OwnedFd::from_raw_fd(n) };
         match rustix::net::sockopt::socket_type(&fd) {
-            Ok(rustix::net::SocketType::SEQPACKET) => Ok(Some(Connector(Mutex::new(fd)))),
+            Ok(rustix::net::SocketType::SEQPACKET) => Ok(Some(Connector(Mutex::new((fd, 0))))),
             _ => {
                 // not ours to close: forget it rather than close a descriptor we do not own
                 std::mem::forget(fd);

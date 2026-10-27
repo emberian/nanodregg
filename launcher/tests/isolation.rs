@@ -663,11 +663,10 @@ fn a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name() 
     }
     // a controller KILLED by a signal is controllerSignaled, restartable
     let t = tree("killed");
-    let src = t.root.join("killself.src");
-    fs::write(&src, b"#!/bin/sh\nkill -9 $$\n").unwrap();
-    fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
+    // the probe placed as `killself` SIGKILLs itself (no interpreter: a `#!` script would need its
+    // shell granted exec, which the sandbox no longer infers)
     let killer = t.root.join("killself");
-    place_exe(&src, &killer);
+    place_exe(Path::new(env!("CARGO_BIN_EXE_probe")), &killer);
     let (err, code) = run(&t, &killer);
     assert!(
         err.contains("grain-launch: controllerSignaled"),
