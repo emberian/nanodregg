@@ -74,7 +74,11 @@ claims above are their components, and what is owed is listed beside each:
   the member trusts. Under an arbitrary relay A1 is FALSE today: a forged continuation makes a fresh
   member adopt any base the forger pinned (SPEC-4). Deleted by keeping the command's state inside
   follow (TOPLEVEL-SPEC §11.2).
-* **`NoRef`** (B3): the chain lift exists for laws without holes only (TOPLEVEL-SPEC §11.6).
+* **`NoRef`** (B3): the chain lift exists for laws that name no closure package: `Lang.NoRef t`
+  (`Lang/Proofs/Receiver.lean`) says no `ref` occurs anywhere in `t`, so relocation is the identity on it
+  (TOPLEVEL-SPEC §11.6). It is not "no holes": a hole is `NoRef` when its substitution's terms are, so
+  contextual laws are inside the fragment, and the chain clause does not by itself say a hole-bearing
+  law was judged at its contextual reference meaning under the pins it depended on (CRIT-SPEC).
 * **`HeadOf`** (§9): the held head's roots are those of a fold of A from A's genesis. Undischargeable
   today (PROTOCOL E-3: heads are posted by grantees, unsigned by A's writer). Deleted by writer-signed
   step-indexed heads (TOPLEVEL-SPEC §9).
