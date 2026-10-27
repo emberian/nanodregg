@@ -68,10 +68,16 @@ half_wasm() {
   sed 's/^#define LEAN_PLATFORM_TARGET .*/#define LEAN_PLATFORM_TARGET "wasm32-unknown-emscripten"/' "$T/include/lean/version.h" > "$work/gen/lean/version.h"
   echo "#define LEAN_GITHASH \"$(git -C "$lean4" rev-parse HEAD)\"" > "$work/gen/githash.h"
   local inc="-I$work/gen -I$lean4/src/include -I$lean4/src -I$work/libuv/include"
+  # a runtime object is named by its source's content, as a tree object is: a patch (patch-rt.sh) or a
+  # new runtime recompiles exactly what changed, and the archive holds only this source's objects
+  local rto=()
   for o in debug thread mpz utf8 object apply exception interrupt memory stackinfo compact init_module io hash byteslice platform alloc allocprof sharecommon stack_overflow process object_ref mpn mutex libuv uv/net_addr uv/event_loop uv/timer uv/tcp uv/udp uv/dns uv/system uv/signal; do
-    [ -f "$work/rt/$o.o" ] || em++ -std=c++20 -O2 -fwasm-exceptions -DLEAN_EMSCRIPTEN -DLEAN_EXPORTING -DNDEBUG $inc -c "$lean4/src/runtime/$o.cpp" -o "$work/rt/$o.o"
+    local h; h=$(cat "$lean4/src/runtime/$o.cpp" "$lean4"/src/runtime/*.h | sha256sum | cut -c1-16)
+    local f="$work/rt/$o-$h.o"
+    [ -f "$f" ] || em++ -std=c++20 -O2 -fwasm-exceptions -DLEAN_EMSCRIPTEN -DLEAN_EXPORTING -DNDEBUG $inc -c "$lean4/src/runtime/$o.cpp" -o "$f"
+    rto+=("$f")
   done
-  rm -f "$work/rt/libleanrt.a"; emar rcs "$work/rt/libleanrt.a" "$work"/rt/*.o "$work"/rt/uv/*.o
+  rm -f "$work/rt/libleanrt.a"; emar rcs "$work/rt/libleanrt.a" "${rto[@]}"
   # an object is named by its C's content (a flag day re-emits the tree's C; a WORK shared by several
   # trees, testground/build/gate.sh's, never links another tree's object under a matching mtime)
   printf '#!/bin/sh\nh=$(sha256sum < $1 | cut -c1-16); o=%s/obj/$(basename $1 .c)-$h.o\n[ -s $o ] || { emcc -Os -fwasm-exceptions -DLEAN_EMSCRIPTEN -DNDEBUG %s -w -c $1 -o $o.$$ && mv $o.$$ $o; } || exit 1\ntouch $o; echo $o\n' \
