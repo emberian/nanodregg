@@ -43,7 +43,9 @@ def grammar : String :=
   "decl    ::= (type N T) | (state T) | (import N \"hex\") | (layer N) | (doc \"text\")\n" ++
   "          | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)] [(holds f)])\n" ++
   "          | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] [(effect (moves n))] body)\n" ++
-  "          kind    ::= account | credit | grant | install | transfer | (invoke T)   — T the argument the invoke sends (LANG-77)\n" ++
+  "          kind    ::= account | credit | grant | install | transfer | (invoke T) | (createOf T)\n" ++
+  "                      T of an invoke the argument it sends (LANG-77); T of a createOf the state of the object it births (LANG-96)\n" ++
+  "          item    ::= (kind (f e)…), in `done`: (install (pkg e)) | (createOf (pkg e) (state e)) | (transfer …) | …\n" ++
   "          | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))\n" ++
   "          | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))\n" ++
   "          | (activity cursor log [(limits cursorLimit logLimit)] [(patience n)] [(withdraw)] [(expose m…)]\n" ++
@@ -376,7 +378,12 @@ def doneSx (c : Ctx) (p : Nat) (st : SExp) (items : List Item) : P SExp := do
       L p [A p "edits", L p (A p "record" :: eSlots)], L p [A p "state", st]])
   | _ => throw (.outOfPlace p "done")
 
-def callKinds : List Label := (callArms (some (.record []))).map (·.1)
+/-- A slot that may both `invoke` with an argument of type `A` and `createOf` an object of state type `T`,
+and may make the other `kinds`. -/
+def invokeCreateOfSlot (A T : Ty) (kinds : List Label := []) : Ty :=
+  .sum ((callArms (some A) (some T)).filter fun a => a.1 == "invoke" || a.1 == "createOf" || kinds.contains a.1)
+
+def callKinds : List Label := (callArms (some (.record [])) (some (.record []))).map (·.1)
 
 /-- `(with e (f x)…)`: the full state record, each field given or `(. e f)`. -/
 def withSx (c : Ctx) (p : Nat) (e : SExp) (given : List (Label × SExp)) : SExp :=
@@ -606,8 +613,9 @@ def relDecl (c : Ctx) (p : Nat) (xs : List SExp) : P RelDecl := do
 structure MethodHead where
   reads : List (Label × RelRead) := []
   arg : SExp := .list 0 [.atom 0 "rec"]
-  /-- each slot: its kinds, and the argument type of its `(invoke T)` kind if it has one (LANG-77) -/
-  calls : List (List Label × Option SExp) := []
+  /-- each slot: its kinds, the argument type of its `(invoke T)` kind if it has one (LANG-77) and the state
+  type of its `(createOf T)` kind if it has one (LANG-96) -/
+  calls : List (List Label × Option SExp × Option SExp) := []
   edits : Nat := 0
   /-- `(effect (moves N))`: the method's grades (LANG-89) -/
   effect : Option Effect := none
@@ -650,15 +658,19 @@ def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
       | .list p kinds => do
         let mut labels : List Label := []
         let mut inv : Option SExp := none
+        let mut cre : Option SExp := none
         for k in kinds do
           match k with
           | .atom _ ℓ => labels := labels ++ [ℓ]
           | .list q [.atom _ "invoke", t] =>
             if inv.isSome then throw (.duplicate q "invoke")
             inv := some t
+          | .list q [.atom _ "createOf", t] =>
+            if cre.isSome then throw (.duplicate q "createOf")
+            cre := some t
           | x => throw (.read (.badLabel x.pos))
-        if labels.isEmpty && inv.isNone then throw (.badClause p)
-        pure (labels, inv)
+        if labels.isEmpty && inv.isNone && cre.isNone then throw (.badClause p)
+        pure (labels, inv, cre)
       | x => .error (.badClause x.pos)
     methodHead { h with calls } rest
   | .list _ [.atom _ "edits", .atom q n] :: rest =>
@@ -711,10 +723,12 @@ def methodSx (c : Ctx) (p : Nat) (xs : List SExp) : P (Ty × SExp × Ty × List 
     unless (Row.find? rel c.rels).isSome do throw (.noRel p rel)
   let (A', bounds) ← argTy c Read.depthMax [] h.arg
   let R := readsTy c.rels h.reads
-  let ks ← h.calls.mapM fun (kinds, inv) => do
-    match inv with
-    | some t => pure (invokeOf (← ty c Read.depthMax t) kinds)
-    | none => pure (callOf kinds)
+  let ks ← h.calls.mapM fun (kinds, inv, cre) => do
+    match inv, cre with
+    | some t, none => pure (invokeOf (← ty c Read.depthMax t) kinds)
+    | none, none => pure (callOf kinds)
+    | none, some T => pure (createOfSlot (← ty c Read.depthMax T) kinds)
+    | some t, some T => pure (invokeCreateOfSlot (← ty c Read.depthMax t) (← ty c Read.depthMax T) kinds)
   let E := editTy c.rels
   let res := resultTy c.state ks E h.edits
   let cm := { c with place := .method res ks h.edits h.reads }
@@ -799,6 +813,9 @@ structure Lowered where
   fields : List (Label × SExp × Nat)
   /-- each hole's surface name and its number (empty for a core text) -/
   holes : List (String × Nat) := []
+  /-- where a hole's guard and each candidate sit in the text: the hole's number, the candidate's index
+  (`none`: the guard) and the offset (for naming the line of a refusal about them) -/
+  sites : List (Nat × Option Nat × Nat) := []
 
 def readTermAt (sx : SExp) : P Term := liftR (Read.term Read.depthMax [] sx)
 
@@ -948,7 +965,7 @@ def holeSig (c : Ctx) (p : Nat) (xs : List SExp) : P (List (String × Ty × Opti
   | _ => throw (.badClause p)
 
 /-- One hole, lowered to the core's `HoleROM` at number `n`. -/
-def holeDecl (c : Ctx) (n p : Nat) (xs : List SExp) : P HoleROM := do
+def holeDecl (c : Ctx) (n p : Nat) (xs : List SExp) : P (HoleROM × List (Nat × Option Nat × Nat)) := do
   let (sig, sel, rest) ← match xs with
     | .list q sig :: .list r [.atom _ "select", .atom s rel, k] :: rest => pure ((q, sig), (r, s, rel, k), rest)
     | _ => throw (.badClause p)
@@ -969,8 +986,9 @@ def holeDecl (c : Ctx) (n p : Nat) (xs : List SExp) : P HoleROM := do
       let body ← liftR (Read.term Read.depthMax names (← term top Read.depthMax names e))
       pure ({ body, supports := ← pins.mapM (pinOf c) } : HoleCode)
     | y => throw (.badClause y.pos)
-  pure { name := n, ctx := bs.map (·.2.1), ty := T, code, selectionRel := selRel, selectionKey := selKey,
-         hypotheses := bs.map (·.2.2), guardPin, guard }
+  let sites := (n, none, g.pos) :: rest.zipIdx.map fun (x, i) => (n, some i, x.pos)
+  pure ({ name := n, ctx := bs.map (·.2.1), ty := T, code, selectionRel := selRel, selectionKey := selKey,
+          hypotheses := bs.map (·.2.2), guardPin, guard }, sites)
 
 /-- Each field the layer adds: never a law of the super (`overridesLaw`), and a field the super
 has only at the super's own type (`retypedOverride`). -/
@@ -1060,7 +1078,9 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
   c := { c with state := S, rels, methods := allMethods, activityCode, layered := sup.isSome }
   -- holes (LANG-104): numbered in declared order, each name once; a body names them through `c.holes`
   unique p [] (d.holes.map (·.2.1))
-  let holes ← d.holes.zipIdx.mapM fun ((q, _, xs), i) => holeDecl c i q xs
+  let holeParts ← d.holes.zipIdx.mapM fun ((q, _, xs), i) => holeDecl c i q xs
+  let holes := holeParts.map (·.1)
+  let holeSites := holeParts.flatMap (·.2)
   let holeNames := d.holes.zipIdx.map fun ((_, u, _), i) => (u, i)
   c := { c with holes := holeNames }
   -- methods
@@ -1129,7 +1149,7 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
     -- a layer's doc is its own (the super's is the super's)
     pure ⟨{ ← layerOf (fun ℓ => ((Row.find? ℓ sxs).map (·.1.pos)).getD p) sid P fields lawLabels
       (allMethods.drop P.methods.length) with
-        doc, effects := Row.sort (P.effects ++ effects), claims := d.claims.map (·.2) }, sxs, []⟩
+        doc, effects := Row.sort (P.effects ++ effects), claims := d.claims.map (·.2) }, sxs, [], []⟩
   | none =>
     let imports ← d.imports.mapM fun (q, _, h) =>
       match Read.unhex .empty h.toList with
@@ -1140,7 +1160,7 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
             body := .record (Row.sort (fields.map fun (ℓ, _, t) => (ℓ, t))),
             methods := allMethods,
             laws := (Row.sort (lawLabels.map (·, ()))).map (·.1), doc, effects, claims := d.claims.map (·.2),
-            holes }, sxs, holeNames⟩
+            holes }, sxs, holeNames, holeSites⟩
 
 /-- A core package text: `(package (imports …) …)`. -/
 def isCore : SExp → Bool
@@ -1150,12 +1170,12 @@ def isCore : SExp → Bool
 /-- The package a text means, with each field's core s-expression (empty for a core text). The
 surface's package is printed and read again by the one reader; a core text is read as it is. -/
 def readSExpWith (supers : List (ByteArray × Package)) (x : SExp) : P Lowered :=
-  if isCore x then do pure ⟨← liftR (Read.package x), [], []⟩
+  if isCore x then do pure ⟨← liftR (Read.package x), [], [], []⟩
   else match x with
     | .list p (.atom _ "package" :: ds) => do
       let l ← lower supers p ds
       match Print.package l.pkg with
-      | some t => do pure ⟨← liftR (Read.readPackage t), l.fields, l.holes⟩
+      | some t => do pure ⟨← liftR (Read.readPackage t), l.fields, l.holes, l.sites⟩
       | none => throw (.unprintable p)
     | y => .error (.notSurface y.pos)
 

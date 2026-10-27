@@ -543,7 +543,7 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
         labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, hxE, hC, hfit]
   obtain ⟨text, ht⟩ := Option.isSome_iff_exists.mp htext
   have hread := readPackage_closedText (checkShape_wf hshape).1 (checkShape_wf hshape).2
-    (checkFields_rels hfields) (hasType_canon hΔ (by simp) (inferE_sound hT)) he
+    (checkFields_rels hfields) (hasType_canon hΔ (by simp) (by simp) (inferE_sound hT)) he
     (checkFields_produces_wf hfields) ht
   simp [package, ht, he]
 
@@ -690,5 +690,87 @@ reads as no package, and the same tree with `ab` reads. -/
 theorem spaced_label_tree_refused : (Wire.packageOf (labelTree "a b")).isNone = true := by decide +kernel
 
 theorem atom_label_tree_reads : (Wire.packageOf (labelTree "ab")).isSome = true := by decide +kernel
+
+/-! ## A checked contextual package reads back from its text (LANG-106)
+
+`HolePrintable` was a premise of the hole round trip. The contextual install check
+(`Package.checkContextual`) guarantees it: a hole that passes `HoleROM.check` has canonical context and
+result types (the check's first clause), a guard that types at `bool` and candidates that type, and a
+typed term is canonical (`hasType_canon`, which holds at a nonempty hole signature once the signature's
+types are canonical). The body is checked against `holeSignature p.holes`, so its canonicity needs that
+generality. -/
+
+theorem exists_zipIdx {α : Type} : ∀ (l : List α) (k : Nat) (c : α), c ∈ l → ∃ i, (c, i) ∈ l.zipIdx k
+  | [], _, _, h => by simp at h
+  | a :: l, k, c, h => by
+    simp only [List.mem_cons] at h
+    rcases h with rfl | h
+    · exact ⟨k, by simp [List.zipIdx_cons]⟩
+    · obtain ⟨i, hi⟩ := exists_zipIdx l (k + 1) c h
+      exact ⟨i, by simp [List.zipIdx_cons, hi]⟩
+
+theorem holeCheck_printable {Δ : List Ty} {h : HoleROM} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hc : h.check Δ = .ok ()) : HolePrintable h := by
+  unfold HoleROM.check at hc
+  simp only [bind, Except.bind, pure, Except.pure] at hc
+  repeat' split at hc
+  all_goals first | (simp at hc; done) | skip
+  rename_i hty _ _ _ hg _ _ hfor
+  have hty' : (h.ctx.all Ty.wf && h.ty.wf) = true := by simpa using hty
+  simp only [Bool.and_eq_true] at hty'
+  have hctx : ∀ A ∈ h.ctx, A.wf = true := fun A hA => List.all_eq_true.mp hty'.1 A hA
+  refine ⟨hty'.1, hty'.2, hasType_canon (Δ := []) (by simp) (by simp) (by intro A hA; simp at hA; subst hA; rfl) (inferE_sound hg), ?_⟩
+  intro c hcm
+  obtain ⟨i, hi⟩ := exists_zipIdx h.code 0 c hcm
+  refine forIn_yield_ok (fun x : HoleCode × Nat => Canon x.1.body) _ _ ?_ hfor (c, i) hi
+  intro x u st hst
+  split at hst
+  · rename_i T hT
+    split at hst
+    · cases hst
+      exact ⟨rfl, hasType_canon hΔ (by simp) hctx (inferE_sound hT)⟩
+    · cases hst
+  · cases hst
+
+theorem checkContextual_facts {Δ : List Ty} {p : Package} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hc : p.checkContextual Δ = .ok ()) :
+    p.checkShape = .ok () ∧ p.checkFields = .ok () ∧ (∀ h ∈ p.holes, HolePrintable h) ∧
+      checkE Δ p.body p.iface (Ω := holeSignature p.holes) = .ok () := by
+  unfold Package.checkContextual at hc
+  simp only [bind, Except.bind, pure, Except.pure] at hc
+  repeat' split at hc
+  all_goals first | (simp at hc; done) | skip
+  rename_i _ hsh _ hfi _ _ _ _ hfe _ hbody
+  refine ⟨hsh, hfi, ?_, hbody⟩
+  refine forIn_yield_ok (fun h : HoleROM => HolePrintable h) _ _ ?_ hfe
+  intro h u st hst
+  split at hst
+  · cases hst
+  · rename_i v hv
+    cases hst
+    exact ⟨rfl, holeCheck_printable hΔ hv⟩
+
+/-- **A package the contextual install check accepts reads back from its text** (LANG-106). The
+composition of the install check's guarantees (`checkContextual_facts`: every hole printable, the body
+typed at the hole signature and so canonical) with `package_eq_packageText` and
+`readPackage_packageText`: nothing is assumed of the package beyond that it checked and printed. -/
+theorem readPackage_checkedContextual {Δ : List Ty} {p : Package} {s : String} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hc : p.checkContextual Δ = .ok ()) (h : package p = some s) : Read.readPackage s = .ok p := by
+  obtain ⟨hsh, hfi, hh, hbody⟩ := checkContextual_facts hΔ hc
+  obtain ⟨hS, hI⟩ := checkShape_wf hsh
+  have hΩ : ∀ d ∈ holeSignature p.holes, d.ty.wf = true := by
+    intro d hd
+    simp only [holeSignature, List.mem_map] at hd
+    obtain ⟨hr, hm, rfl⟩ := hd
+    exact (hh hr hm).2.1
+  have hcanon : Canon p.body := by
+    unfold checkE at hbody
+    split at hbody
+    · rename_i T hT
+      exact hasType_canon hΔ hΩ (by simp) (inferE_sound_live hT)
+    · cases hbody
+  have hpw := checkFields_produces_wf hfi
+  rw [package_eq_packageText hS hI (checkFields_rels hfi) hcanon hh hpw] at h
+  exact readPackage_packageText hS hI (checkFields_rels hfi) hcanon hh hpw h
 
 end Nanodregg.Lang.Print

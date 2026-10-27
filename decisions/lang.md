@@ -7608,3 +7608,45 @@ The generator side:
 **Critique.** A view is the author's statement, not the World's: `ob` says what a run WOULD prepare on those facts, and a wrong view gives a confident wrong answer. That is the point (a client plans its pins from it) but it is not evidence about any World; the journey's RM16 is what ties the two together, on one program. The refusal text lists every blocked hole joined by `; `, while a run is refused only by the first hole it demands; `ob` cannot know which holes a run demands without running a method, which it does not. Install's admission is reached through `admitContextual` with a hand-built closure (`⟨[], [], sups⟩`, indices `0…n-1`); if `checkInstall` ever checks something before `admitContextual` that is not the imports' loading, `ob` will not see it — the call is the same function, the composition is not.
 
 **Meta-critique.** The pull was to give the view its own refusal names (`badFact`) and its own reader; it reads the same key literals as the surface (`Surface.keyLit`) and the same `#hex` atoms, so a view a surface author writes uses the forms the program uses. The second pull was a `(run P METHOD …)` that executes a method on the view; that needs state, arguments and a request, which is `law`'s shape for laws and a separate tool, and the hole's resolution is what the README's walk-through needed.
+
+## LANG-106 The contextual install check guarantees every hole printable: a package it accepts reads back from its text (2026-10-27; FAERIE-SURFACE; LANG-104's open item)
+
+**What was assumed.** LANG-104's round-trip theorems for holes took `HolePrintable` as a premise, and nothing proved the install check gives it, so "a checked contextual package reads back from its text" rested on `Print.package`'s dynamic re-read.
+
+**What changed.** `hasType_wf`, `fieldsTy_wf`, `armsTy_wf` (`Lang/Proofs/Canon.lean`) and `hasType_canon`, `fieldsTy_canon`, `armsTy_canon` (`Lang/Proofs/Print.lean`) are stated at any hole signature `Ω` whose types are well formed (the `.hole` rule: its type is `d.ty`, its substitution is canonical by `substTy_canon`); the `Ω = []` uses supply `by simp`. New in `Lang/Proofs/PrintWire.lean`: `holeCheck_printable` (`HoleROM.check` passing gives `HolePrintable`: the first clause makes context and result types `wf`, the guard types at `bool` so it is canonical, each candidate types so it is canonical), `checkContextual_facts` (a package `checkContextual` accepts passes `checkShape` and `checkFields`, has printable holes, and its body is typed at `holeSignature p.holes`), and the composed `readPackage_checkedContextual`: for canonical import interfaces, `p.checkContextual Δ = .ok ()` and `package p = some s` give `Read.readPackage s = .ok p`, through `package_eq_packageText` and `readPackage_packageText`. No existing statement changed (the lemmas gained an implicit `Ω` and one premise each, discharged at every old use).
+
+**Premise price.** The hole signature's types must be `wf`; `HoleROM.check` establishes it before the body is typed, and the new theorem takes it from the check, not as a premise. Nothing else.
+
+**What re-emits.** Nothing.
+
+**Critique.** The statement is about `Print.package` succeeding (`package p = some s`), which also needs the package within the wire's bounds; that is `package_prints`'s job for closed packages and no theorem yet gives it for a package with holes. So the composed theorem reads "if it prints, it reads back", not "it prints".
+
+**Meta-critique.** The pull was to leave `Ω` out and special-case the hole-free body; the hole signature is the one place the contextual check differs from the closed one, and generalising the mutual blocks costs one case (`.hole`) and one lemma.
+
+## LANG-107 `ob (check P)` names the line of an ill-typed guard or candidate (2026-10-27; FAERIE-SURFACE; LANG-SURFACE's open item)
+
+**What an author could not see.** `ob (check P)` on a package with holes answered `refused holeCandidateType 0 1` for a candidate of the wrong type: the hole and the candidate's index, with no place in the text. Closed packages already named a line (`illTyped … line N`).
+
+**What changed.** `Surface.Lowered.sites` records where each hole's guard (`none`) and each candidate (`some i`) sit in the text (`holeDecl` returns them; the positions are the reader's, as for fields). `Resident.checkLowered` on a package with holes re-runs `checkContextual` after a refusal and, for `holeGuardType n` and `holeCandidateType n i`, appends `line N` of that site. Other refusals are unchanged. Journey rows RM17 (candidate 1 written `true`: `refused holeCandidateType 0 1 line 8`, the line the candidate is on) and RM18 (a guard `3`: `refused holeGuardType 0 line 7`).
+
+**Premise price.** None: no theorem reads `Resident` or `Lowered`.
+
+**What re-emits.** Nothing. `Lowered` gained a field with a default; the core text path carries no sites.
+
+**Critique.** Only the two refusals about a hole's own terms name a line; a body that mentions a hole at the wrong type is an ordinary `bodyType` path in a field and is named by the existing field locator only on closed packages. A package with holes whose body is ill typed still answers with the path, no line.
+
+**Meta-critique.** The pull was to thread a position through `HoleRefusal` itself; the core refusal is the wire text a run prints and has no business holding surface offsets. The surface keeps the offsets and the resident joins them.
+
+## LANG-108 `(createOf T)` in the surface: a method written in text returns `createOf` and the object is born (2026-10-27; FAERIE-SURFACE; LANG-SURFACE's open item)
+
+**What a program could not say.** The core has the `createOf` call arm (KERNEL-77, LANG-96) and `Std.templateCreator` builds methods that return it, but the surface had call kinds `account credit grant install transfer (invoke T)` only, so a creator could not be written as text.
+
+**What changed.** `Lang/Surface.lean`: a call slot lists `(createOf T)`, T the state type of the object the call births (a record), beside the atoms and `(invoke T)`: `(calls ((createOf (rec (n nat)))))`. It lowers to `createOfSlot`, or `invokeCreateOfSlot` with an `invoke` kind in the same slot (new, `callArms` already had the combined case). In `done`, `(createOf (pkg e) (state e))` is the item; `callKinds` includes `createOf`, so a slot without the arm refuses `callKind createOf`. The reader and printer need no case: the call is an `inj` into the slot's sum and the core text already prints and reads it, so no round-trip statement changed. `Surface.grammar` shows the kind and the item forms. Journey GN25: a creator written in surface text is installed, created and invoked; the Turn bears B's object of the package (owned by B) and the package cell; the same text with an `install` slot is refused `callKind createOf`. `docs/spec/2-structure.md` §2.9.4 gives the surface spelling.
+
+**Premise price.** None.
+
+**What re-emits.** Nothing. The README's `spawn` generates a parameter package by `install`, which is the point of that method (the generated package is the output and is read back in RM12); `createOf` would birth an object, a different story, so the README is unchanged.
+
+**Critique.** `(createOf T)` repeats the state type in the slot and in the state record of the item; the core does the same (`createOfArm T`). The surface could infer T from the item but a slot is declared before the body is read, and the interface is the package's contract.
+
+**Meta-critique.** The pull was to name the kind `(create T)`. The core calls it `createOf`, the spec table calls it `createOf`, and a third spelling is the kind of drift this layer exists to prevent.

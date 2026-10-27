@@ -64,6 +64,10 @@ kernel's `Program` (the deployed receipt check at the Sim's parameters, as `Lang
   `produces generate: lacks reset` (`runMeasured_produces`), nothing born.
 * GN24 a bounded package whose `set` (no install or createOf arm) declares it produces an interface:
   install refused `badProduces set`.
+* GN25 (LANG-108) a creator WRITTEN IN SURFACE TEXT: a method with a `(createOf (rec (n nat)))` slot whose
+  `done` returns `(createOf (pkg #bytes) (state (record (n 5))))`. B installs it, creates C, and makes: the
+  ONE Turn bears B's object of the package id (owned by B) and then the package. The same text with an
+  `install` slot is refused `callKind createOf` when it is read.
 -/
 import Lang.Journey.Head
 import Lang.StdGen
@@ -345,6 +349,24 @@ def genRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
     | some nb => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id]) (.install nb))
   r := note r48 s!"GN24 a bounded package whose set declares it produces an interface: {v48}"
     (programRefused v48 "badProduces set")
+  -- GN25 (LANG-108) a creator written in surface text: its method returns `createOf` and the object is born
+  let (eid250, bytes250) := pkgIdOf 250
+  let creatorText (kind : String) : String :=
+    s!"(package (doc \"makes its invoker a bounded object\") (state (rec)) (method make (calls ({kind})) (done state (createOf (pkg #{Print.hex bytes250}) (state (record (n 5)))))))"
+  let creatorOk := Surface.readPackage (creatorText "(createOf (rec (n nat)))")
+  let creatorRefused := match Surface.readWith [] (creatorText "install") with
+    | .error (.callKind _ k) => k == "createOf"
+    | _ => false
+  let (r49, v49, g49?) := match creatorOk with
+    | .ok cp => generator r "GN25" cp
+    | .error e => (r, s!"GN25 the creator text is refused: {e.name}", none)
+  let some (cpkg6, C6) := g49? | return note r49 s!"GN25 {v49}" false
+  let (r50, v50, t50) := go prog r49 (Sim.signed r49.st b b.key (Sim.S.pinsFor r49.st.host [b.id, C6, cpkg6])
+    (.invoke C6 0 (genArg.getD .empty) 1000000 none))
+  let born50 := (t50.map createdIds).getD []
+  let some O6 := bornOf t50 | return note r50 s!"GN25 B makes: {v50}" false
+  r := note r50 s!"GN25 a creator written as surface text (a slot `(createOf (rec (n nat)))`, an item `(createOf (pkg #bytes) (state (record (n 5))))`) is installed and created ({v49}); B makes: {v50}; the ONE Turn bears {born50.length} cells, B's object of the package id owned by B, then the package: {ownedBy r50 O6 b eid250 && born50.getLast? == some eid250}; the same text with an `install` slot is refused callKind createOf: {creatorRefused}"
+    (v50 == "admitted" && born50.length == 2 && ownedBy r50 O6 b eid250 && born50.getLast? == some eid250 && creatorRefused)
   return r
 
 /-- A fresh session for the GN rows. -/

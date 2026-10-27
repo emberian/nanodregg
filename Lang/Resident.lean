@@ -128,17 +128,33 @@ def supersOf (src : String) : List SExp → Except Answer (List (ByteArray × Pa
     let id := romIdOf Codec.Deployed.env { kind := kindPackage, discipline := .rom, slots := [(0, b)] }
     pure ((id.bytes, l.pkg) :: sup)
 
-/-- Check a lowered package; an `illTyped` refusal names the line of the text its path points to. -/
+/-- The line of the text a hole's refusal is about: the guard of a hole that is not `bool`, the candidate
+whose type is not the hole's. -/
+def holeSite (l : Surface.Lowered) : HoleRefusal → Option Nat
+  | .guardType n => (l.sites.find? fun s => s.1 = n ∧ s.2.1 = none).map (·.2.2)
+  | .candidateType n i => (l.sites.find? fun s => s.1 = n ∧ s.2.1 = some i).map (·.2.2)
+  | _ => none
+
+/-- Check a lowered package; an `illTyped` refusal names the line of the text its path points to, and a
+hole's ill-typed guard or candidate the line it is written on. -/
 def checkLowered (src : String) (sups : List Package) (l : Surface.Lowered) : Except Answer (ByteArray × String) :=
   match checkPackageWith sups l.pkg with
   | .ok r => .ok r
   | .error a =>
-    match l.pkg.checkWith (sups.map (·.iface)) with
-    | .error (.illTyped why) =>
-      match Surface.locateField l why.path with
-      | some pos => .error (no s!"illTyped {why.text} line {Surface.lineOf src pos}")
-      | none => .error a
-    | _ => .error a
+    if l.pkg.holes.isEmpty then
+      match l.pkg.checkWith (sups.map (·.iface)) with
+      | .error (.illTyped why) =>
+        match Surface.locateField l why.path with
+        | some pos => .error (no s!"illTyped {why.text} line {Surface.lineOf src pos}")
+        | none => .error a
+      | _ => .error a
+    else
+      match l.pkg.checkContextual (sups.map (·.iface)) with
+      | .error e =>
+        match holeSite l e with
+        | some pos => .error (no s!"{e.wire} line {Surface.lineOf src pos}")
+        | none => .error a
+      | .ok () => .error a
 
 /-! ## A stated view (LANG-105) -/
 

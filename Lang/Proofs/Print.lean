@@ -2239,57 +2239,68 @@ theorem package_eq_packageText {p : Package} (hs : p.state.wf = true) (hi : p.if
 
 /-! ## Every checked term is canonical, so every checked term and package reads back -/
 
-theorem armsTy_labels {Δ : List Ty} : ∀ {Γ : List Ty} {arms : List (Label × Term)} {r : List (Label × Ty)} {B : Ty},
-    ArmsTy Δ Γ arms r B → arms.map Prod.fst = r.map Prod.fst
+theorem armsTy_labels {Δ : List Ty} {Ω : HoleSignature} : ∀ {Γ : List Ty} {arms : List (Label × Term)} {r : List (Label × Ty)} {B : Ty},
+    ArmsTy (Ω := Ω) Δ Γ arms r B → arms.map Prod.fst = r.map Prod.fst
   | _, _, _, _, .one _ => rfl
   | _, _, _, _, .cons _ h _ => by simp [armsTy_labels h]
 
 mutual
-theorem hasType_canon {Δ : List Ty} (hΔ : ∀ A ∈ Δ, A.wf = true) :
-    ∀ {Γ : List Ty} {t : Term} {T : Ty}, (∀ A ∈ Γ, A.wf = true) → HasType Δ Γ t T → Canon t
+theorem hasType_canon {Δ : List Ty} {Ω : HoleSignature} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hΩ : ∀ d ∈ Ω, d.ty.wf = true) :
+    ∀ {Γ : List Ty} {t : Term} {T : Ty}, (∀ A ∈ Γ, A.wf = true) → HasType (Ω := Ω) Δ Γ t T → Canon t
   | _, _, _, _, .var _ => .var
-  | _, _, _, hΓ, .lam hA hb => .lam hA (hasType_canon hΔ (cons_wf hA hΓ) hb)
-  | _, _, _, hΓ, .app hf ha => .app (hasType_canon hΔ hΓ hf) (hasType_canon hΔ hΓ ha)
-  | _, _, _, hΓ, .fix ht => .fix (hasType_canon hΔ hΓ ht)
+  | _, _, _, hΓ, .lam hA hb => .lam hA (hasType_canon hΔ hΩ (cons_wf hA hΓ) hb)
+  | _, _, _, hΓ, .app hf ha => .app (hasType_canon hΔ hΩ hΓ hf) (hasType_canon hΔ hΩ hΓ ha)
+  | _, _, _, hΓ, .fix ht => .fix (hasType_canon hΔ hΩ hΓ ht)
   | _, _, _, _, .nat _ => .nat
   | _, _, _, _, .bool => .bool
   | _, _, _, _, .bytes _ => .bytes
   | _, _, _, _, .digest _ => .digest
-  | _, _, _, hΓ, .prim ha hb => .prim (hasType_canon hΔ hΓ ha) (hasType_canon hΔ hΓ hb)
-  | _, _, _, hΓ, .record hasc hfs => .record hasc (fieldsTy_canon hΔ hΓ hfs)
-  | _, _, _, hΓ, .get ht _ => .get (hasType_canon hΔ hΓ ht)
-  | _, _, _, hΓ, .extend ht hasc hfs => .extend (hasType_canon hΔ hΓ ht) hasc (fieldsTy_canon hΔ hΓ hfs)
-  | _, _, _, hΓ, .inj hw _ ht => .inj hw (hasType_canon hΔ hΓ ht)
+  | _, _, _, hΓ, .prim ha hb => .prim (hasType_canon hΔ hΩ hΓ ha) (hasType_canon hΔ hΩ hΓ hb)
+  | _, _, _, hΓ, .record hasc hfs => .record hasc (fieldsTy_canon hΔ hΩ hΓ hfs)
+  | _, _, _, hΓ, .get ht _ => .get (hasType_canon hΔ hΩ hΓ ht)
+  | _, _, _, hΓ, .extend ht hasc hfs => .extend (hasType_canon hΔ hΩ hΓ ht) hasc (fieldsTy_canon hΔ hΩ hΓ hfs)
+  | _, _, _, hΓ, .inj hw _ ht => .inj hw (hasType_canon hΔ hΩ hΓ ht)
   | _, _, _, hΓ, .case ht ha => by
-    have hw := hasType_wf hΔ hΓ ht
+    have hw := hasType_wf hΔ hΩ hΓ ht
     simp only [Ty.wf, Bool.and_eq_true] at hw
-    exact .case (hasType_canon hΔ hΓ ht) ((Row.ascending_of_labels (armsTy_labels ha)) ▸ hw.1)
-      (armsTy_canon hΔ hΓ hw.2 ha)
-  | _, _, _, hΓ, .ite hc ha hb => .ite (hasType_canon hΔ hΓ hc) (hasType_canon hΔ hΓ ha) (hasType_canon hΔ hΓ hb)
+    exact .case (hasType_canon hΔ hΩ hΓ ht) ((Row.ascending_of_labels (armsTy_labels ha)) ▸ hw.1)
+      (armsTy_canon hΔ hΩ hΓ hw.2 ha)
+  | _, _, _, hΓ, .ite hc ha hb => .ite (hasType_canon hΔ hΩ hΓ hc) (hasType_canon hΔ hΩ hΓ ha) (hasType_canon hΔ hΩ hΓ hb)
   | _, _, _, _, .ref _ => .ref
   | _, _, _, _, .refuse hw _ => .refuse hw
+  | _, _, _, hΓ, .hole _ hσ => .hole (substTy_canon hΔ hΩ hΓ hσ)
 
-theorem fieldsTy_canon {Δ : List Ty} (hΔ : ∀ A ∈ Δ, A.wf = true) :
-    ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
-      (∀ A ∈ Γ, A.wf = true) → FieldsTy Δ Γ fs r → CanonRow fs
+theorem substTy_canon {Δ : List Ty} {Ω : HoleSignature} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hΩ : ∀ d ∈ Ω, d.ty.wf = true) :
+    ∀ {Γ : List Ty} {σ : List Term} {Ψ : List Ty},
+      (∀ A ∈ Γ, A.wf = true) → SubstTy Δ Γ σ Ψ Ω → CanonList σ
   | _, _, _, _, .nil => .nil
-  | _, _, _, hΓ, .cons ht hfs => .cons (hasType_canon hΔ hΓ ht) (fieldsTy_canon hΔ hΓ hfs)
+  | _, _, _, hΓ, .cons ht hσ => .cons (hasType_canon hΔ hΩ hΓ ht) (substTy_canon hΔ hΩ hΓ hσ)
 
-theorem armsTy_canon {Δ : List Ty} (hΔ : ∀ A ∈ Δ, A.wf = true) :
+theorem fieldsTy_canon {Δ : List Ty} {Ω : HoleSignature} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hΩ : ∀ d ∈ Ω, d.ty.wf = true) :
+    ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
+      (∀ A ∈ Γ, A.wf = true) → FieldsTy (Ω := Ω) Δ Γ fs r → CanonRow fs
+  | _, _, _, _, .nil => .nil
+  | _, _, _, hΓ, .cons ht hfs => .cons (hasType_canon hΔ hΩ hΓ ht) (fieldsTy_canon hΔ hΩ hΓ hfs)
+
+theorem armsTy_canon {Δ : List Ty} {Ω : HoleSignature} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hΩ : ∀ d ∈ Ω, d.ty.wf = true) :
     ∀ {Γ : List Ty} {arms : List (Label × Term)} {r : List (Label × Ty)} {B : Ty},
-      (∀ A ∈ Γ, A.wf = true) → Ty.rowWf r = true → ArmsTy Δ Γ arms r B → CanonRow arms
+      (∀ A ∈ Γ, A.wf = true) → Ty.rowWf r = true → ArmsTy (Ω := Ω) Δ Γ arms r B → CanonRow arms
   | _, _, _, _, hΓ, hr, .one hb => by
     simp only [Ty.rowWf, Bool.and_eq_true] at hr
-    exact .cons (hasType_canon hΔ (cons_wf hr.1 hΓ) hb) .nil
+    exact .cons (hasType_canon hΔ hΩ (cons_wf hr.1 hΓ) hb) .nil
   | _, _, _, _, hΓ, hr, .cons hb ha _ => by
     simp only [Ty.rowWf, Bool.and_eq_true] at hr
-    exact .cons (hasType_canon hΔ (cons_wf hr.1 hΓ) hb) (armsTy_canon hΔ hΓ hr.2 ha)
+    exact .cons (hasType_canon hΔ hΩ (cons_wf hr.1 hΓ) hb) (armsTy_canon hΔ hΩ hΓ hr.2 ha)
 end
 
 /-- A closed term that checks reads back from its text. -/
 theorem readTerm_checked {Δ : List Ty} {t : Term} {T : Ty} {s : String} (hΔ : ∀ A ∈ Δ, A.wf = true)
     (hc : inferE Δ [] t (Ω := []) = .ok T) (h : term t = some s) : readTerm s = .ok t :=
-  readTerm_term (hasType_canon hΔ (by simp) (inferE_sound hc)) h
+  readTerm_term (hasType_canon hΔ (by simp) (by simp) (inferE_sound hc)) h
 
 theorem checkShape_wf {p : Package} (h : p.checkShape = .ok ()) : p.state.wf = true ∧ p.iface.wf = true := by
   unfold Package.checkShape at h
@@ -2400,7 +2411,7 @@ theorem readPackage_checked {ifaces : List Ty} {p : Package} {s : String} (hΔ :
       split at hbody
       · rename_i heq
         subst heq
-        exact readPackage_package hS hI (checkFields_rels hfields) (hasType_canon hΔ (by simp) (inferE_sound hT))
+        exact readPackage_package hS hI (checkFields_rels hfields) (hasType_canon hΔ (by simp) (by simp) (inferE_sound hT))
           (checkFields_produces_wf hfields) h
       · cases hbody
     · cases hbody

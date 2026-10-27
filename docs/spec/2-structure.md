@@ -366,6 +366,7 @@ Lean: `callArms`, `accountArm`, `createOfArm`, `creditArm`, `grantArm`, `install
 
 * `install` installs the package the bytes encode (LANG-86).
 * `createOf` installs the package if the World lacks it and creates an object of it, owned by the signer, with the given state (LANG-96, KERNEL-77).
+* In the surface text a slot lists its kinds, `(calls (install transfer (invoke T) (createOf S)))`, `S` the state type of the created object; `done` returns `(createOf (pkg e) (state e))` (LANG-108).
 * `invoke`'s `args` is a value of the slot's declared argument type, which the runtime encodes for the callee (LANG-77).
 * The other arms are the kernel's acts on accounts, value and grants; [`kernel.md`](../reference/kernel.md) defines them.
 

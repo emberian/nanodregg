@@ -150,6 +150,18 @@ def readmeRows (text : String) (r0 : Run) (b a : Sim.Member) : Run := Id.run do
     let same := if a.startsWith "refused " then has world (a.drop 8).toString
       else a.startsWith "ok " && a.endsWith world
     r := note r s!"RM16 ob (check P (view …)) as {row}: {a}" same
+  -- RM17: a candidate or a guard of the wrong type is refused naming the line it is written on
+  let lineOfFirst (t needle : String) : Nat := Surface.lineOf t (t.splitOn needle).head!.length
+  let badCand := P.replace "(candidate 10 (cell #" "(candidate true (cell #"
+  let a17 := (Lang.Resident.run s!"(check {badCand})").line
+  let l17 := lineOfFirst badCand "(candidate true"
+  r := note r s!"RM17 ob (check P) with candidate 1 written `true`: {a17}"
+    (a17 == s!"refused holeCandidateType 0 1 line {l17}" && l17 > 1 && l17 == lineOfFirst P "(candidate 10" )
+  let badGuard := P.replace "(candidate 1)" "(guard 3)\n    (candidate 1)"
+  let a18 := (Lang.Resident.run s!"(check {badGuard})").line
+  let l18 := lineOfFirst badGuard "(guard 3)"
+  r := note r s!"RM18 ob (check P) with a guard written `3`: {a18}"
+    (a18 == s!"refused holeGuardType 0 line {l18}" && l18 > 1)
   return r
 
 /-- A fresh session for the RM rows, over the README's program `text`. -/

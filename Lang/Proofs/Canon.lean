@@ -180,8 +180,8 @@ theorem rowWf_find {ℓ : Label} {t : Ty} :
     · cases h; exact hw.1
     · exact rowWf_find hw.2 h
 
-theorem fieldsTy_labels {Δ : List Ty} : ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
-    FieldsTy Δ Γ fs r → fs.map Prod.fst = r.map Prod.fst
+theorem fieldsTy_labels {Δ : List Ty} {Ω : HoleSignature} : ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
+    FieldsTy (Ω := Ω) Δ Γ fs r → fs.map Prod.fst = r.map Prod.fst
   | _, _, _, .nil => rfl
   | _, _, _, .cons _ h => by simp [fieldsTy_labels h]
 
@@ -196,60 +196,61 @@ theorem cons_wf {A : Ty} {Γ : List Ty} (hA : A.wf = true) (hΓ : ∀ B ∈ Γ, 
 variable {Δ : List Ty}
 
 mutual
-theorem hasType_wf (hΔ : ∀ A ∈ Δ, A.wf = true) :
-    ∀ {Γ : List Ty} {t : Term} {T : Ty}, (∀ A ∈ Γ, A.wf = true) → HasType Δ Γ t T → T.wf = true
+theorem hasType_wf {Ω : HoleSignature} (hΔ : ∀ A ∈ Δ, A.wf = true) (hΩ : ∀ d ∈ Ω, d.ty.wf = true) :
+    ∀ {Γ : List Ty} {t : Term} {T : Ty}, (∀ A ∈ Γ, A.wf = true) → HasType (Ω := Ω) Δ Γ t T → T.wf = true
   | _, _, _, hΓ, .var h => hΓ _ (List.mem_of_getElem? h)
   | _, _, _, hΓ, .lam hA hb => by
-    simp only [Ty.wf, hA, hasType_wf hΔ (cons_wf hA hΓ) hb, Bool.and_self]
+    simp only [Ty.wf, hA, hasType_wf hΔ hΩ (cons_wf hA hΓ) hb, Bool.and_self]
   | _, _, _, hΓ, .app hf _ => by
-    have := hasType_wf hΔ hΓ hf; simp only [Ty.wf, Bool.and_eq_true] at this; exact this.2
+    have := hasType_wf hΔ hΩ hΓ hf; simp only [Ty.wf, Bool.and_eq_true] at this; exact this.2
   | _, _, _, hΓ, .fix ht => by
-    have := hasType_wf hΔ hΓ ht; simp only [Ty.wf, Bool.and_eq_true] at this ⊢; exact this.1
+    have := hasType_wf hΔ hΩ hΓ ht; simp only [Ty.wf, Bool.and_eq_true] at this ⊢; exact this.1
   | _, _, _, _, .nat _ | _, _, _, _, .bool | _, _, _, _, .bytes _ | _, _, _, _, .digest _ => rfl
   | _, _, _, _, .refuse hw _ => hw
   | _, _, _, _, .prim (p := p) _ _ => by cases p <;> rfl
   | _, _, _, hΓ, .record hasc hfs => by
     simp only [Ty.wf, Bool.and_eq_true]
-    exact ⟨(Row.ascending_of_labels (fieldsTy_labels hfs)) ▸ hasc, fieldsTy_wf hΔ hΓ hfs⟩
+    exact ⟨(Row.ascending_of_labels (fieldsTy_labels hfs)) ▸ hasc, fieldsTy_wf hΔ hΩ hΓ hfs⟩
   | _, _, _, hΓ, .get ht hf => by
-    have := hasType_wf hΔ hΓ ht; simp only [Ty.wf, Bool.and_eq_true] at this
+    have := hasType_wf hΔ hΩ hΓ ht; simp only [Ty.wf, Bool.and_eq_true] at this
     exact rowWf_find this.2 hf
   | _, _, _, hΓ, .extend (r := r) (r2 := r2) ht _ hfs => by
-    have hb := hasType_wf hΔ hΓ ht
+    have hb := hasType_wf hΔ hΩ hΓ ht
     simp only [Ty.wf, Bool.and_eq_true] at hb ⊢
     refine ⟨Row.merge_ascending _ hb.1, rowWf_iff.mpr fun e he => ?_⟩
     rcases Row.mem_merge he with he | he
     · exact rowWf_iff.mp hb.2 e he
-    · exact rowWf_iff.mp (fieldsTy_wf hΔ hΓ hfs) e he
+    · exact rowWf_iff.mp (fieldsTy_wf hΔ hΩ hΓ hfs) e he
   | _, _, _, _, .inj hw _ _ => hw
   | _, _, _, hΓ, .case ht ha => by
-    have := hasType_wf hΔ hΓ ht; simp only [Ty.wf, Bool.and_eq_true] at this
-    exact armsTy_wf hΔ hΓ this.2 ha
-  | _, _, _, hΓ, .ite _ ha _ => hasType_wf hΔ hΓ ha
+    have := hasType_wf hΔ hΩ hΓ ht; simp only [Ty.wf, Bool.and_eq_true] at this
+    exact armsTy_wf hΔ hΩ hΓ this.2 ha
+  | _, _, _, hΓ, .ite _ ha _ => hasType_wf hΔ hΩ hΓ ha
   | _, _, _, _, .ref h => hΔ _ (List.mem_of_getElem? h)
+  | _, _, _, _, .hole hf _ => hΩ _ (List.mem_of_find?_eq_some hf)
 
-theorem fieldsTy_wf (hΔ : ∀ A ∈ Δ, A.wf = true) :
+theorem fieldsTy_wf {Ω : HoleSignature} (hΔ : ∀ A ∈ Δ, A.wf = true) (hΩ : ∀ d ∈ Ω, d.ty.wf = true) :
     ∀ {Γ : List Ty} {fs : List (Label × Term)} {r : List (Label × Ty)},
-      (∀ A ∈ Γ, A.wf = true) → FieldsTy Δ Γ fs r → Ty.rowWf r = true
+      (∀ A ∈ Γ, A.wf = true) → FieldsTy (Ω := Ω) Δ Γ fs r → Ty.rowWf r = true
   | _, _, _, _, .nil => rfl
   | _, _, _, hΓ, .cons ht hfs => by
-    simp only [Ty.rowWf, Bool.and_eq_true]; exact ⟨hasType_wf hΔ hΓ ht, fieldsTy_wf hΔ hΓ hfs⟩
+    simp only [Ty.rowWf, Bool.and_eq_true]; exact ⟨hasType_wf hΔ hΩ hΓ ht, fieldsTy_wf hΔ hΩ hΓ hfs⟩
 
-theorem armsTy_wf (hΔ : ∀ A ∈ Δ, A.wf = true) :
+theorem armsTy_wf {Ω : HoleSignature} (hΔ : ∀ A ∈ Δ, A.wf = true) (hΩ : ∀ d ∈ Ω, d.ty.wf = true) :
     ∀ {Γ : List Ty} {arms : List (Label × Term)} {r : List (Label × Ty)} {B : Ty},
-      (∀ A ∈ Γ, A.wf = true) → Ty.rowWf r = true → ArmsTy Δ Γ arms r B → B.wf = true
+      (∀ A ∈ Γ, A.wf = true) → Ty.rowWf r = true → ArmsTy (Ω := Ω) Δ Γ arms r B → B.wf = true
   | _, _, _, _, hΓ, hr, .one hb => by
     simp only [Ty.rowWf, Bool.and_eq_true] at hr
-    exact hasType_wf hΔ (cons_wf hr.1 hΓ) hb
+    exact hasType_wf hΔ hΩ (cons_wf hr.1 hΓ) hb
   | _, _, _, _, hΓ, hr, .cons hb _ _ => by
     simp only [Ty.rowWf, Bool.and_eq_true] at hr
-    exact hasType_wf hΔ (cons_wf hr.1 hΓ) hb
+    exact hasType_wf hΔ hΩ (cons_wf hr.1 hΓ) hb
 end
 
 /-- Under canonical package and local types, every type `infer` returns is canonical. -/
 theorem infer_wf {Γ : List Ty} {t : Term} {T : Ty} (hΔ : ∀ A ∈ Δ, A.wf = true)
     (hΓ : ∀ A ∈ Γ, A.wf = true) (h : infer Δ Γ t (Ω := []) = some T) : T.wf = true :=
-  hasType_wf hΔ hΓ (infer_sound h)
+  hasType_wf hΔ (by simp) hΓ (infer_sound h)
 
 /-- The tooth: `merge` puts a new field in its place and overrides in place (an appending or
 prepending `put` would turn this red, and with it `merge_ascending`). -/
