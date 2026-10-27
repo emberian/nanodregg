@@ -10,8 +10,8 @@ KMAC256 sealers at the deployed parameters); the cadence is small enough that th
 
 Every arm is HOST's: `log` is `Host.handle`'s (the read envelope checked against the World as the
 batch advanced it) and its page is `Host.Page.build` over the in-memory segment (`pager`), the
-same code `Host.Deployed.pager` runs over the segment file. The one deviation is a plant
-(`Params.gateLog = false`).
+same code `Host.Deployed.pager` runs over the segment file. Every deviation is a plant, a
+field of `Params` (`gateLog`, `forgetJournal`, `lieTip`, …).
 -/
 import Protocol.Rows.Params
 import Protocol.Envelope

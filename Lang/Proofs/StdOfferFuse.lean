@@ -680,8 +680,8 @@ call; under `fuse_atomic`'s premises, and `y'`'s digest reading back). `x'` judg
 and its run encoded that value for `y'`'s take, which decoded exactly it: ONE θ, by the codec's
 canonicity (`decodeData_eq_ok_iff`), not by anyone's forwarding. `x'` read its own offer `ox` and its
 peer's `qx`, `y'` its own `oy` and its peer's `qy`; each evaluated `offerJoint` on what it read and
-found `JointOk`; the pair names exactly the two parties (each one's `peerOf` is the other), so the two
-runs read the same two pinned rows (`ox = qy`, `qx = oy`, keys too); and the two session inserts in
+found `JointOk`; the keys and offers cross (`kx = kqy ∧ ox = qy ∧ ky = kqx ∧ oy = qx`), so the two runs
+read the same two pinned rows; and the two session inserts in
 `t.rows` carry the same value bytes. Mutations: P1 (`offerJoint := okT`: `JointOk` fails on F2's pair)
 and PT3 (the fuse sends `keys` where it sends `theta`: the one-θ conjunct fails). -/
 theorem jointLaw_sound {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}

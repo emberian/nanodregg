@@ -1136,22 +1136,6 @@ theorem take_notCompliant {theta roles : List Label} {rels : List (Label × RelD
 
 /-! ## The deployed run of `take` -/
 
-theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
-  cases h with | record hr => cases hr; rfl
-
-/-- A value of an option type is `none` or `some` of a conforming value. -/
-theorem conforms_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
-    d = optD none ∨ ∃ z, d = optD (some z) ∧ Conforms z T := by
-  cases h with
-  | inj hf hc =>
-    rename_i ℓ A z
-    simp only [Row.find?] at hf
-    split at hf
-    · cases hf; subst_vars; exact .inl (by rw [conforms_empty hc]; rfl)
-    · split at hf
-      · cases hf; subst_vars; exact .inr ⟨z, rfl, hc⟩
-      · cases hf
-
 /-- A conforming take argument is `{keys, pair, theta}` (`Std.offer`'s and the escrow's). -/
 theorem offerTakeArg_cases {theta : List Label} {ad : Data} (h : Conforms ad (offerTakeArg theta)) :
     ∃ keys pair th, ad = .record [("keys", keys), ("pair", pair), ("theta", th)] ∧ Conforms keys offerKeysTy ∧
@@ -1581,18 +1565,20 @@ theorem fuse_refused_disjoint :
 (`offerSessionGuard`, `activityWaiting` at patience `pt`) admits the retraction of a session row
 (always unanswered: nothing in the package answers it) iff the call's signed `notBefore` `m` is at
 least the row key's `notBefore` `n` plus `pt`, whoever retracts; before that it refuses `unanswered`.
-`waiting_retract_iff` (LANG-76) at the offer's guard. -/
+`waiting_retract_iff` (LANG-76) at the offer's guard, which declares no `withdraw` (LANG-97: a session
+row records a deal, and a party does not release its own). -/
 theorem offer_session_retract_iff (theta : List Label) (sd : RelDecl) (pt n m : Nat) (key captured req : Data)
-    (lib : List Term) (env : Env) (state : Val)
+    {ka ra : ByteArray} (lib : List Term) (env : Env) (state : Val)
     (hk : key.field "notBefore" = some (.nat n)) (hr : req.field "notBefore" = some (.nat m))
+    (hka : key.field "agent" = some (.digest ka)) (hra : req.field "agent" = some (.digest ra))
     (hlim : n + pt < Bounds.natLimit) :
     (∃ w, BigStep lib
       ((Data.record [("edit", .inj "retract" (.record [("key", key)])), ("old", .inj "some" (.record [
         ("answered", .inj "none" (.record [])), ("captured", captured)]))]).toVal :: req.toVal :: state :: env)
       (activityApply (offerSessionGuard theta sd pt) [.var 2, .var 1, .var 0]) (.ok (.inj "ok" w))) ↔
       n + pt ≤ m := by
-  have h := waiting_retract_iff offerStateTy [offerSettlePlan theta] sd offerResumer {} (some pt) n m key captured
-    req none lib env state hk hr (fun P hP => by cases hP; exact hlim)
+  have h := waiting_retract_iff offerStateTy [offerSettlePlan theta] sd offerResumer {} (some pt) false n m key captured
+    req none lib env state hk hr hka hra (fun P hP => by cases hP; exact hlim)
   simpa [offerSessionGuard] using h
 
 end Nanodregg.Lang.Std

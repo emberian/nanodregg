@@ -69,7 +69,7 @@ structure Entry where
   offset : Nat
   chain : ByteArray
 
-/-- The widest chain the origin frame carries (the deployed digest is 32 bytes): `originMax`. -/
+/-- The widest chain the origin frame carries (the deployed digest is 32 bytes). -/
 def chainBytesMax : Nat := 64
 
 /-- An entry the index can hold: a u64 step count and offset, and a chain of exactly `w` bytes (the

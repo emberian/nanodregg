@@ -14,8 +14,9 @@ same price list). It never reads the machine: no `step`, no
 carrying its size, `derives_bigStep`/`bigStep_derives`, the size unique by
 `derives_size_unique`).
 
-`requiredOf` has `runMeasured`'s inputs and starts from its own front half, the deployed
-`Lang.runSetup` (it loads, resolves, reads and decodes). In place of the machine it counts the method's derivation and
+`requiredOf` has `runMeasured`'s inputs and starts from the closed front half, `Lang.runSetup` (it
+loads, resolves, reads and decodes). The deployed front half is `runSetupLive`; `requiredOfLive` starts
+from it and adds the ROM preparation charge. In place of the machine it counts the method's derivation and
 extraction's forced suspensions (`needExtract`, shaped like `Machine.extract`). A count past its
 fuel is a named refusal (`required: fuel`), never a zero.
 

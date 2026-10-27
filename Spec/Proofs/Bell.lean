@@ -204,7 +204,7 @@ theorem ringer_run {bytesOf : D → ByteArray} {digestOf : ByteArray → Option 
           obtain ⟨cenv, w, hbody⟩ := Lang.Std.runLaw_ref_admits (g := g) (fs := Lang.Term.relocateRow f fs)
             (by rw [hlib, hb]; rfl)
             (by rw [Lang.find_relocateRow, hf, Option.map_some, Lang.relocate_noRef _ _
-                  (Lang.Std.noRef_activityWaiting _ _ _ _ _ hnr)]; rfl)
+                  (Lang.Std.noRef_activityWaiting _ _ _ _ _ _ hnr)]; rfl)
             (hgl "rung" (by rw [hdecl]; exact hgd))
           have hW := Lang.Std.waiting_body_step hw hv hc hold hbody
           generalize hdx : x.data = dx at hW
@@ -212,6 +212,7 @@ theorem ringer_run {bytesOf : D → ByteArray} {digestOf : ByteArray → Option 
           | start => rw [hdata] at hdx; simp at hdx
           | retire => rw [hdata] at hdx; simp at hdx
           | timedOut => rw [hdata] at hdx; simp at hdx
+          | withdrawn => rw [hdata] at hdx; simp at hdx
           | @answer key' c0 y0 l0 hres' =>
             rw [hdata] at hdx
             simp only [Lang.Data.inj.injEq, Lang.Data.record.injEq, List.cons.injEq, Prod.mk.injEq,

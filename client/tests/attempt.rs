@@ -3,7 +3,11 @@
 //! send bound holds; one call per attempt. The Host's word never settles: a claimed final is
 //! confirmed by the member's own follow, whose three lines are what `settled` holds. A Host that
 //! lies is contradicted (`ok` for an absent call) or overruled (`refused` for a committed one), and
-//! an absent call whose window is live stays OPEN, never "safe to run again".
+//! an absent call whose window is live stays OPEN, never "safe to run again". The cases a member row
+//! drives through nd (a Host `ok` confirmed by follow, a Host `refused` overruled for a committed
+//! call, a declined call looked up by the next run, a lost reply settled by the next run) are
+//! replayed from the rows' own trace (`tests/trace.rs`, DESIGN-QA Q5); the receipts typed here are
+//! stand-ins for the cases left.
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::fs;
 
@@ -44,37 +48,6 @@ fn settled(committed: bool, verdict: &str) -> State {
     }
 }
 
-#[test]
-fn a_host_ok_is_confirmed_and_the_settlement_is_follows_receipt() {
-    let d = scratch("commit");
-    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
-    let mut seen = Vec::new();
-    let s = a
-        .drive(State::Signed, 3, |r, b| -> R {
-            seen.push((r, b.to_vec()));
-            Ok(match r {
-                Request::Submit => host(Seen::Committed),
-                _ => follow("committed 3 77"),
-            })
-        })
-        .unwrap();
-    assert_eq!(s, settled(true, "committed 3 77"));
-    assert_eq!(
-        seen,
-        vec![
-            (Request::Submit, b"CALL".to_vec()),
-            (Request::Confirm, b"CALL".to_vec())
-        ]
-    );
-    assert_eq!(
-        fs::read(d.join("settled")).unwrap(),
-        lines("committed 3 77"),
-        "never the Host's reply"
-    );
-    assert_eq!(Attempt::load(&d).unwrap().1, s, "the settlement is durable");
-    done(&d);
-}
-
 /// A Host that answers `ok` for a call its World does not hold: follow's receipt says `open`, the
 /// run ends `contradicted` naming both, and nothing is settled.
 #[test]
@@ -102,23 +75,6 @@ fn a_host_ok_for_an_absent_call_is_contradicted_and_stays_open() {
         State::Uncertain { sends: 1 },
         "open on disk"
     );
-    done(&d);
-}
-
-/// A Host that answers `refused` for a call that committed: follow's receipt settles it committed.
-#[test]
-fn a_host_refused_for_a_committed_call_settles_committed() {
-    let d = scratch("lie-refused");
-    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
-    let s = a
-        .drive(State::Signed, 3, |r, _| -> R {
-            Ok(match r {
-                Request::Submit => host(Seen::Refused),
-                _ => follow("committed 4 99"),
-            })
-        })
-        .unwrap();
-    assert_eq!(s, settled(true, "committed 4 99"));
     done(&d);
 }
 
@@ -318,46 +274,6 @@ fn only_this_layout_loads() {
         );
         done(&d);
     }
-}
-
-/// PROTOCOL-41: `declined` is not final. The run ends with nothing written but the send marker, the
-/// attempt reloads as uncertain, and a drive from disk LOOKS IT UP (the same bytes), never
-/// resubmits blind. That the next RUN is this drive is `run.rs`'s
-/// `a_rerun_of_the_same_argv_continues_its_open_attempt_and_signs_nothing` (CLIENT-37).
-#[test]
-fn declined_leaves_the_attempt_open_and_a_reload_looks_up() {
-    let d = scratch("declined");
-    let a = Attempt::freeze(&d, b"CALL", b"ARGV", b"K").unwrap();
-    let s = a
-        .drive(State::Signed, 3, |_, _| -> R {
-            Ok(Reply::Host(Seen::Declined, b"unknownKey".to_vec()))
-        })
-        .unwrap();
-    assert_eq!(
-        s,
-        State::Open {
-            sends: 1,
-            end: Action::Declined,
-            payload: b"unknownKey".to_vec()
-        }
-    );
-    let (a, s) = Attempt::load(&d).unwrap();
-    assert_eq!(s, State::Uncertain { sends: 1 }, "open on disk");
-    let mut seen = Vec::new();
-    a.drive(s, 3, |r, _| -> R {
-        seen.push(r);
-        Ok(match r {
-            Request::Lookup => host(Seen::Committed),
-            _ => follow("committed 1 2"),
-        })
-    })
-    .unwrap();
-    assert_eq!(
-        seen,
-        [Request::Lookup, Request::Confirm],
-        "a reload looks up"
-    );
-    done(&d);
 }
 
 /// HOST-74: the writer declines a lookup it decided nothing about (bytes it cannot decode, a frame

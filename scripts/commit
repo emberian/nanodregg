@@ -12,6 +12,8 @@
 #     The script refuses to run when its own bytes are not origin/main's scripts/commit (a worktree that has not
 #     rebased since the gate changed), unless the commit being landed is itself the change to scripts/commit and
 #     this is that version: "this tree's scripts/commit is stale: rebase onto origin/main first";
+#     A replayed commit that takes back hunks of recent landings is refused (gates/reverts.py, GATES-30): "this
+#     commit reverts N hunks of M landings", each named; a lane that means to revert says so with --reverts;
 #  2. materialize the rebased tree in the lane's build directory on the home disk (hbox: NVMe, never /tank):
 #     ~/nd-land/<worktree name>/tree, its .lake and cargo target kept between landings (seeded once from this
 #     worktree's .lake/build), so a build re-hashes only that tree;
@@ -35,18 +37,20 @@
 # Run detached with a PID file: nohup bash -c 'exec scripts/commit -F MSG PATH...' > LOG 2>&1 & echo $! > job.pid
 # Every lander also writes <git common dir>/nanodregg-pids/<pid> (its worktree, its stage, the commit), removed
 # when it exits, so another session on the box can see what is landing.
-# Flags of the old judge (--cross-layer, --no-build, --reverts) are accepted and ignored.
+# Flags of the old judge (--cross-layer, --no-build) are accepted and ignored. --reverts lands a commit that takes back
+# hunks of recent landings (step 1's check), which is otherwise refused.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(git rev-parse --show-toplevel) || exit 2
 common=$(cd "$repo" && cd "$(git rev-parse --git-common-dir)" && pwd)
 export PATH=$HOME/.elan/bin:$PATH
-msgsrc="" msgfile="" paths=()
+msgsrc="" msgfile="" paths=() reverts=""
 while [ $# -gt 0 ]; do
   case $1 in
     -m) msgsrc=$2; shift ;;
     -F) msgfile=$2; shift ;;
-    --cross-layer|--no-build|--reverts) echo "scripts/commit: $1 is ignored (rule 1 has no such line)"; shift ;;
+    --reverts) reverts=1 ;;
+    --cross-layer|--no-build) echo "scripts/commit: $1 is ignored (rule 1 has no such line)" ;;
     --) shift; paths+=("$@"); break ;;
     -*) echo "scripts/commit: unknown flag $1" >&2; exit 2 ;;
     *) paths+=("$1") ;;
@@ -105,6 +109,13 @@ replay() {
     onto=$(GIT_AUTHOR_NAME=$(git -C "$repo" log -1 --format=%an "$c") GIT_AUTHOR_EMAIL=$(git -C "$repo" log -1 --format=%ae "$c") \
            GIT_AUTHOR_DATE=$(git -C "$repo" log -1 --format=%aD "$c") \
            git -C "$repo" commit-tree "$(head -1 <<< "$out")" -p "$onto" -m "$(git -C "$repo" log -1 --format=%B "$c")") || return 1
+    # a commit made from a stale copy of the tree carries other landings' hunks backwards, and replays cleanly
+    if [ -z "$reverts" ] && ! out=$(python3 "$repo/gates/reverts.py" "$repo" "$onto"); then
+      echo "scripts/commit: REFUSED — $(git -C "$repo" log -1 --format='%h %s' "$c" | cut -c1-100): this commit $(tail -1 <<< "$out"):" >&2
+      sed '$d; s/^REVERTS /  /' <<< "$out" | cut -c1-400 >&2
+      echo "  a stale copy of the tree? re-apply your change on origin/main; if the revert is meant, pass --reverts" >&2
+      return 1
+    fi
   done
   echo "$onto"
 }

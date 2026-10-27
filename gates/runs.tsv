@@ -29,6 +29,7 @@ emit-units	-	a generator; gates/generated.tsv checks its output	-
 emit-hosting	-	a generator; gates/generated.tsv checks its output	-
 emit-broker	-	a generator; gates/generated.tsv checks its output	-
 emit-pins	-	a generator; gates/generated.tsv checks its output	-
+emit-traces	-	a generator; gates/generated.tsv checks its output (each member row's conversation with nd, which client/tests/trace.rs replays)	-
 codec-vectors	-	a generator; gates/generated.tsv checks its output (a change of meaning under an unchanged tag is red, CODEC-28)	-
 live-calls	-	a generator of deploy/live/ inputs; deploy/live/harness.sh drives it against running units	-
 ob	-	LANG's resident check, an interactive tool: lang-journey and the rows drive the same code	-

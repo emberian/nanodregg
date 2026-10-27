@@ -5,4 +5,9 @@ emit-hosting	launcher/src/generated.rs
 emit-broker	launcher/src/broker_generated.rs
 cargo:emit-anchors	deploy/tls/anchors.pem
 emit-pins	deploy/tls/pins
+emit-traces	client/tests/traces/rerun.trace
+emit-traces	client/tests/traces/staleRefusing.trace
+emit-traces	client/tests/traces/settle.trace
+emit-traces	client/tests/traces/cancel.trace
+emit-traces	client/tests/traces/journey.trace
 codec-vectors	gates/codec-vectors.tsv

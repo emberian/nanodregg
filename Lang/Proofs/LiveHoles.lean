@@ -12,7 +12,7 @@ import Lang.Proofs.Run
 
 namespace Nanodregg.Lang
 
-/-! ## From `Lang.Proofs.Contextual.LiveHoles`: The live runtime's typing, allocation and authenticated-source invariants. -/
+/-! ## From `Lang.Proofs.LiveHoles`: The live runtime's typing, allocation and authenticated-source invariants. -/
 section
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive

@@ -63,10 +63,11 @@ impl FollowSocket {
     }
 }
 
-/// Follow's reply as a step. Follow answers every command, its own refusals included, with a
+/// Follow's reply as a step (the one reader nd's sockets and the trace replay, `tests/trace.rs`,
+/// share). Follow answers every command, its own refusals included, with a
 /// `done` step; any other status is follow refusing the frame itself, and is not rendered as a
 /// verdict. A supervisor close is named by its emitted CloseReason name (PROTOCOL-22).
-pub(crate) fn step(status: u8, reply: &[u8]) -> io::Result<Step> {
+pub fn step(status: u8, reply: &[u8]) -> io::Result<Step> {
     if status != g::status::OK {
         let what = if status == g::status::CLOSED {
             "closed".to_string()
@@ -82,7 +83,7 @@ pub(crate) fn step(status: u8, reply: &[u8]) -> io::Result<Step> {
 }
 
 /// A `command` request: its op and its payload, bounded by `argvBytesMax`.
-pub(crate) fn command(argv: &[Vec<u8>]) -> io::Result<(u8, Vec<u8>)> {
+pub fn command(argv: &[Vec<u8>]) -> io::Result<(u8, Vec<u8>)> {
     let payload = layout::Command {
         argv: argv.to_vec(),
     }
@@ -98,7 +99,7 @@ pub(crate) fn command(argv: &[Vec<u8>]) -> io::Result<(u8, Vec<u8>)> {
 }
 
 /// A `resume` request.
-pub(crate) fn resume(k: &[u8], outcome: &Outcome) -> io::Result<(u8, Vec<u8>)> {
+pub fn resume(k: &[u8], outcome: &Outcome) -> io::Result<(u8, Vec<u8>)> {
     let payload = layout::Resume {
         k: k.to_vec(),
         result: outcome.result(),

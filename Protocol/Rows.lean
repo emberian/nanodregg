@@ -123,9 +123,11 @@ inductive Act
   /-- the actor's last call (its frozen bytes) is submitted again, byte-identical: a relay or a
   client that still holds the bytes. The outcome is the writer's answer -/
   | resubmit
-  /-- the attempt store's next run of the actor's open attempt (its last frozen call): "sent, outcome
-  lost", so it looks up, sends the same bytes again while sends remain, and settles by the member's
-  own follow (PROTOCOL-46); the outcome is the command's end, as the follow machine renders it -/
+  /-- `nd ARGV` again, for the argv of the actor's last frozen call: nd's next run of the same argv
+  (CLIENT-37). While that attempt is open the run IS it: it looks the frozen bytes up, sends them
+  again while sends remain, settles them by the member's own follow (PROTOCOL-46), and resumes
+  follow with the attempt's own continuation; a call follow holds refused or expired is dead, and the
+  command is planned afresh. The outcome is the command's end, as the follow machine renders it -/
   | rerun
   /-- the actor's client signs every later envelope for `n` heights (its own `Self.window`, a
   client's setting; the writer's read gate bounds it by `Bounds.windowMax`) -/
@@ -139,6 +141,10 @@ inductive Fault
   | none
   /-- the Host commits the submit, the reply is lost; the attempt store settles by `lookup` -/
   | dropReply
+  /-- the Host commits the submit, and the reply to it and to every lookup of this run are lost (a
+  writer that died after its commit, as `client/tests/real.rs`'s reply-losing proxy): the run ends
+  `uncertain`, and only a later run can settle the call -/
+  | dropReplies
   /-- the submit never reaches the Host; the lookup answers `absent` -/
   | neverForward
   /-- between this command's signature and its submit, ACTOR runs ARGV to completion (ok) -/
@@ -345,6 +351,9 @@ inductive Mutation
   the page states the record; the follower re-derives it by its own `judge`, and the page's stated
   chain (over the writer's record) is what refuses the forgery (HOST-75) -/
   | forgesRefusal
+  /-- nd's next run of an argv whose attempt is open plans the command afresh, never continuing the
+  attempt: the client before CLIENT-37 (A6), whose re-run signed a second call beside the first -/
+  | rerunFresh
   deriving DecidableEq, Repr
 
 /-- A row's plant: the mutation, and the line that must catch it with the outcome it then gets. -/
@@ -854,12 +863,12 @@ def forgotten : Row where
 /-- KERNEL-44's teeth over sockets (PROTOCOL-41), as KERNEL-54 re-cut them: a refusal of a class
 that is not structurally final is a recorded system interaction, final for its transaction id within
 the window; a STALE is never recorded. A write raced by another member's write is `declined stale`:
-the writer neither records it nor ends the attempt. The attempt store's next run looks it up
-(`absent`), confirms that with follow before any resend (PROTOCOL-15's condition 3), and follow's
-own fold settles it `refused stale` (BEHIND: the member's own call, planned at a height follow has
-reached, refused `stale` there, `Command.staleBehind`). The World's pin returns to the value the call
+the writer neither records it nor ends the attempt. Asked for the call's receipt, the member's
+own follow settles it `refused stale` (BEHIND: the member's own call, planned at a height follow has
+reached, refused `stale` there, `Command.staleBehind`), which is why nd's next run of the argv plans
+it afresh (CLIENT-37 amended). The World's pin returns to the value the call
 saw (A→B→A): the same bytes sent again are still `declined stale` (the pin reads the entry and its
-version, KERNEL-54), the Host's lookup is `absent` (nothing recorded), and the next run settles
+version, KERNEL-54), the Host's lookup is `absent` (nothing recorded), and the receipt settles
 `refused stale` again. Another member asking about the call it did not plan settles `open`
 (unplaceable: never final from someone else's fold). A member's refusals in one window are bounded:
 sixteen recorded `keyTaken` refusals (posts at a taken key of a board), then `declined refusalBudget`, not recorded
@@ -882,13 +891,13 @@ def refusedRow : Row where
     -- signed on the World where 2=1, raced by the sponsor's write: the writer declines it stale
     { actor := "newcomer", act := .cmd ["write", "@shared", "3", "7", "--via", "@g"],
       expect := .declined "stale", fault := .race "sponsor" ["write", "@shared", "2", "5"] },
-    -- the next run: lookup `absent`, follow's own fold settles it
-    { actor := "newcomer", act := .rerun, expect := .refused "stale" },
+    -- follow's own fold settles it (`receipt CALL`); nd's next run of the argv would plan it afresh
+    { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, prints := some "settle refused" },
     -- A→B→A: the content the call saw holds again; its version does not
     ok "sponsor" ["write", "@shared", "2", "1"],
     { actor := "newcomer", act := .resubmit, expect := .declined "stale" },
     { actor := "newcomer", act := .retry, expect := .absent },
-    { actor := "newcomer", act := .rerun, expect := .refused "stale" },
+    { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, prints := some "settle refused" },
     ok "newcomer" ["read", "@shared", "2=1"],
     -- unplaceable: another member's follow did not plan the call, so it never settles it final
     { actor := "auditor", act := .receiptOf "newcomer", expect := .ok, prints := some "settle open" },
@@ -1369,8 +1378,8 @@ def langJourney : Row where
 frozen call by the Host's status and ends it only on its own follow's `receipt CALL`
 (`Settle.ofReceipt`). A committed call whose lookup the Host answers `refused stale` settles
 committed. A call that never reached the writer ends `open`, not "absent, safe to run again": a
-relay holding the bytes lands them. A second such call, signed for a window of 2, is re-run past
-its window and settles `refused expired`, final. A rotation whose `ok` is lost confirms through
+relay holding the bytes lands them. A second such call, signed for a window of 2, is past its
+window when the sponsor's follow is asked for its receipt, and settles `refused expired`, final. A rotation whose `ok` is lost confirms through
 the ARMED rotation's incoming key (`signIncoming`: the writer refuses the old key `unknownKey`),
 and custody advances on that confirmation, so the next write signs with the new key. The plant is
 a store that takes the Host's final refusal as final: line 6, the lying lookup's own line, ends on
@@ -1394,7 +1403,7 @@ def settleRow : Row where
       fault := .neverForward },
     okBind "operator" ["create", "@permit"] "own",
     { actor := "operator", act := .cmd ["write", "@own", "2", "1"], expect := .ok, times := 3 },
-    { actor := "sponsor", act := .rerun, expect := .refused "expired" },
+    { actor := "sponsor", act := .receiptOf "sponsor", expect := .ok, prints := some "settle expired" },
     ok "operator" ["read", "@shared", "3=1"],
     { actor := "newcomer", act := .cmd ["rotate"], expect := .ok, fault := .dropReply },
     ok "newcomer" ["write", "@shared", "2", "6", "--via", "@g"],
@@ -1403,6 +1412,26 @@ def settleRow : Row where
   -- confirm, follow has not caught up the committed call, so line 6 says `hostContradicted refused
   -- open`, never `refused stale`; the honest lines before it trust no refusal and keep their outcomes
   plant := .caught .trustLookup 6 (.contradicted "refused open")
+
+/-- CLIENT-37's scenario, the one A6 hid (Q5). The sponsor's counter `tally` is invoked once; the
+writer commits the call and the reply to the submit and to its lookup are lost, so the run ends
+`uncertain`. The next run of the same argv is that attempt: it looks the frozen bytes up, settles
+them by the sponsor's own follow and resumes follow with the attempt's continuation, so it prints
+the invoke's own output and signs nothing. One call is on the journal: the total reads 1. The plant
+is the client before CLIENT-37, whose re-run plans afresh: line 4's read prints `(total 2)`. -/
+def rerunRow : Row where
+  name := "rerun"
+  replaces := []
+  ops := settled
+  kinds := ["install", "create", "invoke"]
+  drive := .members [
+    okBind "sponsor" ["install", counter] "counter",
+    okBind "sponsor" ["create", "--pkg", "@counter", "(record (total 0))"] "tally",
+    { actor := "sponsor", act := .cmd ["invoke", "@tally", "0", "1"], expect := .uncertain,
+      fault := .dropReplies },
+    { actor := "sponsor", act := .rerun, expect := .ok },
+    { actor := "sponsor", act := .cmd ["read", "@tally"], expect := .ok, prints := some "(total 1)" }]
+  plant := .caught .rerunFresh 4 (.refused "unprinted")
 
 /-- A tally of rings by round whose `take` reads a round's rings as ONE signed range (item 4): `ring`
 inserts its text at key `(round, ringer)` and leaves the state alone (it writes no cell: two rings
@@ -1651,11 +1680,12 @@ def cancelRow : Row where
 /-- A moved pin and a refusing receiver at once (PROTOCOL-73, FIX-KERNEL's finding after KERNEL-66): the
 newcomer writes through its grant `g` while the sponsor revokes `g`. The Host compares the call's pins
 first, so the moved grant pin makes it `declined stale`, though the write's receiver would also refuse
-it now (no grant). The next run's settlement is follow's own fold: `staleBehind` asks what the Host
+it now (no grant). The call's settlement is follow's own fold (`receipt CALL`): `staleBehind` asks what the Host
 asks, in its order (`signedBy`, then `checkPins`), so it settles `refused stale`, final. Before
 PROTOCOL-73 follow asked `receive` first, read the refusing receiver as "not stale" and left the
 settlement `open`, so the attempt sent the call again and the Host declined it again: line 7 `declined
-stale`, never settled (MEASURED, both parameter sets). -/
+stale`, never settled (MEASURED, both parameter sets, when line 7 was the re-run). nd's next run of the
+argv then plans the write afresh, refused by follow on a World without the grant. -/
 def staleRefusingRow : Row where
   name := "staleRefusing"
   replaces := []
@@ -1664,8 +1694,11 @@ def staleRefusingRow : Row where
   drive := .members (welcome ++ [
     { actor := "newcomer", act := .cmd ["write", "@shared", "2", "1", "--via", "@g"],
       expect := .declined "stale", fault := .race "sponsor" ["retire", "@g"] },
-    { actor := "newcomer", act := .rerun, expect := .refused "stale" }])
-  plant := .measured "receive-first staleBehind: line 7 declined stale, the settlement open"
+    { actor := "newcomer", act := .receiptOf "newcomer", expect := .ok, prints := some "settle refused" },
+    -- nd's next run of the argv: the dead attempt releases it, and the write is planned afresh on a
+    -- World where the grant is gone
+    { actor := "newcomer", act := .rerun, expect := .refused "missingCell" }])
+  plant := .measured "receive-first staleBehind: line 7 printed settle open, the settlement open"
 
 /-- A Host that says it recorded a cancel it never saw (PROTOCOL-71, readers A7): the sponsor's write
 never reaches the writer (`open`); its cancel is answered `refused cancelled` by a relay that kept the
@@ -1870,6 +1903,6 @@ def rows : List Row :=
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow, forkRow, selfHeadRow, certifiedRow, certifiedPageRow]
+   forgedRefusalRow, forkRow, selfHeadRow, certifiedRow, certifiedPageRow, rerunRow]
 
 end Nanodregg.Protocol

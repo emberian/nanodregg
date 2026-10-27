@@ -1413,7 +1413,7 @@ state carried by bytes. The enumeration was what decided it. It found one reader
 was a defect in a consumer, not a reason to re-key.
 **Flag day.** None. No definition changed. Nothing re-geneses, re-emits or refuses to load.
 
-## KERNEL-41 · The journal is the trie's third slot kind: one authenticated map, canonical by construction, pruned by a canonical `retain` (KERNEL-11, 2026-10-17; cv 01a14ac8-1db6, GATES-3's law-6 read via CODEC-30; DESIGN, not yet built)
+## KERNEL-41 · The journal is the trie's third slot kind: one authenticated map, canonical by construction, pruned by a canonical `retain` (KERNEL-11, 2026-10-17; cv 01a14ac8-1db6, GATES-3's law-6 read via CODEC-30; DESIGN; replaced by (a′) below and BUILT, see KERNEL-41 PORTED)
 **Defect.** The World and the carried state hold the journal as a `Std.TreeMap`, whose internal
 balancing depends on insertion history. So `decode ∘ bytes` is the identity only up to
 `World.Equiv`/`CarriedEquiv` (CODEC-14/22), and two `gates/refines-allow.tsv` rows excuse it. A

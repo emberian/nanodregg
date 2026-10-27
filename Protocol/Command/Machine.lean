@@ -19,7 +19,8 @@ height and re-signs ONCE a command for that height + window (`reSign`, PROTOCOL-
 (precommitting the digest of its PENDING key) and has it signed by `signNext`; custody advances on
 its own settlement of the submit (CLIENT-13).
 
-`invite INPUT` (PROTOCOL-42) catches up, checks that INPUT makes the member's own World, pins the
+`invite INPUT` (PROTOCOL-42) catches up, checks the origin INPUT commits to is the member's own World's
+(a genesis input is recomputed; a carried input's stated origin is taken as stated), pins the
 writer's newest base as follow verified it itself (PROTOCOL-47, `pinOf`: follow's own World at the
 base's step count, the digest of its bytes; `noBase` / `baseMismatch` otherwise) and has custody
 sign the invitation; it prints `invite HEX`.
@@ -92,7 +93,8 @@ inductive Refusal (D : Type)
   | receive (r : Receive.Refusal D)
   /-- follow's own World rejects the derived Turn -/
   | reject (r : Reject D)
-  /-- the Host refused, by its name -/
+  /-- the Host refused, by its name; also follow's own settlement of a call (`receipt CALL`), by the
+  refusal's name -/
   | host (name : String)
   /-- the logged step at this log position does not re-derive on follow's World: an event that does
   not read (`eventOf`), or one `Receive.rederive` refuses `eventMismatch` (a call that does not
@@ -324,7 +326,8 @@ def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
 `signIncoming`), 2 for `init`
 only (its join signature; every other verb's phase 2 is a `log` reply), 3 (a call's
 signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature), 8 (an
-invitation's signature). -/
+invitation's signature), 9 (a cancel message's signature) and 11 (the `sync --attest` head's
+signature). -/
 def custodyPhase (isInit : Bool) (phase : UInt8) : Bool :=
   phase == 1 || phase == 3 || phase == 5 || phase == 6 || phase == 8 || phase == 9 || phase == 11 ||
     (isInit && phase == 2)
@@ -914,7 +917,8 @@ def adoptPin (X : Ctx D) (me : Self D) (inv key : ByteArray) : Except (Refusal D
   | .error r => .error (.invite r)
   | .ok (i, o) => if o = me.world then .ok i else .error (.invite .otherWorld)
 
-/-- `invite`'s check of its INPUT: the inputs decode and make the member's own World. -/
+/-- `invite`'s check of its INPUT: the inputs decode and commit to the member's own World's origin. A genesis
+input's origin is recomputed (`Invite.startOrigin`); a carried input's is the one it states. -/
 def inviteInput (X : Ctx D) (me : Self D) (input : ByteArray) : Except (Refusal D) Unit :=
   match Invite.startOf X input with
   | none => .error (.invite .badInvitation)

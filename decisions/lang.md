@@ -276,6 +276,7 @@ law trusts `World.admit`'s window check, a fact about KERNEL it does not state. 
 derived, not run. The proof shape (inversion over `BigStep`, with data-level views of the
 environment) was the one I could make go quickly; it shares `Val`/`primEval` with the machine
 (LANG-18's named gap), so a bug in `primEval` would be inherited by every spec.
+**Amended (FAERIE-DOCS 2026-10-27).** KERNEL-25 is BUILT (be98647): an invoke is owner-gated like a write, so "NOT YET BUILT" and "an invoke is not" above no longer hold.
 
 ## LANG-21 Cross-object calls: effects as data, restated over touches; built with LEDGER's first method-triggered receiver (2026-10-17; ID-9, closes the LANG-13 fork as a design)
 **Decision.** LANG-13's fork is decided for (a)'s atomicity without (a)'s `perform`: a method
@@ -6903,6 +6904,8 @@ consumer written to it; the proofs then forced one honest generalisation (the ta
 fields than the three it reads), which the original matcher design had hidden by giving the matcher its own argument.
  L2 (the fuse as two objects: `X.fuse` judges, retracts, logs and invokes `Y.take`
 with the deal it decoded; the matcher deleted) is the next commit of this session (DESIGN-T §3, §4 PT3/PT4).
+
+**Amended (FAERIE-DOCS 2026-10-27; LANG-75.24, READ-LANGPROOFS F8 and F-7).** `escrow_fuse_admitted` no longer takes `hne : x' ≠ y'`: the peer is not `x'` because `x'` is already in the walk, and the Critique's sentence that `hne` is left as a premise is superseded by LANG-75.24. PT3's "type error at generation" holds at the fixture's `theta = [price]`; at `theta = [a, b]` the type `offerThetaTy [a, b]` equals `offerKeysTy`, so the mutation checks, and a well-typed wrong value (a swapped pair) is never a generation error.
 
 ## LANG-78 One install loader: install admits every package of the closure, and the package itself, by the admission a run's load uses (2026-10-24; FIX-LANG card 1; COLLATION-20261024 §A10; READ-LANG F-1; method R-0069)
 

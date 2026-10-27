@@ -317,7 +317,7 @@ def run_group(argv: list[str], cwd: str, env: dict) -> subprocess.CompletedProce
     """Run `argv` as the leader of a process group of its own; past DEADLINE the WHOLE group is
     killed (SIGKILL), not only the direct child (CLIENT-38, A19: the child is cargo or strace, and a
     kill of it alone left the test binary and every supervisor under it alive: the 336 of 10-23).
-    A process that left the group (bwrap's --new-session) is our binaries' parent-death link's
+    A process that left the group (a confined child calls setsid, CLIENT-48) is our binaries' parent-death link's
     to end. Raises subprocess.TimeoutExpired as subprocess.run does, with what was printed."""
     with subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           text=True, start_new_session=True) as p:
@@ -672,8 +672,8 @@ def main() -> int:
             k = "t:" + readset.key(rs0, t.root, line) if rs0 and line else None
         at = prev[exe][1].get("at") if exe in prev else None
         if exe in prev and prev[exe][0].startswith("t:") and not readset.keyable(prev[exe][1].get("readset") or {}):
-            head.say(f"  {word} {exe}: re-run (namespace bind sources were not mapped to host paths, "
-                     f"or the record predates GATES-20m)")
+            head.say(f"  {word} {exe}: re-run (traced in a mount namespace, "
+                     f"or the record predates GATES-20g)")
             continue
         if exe in prev and k is not None and prev[exe][0] == k and mine(exe) and a.daily is not None and (
                 not isinstance(at, (int, float)) or now - at > a.daily):
