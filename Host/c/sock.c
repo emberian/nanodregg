@@ -10,6 +10,13 @@
  * too: Linux never answers EINPROGRESS for AF_UNIX, and a full backlog is EAGAIN at once.
  * clock_gettime's result is unchecked: CLOCK_MONOTONIC fails only with EINVAL for an unsupported
  * clock id, and POSIX requires it on both platforms.
+ *
+ * A confined Linux child cannot make a socket (sandbox/src/linux.rs, CLIENT-48): when ND_CONNECTOR
+ * names a descriptor, the connect is asked of the launcher over it instead. The wire is the sandbox
+ * crate's (`linux::ask`): the path as one seqpacket message; the reply a u32le errno (0: connected)
+ * with the connected, non-blocking socket as SCM_RIGHTS. One ask at a time (a mutex), so two threads
+ * never read each other's reply. Errors read as before: `connect: … (errno 13)` for a path the
+ * launcher's policy does not grant, the connect's own errno otherwise.
  */
 #include <lean/lean.h>
 #include <errno.h>
@@ -22,6 +29,10 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <pthread.h>
+#include <stdint.h>
+#endif
 
 lean_obj_res nd_io_errno(const char *call, int err); /* Host/c/file.c */
 
@@ -66,6 +77,57 @@ static lean_obj_res fail_close(int fd, const char *call, int err) {
   return err == 0 ? named(call) : nd_io_errno(call, err);
 }
 
+/* The connected socket `fd` as a Conn bounded by `ms`. */
+static lean_obj_res conn_ok(int fd, uint32_t ms) {
+  nd_conn *c = (nd_conn *)malloc(sizeof(nd_conn));
+  if (c == NULL) return fail_close(fd, "malloc", ENOMEM);
+  c->fd = fd; c->ms = ms;
+  if (nd_conn_class == NULL)
+    nd_conn_class = lean_register_external_class(nd_conn_finalize, nd_conn_foreach);
+  return lean_io_result_mk_ok(lean_alloc_external(nd_conn_class, c));
+}
+
+#ifdef __linux__
+static pthread_mutex_t nd_connector_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* The connected socket at `path` from the launcher's connector `k`, or -1 with errno set. */
+static int nd_connector_ask(int k, const char *path, size_t n) {
+  pthread_mutex_lock(&nd_connector_lock);
+  ssize_t sent;
+  do sent = send(k, path, n, MSG_NOSIGNAL); while (sent < 0 && errno == EINTR);
+  if (sent != (ssize_t)n) { int e = sent < 0 ? errno : EPROTO; pthread_mutex_unlock(&nd_connector_lock); errno = e; return -1; }
+  uint8_t code[4];
+  union { struct cmsghdr h; char b[CMSG_SPACE(sizeof(int))]; } ctl;
+  struct iovec io = { code, sizeof code };
+  struct msghdr m;
+  memset(&m, 0, sizeof m);
+  m.msg_iov = &io; m.msg_iovlen = 1; m.msg_control = ctl.b; m.msg_controllen = sizeof ctl.b;
+  ssize_t got;
+  do got = recvmsg(k, &m, MSG_CMSG_CLOEXEC); while (got < 0 && errno == EINTR);
+  int e = got < 0 ? errno : 0;
+  pthread_mutex_unlock(&nd_connector_lock);
+  if (got < 0) { errno = e; return -1; }
+  int fd = -1;
+  for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c != NULL; c = CMSG_NXTHDR(&m, c))
+    if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len == CMSG_LEN(sizeof(int)))
+      memcpy(&fd, CMSG_DATA(c), sizeof fd);
+  if (got != 4) { if (fd >= 0) close(fd); errno = EPROTO; return -1; }
+  uint32_t err = (uint32_t)code[0] | (uint32_t)code[1] << 8 | (uint32_t)code[2] << 16 | (uint32_t)code[3] << 24;
+  if (err != 0) { if (fd >= 0) close(fd); errno = (int)err; return -1; }
+  if (fd < 0) { errno = EPROTO; return -1; }
+  return fd;
+}
+
+/* The connector this process was handed (ND_CONNECTOR), or -1 when it has none. */
+static int nd_connector(void) {
+  const char *v = getenv("ND_CONNECTOR");
+  if (v == NULL || *v == 0) return -1;
+  char *end = NULL;
+  long n = strtol(v, &end, 10);
+  return (*end == 0 && n > 2 && n < INT_MAX) ? (int)n : -1;
+}
+#endif
+
 LEAN_EXPORT lean_obj_res nd_unix_connect(b_lean_obj_arg path, uint32_t ms, lean_obj_arg w) {
   (void)w;
   struct sockaddr_un a;
@@ -76,6 +138,14 @@ LEAN_EXPORT lean_obj_res nd_unix_connect(b_lean_obj_arg path, uint32_t ms, lean_
   if (n >= sizeof a.sun_path) return named("pathTooLong");
   if (ms == 0) return named("timeoutZero");
   memset(&a, 0, sizeof a); a.sun_family = AF_UNIX; memcpy(a.sun_path, s, n);
+#ifdef __linux__
+  int k = nd_connector();
+  if (k >= 0) {
+    int fd = nd_connector_ask(k, s, n);
+    if (fd < 0) return nd_io_errno("connect", errno);
+    return conn_ok(fd, ms);
+  }
+#endif
 #ifdef SOCK_CLOEXEC
   int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
   if (fd < 0) return nd_io_errno("socket", errno);
@@ -99,12 +169,7 @@ LEAN_EXPORT lean_obj_res nd_unix_connect(b_lean_obj_arg path, uint32_t ms, lean_
     else if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &l) != 0) e = errno;
     if (e != 0) return fail_close(fd, "connect", e);
   }
-  nd_conn *c = (nd_conn *)malloc(sizeof(nd_conn));
-  if (c == NULL) return fail_close(fd, "malloc", ENOMEM);
-  c->fd = fd; c->ms = ms;
-  if (nd_conn_class == NULL)
-    nd_conn_class = lean_register_external_class(nd_conn_finalize, nd_conn_foreach);
-  return lean_io_result_mk_ok(lean_alloc_external(nd_conn_class, c));
+  return conn_ok(fd, ms);
 }
 
 /* Every byte before the deadline, or an IO error; a short send is continued, never success. */

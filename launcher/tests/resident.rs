@@ -21,21 +21,20 @@
 //!   Inside, the resident `write`s the operator's data object it holds a mutate grant on, and the
 //!   operator `read`s the value over its own sockets. Its write to an object it holds no grant on is
 //!   refused, and the operator reads that object unchanged. An off-surface verb (`rotate`) is refused
-//!   `notOnSurface`. The other resident's member socket is ENOENT, and the member directory lists
-//!   exactly `nd.sock`. The member's key never enters the sandbox (the workspace is hidden: W-key).
+//!   `notOnSurface`. The other resident's member socket is refused (EACCES: the connector grants
+//!   only the plan's two sockets), and the member directory is not listed (CLIENT-48). The member's key never enters the sandbox (the workspace is hidden: W-key).
 //! - R2: grain-launch resolves it through `Policy.connect` (one uid here: the socket is this uid's,
 //!   exactly 0600, because keybroker binds 0600 when PEER is its own uid, HOSTING-21). The
 //!   refusals at resolve are `refusals_at_resolve_by_name`.
 //! - R3: inside, the resident asks keybroker and is granted (the fake TLS upstream's 200).
-//! - R4: inside, the key file is ENOENT.
-//! - R5: inside, the second resident's socket is ENOENT, and SOCKDIR lists at most this resident's
-//!   own directory (bwrap makes the bound directory's parents as empty mount scaffolding:
-//!   isolation.rs measured it, so SOCKDIR either refuses the listing or shows `<dirOf>` alone,
-//!   never the other resident).
-//! - R5b: inside, the bound directory lists exactly `broker.sock`.
+//! - R4: inside, the key file is EACCES (Landlock: its name resolves, its contents do not).
+//! - R5: inside, the second resident's socket is EACCES (not a connector entry), and SOCKDIR is
+//!   not listed.
+//! - R5b: inside, its own socket's directory is not listed either: a connect grant is the socket.
 //! - restart (PROTOCOL-7's (d)): keybroker is stopped (its process, by the handle whose pid is its
 //!   PID file) and started again. The resident, never relaunched, asks again and is granted. That
-//!   works because the sandbox binds the DIRECTORY, so the new socket inode is in its view.
+//!   works because the connector connects by the granted PATH on every ask, so the new socket
+//!   inode is the one reached.
 //! - R6 CONTROL: the canary key is in what the upstream received, and absent from every byte the
 //!   resident received. The resident did receive bytes, so the absence is not vacuous.
 //! - the operator's stop (`invoke 2`) ends the child, and grain-launch reports its exit.
@@ -279,23 +278,23 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     );
     assert_eq!(
         v("key-read"),
-        "denied ENOENT",
+        "denied EACCES/EPERM",
         "R4: the key file inside the sandbox"
     );
     assert_eq!(
         v("other-connect"),
-        "denied ENOENT",
+        "denied EACCES/EPERM",
         "R5: another resident's socket"
     );
-    let sl = v("sockdir-list");
-    assert!(
-        sl.starts_with("denied") || sl == format!("ok {g}"),
-        "R5: SOCKDIR shows more than this resident's own directory: {sl}"
+    assert_eq!(
+        v("sockdir-list"),
+        "denied EACCES/EPERM",
+        "R5: SOCKDIR is listed"
     );
     assert_eq!(
         v("own-list"),
-        "ok broker.sock",
-        "R5b: the bound directory holds more than broker.sock"
+        "denied EACCES/EPERM",
+        "R5b: a connect grant is the socket, never its directory"
     );
     // W: the resident reaches the World through its member socket, and only as its grants say
     assert!(
@@ -330,7 +329,7 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     );
     assert_eq!(
         v("member-other"),
-        "denied ENOENT",
+        "denied EACCES/EPERM",
         "W: another resident's member socket"
     );
     assert!(
@@ -339,12 +338,12 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
     );
     assert_eq!(
         v("member-list"),
-        "ok nd.sock",
-        "W: the member directory holds more than nd.sock"
+        "denied EACCES/EPERM",
+        "W: a connect grant is the socket, never its directory"
     );
     assert_eq!(
         v("member-key"),
-        "denied ENOENT",
+        "denied EACCES/EPERM",
         "W-key: the member workspace (its custody) inside the sandbox"
     );
     assert!(
@@ -417,7 +416,11 @@ fn a_resident_is_granted_through_its_own_socket_and_reaches_nothing_else() {
         "ok reply hello back",
         "restart: the resident was not granted by keybroker's next life"
     );
-    assert_eq!(v("own-list2"), "ok broker.sock", "R5b after the restart");
+    assert_eq!(
+        v("own-list2"),
+        "denied EACCES/EPERM",
+        "R5b after the restart"
+    );
     assert_eq!(
         log().matches(&format!("grain-launch: {g} started")).count(),
         1,

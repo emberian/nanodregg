@@ -337,7 +337,7 @@ def supervisorName : SupervisorExit → String
 def supervisorAction : SupervisorExit → String
   | .refusedAtLaunch => "refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism, a soft open-file limit below what the supervisor may hold): fix the unit or the box; the reason is on stderr. For `RLIMIT_NOFILE N is below the M fds it may hold` (CLIENT-28) raise the unit's LimitNOFILE (or `ulimit -n`) to at least M (73 at CONNECTIONS_MAX 64: its stdio, its socket, the child's two pipes, its SIGTERM pair, one per connection, one being refused `full`)"
   | .childUnroutable => "the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT"
-  | .childSignaled => "automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit"
+  | .childSignaled => "automatic; the child was killed by a signal (the OOM killer, an operator); a crash on every start stops at the start limit"
 
 def classWord : ExitClass → String
   | .done => "done"
@@ -393,7 +393,7 @@ def keybrokerAction : KeybrokerExit → String
   | .pidFile => "the decider's PID file could not be written: check the runtime directory"
   | .deciderSignaled => "automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit"
   | .deciderLost => "keybroker could not read its decider's end, or the decider gave no answer within ANSWER_MS_MAX (120 s) and did not end: nothing says a restart is safe; read the journal, then start the unit"
-  | .deciderMechanism => "the decider's sandbox or program failed before the decider ran (stderr names the raw code: bwrap, a missing library, the unit's RestrictAddressFamilies — it needs AF_NETLINK): fix the mechanism (deploy/live/README.md), then start the unit"
+  | .deciderMechanism => "the decider's sandbox or program failed before the decider ran (stderr names the raw code: the confinement step, a missing program or library): fix the mechanism (deploy/live/README.md), then start the unit"
   | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
 
 /-- The codes the keybroker unit must not restart: both broker tables' fatal classes. -/
@@ -504,9 +504,8 @@ def Broker.systemd (b : Broker) : Except Refusal String := do
     "# UMask=0027: the setgid resident socket directory must let the hosted group search it (02710); under 0077 it is created 02700 and keybroker refuses sockDir (R4)",
     "UMask=0027",
     "NoNewPrivileges=yes",
-    "# AF_NETLINK: bwrap --unshare-net brings up the decider sandbox loopback over NETLINK_ROUTE; without it",
-    "# the decider dies at every start (measured on burst5, systemd 255, OPS-3 run 1)",
-    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+    "# AF_INET/AF_INET6 for the upstream call; the decider confines itself (Landlock, seccomp: CLIENT-48) and needs no family",
+    "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
     s!"TimeoutStopSec={stopSeconds}",
     "",
     "[Install]",
@@ -578,7 +577,7 @@ def membersAction : MembersExit → String
   | .pidFile => "a PID file in PIDS could not be written: check the unit's RuntimeDirectory"
   | .deciderSignaled => "automatic; the decider was killed by a signal; a crash on every start stops at the start limit"
   | .deciderLost => "the decider stopped answering `residents` and did not end: read its stderr in the journal, then start the unit by hand"
-  | .deciderMechanism => "the decider's process ended with a code DeciderExit does not name (bwrap setup, a missing program or library, the unit's RestrictAddressFamilies): a restart meets the same thing; fix the mechanism"
+  | .deciderMechanism => "the decider's process ended with a code DeciderExit does not name (the confinement step, a missing program or library): a restart meets the same thing; fix the mechanism"
   | .stateRoot => "STATE (/srv/nd-members/L/follow) is not a 0700 nd directory with a clean chain (RUNBOOK §2b)"
   | .rootsOverlap => "two of nd-members' roots nest: MEMBER, MEMBERS, STATE and FOLLOW must be pairwise disjoint trees (HOSTING-32); fix the unit's argv"
   | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
@@ -690,8 +689,7 @@ def Members.systemd (m : Members) : Except Refusal String := do
     "# UMask=0027: the setgid resident socket directory must let the hosted group search it (02710); under 0077 it is created 02700 and keybroker refuses sockDir (R4)",
     "UMask=0027",
     "NoNewPrivileges=yes",
-    "# AF_NETLINK: the decider's and the children's bwrap bring a sandbox loopback up over NETLINK_ROUTE",
-    "RestrictAddressFamilies=AF_UNIX AF_NETLINK",
+    "RestrictAddressFamilies=AF_UNIX",
     s!"TimeoutStopSec={stopSeconds}",
     "",
     "[Install]",

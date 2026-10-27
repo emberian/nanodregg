@@ -337,9 +337,6 @@ pub mod wire {
         ConnectOwner,
         ConnectMode,
         ConnectDir,
-        ConnectOverlap,
-        SocketInGrant,
-        GrantUnlisted,
     }
 
     impl LaunchFailure {
@@ -359,9 +356,6 @@ pub mod wire {
                 LaunchFailure::ConnectOwner => 11,
                 LaunchFailure::ConnectMode => 12,
                 LaunchFailure::ConnectDir => 13,
-                LaunchFailure::ConnectOverlap => 14,
-                LaunchFailure::SocketInGrant => 15,
-                LaunchFailure::GrantUnlisted => 16,
             }
         }
 
@@ -381,9 +375,6 @@ pub mod wire {
                 11 => Some(LaunchFailure::ConnectOwner),
                 12 => Some(LaunchFailure::ConnectMode),
                 13 => Some(LaunchFailure::ConnectDir),
-                14 => Some(LaunchFailure::ConnectOverlap),
-                15 => Some(LaunchFailure::SocketInGrant),
-                16 => Some(LaunchFailure::GrantUnlisted),
                 _ => None,
             }
         }
@@ -405,9 +396,6 @@ pub mod wire {
                 LaunchFailure::ConnectOwner => "connectOwner",
                 LaunchFailure::ConnectMode => "connectMode",
                 LaunchFailure::ConnectDir => "connectDir",
-                LaunchFailure::ConnectOverlap => "connectOverlap",
-                LaunchFailure::SocketInGrant => "socketInGrant",
-                LaunchFailure::GrantUnlisted => "grantUnlisted",
             }
         }
     }

@@ -66,7 +66,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 |---|---|---|---|---|
 | 64 | refusedAtLaunch | fatal | stopped (RestartPreventExitStatus) | refused before the child ran (nothing hidden, an unreadable argument, a socket it cannot bind, the sandbox's policy or mechanism, a soft open-file limit below what the supervisor may hold): fix the unit or the box; the reason is on stderr. For `RLIMIT_NOFILE N is below the M fds it may hold` (CLIENT-28) raise the unit's LimitNOFILE (or `ulimit -n`) to at least M (73 at CONNECTIONS_MAX 64: its stdio, its socket, the child's two pipes, its SIGTERM pair, one per connection, one being refused `full`) |
 | 65 | childUnroutable | fatal | stopped (RestartPreventExitStatus) | the child wrote a frame the mux cannot route: a defect in the child, report to HOST and CLIENT |
-| 66 | childSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the child was killed by a signal (the OOM killer, an operator; on Linux any mechanism exit of 128 or more, bwrap's 128+N); a crash on every start stops at the start limit |
+| 66 | childSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the child was killed by a signal (the OOM killer, an operator); a crash on every start stops at the start limit |
 
 ## keybroker (the nd-keybroker unit; its decider's codes below are passed through)
 
@@ -106,7 +106,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 102 | deciderSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the decider was killed by a signal (OOM, an operator); a crash on every start stops at the start limit |
 | 104 | deciderLost | fatal | stopped (RestartPreventExitStatus) | keybroker could not read its decider's end, or the decider gave no answer within ANSWER_MS_MAX (120 s) and did not end: nothing says a restart is safe; read the journal, then start the unit |
 | 105 | sockDir | fatal | stopped (RestartPreventExitStatus) | the broker's socket directory fails its checks: /run/nd-broker must be nd:nd-hosted mode 02710 (tmpfiles), every directory above it owned by root, and each resident directory in it nd's, mode 02710 (HOSTING-17, RUNBOOK §2a) |
-| 79 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's sandbox or program failed before the decider ran (stderr names the raw code: bwrap, a missing library, the unit's RestrictAddressFamilies — it needs AF_NETLINK): fix the mechanism (deploy/live/README.md), then start the unit |
+| 79 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's sandbox or program failed before the decider ran (stderr names the raw code: the confinement step, a missing program or library): fix the mechanism (deploy/live/README.md), then start the unit |
 | 149 | parentDeath | fatal | stopped (RestartPreventExitStatus) | the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT |
 
 ## hosting-broker (the decider, under keybroker)
@@ -138,7 +138,7 @@ code space holds both tables: `host` (Host.Status, below 64) and nd-supervise's 
 | 156 | pidFile | fatal | stopped (RestartPreventExitStatus) | a PID file in PIDS could not be written: check the unit's RuntimeDirectory |
 | 157 | deciderSignaled | restart | restarted after 2 s; failed past 5 starts in 120 s | automatic; the decider was killed by a signal; a crash on every start stops at the start limit |
 | 158 | deciderLost | fatal | stopped (RestartPreventExitStatus) | the decider stopped answering `residents` and did not end: read its stderr in the journal, then start the unit by hand |
-| 159 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's process ended with a code DeciderExit does not name (bwrap setup, a missing program or library, the unit's RestrictAddressFamilies): a restart meets the same thing; fix the mechanism |
+| 159 | deciderMechanism | fatal | stopped (RestartPreventExitStatus) | the decider's process ended with a code DeciderExit does not name (the confinement step, a missing program or library): a restart meets the same thing; fix the mechanism |
 | 160 | stateRoot | fatal | stopped (RestartPreventExitStatus) | STATE (/srv/nd-members/L/follow) is not a 0700 nd directory with a clean chain (RUNBOOK §2b) |
 | 161 | rootsOverlap | fatal | stopped (RestartPreventExitStatus) | two of nd-members' roots nest: MEMBER, MEMBERS, STATE and FOLLOW must be pairwise disjoint trees (HOSTING-32); fix the unit's argv |
 | 162 | parentDeath | fatal | stopped (RestartPreventExitStatus) | the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT |

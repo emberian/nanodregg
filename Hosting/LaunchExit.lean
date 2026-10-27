@@ -8,8 +8,8 @@ but only a code `ControllerExit` names (`controller_exit::ALL`); any other is `c
 renders the unit's `RestartPreventExitStatus` from `codesOf .fatal` of both tables. grain-launch reads
 its codes only from the emitted `generated::launch_exit`.
 
-Every code is below 128: under bwrap a status of 128 or more IS a signal death (`sandbox`'s platform
-fact), so grain-launch reads a controller status ≥ 128 as `controllerSignaled`, never as a code. The
+Every code is below 128, the codes a shell would read as signal deaths (a signal death itself reaches
+grain-launch as a signal, `sandbox::killed_by_signal`: the confined child is the program, CLIENT-48). The
 codes avoid 1 and 2, 101 (a Rust panic), and every Host, nd-supervise, decider and keybroker code
 (`Hosting.Proofs.LaunchExit`).
 -/
@@ -94,7 +94,7 @@ inductive LaunchExit where
   /-- `wait` on the controller failed: nothing says a restart is safe -/
   | controllerLost
   /-- the controller's process ended below 128 with a code `ControllerExit` does not name: the
-  controller never ran its own end (bwrap's setup, a missing program or library), so a restart
+  controller never ran its own end (the confinement step, a missing program or library), so a restart
   meets the same mechanism (HOSTING-23) -/
   | controllerMechanism
   /-- a directory the World's layout hides (`Plan.layoutHidden` under `worlds/<label>`) is absent:

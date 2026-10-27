@@ -105,7 +105,7 @@ inductive LaunchFailure
   | programNotAbsolute
   | programOutside
   | exposed
-  /-- the confined command did not start (`Command::spawn` failed) -/
+  /-- the confined command did not start (`Command::spawn` failed, or its connector could not be made) -/
   | spawnFailed
   /-- more `connect` sockets than `sandbox::CONNECT_MAX` (HOSTING-17 §5) -/
   | connectTooMany
@@ -120,13 +120,6 @@ inductive LaunchFailure
   /-- a directory above a `connect` socket is writable by another, or owned by a uid that is neither
   root, the euid nor the socket's owner -/
   | connectDir
-  /-- a `connect` directory lies under or contains a read/write/exec entry: on Linux every directory a
-  child sees is already a connect grant (CLIENT-20, HOSTING-17 §8) -/
-  | connectOverlap
-  /-- a read/write/exec tree holds a unix socket at launch (CLIENT-20) -/
-  | socketInGrant
-  /-- a directory under a read/write/exec grant cannot be listed, so a socket in it cannot be ruled out -/
-  | grantUnlisted
   deriving DecidableEq, Repr
 
 namespace LaunchFailure
@@ -134,13 +127,13 @@ namespace LaunchFailure
 def all : List LaunchFailure :=
   [unsupported, mechanismMissing, unnameablePath, pathMissing, programNotAbsolute, programOutside,
    exposed, spawnFailed, connectTooMany, connectLink, connectNotSocket, connectOwner, connectMode,
-   connectDir, connectOverlap, socketInGrant, grantUnlisted]
+   connectDir]
 
 def code : LaunchFailure → UInt8
   | unsupported => 0 | mechanismMissing => 1 | unnameablePath => 2 | pathMissing => 3
   | programNotAbsolute => 4 | programOutside => 5 | exposed => 6 | spawnFailed => 7
   | connectTooMany => 8 | connectLink => 9 | connectNotSocket => 10 | connectOwner => 11
-  | connectMode => 12 | connectDir => 13 | connectOverlap => 14 | socketInGrant => 15 | grantUnlisted => 16
+  | connectMode => 12 | connectDir => 13
 
 def name : LaunchFailure → String
   | unsupported => "unsupported" | mechanismMissing => "mechanismMissing"
@@ -149,7 +142,6 @@ def name : LaunchFailure → String
   | exposed => "exposed" | spawnFailed => "spawnFailed"
   | connectTooMany => "connectTooMany" | connectLink => "connectLink" | connectNotSocket => "connectNotSocket"
   | connectOwner => "connectOwner" | connectMode => "connectMode" | connectDir => "connectDir"
-  | connectOverlap => "connectOverlap" | socketInGrant => "socketInGrant" | grantUnlisted => "grantUnlisted"
 
 def ofCode? (b : UInt8) : Option LaunchFailure := all.find? (·.code == b)
 

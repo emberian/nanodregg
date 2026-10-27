@@ -13,8 +13,8 @@
 #   ROW NAME PASS|FAIL|INFO :: detail
 # One uid runs it all (a user unit): PEER is this uid and SOCKDIR's group its primary group, the
 # deployment's two-uid branch is the broker test's. The upstream is an unreachable local port: the
-# rows are the unit's, not a call's. The mechanism (/usr/local/libexec/nd-bwrap) is a deploy-time
-# install (README.md).
+# rows are the unit's, not a call's. The confinement needs Landlock in the kernel
+# (README.md); nothing is installed for it.
 set -uo pipefail
 SRC=${1:?usage: broker.sh SRC ROOT} ROOT=${2:?usage: broker.sh SRC ROOT}
 [ -e "$ROOT" ] && { echo "$ROOT exists: every run gets a fresh ROOT"; exit 2; }
@@ -43,7 +43,7 @@ exits() { ju | grep -o 'Main process exited, code=[a-z]*, status=[0-9A-Z]*' | ta
 fresh() { systemctl --user stop "$UNIT" 2>/dev/null; systemctl --user reset-failed "$UNIT" 2>/dev/null; return 0; }
 for nt in deciderSignaled:keybroker keyFileMode:keybroker sockDir:keybroker store:hosting-controller layoutMissing:grain-launch inviteRefused:host missing:host; do
   [ -n "$(code "${nt%%:*}" "${nt#*:}")" ] || { echo "no code for $nt in EXITS.md"; exit 2; }; done
-[ -x /usr/local/libexec/nd-bwrap ] || { echo "no mechanism at /usr/local/libexec/nd-bwrap (README.md)"; exit 2; }
+grep -qw landlock /sys/kernel/security/lsm 2>/dev/null || { echo "no Landlock in this kernel (README.md)"; exit 2; }
 
 # the fixture: a genesis Store, the provider key (a canary, never a real key), the pinned anchors,
 # SOCKDIR 02710, the environment file

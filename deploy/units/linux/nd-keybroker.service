@@ -20,9 +20,8 @@ RestartPreventExitStatus=70 71 72 73 75 76 78 7 80 81 82 83 84 85 86 87 88 89 90
 # UMask=0027: the setgid resident socket directory must let the hosted group search it (02710); under 0077 it is created 02700 and keybroker refuses sockDir (R4)
 UMask=0027
 NoNewPrivileges=yes
-# AF_NETLINK: bwrap --unshare-net brings up the decider sandbox loopback over NETLINK_ROUTE; without it
-# the decider dies at every start (measured on burst5, systemd 255, OPS-3 run 1)
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# AF_INET/AF_INET6 for the upstream call; the decider confines itself (Landlock, seccomp: CLIENT-48) and needs no family
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 TimeoutStopSec=10
 
 [Install]

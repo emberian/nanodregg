@@ -8,15 +8,11 @@ name; the only process signalled by hand is a unit's host child, found from the 
 
 ## Deploy-time install (not made by the units or the harness)
 
-nd-supervise's Linux mechanism is the fixed path `/usr/local/libexec/nd-bwrap` (sandbox/src/lib.rs
-`MECHANISM`; missing is `MechanismMissing`, exit 64, never a fallback). The operator installs it:
-
-    sudo install -D -o root -g root -m 0755 /usr/bin/bwrap /usr/local/libexec/nd-bwrap
-
-- **Restriction ON** (Ubuntu 24.04+ default, `kernel.apparmor_restrict_unprivileged_userns = 1`;
-  hbox, Ubuntu 24.10): also install `sandbox/apparmor/nd-bwrap`, granting `userns` to that path alone.
-- **Restriction OFF** (burst5-a: Ubuntu 24.04.5, `apparmor_restrict_unprivileged_userns = 0`, no
-  `/etc/apparmor.d`, systemd 255): the root-owned copy is enough.
+Nothing (CLIENT-48). A confined child restricts itself with Landlock and seccomp between fork and
+exec (sandbox/src/linux.rs); the box needs only a kernel with Landlock at ABI 3 or newer (`landlock`
+in `/sys/kernel/security/lsm`). Without it every launch is `MechanismMissing` (exit 64), never a
+fallback. The runs below until 2026-10-27 were made under the retired bwrap mechanism
+(`/usr/local/libexec/nd-bwrap`).
 
 On Linux the sandbox does not filter exec (`EXEC_FILTERED = false`, b487eef): `--exec` bounds what
 is visible, not what may run.

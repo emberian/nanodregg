@@ -239,7 +239,7 @@ print(f"BAR fs {fstype}")
 
 def start(name, sock, hides, store, args):
     """nd-supervise SOCK --hide … --write STORE --exec HOST -- HOST ARGS…, its PID in PIDS/NAME.pid
-    (the program is named to the sandbox: Linux's bwrap floor refuses one outside every path)."""
+    (the program is named to the sandbox, which refuses one outside every path)."""
     cmd = [sup, sock] + sum((["--hide", h] for h in hides), []) + ["--write", store, "--exec", host, "--", host] + args
     p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(os.path.join(root, name + ".err"), "w"))
     open(pidfile(name), "w").write(str(p.pid))

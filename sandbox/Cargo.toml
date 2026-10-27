@@ -13,11 +13,20 @@ path = "src/lib.rs"
 rustix = { version = "=1.1.2", default-features = false, features = ["std", "fs", "process", "net"] }
 zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
+# Linux self-confinement (CLIENT-48): Landlock rules and seccomp programs built in the launcher,
+# applied by the child to itself before exec. libc for the system call numbers only.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = { version = "=0.4.5", default-features = false }
+seccompiler = { version = "=0.4.0", default-features = false }
+libc = { version = "=0.2.190", default-features = false }
+
 [dev-dependencies]
 nanodregg-devtools = { path = "../devtools" }
 
 [lints.rust]
-unsafe_code = "forbid"
+# deny, not forbid: exactly two sites allow it (the pre-exec step in linux.rs, the connector's
+# descriptor claim in connector.rs), each with its SAFETY argument.
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [lints.clippy]

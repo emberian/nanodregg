@@ -11,15 +11,22 @@
 //!
 //! - macOS: `sandbox-exec` with `(deny default)` and allow rules for exactly the policy's paths.
 //!   No network, no IPC, no fork, no exec but the policy's, no sysctl but `hw.ncpu`.
-//! - Linux: `bwrap` with every namespace unshared (the user namespace for certain, nested ones
-//!   disabled) and nothing mounted but the policy's paths, the floor and `/dev`. First run on hbox
-//!   (Ubuntu 24.10) 2026-10-17.
+//! - Linux: the child confines ITSELF between fork and exec (`linux`, CLIENT-48): Landlock for the
+//!   file system (rules on descriptors opened at launch), seccomp for the system calls (no socket
+//!   can be made, no process forked, no exec but the policy's), `no_new_privs`, its own session and
+//!   a parent-death signal. No helper program, no namespace, no mount: it composes with a service
+//!   manager's own sandbox (systemd's `RestrictNamespaces=yes` stays on). A `connect` entry is
+//!   reached through the connector the launcher hands it ([`connect_unix`]).
 //!
 //! Paths are canonicalized first (macOS checks real paths: `/var` is `/private/var`). The child's
 //! environment is cleared on both platforms.
 
 mod connect;
+#[cfg(target_os = "linux")]
+mod connector;
 pub mod custody;
+#[cfg(target_os = "linux")]
+mod linux;
 
 pub use connect::CONNECT_MAX;
 
@@ -67,8 +74,11 @@ impl Policy {
 pub enum ConfineError {
     /// This platform has no confinement mechanism nanodregg trusts.
     Unsupported,
-    /// The confinement program (`bwrap`, `sandbox-exec`) is not at its fixed path.
+    /// The mechanism is absent: `sandbox-exec` not at its fixed path (macOS); a kernel without
+    /// Landlock ABI 3, or a seccomp program that cannot be built for this architecture (Linux).
     MechanismMissing(&'static str),
+    /// The connector of a child with `connect` entries could not be made (Linux).
+    Connector(io::Error),
     /// A path cannot be named safely to the mechanism (not UTF-8, or a quote or backslash).
     UnnameablePath(PathBuf),
     /// A policy path does not exist (allowing or hiding nothing would pass silently).
@@ -107,19 +117,6 @@ pub enum ConfineError {
     /// A directory above a connect socket is not owned by root, the euid or the socket's owner, or
     /// another can write it.
     ConnectDir(PathBuf),
-    /// A connect directory lies under or contains a read, write or exec entry: on Linux the entry
-    /// would grant connect to every socket the directory ever holds (`CONNECT_FILTERED`).
-    ConnectOverlap {
-        /// The connect socket's directory.
-        connect: PathBuf,
-        /// The file grant it overlaps.
-        allowed: PathBuf,
-    },
-    /// A read, write or exec entry holds a unix socket at launch (this one): the grant would be a
-    /// connect grant on Linux.
-    SocketInGrant(PathBuf),
-    /// A directory under a read, write or exec entry cannot be listed, so a socket in it is unseen.
-    GrantUnlisted(PathBuf),
     /// An allowed path (or the floor) covers a hidden path or lies inside one (CLIENT-8).
     Exposed {
         /// The hidden path.
@@ -134,6 +131,7 @@ impl std::fmt::Display for ConfineError {
         match self {
             Self::Unsupported => write!(f, "confine: no confinement on this platform"),
             Self::MechanismMissing(p) => write!(f, "confine: {p} is missing"),
+            Self::Connector(e) => write!(f, "confine: connector: {e}"),
             Self::UnnameablePath(p) => write!(f, "confine: cannot name {}", p.display()),
             Self::PathMissing(p, e) => write!(f, "confine: {}: {e}", p.display()),
             Self::ProgramOutside { program, canonical } => write!(
@@ -163,14 +161,6 @@ impl std::fmt::Display for ConfineError {
                 "confine: connect: directory {} is not trusted",
                 p.display()
             ),
-            Self::ConnectOverlap { connect, allowed } => write!(
-                f,
-                "confine: connect directory {} overlaps grant {}",
-                connect.display(),
-                allowed.display()
-            ),
-            Self::GrantUnlisted(p) => write!(f, "confine: cannot list grant {}", p.display()),
-            Self::SocketInGrant(p) => write!(f, "confine: a grant holds socket {}", p.display()),
             Self::Exposed { hidden, allowed } => write!(
                 f,
                 "confine: exposed: {} reaches hidden {}",
@@ -183,46 +173,13 @@ impl std::fmt::Display for ConfineError {
 
 impl std::error::Error for ConfineError {}
 
-/// A platform fact (charter law 2, CLIENT-9): whether the mechanism filters EXEC. macOS
-/// `sandbox-exec` does (`process-exec` is allowed only for the program and `exec`). Linux `bwrap`
-/// does not: it only decides what is mounted, so every program under the read-only floor (/usr)
-/// runs inside, and `Policy::exec` bounds what is VISIBLE there, not what may run. Plant:
-/// tests/confine.rs `exec_is_filtered_exactly_where_the_platform_says`.
-#[cfg(target_os = "macos")]
-pub const EXEC_FILTERED: bool = true;
-/// See the macOS row.
-#[cfg(target_os = "linux")]
-pub const EXEC_FILTERED: bool = false;
-/// No mechanism, no launch, so nothing runs at all.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub const EXEC_FILTERED: bool = true;
-
-/// A platform fact (charter law 2, CLIENT-20): whether the mechanism filters CONNECT to unix
-/// sockets. macOS `sandbox-exec` does (`(deny default)`; `network-outbound` is allowed only to the
-/// `connect` paths). Linux `bwrap` does not: a child connects to every path socket in a directory
-/// of its view (measured on hbox under nd-bwrap), so `connect` there bounds what is VISIBLE, and
-/// `ConnectOverlap` and `SocketInGrant` keep sockets out of file grants. Plant: tests/connect.rs
-/// `connect_is_filtered_exactly_where_the_platform_says`.
-#[cfg(target_os = "macos")]
-pub const CONNECT_FILTERED: bool = true;
-/// See the macOS row.
-#[cfg(target_os = "linux")]
-pub const CONNECT_FILTERED: bool = false;
-/// No mechanism, no launch.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub const CONNECT_FILTERED: bool = true;
-
-/// A platform fact (charter law 2): how the mechanism reports a child killed by a signal. macOS
-/// `sandbox-exec` execs the program in its own place, so a signal death is seen as one (no exit
-/// code). Linux `bwrap` stays the parent and turns the inner death into its own exit `128 + N`
-/// (measured by OPS-2 on hbox: SIGXFSZ → 153, SIGKILL → 137). So on Linux a status of 128 or more
-/// IS a signal death; a confined child's own code can then not be read above 127 (the Host's stay
-/// below 64, `Host.Proofs.Exit`). Plant: client/tests/supervise.rs
-/// `a_confined_child_killed_by_a_signal_is_child_signaled`.
+/// Whether a confined child was killed by a signal. Both mechanisms leave the child in its own
+/// place (sandbox-exec execs the program; on Linux the program IS the child), so a signal death is
+/// seen as one, never as an exit code (bwrap's `128 + N` is gone with bwrap, CLIENT-48). Plant:
+/// client/tests/supervise.rs `a_confined_child_killed_by_a_signal_is_child_signaled`.
 pub fn killed_by_signal(status: std::process::ExitStatus) -> bool {
     use std::os::unix::process::ExitStatusExt;
     status.signal().is_some()
-        || (cfg!(target_os = "linux") && status.code().is_some_and(|c| c >= 128))
 }
 
 /// Write `WHO: LINE` to stderr in ONE write, and never panic. Every launcher process shares its
@@ -248,7 +205,8 @@ pub fn say_line(line: &str) {
 /// a parent that dies without stopping it (a test process killed by SIGKILL, a crashed nd-members)
 /// takes it along: it is sent SIGTERM, the stop a service manager sends, which nd-supervise answers
 /// by naming every close (CLIENT-30) and every other binary takes as its default end. Its confined
-/// children follow it (`--die-with-parent` on Linux; EOF on stdin on macOS).
+/// children follow it (on Linux their own step sets SIGKILL as their parent-death signal; on macOS
+/// EOF on stdin).
 ///
 /// A platform fact (law 2). Linux: `PR_SET_PDEATHSIG` (rustix's safe wrapper), which fires when the
 /// THREAD that spawned this process exits: a spawner keeps the child on the thread that owns it. A
@@ -285,13 +243,6 @@ pub fn die_with_parent() -> io::Result<()> {
 #[cfg(not(target_os = "linux"))]
 pub const ORPHAN_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 
-#[cfg(target_os = "linux")]
-/// Not `/usr/bin/bwrap`: Ubuntu 24.04+ (`kernel.apparmor_restrict_unprivileged_userns = 1`) gives an
-/// unprivileged user namespace no capabilities, so the distro bwrap fails `setting up uid map:
-/// Permission denied`. The mechanism is a root-owned copy of the distro ELF at this path with its
-/// own AppArmor profile granting `userns` to this path alone (`sandbox/apparmor/nd-bwrap`, installed
-/// by the operator); the global sysctl is untouched. Missing: `MechanismMissing`, never a fallback.
-const MECHANISM: &str = "/usr/local/libexec/nd-bwrap";
 #[cfg(target_os = "macos")]
 const MECHANISM: &str = "/usr/bin/sandbox-exec";
 
@@ -305,16 +256,6 @@ const FLOOR: [(&str, bool); 4] = [
     ("/dev/urandom", false),
     ("/usr/lib", true),
     ("/System/Volumes/Preboot/Cryptexes", true),
-];
-
-/// The same floor on Linux, as read-only binds (`true`: bound only if present).
-#[cfg(target_os = "linux")]
-const FLOOR: [(&str, bool); 5] = [
-    ("/usr", false),
-    ("/lib", true),
-    ("/lib64", true),
-    ("/bin", true),
-    ("/etc/ld.so.cache", true),
 ];
 
 pub(crate) fn canonical(path: &Path) -> Result<PathBuf, ConfineError> {
@@ -342,7 +283,7 @@ struct Resolved {
     read: Vec<PathBuf>,
     write: Vec<PathBuf>,
     exec: Vec<PathBuf>,
-    /// The connect sockets, canonical, and the directories that expose them.
+    /// The connect sockets: as the policy names them, and canonical.
     connect: Vec<(PathBuf, PathBuf)>,
 }
 
@@ -363,7 +304,7 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
     }
     let mut r = r;
     for p in &policy.connect {
-        r.connect.push(connect::entry(p)?);
+        r.connect.push((p.clone(), connect::entry(p)?));
     }
     if !r
         .read
@@ -376,42 +317,39 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
             canonical: r.program.clone(),
         });
     }
+    #[cfg(target_os = "linux")]
+    let floor: Vec<PathBuf> = linux::FLOOR.iter().map(PathBuf::from).collect();
+    #[cfg(not(target_os = "linux"))]
     let floor: Vec<PathBuf> = FLOOR.iter().map(|(p, _)| PathBuf::from(p)).collect();
-    let grants: Vec<&PathBuf> = [&r.program]
-        .into_iter()
-        .chain(&r.read)
-        .chain(&r.write)
-        .chain(&r.exec)
-        .collect();
-    for (_, dir) in &r.connect {
-        if let Some(a) = grants.iter().find(|a| overlap(a, dir)) {
-            return Err(ConfineError::ConnectOverlap {
-                connect: dir.clone(),
-                allowed: (*a).clone(),
-            });
-        }
-    }
-    // A grant under the floor adds nothing the floor does not already show, so it is not scanned.
-    for g in grants
-        .iter()
-        .filter(|g| !floor.iter().any(|f| g.starts_with(f)))
-    {
-        connect::socket_in(g)?;
-    }
     let floor = floor.into_iter();
     let allowed: Vec<PathBuf> = [r.program.clone()]
         .into_iter()
         .chain(r.read.iter().cloned())
         .chain(r.write.iter().cloned())
         .chain(r.exec.iter().cloned())
-        .chain(r.connect.iter().map(|(_, d)| d.clone()))
+        .chain(r.connect.iter().map(|(_, s)| s.clone()))
         .chain(floor)
+        .collect();
+    // An executable FILE granted to run (the program, an `exec` file) exposes that one inode, read
+    // and executed, never the tree around it: both mechanisms grant it alone (a Landlock rule on its
+    // descriptor; a sandbox-exec literal). So it may lie inside a hidden tree: a Host under
+    // `/home` runs with `/home` hidden (TESTGROUND-4). It may not be or contain a hidden path, and
+    // a file without an execute bit (a seed is 0600) gets no such pass.
+    let runnable: Vec<&PathBuf> = [&r.program]
+        .into_iter()
+        .chain(&r.exec)
+        .filter(|p| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
         .collect();
     for hidden in all(&policy.hidden)? {
         // `/` in the macOS floor is its listing only (a literal), so it exposes no file under it.
+        let inside_only =
+            |a: &PathBuf| runnable.contains(&a) && a != &hidden && a.starts_with(&hidden);
         if let Some(a) = allowed
             .iter()
-            .find(|a| a.as_os_str() != "/" && overlap(a, &hidden))
+            .find(|a| a.as_os_str() != "/" && overlap(a, &hidden) && !inside_only(a))
         {
             return Err(ConfineError::Exposed {
                 hidden,
@@ -422,15 +360,36 @@ fn resolve(policy: &Policy, program: &OsStr) -> Result<Resolved, ConfineError> {
     Ok(r)
 }
 
-/// The command that runs `program args…` under `policy`.
+/// The command that runs `program args…` under `policy`, its environment cleared.
 pub fn command(policy: &Policy, program: &OsStr, args: &[&OsStr]) -> Result<Command, ConfineError> {
     let r = resolve(policy, program)?;
-    let mut c = platform(&r)?;
-    if !Path::new(MECHANISM).is_file() {
-        return Err(ConfineError::MechanismMissing(MECHANISM));
-    }
-    c.env_clear().arg("--").arg(&r.program).args(args);
+    #[cfg(target_os = "linux")]
+    let mut c = linux::command(&r)?;
+    #[cfg(not(target_os = "linux"))]
+    let mut c = {
+        let mut c = platform(&r)?;
+        if !Path::new(MECHANISM).is_file() {
+            return Err(ConfineError::MechanismMissing(MECHANISM));
+        }
+        c.env_clear().arg("--").arg(&r.program);
+        c
+    };
+    c.args(args);
     Ok(c)
+}
+
+/// A unix stream socket connected to `path`: through the connector when this process is a confined
+/// Linux child with `connect` entries (`ND_CONNECTOR` names it; the launcher connects only to its
+/// policy's entries, anything else is `EACCES`), else a plain connect (macOS, where sandbox-exec
+/// filters the connect itself, and every unconfined caller). The socket is blocking.
+pub fn connect_unix(path: &Path) -> io::Result<std::os::unix::net::UnixStream> {
+    #[cfg(target_os = "linux")]
+    if let Some(c) = connector::get()? {
+        let s = std::os::unix::net::UnixStream::from(c.ask(path)?);
+        s.set_nonblocking(false)?;
+        return Ok(s);
+    }
+    std::os::unix::net::UnixStream::connect(path)
 }
 
 #[cfg(target_os = "macos")]
@@ -485,59 +444,6 @@ fn platform(r: &Resolved) -> Result<Command, ConfineError> {
     }
     let mut c = Command::new(MECHANISM);
     c.arg("-p").arg(profile);
-    Ok(c)
-}
-
-#[cfg(target_os = "linux")]
-fn platform(r: &Resolved) -> Result<Command, ConfineError> {
-    let mut c = Command::new(MECHANISM);
-    c.args([
-        "--die-with-parent",
-        "--new-session",
-        "--unshare-all",
-        // `--unshare-all` only TRIES the user namespace; `--disable-userns` needs it for certain.
-        "--unshare-user",
-        "--disable-userns",
-        "--cap-drop",
-        "ALL",
-        "--clearenv",
-        // A Lean child needs /dev (measured: without it `host follow` closes at its first frame).
-        // It needs no /proc: the runtime sizes its pool by sched_getaffinity, the Linux twin of
-        // macOS hw.ncpu, which bwrap does not filter (measured: the real round trip and the 3 s
-        // plant are green without /proc), so /proc is not mounted.
-        "--dev",
-        "/dev",
-    ]);
-    // A merged-/usr system has `/lib -> usr/lib` (and /lib64, /bin): the link is recreated, never
-    // bound (binding it would bind its target a second time under another name).
-    for (p, optional) in FLOOR {
-        match std::fs::read_link(p) {
-            Ok(target) => {
-                c.arg("--symlink").arg(target).arg(p);
-            }
-            Err(_) => {
-                c.args([
-                    if optional {
-                        "--ro-bind-try"
-                    } else {
-                        "--ro-bind"
-                    },
-                    p,
-                    p,
-                ]);
-            }
-        }
-    }
-    for p in [&r.program].into_iter().chain(&r.read).chain(&r.exec) {
-        c.arg("--ro-bind").arg(p).arg(p);
-    }
-    for p in &r.write {
-        c.arg("--bind").arg(p).arg(p);
-    }
-    // The socket's DIRECTORY, so a restarted server's new socket is the one seen (HOSTING-17 §4).
-    for (_, d) in &r.connect {
-        c.arg("--ro-bind").arg(d).arg(d);
-    }
     Ok(c)
 }
 

@@ -757,8 +757,8 @@ fn a_peer_of_another_uid_or_group_is_refused_by_name() {
 /// HOSTING-23 (burst5: a unit without AF_NETLINK made bwrap fail before the decider ran, and the
 /// unnamed exit 1 was restarted to the start limit): a decider process that ends with a code Lean's
 /// `DeciderExit` does not name ends keybroker `deciderMechanism` (fatal) with the raw code on
-/// stderr, never a pass-through. The "decider" is `/usr/bin/false`, run under the real nd-bwrap
-/// path, as the unit runs it. CONTROL: the real decider's own `store` end (an empty STORE) is passed
+/// stderr, never a pass-through. The "decider" is `/usr/bin/false`, run under the real
+/// confinement, as the unit runs it. CONTROL: the real decider's own `store` end (an empty STORE) is passed
 /// through with its own code (exposed_or_malformed_custody_files_stop_keybroker_by_name).
 #[test]
 fn a_decider_that_never_ran_its_own_end_stops_keybroker_by_name() {
@@ -791,9 +791,9 @@ fn a_decider_that_never_ran_its_own_end_stops_keybroker_by_name() {
     );
 }
 
-/// The other half of HOSTING-23 (VACUITY-READER-H4): a decider KILLED by a signal makes bwrap exit
-/// 128 + n, and that is `deciderSignaled` (102, restart: the OOM killer), never the mechanism's
-/// fatal 79. The "decider" is a script that SIGKILLs itself, under the real nd-bwrap path.
+/// The other half of HOSTING-23 (VACUITY-READER-H4): a decider KILLED by a signal is
+/// `deciderSignaled` (102, restart: the OOM killer), never the mechanism's fatal 79. The "decider"
+/// is a script that SIGKILLs itself, under the real confinement (a signal to itself is allowed).
 #[test]
 fn a_decider_killed_by_a_signal_is_restarted_not_stopped() {
     use nanodregg_launcher::broker_generated::keybroker_exit;

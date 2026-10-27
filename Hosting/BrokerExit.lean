@@ -117,8 +117,8 @@ inductive KeybrokerExit where
   `Broker.Bounds.answerMsMax` and did not end (CLIENT-39): nothing says a restart is safe -/
   | deciderLost
   /-- the decider's process ended with a code `DeciderExit` does not name: the decider never ran
-  its own end (bwrap failed to set up the sandbox, the program or a library is missing), so a
-  restart meets the same mechanism (HOSTING-23; burst5's AF_NETLINK) -/
+  its own end (its confinement step refused, the program or a library is missing), so a
+  restart meets the same mechanism (HOSTING-23) -/
   | deciderMechanism
   /-- the parent-death link could not be set (`nanodregg_sandbox::die_with_parent`, CLIENT-38): a
   process of ours that would outlive the parent that spawned it does not start -/

@@ -15,7 +15,7 @@
 //!   and the hosted uid with another gid are each answered `peerRefused`; this uid without the
 //!   group cannot reach the socket at all (EACCES at SOCKDIR's 02710).
 //! - `the_hosted_uid_alone_resolves_the_group_socket`: `Policy.connect` as the hosted uid accepts
-//!   the 0660 nd:nd-hosted socket, and the child it confines (under nd-bwrap, as the hosted uid)
+//!   the 0660 nd:nd-hosted socket, and the child it confines (as the hosted uid)
 //!   reaches keybroker and is decided; as the hosted uid with gid nd it is `ConnectOwner`; as the
 //!   owner `nd` it is `ConnectMode` (an own socket must be 0600); as this uid it is
 //!   `PathMissing` (EACCES: the directory refuses before the policy reads the socket).
@@ -24,11 +24,10 @@
 //! Plants (run by hand, hbox logs/hosting15-plants.out, logs/hosting16-plants.out), each RED:
 //! keybroker's peer check made `true` (the first test); `Policy.connect`'s other-gid refusal made a
 //! 0660 accept (the second); `make_dir` back to mkdir-then-chmod, and keybroker under UMask 0077
-//! (both: `sockDir … Mode(456)`, `Mode(1472)`); the sandbox's `Exposed` check disabled, and its grant
-//! scan made to skip an unlistable directory (the third).
+//! (both: `sockDir … Mode(456)`, `Mode(1472)`); the sandbox's `Exposed` check disabled (the third).
 //!
 //! When the fence is absent (no `nd`/`nd-hosted` uid, no `sudo -n` to them, no run roots, no
-//! SOCKDIR at its deployed shape, nd-bwrap not executable by both uids) each test prints
+//! SOCKDIR at its deployed shape) each test prints
 //! `skipped: no nd-hosted uid (<test>: <what is absent>; restore: <the operator's command>)` on
 //! stderr, uncaptured, and returns: the gates row reads such a run INCOMPLETE in a landing and RED in
 //! the standing run (ROOT, 10-21), never ok. sudo is used only to run a process as
@@ -62,7 +61,6 @@ const HOSTED: &str = "nd-hosted";
 const ND_TREE: &str = "/tank/hosting15-nd";
 /// The deployed SOCKDIR (tmpfiles nd-broker.conf); each run serves a directory `t<pid><tag>` of it.
 const BROKER: &str = "/run/nd-broker";
-const MECHANISM: &str = "/usr/local/libexec/nd-bwrap";
 /// The longest any process run as another uid lives.
 const LIFE_S: &str = "600";
 
@@ -107,10 +105,9 @@ fn fence(test: &str) -> Option<Fence> {
             ));
         };
         for u in [ND, HOSTED] {
-            if !sudo_ok(u, &["/usr/bin/test", "-x", MECHANISM]) {
+            if !sudo_ok(u, &["/usr/bin/true"]) {
                 return Some(format!(
-                    "sudo -n -u {u}, or {MECHANISM} not executable by it; restore: sudo setfacl -m \
-                     u:{ND}:rx,u:{HOSTED}:rx {MECHANISM}"
+                    "no sudo -n -u {u}; restore: a sudoers rule letting this uid run as {u}"
                 ));
             }
         }
@@ -270,7 +267,8 @@ fn name_of(e: &impl std::fmt::Debug) -> String {
 
 /// One broker answer, rendered `decided <Answer>` / `refused <name>`, or the IO error's kind.
 fn ask_once(sock: &Path) -> String {
-    let mut s = match UnixStream::connect(sock) {
+    // through the connector when this helper runs confined (CLIENT-48), plainly otherwise
+    let mut s = match nanodregg_sandbox::connect_unix(sock) {
         Ok(s) => s,
         Err(e) => return format!("connect {:?}", e.kind()),
     };
@@ -805,17 +803,29 @@ fn supervise_test(
     hide: &[&Path],
     args: &[&str],
 ) -> String {
+    supervise_run(u, sock, grant, hide, "/usr/bin/test", args)
+}
+
+/// [`supervise_test`] with another program in /usr/bin.
+fn supervise_run(
+    u: Option<&str>,
+    sock: &Path,
+    grant: &Path,
+    hide: &[&Path],
+    program: &str,
+    args: &[&str],
+) -> String {
     let mut a: Vec<&OsStr> = vec![
         sock.as_os_str(),
         OsStr::new("--read"),
         grant.as_os_str(),
         OsStr::new("--exec"),
-        OsStr::new("/usr/bin/test"),
+        OsStr::new(program),
     ];
     for h in hide {
         a.extend([OsStr::new("--hide"), h.as_os_str()]);
     }
-    a.extend([OsStr::new("--"), OsStr::new("/usr/bin/test")]);
+    a.extend([OsStr::new("--"), OsStr::new(program)]);
     a.extend(args.iter().map(OsStr::new));
     let sup = nd_supervise();
     let mut c = match u {
@@ -833,16 +843,15 @@ fn supervise_test(
 
 /// Check 3, the units' `--hide /home` (nd-host-serve, nd-hosted-follow@, nd-members@), for real.
 ///
-/// On Linux a confined child is built from an empty root, so `/home` is absent from it whether or
-/// not anything hides it; the hide is a refusal before launch of a grant overlapping `/home`
-/// (`Exposed`). Measured here (HOSTING-16, logs/hosting16-home*.out):
-/// - as nd and as nd-hosted, a grant naming `/home` is refused by name (`cannot list grant
-///   /home/<user>`, `GrantUnlisted`), and so is a grant of a user's directory under it: the socket
-///   scan of every grant (which runs before the hide check) cannot list another user's 0750 home.
-///   With the `/home` hide removed the refusal is IDENTICAL: on this box the hide is never reached
-///   for the deployed uids. It would be on a box whose `/home` holds a path they can list.
-/// - as nd, a child granted only its run tree tests `-e /home`: absent (exit 1); unconfined, nd
-///   sees it (exit 0).
+/// On Linux a confined child sees the host's names but reads only its grants (Landlock, CLIENT-48),
+/// so `/home` resolves inside and cannot be listed; the hide is a refusal before launch of a grant
+/// overlapping `/home` (`Exposed`). Measured here:
+/// - as nd and as nd-hosted, a grant naming `/home`, or a user's directory under it, with `/home`
+///   hidden is refused by name (`exposed: … reaches hidden /home`). (Under bwrap the socket scan of
+///   every grant refused first, `GrantUnlisted`, so the hide was never reached for these uids; the
+///   scan is gone with bwrap.)
+/// - as nd, a child granted only its run tree lists `/home`: refused (`ls` exits 2); unconfined, nd
+///   lists it (exit 0).
 /// - as this uid, which can list a directory under /home (cargo's), the hide is reached and refuses
 ///   (`exposed: … reaches hidden /home`); CONTROL, the hide removed: the child launches and reads
 ///   that directory (exit 0). So the check bites where it is reached.
@@ -854,7 +863,6 @@ fn a_home_grant_is_refused_and_home_is_absent_for_both_uids() {
     let home = Path::new("/home");
     let mut run = Run::new(ND, ND_TREE, tag('h'), "700");
     let rdir = run.dir("h", "700");
-    let tree = run.path();
     // never bound: each launch below is refused before nd-supervise binds; both uids traverse
     // SOCKDIR (02710 nd:nd-hosted) and the directory named does not exist
     let nowhere = Path::new(BROKER)
@@ -868,42 +876,47 @@ fn a_home_grant_is_refused_and_home_is_absent_for_both_uids() {
     for u in [ND, HOSTED] {
         for g in std::iter::once(home.to_path_buf()).chain(users.iter().cloned()) {
             for (word, hide) in [
-                ("hidden", vec![tree.as_path(), home]),
-                ("hide removed", vec![tree.as_path()]),
+                // `/root` is a hide both uids can name (nd's run tree is not nd-hosted's to resolve)
+                ("hidden", vec![Path::new("/root"), home]),
+                ("hide removed", vec![Path::new("/root")]),
             ] {
                 let v = supervise_test(Some(u), &nowhere, &g, &hide, &["-r", &g.to_string_lossy()]);
                 eprintln!(
                     "fence verdict: as {u}, grant {} (/home {word}): {v}",
                     g.display()
                 );
-                assert!(
-                    v.contains("cannot list grant /home/"),
-                    "as {u}, a grant of {} ({word}) was not refused by name: {v}",
-                    g.display()
-                );
+                if word == "hidden" {
+                    assert!(
+                        v.contains("reaches hidden /home"),
+                        "as {u}, a grant of {} ({word}) was not refused by name: {v}",
+                        g.display()
+                    );
+                }
             }
         }
     }
-    // /home is absent from a confined child as nd; nd itself sees it
-    let v = supervise_test(
+    // /home cannot be listed by a confined child as nd; nd itself lists it
+    let v = supervise_run(
         Some(ND),
         &rdir.join("s.sock"),
         &rdir,
         &[home],
-        &["-e", "/home"],
+        "/usr/bin/ls",
+        &["/home"],
     );
-    eprintln!("fence verdict: as nd, confined, test -e /home: {v}");
+    eprintln!("fence verdict: as nd, confined, ls /home: {v}");
     assert!(
-        v.ends_with("child exit status: 1"),
-        "a confined child as nd saw /home: {v}"
+        v.ends_with("child exit status: 2"),
+        "a confined child as nd listed /home: {v}"
     );
     let seen = Command::new("sudo")
-        .args(["-n", "-u", ND, "--", "/usr/bin/test", "-e", "/home"])
+        .args(["-n", "-u", ND, "--", "/usr/bin/ls", "/home"])
+        .stdout(Stdio::null())
         .status()
         .unwrap();
     assert!(
         seen.success(),
-        "control: nd does not see /home unconfined: {seen}"
+        "control: nd does not list /home unconfined: {seen}"
     );
     // where the hide IS reached: this uid lists cargo's directory under /home
     let cargo = Path::new(env!("CARGO"))

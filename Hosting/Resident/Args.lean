@@ -4,8 +4,8 @@
 grain-launch starts every grain with its launch frame's paths as argv, one field after another
 in `Plan` order (`launcher::plan_argv`): the program, then for each of read, write, exec, broker and
 member a count followed by that many absolute paths. Hidden paths are not passed, since they name
-what the grain must not see. The sandbox clears the environment, and `IO.appPath` is absent under
-bwrap (no /proc), so argv is the only way a confined grain can learn where it is.
+what the grain must not see. The sandbox clears the environment and grants no `/proc` read, so argv
+is the only way a confined grain learns where it is.
 
 The resident trusts none of it until it is its plan. `place` reads the label, the grain id and the
 entry out of the program path (`…/worlds/<l>/grains/<id>/pkg/<entry>`), computes Lean's own

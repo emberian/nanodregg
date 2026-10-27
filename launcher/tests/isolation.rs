@@ -5,10 +5,10 @@
 //! vacuous. Plants: a plan with `worlds/` added to `read` is refused (`foreignPath`), and a symlinked
 //! program pointing outside its package is refused (`programOutside`); each must show by name.
 //!
-//! On Linux bwrap mounts and does not filter exec: what the grain cannot see is absent (`ENOENT`),
-//! its package is read-only (`EROFS`), and everything under the read-only /usr floor is visible and
-//! executable inside (`nanodregg_sandbox::EXEC_FILTERED` = false). The verdicts below say "denied"
-//! with the errno the OS gave, never a bare EPERM it did not give.
+//! On Linux the grain confines itself (Landlock and seccomp, CLIENT-48): what it may not open is
+//! `EACCES` (its name still resolves), its package is read-only, and it executes only its program
+//! and its `exec` entries. A connect grant is the socket alone, reached through the connector, never
+//! a view of its directory. The verdicts below say "denied" with the errno the OS gave.
 //!
 //! Needs the built Lean exe `hosting-drive` (`nanodregg_devtools::lean_bin`; missing, it fails by name).
 #![cfg(target_os = "linux")]
@@ -458,12 +458,17 @@ fn a_resident_reaches_its_own_sockets_and_nothing_else() {
         );
     }
     fs::remove_file(t.vol.join("probe.out")).unwrap();
-    // CONFINED, through grain-launch + the Lean plan + nd-bwrap
+    // CONFINED, through grain-launch + the Lean plan + the self-confinement step
     let err = launch_as(&t, false, true);
     assert!(err.contains("report started"), "not launched: {err}");
     let v = verdicts(&t);
     assert_eq!(verdict(&v, "own-connect"), "ok", "own socket: {err}");
-    assert_eq!(verdict(&v, "own-list"), "ok broker.sock", "own directory");
+    // a connect grant is the socket, not its directory (CLIENT-48): the directory is not listed
+    assert!(
+        verdict(&v, "own-list").starts_with("denied"),
+        "own directory: {}",
+        verdict(&v, "own-list")
+    );
     assert!(
         verdict(&v, "other-connect").starts_with("denied"),
         "another resident's socket: {}",
@@ -474,19 +479,14 @@ fn a_resident_reaches_its_own_sockets_and_nothing_else() {
         "a file in the broker root: {}",
         verdict(&v, "broker-read")
     );
-    // bwrap makes the bound directory's parents as empty mount scaffolding, so the broker root may
-    // list inside, but only as the resident's own directory: never another resident's, never its file
     let bl = verdict(&v, "broker-list");
-    assert!(
-        bl.starts_with("denied") || bl == format!("ok {A}"),
-        "the broker root shows more than this resident's own directory: {bl}"
-    );
+    assert!(bl.starts_with("denied"), "the broker root is listed: {bl}");
     // the member root, the same way (HOSTING-25)
     assert_eq!(verdict(&v, "own-member"), "ok", "own member socket: {err}");
-    assert_eq!(
-        verdict(&v, "own-member-list"),
-        "ok nd.sock",
-        "own member directory"
+    assert!(
+        verdict(&v, "own-member-list").starts_with("denied"),
+        "own member directory: {}",
+        verdict(&v, "own-member-list")
     );
     for n in ["other-member", "member-read"] {
         assert!(
@@ -496,10 +496,7 @@ fn a_resident_reaches_its_own_sockets_and_nothing_else() {
         );
     }
     let ml = verdict(&v, "member-list");
-    assert!(
-        ml.starts_with("denied") || ml == format!("ok {A}"),
-        "the member root shows more than this resident's own directory: {ml}"
-    );
+    assert!(ml.starts_with("denied"), "the member root is listed: {ml}");
     // R1's isolation half: the launch named exactly the two own sockets, each under its own root
     let connects: Vec<&str> = err
         .lines()
@@ -617,7 +614,7 @@ fn a_placed_executable_is_never_busy_under_concurrent_spawns() {
 /// would refuse every launch `pathMissing` and crash-loop each grain; grain-launch ends
 /// `layoutMissing` (fatal), naming the directory, before it starts the controller. HOSTING-23: a
 /// controller process that ends below 128 with a code Lean's `ControllerExit` does not name (here
-/// `/usr/bin/false`, exit 1, under the real nd-bwrap path) ends grain-launch `controllerMechanism`
+/// `/usr/bin/false`, exit 1, under the real confinement) ends grain-launch `controllerMechanism`
 /// (fatal), never a pass-through of an unnamed code.
 #[test]
 fn a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name() {
@@ -664,7 +661,7 @@ fn a_missing_layout_or_a_controller_that_never_ran_stops_grain_launch_by_name() 
             "{name}: exit code"
         );
     }
-    // a controller KILLED by a signal (bwrap exits 128 + n) is controllerSignaled, restartable
+    // a controller KILLED by a signal is controllerSignaled, restartable
     let t = tree("killed");
     let src = t.root.join("killself.src");
     fs::write(&src, b"#!/bin/sh\nkill -9 $$\n").unwrap();

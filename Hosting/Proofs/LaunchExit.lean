@@ -31,7 +31,7 @@ theorem codes_disjoint :
   decide
 
 /-- No code is 1, 2 or 101 (an uncaught exception, a shell's misuse, a Rust panic), every code is
-below 128 (a bwrap'd status of 128 or more is a signal), and 0 is exactly `done`. -/
+below 128 (a shell reads 128 or more as a signal), and 0 is exactly `done`. -/
 theorem codes_reserved :
     (∀ a ∈ LaunchExit.all, a.code ≠ 1 ∧ a.code ≠ 2 ∧ a.code ≠ 101 ∧ 0 < a.code ∧ a.code < 128) ∧
     (∀ a ∈ ControllerExit.all, a.code ≠ 1 ∧ a.code ≠ 2 ∧ a.code ≠ 101 ∧ a.code < 128 ∧

@@ -77,10 +77,10 @@ pub fn ask(d: &mut Decider, at_ms: u64) -> Option<Vec<Vec<u8>>> {
 pub enum DeciderEnd {
     /// a code Lean's `DeciderExit` names (`decider_exit::ALL`): the decider's own end, passed through
     Own(u8),
-    /// killed by a signal (`nanodregg_sandbox::killed_by_signal`, the platform's fact: under bwrap
-    /// a code of 128 or more IS one, the OOM killer), restartable
+    /// killed by a signal (`nanodregg_sandbox::killed_by_signal`: the OOM killer, an operator),
+    /// restartable
     Signaled,
-    /// any other code: the mechanism's (bwrap's setup, a missing program), which a restart meets
+    /// any other code: the mechanism's (the confinement step, a missing program), which a restart meets
     /// again (HOSTING-23; VACUITY-READER-H4: 137 must not read as the mechanism)
     Mechanism(i32),
 }

@@ -74,9 +74,8 @@ pub fn policy(r: &Roots<'_>, p: &PlanPaths<'_>) -> Policy {
     }
 }
 
-/// HOSTING-17 §8, HOSTING-25: the hosting, broker and member roots are pairwise disjoint trees (on
-/// Linux every directory a grain may see is a connect grant to the sockets in it), compared after
-/// canonicalizing.
+/// HOSTING-17 §8, HOSTING-25: the hosting, broker and member roots are pairwise disjoint trees, so
+/// no file grant under one root names a socket of another, compared after canonicalizing.
 pub fn roots_disjoint(r: &Roots<'_>) -> bool {
     pairwise_apart(&[r.root, r.broker, r.member])
 }
@@ -156,9 +155,7 @@ pub fn failure_of(e: &ConfineError) -> LaunchFailure {
         ConfineError::ConnectOwner { .. } => LaunchFailure::ConnectOwner,
         ConfineError::ConnectMode { .. } => LaunchFailure::ConnectMode,
         ConfineError::ConnectDir(_) => LaunchFailure::ConnectDir,
-        ConfineError::ConnectOverlap { .. } => LaunchFailure::ConnectOverlap,
-        ConfineError::SocketInGrant(_) => LaunchFailure::SocketInGrant,
-        ConfineError::GrantUnlisted(_) => LaunchFailure::GrantUnlisted,
+        ConfineError::Connector(_) => LaunchFailure::SpawnFailed,
     }
 }
 

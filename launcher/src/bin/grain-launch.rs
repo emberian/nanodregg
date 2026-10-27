@@ -385,8 +385,8 @@ impl Launcher {
     }
 }
 
-/// How the controller's process ended: a signal (`nanodregg_sandbox::killed_by_signal`, the
-/// platform's fact: under bwrap a status of 128 or more, the OOM killer); its own code if Lean's
+/// How the controller's process ended: a signal (`nanodregg_sandbox::killed_by_signal`: the OOM
+/// killer, an operator); its own code if Lean's
 /// `ControllerExit` names it; otherwise the mechanism's.
 fn ended(status: std::process::ExitStatus) -> End {
     match status.code() {

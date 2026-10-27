@@ -4,9 +4,8 @@
 #   systemctl --user link /ABS/deploy/testground/units/nd-testground.service
 #   systemctl --user start nd-testground       # after `run.sh genesis STATE` once
 # Edit TREE, STATE and PORT; the relay listens on 127.0.0.1:PORT only.
-# Under systemd hardening, the writer's bwrap (nd-supervise's confinement) needs user namespaces: leave
-# ProtectKernelTunables and ProcSubset=pid OFF: bwrap writes /proc/sys/user/max_user_namespaces and reads
-# /proc/sys/kernel/overflowuid (measured by the demo-box tenant, redregg codex/TENANT.report.md).
+# The writer confines itself (Landlock and seccomp, CLIENT-48): any hardening may be added here,
+# RestrictNamespaces=yes included; a SystemCallFilter=@system-service must add @sandbox.
 [Unit]
 Description=nanodregg testground: a hosted World (host serve, guest-book, WebSocket relay)
 

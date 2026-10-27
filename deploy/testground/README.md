@@ -19,10 +19,11 @@ To turn it on (hbox, MEASURED 10-26 in `wt/testground-b`, PORT 18787 behind an s
     deploy/testground/run.sh stop STATE         # each process by its PID file
     PORT=8787 deploy/testground/run.sh serve STATE   # the same in the foreground, for systemd (units/)
 
-Under systemd (`units/nd-testground.service`, Type=simple around `run.sh serve`): the writer's
-confinement is bwrap (nd-supervise), which needs user namespaces, so leave `ProtectKernelTunables`
-and `ProcSubset=pid` OFF (bwrap writes `/proc/sys/user/max_user_namespaces` and reads
-`/proc/sys/kernel/overflowuid`; measured by the demo-box tenant, redregg `codex/TENANT.report.md`).
+Under systemd (`units/nd-testground.service`, Type=simple around `run.sh serve`): the writer
+confines itself (Landlock and seccomp, CLIENT-48), so every hardening directive may stay on
+(`RestrictNamespaces=yes`, `ProtectKernelTunables=yes`, `ProcSubset=pid`, `RestrictSUIDSGID=yes`);
+a `SystemCallFilter=@system-service` must add `@sandbox` (`deploy/live/confined-unit.sh` runs the
+writer and a member's follower as transient units with the demo box's full drop-ins).
 The kernel build pins libuv's headers at v1.48.0 (`build.sh`), so no CPATH is needed.
 
 Then expose `127.0.0.1:PORT` as `wss://HOST/ws` (TLS and the proxy are the operator's act; nothing

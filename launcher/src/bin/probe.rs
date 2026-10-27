@@ -17,7 +17,7 @@
 //!   and layout code), then print `ok <exit> <stdout>` (or `<stderr>` when the exit is not OK),
 //!   newlines as `|`.
 //!
-//! It finds itself by argv[0] (no /proc under bwrap). Exit 3 when it cannot write its own volume.
+//! It finds itself by argv[0] (no /proc: the sandbox grants none). Exit 3 when it cannot write its own volume.
 //!
 //! Run in `nd`'s place by nd-members (`launcher/tests/members.rs`, HOSTING-32) it is started as
 //! `probe --stdio WS FOLLOW_SOCK HOST_SOCK`: then its directory is the member workspace WS, the one
@@ -25,7 +25,6 @@
 //! own confinement lets it touch.
 
 use std::io::{ErrorKind, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -53,7 +52,7 @@ fn errno(e: &std::io::Error) -> String {
 }
 
 fn ask(path: &str, recv: &Path) -> String {
-    let s = UnixStream::connect(path).and_then(|s| {
+    let s = nanodregg_sandbox::connect_unix(Path::new(path)).and_then(|s| {
         s.set_read_timeout(Some(ASK))?;
         Ok(s)
     });
@@ -102,7 +101,7 @@ fn nd(rest: &str) -> String {
         return "bad-nd".into();
     };
     let argv: Vec<Vec<u8>> = words.map(|w| w.as_bytes().to_vec()).collect();
-    let mut s = match UnixStream::connect(sock).and_then(|s| {
+    let mut s = match nanodregg_sandbox::connect_unix(Path::new(sock)).and_then(|s| {
         s.set_read_timeout(Some(table::REPLY))?;
         Ok(s)
     }) {
@@ -152,7 +151,7 @@ fn attempt(op: &str, path: &str, recv: &Path) -> String {
             f.read_to_end(&mut b).map(|_| ())
         }),
         "write" => std::fs::write(path, b"probe"),
-        "connect" => UnixStream::connect(path).map(|_| ()),
+        "connect" => nanodregg_sandbox::connect_unix(Path::new(path)).map(|_| ()),
         "ask" => return ask(path, recv),
         "wait" => return wait(path),
         "nd" => return nd(path),

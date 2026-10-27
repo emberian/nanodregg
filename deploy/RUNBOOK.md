@@ -40,12 +40,12 @@ RUN WITH TWO REAL UIDS (hbox, 2026-10-21, HOSTING-40; the row `cargo-untraced:la
 check refuses `nd`, a third uid holding the group and `nd-hosted` with another gid (`peerRefused`), and decides
 `nd-hosted`; the grant naming `/home` is refused by name for both uids, but by the grant scan (`cannot list grant`)
 before the `/home` hide is reached, because hbox's homes are 0750 (cv 01a155e0-8f91). The run needed three fixes,
-above and in §2a: the nd-bwrap ACL, mkdir at mode, UMask 0027 on keybroker and nd-members. The units themselves
+above and in §2a: the nd-bwrap ACL (gone with bwrap, CLIENT-48), mkdir at mode, UMask 0027 on keybroker and nd-members. The units themselves
 (sysusers, tmpfiles, `User=`, NoNewPrivileges) are still to run on a box (STAND-INS B1 and B6).
 
 DEPLOYMENT SHAPE (Ember, 2026-10-21): the deployment will be inside its own VMs. That changes STAND-INS B1: the
 "deployment box" is a VM, so B1's system-unit run (sysusers, tmpfiles, `User=`, `RuntimeDirectory=`, NoNewPrivileges,
-nd-bwrap and AppArmor userns) is run INSIDE a VM image with two real uids, not on a shared host; the box window is
+and the confinement's Landlock floor, ABI 3) is run INSIDE a VM image with two real uids, not on a shared host; the box window is
 the VM's. Nothing in the rendered units changes for it. The VM is a boundary outside the nd / nd-hosted fence, not a
 replacement for it: this RUNBOOK still installs both uids.
 
@@ -148,8 +148,8 @@ built on opposite sides of it refuse every log page `badResult`, so upgrade the 
 follower together.
 nd-supervise refuses a `--write` or `--hide` path that does not exist (64), and `host follow` on a
 directory with no Store is `io` (13); both stop the unit (measured on burst5, deploy/live/README.md).
-A host killed by a signal is nd-supervise's 66 childSignaled, restarted (on Linux bwrap reports it
-as 128+N; CLIENT's c6e4abf maps that to 66).
+A host killed by a signal is nd-supervise's 66 childSignaled, restarted (the child is the program
+itself on both platforms, so the death arrives as the signal, CLIENT-48).
 
 systemd restarts every failure except the fatal codes of both tables (`RestartPreventExitStatus`:
 the Host's fatal class and nd-supervise's 64 refusedAtLaunch and 65 childUnroutable); a fatal
@@ -202,12 +202,12 @@ it. Under 0077 it comes out 02700 and keybroker ends `sockDir` (105), so neither
 resident in a two-uid deployment (HOSTING-40 R4). Other bits stay off; the socket itself is chmodded
 0660/0600 explicitly (by keybroker, and by nd-supervise for nd-members' sockets).
 
-Both users must be able to execute the sandbox mechanism, and neither is in an operator group
-(`nd-hosted` holds no supplementary group at all), so after installing `/usr/local/libexec/nd-bwrap`
-root:`<operator-group>` 0750 as `sandbox/apparmor/nd-bwrap` says, grant exactly those two uids
-(HOSTING-40 R1; never 0755, which gives the userns grant to every local uid):
-
-    sudo setfacl -m u:nd:rx,u:nd-hosted:rx /usr/local/libexec/nd-bwrap
+The sandbox installs nothing (CLIENT-48): every confined child restricts itself with Landlock and
+seccomp before its program runs, so there is no mechanism binary, AppArmor profile or ACL to deploy.
+The box needs a kernel with Landlock enabled at ABI 3 or newer (`landlock` in
+`/sys/kernel/security/lsm`; Linux 6.2+); without it every launch is refused `MechanismMissing`.
+A unit with `SystemCallFilter=@system-service` must add `@sandbox` (the Landlock and seccomp calls,
+each of which only restricts its caller), or the same refusal follows.
 
 The render refuses a hosted user equal to the key holder (`hostedIsKeyHolder`,
 `Ops.Units.Broker.check_hosted_ne_user`): keybroker cannot tell that misconfiguration from the
@@ -280,12 +280,13 @@ rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit
 - keybroker's and the decider's ends are `deploy/units/EXITS.md`'s two broker tables (HOSTING-16):
   every custody refusal stops the unit, a signalled or lagging decider restarts.
 - RAN under systemd 255 (burst5, the rendered unit as a user unit, `deploy/live/broker.sh` run 2, all
-  PASS): it starts under NoNewPrivileges=yes with the decider confined by nd-bwrap; a SIGKILLed
+  PASS): it starts under NoNewPrivileges=yes with the decider confined (then by nd-bwrap; now by its own step, CLIENT-48); a SIGKILLed
   decider ends keybroker `deciderSignaled` (102) and the unit restarts; a one-byte edit of the
   installed anchors makes ExecStartPre refuse every start until the start limit (keybroker never
   runs); key mode 0644 stops it `keyFileMode` (84), SOCKDIR 0755 stops it `sockDir` (105), each with
-  no restart. Run 1 found that `RestrictAddressFamilies` without AF_NETLINK kills the decider at
-  every start (bwrap brings the sandbox's loopback up over NETLINK_ROUTE); the unit now allows it.
+  no restart. Run 1 found that `RestrictAddressFamilies` without AF_NETLINK killed the decider at
+  every start (bwrap brought the sandbox's loopback up over NETLINK_ROUTE); with bwrap gone
+  (CLIENT-48) the unit no longer allows AF_NETLINK.
 
 ### 2b. The hosted follower (HOSTING-17 §7, ROOT's ruling) — follower and launcher RAN as user units (burst5, OPS-3 run 2); the driver PENDING
 

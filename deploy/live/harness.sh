@@ -8,8 +8,8 @@
 # found from the unit's own MainPID by walking /proc/PID/task/*/children to the process whose exe
 # is ROOT/bin/host (never a pattern). Every wait is bounded. One line per row:
 #   ROW NAME PASS|FAIL|INFO :: detail
-# then `ALL PASS` or `FAIL k`. The mechanism (/usr/local/libexec/nd-bwrap) is a deploy-time
-# install (README.md), not something this script or the units create.
+# then `ALL PASS` or `FAIL k`. The confinement needs Landlock in the kernel
+# (README.md); nothing is installed for it.
 set -uo pipefail
 SRC=${1:?usage: harness.sh SRC ROOT} ROOT=${2:?usage: harness.sh SRC ROOT}
 [ -e "$ROOT" ] && { echo "$ROOT exists: every run gets a fresh ROOT"; exit 2; }
@@ -38,7 +38,7 @@ for u in $UNITS; do systemctl --user stop "$u" 2>/dev/null; systemctl --user res
 
 mkdir -p "$ROOT/ws" "$ROOT/env" "$U" "$ROOT/report"
 journal_mark "$ROOT/report"
-[ -x /usr/local/libexec/nd-bwrap ] || { echo "no mechanism at /usr/local/libexec/nd-bwrap (README.md)"; exit 2; }
+grep -qw landlock /sys/kernel/security/lsm 2>/dev/null || { echo "no Landlock in this kernel (README.md)"; exit 2; }
 "$B/live-calls" "$C" 12 >/dev/null || exit 2
 # the member's follow Store is the writer's genesis reproduced with the writer's nonce (KERNEL-24,
 # RUNBOOK §2): genesis.args carries the nonce, so all three are one World

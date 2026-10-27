@@ -52,9 +52,10 @@ pub struct FollowSocket(UnixStream, Duration);
 pub struct HostSocket(UnixStream, Duration);
 
 impl FollowSocket {
-    /// Connect; each reply is waited for at most `reply`.
+    /// Connect (through the confined child's connector, `sandbox::connect_unix`); each reply is
+    /// waited for at most `reply`.
     pub fn connect(path: &Path, reply: Duration) -> io::Result<Self> {
-        Ok(Self(UnixStream::connect(path)?, reply))
+        Ok(Self(nanodregg_sandbox::connect_unix(path)?, reply))
     }
     fn ask(&mut self, (op, payload): (u8, Vec<u8>)) -> io::Result<Step> {
         let (status, reply) = exchange(&self.0, self.1, op, &payload)?;
@@ -117,9 +118,10 @@ impl Follow for FollowSocket {
 }
 
 impl HostSocket {
-    /// Connect; each reply is waited for at most `reply`.
+    /// Connect (through the confined child's connector, `sandbox::connect_unix`); each reply is
+    /// waited for at most `reply`.
     pub fn connect(path: &Path, reply: Duration) -> io::Result<Self> {
-        Ok(Self(UnixStream::connect(path)?, reply))
+        Ok(Self(nanodregg_sandbox::connect_unix(path)?, reply))
     }
 }
 

@@ -143,8 +143,8 @@ fn a_confined_lean_host_answers_within_the_deadline() {
 }
 
 /// A confined child killed by a signal ends the supervisor `childSignaled` (66), whatever the
-/// mechanism makes of the death (OPS-2, hbox: bwrap exits 128 + N, so the unit saw 137/153, a code
-/// in neither table). The child kills itself with SIGKILL before reading a frame.
+/// mechanism (OPS-2 measured bwrap turning it into exit 128 + N; self-confined, the death reaches the
+/// supervisor as the signal, CLIENT-48). The child kills itself with SIGKILL before reading a frame.
 #[test]
 fn a_confined_child_killed_by_a_signal_is_child_signaled() {
     let ws = std::env::temp_dir().join(format!("nd-sup-sig-{}", std::process::id()));

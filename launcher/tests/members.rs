@@ -519,8 +519,11 @@ fn starts(log: &str, name: &str, role: &str) -> usize {
 fn slow_follow(w: &World, r: &Roots) -> Members {
     let wrapper = r.base.0.join("slow-supervise.py");
     fs::write(&wrapper, format!(
-        "#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\ni=a.index('--')\nif a[i+2]=='follow':\n a=a[:i]+['--exec','/bin/sh','--exec','/bin/sleep']+['--','/bin/sh','-c','echo delayed-follow-startup >&2; while ! test -e \"$3/startup-go\"; do sleep 0.05; done; sleep 2; exec \"$@\"','sh']+a[i+1:]\nos.execv({0:?},[{0:?}]+a)\n",
-        nd_supervise().to_str().unwrap()
+        "#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\ni=a.index('--')\nif a[i+2]=='follow':\n a=a[:i]+['--exec','/usr/bin/python3']+['--','/usr/bin/python3','-I','-c',{1:?}]+a[i+1:]\nos.execv({0:?},[{0:?}]+a)\n",
+        nd_supervise().to_str().unwrap(),
+        // A confined child forks nothing (CLIENT-48): the wait is one Python process that then
+        // execs the Host in its own place (argv: HOST follow STORE MEMBER GRANT).
+        "import os,sys,time\nsys.stderr.write('delayed-follow-startup\\n'); sys.stderr.flush()\nwhile not os.path.exists(sys.argv[3]+'/startup-go'): time.sleep(0.05)\ntime.sleep(2)\nos.execv(sys.argv[1], sys.argv[1:])\n"
     )).unwrap();
     fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
     let c = argv(
@@ -638,13 +641,10 @@ fn steered(r: &Roots, names: &[&String]) -> (PathBuf, PathBuf) {
     let dir = r.base.0.join("steer");
     nanodregg_devtools::mkdirs(&dir).unwrap();
     steer(&dir, names);
-    let sh = r.base.0.join("steer.sh");
-    let py = "import struct,sys\ni,o=sys.stdin.buffer,sys.stdout.buffer\nwhile True:\n h=i.read(4)\n if len(h)<4: break\n i.read(struct.unpack('<I',h)[0])\n o.write(open(sys.argv[1]+'/frame','rb').read()); o.flush()\n";
-    fs::write(
-        &sh,
-        format!("#!/bin/sh\nexec /usr/bin/python3 -I -c \"{py}\" \"$1\"\n"),
-    )
-    .unwrap();
+    let sh = r.base.0.join("steer.py");
+    // its `#!` interpreter is executable confined (the sandbox grants a program's interpreters)
+    let py = "#!/usr/bin/python3 -I\nimport struct,sys\ni,o=sys.stdin.buffer,sys.stdout.buffer\nwhile True:\n h=i.read(4)\n if len(h)<4: break\n i.read(struct.unpack('<I',h)[0])\n o.write(open(sys.argv[1]+'/frame','rb').read()); o.flush()\n";
+    fs::write(&sh, py).unwrap();
     fs::set_permissions(&sh, fs::Permissions::from_mode(0o700)).unwrap();
     (sh, dir)
 }
@@ -774,17 +774,18 @@ fn ends(c: &mut Command) -> (String, Option<i32>) {
     (fs::read_to_string(&log).unwrap(), st.code())
 }
 
-/// A decider that prints `frame` once (a stub: `cat`), then sleeps.
+/// A decider that prints `frame` once, then sleeps (one Python process: a confined child forks
+/// nothing, CLIENT-48).
 fn stub(r: &Roots, names: Vec<Vec<u8>>) -> (PathBuf, PathBuf) {
     let dir = r.base.0.join("stub");
     nanodregg_devtools::mkdirs(&dir).unwrap();
     let mut f = Vec::new();
     write_frame(&mut f, &Verdict::Residents { names }.encode().unwrap()).unwrap();
     fs::write(dir.join("frame"), f).unwrap();
-    let sh = r.base.0.join("stub.sh");
+    let sh = r.base.0.join("stub.py");
     fs::write(
         &sh,
-        "#!/bin/sh\n/usr/bin/cat \"$1/frame\"\nexec /usr/bin/sleep 30\n",
+        "#!/usr/bin/python3 -I\nimport sys,time\nsys.stdout.buffer.write(open(sys.argv[1]+'/frame','rb').read()); sys.stdout.flush()\ntime.sleep(30)\n",
     )
     .unwrap();
     fs::set_permissions(&sh, fs::Permissions::from_mode(0o700)).unwrap();
