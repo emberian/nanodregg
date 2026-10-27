@@ -801,22 +801,6 @@ private theorem noRef_take (theta roles : List Label) (rels : List (Label × Rel
 
 /-! ## The deployed run of `take` -/
 
-theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
-  cases h with | record hr => cases hr; rfl
-
-/-- A value of an option type is `none` or `some` of a conforming value. -/
-theorem conforms_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
-    d = optD none ∨ ∃ z, d = optD (some z) ∧ Conforms z T := by
-  cases h with
-  | inj hf hc =>
-    rename_i ℓ A z
-    simp only [Row.find?] at hf
-    split at hf
-    · cases hf; subst_vars; exact .inl (by rw [conforms_empty hc]; rfl)
-    · split at hf
-      · cases hf; subst_vars; exact .inr ⟨z, rfl, hc⟩
-      · cases hf
-
 /-- A conforming take argument is `{keys, pair, theta}` (`Std.offer`'s and the escrow's). -/
 theorem offerTakeArg_cases {theta : List Label} {ad : Data} (h : Conforms ad (offerTakeArg theta)) :
     ∃ keys pair th, ad = .record [("keys", keys), ("pair", pair), ("theta", th)] ∧ Conforms keys offerKeysTy ∧

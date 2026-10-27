@@ -67,17 +67,18 @@ inductive WaitingStep (lib : List Term) (resumer : Term) (patience : Option Nat)
       WaitingStep lib resumer patience req state (.inj "retract" (.record [("key", key)]))
         (.inj "some" (.record [("answered", .inj "none" (.record [])), ("captured", c)]))
 
-private theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
+theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
   cases h with | record hr => cases hr; rfl
 
-private theorem conforms_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
-    d = .inj "none" (.record []) ∨ ∃ z, d = .inj "some" z ∧ Conforms z T := by
+/-- A value of an option type is `none` or `some` of a conforming value. -/
+theorem conforms_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
+    d = optD none ∨ ∃ z, d = optD (some z) ∧ Conforms z T := by
   cases h with
   | inj hf hc =>
     rename_i ℓ A z
     simp only [Row.find?] at hf
     split at hf
-    · cases hf; subst_vars; exact .inl (by rw [conforms_empty hc])
+    · cases hf; subst_vars; exact .inl (by rw [conforms_empty hc]; rfl)
     · split at hf
       · cases hf; subst_vars; exact .inr ⟨z, rfl, hc⟩
       · cases hf

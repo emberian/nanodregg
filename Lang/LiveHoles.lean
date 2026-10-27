@@ -5,6 +5,7 @@ import Lang.Eval
 import Lang.Wire.Data
 import Kernel.Receive.Call
 import Lang.Rel
+import Lang.Print
 
 namespace Nanodregg.Lang
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
@@ -138,14 +139,10 @@ def supportPinned {D : Type} (digestOf : ByteArray → Option D) (look : Pinned 
   | .row rel key _ => (holeRow rv self rel key).map fun _ => ()
   | _ => if supportObserved digestOf look p then .ok () else .error (.unpinned [p])
 
-/-- One hex digit. -/
-def hexDigit (n : UInt8) : Char :=
-  if n < 10 then Char.ofNat (48 + n.toNat) else Char.ofNat (87 + n.toNat)
-
 /-- Bytes as lowercase hex, two digits a byte: the text of a key or a cell id inside a refusal. Two pushes a
 byte, no list (law 4). -/
 def hexOf (b : ByteArray) : String :=
-  b.foldl (fun s x => (s.push (hexDigit (x >>> 4))).push (hexDigit (x &&& 15))) ""
+  b.foldl (fun s x => (s.push (Print.hexDigit (x >>> 4).toNat)).push (Print.hexDigit (x &&& 15).toNat)) ""
 
 /-- A pin's coordinates in a refusal: `row:REL:KEYHEX:VER` or `cell:IDHEX`. A client that is refused re-reads
 exactly this (DESIGN-CTX §2.3: a refusal is the negative literal of the assumption that failed, with its
