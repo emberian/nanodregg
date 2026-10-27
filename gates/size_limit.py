@@ -15,17 +15,37 @@ SKIP_DIRS = {".lake", ".git", "target", "node_modules"}
 TABLE = os.path.join("gates", "size-allow.tsv")
 
 
+def tracked_names(root: str) -> list[str] | None:
+    """The tracked files of ROOT, or None when ROOT has no record of what is tracked. A git checkout
+    lists `git ls-files`. An exported tree (scripts/gate-lib.sh materialize: `read-tree -u` into DIR with
+    its index at DIR.index, inside some repo's git dir) lists that index: the export also holds untracked
+    build products (testground/kernel.wasm, gitignored), which are not the tree being judged."""
+    env = dict(os.environ)
+    cmd = ["git", "-C", root, "ls-files", "-z"]
+    if not os.path.exists(os.path.join(root, ".git")):
+        index = root.rstrip(os.sep) + ".index"
+        gitdir, d = None, os.path.dirname(os.path.abspath(root))
+        while gitdir is None and d != os.path.dirname(d):
+            if os.path.basename(d) == ".git" and os.path.isdir(d):
+                gitdir = d
+            d = os.path.dirname(d)
+        if not os.path.exists(index) or gitdir is None:
+            return None
+        env.update(GIT_DIR=gitdir, GIT_WORK_TREE=os.path.abspath(root), GIT_INDEX_FILE=index)
+        cmd = ["git", "ls-files", "-z"]
+    r = subprocess.run(cmd, capture_output=True, env=env, cwd=root)
+    if r.returncode != 0:
+        raise RuntimeError(f"git ls-files: {r.stderr.decode(errors='replace').strip()}")
+    return [os.fsdecode(x) for x in r.stdout.split(b"\0") if x]
+
+
 def listing(root: str) -> dict[str, int]:
-    """Every file of ROOT, name -> size on disk. A git tree lists `git ls-files` (every tracked file,
-    SKIP_DIRS or not); an exported tree (scripts/standing.sh runs gates/check.py on one) is walked outside SKIP_DIRS. Symlinks and
-    non-regular files are skipped, as is a git path deleted from the worktree."""
-    names: list[str] = []
-    if os.path.exists(os.path.join(root, ".git")):
-        r = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"git ls-files: {r.stderr.decode(errors='replace').strip()}")
-        names = [os.fsdecode(x) for x in r.stdout.split(b"\0") if x]
-    else:
+    """Every tracked file of ROOT, name -> size on disk (tracked_names). A tree with no record of what
+    is tracked (a bare directory, as the plants build) is walked outside SKIP_DIRS. Symlinks and
+    non-regular files are skipped, as is a tracked path deleted from the worktree."""
+    names = tracked_names(root)
+    if names is None:
+        names = []
         for d, dirs, files in os.walk(root):
             dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
             names += [os.path.relpath(os.path.join(d, f), root) for f in files]

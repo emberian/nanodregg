@@ -56,6 +56,25 @@ def main() -> int:
         assert r.returncode == 1, "allow: a malformed row must be red"
         assert "gates/size-allow.tsv:2" in r.stdout, "allow: the red must name the malformed row's line"
 
+        # An export (scripts/gate-lib.sh materialize) holds untracked build output beside the tracked
+        # files: its index names what is tracked, and only that is judged.
+        g = os.path.join(d, "repo.git", ".git")
+        os.makedirs(g)
+        subprocess.run(["git", "init", "-q", "--bare", g], check=True)
+        exp = os.path.join(g, "standing", "tree")
+        for rel, n in (("testground/kernel.wasm", 5_000_000), ("tracked/big.bin", OVER_LIMIT)):
+            os.makedirs(os.path.dirname(os.path.join(exp, rel)), exist_ok=True)
+            with open(os.path.join(exp, rel), "wb") as fh:
+                fh.write(b"\0" * n)
+        env = dict(os.environ, GIT_DIR=g, GIT_WORK_TREE=exp, GIT_INDEX_FILE=exp + ".index")
+        subprocess.run(["git", "update-index", "--add", "tracked/big.bin"], check=True, env=env, cwd=exp)
+        r = run_gate(real, exp)
+        assert r.returncode == 1 and "tracked/big.bin: 1048577 bytes" in r.stdout, "export: a tracked over-limit file must be red"
+        assert "kernel.wasm" not in r.stdout, "export: an untracked 5 MB file must not be named"
+        subprocess.run(["git", "update-index", "--force-remove", "tracked/big.bin"], check=True, env=env, cwd=exp)
+        r = run_gate(real, exp)
+        assert r.returncode == 0, "export: with nothing over the limit tracked, an untracked 5 MB file is not red"
+
         source = open(real, encoding="utf-8").read()
         n = source.count("size > LIMIT")
         assert n == 1, f"mutant: 'size > LIMIT' occurs {n} times in gates/size_limit.py, expected exactly 1"
