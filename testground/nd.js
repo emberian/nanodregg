@@ -8,6 +8,14 @@
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 export const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+// an argument as the terminal reads it back (testground.js splitArgv): bare when it has no space or
+// quote, else in the quote it does not contain
+export function quoteArg(a) {
+  if (a !== '' && /^[^\s"']+$/.test(a)) return a;
+  if (!a.includes('"')) return `"${a}"`;
+  if (!a.includes("'")) return `'${a}'`;
+  return `"${a}"`;
+}
 export const unhex = (s) => Uint8Array.from(s.match(/../g) || [], (h) => parseInt(h, 16));
 const cat = (...bs) => { const n = bs.reduce((a, b) => a + b.length, 0); const o = new Uint8Array(n); let i = 0; for (const b of bs) { o.set(b, i); i += b.length; } return o; };
 const u32 = (n) => { const o = new Uint8Array(4); new DataView(o.buffer).setUint32(0, n, true); return o; };
@@ -59,6 +67,7 @@ export async function loadKernel(factory, opts = {}) {
     source: (i, pkg) => call(K._w_source, i, enc.encode(pkg)),
     grants: (i, obj) => call(K._w_grants, i, enc.encode(obj)),
     turn: (i, tx) => call(K._w_turn, i, enc.encode(tx)),
+    example: (ty, me) => call(K._w_example, enc.encode(ty), enc.encode(me)),
   };
 }
 

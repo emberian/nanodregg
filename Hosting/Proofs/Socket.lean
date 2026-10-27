@@ -130,6 +130,7 @@ theorem start_cont {X : Ctx D} {me : Self D} {f : Follow D} {argv : List ByteArr
   repeat' split at hk
   all_goals first
     | (simp [refused, Reply.cont] at hk; done)
+    | (unfold refusedAt at hk; split at hk <;> simp [refused, Reply.cont] at hk; done)
     | (obtain ⟨-, hs0⟩ := next_spec (fun _ => rfl) hk; rw [hs0] at hs'; cases hs'
        exact ⟨rfl, by simp⟩)
 
@@ -140,7 +141,9 @@ theorem start_ne_ok {X : Ctx D} {me : Self D} {f : Follow D} {argv : List ByteAr
   unfold Command.start next at h
   dsimp only at h
   repeat' split at h
-  all_goals simp [refused, CommandExit.code] at h
+  all_goals first
+    | (unfold refusedAt at h; split at h <;> simp [refused, CommandExit.code] at h; done)
+    | simp [refused, CommandExit.code] at h
 
 /-! ## No `ok` from a refusal or a continuation -/
 

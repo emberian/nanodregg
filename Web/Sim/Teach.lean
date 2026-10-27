@@ -11,6 +11,7 @@ every answer here is the language's own function, never a second implementation:
   core package are) or `surface` (`Lang.Surface.grammar`, what a package source is).
 * `tg_source I PKG` — package `PKG` as member `I`'s follow holds it, printed by `Lang.Print.package`
   (the core text `install` reads back to the same package).
+* `tg_example TYPE ME` — a value of a method's argument type to start editing from.
 * `tg_grants I OBJ` — the live grants on `OBJ` in member `I`'s follow World: one line each.
 * `tg_turn I TX` — the step with transaction id `TX`, re-derived on the World member `I`'s follow
   absorbed it onto (`Testground.Member.seen`): who, the ticks, the call, every pin and what was done
@@ -63,6 +64,38 @@ def memberWorld (i : UInt32) : IO (Except ByteArray (Member)) := do
     | .ok pk => match Lang.Print.package pk with
       | some t => return okText t
       | none => return refusedText "noText"
+
+/-! ## An example argument -/
+
+mutual
+/-- A value of type `T` to start editing from: 0, false, "text", the viewer's own id for a digest
+(a live cell, which is what a digest entering a run must name), every field of a record, a sum's
+first arm. Only a starting point: the kernel judges what the visitor sends. -/
+def exampleData (me : ByteArray) : Lang.Ty → Lang.Data
+  | .nat => .nat 0
+  | .bool => .bool false
+  | .bytes => .bytes "text".toUTF8
+  | .digest => .digest me
+  | .fn _ _ => .record []
+  | .record fs => .record (exampleFields me fs)
+  | .sum [] => .record []
+  | .sum ((ℓ, T) :: _) => .inj ℓ (exampleData me T)
+
+def exampleFields (me : ByteArray) : List (Lang.Label × Lang.Ty) → List (Lang.Label × Lang.Data)
+  | [] => []
+  | (ℓ, T) :: fs => (ℓ, exampleData me T) :: exampleFields me fs
+end
+
+/-- `tg_example TYPE ME`: a value of the type (LANG's text of it, as `read OBJ ?` prints a method's
+argument type), printed as `invoke` reads it back; `ME` (hex) is the viewer's member id. -/
+@[export tg_example] def tgExample (ty me : ByteArray) : ByteArray :=
+  match (String.fromUTF8? ty).map Lang.Read.readTy with
+  | some (.ok T) =>
+    let m := ((String.fromUTF8? me) >>= Text.ofHex).getD ByteArray.empty
+    match Lang.Print.data (exampleData m T) with
+    | some t => okText t
+    | none => refusedText "noText"
+  | _ => refusedText "notAType"
 
 /-! ## Grants -/
 

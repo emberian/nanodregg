@@ -2,9 +2,9 @@
 // Every word a window shows is printed by the member's own follow (Lean) or is a name from the
 // kernel's table; this file lays it out and never decides what it means.
 import factory from './kernel.mjs';
-import { loadKernel, client, genesis, hex } from './nd.js';
+import { loadKernel, client, genesis, hex, quoteArg } from './nd.js';
 import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
-import { demos, runDemo, lieScenes, memberLies, runScene, head0Of } from './demos.js';
+import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf } from './demos.js';
 import { teach } from './teach.js';
 
 const $ = (tag, attrs = {}, ...kids) => {
@@ -100,7 +100,7 @@ const kept = {
 function clearDesk() { for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); } }
 function newWorld() {
   frames = []; cmdNo = 0; lie = 'honest'; setTray();
-  clearDesk();
+  clearDesk(); terms.clear(); tourAt = 0; T.reset();
   const t = performance.now();
   world = genesis(K, 'testground', ['alice', 'bob']);
   world.ms = performance.now() - t;
@@ -385,6 +385,7 @@ function linkify(text, m) {
     });
   });
 }
+const commandText = (argv) => argv.map(quoteArg).join(' ');
 function splitArgv(s) {
   const out = []; let cur = '', q = null, any = false;
   for (const c of s) {
@@ -398,6 +399,9 @@ function splitArgv(s) {
 }
 const terms = new Map();
 function openTerm(m, x, y) {
+  // reopening a terminal shows the one that exists: its transcript and history are kept
+  const open = wins.get(`term-${m.name}`);
+  if (open && terms.has(m.name)) { focus(open); return; }
   const out = $('div', { class: 'out sunken', 'aria-live': 'polite' });
   const input = $('input', { class: 'sunken', 'aria-label': `${m.name}'s nd command`, placeholder: 'create   ·   write OBJ 0 hello   ·   read OBJ ?', autocomplete: 'off', spellcheck: 'false' });
   const hist = []; let hi = 0;
@@ -407,12 +411,12 @@ function openTerm(m, x, y) {
     if (e.key !== 'Enter' || !input.value.trim()) return;
     const line = input.value.trim(); hist.push(line); hi = hist.length; input.value = '';
     const argv = splitArgv(line.replace(/^nd\s+/, ''));
-    await runIn(m, argv);
+    await runIn(m, argv, '', { typed: line.replace(/^nd\s+/, '') });
   });
   const body = $('div', { class: 'term' }, out, $('div', { class: 'line' }, $('span', { class: 'prompt' }, `${m.name}$ nd`), input));
   terms.set(m.name, { out, m });
   openWindow({ id: `term-${m.name}`, title: `${m.name}${m.world ? ` (World ${m.world})` : ''}`, x, y, w: 520, body });
-  const commands = 'Commands: create · write OBJ SLOT TEXT · read OBJ [?] · grant OBJ MEMBER RIGHTS · invoke OBJ N ARGS · install TEXT · sync';
+  const commands = 'Commands: create · write OBJ SLOT "TEXT" · read OBJ [?] · grant OBJ MEMBER RIGHTS · invoke OBJ METHOD "ARGUMENT" · sync · help lists every command. Quote an argument that holds a space.';
   if (world.hosted) print(m, $('span', { class: 'dim' }, `You are a member of a hosted World. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\n${commands}\n`));
   else print(m, $('span', { class: 'dim' }, `You are ${m.name}, founder ${m.index}${m.world ? ` of World ${m.world}` : ''}, member ${short(m.id)}. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\n${commands}\n`));
 }
@@ -426,10 +430,15 @@ async function runIn(m, argv, why = '', opts = {}) {
   await prev;
   try { return await runOne(m, argv, why, opts); } finally { release(); }
 }
-async function runOne(m, argv, why, { forge = false, quiet = false } = {}) {
+async function runOne(m, argv, why, { forge = false, quiet = false, typed = null } = {}) {
   cmdNo++;
-  const label = argv.map((a) => (a.length > 40 ? `${a.slice(0, 37)}…` : a)).join(' ');
-  print(m, $('div', {}, $('b', { class: forge ? 'bad' : '' }, `${m.name}$ ${forge ? 'forge' : 'nd'} ${label}`), why ? $('span', { class: 'dim' }, `   (${why})`) : ''));
+  // the command as typed, or as the terminal would read it back; a long argument (a package text)
+  // is shown folded, and "edit" puts the whole command in the input
+  const full = typed ?? commandText(argv);
+  const shown = typed ?? argv.map((a) => (a.length > 72 ? `${quoteArg(a).slice(0, 48)}… [${a.length} chars]` : quoteArg(a))).join(' ');
+  print(m, $('div', {}, $('b', { class: forge ? 'bad' : '' }, `${m.name}$ ${forge ? 'forge' : 'nd'} ${shown}`),
+    forge ? '' : [' ', $('a', { class: 'cmd dim', title: 'put this command in the input', onclick: () => prefill(m, full) }, 'edit')],
+    why ? $('span', { class: 'dim' }, `   (${why})`) : ''));
   const n0 = frames.length, t = performance.now();
   let r;
   forging = forge;
@@ -532,13 +541,14 @@ function renderLog() {
 }
 
 // ---------------------------------------------------------------- the first five minutes
+// each step advances only when its command ends with the result it teaches (`want`)
 const tour = [
-  { say: 'alice creates a cell: an object with numbered slots and no code. She owns it.', argv: () => ['create'], who: 0, done: (a) => a[0] === 'create' },
-  { say: 'alice writes slot 0. Her copy of the World checks the write before her key signs it. If the check fails, nothing is signed.', argv: () => ['write', firstObj(), '0', 'hello from the testground'], who: 0, done: (a) => a[0] === 'write' },
-  { say: 'alice reads the description of the cell. Click any id to open the object.', argv: () => ['read', firstObj(), '?'], who: 0, done: (a) => a[0] === 'read' },
-  { say: 'alice grants bob the right to write the cell (mutate). The grant is a cell with its own id.', argv: () => ['grant', firstObj(), world.members[1].id, 'mutate'], who: 0, done: (a) => a[0] === 'grant' },
-  { say: 'bob writes slot 0 through the grant. His call names the state of the cell it expects (a pin). alice writes slot 0 while his signed call is in transit, so the writer declines his call (stale).', argv: () => ['write', firstObj(), '0', 'bob says hi', '--via', firstGrant()], who: 1, race: true, done: (a, m) => m.name === 'bob' && a[0] === 'write' },
-  { say: 'The writer lies: it changes one byte of every event it serves. bob\'s follow resets to genesis and replays the log. It checks each Turn and refuses the altered one (eventMismatch).', argv: () => ['sync'], who: 1, lie: 'flipEvent', done: (a, m) => m.name === 'bob' && a[0] === 'sync' && lie !== 'honest' },
+  { say: 'alice creates a cell: an object with numbered slots and no code. She owns it.', argv: () => ['create'], who: 0, want: 'ok', done: (a) => a[0] === 'create' },
+  { say: 'alice writes slot 0. Her copy of the World checks the write before her key signs it. If the check fails, nothing is signed.', argv: () => ['write', firstObj(), '0', 'hello from the testground'], who: 0, want: 'ok', done: (a) => a[0] === 'write' },
+  { say: 'alice reads the description of the cell. Click any id to open the object.', argv: () => ['read', firstObj(), '?'], who: 0, want: 'ok', done: (a) => a[0] === 'read' },
+  { say: 'alice grants bob the right to write the cell (mutate). The grant is a cell with its own id.', argv: () => ['grant', firstObj(), world.members[1].id, 'mutate'], who: 0, want: 'ok', done: (a) => a[0] === 'grant' },
+  { say: 'bob writes slot 0 through the grant. His call names the state of the cell it expects (a pin). alice writes slot 0 while his signed call is in transit, so the writer declines his call (stale).', argv: () => ['write', firstObj(), '0', 'bob says hi', '--via', firstGrant()], who: 1, race: true, want: 'declined stale', done: (a, m) => m.name === 'bob' && a[0] === 'write' },
+  { say: 'The writer lies: it changes one byte of every event it serves. bob\'s follow resets to genesis and replays the log. It checks each Turn and refuses the altered one (eventMismatch).', argv: () => ['sync'], who: 1, lie: 'flipEvent', want: 'refused eventMismatch', done: (a, m) => m.name === 'bob' && a[0] === 'sync' && lie !== 'honest' },
   // one demo per axis (DESIGN-TESTGROUND §5): each is demos.js's argv, typed into the terminals
   { say: 'A generator: a package whose method installs another package. The generated package has the law n <= 100; setting n = 101 is refused (lawDenied).', demo: 'generator' },
   { say: 'The meter: each Turn records its member and its ticks (evaluator steps). bob repeats an expensive call until his ticks for the window run out (ticksBudget).', demo: 'meter' },
@@ -547,7 +557,12 @@ const tour = [
 let tourAt = 0;
 const firstObj = () => [...world.objects.entries()].find(([, v]) => v === 'create')?.[0] ?? '';
 const firstGrant = () => [...world.objects.entries()].find(([, v]) => v === 'grant')?.[0] ?? '';
-function tourCheck(m, argv, r) { if (!world.hosted && tour[tourAt] && !tour[tourAt].demo && r.exit !== 'client' && tour[tourAt].done(argv, m)) { tourAt++; openTour(); } }
+function tourCheck(m, argv, r) {
+  const s = tour[tourAt];
+  if (world.hosted || !s || s.demo || !s.done(argv, m)) return;
+  if (outcomeOf(r) !== s.want) return;
+  tourAt++; openTour();
+}
 function openTour() {
   const items = tour.map((s, i) => $('li', { class: i < tourAt ? 'done' : '' }, s.say, i === tourAt ? $('div', {},
     $('code', {}, s.demo ? `Demos ▸ ${demos[s.demo].title}` : `${world.members[s.who].name}$ nd ${s.argv().map((a) => short(a)).join(' ')}`), ' ',
@@ -569,8 +584,9 @@ function openTour() {
 // ---------------------------------------------------------------- demos: command sequences a member types
 function openDemos() {
   const list = Object.entries(demos).map(([k, d]) => $('li', {}, $('b', {}, d.title), ' ',
-    $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run'), $('div', { class: 'dim' }, `${d.steps.length} commands`)));
-  openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' }, $('ol', {}, list), $('p', { class: 'dim' }, 'Each demo types ordinary nd commands into the terminals, on the current World.')) });
+    $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run here'), ' ',
+    $('button', { class: 'btn', onclick: () => { newWorld(); playDemo(k); } }, 'Run on a new World'), $('div', { class: 'dim' }, `${d.steps.length} commands`)));
+  openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' }, $('ol', {}, list), $('p', { class: 'dim' }, 'Run here types the commands into the terminals of the current World; a package it already installed is reused. Run on a new World starts from genesis.')) });
 }
 // a second World in this tab (the time-lock's clock): its own kernel instance, its own writer, its
 // founders' terminals; made once per World in the tab and kept until Re-genesis
@@ -593,7 +609,7 @@ async function playDemo(name) {
   for (const [w, names] of Object.entries(d.worlds ?? {})) { const x = await secondWorld(w, names); origin[w] = x.origin; members.push(...x.members); }
   const r = await runDemo(name, {
     fetchText: async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text()),
-    members, origin,
+    members, origin, idOfText: T.idOfText,
     run: async (m, argv, s) => {
       if (s.say) print(m, $('div', { class: 'warn' }, s.say));
       const out = await runIn(m, argv, s.again ? `repeat ${s.again}` : '');

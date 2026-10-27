@@ -618,11 +618,17 @@ theorem step_asked_signIncoming {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base
                exact ⟨_, envelopeSign_incoming (by simpa using hin)⟩
              · intro hin; simp at hin)
 
+omit [Ord D] [DecidableEq D] in
+/-- A refusal with its hint (`refusedAt`) asks nothing of custody. -/
+theorem refusedAt_ne_signIncoming {X : Ctx D} {r : Refusal D} {m k : ByteArray} :
+    refusedAt X r ≠ .signIncoming m k := by
+  unfold refusedAt; split <;> simp [refused]
+
 theorem start_ne_signIncoming {X : Ctx D} {me : Self D} {f : Follow D} {argv : List ByteArray}
     {m k : ByteArray} : start X me f argv ≠ .signIncoming m k := by
   unfold start next; dsimp only
   repeat' split
-  all_goals simp [refused]
+  all_goals first | exact refusedAt_ne_signIncoming | simp [refused]
 
 /-- **`start` never asks the incoming key** (PROTOCOL-56): every state a command's first reply
 hands on fails `askedIncoming`, and that reply is never `signIncoming`. With the two step theorems,
@@ -638,6 +644,7 @@ theorem start_not_incoming {X : Ctx D} {me : Self D} {f : Follow D} {argv : List
   dsimp only at hk
   repeat' split at hk
   all_goals (try (simp [refused, Reply.cont] at hk; done))
+  all_goals (try (rw [refusedAt_cont] at hk; cases hk; done))
   all_goals (obtain ⟨_, hs0⟩ := next_spec (fun _ => rfl) hk
              rw [hs0] at hs; cases hs
              simp [askedIncoming, State.tried, ofU64_u64 (n := 0) (by decide)])

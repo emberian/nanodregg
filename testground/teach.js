@@ -3,6 +3,8 @@
 // (Web.Sim.Teach: tg_ob, tg_grammar, tg_source, tg_grants, tg_turn; or a member's nd command); this
 // file lays answers out and never decides what they mean. Words follow testground/STYLE.md.
 
+import { quoteArg } from './nd.js';
+
 const dec = new TextDecoder();
 const OK = 0;
 // a core package text (`(package (imports …) …)`) is what install takes as it is; a surface text is
@@ -37,6 +39,9 @@ export function teach(ctx) {
   const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'Terms'), $('dl', {}, pairs.flatMap(([t, d]) => [$('dt', {}, t), $('dd', {}, d)])));
   const pre = (t, cls = '') => $('pre', { class: `src sunken ${cls}` }, t);
   const h = (t) => $('h4', {}, t);
+
+  // a value of a method's argument type to start from (tg_example), as the terminal reads it
+  const example = (m, ty) => { const r = answer((m.K ?? K()).example(ty, m.id ?? '')); return r.ok ? r.text : '(record)'; };
 
   // what the tab knows of a package's text: the source a member installed (surface or core) by id
   const sources = new Map();
@@ -96,12 +101,12 @@ export function teach(ctx) {
           props.state ? ['state type', $('code', {}, props.state)] : null,
           ['viewed by', `${m.name}'s follow (read ${short(id)} ?), updated after each command`]]),
         h('State'), pre(stateText || '(empty)'),
-        pkg ? '' : $('p', {}, $('a', { class: 'cmd', onclick: () => prefill(m, `write ${id} 0 `) }, 'write a slot…')),
+        pkg ? '' : $('p', {}, $('a', { class: 'cmd', onclick: () => prefill(m, `write ${id} 0 "new text"`) }, 'change slot 0…')),
         methods.length ? [h('Methods'), $('table', { class: 'props sunken methods' },
           $('tr', {}, $('td', {}, 'index'), $('td', {}, 'name'), $('td', {}, 'argument type'), $('td', {}, 'calls it may make'), $('td', {}, '')),
           methods.map((x) => $('tr', {}, $('td', {}, x.i), $('td', {}, $('b', {}, x.label)), $('td', {}, $('code', {}, x.ty)),
             $('td', {}, calls.filter((c) => c.i === x.i).map((c) => $('div', {}, $('code', {}, c.ty)))),
-            $('td', {}, $('a', { class: 'cmd', onclick: () => prefill(m, `invoke ${id} ${x.i} `) }, 'invoke…')))))] : '',
+            $('td', {}, $('a', { class: 'cmd', title: 'put a call with an example argument in the terminal', onclick: () => prefill(m, `invoke ${id} ${x.i} ${quoteArg(example(m, x.ty))}`) }, `call ${x.label}…`)))))] : '',
         laws.length ? [h('Laws'), laws.map((ℓ) => lawPanel(m, id, ℓ, src, stateText))] : '',
         extraLaws.length ? [h('Extra laws (data object)'), extraLaws.map((x) => $('div', {}, $('code', {}, x)))] : '',
         rels.length ? [h('Relations'), rels.map((r) => relPanel(m, id, r))] : '',
@@ -487,5 +492,7 @@ export function teach(ctx) {
     openWindow({ id: 'tutorial', title: 'Tutorial', x: 130, y: 20, w: 760, body });
   }
 
-  return { openInspector, openEditor, openRepl, openGrammar, openTurn, openTutorial, remember, steps, templates, parseLine };
+  // a new World: the tutorial starts again at step 1 with no bindings
+  const reset = () => { tut.at = 0; tut.v = {}; tut.done.clear(); };
+  return { openInspector, openEditor, openRepl, openGrammar, openTurn, openTutorial, remember, idOfText, reset, steps, templates, parseLine };
 }

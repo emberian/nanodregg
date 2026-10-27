@@ -130,7 +130,7 @@ export function receiptOf(out) {
 // client); `origin` names each World's origin (`origin.A`). A step may bind its call (`call`: the
 // attempt store's frozen bytes, as `cancel`/`receipt` take them), a receipt (`receipt`), method
 // numbers (`method`), and check a word in its output (`says`) or a refusal's name (`refusal`).
-export async function runDemo(name, { fetchText, members, run, origin = {} }) {
+export async function runDemo(name, { fetchText, members, run, origin = {}, idOfText = null }) {
   const d = demos[name];
   const v = { text: {}, origin };
   for (const m of members) v[m.name] = m.id;
@@ -141,6 +141,12 @@ export async function runDemo(name, { fetchText, members, run, origin = {} }) {
     let r = await run(m, s.argv(v), s);
     // `repeat: N`: the same argv until it ends as `expect` (at most N runs; each before it must be ok)
     for (let i = 1; s.repeat && i < s.repeat && r.exit === 'ok'; i++) r = await run(m, s.argv(v), { ...s, say: null, again: i });
+    // a package this World already holds (`refused idTaken`): the demo reuses it, by the id it was
+    // installed under in this tab
+    if (r.exit === 'refused' && /idTaken/.test(r.stderr) && idOfText && s.argv(v)[0] === 'install') {
+      const id = idOfText(s.argv(v)[1]);
+      if (id) r = { ...r, exit: 'ok', stdout: `id ${id}\n` };
+    }
     results.push(r);
     if (s.bind) { const id = (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1]; if (!id) return { ok: false, at: s, results }; v[s.bind] = id; }
     if (s.method) for (const [k, label] of Object.entries(s.method)) {

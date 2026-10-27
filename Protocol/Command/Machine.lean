@@ -840,6 +840,12 @@ def hint (X : Ctx D) : Refusal D → Option String
   -- on the writer's word (cv 01a151bc-6ef3)
   | .host "beforeLog" =>
       some "hint beforeLog: the writer's log starts at a base; join it with an invitation that pins that base (nd adopt)"
+  -- an argv the parser refused: the verb's grammar, the list of verbs, the reader's reason (CLIENT-51)
+  | .parse (.usage _ u) => some s!"hint usage: nd {u}; quote an argument that holds spaces: \"two words\""
+  | .parse (.unknownVerb _) | .parse .noVerb =>
+      some s!"hint commands: {" · ".intercalate (Verb.all.map usage)}"
+  | .parse (.badPackage why) => some s!"hint badPackage: {oneLine why}"
+  | .parse (.badDigest _) => some "hint badDigest: an id is 64 lowercase hex digits, as create, install and grant print it"
   | _ => none
 
 /-- `refused r`, with its hint on stdout when it has one. -/
@@ -1243,7 +1249,7 @@ def start (X : Ctx D) (me : Self D) (f : Follow D) (argv : List ByteArray) : Rep
     next (D := D) ⟨argv, 1, [Text.u64 w.steps, Text.u64 0, Text.u64 upTo, Text.u64 0]⟩ fun k =>
       .sign (envelopeMessage X me w.steps upTo) k
   match parse X.digestOf argv with
-  | .error r => refused (D := D) (.parse r)
+  | .error r => refusedAt X (.parse r)
   | .ok (.init _) => next (D := D) ⟨argv, 1, []⟩ fun k => .sign whoami k
   | .ok (.adopt inv key) =>
       match adoptPin X me inv key with
