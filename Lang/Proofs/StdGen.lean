@@ -14,6 +14,7 @@ import Lang.Proofs.LiveClosed
 import Lang.Proofs.Receiver
 import Lang.Proofs.Quote
 import Lang.Proofs.StdRun
+import Lang.Proofs.StdQuorum
 
 namespace Nanodregg.Lang.Std
 
@@ -463,8 +464,8 @@ theorem make_bounded_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray
 
 /-! ## The quorum generator (LANG-99): an install only on a commit -/
 
-theorem quorumGenerator_body (r : List (Label × Ty)) (f : Label) (members : List ByteArray) (k : Nat) :
-    (quorumGenerator r f members k).body = .record [("approve", approveGenMethod),
+theorem quorumGeneratorOf_body (r : List (Label × Ty)) (f : Label) (members : List ByteArray) (k : Nat) :
+    (quorumGeneratorOf r f members k).body = .record [("approve", approveGenMethod),
       ("generate", quorumGenerateMethod (boundedPackageWith r f (.var 4))),
       ("propose", proposeGenMethod), ("quorum", quorumLaw quorumGenStateTy .nat members k "generated")] := rfl
 
@@ -474,10 +475,10 @@ theorem noRef_quorumGenerate (p : Package) : NoRef (quorumGenerateMethod p) := b
     and_self]
 
 /-- **A quorum generator installs only the approved proposal, and only as it commits it.** For
-`quorumGenerator r f members k` read at `pkg`, every admitted run of `generate` (method 1) read the
+`quorumGeneratorOf r f members k` read at `pkg`, every admitted run of `generate` (method 1) read the
 object's state as `{approvals = a, generated = g, proposal = set v}` with `v ≠ g`, and returns
 exactly `[install B]` with `B` = `encodePackage (boundedPackage r f v)` — the bounded package at the
-PROPOSED bound — and no row acts. Its new state is `{approvals = 0, generated = v, …}`, a change of
+PROPOSED bound — and no row acts. Its new state reads `{approvals = 0, generated = v, proposal = set v}`, a change of
 `generated` that the quorum law in force judges as a commit (k approvals of exactly `set v`); the
 kernel judges the laws before deriving the install (`invoke_ok`), and the Turn fails whole. The
 hypotheses: `generate` resolves to its signature (`rfl` at a concrete label), and the template has
@@ -487,14 +488,16 @@ theorem generate_quorum_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteAr
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
     {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
     (hid : digestOf (bytesOf pkg) = some pkg)
-    (hp : readPackage look pkg = .ok (quorumGenerator r f members k))
-    (hres : resolveMethod (D := D) (quorumGenerator r f members k) 1 =
+    (hp : readPackage look pkg = .ok (quorumGeneratorOf r f members k))
+    (hres : resolveMethod (D := D) (quorumGeneratorOf r f members k) 1 =
       .ok ("generate", ⟨.record [], [installSlot], [], 0⟩))
     (hB : ∀ m, ∃ B, Wire.encodePackage (boundedPackage r f m) = some B ∧ B.size ≤ Bounds.bytesMax)
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state 1 args rq budget = .ok (s, calls, rows, used)) :
     ∃ a g v B, readState digestOf quorumGenRow state =
         .ok (.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj "set" (.nat v))]) ∧
-      v ≠ g ∧ Wire.encodePackage (boundedPackage r f v) = some B ∧ calls = [.install B] ∧ rows = [] := by
+      v ≠ g ∧ Wire.encodePackage (boundedPackage r f v) = some B ∧ calls = [.install B] ∧ rows = [] ∧
+      readState digestOf quorumGenRow s =
+        .ok (.record [("approvals", .nat 0), ("generated", .nat v), ("proposal", .inj "set" (.nat v))]) := by
   change (runMeasuredLive bytesOf digestOf rc look rv pkg state 1 args rq budget).map _ = _ at h
   rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
   cases hm : runMeasured bytesOf digestOf rc look rv pkg state 1 args rq budget with
@@ -504,14 +507,14 @@ theorem generate_quorum_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteAr
   obtain ⟨s', calls', rows', t', n'⟩ := x
   simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl, rfl, rfl⟩ := h
-  obtain ⟨S, v0, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
+  obtain ⟨S, v0, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows, hslots⟩ := runMeasured_inv_slots hm
   obtain ⟨L, g0, p', ℓ, sg, sd, ad, wd, -, hl, hpg, hres', hst, -, -, -, rfl⟩ := runSetup_spec hS
   obtain ⟨hpg', f', hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
   rw [hpg'] at hpg
   cases hpg
   rw [hres] at hres'
   cases hres'
-  simp only at hrun hx hes hc hst
+  simp only at hrun hx hes hc hst hslots
   have hbig := run_bigStep hrun
   -- the state the run read: three fields, the proposal one of two arms
   have hconf := readState_conforms hst
@@ -534,7 +537,7 @@ theorem generate_quorum_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteAr
         (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj ℓp pd)]).toVal, wd.toVal]
         (apply4 g0 "generate") r' :=
     fun hb => apply4_method (R := .record []) (S := quorumGenStateTy) (A := .record []) (Q := reqTy) hlib
-      (quorumGenerator_body r f members k) (by simp [Row.find?, quorumGenerateMethod])
+      (quorumGeneratorOf_body r f members k) (by simp [Row.find?, quorumGenerateMethod])
       (noRef_quorumGenerate _) hb
   have hprop : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal,
       (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj ℓp pd)]).toVal, wd.toVal]
@@ -625,12 +628,84 @@ theorem generate_quorum_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteAr
       have hc' : callsOf digestOf [installSlot]
           (.record [("c0", .inj "some" (.inj "install" (.record [("pkg", .bytes B)])))]) = .ok [.install B] := rfl
       rw [hc'] at hc
-      have he' : editsOf (D := D) (quorumGenerator r f members k).rels rq.self (.record []) = .ok [] := rfl
+      have he' : editsOf (D := D) (quorumGeneratorOf r f members k).rels rq.self (.record []) = .ok [] := rfl
       rw [he'] at hes
+      -- the state field
+      have hwS := BigStep.get (ℓ := "state") hrun'
+        (.field (find_suspend_of (t := .record [("approvals", natT 0), ("generated", .var 0),
+          ("proposal", .get (.var 3) "proposal")]) rfl) .record)
+      obtain ⟨A3, hA3, hmS⟩ := means_get hrun' hM rfl hwS
+      simp only [Row.find?] at hA3
+      cases hA3
+      have hSt : Means L.lib quorumGenStateTy
+          (.record (suspend env' [("approvals", natT 0), ("generated", .var 0), ("proposal", .get (.var 3) "proposal")]))
+          (.record [("approvals", .nat 0), ("generated", .nat v), ("proposal", .inj "set" (.nat v))]) :=
+        .record .record (.cons .nat .nat (.cons (.var rfl) .nat
+          (.cons (.get (.var rfl) (sel_toVal (d := .record [("approvals", .nat a), ("generated", .nat g),
+              ("proposal", .inj "set" (.nat v))]) (x := .inj "set" (.nat v)) rfl)) (.inj rfl .nat) .nil)))
+      have hdsEq := means_deterministic hmS hSt
+      cases hdsEq
+      have hread := readState_go_stateSlots (digestOf := digestOf) quorumGenRow
+        [("approvals", .nat 0), ("generated", .nat v), ("proposal", .inj "set" (.nat v))] 0 _ []
+        (.cons (.nat (by simp [Bounds.natLimit])) (.cons hpd (.cons (.inj rfl hpd) .nil))) hslots (by simp) rfl
       cases hc
       cases hes
       subst hrows
-      exact ⟨rfl, rfl⟩
+      exact ⟨rfl, rfl, by simpa [readState] using hread⟩
   · cases hfp
+
+/-- **A quorum generator installs only what `k` distinct members approved** (LANG-99's composition,
+as one statement). Take the checked `quorumGenerator r f members k` read at `pkg`, and a run of its
+`generate` from slots `state` to `s` returning `calls`. Take any history of its law from a state with
+no approvals (a birth leaves one: `quorum_birth_empty`) in which this run is a step: an invoke whose
+old and new states are what `state` and `s` read (the kernel judges the laws over exactly those
+before it derives the install, `invoke_ok`; a World's audited history is such a chain,
+`Kernel.Receive.object_history_chain`). Then the run installs exactly `encodePackage (boundedPackage
+r f v)` for one bound `v`, and at least `k ≥ 1` distinct members each signed, earlier in that history,
+an approval of exactly `set v`. -/
+theorem quorumGenerator_installs_attested {D : Type} [DecidableEq D] (bytesOf : D → ByteArray)
+    (digestOf : ByteArray → Option D)
+    {rc : Lang.ReceiptCheck} {r : List (Label × Ty)} {f : Label} {members : List ByteArray} {k : Nat}
+    {p : Package} (hq : quorumGenerator r f members k = .ok p)
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
+    {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (hid : digestOf (bytesOf pkg) = some pkg)
+    (hp : readPackage look pkg = .ok p)
+    (hres : resolveMethod (D := D) p 1 = .ok ("generate", ⟨.record [], [installSlot], [], 0⟩))
+    (hB : ∀ m, ∃ B, Wire.encodePackage (boundedPackage r f m) = some B ∧ B.size ≤ Bounds.bytesMax)
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state 1 args rq budget = .ok (s, calls, rows, used))
+    {lib : List Term} {o : Data} {steps : List (Data × Data)}
+    (hch : Chain (Step lib (quorumLaw quorumGenStateTy .nat members k "generated")) o steps)
+    (h0 : o.field "approvals" = some (.nat 0))
+    {pre post : List (Data × Data × Data)} {o' rqd n : Data}
+    (hz : (o :: steps.map Prod.snd).zip steps = pre ++ (o', (rqd, n)) :: post)
+    (ho' : readState digestOf quorumGenRow state = .ok o') (hn : readState digestOf quorumGenRow s = .ok n)
+    (hocc : ∃ x, rqd.field "occasion" = some (.inj "invoke" x)) :
+    ∃ v B, Wire.encodePackage (boundedPackage r f v) = some B ∧ calls = [.install B] ∧ rows = [] ∧
+      1 ≤ k ∧ ∃ M : List ByteArray, M.Nodup ∧ M.Sublist members ∧ k ≤ M.length ∧
+        ∀ m ∈ M, ∃ t ∈ pre, Approves members m (.inj "set" (.nat v)) t := by
+  have hchk : p = quorumGeneratorOf r f members k ∧ members.Nodup ∧ 1 ≤ k := by
+    unfold quorumGenerator at hq
+    cases hqq : quorum quorumGenStateTy .nat members k "generated" with
+    | error e => rw [hqq] at hq; cases hq
+    | ok t =>
+      rw [hqq] at hq
+      obtain ⟨-, hnd, hk1, -⟩ := quorum_ok hqq
+      simp only [Except.map, Except.ok.injEq] at hq
+      exact ⟨hq.symm, hnd, hk1⟩
+  obtain ⟨rfl, hnd, hk1⟩ := hchk
+  obtain ⟨a, g, v, B, hst, hvg, hBv, hcalls, hrows, hs⟩ := generate_quorum_sound bytesOf digestOf hid hp hres hB h
+  rw [hst] at ho'; cases ho'
+  rw [hs] at hn; cases hn
+  obtain ⟨x, hx⟩ := hocc
+  have hchg : (Data.record [("approvals", .nat 0), ("generated", .nat v), ("proposal", .inj "set" (.nat v))]).field
+      "generated" ≠ (Data.record [("approvals", .nat a), ("generated", .nat g),
+        ("proposal", .inj "set" (.nat v))]).field "generated" := by
+    simp [Data.field, Row.find?]; exact hvg
+  obtain ⟨ng, hng, -, M, hM, hsub, hk, hall⟩ :=
+    quorum_commit_attested hnd hch h0 hz ⟨"invoke", x, hx, .inr rfl⟩ hchg
+  simp [Data.field, Row.find?] at hng
+  subst hng
+  exact ⟨v, B, hBv, hcalls, hrows, hk1, M, hM, hsub, hk, hall⟩
 
 end Nanodregg.Lang.Std

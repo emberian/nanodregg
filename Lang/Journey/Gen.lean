@@ -53,7 +53,10 @@ kernel's `Program` (the deployed receipt check at the Sim's parameters, as `Lang
   same Turn as the commit the law refused, so nothing is born.
 * GN20 B approves (bit 1), A through a grant approves (bit 2), B generates: admitted; the Turn bears
   exactly the package cell of `encodePackage (boundedPackage {n : nat} n 400)` (`generate_quorum_sound`,
-  run) and Q's `generated` is 400.
+  run) and Q's `generated` is 400 (`quorumGenerator_installs_attested`: the two approvals are the
+  history's witnesses).
+* GN21 the checked constructor: `Std.quorumGenerator` refuses `[B, B]` by name (`duplicateMember`: one
+  member, two bits) and a threshold of 0 (`badThreshold`: an install with no approval at all).
 -/
 import Lang.Journey.Head
 import Lang.StdGen
@@ -260,7 +263,8 @@ def genRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
     (v32 == "admitted" && born32 == [O5, eid300] && ownedBy r32 O5 b eid300)
   -- GN18 the quorum generator (LANG-99)
   let (eid400, bytes400) := pkgIdOf 400
-  let qg := Std.quorumGenerator rty "n" [Sim.dc.bytes b.id, Sim.dc.bytes a.id] 2
+  let qg? := Std.quorumGenerator rty "n" [Sim.dc.bytes b.id, Sim.dc.bytes a.id] 2
+  let .ok qg := qg? | return note r s!"GN18 the quorum generator of [B, A] at 2: refused" false
   let (r33, v33, t33) := match Wire.encodePackage qg with
     | none => (r, "no generator bytes", none)
     | some gb => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id]) (.install gb))
@@ -299,6 +303,13 @@ def genRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
   r := note r41 s!"GN20 B approves ({v39}), A approves through a grant ({v40}), B generates: {v41}; the Turn bears exactly the package cell of encodePackage (boundedPackage \{n : nat} n 400) ({bytes400.size} bytes): {born41 == [eid400]}; Q's generated: {match gen41 with | some (.nat n) => toString n | _ => "?"}"
     (v38 == "admitted" && v39 == "admitted" && v40 == "admitted" && v41 == "admitted" && born41 == [eid400] &&
       (match gen41 with | some (.nat 400) => true | _ => false))
+  -- GN21 the constructor checks the members and the threshold
+  let refusedAs (x : Except Std.StdRefusal Package) : String :=
+    match x with | .ok _ => "built" | .error e => s!"refused {e.name}"
+  let v42 := refusedAs (Std.quorumGenerator rty "n" [Sim.dc.bytes b.id, Sim.dc.bytes b.id] 2)
+  let v43 := refusedAs (Std.quorumGenerator rty "n" [Sim.dc.bytes b.id, Sim.dc.bytes a.id] 0)
+  r := note r s!"GN21 the quorum generator of [B, B] at 2: {v42}; of [B, A] at 0: {v43}"
+    (v42 == "refused duplicateMember" && v43 == "refused badThreshold")
   return r
 
 /-- A fresh session for the GN rows. -/

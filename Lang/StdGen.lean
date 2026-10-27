@@ -205,9 +205,9 @@ def quorumGenerateMethod (p : Package) : Term :=
           (resultT (callsT [installOf (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty) p)])
             (.record [("approvals", natT 0), ("generated", .var 0), ("proposal", .get (.var 3) "proposal")])))]))))
 
-/-- The QUORUM GENERATOR of `boundedPackage r f`: members `members`, threshold `k`. Its object's
-`generate` installs the bounded package at a bound k of the members approved, and at no other. -/
-def quorumGenerator (r : List (Label × Ty)) (f : Label) (members : List ByteArray) (k : Nat) : Package :=
+/-- The quorum generator's package, unchecked: what the theorems are about. Its law is `quorumLaw`
+at `members` and `k` as given; `quorumGenerator` is the constructor that checks them. -/
+def quorumGeneratorOf (r : List (Label × Ty)) (f : Label) (members : List ByteArray) (k : Nat) : Package :=
   { imports := [], state := quorumGenStateTy,
     iface := .record [("approve", methodTy quorumGenStateTy (.record [("bit", .nat)])),
       ("generate", methodTy quorumGenStateTy (.record []) [installSlot]),
@@ -217,5 +217,14 @@ def quorumGenerator (r : List (Label × Ty)) (f : Label) (members : List ByteArr
       ("propose", proposeGenMethod), ("quorum", quorumLaw quorumGenStateTy .nat members k "generated")],
     methods := ["approve", "generate", "propose"], laws := ["quorum"],
     doc := s!"installs a {f}-bounded record at a bound {k} of its members approved".toUTF8 }
+
+/-- The QUORUM GENERATOR of `boundedPackage r f`: members `members`, threshold `k`. Its object's
+`generate` installs the bounded package at a bound `k` distinct members approved, and at no other
+(`quorumGenerator_installs_attested`, `Lang.Proofs.StdGen`). The members and threshold are checked as
+`quorum` checks them: a repeated member (`duplicateMember`) would cast two bits, and `k = 0`
+(`badThreshold`) would install with no approval at all. -/
+def quorumGenerator (r : List (Label × Ty)) (f : Label) (members : List ByteArray) (k : Nat) :
+    Except StdRefusal Package :=
+  (quorum quorumGenStateTy .nat members k "generated").map fun _ => quorumGeneratorOf r f members k
 
 end Nanodregg.Lang.Std

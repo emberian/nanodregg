@@ -86,8 +86,9 @@ theorem apply4_method_iff {lib : List Term} {g : Nat} {f : Nat → Nat} {pb : Te
   fun _ => ⟨fun h' => bigStep_deterministic h' (apply4_method hlib hb hf hn h),
     fun e => e ▸ apply4_method hlib hb hf hn h⟩
 
-/-- `runMeasured`'s do-block inverted, with the calls conjunct (`runMeasuredWith_ok` with `callsOf`). -/
-theorem runMeasured_inv {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+/-- `runMeasured`'s do-block inverted, with the calls conjunct (`runMeasuredWith_ok` with `callsOf`)
+and the state slots the run returns: `stateSlots` of the state record the method's result holds. -/
+theorem runMeasured_inv_slots {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots}
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots}
     {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {t n : Nat}
@@ -97,7 +98,7 @@ theorem runMeasured_inv {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {
       (Machine.mk S.lib).extract S.ty (budget - S.preparation - used) v =
         .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) ∧
       callsOf digestOf S.calls c = .ok calls ∧ editsOf S.rels r.self e = .ok es ∧
-      rows = es.map (fun x => (x.slot, x.act)) := by
+      rows = es.map (fun x => (x.slot, x.act)) ∧ stateSlots S.row ds 0 = some s := by
   unfold runMeasured runMeasuredWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   split at h
@@ -114,8 +115,24 @@ theorem runMeasured_inv {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {
   repeat' split at h
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
-  obtain ⟨-, rfl, rfl, -, -⟩ := h
-  exact ⟨S, v, used, c, e, ds, left, _, hS, hrun, hx, ‹callsOf _ _ _ = .ok _›, ‹editsOf _ _ _ = .ok _›, rfl⟩
+  obtain ⟨rfl, rfl, rfl, -, -⟩ := h
+  exact ⟨S, v, used, c, e, ds, left, _, hS, hrun, hx, ‹callsOf _ _ _ = .ok _›, ‹editsOf _ _ _ = .ok _›, rfl,
+    ‹stateSlots _ _ _ = some _›⟩
+
+/-- `runMeasured`'s do-block inverted, with the calls conjunct (`runMeasuredWith_ok` with `callsOf`). -/
+theorem runMeasured_inv {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots}
+    {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots}
+    {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {t n : Nat}
+    (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
+    ∃ S v used c e ds left es, runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
+      run S.lib Bounds.stackMax (budget - S.preparation) 0 (State.init S.term S.env) = .value v used ∧
+      (Machine.mk S.lib).extract S.ty (budget - S.preparation - used) v =
+        .ok (.record [("calls", c), ("edits", e), ("state", .record ds)], left) ∧
+      callsOf digestOf S.calls c = .ok calls ∧ editsOf S.rels r.self e = .ok es ∧
+      rows = es.map (fun x => (x.slot, x.act)) := by
+  obtain ⟨S, v, used, c, e, ds, left, es, h1, h2, h3, h4, h5, h6, -⟩ := runMeasured_inv_slots h
+  exact ⟨S, v, used, c, e, ds, left, es, h1, h2, h3, h4, h5, h6⟩
 
 mutual
 /-- Data conforming to a type means itself there. -/
