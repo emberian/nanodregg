@@ -4,3 +4,5 @@ kernel.mjs
 kernel.wasm
 .kernel-key
 world/
+kernel.json
+deployment.json

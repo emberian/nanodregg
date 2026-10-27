@@ -78,3 +78,4 @@ details.terms { margin: 6px 0; } details.terms summary { cursor: pointer; font-w
 details.terms dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 4px 0 0; }
 details.terms dt { font: bold 11px var(--mono); } details.terms dd { margin: 0; }
 .props + .props, .props + p, p + .props { margin-top: 6px; }
+.tour p.door { padding: 6px 8px; margin: 0 0 8px; line-height: 1.6; }

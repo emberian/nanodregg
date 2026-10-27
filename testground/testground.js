@@ -2,8 +2,8 @@
 // Every word a window shows is printed by the member's own follow (Lean) or is a name from the
 // kernel's table; this file lays it out and never decides what it means.
 import factory from './kernel.mjs';
-import { loadKernel, client, genesis, custody, rand32, hex, unhex } from './nd.js';
-import { framed, wsOpen } from './transport.js';
+import { loadKernel, client, genesis, hex } from './nd.js';
+import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
 import { demos, runDemo, lieScenes, memberLies, runScene, head0Of } from './demos.js';
 
 const $ = (tag, attrs = {}, ...kids) => {
@@ -62,13 +62,37 @@ function openWindow({ id, title, x, y, w = 420, body, onClose, dialog = false })
 const boot = document.getElementById('boot-line');
 let K, nd, world, frames = [], cmdNo = 0, raceArmed = null, lie = 'honest', forging = false;
 const t0 = performance.now();
-K = await loadKernel(factory);
+// The kernel is fetched once, hashed, and those bytes are the module instantiated: the sha256 the World
+// window shows is of the kernel this tab runs. kernel.json (build.sh) names the commit it was built from;
+// deployment.json (testground/build/publish.sh) names this deployment's live World. Either may be absent
+// (a local build): the page says so and runs the World in the tab.
+const fetchJson = async (p) => { try { const r = await fetch(p, { cache: 'no-cache' }); return r.ok ? await r.json() : null; } catch { return null; } };
+const kernelBytes = new Uint8Array(await (await fetch(new URL('./kernel.wasm', import.meta.url))).arrayBuffer());
+let kernelSha = '';
+try { kernelSha = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', kernelBytes))); } catch { /* no WebCrypto (an insecure origin): shown as unknown */ }
+const [built, deployment] = await Promise.all([fetchJson('kernel.json'), fetchJson('deployment.json')]);
+const LIVE = deployment?.live ?? '';
+K = await loadKernel(factory, { wasmBinary: kernelBytes });
 const loadMs = performance.now() - t0;
 document.getElementById('boot').remove();
 
+// ---------------------------------------------------------------- a membership this browser keeps
+// A hosted World's member is a record (hosted.mjs recordOf: the relay, the origin, the invitation and
+// sponsor key it accepted, its seeds, its ids), kept in localStorage per relay so that a visitor who
+// comes back is the same member. The seeds are a toy World's member keys, readable by any script on
+// this page's origin; "Forget me" deletes them. Storage may be refused (a private window): then the
+// membership lasts as long as the tab.
+const kept = {
+  key: (url) => `nd-testground/member ${url}`,
+  get(url) { try { return JSON.parse(localStorage.getItem(this.key(url)) ?? 'null'); } catch { return null; } },
+  put(url, rec) { try { localStorage.setItem(this.key(url), JSON.stringify(rec)); return true; } catch { return false; } },
+  forget(url) { try { localStorage.removeItem(this.key(url)); } catch { /* nothing kept */ } },
+};
+
+function clearDesk() { for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); } }
 function newWorld() {
   frames = []; cmdNo = 0; lie = 'honest'; setTray();
-  for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); }
+  clearDesk();
   const t = performance.now();
   world = genesis(K, 'testground', ['alice', 'bob']);
   world.ms = performance.now() - t;
@@ -91,7 +115,7 @@ function openWorld() {
   const rows = lines.map((l) => { const w = l.split(' '); return $('tr', {}, $('td', {}, w[0] === 'founder' ? `founder ${w[1]}` : w[0]), $('td', {}, w[0] === 'founder' ? `${world.members[+w[1]].name}: member ${w[3]}  grant ${w[5]}` : w.slice(1).join(' '))); });
   const body = $('div', {},
     $('table', { class: 'props sunken' }, rows),
-    kv([['kernel load', `${loadMs.toFixed(0)} ms`], ['genesis', `${world.ms.toFixed(0)} ms`], ['runs in', 'this tab: one writer, one follow per member']]),
+    kv([['kernel load', `${loadMs.toFixed(0)} ms`], ['genesis', `${world.ms.toFixed(0)} ms`], ['runs in', 'this tab: one writer, one follow per member'], ...kernelPairs()]),
     glossed([
       ['World', 'One shared ledger: a set of cells (objects) and a log of the calls that changed them.'],
       ['writer', 'The process that orders calls into the log. It is not trusted.'],
@@ -105,12 +129,30 @@ function openWorld() {
       ['chain', 'Hash chain over the log. Two follows with the same chain hold the same history.'],
       ['chain0, roots0', 'The chain and the state roots (hash of all cells) at genesis.'],
       ['authority', 'Certifiers of the World\'s head: count and threshold. 0 0 means none.'],
+      ...kernelTerms,
     ]),
     $('button', { class: 'btn', onclick: () => newWorld() }, 'New World (genesis)'), ' ',
+    LIVE ? [$('button', { class: 'btn', onclick: () => liveDoor() }, doorLabel()), ' '] : '',
     $('button', { class: 'btn', onclick: () => joinHosted() }, 'Join a hosted World…'),
     writerMenu());
   openWindow({ id: 'world', title: 'World', x: 110, y: 16, w: 570, body });
 }
+
+// The kernel this tab runs: the sha256 this tab computed of the bytes it instantiated, and kernel.json's
+// commit. A visitor ties the tab to a commit by building it (build.sh: content-named objects, a sorted
+// link, one sha256 per tree) and comparing.
+function kernelPairs() {
+  const commit = built?.commit, repo = deployment?.repo;
+  return [
+    ['kernel sha256', kernelSha || 'unknown (no WebCrypto on this origin)'],
+    ['kernel size', `${kernelBytes.length.toLocaleString()} bytes`],
+    ['built from', !built ? $('span', { class: 'warn' }, 'no kernel.json (a local build)')
+      : [repo ? $('a', { class: 'cmd', href: `${repo}/commit/${commit}`, target: '_blank', rel: 'noopener' }, `nanodregg ${commit}`) : `nanodregg ${commit}`,
+         built.tree === 'clean' ? '' : $('span', { class: 'warn' }, ' (with uncommitted changes)'), `; Lean ${built.lean}, emcc ${built.emcc}`]],
+    built && built.sha256 !== kernelSha ? ['kernel.json sha256', $('span', { class: 'bad' }, `${built.sha256} (does not match this tab's kernel)`)] : null,
+  ];
+}
+const kernelTerms = [['kernel sha256', 'Hash of the kernel.wasm this tab downloaded and runs. testground/build/build.sh at the commit shown makes the same hash.']];
 
 // ---------------------------------------------------------------- (B) a hosted World
 // The same page with one function swapped: the writer is a real `host serve` behind a WebSocket
@@ -120,47 +162,95 @@ function openWorld() {
 // The trust caveat (DESIGN-TESTGROUND §7): whoever serves this page and world.json chooses the kernel
 // and the sponsor key; this is a demonstration of the check, not a trust anchor.
 const hostedDefault = () => new URLSearchParams(location.search).get('hosted') ?? '';
-function httpOf(ws) { return ws.replace(/^ws/, 'http').replace(/\/ws$/, ''); }
+const doorLabel = () => (kept.get(LIVE) ? 'Return to the live World' : 'Join the live World');
+// The door: this deployment's live World (deployment.json's `live`, stamped at publish time), joined
+// or, when this browser kept a membership of it, returned to. `?live` in the address is the door too.
+function liveDoor() {
+  if (!LIVE) return;
+  history.replaceState(null, '', `${location.pathname}?live`);
+  joinHosted(LIVE);
+}
 async function joinHosted(url = null) {
-  url = url ?? prompt('Relay address (wss://…/ws):', hostedDefault() || 'ws://127.0.0.1:8787/ws');
+  url = url ?? prompt('Relay address (wss://…/ws):', hostedDefault() || LIVE || 'ws://127.0.0.1:8787/ws');
   if (!url) return;
-  const say = (t) => { boot.textContent = t; };
   let wj;
-  try { wj = await (await fetch(`${httpOf(url)}/world.json`)).json(); } catch (e) { alert(`cannot read ${httpOf(url)}/world.json: ${e.message}`); return; }
-  const j = K.join(unhex(wj.invitation), unhex(wj.sponsorKey));
-  const text = new TextDecoder().decode(j.slice(1));
-  if (j[0] !== K.table.statuses.find((x) => x.name === 'ok').code) { alert(`Invitation refused: ${text}`); return; }
-  const jv = Object.fromEntries(text.trim().split('\n').map((l) => l.split(' ')));
-  for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); }
+  try { wj = await worldOf(url); } catch (e) { alert(`cannot read ${httpOf(url)}/world.json: ${e.message}`); return; }
+  // a saved membership of a World this relay no longer serves (a new genesis: a new origin) is not resumed
+  let rec = kept.get(url), stale = null;
+  if (rec && rec.origin !== wj.origin) { stale = rec; rec = null; kept.forget(url); }
+  clearDesk();
   frames = []; cmdNo = 0; lie = 'honest'; setTray();
-  const host = framed(wsOpen(url), { frameMax: K.table.bounds.frameBytesMax });
-  const me = { name: 'you', index: +jv.index, custody: custody(K, [rand32(), rand32(), rand32()]) };
-  me.nd = client(K, { host, onFrame: (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie, ...f }); renderLog(); } });
-  world = { hosted: true, url, wj, origin: jv.origin, members: [me], objects: new Map(), text: '' };
-  openHosted(); openLog(); openTerm(me, 700, 16);
-  print(me, $('div', { class: 'dim' }, `Joined by invitation. World origin ${short(jv.origin)}. The invitation was checked against the sponsor key in world.json. Asking the guest-book (the member that enrols new members) to enrol you.`));
-  const init = await runIn(me, ['init', wj.sponsor], 'join token, signed by your new key');
-  const token = (init.stdout.match(/^join ([0-9a-f]+)/m) || [])[1];
-  if (!token) return;
-  let en;
-  try { en = await (await fetch(`${httpOf(url)}/enroll`, { method: 'POST', body: token })).json(); } catch (e) { en = { refused: e.message }; }
-  if (!en.member) { print(me, $('div', { class: 'bad' }, `Not enrolled: ${en.refused}`)); return; }
-  K.self(me.index, en.member, en.grant); me.id = en.member; me.grant = en.grant;
-  print(me, $('div', { class: 'ok' }, `Enrolled. member ${short(en.member)}, grant ${short(en.grant)}. The writer runs elsewhere. Your follow checks each of its replies.`));
-  openHosted();
+  const onFrame = (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie, ...f }); renderLog(); };
+  world = { hosted: true, url, wj, origin: wj.origin, members: [], objects: new Map(), text: '' };
+  const enter = (m) => { world.members = [m]; world.origin = m.origin; openHosted(); openLog(); openTerm(m, 700, 16); };
+  if (rec) {
+    let me = null;
+    try { me = resumeIn(K, rec, 'you', { onFrame }); } catch (e) { stale = rec; kept.forget(url); }
+    if (me) {
+      enter(me);
+      print(me, $('div', { class: 'ok' }, `Welcome back. You are member ${short(me.id)}. Your keys were saved in this browser on ${rec.joined?.slice(0, 10) ?? 'your first visit'}. Your follow replays the log from the invitation and checks every entry.`));
+      const s = await runIn(me, ['sync'], 'replay the log since the invitation');
+      if (s.exit === 'ok' && !rosterOf(K, me).members.includes(me.id))
+        print(me, $('div', { class: 'bad' }, `Your follow's World has no member ${short(me.id)}. This World does not hold the saved membership. Use Forget me, then join again.`));
+      renderRoster(); refreshDoor();
+      return;
+    }
+  }
+  let me;
+  try {
+    me = await joinIn(K, url, wj, 'you', { onFrame, run: (m, argv, why) => runIn(m, argv, why), say: (m) => {
+      enter(m);
+      if (stale) print(m, $('div', { class: 'warn' }, `This browser saved a membership of World ${short(stale.origin)}. The relay now serves a different World (a new genesis). The old membership is deleted.`));
+      print(m, $('div', { class: 'dim' }, `Joined by invitation. World origin ${short(m.origin)}. The invitation was checked against the sponsor key in world.json. Asking the guest-book (the member that enrols new members) to enrol you.`));
+    } });
+  } catch (e) {
+    if (world.members[0]) print(world.members[0], $('div', { class: 'bad' }, e.message), explain(e.message) ? $('div', { class: 'dim' }, explain(e.message)) : ''); else alert(e.message);
+    return;
+  }
+  const stored = kept.put(url, me.record);
+  print(me, $('div', { class: 'ok' }, `Enrolled. member ${short(me.id)}, grant ${short(me.grant)}. The writer runs elsewhere. Your follow checks each of its replies.`),
+    $('div', { class: 'dim' }, stored ? 'Your keys and membership are saved in this browser. Open this page again and you are the same member. Forget me deletes them.' : 'This browser does not allow storage. The membership ends when this tab closes.'));
+  openHosted(); refreshDoor();
   await runIn(me, ['sync']);
+}
+// the roster: the members of the World as YOUR follow folded it (tg_members), refreshed after every command
+function renderRoster() {
+  const box = document.getElementById('roster'); if (!box || !world.hosted || !world.members[0]) return;
+  const me = world.members[0], r = rosterOf(K, me);
+  const label = (id) => (id === me.id ? 'you' : id === world.wj.sponsor ? 'guest-book' : 'member');
+  const shown = r.members.slice(0, 60);
+  box.replaceChildren(
+    kv([['members', `${r.members.length}`], ['height', `${r.height ?? '—'}`], r.refused ? ['refused', $('span', { class: 'bad' }, r.refused)] : null]),
+    $('div', { class: 'sunken', style: 'max-height:120px;overflow:auto' }, $('table', { class: 'props' }, shown.map((id) => $('tr', {}, $('td', {}, label(id)),
+      $('td', {}, $('a', { class: 'hex', title: id, onclick: () => openObject(me, id) }, short(id))))),
+      r.members.length > shown.length ? $('tr', {}, $('td', {}, ''), $('td', {}, `and ${r.members.length - shown.length} more`)) : '')),
+    $('div', { class: 'dim' }, 'Read from your follow\'s copy of the World. A World knows members by key, so other members are ids. ',
+      $('a', { class: 'cmd', onclick: () => runIn(me, ['sync'], 'new members since') }, 'sync'), ' to update.'));
+}
+function refreshDoor() { const l = document.getElementById('door-label'); if (l) l.textContent = doorLabel(); }
+function forgetMe() {
+  if (!confirm('Delete the keys and membership saved in this browser? You cannot become this member again. A new join makes a new member.')) return;
+  kept.forget(world.url); refreshDoor();
+  history.replaceState(null, '', location.pathname);
+  newWorld();
 }
 function openHosted() {
   const me = world.members[0];
   const body = $('div', {},
-    kv([['relay', world.url], ['origin', world.origin], ['sponsor', `${world.wj.sponsor} (guest-book)`],
-      ['you', me.id ? `member ${me.id}  grant ${me.grant}` : 'not enrolled']]),
-    $('p', { class: 'dim' }, 'The writer is a host serve process on another machine. This tab holds your keys and your follow. The follow checks each step before your key signs. A second tab of this page is a second member.'),
+    kv([['relay', world.url === LIVE ? `${world.url} (live World)` : world.url], ['origin', world.origin], ['sponsor', `${world.wj.sponsor} (guest-book)`],
+      ['you', me.id ? `member ${me.id}  grant ${me.grant}` : 'not enrolled'],
+      ['saved', me.id && kept.get(world.url)?.member === me.id ? 'your keys and membership, in this browser' : 'nothing'], ...kernelPairs()]),
+    $('fieldset', { class: 'writer' }, $('legend', {}, 'Members'), $('div', { id: 'roster' }, 'syncing')),
+    $('p', { class: 'dim' }, 'The writer is a host serve process on another machine. This tab holds your keys and your follow. The follow checks each step before your key signs. The Frames window lists every frame you send and each reply. Another browser is another member.'),
     glossed([['relay', 'Forwards frames between this tab and the writer. It is not trusted.'], ['guest-book', 'The member that enrols new members.'],
-      ['sponsor', 'The member whose key signed the invitation.'], ['follow', 'Your own copy of the World. It replays the log and checks every entry.']]),
+      ['sponsor', 'The member whose key signed the invitation.'], ['follow', 'Your own copy of the World. It replays the log and checks every entry.'],
+      ['saved', 'Your seeds, member id and invitation in this browser\'s storage (localStorage). Any page on this site can read them.'],
+      ['members', 'The member cells in your follow\'s copy of the World. The writer does not supply this list.'], ...kernelTerms]),
     relayMenu(me), forkCheck(me),
-    $('button', { class: 'btn', onclick: () => newWorld() }, 'Local World'));
-  openWindow({ id: 'world', title: 'Hosted World', x: 110, y: 16, w: 570, body });
+    $('button', { class: 'btn', onclick: () => { history.replaceState(null, '', location.pathname); newWorld(); } }, 'Local World'), ' ',
+    me.id && kept.get(world.url) ? $('button', { class: 'btn', title: 'delete the keys and membership saved in this browser', onclick: () => forgetMe() }, 'Forget me') : '');
+  openWindow({ id: 'world', title: world.url === LIVE ? 'Live World' : 'Hosted World', x: 110, y: 16, w: 570, body });
+  renderRoster();
 }
 
 // ---------------------------------------------------------------- the Writer menu: the writer lies
@@ -312,7 +402,9 @@ function openTerm(m, x, y) {
   const body = $('div', { class: 'term' }, out, $('div', { class: 'line' }, $('span', { class: 'prompt' }, `${m.name}$ nd`), input));
   terms.set(m.name, { out, m });
   openWindow({ id: `term-${m.name}`, title: `${m.name}${m.world ? ` (World ${m.world})` : ''}`, x, y, w: 520, body });
-  print(m, $('span', { class: 'dim' }, `You are ${m.name}, founder ${m.index}${m.world ? ` of World ${m.world}` : ''}, member ${short(m.id)}. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\nCommands: create · write OBJ SLOT TEXT · read OBJ [?] · grant OBJ MEMBER RIGHTS · invoke OBJ N ARGS · install TEXT · sync\n`));
+  const commands = 'Commands: create · write OBJ SLOT TEXT · read OBJ [?] · grant OBJ MEMBER RIGHTS · invoke OBJ N ARGS · install TEXT · sync';
+  if (world.hosted) print(m, $('span', { class: 'dim' }, `You are a member of a hosted World. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\n${commands}\n`));
+  else print(m, $('span', { class: 'dim' }, `You are ${m.name}, founder ${m.index}${m.world ? ` of World ${m.world}` : ''}, member ${short(m.id)}. Your keys stay in this tab. Your follow (your copy of the World) checks each command before your key signs it.\n${commands}\n`));
 }
 function print(m, ...nodes) { const t = terms.get(m.name); if (!t) return; t.out.append(...nodes); t.out.scrollTop = t.out.scrollHeight; }
 
@@ -343,6 +435,7 @@ async function runOne(m, argv, why, { forge = false, quiet = false } = {}) {
   document.getElementById('tray-height').textContent = `${frames.length} frames · ${cmdNo} commands`;
   if (r.exit !== 'ok' && !quiet) refusal(m, argv, r, frames.slice(n0));
   for (const o of wins.values()) if (o.refresh) o.refresh();
+  renderRoster();
   tourCheck(m, argv, r);
   return r;
 }
@@ -389,6 +482,8 @@ const glossary = {
   hostContradicted: 'hostContradicted: the writer reports one outcome for your call and your follow finds another. The attempt stays open. The writer\'s reply is shown and not acted on.',
   relationFull: 'relationFull: the relation (a table of rows inside the object) is at its row limit; here, the one slot is taken.',
   forkedWorld: 'forkedWorld: the signed head names a chain hash your follow does not have at that step of your writer\'s log. The two writers serve different histories of one genesis.',
+  enrollFloor: 'enrollFloor: the guest-book keeps its last enrolments for the operator. This World takes no new members until its next genesis. Enrolled members are not affected. The local World is always open.',
+  enrollBudget: 'enrollBudget: the relay enrols at most a few visitors per address per hour. Try again later. A membership saved in this browser needs no enrolment.',
   ticksBudget: 'ticksBudget: this member has spent its ticks for this window. Each Turn records its member and its ticks, and every follow recomputes both, so no writer can charge one member for another. The count restarts each window.',
 };
 function explain(name) { const w = name.split(' ').find((x) => glossary[x]); return w ? glossary[w] : ''; }
@@ -441,7 +536,7 @@ function openObject(m, id) {
 // ---------------------------------------------------------------- the wire, as a scrubbable timeline
 let logSel = -1;
 function openLog() {
-  const w = openWindow({ id: 'log', title: 'Frames', x: 110, y: 560, w: 570, body: $('div', {}) });
+  const w = openWindow({ id: 'log', title: 'Frames', ...(world?.hosted ? { x: 700, y: 340, w: 520 } : { x: 110, y: 560, w: 570 }), body: $('div', {}) });
   w.refresh = renderLog; renderLog();
 }
 function renderLog() {
@@ -490,7 +585,10 @@ function openTour() {
       await runIn(m, s.argv());
     } }, 'Run')) : ''));
   openWindow({ id: 'tour', title: 'Tour', x: 110, y: 270, w: 570,
-    body: $('div', { class: 'tour' }, $('p', {}, 'One World, two members (alice, bob), all in this tab. Type into their terminals, or press Run on each step.'), $('ol', {}, items),
+    body: $('div', { class: 'tour' },
+      LIVE ? $('p', { class: 'door sunken' }, 'This World runs only in this tab. Nothing you do here reaches anyone else. ',
+        $('button', { class: 'btn', onclick: () => liveDoor() }, doorLabel()), ' to work with other visitors. Its writer runs on a public server. Your follow checks each of its replies.') : '',
+      $('p', {}, 'One World, two members (alice, bob), all in this tab. Type into their terminals, or press Run on each step.'), $('ol', {}, items),
       tourAt >= tour.length ? $('p', {}, 'More: the Writer menu in the World window turns on each lie the conformance rows test, and runs its scene. Or try: write as bob without --via; install a package twice; New World.') : '') });
 }
 
@@ -505,7 +603,7 @@ function openDemos() {
 async function secondWorld(name, names) {
   world.extra ??= {};
   if (world.extra[name]) return world.extra[name];
-  const KW = await loadKernel(factory);
+  const KW = await loadKernel(factory, { wasmBinary: kernelBytes });
   const g = genesis(KW, name, names);
   const ndW = client(KW, { onFrame: (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie: 'honest', ...f, who: `${f.who}@${name}` }); renderLog(); } });
   for (const m of g.members) { m.K = KW; m.nd = ndW; m.world = name; }
@@ -542,6 +640,10 @@ icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]));
 icon('≡', 'Frames', () => openLog());
 icon('?', 'Start here', () => openTour());
 icon('▶', 'Demos', () => openDemos());
+if (LIVE) { icon('◎', doorLabel(), () => liveDoor()); icons.lastChild.querySelector('.label').id = 'door-label'; }
 document.getElementById('start').addEventListener('click', () => openWorld());
-if (hostedDefault() && new URLSearchParams(location.search).has('join')) { newWorld(); joinHosted(hostedDefault()); } else newWorld();
-window.testground = { K, runIn, playDemo, world: () => world, frames: () => frames, hex };
+const q = new URLSearchParams(location.search);
+newWorld();
+if (q.has('live') && LIVE) liveDoor();
+else if (hostedDefault() && q.has('join')) joinHosted(hostedDefault());
+window.testground = { K, runIn, playDemo, world: () => world, frames: () => frames, hex, kernel: { sha256: kernelSha, built }, deployment, roster: () => (world.hosted ? rosterOf(K, world.members[0]) : null) };

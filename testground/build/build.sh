@@ -53,6 +53,8 @@ half_c() {
   lean4_src
   cp "$lean4/stage0/stdlib/Init/Data/String/PosRaw.c" "$work/pack/std/Init_Data_String_PosRaw.c"
   cp "$root"/Host/c/*.c "$work/pack/"
+  # the tree the pack's C came from: its commit, and whether tracked files differed from it
+  { git -C "$root" rev-parse HEAD; [ -z "$(git -C "$root" status --porcelain --untracked-files=no)" ] && echo clean || echo dirty; } > "$work/pack/commit"
   tar czf "$work/pack.tgz" -C "$work" pack
   echo "pack: $(grep -c '^T ' "$work/closure.txt") tree modules, $(grep -c '^L ' "$work/closure.txt") toolchain modules → $work/pack.tgz"
 }
@@ -87,12 +89,20 @@ half_wasm() {
     --no-entry -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,node \
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=8388608 \
     -sERROR_ON_UNDEFINED_SYMBOLS=1 \
-    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_w_found,_w_join,_w_self,_w_relay_pre,_w_relay_post,_w_meter,_malloc,_free \
+    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_w_found,_w_join,_w_self,_w_relay_pre,_w_relay_post,_w_meter,_w_members,_malloc,_free \
     -sEXPORTED_RUNTIME_METHODS=HEAPU8
   echo "$key" > "$root/testground/.kernel-key"
   fi
   for d in doc resident escrow head; do mkdir -p "$root/testground/world/$d" && cp "$root/world/$d"/* "$root/testground/world/$d/"; done
   mkdir -p "$root/testground/world/timelock" && cp "$root/client/tests/fixtures/foreign/Timelock" "$root/testground/world/timelock/"
+  # kernel.json: what the page shows a visitor beside the sha256 it computes of the bytes it loaded —
+  # the commit the pack's C came from and how it was built, so the tab's kernel ties to a commit
+  # (two links of one tree are one sha256: the objects are content-named and the link order sorted)
+  local commit state; { read -r commit; read -r state; } < "$work/pack/commit"
+  printf '{"commit":"%s","tree":"%s","sha256":"%s","bytes":%s,"lean":"%s","emcc":"%s"}\n' "$commit" "$state" \
+    "$(sha256sum < "$root/testground/kernel.wasm" | cut -c1-64)" "$(wc -c < "$root/testground/kernel.wasm" | tr -d ' ')" \
+    "$tag" "$(emcc --version | head -1 | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)" > "$root/testground/kernel.json"
+  cat "$root/testground/kernel.json"
   ls -la "$root/testground/kernel.wasm"; echo "gzip: $(gzip -9 -c "$root/testground/kernel.wasm" | wc -c) bytes"
 }
 

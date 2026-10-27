@@ -13,8 +13,10 @@ const cat = (...bs) => { const n = bs.reduce((a, b) => a + b.length, 0); const o
 const u32 = (n) => { const o = new Uint8Array(4); new DataView(o.buffer).setUint32(0, n, true); return o; };
 
 // ---- the kernel module: bytes in, bytes out ----
-export async function loadKernel(factory) {
-  const K = await factory();
+// `opts` reach emscripten's factory: the page hands `wasmBinary`, the bytes it fetched and hashed, so the
+// module it shows the sha256 of is the module it runs
+export async function loadKernel(factory, opts = {}) {
+  const K = await factory(opts);
   if (K._w_init() !== 0) throw new Error('kernel init refused');
   const out = (n) => { if (n < 0) throw new Error('kernel IO error'); return K.HEAPU8.slice(K._w_out(), K._w_out() + n); };
   const put = (b) => { const p = K._malloc(b.length || 1); K.HEAPU8.set(b, p); return p; };
@@ -40,6 +42,8 @@ export async function loadKernel(factory) {
     // the rows' relay around a hosted tab's socket: before it (an answer of its own, or forward) and after
     // the meter, read back from member i's own fold (World.ticksUsed)
     meter: (i) => call(K._w_meter, i),
+    // the members of member i's World, read off its own fold (a hosted tab's roster)
+    members: (i) => call(K._w_members, i),
     relayPre: (op) => call(K._w_relay_pre, op),
     relayPost: (op, p, r) => call(K._w_relay_post, op, p, r),
     genesis: (b) => call(K._w_genesis, b),

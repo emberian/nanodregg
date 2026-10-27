@@ -3,7 +3,7 @@
 # `script:testground/build/gate.sh`): the kernel the page loads, built from THIS tree (build.sh all), runs
 # every Writer-menu scene (lies-run.mjs) and its control with the lies off (--honest), then each axis's
 # demo (axes-run.mjs: the generator, the meter to ticksBudget, the time-lock, the document), then a real
-# hosted World on a fresh genesis (hosted-run.mjs basic and document). The expectation
+# hosted World on a fresh genesis (hosted-run.mjs basic, document and door: the live World's door, CLIENT-49). The expectation
 # of each scene is its row's, read off Protocol.rows by the kernel, so a row that changes its lines is
 # RED here until its scene follows, never silently left behind.
 #
@@ -38,6 +38,7 @@ hosted() {   # hosted SCENE... [--harness-control]
   ( cd "$root" && cargo build -q --release -p nanodregg-client --bin nd-supervise ) || { echo "FAIL nd-supervise did not build"; return 1; }
   st=$(mktemp -d "${TMPDIR:-/tmp}/ndtg.XXXXXX")
   port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  export ND_TESTGROUND_ENROLL_FLOOR=250   # hosted-run.mjs door: a join past the scenes' six meets the floor
   export ND_HOST=${ND_LEAN_BIN:-$root/.lake/build/bin}/host ND_SUPERVISE=${CARGO_TARGET_DIR:-$root/target}/release/nd-supervise
   if "$root/deploy/testground/run.sh" genesis "$st/w" > "$st/genesis.log" 2>&1 && PORT=$port "$root/deploy/testground/run.sh" start "$st/w" > "$st/start.log" 2>&1; then
     for _ in $(seq 100); do curl -sf "http://127.0.0.1:$port/world.json" > /dev/null && break; sleep 0.2; done
@@ -63,5 +64,5 @@ fi
 node lies-run.mjs || { echo "FAIL a lie's scene did not end as its row expects (lies-run.mjs)"; exit 1; }
 node lies-run.mjs --honest || { echo "FAIL the control: with the lies off a scene still ended as its row expects (lies-run.mjs --honest)"; exit 1; }
 node axes-run.mjs || { echo "FAIL an axis demo did not answer as scripted (axes-run.mjs)"; exit 1; }
-hosted basic document || { echo "FAIL the hosted World did not answer as scripted (hosted-run.mjs)"; exit 1; }
+hosted basic document door || { echo "FAIL the hosted World did not answer as scripted (hosted-run.mjs)"; exit 1; }
 echo "TESTGROUND GATE GREEN"

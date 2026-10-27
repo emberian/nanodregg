@@ -3,7 +3,8 @@
 
     ws-relay.py --listen 127.0.0.1:8787 --host-sock /run/nd-testground/host.sock \
                 --world /srv/nd-testground/guestbook/world.json \
-                --guestbook /srv/nd-testground/guestbook/guestbook.sock [--max-conns 64]
+                --guestbook /srv/nd-testground/guestbook/guestbook.sock [--max-conns 64] \
+                [--enroll-per-hour 10]
 
 Each WebSocket connection is one connection to the supervisor's host.sock (nd-supervise: its mux
 bounds connections, idles, deadlines and names every close): binary messages from the tab are
@@ -16,18 +17,26 @@ Besides the socket: `GET /world.json` (the guest-book's invitation and its spons
 testground's trust caveat is that whoever serves this file and the page chooses both, DESIGN-
 TESTGROUND §7), `POST /enroll` (a join token, one line to the guest-book's socket, its one-line
 JSON answer back) and `GET /attest` (the guest-book's own signed head, `sync --attest`, for a member
-of another writer of the same genesis to check: the fork demo). Python's standard library only. Listens where it is told; exposing it to the
+of another writer of the same genesis to check: the fork demo). Python's standard library only.
+
+Abuse: `POST /enroll` spends one of the World's enrolments (the guest-book's grant: enrollMax, 256),
+so each client address gets `--enroll-per-hour` of them (a sliding hour), refused `429` with
+`Retry-After` and `{"refused":"enrollBudget"}` past it. The address is the last entry of the
+`X-Forwarded-For` the proxy in front sets (Caddy appends the peer it saw), else the TCP peer. The
+guest-book keeps its own floor of the grant for the operator (guestbook.mjs). Connection floods are
+the box's (nftables) and `--max-conns`. Listens where it is told; exposing it to the
 internet (TLS, a reverse proxy) is the operator's act, not this file's.
 """
-import argparse, asyncio, base64, hashlib, os, signal, struct, sys
+import argparse, asyncio, base64, collections, hashlib, os, signal, struct, sys, time
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MSG_MAX = 1 << 21          # a tab's message: one host.sock frame at most (frameBytesMax + header)
 HEAD_MAX = 8192
 ENROLL_MAX = 512
+ADDRS_MAX = 65536          # addresses the enrolment budget remembers; the oldest is dropped past it
 
-def http(status, body=b"", ctype=b"text/plain; charset=utf-8"):
-    return (b"HTTP/1.1 " + status + b"\r\nContent-Type: " + ctype + b"\r\nContent-Length: " +
+def http(status, body=b"", ctype=b"text/plain; charset=utf-8", extra=b""):
+    return (b"HTTP/1.1 " + status + b"\r\nContent-Type: " + ctype + b"\r\n" + extra + b"Content-Length: " +
             str(len(body)).encode() + b"\r\nAccess-Control-Allow-Origin: *\r\n"
             b"Access-Control-Allow-Headers: content-type\r\nConnection: close\r\n\r\n" + body)
 
@@ -54,6 +63,18 @@ def frame(opcode, payload):
 class Relay:
     def __init__(self, a):
         self.a, self.live = a, 0
+        self.spent = collections.OrderedDict()   # client address -> enrolment times in the last hour
+
+    def budget(self, addr):
+        """Seconds until `addr` may enrol again, or 0 (and the enrolment counted)."""
+        now = time.monotonic()
+        ts = [t for t in self.spent.pop(addr, []) if now - t < 3600]
+        if len(ts) >= self.a.enroll_per_hour:
+            self.spent[addr] = ts
+            return int(3600 - (now - ts[0])) + 1
+        self.spent[addr] = ts + [now]
+        while len(self.spent) > ADDRS_MAX: self.spent.popitem(last=False)
+        return 0
 
     async def handle(self, r, w):
         try:
@@ -73,7 +94,12 @@ class Relay:
                 else: w.write(http(b"200 OK", body, b"application/json"))
             elif method == "POST" and path == "/enroll":
                 n = int(hdr.get("content-length", "0"))
+                fwd = hdr.get("x-forwarded-for", "").split(",")[-1].strip()
+                addr = fwd or (w.get_extra_info("peername") or ("?",))[0]
                 if n > ENROLL_MAX: w.write(http(b"413 Payload Too Large"))
+                elif (wait := self.budget(addr)):
+                    w.write(http(b"429 Too Many Requests", b'{"refused":"enrollBudget"}', b"application/json",
+                                 b"Retry-After: " + str(wait).encode() + b"\r\n"))
                 else: w.write(http(b"200 OK", await self.enroll(await r.readexactly(n)), b"application/json"))
             elif method == "GET" and path == "/attest":
                 w.write(http(b"200 OK", await self.ask(b"attest\n"), b"application/json"))
@@ -149,6 +175,7 @@ async def main():
     p.add_argument("--world", required=True)
     p.add_argument("--guestbook", required=True)
     p.add_argument("--max-conns", type=int, default=64)
+    p.add_argument("--enroll-per-hour", type=int, default=int(os.environ.get("ND_TESTGROUND_ENROLL_PER_HOUR", "10")))
     p.add_argument("--pid-file")
     a = p.parse_args()
     host, port = a.listen.rsplit(":", 1)

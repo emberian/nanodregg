@@ -32,6 +32,7 @@ accept, refuse, plan, render and attempt decision is one of these exports' Lean:
 * `tg_forge I ARGV SEED NEXT` — a hostile client's call (`Loopback.forgedCall`): ARGV planned on
   founder `I`'s World WITHOUT its follow's admission and signed with the seed it is handed; the page
   submits it like any call. `tg_text NAME` — a row's own package text (`Protocol.slot`, …).
+* `tg_members I` — the members of founder `I`'s World as its own fold holds them (a hosted tab's roster).
 * `tg_found INPUT I`, `tg_join INVITATION KEY`, `tg_self I MEMBER GRANT` — a HOSTED World (no
   writer in the tab; the page relays each member's writer frames to a real `host serve`): a founder's
   follow from the genesis inputs `host genesis` printed, a stranger's from an invitation accepted
@@ -455,6 +456,26 @@ def addMember (self : Command.Self D) (w : World D) : IO Nat := do
   | none => ground.set (some { writer := none, members := #[m], genesis := w }); return 0
 
 def hexOf (d : D) : String := Text.toHex (P.X.env.bytes d)
+
+/-- The members of founder `I`'s World, read off its OWN fold: every live cell of kind `kindMember`
+(`Receive.kindMember`), in trie order, one `member HEX` line each, then `height H`, then
+`enrollLeft N` when the member's own grant carries an enrolment right (`Receive.enrollLeft`: the
+count its next `enroll` would spend from). A hosted tab's roster is this: what its follow re-derived
+from the log, not a list the writer or the guest-book keeps; a member the writer never logged is not
+in it, and one it logged cannot be left out. The guest-book reads its own `enrollLeft` to keep a
+floor for members who come back. -/
+@[export tg_members] def tgMembers (i : UInt32) : IO ByteArray := do
+  let some g ← ground.get | return refusedText "noWorld"
+  let some m := g.members[i.toNat]? | return refusedText "noMember"
+  let w := m.follow.world
+  let ids := w.cellIds.filter fun c => (w.live P.X.env c).any (·.kind == kindMember)
+  let lines := ids.foldl (fun acc c => acc ++ s!"member {hexOf c}\n") ""
+  let left := match w.live P.X.env m.self.grant with
+    | some cell => match enrollLeft m.self.grant cell with
+      | .ok (_, n) => s!"enrollLeft {n}\n"
+      | .error _ => ""
+    | none => ""
+  return reply Protocol.Status.ok.code s!"{lines}height {w.height}\n{left}".toUTF8
 
 /-- A founder of a hosted World: its follow starts at the genesis its INPUT makes (the `input HEX`
 `host genesis` prints, as a founder's own follow Store reproduces it, RUNBOOK §2b's residual), its

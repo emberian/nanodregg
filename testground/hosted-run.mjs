@@ -1,15 +1,22 @@
 // hosted-run.mjs — two members of a HOSTED World under node, each its own kernel instance as two
 // tabs would be: each joins over the guest-book's invitation, is enrolled, and they run the
 // document demo against the real `host serve` behind the relay (deploy/testground/run.sh).
-//   node hosted-run.mjs ws://127.0.0.1:8787/ws [document|basic] [--harness-control]
+//   node hosted-run.mjs ws://127.0.0.1:8787/ws [document|basic|door] [--harness-control]
 // Every command must answer as scripted (its exit; `basic`: ok, then the read shows bob's text), the
 // joins and first syncs included; the last line is `HOSTED <what> OK` or `HOSTED <what> RED: …`, exit
-// 1 on red (testground/build/gate.sh runs both scenes on a fresh World). --harness-control adds one
+// 1 on red (testground/build/gate.sh runs every scene on a fresh World). --harness-control adds one
 // expectation no command meets (GATES-15).
-import { readFileSync } from 'node:fs';
+// `door` is the page's door to a live World (CLIENT-49): each joined member's roster, read off its
+// own fold, holds itself, the guest-book and the other member; alice's membership RECORD (what the
+// page keeps in localStorage) resumed in a fresh kernel (a reloaded tab) syncs, finds itself in its
+// roster, and writes the object alice made before the reload; the same record with its seeds
+// forgotten does not write (the keys are what came back); kernel.json's sha256 is kernel.wasm's.
+import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import factory from './kernel.mjs';
 import { runDemo } from './demos.js';
-import { joinMember, worldOf } from './hosted.mjs';
+import { joinMember, resumeMember, rosterOf, worldOf, httpOf } from './hosted.mjs';
+import { hex, rand32 } from './nd.js';
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const [url, what = 'document'] = args;
 const control = process.argv.includes('--harness-control');
@@ -34,6 +41,57 @@ if (what === 'basic') {
   await must(bob, ['write', obj, '0', 'bob, from another tab', '--via', grant]);
   const r = await must(alice, ['read', obj]);
   if (!r.stdout.includes('bob, from another tab')) red('alice does not read bob\'s write');
+} else if (what === 'door') {
+  const rosterHas = (m, ids, when) => {
+    const r = rosterOf(m.K, m);
+    console.log(`${m.name}'s roster ${when}: ${r.members.length} members at height ${r.height}${r.refused ? ` (refused ${r.refused})` : ''}`);
+    for (const [who, id] of ids) if (!r.members.includes(id)) red(`${m.name}'s own fold has no member ${who} (${id.slice(0, 12)}…) ${when}`);
+    return r;
+  };
+  const c = await must(alice, ['create']);
+  const obj = (c.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1];
+  await must(alice, ['write', obj, '0', 'before the reload']);
+  await must(bob, ['sync']); await must(alice, ['sync']);
+  rosterHas(alice, [['alice', alice.id], ['bob', bob.id], ['the guest-book', wj.sponsor]], 'after both joined');
+  rosterHas(bob, [['alice', alice.id], ['bob', bob.id], ['the guest-book', wj.sponsor]], 'after both joined');
+  const rec = JSON.parse(JSON.stringify(alice.record));   // as localStorage hands it back
+  const back = await resumeMember(factory, rec, 'alice-back');
+  console.log(`alice-back: resumed member ${back.id.slice(0, 12)}… in a fresh kernel in ${back.joinMs.toFixed(0)} ms; sync ${back.syncExit}`);
+  if (back.syncExit !== 'ok') red(`the resumed member's first sync: ${back.syncExit} ${back.syncErr}`);
+  rosterHas(back, [['alice', alice.id], ['bob', bob.id]], 'after the reload');
+  await must(back, ['write', obj, '0', 'after the reload']);
+  const rd = await must(bob, ['read', obj]);
+  if (!rd.stdout.includes('after the reload')) red('bob does not read the resumed alice\'s write');
+  // the control: the same membership with its keys forgotten is not alice
+  const forgot = await resumeMember(factory, { ...rec, seeds: [rand32(), rand32(), rand32()].map(hex) }, 'alice-forgot');
+  const w = await show(forgot, ['write', obj, '0', 'a stranger with alice\'s ids']);
+  if (w.exit === 'ok') red('a record with forgotten seeds wrote as alice');
+  const kj = new URL('./kernel.json', import.meta.url);
+  if (!existsSync(kj)) red('no kernel.json beside kernel.wasm (build.sh writes it)');
+  const stamped = JSON.parse(readFileSync(kj, 'utf8')).sha256;
+  const actual = createHash('sha256').update(readFileSync(new URL('./kernel.wasm', import.meta.url))).digest('hex');
+  if (stamped !== actual) red(`kernel.json says sha256 ${stamped}, kernel.wasm is ${actual}`);
+  console.log(`kernel ${actual.slice(0, 16)}… = kernel.json's`);
+  // the abuse bounds the door needs: the guest-book's floor of its enrolment grant (gate.sh runs this
+  // World with ND_TESTGROUND_ENROLL_FLOOR=250, so a join past the scenes' own is refused), then the
+  // relay's per-address enrolment budget (429, Retry-After, enrollBudget)
+  if (process.env.ND_TESTGROUND_ENROLL_FLOOR) {
+    let floor = null;
+    for (let n = 0; n < 8 && !floor; n++) {
+      try { await joinMember(factory, url, wj, `probe${n}`); } catch (e) { floor = e.message; }
+    }
+    console.log(`a join at the floor: ${floor}`);
+    if (!/enrollFloor/.test(floor ?? '')) red(`no join was refused enrollFloor: ${floor}`);
+  }
+  const at = await (await fetch(`${httpOf(url)}/attest`)).text();
+  console.log(`GET /attest answers ${at.length} bytes (${JSON.parse(at).attest ? 'an attestation' : at.trim()})`);
+  let budget = null;
+  for (let n = 0; n < 12 && !budget; n++) {
+    const r = await fetch(`${httpOf(url)}/enroll`, { method: 'POST', body: 'zz' });
+    if (r.status === 429) budget = { after: n, retry: r.headers.get('retry-after'), body: await r.text() };
+  }
+  console.log(`the relay's enrolment budget: ${JSON.stringify(budget)}`);
+  if (!budget || !/enrollBudget/.test(budget.body) || !(+budget.retry > 0)) red('the relay never refused an address its enrolment budget');
 } else {
   const r = await runDemo('document', { fetchText: async (p) => readFileSync(new URL(p, import.meta.url), 'utf8'), members: [alice, bob],
     run: async (m, argv) => show(m, argv) });

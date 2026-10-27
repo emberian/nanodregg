@@ -49,4 +49,13 @@ certified heads land, a visitor can check the writer's certified head instead of
 
 **Abuse.** The relay bounds its connections (`--max-conns`); each connection is one host.sock
 connection under the mux's bounds. How many visitors the guest-book enrols is the kernel's to bound
-(its World grant's enrolments; the meter, KERNEL-68), and a guest-book that ran out refuses by name.
+(its World grant's enrolments, `enrollMax` 256; the meter, KERNEL-68), and a guest-book that ran out
+refuses by name. Two bounds keep one client from spending them: the relay enrols at most
+`--enroll-per-hour` (`ND_TESTGROUND_ENROLL_PER_HOUR`, default 10) per client address in a sliding
+hour (the last `X-Forwarded-For` entry the proxy appends, else the TCP peer), answering `429`,
+`Retry-After` and `{"refused":"enrollBudget"}` past it; and the guest-book refuses a `join`
+`enrollFloor` once its own fold's `enrollLeft` is at `ND_TESTGROUND_ENROLL_FLOOR` (default 16), the
+operator's reserve, spent only by a `reserve HEX` line on guestbook.sock, which the relay never
+sends. A member enrolled once never enrols again (the page keeps its keys), so the floor only stops
+new visitors of a World that is due a re-genesis. Per-address connection limits are the proxy's or
+the box's firewall's.

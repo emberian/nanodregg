@@ -15,7 +15,12 @@
 // and refusing by name like any member's; `{"member","grant"}` or `{"refused": NAME}`. One line
 // `attest` is answered with this member's own `sync --attest` (`{"attest": HEX}`): its head, signed,
 // which a member of another writer of the same genesis checks with `sync --check` (PROTOCOL-74). How many it
-// enrolls is the kernel's to bound (the founder grant's enroll:N, its meter), not this file's.
+// enrolls is the kernel's to bound (the founder grant's enroll:N, its meter), not this file's; this file
+// keeps a FLOOR of that count (ND_TESTGROUND_ENROLL_FLOOR, default 16): a `join` line is refused
+// `enrollFloor` once its own fold's `enrollLeft` (tg_members) is at the floor, and the floor is spent
+// only by a `reserve HEX` line, which the relay never sends (it forwards `join` only): the operator's,
+// on the box, to enrol a member for a check after the public has used the rest. A member enrolled
+// once needs no enrolment again (the page keeps its keys); the floor is for the World's operator.
 import { readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
 import net from 'node:net';
 import { webcrypto } from 'node:crypto';
@@ -54,6 +59,9 @@ const host = framed(unixOpen(net, hostSock), { frameMax: T.bounds.frameBytesMax 
 const nd = client(K, { host });
 const run = async (argv) => { const r = await nd.run(me, argv); console.error(`guestbook$ nd ${argv[0]} … → ${r.exit} ${r.stderr.trim()}`); return r; };
 const idOf = (r) => (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1];
+const FLOOR = +(process.env.ND_TESTGROUND_ENROLL_FLOOR ?? 16);
+// the count this member's grant has left to enrol, read off its own fold (tg_members `enrollLeft`)
+const enrollLeft = () => { const r = K.members(me.index); const m = new TextDecoder().decode(r.slice(1)).match(/^enrollLeft (\d+)$/m); return r[0] === okCode && m ? +m[1] : null; };
 
 const s = await run(['sync']);
 if (s.exit !== 'ok') process.exit(1);
@@ -63,7 +71,9 @@ if (!invitation) process.exit(1);
 writeFileSync(`${dir}/world.json`, JSON.stringify({ origin: lines.origin, invitation, sponsorKey: hex(K.pub(seeds[0])), sponsor: me.id }) + '\n');
 
 let queue = Promise.resolve();
-const enroll = async (token) => {
+const enroll = async (token, reserve = false) => {
+  const left = enrollLeft();
+  if (!reserve && left !== null && left <= FLOOR) return { refused: 'enrollFloor', left };
   const e = await run(['enroll', token]);
   const member = idOf(e);
   if (!member) return { refused: e.stderr.trim() || e.exit };
@@ -86,9 +96,9 @@ net.createServer((c) => {
       }).catch(() => c.end('{"refused":"guestbook"}\n'));
       return;
     }
-    const m = buf.slice(0, nl).match(/^join ([0-9a-f]{1,400})$/);
+    const m = buf.slice(0, nl).match(/^(join|reserve) ([0-9a-f]{1,400})$/);
     if (!m) return c.end('{"refused":"usage"}\n');
-    queue = queue.then(async () => c.end(JSON.stringify(await enroll(m[1])) + '\n')).catch(() => c.end('{"refused":"guestbook"}\n'));
+    queue = queue.then(async () => c.end(JSON.stringify(await enroll(m[2], m[1] === 'reserve')) + '\n')).catch(() => c.end('{"refused":"guestbook"}\n'));
   });
   c.on('error', () => {});
 }).listen(sock, () => { chmodSync(sock, 0o660); console.error(`guestbook: member ${me.id}, serving ${sock}`); });
