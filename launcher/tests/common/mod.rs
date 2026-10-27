@@ -10,7 +10,7 @@ use std::net::TcpListener;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -385,8 +385,13 @@ impl World {
     }
     /// `nd create` of an allowance for `resident` (hex) on `model`, slot `slot`; its object id.
     pub fn allowance(&self, resident: &str, model: &str, slot: u32, cap: u64) -> String {
+        self.allowance_w(resident, model, slot, cap, WINDOW_MS)
+    }
+
+    /// `allowance`, its window `window_ms` long.
+    pub fn allowance_w(&self, resident: &str, model: &str, slot: u32, cap: u64, window_ms: u64) -> String {
         let state = format!(
-            "(record (cap {cap}) (keySlot {slot}) (maxTokens 100) (microPerKTok 1000) (model \"{model}\") (resident #{resident}) (revoked false) (windowMs {WINDOW_MS}))"
+            "(record (cap {cap}) (keySlot {slot}) (maxTokens 100) (microPerKTok 1000) (model \"{model}\") (resident #{resident}) (revoked false) (windowMs {window_ms}))"
         );
         line(&self.run(&["create", "--pkg", &self.pkg, &state]), "id ").to_owned()
     }
@@ -819,6 +824,87 @@ pub fn is_refused(a: &Answer, r: BrokerRefusal) -> bool {
 
 pub fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// The operator time keybroker started its decider at (`T0`, the decider's first argument, read from
+/// its command line by the PID file keybroker wrote in `pids`): the start every allowance window is
+/// forfeit from (`Broker.start`), as the broker saw it, not as the test guessed it.
+pub fn decider_t0(pids: &Path) -> u64 {
+    let pid = fs::read_to_string(pids.join("decider.pid")).unwrap();
+    let cmd = fs::read(format!("/proc/{}/cmdline", pid.trim())).unwrap();
+    let t0 = cmd.split(|b| *b == 0).nth(1).unwrap();
+    std::str::from_utf8(t0).unwrap().parse().unwrap()
+}
+
+/// Wait until the operator clock is past the window keybroker started in (its decider's own T0,
+/// `decider_t0`): the first window whose asks are not forfeit, however long the start took.
+pub fn past_start_window(pids: &Path) {
+    let t0 = decider_t0(pids);
+    while now_ms() / WINDOW_MS <= t0 / WINDOW_MS {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// CPU ticks (user and system) used so far by `pid` and every live process below it, from /proc.
+pub fn tree_ticks(pid: u32) -> u64 {
+    let mut stats: Vec<(u32, u32, u64)> = Vec::new();
+    for e in fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(p) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(st) = fs::read_to_string(e.path().join("stat")) else {
+            continue;
+        };
+        let Some(rest) = st.rsplit_once(')').map(|(_, r)| r) else {
+            continue;
+        };
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        let n = |i: usize| f.get(i).and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+        stats.push((p, n(1) as u32, n(11) + n(12)));
+    }
+    let mut tree = vec![pid];
+    let mut i = 0;
+    while i < tree.len() {
+        let parent = tree[i];
+        tree.extend(stats.iter().filter(|s| s.1 == parent).map(|s| s.0));
+        i += 1;
+    }
+    stats.iter().filter(|s| tree.contains(&s.0)).map(|s| s.2).sum()
+}
+
+/// Wait for `child` to end, its stderr read as it comes (a full pipe never stalls it). A hang is
+/// `idle` with no CPU used by the child or any process below it while it has not ended: a loaded box
+/// slows a run and still schedules it, so the bound is the run's own progress, never a fixed number
+/// of wall-clock seconds from the spawn. Returns its status and its stderr.
+pub fn wait_live(mut child: Child, what: &str, idle: Duration) -> (ExitStatus, String) {
+    let mut err = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        if let Some(e) = err.as_mut() {
+            let _ = e.read_to_end(&mut s);
+        }
+        String::from_utf8_lossy(&s).into_owned()
+    });
+    let (mut ticks, mut since) = (tree_ticks(child.id()), Instant::now());
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st;
+        }
+        let t = tree_ticks(child.id());
+        if t != ticks {
+            (ticks, since) = (t, Instant::now());
+        } else if since.elapsed() > idle {
+            let _ = child.kill(); // our own child, by its handle
+            let _ = child.wait();
+            panic!(
+                "{what} used no CPU for {} s and did not end (a hang, not a slow box): {}",
+                idle.as_secs(),
+                reader.join().unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    (status, reader.join().unwrap_or_default())
 }
 
 /// Sleep until the operator clock is in a later window than `t0_ms` (bounded).

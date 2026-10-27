@@ -16,14 +16,14 @@
 
 mod common;
 
-use common::{Gone, place_exe};
+use common::{Gone, place_exe, wait_live};
 use nanodregg_devtools::lean_bin;
 use nanodregg_launcher::generated::{controller_exit, launch_exit};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const A: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 const B: &str = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
@@ -145,21 +145,8 @@ fn launch_as(t: &Tree, plant: bool, resident: bool) -> String {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    let mut child = cmd.spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
-        if Instant::now() > deadline {
-            let _ = child.kill(); // our own child, by its handle
-            let _ = child.wait();
-            panic!("grain-launch did not end within 60 s");
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    let out = child.wait_with_output().unwrap();
-    String::from_utf8_lossy(&out.stderr).into_owned()
+    // a hang is a minute with no CPU used by grain-launch, its drive or the grain; a loaded box is not
+    wait_live(cmd.spawn().unwrap(), "grain-launch", Duration::from_secs(60)).1
 }
 
 #[test]
@@ -717,4 +704,17 @@ fn a_panicking_test_still_removes_its_tree() {
         );
         assert!(!d.exists(), "{} outlived its panicking test", d.display());
     }
+}
+
+/// The falsifier of `wait_live`: a child that sleeps uses no CPU, and is named a hang after the idle
+/// bound however busy the box is.
+#[test]
+#[should_panic(expected = "used no CPU")]
+fn a_child_that_uses_no_cpu_is_named_a_hang() {
+    let child = Command::new("/bin/sleep")
+        .arg("60")
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_live(child, "sleep", Duration::from_secs(2));
 }

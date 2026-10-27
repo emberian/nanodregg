@@ -85,27 +85,39 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     let server = pki.server(HOST, false);
     pki.pin(&d, &[&server]);
     let (up, seen) = upstream(Mode::Ok, &server);
-    // resident 01: model m (slot 7), n (slot 9: no key), and a twice (ambiguous)
+    // resident 01: model m (slot 7), n (slot 9: no key), and a twice (ambiguous). The windows are
+    // long (START_W) so that an ask a loaded box answers seconds after the start still lands in the
+    // start window; which window that is, is read from the decider's own T0, never guessed.
+    const START_W: u64 = 30_000;
     let w = World::genesis("main");
-    let m = w.allowance(&w.r1, "claude-m", 7, 100_000);
-    w.allowance(&w.r1, "claude-n", 9, 100_000);
-    w.allowance(&w.r1, "claude-a", 7, 100_000);
-    let a2 = w.allowance(&w.r1, "claude-a", 7, 100_000);
-    let t_before = early_in_window();
-    let b = start(&d, &keys, &anchors, &up, &w);
-    let mut r = Resident::connect(&b);
-
-    // the start window is forfeit; the static refusals come before the meter
-    let first = r.ask(&ask(b"claude-m", 10, b"hi"));
-    assert_eq!(
-        now_ms() / WINDOW_MS,
-        t_before / WINDOW_MS,
-        "slow run (load): the start-window ask left its window before it was answered; re-run"
-    );
-    assert!(
-        is_refused(&first, BrokerRefusal::OverSpend),
-        "start window not forfeit"
-    );
+    let m = w.allowance_w(&w.r1, "claude-m", 7, 100_000, START_W);
+    w.allowance_w(&w.r1, "claude-n", 9, 100_000, START_W);
+    w.allowance_w(&w.r1, "claude-a", 7, 100_000, START_W);
+    let a2 = w.allowance_w(&w.r1, "claude-a", 7, 100_000, START_W);
+    // the start window is forfeit: an ask answered inside the window of the broker's own T0 is
+    // `overSpend`. A start too close to a window's end to show it is started again (the forfeit is
+    // the property, and it is only visible inside that window).
+    let mut tries = 0;
+    let (b, mut r, t0) = loop {
+        let b = start(&d, &keys, &anchors, &up, &w);
+        let t0 = decider_t0(&d.join("pids"));
+        let mut r = Resident::connect(&b);
+        let first = r.ask(&ask(b"claude-m", 10, b"hi"));
+        if now_ms() / START_W == t0 / START_W {
+            assert!(
+                is_refused(&first, BrokerRefusal::OverSpend),
+                "start window not forfeit"
+            );
+            break (b, r, t0);
+        }
+        // answered after the start window: the ask may have been granted; start again
+        tries += 1;
+        assert!(tries < 5, "five starts and no ask answered inside its start window");
+        drop(r);
+        drop(b);
+        seen.lock().unwrap().clear();
+    };
+    // the static refusals come before the meter
     assert!(is_refused(
         &r.ask(&ask(b"zz", 10, b"hi")),
         BrokerRefusal::ModelNotAllowed
@@ -143,7 +155,10 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
     .unwrap();
     assert!(is_refused(&busy, BrokerRefusal::Busy));
 
-    next_window(t_before);
+    // the window after the start window, read from the broker's own T0
+    while now_ms() / START_W <= t0 / START_W {
+        std::thread::sleep(Duration::from_millis(100));
+    }
     // identity is the socket: r2 has a socket but no allowance, so it is refused whatever it asks
     let mut other = Resident::connect_as(&b, &w.r2);
     assert!(is_refused(
@@ -171,7 +186,7 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
         "invoke",
         &m,
         "1",
-        &format!("(record (cap 200000) (keySlot 7) (maxTokens 100) (microPerKTok 1000) (windowMs {WINDOW_MS}))"),
+        &format!("(record (cap 200000) (keySlot 7) (maxTokens 100) (microPerKTok 1000) (windowMs {START_W}))"),
     ]);
     assert!(
         is_refused(
@@ -181,7 +196,7 @@ fn refusals_by_name_and_no_key_reaches_the_resident() {
         "a changed allowance kept its meter"
     );
     // a second allowance on m CREATED while keybroker runs: the broker sees the born id
-    let m2 = w.allowance(&w.r1, "claude-m", 7, 5);
+    let m2 = w.allowance_w(&w.r1, "claude-m", 7, 5, START_W);
     assert!(
         is_refused(
             &r.ask(&ask(b"claude-m", 10, b"hello")),
@@ -231,15 +246,9 @@ fn an_echoed_key_is_withheld() {
     let (up, seen) = upstream(Mode::Echo, &server);
     let w = World::genesis("echo");
     w.allowance(&w.r1, "claude-m", 7, 100_000);
-    let t_before = early_in_window();
     let b = start(&d, &keys, &anchors, &up, &w);
     let mut r = Resident::connect(&b);
-    assert_eq!(
-        now_ms() / WINDOW_MS,
-        t_before / WINDOW_MS,
-        "slow run (load): keybroker started past its start window; re-run"
-    );
-    next_window(t_before);
+    past_start_window(&d.join("pids"));
     assert!(is_refused(
         &r.ask(&ask(b"claude-m", 10, b"hello")),
         BrokerRefusal::KeyEchoed
@@ -481,9 +490,8 @@ fn an_unverified_upstream_is_refused_by_name_and_gets_no_byte() {
         // pinned, so the Truncate case meets the TLS close, never the pin
         pki.pin(&d, &[&cert]);
         let (up, seen) = upstream(mode, &cert);
-        let t0 = now_ms();
         let b = start(&d, &keys, &anchors, &up, &w);
-        next_window(t0);
+        past_start_window(&d.join("pids"));
         let mut r = Resident::connect(&b);
         let a = r.ask(&ask(b"claude-m", 10, b"hello"));
         assert!(is_refused(&a, want), "expected {want:?}, got {a:?}");
@@ -824,9 +832,8 @@ fn one_grant(d: &Scratch, pki: &Pki, w: &World, mode: Mode) -> (Answer, Vec<u8>,
     pki.pin(d, &[&server]);
     sockdir(&d.socks);
     let (up, seen) = upstream(mode, &server);
-    let t0 = now_ms();
     let b = start(d, &keys, &anchors, &up, w);
-    next_window(t0);
+    past_start_window(&d.join("pids"));
     let mut r = Resident::connect(&b);
     let a = r.ask(&ask(b"claude-m", 10, b"hello"));
     let n = seen.lock().unwrap().len();
@@ -919,9 +926,8 @@ fn a_leaf_key_the_operator_did_not_pin_is_refused_before_a_byte() {
         sockdir(&d.socks);
         pins_file(&d, &pins);
         let (up, seen) = upstream(Mode::Ok, server);
-        let t0 = now_ms();
         let b = start(&d, &keys, &anchors, &up, &w);
-        next_window(t0);
+        past_start_window(&d.join("pids"));
         let mut r = Resident::connect(&b);
         let a = r.ask(&ask(b"claude-m", 10, b"hello"));
         let n = seen.lock().unwrap().len();
