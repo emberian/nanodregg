@@ -9,12 +9,13 @@ import { readFileSync } from 'node:fs';
 import factory from './kernel.mjs';
 import { loadKernel, client, genesis } from './nd.js';
 import { demos, runDemo } from './demos.js';
+import { residentDriver } from './resident.js';
 const argv = process.argv.slice(2);
 const control = argv.includes('--harness-control');
 const only = argv.find((a) => !a.startsWith('--'));
 const dec = new TextDecoder();
 if (control) demos['harness-control'] = { title: 'harness-control', steps: [{ who: 'alice', argv: () => ['create'], says: 'harness-control: a word no command prints' }] };
-const axes = control ? ['harness-control'] : only ? [only] : ['generator', 'creator', 'meter', 'timelock', 'document', 'inbox'];
+const axes = control ? ['harness-control'] : only ? [only] : ['generator', 'produces', 'creator', 'meter', 'timelock', 'document', 'inbox'];
 let bad = 0;
 for (const name of axes) {
   const d = demos[name];
@@ -35,6 +36,9 @@ for (const name of axes) {
     fetchText: async (p) => (p.startsWith('kernel:') ? dec.decode(K.text(p.slice(7)).slice(1)) : readFileSync(new URL(p, import.meta.url), 'utf8')),
     members, origin,
     run: async (m, a) => { n++; const o = await m.nd.run(m, a); if (process.env.V) console.log(`  ${m.name}$ nd ${a.join(' ').slice(0, 90)} -> ${o.exit} ${o.stderr.trim()}`); return o; },
+    resident: residentDriver(K, async (m, a) => { n++; return m.nd.run(m, a); }, (m, e) => {
+      if (process.env.V && (e.say || e.hole || e.end)) console.log(`  ${m.name} resident: ${e.say ?? (e.hole ? `${e.hole} hole: ${e.cands.map((c) => `${c.raw.slice(0, 24)}${c.chosen ? '*' : ''}(${c.supports.map((x) => `${x.fact.slice(0, 12)} ${x.holds ? 'holds' : 'dead'}`).join(', ')})`).join(' | ')}` : `end ${e.end} ${e.why}`)}`);
+    }),
   });
   const last = r.results.at(-1);
   if (!r.ok) bad++;

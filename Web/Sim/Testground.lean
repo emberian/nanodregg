@@ -431,6 +431,21 @@ def spinPackage : Package :=
 
 end Spin
 
+open Nanodregg.Lang in
+/-- The journey's GN22/GN23 (LANG-103): a constant generator of `boundedPackage {n : nat} n 500`
+whose `generate` declares it produces interface `I`. At that package's own interface it is admitted;
+at the interface with one more method `reset` its run is refused `produces generate: lacks reset`. -/
+def producing (more : Bool) : Package :=
+  let p500 := Std.boundedPackage [("n", .nat)] "n" 500
+  let I := p500.iface
+  let J := if more then match I with
+      | .record row => Ty.record (Row.sort (("reset", (Row.find? "set" row).getD .nat) :: row))
+      | t => t
+    else I
+  { Std.generatorOf ((Wire.encodePackage p500).getD .empty)
+      (if more then "claims to install a package with reset" else "installs the bound-500 package, of its own interface")
+    with effects := [("generate", { produces := some J })] }
+
 /-- A row's own texts by name: the package a scene installs and the seed it creates with, and the
 journey's generators (§GN, `Lang.Std`): `boundedGenerator` (GN6–GN8: `generate {max}` installs a
 record bounded at `max`) and `ownerGenerator` (GN9–GN11: `generate {}` installs a record only its
@@ -443,6 +458,9 @@ def texts : List (String × String) :=
    ("ownerGenerator", packageText (Lang.Std.ownerGenerator [("n", .nat)])),
    ("boundedCreator", packageText (Lang.Std.boundedCreator "n" 0)),
    ("spin", packageText spinPackage),
+   -- the journey's producing generators (§GN22–GN23, LANG-103)
+   ("producing", packageText (producing false)),
+   ("producingReset", packageText (producing true)),
    -- the journey's claim (§LK, LANG-93): `Kept` claims `keeps le100 bounded` and its law bears it;
    -- the same package with a `write` arm that skips the test (LK6) is refused at install
    ("kept", packageText Lang.Journey.kept),

@@ -189,40 +189,36 @@ theorem packageLines_method {pk : Lang.Package} {ls : List String} (h : packageL
     {l : String} (hl : l ∈ ls) {i lab ty : String} (hm : Resident.methodWords l.toList = some (i, lab, ty)) :
     ∃ j ℓ sg a, Lang.resolveMethod (D := D) pk j = .ok (ℓ, sg) ∧ Lang.labelAtom ℓ = true ∧
       sg.arg.wf = true ∧ Lang.Print.ty sg.arg = some a ∧ l = s!"method {j} {ℓ} {a}" := by
-  unfold packageLines at h
-  cases hst : Lang.Print.ty pk.state with
-  | none => simp [hst] at h
-  | some st =>
-    cases hms : (List.range pk.methods.length).mapM (methodLine (D := D) pk) with
-    | none => simp [hst, hms] at h
-    | some ms =>
-      cases hrs : pk.rels.mapM relLine with
-      | none => simp [hst, hms, hrs] at h
-      | some rs =>
-        simp only [hst, hms, hrs, Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq] at h
-        subst h
-        simp only [List.mem_append, List.mem_cons] at hl
-        rcases hl with ((hl | hl | hl) | hl) | hl
-        · unfold docLines at hl
-          split at hl
-          · cases hl
-          · simp at hl; subst hl; simp [toString, Resident.methodWords] at hm
-        · subst hl; simp [toString, Resident.methodWords] at hm
-        · obtain ⟨mj, hmj, hl⟩ := List.mem_flatten.mp hl
-          obtain ⟨j, -, hj⟩ := mapM_some_mem hms mj hmj
-          obtain ⟨ℓ, sg, a, cs, hr, hat, hwf, ha, hc, rfl⟩ := methodLine_resolves hj
-          rcases List.mem_cons.mp hl with rfl | hl
-          · exact ⟨j, ℓ, sg, a, hr, hat, hwf, ha, rfl⟩
-          · unfold callLines at hc
-            obtain ⟨⟨k, jj⟩, -, hk⟩ := mapM_some_mem hc l hl
-            obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hk
-            simp [toString, Resident.methodWords] at hm
-        · obtain ⟨ℓ, -, rfl⟩ := List.mem_map.mp hl
-          simp [toString, Resident.methodWords] at hm
-        · obtain ⟨r, -, hr⟩ := mapM_some_mem hrs l hl
-          unfold relLine at hr
-          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hr
-          simp [toString, Resident.methodWords] at hm
+  obtain ⟨st, ms, rs, it, gs, -, hms, hrs, -, hgs, rfl⟩ := packageLines_eq h
+  simp only [List.mem_append, List.mem_cons] at hl
+  rcases hl with ((((hl | hl | hl) | hl) | hl) | hl | hl)
+  · unfold docLines at hl
+    split at hl
+    · cases hl
+    · simp at hl; subst hl; simp [toString, Resident.methodWords] at hm
+  · subst hl; simp [toString, Resident.methodWords] at hm
+  · obtain ⟨mj, hmj, hl⟩ := List.mem_flatten.mp hl
+    obtain ⟨j, -, hj⟩ := mapM_some_mem hms mj hmj
+    obtain ⟨ℓ, sg, a, cs, hr, hat, hwf, ha, hc, rfl⟩ := methodLine_resolves hj
+    rcases List.mem_cons.mp hl with rfl | hl
+    · exact ⟨j, ℓ, sg, a, hr, hat, hwf, ha, rfl⟩
+    · unfold callLines at hc
+      obtain ⟨⟨k, jj⟩, -, hk⟩ := mapM_some_mem hc l hl
+      obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hk
+      simp [toString, Resident.methodWords] at hm
+  · obtain ⟨ℓ, -, rfl⟩ := List.mem_map.mp hl
+    simp [toString, Resident.methodWords] at hm
+  · obtain ⟨r, -, hr⟩ := mapM_some_mem hrs l hl
+    unfold relLine at hr
+    obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hr
+    simp [toString, Resident.methodWords] at hm
+  · subst hl; simp [toString, Resident.methodWords] at hm
+  · obtain ⟨e, -, he⟩ := mapM_some_mem hgs l hl
+    unfold gradeLine at he
+    split at he
+    · cases he; simp [toString, Resident.methodWords] at hm
+    · obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp he
+      simp [toString, Resident.methodWords] at hm
 
 theorem describeText_method {X : Ctx D} {w : World D} {obj : D} {cell : Cell} {ls : List String}
     (h : describeText X w obj cell = .ok ls) {l : String} (hl : l ∈ ls) {i lab ty : String}
@@ -303,40 +299,36 @@ omit [Ord D] [DecidableEq D] in
 /-- A package's description lines: none is in `core` form. -/
 theorem packageLines_core {pk : Lang.Package} {ls : List String} (h : packageLines (D := D) pk = some ls)
     {l : String} (hl : l ∈ ls) : Resident.coreWords l.toList = none := by
-  unfold packageLines at h
-  cases hst : Lang.Print.ty pk.state with
-  | none => simp [hst] at h
-  | some st =>
-    cases hms : (List.range pk.methods.length).mapM (methodLine (D := D) pk) with
-    | none => simp [hst, hms] at h
-    | some ms =>
-      cases hrs : pk.rels.mapM relLine with
-      | none => simp [hst, hms, hrs] at h
-      | some rs =>
-        simp only [hst, hms, hrs, Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq] at h
-        subst h
-        simp only [List.mem_append, List.mem_cons] at hl
-        rcases hl with ((hl | hl | hl) | hl) | hl
-        · unfold docLines at hl
-          split at hl
-          · cases hl
-          · simp at hl; subst hl; simp [toString, Resident.coreWords]
-        · subst hl; simp [toString, Resident.coreWords]
-        · obtain ⟨mj, hmj, hl⟩ := List.mem_flatten.mp hl
-          obtain ⟨j, -, hj⟩ := mapM_some_mem hms mj hmj
-          obtain ⟨ℓ, sg, a, cs, -, -, -, -, hc, rfl⟩ := methodLine_resolves hj
-          rcases List.mem_cons.mp hl with rfl | hl
-          · simp [toString, Resident.coreWords]
-          · unfold callLines at hc
-            obtain ⟨⟨k, jj⟩, -, hk⟩ := mapM_some_mem hc l hl
-            obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hk
-            simp [toString, Resident.coreWords]
-        · obtain ⟨ℓ, -, rfl⟩ := List.mem_map.mp hl
-          simp [toString, Resident.coreWords]
-        · obtain ⟨r, -, hr⟩ := mapM_some_mem hrs l hl
-          unfold relLine at hr
-          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hr
-          simp [toString, Resident.coreWords]
+  obtain ⟨st, ms, rs, it, gs, -, hms, hrs, -, hgs, rfl⟩ := packageLines_eq h
+  simp only [List.mem_append, List.mem_cons] at hl
+  rcases hl with ((((hl | hl | hl) | hl) | hl) | hl | hl)
+  · unfold docLines at hl
+    split at hl
+    · cases hl
+    · simp at hl; subst hl; simp [toString, Resident.coreWords]
+  · subst hl; simp [toString, Resident.coreWords]
+  · obtain ⟨mj, hmj, hl⟩ := List.mem_flatten.mp hl
+    obtain ⟨j, -, hj⟩ := mapM_some_mem hms mj hmj
+    obtain ⟨ℓ, sg, a, cs, -, -, -, -, hc, rfl⟩ := methodLine_resolves hj
+    rcases List.mem_cons.mp hl with rfl | hl
+    · simp [toString, Resident.coreWords]
+    · unfold callLines at hc
+      obtain ⟨⟨k, jj⟩, -, hk⟩ := mapM_some_mem hc l hl
+      obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hk
+      simp [toString, Resident.coreWords]
+  · obtain ⟨ℓ, -, rfl⟩ := List.mem_map.mp hl
+    simp [toString, Resident.coreWords]
+  · obtain ⟨r, -, hr⟩ := mapM_some_mem hrs l hl
+    unfold relLine at hr
+    obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hr
+    simp [toString, Resident.coreWords]
+  · subst hl; simp [toString, Resident.coreWords]
+  · obtain ⟨e, -, he⟩ := mapM_some_mem hgs l hl
+    unfold gradeLine at he
+    split at he
+    · cases he; simp [toString, Resident.coreWords]
+    · obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp he
+      simp [toString, Resident.coreWords]
 
 omit [Ord D] [DecidableEq D] in
 theorem word_append {ys : List Char} : ∀ {xs : List Char}, (∀ c ∈ xs, c ≠ ' ') →

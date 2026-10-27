@@ -32,6 +32,27 @@ function declOf(text, head, name) {
   return m ? sexpAt(text, m.index) : '';
 }
 
+// the fields of a printed record type `(rec (NAME TYPE) …)`, for display (each TYPE as printed)
+function fieldsOf(ty) {
+  const t = (ty ?? '').trim();
+  if (!t.startsWith('(rec')) return [];
+  const out = [];
+  for (let i = 4; i < t.length - 1; i++) {
+    if (t[i] !== '(') continue;
+    const f = sexpAt(t, i);
+    const m = /^\((\S+)\s+([\s\S]*)\)$/.exec(f);
+    if (m) out.push([m[1], m[2]]);
+    i += f.length - 1;
+  }
+  return out;
+}
+// a package's interface as a table: each method or law, its type
+function ifaceTable($, ty) {
+  const fs = fieldsOf(ty);
+  if (!fs.length) return $('code', {}, ty || '(rec)');
+  return $('table', { class: 'props sunken' }, fs.map(([n, t]) => $('tr', {}, $('td', {}, n), $('td', {}, $('code', {}, t)))));
+}
+
 export function teach(ctx) {
   const { $, K, openWindow, wins, runIn, members, short, prefill } = ctx;
   const answer = (r) => ({ ok: r[0] === OK, text: dec.decode(r.slice(1)) });
@@ -90,13 +111,22 @@ export function teach(ctx) {
     const core = src?.core ?? src?.text ?? '';
     const stateTy = (core.match(/^\s*\(state (.*)\)\s*$/m) || [])[1] ?? '(rec)';
     const seed = example(m, stateTy);
+    const iface = (core.match(/^\s*\(iface (.*)\)\s*$/m) || [])[1] ?? '';
+    const effects = (core.match(/^\s*\(effects (.*)\)\s*$/m) || [])[1] ?? '';
+    const grades = fieldsOf(`(rec ${effects})`).map(([ℓ, rest]) => { const sp = rest.indexOf(' '); return { label: ℓ, moves: sp < 0 ? rest : rest.slice(0, sp), produces: sp < 0 ? '' : rest.slice(sp + 1) }; });
     const body = $('div', { class: 'inspector' },
       kv([['package', id], ['state type', $('code', {}, stateTy)],
         ['methods', $('code', {}, (core.match(/^\s*\(methods(.*)\)\s*$/m) || [])[1]?.trim() || '(none)')],
         ['laws', $('code', {}, (core.match(/^\s*\(laws(.*)\)\s*$/m) || [])[1]?.trim() || '(none)')],
+        iface ? ['interface', ifaceTable($, iface)] : null,
+        grades.length ? ['grades', grades.map((g) => $('div', {}, $('b', {}, g.label), ` moves at most ${g.moves}`, g.produces ? [', every package it makes has the interface ', $('code', {}, g.produces)] : ''))] : null,
         ['next', $('a', { class: 'cmd', onclick: () => prefill(m, `create --pkg ${id} ${quoteArg(seed)}`) }, `create an object of it (as ${m.name})…`)]]),
       $('p', { class: 'dim' }, 'A package is named by the hash of its bytes. Installing a changed source makes a new package with a new id; objects of the old package keep running the old code.'),
-      h('Source'), sourcePanel(m, id, src));
+      h('Source'), sourcePanel(m, id, src),
+      glossed([
+        ['interface', 'The names and types of the package\'s methods and laws (the iface section).'],
+        ['grade', 'What a method promises about every run: the most value it moves, and (produces) the interface of every package it installs or makes. A run that breaks it is refused.'],
+      ]));
     openWindow({ id: `pkg-${id}`, title: `Package ${short(id)}`, w: 640, body });
   }
 
@@ -142,7 +172,7 @@ export function teach(ctx) {
       if (w.closed) return;
       if (d.exit !== 'ok') { w.setBody($('div', { class: 'bad' }, (d.stderr || '').trim(), ' ', d.stdout.trim())); return; }
       const lines = d.stdout.trim().split('\n').filter(Boolean);
-      const props = {}, methods = [], calls = [], laws = [], rels = [], extraLaws = [];
+      const props = {}, methods = [], calls = [], laws = [], rels = [], extraLaws = [], grades = {};
       for (const l of lines) {
         const sp = l.indexOf(' '), k = sp < 0 ? l : l.slice(0, sp), v = sp < 0 ? '' : l.slice(sp + 1);
         if (k === 'method') { const [i, label, ...ty] = v.split(' '); methods.push({ i, label, ty: ty.join(' ') }); }
@@ -150,6 +180,7 @@ export function teach(ctx) {
         else if (k === 'law' && /^[0-9a-f]{64}( |$)/.test(v)) extraLaws.push(v);
         else if (k === 'law') laws.push(v);
         else if (k === 'rel') rels.push(v);
+        else if (k === 'grade') { const g = /^(\S+) moves (\d+)(?: produces (.*))?$/.exec(v); if (g) grades[g[1]] = { moves: g[2], produces: g[3] ?? '' }; }
         else props[k] = v;
       }
       const pkg = props.package;
@@ -170,14 +201,18 @@ export function teach(ctx) {
           ['package', pkg ? idLink(m, pkg) : 'none: a data object (numbered slots, no code)'],
           props.doc ? ['doc', props.doc.replace(/^"|"$/g, '')] : null,
           props.state ? ['state type', $('code', {}, props.state)] : null,
+          props.iface ? ['interface', ifaceTable($, props.iface)] : null,
           ['viewed by', `${m.name}'s follow (read ${short(id)} ?), updated after each command`]]),
         h('State'), pre(stateText || '(empty)'),
         pkg ? '' : $('p', {}, $('a', { class: 'cmd', onclick: () => prefill(m, `write ${id} 0 "new text"`) }, 'change slot 0…')),
         methods.length ? [h('Methods'), $('table', { class: 'props sunken methods' },
-          $('tr', {}, $('td', {}, 'index'), $('td', {}, 'name'), $('td', {}, 'argument type'), $('td', {}, 'calls it may make'), $('td', {}, '')),
+          $('tr', {}, $('td', {}, 'index'), $('td', {}, 'name'), $('td', {}, 'argument type'), $('td', {}, 'calls it may make'), $('td', {}, 'grade'), $('td', {}, '')),
           methods.map((x) => $('tr', {}, $('td', {}, x.i), $('td', {}, $('b', {}, x.label)), $('td', {}, $('code', {}, x.ty)),
             $('td', {}, calls.filter((c) => c.i === x.i).map((c) => $('div', {}, $('code', {}, c.ty)))),
+            $('td', {}, grades[x.label] ? [`moves ≤ ${grades[x.label].moves}`, grades[x.label].produces ? [$('br'), `produces a package with ${fieldsOf(grades[x.label].produces).map(([n]) => n).join(', ') || 'this interface'}`] : ''] : ''),
             $('td', {}, $('a', { class: 'cmd', title: 'put a call with an example argument in the terminal', onclick: () => prefill(m, `invoke ${id} ${x.i} ${quoteArg(example(m, x.ty))}`) }, `call ${x.label}…`)))))] : '',
+        Object.values(grades).some((g) => g.produces) ? [h('What each method produces'), Object.entries(grades).filter(([, g]) => g.produces).map(([ℓ, g]) =>
+          $('div', {}, $('p', {}, $('b', {}, ℓ), ': every package a run of it installs or makes has this interface. A run that installs another is refused (produces).'), ifaceTable($, g.produces)))] : '',
         laws.length ? [h('Laws'), laws.map((ℓ) => lawPanel(m, id, ℓ, src, stateText))] : '',
         extraLaws.length ? [h('Extra laws (data object)'), extraLaws.map((x) => $('div', {}, $('code', {}, x)))] : '',
         rels.length ? [h('Relations'), rels.map((r) => relPanel(m, id, r))] : '',
@@ -192,6 +227,8 @@ export function teach(ctx) {
           ['method', 'An entry point. invoke OBJ INDEX ARGS runs it. Methods are numbered in name order. A method returns the new state, the calls to make, and the row edits.'],
           ['calls', 'The kinds of call a method may return (for example an invoke of another object). The kernel runs them in the same Turn, as this object.'],
           ['law', 'A rule over every change: it sees the old state, the new state and the request, and returns ok or a refusal with a reason.'],
+          ['interface', 'The names and types of the package\'s methods and laws. A generator can promise the interface of the packages it makes.'],
+          ['grade', 'What a method promises about every run: moves ≤ N, the most value it moves; produces I, the interface of every package it installs or makes. A run that breaks it is refused.'],
           ['relation', 'A table of keyed rows inside the object, with a row limit. A method reads rows only through pins the call signed.'],
           ['grant', 'A cell that lets one member (or anyone) use rights on this object: observe, mutate, invoke:N.'],
           ['core', 'The package as the kernel reads it: the source lowered to plain terms (lam, record, case, …).'],

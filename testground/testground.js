@@ -8,6 +8,7 @@ import { loadKernel, client, genesis, hex, quoteArg } from './nd.js';
 import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
 import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf } from './demos.js';
 import { teach } from './teach.js';
+import { residentDriver } from './resident.js';
 
 const short = (h) => (h && h.length > 12 ? `${h.slice(0, 8)}…` : h);
 // a two-column table of labelled values (STYLE.md: a labelled value instead of a sentence)
@@ -649,7 +650,7 @@ const tour = [
   { say: 'A claim: a package says what it keeps (total <= 100), and install checks that its own law enforces it. A package whose law skips the test on a write is refused (claimUnproved).', demo: 'claims' },
   { say: 'The meter: each Turn records its member and its ticks (evaluator steps). bob repeats an expensive call until his ticks for the window run out (ticksBudget).', demo: 'meter' },
   { say: 'A time lock: a second World (A) runs in this tab. alice\'s lock releases only with a receipt showing that A admitted a call at or after the deadline height.', demo: 'timelock' },
-  { say: 'An inbox for an agent: alice rings her Bell (a queue of questions) and names a section of a document as the place for the answer. The answer becomes a proposed text of that section (a candidate) in the same Turn. Her revoke of the Bell\'s grant suspends it (support0 dead). Here bob types the answer (a scripted answerer); on a hosted World a model answers.', demo: 'inbox' },
+  { say: 'An inbox for an agent: alice rings her Bell (a queue of questions) and names a section of a document as the place for the answer. bob\'s member runs the resident, the program a hosted World runs for a Bell; here only its model is scripted. The answer becomes a proposed text of that section (a candidate) in the same Turn. Her revoke of the Bell\'s grant suspends it (support0 dead). A ring aimed through the revoked grant is withdrawn; the next ring is answered. The Resident window shows each open choice.', demo: 'inbox' },
 ];
 let tourAt = 0;
 const firstObj = () => [...world.objects.entries()].find(([, v]) => v === 'create')?.[0] ?? '';
@@ -726,6 +727,57 @@ async function secondWorld(name, names) {
   g.members.forEach((m, i) => openTerm(m, 640, 120 + i * 60));
   return world.extra[name];
 }
+// ---------------------------------------------------------------- the Bell's resident (Web.Sim.Resident)
+// The kernel runs the deployed resident's tick and stops at each effect; resident.js performs it. This
+// window lays out what each tick did: its commands, its two open choices (holes) with every candidate
+// and the facts it cites, its log lines, and what it keeps between ticks.
+const residentLog = { m: null, bell: null, ticks: [] };
+function residentEvent(m, e) {
+  if (e.start) { Object.assign(residentLog, { m, bell: e.start.split(' ').at(-1), ticks: [] }); }
+  else { if (!residentLog.ticks.length || residentLog.ticks.at(-1).done) residentLog.ticks.push({ events: [] }); const t = residentLog.ticks.at(-1); t.events.push(e); if (e.end) t.done = true; }
+  openResident();
+}
+const SUPPORT_WORDS = { pending: 'the ring is in this read of the queue', stands: 'its answer was not withdrawn', left: 'the ring is no longer in the queue', waits: 'the ring is still in the queue' };
+function supportText(f) { const [k, cell] = f.split(' '); return k === 'gone' ? ['cell ', cell ? T.idLink(residentLog.m, cell) : '', ' is gone'] : SUPPORT_WORDS[k] ?? f; }
+function candText(m, c) {
+  if (c.ring) return [c.kind === 'ask' ? 'ask the model about ' : 'deliver the kept answer to ', `"${c.ring.text}"`, c.ring.via ? [' (aimed through grant ', T.idLink(m, c.ring.via), ')'] : ''];
+  if (c.kind === 'withdraw') return ['withdraw the answer: cell ', T.idLink(m, c.cell), ' is gone'];
+  return { idle: 'do nothing this tick', closed: 'forget the answer: the ring left the queue', stop: 'stop the queue (answerRefused)' }[c.kind] ?? c.kind;
+}
+function holeTable(m, h) {
+  const title = h.hole === 'serve' ? 'Open choice serve: which ring to act on' : ['Open choice use: what follows the refused answer to "', h.ring.text, '" (', h.line, ')'];
+  return [$('h4', {}, title), $('table', { class: 'props sunken holes' },
+    $('tr', {}, $('td', {}, 'candidate'), $('td', {}, 'facts it cites'), $('td', {}, 'usable'), $('td', {}, '')),
+    h.cands.map((c) => $('tr', { class: c.chosen ? 'chosen' : '' }, $('td', {}, candText(m, c)),
+      $('td', {}, c.supports.length ? c.supports.map((x) => $('div', { class: x.holds ? 'ok' : 'bad' }, supportText(x.fact), x.holds ? ': holds' : ': dead')) : $('span', { class: 'dim' }, 'none')),
+      $('td', {}, c.usable ? 'yes' : 'no'), $('td', {}, c.chosen ? $('b', {}, 'chosen') : ''))))];
+}
+function openResident() {
+  const m = residentLog.m;
+  if (!m) return;
+  const tick = (t, i) => $('div', { class: 'tick' }, $('h4', {}, `Tick ${i + 1}`), t.events.map((e) => {
+    if (e.hole) return holeTable(m, e);
+    if (e.cmd) return $('div', {}, $('code', {}, `nd ${e.cmd.map(quoteArg).map((a) => (a.length > 40 ? `${a.slice(0, 32)}…` : a)).join(' ')}`), ' → ', e.exit === 'ok' ? 'ok' : $('span', { class: 'bad' }, e.stderr.trim().split('\n')[0] || e.exit));
+    if (e.ask) return $('div', {}, `ask the model "${e.ask.text}": `, e.answer == null ? $('span', { class: 'bad' }, 'no answer') : `"${e.answer}" (scripted)`);
+    if (e.keep) return $('div', { class: 'dim' }, `keep on the volume: "${e.text}"`);
+    if (e.forget) return $('div', { class: 'dim' }, 'forget the kept answer');
+    if (e.note) return $('div', { class: 'dim' }, `keep on the volume: ${e.note} withdrawn ring${e.note === 1 ? '' : 's'}`);
+    if (e.say) return $('pre', { class: 'src sunken' }, e.say);
+    if (e.end) return [$('div', { class: e.end === 'next' ? 'ok' : 'bad' }, e.end === 'next' ? 'tick ends' : `the resident ends: ${e.why}`),
+      e.memory.length ? kv(e.memory.map((x) => (x.kept ? ['kept answer', `"${x.kept.text}"`] : ['withdrawn', `"${x.withdrawn.text}" `, 'because cell ', T.idLink(m, x.cell), ' is gone']))) : ''];
+    return '';
+  }));
+  openWindow({ id: 'resident', title: 'Resident', x: 560, y: 60, w: 600, body: $('div', { class: 'inspector' },
+    kv([['program', 'Hosting.Resident: the program a hosted World runs for a Bell, run here by the kernel in this tab'], ['member', `${m.name}`], ['Bell', T.idLink(m, residentLog.bell)], ['model', 'scripted: the demo gives the answer to each question']]),
+    residentLog.ticks.map(tick),
+    glossed([
+      ['resident', 'A program that answers a Bell\'s rings. It acts as one member, through that member\'s grant on the Bell.'],
+      ['tick', 'One round of the resident: one read of the queue, then at most one question to the model and one answer.'],
+      ['open choice (hole)', 'A point in the program where the next step is chosen at run time from a list of candidates.'],
+      ['candidate', 'One possible next step. It cites facts. It is usable only if every fact it cites holds in what the resident has just read.'],
+      ['withdrawn', 'An answer the resident gave up because a cell it cites is gone (retired). The ring stays in the queue; the resident skips it.'],
+    ])) });
+}
 async function playDemo(name) {
   if (world.hosted) return { ok: false, hosted: true };
   const d = demos[name];
@@ -740,6 +792,10 @@ async function playDemoSequence(name, job) {
   const r = await runDemo(name, {
     fetchText: async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text()),
     members, origin, idOfText: T.idOfText,
+    resident: ((d) => ({
+      start: (m, a, s) => job.run(async () => { if (s.say) print(m, $('div', { class: 'warn' }, s.say)); return d.start(m, a); }),
+      tick: (m, answers, s) => job.run(async () => { if (s.say) print(m, $('div', { class: 'warn' }, s.say)); return d.tick(m, answers); }),
+    }))(residentDriver(K, (m, argv) => runIn(m, argv, 'resident'), residentEvent)),
     run: async (m, argv, s) => job.run(async () => {
       if (s.say) print(m, $('div', { class: 'warn' }, s.say));
       const out = await runIn(m, argv, s.again ? `repeat ${s.again}` : '');

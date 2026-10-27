@@ -95,7 +95,7 @@ half_wasm() {
     --no-entry -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,node \
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=8388608 \
     -sERROR_ON_UNDEFINED_SYMBOLS=1 \
-    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_w_found,_w_join,_w_self,_w_relay_pre,_w_relay_post,_w_meter,_w_members,_w_ob,_w_grammar,_w_source,_w_grants,_w_turn,_w_example,_w_cell,_malloc,_free \
+    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_w_found,_w_join,_w_self,_w_relay_pre,_w_relay_post,_w_meter,_w_members,_w_ob,_w_grammar,_w_source,_w_grants,_w_turn,_w_example,_w_cell,_w_res_start,_w_res_tick,_w_res_answer,_malloc,_free \
     -sEXPORTED_RUNTIME_METHODS=HEAPU8
   echo "$key" > "$root/testground/.kernel-key"
   fi

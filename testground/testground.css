@@ -180,3 +180,9 @@ fieldset { min-inline-size: 0; }
 .props { table-layout: fixed; }
 progress { width: 100%; min-height: 24px; accent-color: var(--focus); }
 .log { position: relative; }
+
+/* the Resident window: an open choice's candidates, the chosen one marked */
+.holes td { font-family: var(--ui); word-break: normal; }
+.holes td:first-child { font-weight: normal; white-space: normal; }
+.holes tr.chosen td { outline: 1px solid var(--title-a); background: color-mix(in srgb, var(--title-b) 25%, var(--field)); }
+.tick { border-top: 1px solid var(--lo); margin-top: 6px; }

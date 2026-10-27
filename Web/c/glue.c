@@ -38,6 +38,9 @@ extern lean_object* tg_grants(uint32_t, lean_object*);
 extern lean_object* tg_turn(uint32_t, lean_object*);
 extern lean_object* tg_example(lean_object*, lean_object*);
 extern lean_object* tg_cell(uint32_t, lean_object*);
+extern lean_object* tg_res_start(lean_object*, lean_object*);
+extern lean_object* tg_res_tick(lean_object*);
+extern lean_object* tg_res_answer(lean_object*);
 lean_object* initialize_nanodregg_Web_Sim_Teach(uint8_t builtin);
 void lean_initialize_runtime_module(void);
 void lean_io_mark_end_initialization(void);
@@ -119,3 +122,7 @@ EMSCRIPTEN_KEEPALIVE int32_t w_grants(uint32_t i, const uint8_t* p, size_t n) { 
 EMSCRIPTEN_KEEPALIVE int32_t w_turn(uint32_t i, const uint8_t* p, size_t n) { return io_take(tg_turn(i, ba(p, n))); }
 EMSCRIPTEN_KEEPALIVE int32_t w_example(const uint8_t* t, size_t tn, const uint8_t* m, size_t mn) { return take(tg_example(ba(t, tn), ba(m, mn))); }
 EMSCRIPTEN_KEEPALIVE int32_t w_cell(uint32_t i, const uint8_t* p, size_t n) { return io_take(tg_cell(i, ba(p, n))); }
+/* Web.Sim.Resident: the Bell's resident, its effects performed by the page */
+EMSCRIPTEN_KEEPALIVE int32_t w_res_start(const uint8_t* b, size_t bn, const uint8_t* g, size_t gn) { return io_take(tg_res_start(ba(b, bn), ba(g, gn))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_res_tick(void) { return io_take(tg_res_tick(lean_box(0))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_res_answer(const uint8_t* p, size_t n) { return io_take(tg_res_answer(ba(p, n))); }

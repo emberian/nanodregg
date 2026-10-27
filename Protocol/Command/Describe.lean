@@ -20,6 +20,12 @@ the text says exactly what `invoke` will check:
     rel (LABEL (key …) (val T) …)  each relation of the package (`Lang.Print.relSx`): its key's
                                    fields in DECLARED order (a range prefix is the first ones) and
                                    its `limit` (the most `read OBJ REL K` lists, PROTOCOL-51)
+    iface TYPE                     the package's interface (LANG-103): its methods' and laws' names
+                                   and types, the type a generator's `produces` grade compares
+    grade LABEL moves N [produces TYPE]
+                                   each graded method (LANG-89): the most one run moves, and, when it
+                                   declares one, the interface of every package its run installs or
+                                   makes (`checkProduces` refuses a run whose package has another)
     law HEX LABEL…                 each further law package of the object, with its laws
 
 Each method line is `Lang.resolveMethod`'s answer for that index: the label `invoke` resolves, and
@@ -67,12 +73,22 @@ def relLine (r : Lang.Label × Lang.RelDecl) : Option String :=
 def docLines (p : Lang.Package) : List String :=
   if p.doc.isEmpty then [] else [s!"doc {Lang.Print.bytesText p.doc}"]
 
+/-- A method's grade as a line (LANG-89, LANG-103): `grade LABEL moves N`, then `produces TYPE` when it
+declares the interface of the packages it produces; `none` when that type has no text. -/
+def gradeLine (e : Lang.Label × Lang.Effect) : Option String :=
+  match e.2.produces with
+  | none => some s!"grade {e.1} moves {e.2.moves}"
+  | some I => (Lang.Print.ty I).map fun t => s!"grade {e.1} moves {e.2.moves} produces {t}"
+
 /-- A package's description lines: its doc, its state, every method in index order, its laws, its
-relations. -/
+relations, its interface, its methods' grades. -/
 def packageLines (p : Lang.Package) : Option (List String) := do
   let st ← Lang.Print.ty p.state
   let ms ← (List.range p.methods.length).mapM (methodLine (D := D) p)
   let rs ← p.rels.mapM relLine
-  pure (docLines p ++ (s!"state {st}" :: ms.flatten) ++ p.laws.map (fun ℓ => s!"law {ℓ}") ++ rs)
+  let it ← Lang.Print.ty p.iface
+  let gs ← p.effects.mapM gradeLine
+  pure (docLines p ++ (s!"state {st}" :: ms.flatten) ++ p.laws.map (fun ℓ => s!"law {ℓ}") ++ rs ++
+    (s!"iface {it}" :: gs))
 
 end Nanodregg.Protocol.Command

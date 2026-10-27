@@ -69,6 +69,10 @@ export async function loadKernel(factory, opts = {}) {
     turn: (i, tx) => call(K._w_turn, i, enc.encode(tx)),
     example: (ty, me) => call(K._w_example, enc.encode(ty), enc.encode(me)),
     cell: (i, id) => call(K._w_cell, i, enc.encode(id)),
+    // the Bell's resident (Web.Sim.Resident): the deployed tick's term, each effect handed to the page
+    resStart: (bell, grant) => call(K._w_res_start, bell, grant),
+    resTick: () => call(K._w_res_tick),
+    resAnswer: (result) => call(K._w_res_answer, result),
   };
 }
 

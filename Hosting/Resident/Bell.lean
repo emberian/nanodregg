@@ -112,6 +112,42 @@ def splitLines : List Char → List (List Char)
     | [] => [[c]]
     | l :: ls => (c :: l) :: ls
 
+/-- `splitLines` as a loop: the line so far (reversed) and the finished lines (reversed). The
+compiler runs this in place of `splitLines` (`splitLines_eq_loop`, `@[csimp]`): a description's `core`
+line is ~55,000 characters, and `splitLines`' recursion one call per character overflows a browser's
+stack (the testground runs this resident in the tab, Web.Sim.Resident). -/
+def splitLinesLoop : List Char → List Char → List (List Char) → List (List Char)
+  | [], cur, acc => acc.reverse ++ [cur.reverse]
+  | c :: cs, cur, acc => if c = '\n' then splitLinesLoop cs [] (cur.reverse :: acc) else splitLinesLoop cs (c :: cur) acc
+
+theorem splitLines_cons : ∀ l : List Char, ∃ x xs, splitLines l = x :: xs
+  | [] => ⟨[], [], rfl⟩
+  | c :: cs => by
+    obtain ⟨x, xs, h⟩ := splitLines_cons cs
+    by_cases hc : c = '\n'
+    · exact ⟨[], splitLines cs, by simp [splitLines, hc]⟩
+    · exact ⟨c :: x, xs, by simp [splitLines, hc, h]⟩
+
+theorem splitLinesLoop_eq : ∀ (l cur : List Char) (acc : List (List Char)) (x : List Char) (xs : List (List Char)),
+    splitLines l = x :: xs → splitLinesLoop l cur acc = acc.reverse ++ (cur.reverse ++ x) :: xs
+  | [], cur, acc, x, xs, h => by
+    simp [splitLines] at h; obtain ⟨rfl, rfl⟩ := h; simp [splitLinesLoop]
+  | c :: cs, cur, acc, x, xs, h => by
+    obtain ⟨y, ys, hy⟩ := splitLines_cons cs
+    by_cases hc : c = '\n'
+    · simp [splitLines, hc] at h; obtain ⟨rfl, rfl⟩ := h
+      simp [splitLinesLoop, hc, splitLinesLoop_eq cs [] _ y ys hy, hy]
+    · simp [splitLines, hc, hy] at h; obtain ⟨rfl, rfl⟩ := h
+      simp [splitLinesLoop, hc, splitLinesLoop_eq cs (c :: cur) acc y ys hy]
+
+/-- `splitLines` by the loop. -/
+def splitLinesTR (l : List Char) : List (List Char) := splitLinesLoop l [] []
+
+@[csimp] theorem splitLines_eq_loop : @splitLines = @splitLinesTR := by
+  funext l
+  obtain ⟨x, xs, h⟩ := splitLines_cons l
+  simp [splitLinesTR, splitLinesLoop_eq l [] [] x xs h, h]
+
 /-- A line's text before its first space, and what follows that space (`none`: no space). -/
 def word : List Char → Option (List Char × List Char)
   | [] => none

@@ -23,6 +23,7 @@ every answer here is the language's own function, never a second implementation:
 Tooling, like `Web.Sim.Testground`: no deployed module imports it.
 -/
 import Web.Sim.Testground
+import Web.Sim.Resident
 import Lang.Resident
 
 namespace Nanodregg.Web.Sim.Teach
