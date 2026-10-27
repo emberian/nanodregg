@@ -139,7 +139,6 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .forgeBase => { writer := { R, X := R.ctx, forgeBase := true }, follow := R.ctx }
   | some .forgeCertificate => { writer := { R, X := R.ctx, forgeCertificate := true }, follow := R.ctx }
   | some .unstatedExpiry => { writer := { R, X := R.ctx, unstatedExpiry := true }, follow := R.ctx }
-  | some .ignoreNotBefore => { writer := { R, X := R.ctx, ignoreNotBefore := true }, follow := R.ctx }
   | some .forgottenRefused => { writer := { R, X := R.ctx, forgottenRefused := true }, follow := R.ctx }
   | some .nonceRepeats => { writer := { R, X := R.ctx }, follow := R.ctx, nonceRepeats := true }
   | some .accountByAsset =>
@@ -205,6 +204,99 @@ def Actor.key (n : String) (a : Actor D) : ByteArray := secretOf n a.gen
 def Actor.next (n : String) (a : Actor D) : ByteArray := secretOf n (a.gen + 1)
 def Actor.pending (n : String) (a : Actor D) : ByteArray := secretOf n (a.gen + 2)
 
+/-! ## A generated relay (DESIGN-QA Q6, `Protocol.Rows.Adversary`)
+
+The adversary's moves on the writer's socket and on follow's continuations. The harness holds no
+generator: `Protocol.Rows.Adversary` draws a TAPE of moves from a seed, and the harness plays one
+move per exchange (`ask`) and one continuation choice per resume (`resume`). An empty tape is the
+honest relay, the rows' own. -/
+
+/-- An edit of a `log` page's events. -/
+inductive EventEdit
+  /-- the event at `i` (mod the page's length) has its last byte flipped -/
+  | flip (i : Nat)
+  /-- the page's last event is withheld -/
+  | dropLast
+  /-- the page's first event is withheld -/
+  | dropFirst
+  /-- the event at `i` is served twice -/
+  | dup (i : Nat)
+  /-- the page's first two events are served in each other's place -/
+  | swap
+  /-- every cancel event carries a flipped signature byte (a cancel the member never signed) -/
+  | forgeCancel
+  deriving Repr
+
+/-- One move of the relay on one exchange with the writer. -/
+inductive Move
+  | pass
+  /-- the request reaches the writer; its reply never reaches nd (the connection is closed) -/
+  | drop
+  /-- the request never reaches the writer; the connection is closed -/
+  | withhold
+  /-- the request reaches the writer twice; nd reads the second reply -/
+  | duplicate
+  /-- the reply's payload byte `i` (mod its size) is flipped -/
+  | flip (i : Nat)
+  /-- the reply's status byte is replaced -/
+  | status (s : Status)
+  /-- the request never reaches the writer; nd reads `s ‖ name` (a Host's word with nothing behind it) -/
+  | answer (s : Status) (name : String)
+  /-- the request reaches the writer; nd reads the PREVIOUS reply to this op (a stale or late reply) -/
+  | replay
+  /-- a `log` page's events edited -/
+  | events (e : EventEdit)
+  /-- a `log` page states its tip `extra` beyond the writer's (`0`: the page's own end, hiding the rest) -/
+  | tip (extra : Nat)
+  /-- a `log` page states its tip as the newest base -/
+  | base
+  /-- an `expired` refusal states a height `extra` past the writer's -/
+  | expired (extra : Nat)
+  /-- a `log` or `read` page is answered `pageIo` (the writer's IO failed; it serves on) -/
+  | pageIo
+  deriving Repr
+
+def EventEdit.name : EventEdit → String
+  | .flip i => s!"flip{i}" | .dropLast => "dropLast" | .dropFirst => "dropFirst" | .dup i => s!"dup{i}"
+  | .swap => "swap" | .forgeCancel => "forgeCancel"
+
+def Move.name : Move → String
+  | .pass => "pass" | .drop => "drop" | .withhold => "withhold" | .duplicate => "duplicate"
+  | .flip i => s!"flip{i}" | .status s => s!"status{s.code}" | .answer s n => s!"answer{s.code}:{n}"
+  | .replay => "replay" | .events e => s!"events:{e.name}" | .tip n => s!"tip{n}" | .base => "base"
+  | .expired n => s!"expired{n}" | .pageIo => "pageIo"
+
+/-- The relay's tapes and what it did. -/
+structure Relay where
+  /-- one move per exchange with the writer, in order; past its end the relay is honest -/
+  host : List Move := []
+  /-- one choice per resume: `some i` hands follow, in place of its own continuation, the `i`th (mod
+  their number) continuation follow handed this actor earlier; past its end, none -/
+  resume : List (Option Nat) := []
+  /-- the last reply the writer sent to each op (for `replay`) -/
+  last : List (UInt8 × ByteArray) := []
+  /-- the continuations follow handed each actor, oldest first -/
+  ks : List (String × Array ByteArray) := []
+  /-- every move made, in order (`op:move`; `k:I` for a swapped continuation) -/
+  made : Array String := #[]
+
+/-- One top-level `nd` run as the judge reads it (`Protocol.Rows.Adversary`), recorded when
+`judging`: the actor, the argv, how it ended, the calls it froze or continued, every call-domain
+message custody signed in it with the argv of the continuation that asked, and the actor's own
+follow World and `Self` after it. -/
+structure Seen (D : Type) [Ord D] where
+  run : Nat
+  actor : String
+  argv : List String
+  calls : List ByteArray
+  signs : List (ByteArray × List ByteArray)
+  world : World D
+  self : Self D
+  /-- the harness's outcome of the run -/
+  outcome : Expect
+  /-- the relay's moves while the run lasted (`Relay.made`'s entries) -/
+  moves : List String
+
 /-- One line's measured run. -/
 structure Timed where
   line : Nat
@@ -256,6 +348,17 @@ structure St (D : Type) [Ord D] where
   /-- the attempt's hint: the last confirm or probe `receipt CALL` stderr that was not empty and at
   most `Bounds.hintBytesMax` bytes, as nd's attempt store keeps it (cv 01a150b1) -/
   hint : ByteArray := ByteArray.empty
+  /-- the generated relay (Q6); the default is the honest one -/
+  relay : Relay := {}
+  /-- record each top-level run for the judge (`seen`, Q6) -/
+  judging : Bool := false
+  seen : Array (Seen D) := #[]
+  /-- the top-level runs started so far, and the run each actor is in -/
+  runs : Nat := 0
+  runOf : List (String × Nat) := []
+  /-- the calls each run froze or continued, and the call-domain messages signed in it -/
+  runCalls : List (Nat × ByteArray) := []
+  runSigns : List (Nat × ByteArray × List ByteArray) := []
 
 abbrev M (D : Type) [Ord D] := StateT (St D) IO
 
@@ -516,12 +619,17 @@ def signIncoming (name : String) (msg : ByteArray) : M D ByteArray := do
   else pure (signWith (← params) (a.next name) (a.pending name) msg)
 
 /-- Send one frame to the writer; its reply as `status ‖ payload`, or `none` if it has stopped. -/
-def ask (op : Op) (payload : ByteArray) : M D (Option ByteArray) := do
+def send (op : Op) (payload : ByteArray) : M D (Option ByteArray) := do
   sawOp op
   let st ← get
   set { st with conn := st.conn + 1 }
   match ← st.host.ask ⟨UInt32.ofNat st.conn, op.code, payload⟩ with
-  | some r => pure (some (ByteArray.mk #[r.status] ++ r.payload))
+  | some r =>
+      let b := ByteArray.mk #[r.status] ++ r.payload
+      if st.judging then
+        modify fun st => { st with relay := { st.relay with
+          last := (op.code, b) :: st.relay.last.filter (·.1 ≠ op.code) } }
+      pure (some b)
   | none => pure none
 
 /-- How the rows' followers read a base: the run's World codec and the writer's own `worldDigest`. -/
@@ -573,13 +681,17 @@ def pageFault : Fault → ByteArray → ByteArray
   | .flipEvent i => editPage fun evs => evs.mapIdx fun j e => if j = i then flipLast e else e
   | .forgeCancel => editPage fun evs => evs.map forgeCancelSig
   | .dropLastEvent => editPage List.dropLast
-  | .inflateExpired n => fun reply =>
-      match Command.hostReply reply with
-      | some (.refused, p) => match expiredHeight? p with
-        | some h => ByteArray.mk #[Status.refused.code] ++ (ReadRefusal.expired (h + n)).payload
-        | none => reply
-      | _ => reply
   | _ => id
+
+/-- An `expired` refusal stating a height `extra` past the writer's (a man in the middle on the
+member's path, PROTOCOL-27: the inflation buys a window in the future, never a longer one,
+`Envelope.check_ok_within`); any other reply as it is. -/
+def inflateExpiry (extra : Nat) (reply : ByteArray) : ByteArray :=
+  match Command.hostReply reply with
+  | some (.refused, p) => match expiredHeight? p with
+    | some h => ByteArray.mk #[Status.refused.code] ++ (ReadRefusal.expired (h + extra)).payload
+    | none => reply
+  | _ => reply
 
 /-- A relay that hides the writer's log: a `log` page answered as an EMPTY page at follow's own
 position `w`, stated as the writer's tip (the plant `staleRange`: follow is never caught up, and its
@@ -602,7 +714,7 @@ def hideLog (X : Ctx D) (w : World D) (reply : ByteArray) : ByteArray :=
   | _ => reply
 
 def coldFault : Fault → Bool
-  | .flipEvent _ | .dropLastEvent | .cold | .inflateExpired _ | .forgeCancel => true
+  | .flipEvent _ | .dropLastEvent | .cold | .forgeCancel => true
   | _ => false
 
 /-- `lieCancel`: the relay keeps a `cancel` from the writer and answers it `refused cancelled` itself
@@ -629,6 +741,120 @@ def lookupLie (fault : Fault) (reply : ByteArray) : ByteArray :=
   match fault, Command.hostReply reply with
   | .lieLookup, some (.ok, _) => ByteArray.mk #[Status.refused.code] ++ "stale".toUTF8
   | _, _ => reply
+
+/-! ## The relay's moves (Q6) -/
+
+def eventEdit : EventEdit → List ByteArray → List ByteArray
+  | .flip i, evs => evs.mapIdx fun j e => if j = i % evs.length then flipLast e else e
+  | .dropLast, evs => evs.dropLast
+  | .dropFirst, evs => evs.drop 1
+  | .dup i, evs => (evs.mapIdx fun j e => if j = i % evs.length then [e, e] else [e]).flatten
+  | .swap, a :: b :: rest => b :: a :: rest
+  | .swap, evs => evs
+  | .forgeCancel, evs => evs.map forgeCancelSig
+
+/-- A `log` page whose stated tip or base is moved: `tip 0` states the page's own end as the tip
+(the writer's height kept), `tip n` the writer's tip plus `n` in both units, `base` the tip as the
+newest base. Any other reply as it is. -/
+def tipEdit (m : Move) (reply : ByteArray) : ByteArray :=
+  match Command.hostReply reply with
+  | some (.ok, p) =>
+      match logReplyFrame.decode p with
+      | .ok (l, n, c, t, th, bs, bd, ()) =>
+          let f := Text.fit Bounds.frameBytesMax
+          match Text.ofU64 n.1, Text.ofU64 t.1, Text.ofU64 th.1, m with
+          | some ns, some _, some hs, .tip 0 =>
+              match f (Text.u64 ns), f (Text.u64 hs) with
+              | some t', some h' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t', h', bs, bd, ())
+              | _, _ => reply
+          | some _, some ts, some hs, .tip x =>
+              match f (Text.u64 (ts + x)), f (Text.u64 (hs + x)) with
+              | some t', some h' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t', h', bs, bd, ())
+              | _, _ => reply
+          | _, _, _, .base => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, t, bd, ())
+          | _, _, _, _ => reply
+      | .error _ => reply
+  | _ => reply
+
+/-- A page reply under a move: its events, its stated tip or base, or an `expired` height. -/
+def pageEdit : Move → ByteArray → ByteArray
+  | .events e => editPage (eventEdit e)
+  | .tip n => tipEdit (.tip n)
+  | .base => tipEdit .base
+  | .expired n => inflateExpiry n
+  | _ => id
+
+/-- One exchange with the writer, through the relay: the tape's next move, or, past the tape's end,
+the honest relay (`send`). -/
+def ask (op : Op) (payload : ByteArray) : M D (Option ByteArray) := do
+  let st ← get
+  match st.relay.host with
+  | [] => send op payload
+  | m :: rest =>
+    let prev := st.relay.last.lookup op.code
+    set { st with relay := { st.relay with host := rest, made := st.relay.made.push s!"{op.name}:{m.name}" } }
+    let closed := ByteArray.mk #[Status.closed.code] ++ CloseReason.idle.name.toUTF8
+    let page := op = .log || op = .read
+    match m with
+    | .pass => send op payload
+    | .drop => pure ((← send op payload).map fun _ => closed)
+    | .withhold => sawOp op; pure (some closed)
+    | .duplicate => discard <| send op payload; send op payload
+    | .flip i => pure ((← send op payload).map fun r =>
+        if r.size ≤ 1 then r else Host.Sim.flipByte r (1 + i % (r.size - 1)))
+    | .status s => pure ((← send op payload).map fun r => if r.size = 0 then r else r.set! 0 s.code)
+    | .answer s n => sawOp op; pure (some (ByteArray.mk #[s.code] ++ n.toUTF8))
+    | .replay => do
+        let r ← send op payload
+        pure (match r, prev with | some _, some p => some p | _, _ => r)
+    | .pageIo =>
+        if page then do sawOp op; pure (some (ByteArray.mk #[Host.pageIoReply.1] ++ Host.pageIoReply.2))
+        else send op payload
+    | m => pure ((← send op payload).map fun r => if page then pageEdit m r else r)
+
+/-- The continuation nd hands follow on a resume: its own, or under the relay's next choice one
+follow handed this actor earlier (a swapped continuation). -/
+def swapK (name : String) (k : ByteArray) : M D ByteArray := do
+  let st ← get
+  match st.relay.resume with
+  | [] => pure k
+  | c :: rest =>
+    let pool := (st.relay.ks.lookup name).getD #[]
+    let pick : Option Nat := match c with
+      | some i => if pool.isEmpty then none else some (i % pool.size)
+      | none => none
+    let made := match pick with
+      | some i => st.relay.made.push s!"k:{i}"
+      | none => st.relay.made
+    set { st with relay := { st.relay with resume := rest, made } }
+    pure (match pick with | some i => pool[i]?.getD k | none => k)
+
+/-- The most continuations the relay keeps per actor. -/
+def keptKs : Nat := 64
+
+/-- Keep the continuation a step of follow's carries (when judging: the relay's pool). -/
+def keepK (name : String) (b : ByteArray) : M D Unit := do
+  if !(← get).judging then return
+  match Reply.ofBytes b >>= Reply.cont with
+  | none => pure ()
+  | some k => modify fun st =>
+      let pool := ((st.relay.ks.lookup name).getD #[]).push k
+      let pool := if pool.size > keptKs then pool.extract (pool.size - keptKs) pool.size else pool
+      { st with relay := { st.relay with ks := (name, pool) :: st.relay.ks.filter (·.1 ≠ name) } }
+
+/-- The run actor `name` is in, if any. -/
+def runNow (name : String) : M D (Option Nat) := do pure ((← get).runOf.lookup name)
+
+/-- A call this run froze or continued (when judging). -/
+def noteCall (name : String) (call : ByteArray) : M D Unit := do
+  if !(← get).judging then return
+  if let some n ← runNow name then modify fun st => { st with runCalls := (n, call) :: st.runCalls }
+
+/-- A call-domain message custody signed, with the argv of the continuation that asked (when judging). -/
+def noteSign (name : String) (msg k : ByteArray) : M D Unit := do
+  if !(← get).judging || msg.extract 0 domCall.size != domCall then return
+  let argv := ((Command.State.ofBytes k).map (·.argv)).getD []
+  if let some n ← runNow name then modify fun st => { st with runSigns := (n, msg, argv) :: st.runSigns }
 
 /-! ## The attempt store -/
 
@@ -714,6 +940,7 @@ def resume (name : String) (argv : List String) (fault : Fault) (depth : Nat) (k
     Nat → M D (Expect × String)
   | 0 => pure (.refused "tooManySteps", "")
   | fuel + 1 => do
+      let k ← swapK name k
       let some kf := Text.fit Bounds.frameBytesMax k | return (.refused "badState", "")
       let some rf := Text.fit Bounds.frameBytesMax result | return (.refused "badResult", "")
       let self ← selfOf name fault
@@ -727,6 +954,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
     Nat → M D (Expect × String)
   | 0 => pure (.refused "tooManySteps", "")
   | fuel + 1 => do
+      keepK name b
       match Reply.ofBytes b with
       | none => pure (.refused "badFrame", "")
       | some (.done exit out err) =>
@@ -736,6 +964,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           modify fun st => { st with lastErr := err }
           pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
       | some (.sign msg k) =>
+          noteSign name msg k
           let (n, a, key) ← custodyOf name fault
           -- the plant: a cancel's message signed without its domain (the bare transaction id)
           let msg := if (← get).sys.cancelUndomained && msg.extract 0 domCancel.size == domCancel then
@@ -745,6 +974,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           let a ← actor name
           resume name argv fault depth k (precommitResult (← params) (a.next name) (a.pending name)) fuel
       | some (.signNext msg k) =>
+          noteSign name msg k
           let a ← actor name
           let r := signWith (← params) (a.next name) (a.pending name) msg
           setActor name (if (← get).sys.advanceOnSend then { a with gen := a.gen + 1 } else { a with arming := true })
@@ -779,6 +1009,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
               resume name argv fault depth k (if op = .log then pageFault fault res else res) fuel
       | some (.submit call k) => do
           sawCall name call
+          noteCall name call
           let a ← actor name
           setActor name { a with last := some call, arming := false,
                                  armed := if a.arming then some call else a.armed }
@@ -879,6 +1110,29 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
       | .badReply => pure (.ok (ended .badReply ""))
 termination_by fuel => (depth, 0, fuel + 1)
 end
+
+/-- Run `act` as one top-level `nd ARGV` of actor `name`; when judging, record it (`Seen`): its
+outcome, the calls it froze or continued, the call-domain messages custody signed in it, the relay's
+moves while it lasted, and the actor's follow World and `Self` after it. -/
+def asRun (name : String) (argv : List String) (act : M D (Expect × String)) : M D (Expect × String) := do
+  let st ← get
+  if !st.judging then return ← act
+  let n := st.runs
+  let m0 := st.relay.made.size
+  set { st with runs := n + 1, runOf := (name, n) :: st.runOf.filter (·.1 ≠ name) }
+  let r ← act
+  let st ← get
+  if let some a := st.actors.lookup name then
+    let calls := (st.runCalls.filter (·.1 = n)).reverse.map (·.2)
+    let signs := (st.runSigns.filter (·.1 = n)).reverse.map (·.2)
+    let seen : Seen D := ⟨n, name, argv, calls, signs, a.follow.world, a.self, r.1,
+      (st.relay.made.extract m0 st.relay.made.size).toList⟩
+    set { st with seen := st.seen.push seen }
+  modify fun st => { st with
+    runOf := st.runOf.filter (·.1 ≠ name)
+    runCalls := st.runCalls.filter (·.1 ≠ n)
+    runSigns := st.runSigns.filter (·.1 ≠ n) }
+  pure r
 
 /-! ## The operator's and the attempt store's acts -/
 
@@ -1027,13 +1281,13 @@ def runAct (l : Line) : M D (Expect × String) := do
           let av := if (← get).sys.dropRange then dropRangeFlag av else av
           -- the plant (PROTOCOL-74): a client that compares with nobody
           let av := if (← get).sys.ignoreAnchor then dropAnchor av else av
-          let (o, out) ← command l.actor av l.fault 4
+          let (o, out) ← asRun l.actor av (command l.actor av l.fault 4)
           -- the plant: follow acts on the writer's `beforeLog`, taking its first step (the carried
           -- World) as the base on the writer's word, and reads again
           let (o, out) ← if (← get).sys.actOnBeforeLog && o == .refused "beforeLog" then do
               let a ← actor l.actor
               setActor l.actor { a with follow := { world := (← get).genesis } }
-              command l.actor av l.fault 4
+              asRun l.actor av (command l.actor av l.fault 4)
             else pure (o, out)
           -- the plant: a description with its `doc` line dropped
           let out := if (← get).sys.dropDoc && av.length == 3 && av.getLast? == some "?" then
@@ -1192,12 +1446,16 @@ def runAct (l : Line) : M D (Expect × String) := do
       let st ← get
       match (← actor owner).last >>= st.sys.follow.decodeCall with
       | none => pure (.refused "noAttempt", "")
-      | some _ => command l.actor ["receipt", Text.toHex ((← actor owner).last.getD ByteArray.empty)] .none 4
+      | some _ =>
+          let av := ["receipt", Text.toHex ((← actor owner).last.getD ByteArray.empty)]
+          asRun l.actor av (command l.actor av .none 4)
   | .cancelOf owner => do
       let st ← get
       match (← actor owner).last >>= st.sys.follow.decodeCall with
       | none => pure (.refused "noAttempt", "")
-      | some _ => command l.actor ["cancel", Text.toHex ((← actor owner).last.getD ByteArray.empty)] l.fault 4
+      | some _ =>
+          let av := ["cancel", Text.toHex ((← actor owner).last.getD ByteArray.empty)]
+          asRun l.actor av (command l.actor av l.fault 4)
   | .verify owner rc => do
       let st ← get
       let X := st.sys.follow
@@ -1247,7 +1505,8 @@ def runAct (l : Line) : M D (Expect × String) := do
   | .rerun => do
       match (← actor l.actor).last with
       | none => pure (.refused "noAttempt", "")
-      | some call =>
+      | some call => asRun l.actor ["rerun"] do
+          noteCall l.actor call
           -- the next run of the open attempt: "sent, outcome lost"
           match ← drive l.actor call .none 4 attemptFuel 0 (some (.submit, .lost)) none none "" with
           | .error e => pure (.refused e, "")
@@ -1321,14 +1580,10 @@ structure Result where
   frames : Nat
   steps : Nat
 
-/-- Run a member row against a fresh deployment under the parameters `R` and the plant `m`;
-`times` scales every repeated line. -/
-def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : Option Nat)
-    (budget : Option Nat := none) : IO Result := do
-  let s := sys R m
-  let s := match budget with
-    | some b => { s with writer := { s.writer with pageBudget := b } }
-    | none => s
+/-- A fresh deployment of the system `s`: the genesis World, its Store and the writer serving it,
+the founding invitation and the founders' binds; no actor has run yet. -/
+def setup (s : Sys D) : IO (St D) := do
+  let R := s.writer.R
   let fs := founders.map fun n => (keyOf R n 0, nextKeyDigest s.writer.X (keyOf R n 1))
   let g ← match Receive.genesis s.writer.X Rows.Params.worldName Rows.Params.nonce Rows.Params.allowance fs (Writer.authority R) with
     | .ok g => pure g
@@ -1337,8 +1592,6 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
     | .ok m => pure m
     | .error e => throw (IO.userError s!"genesis: {e}")
   let host ← Writer.start s.writer mem r₀
-  let go : M D (List Expect) := lines.zipIdx.mapM fun (l, i) =>
-    runLine i l (if l.times > 1 then times.getD l.times else l.times)
   let hex (d : D) := Text.toHex (s.writer.X.env.bytes d)
   -- the World's origin inputs, as the founders hold them (`host genesis` prints them), and another
   -- World's (the nonce changed)
@@ -1359,7 +1612,20 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
     [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other), ("world", hex g.origin),
      ("chain0", hex g.chain), ("roots0", hex (g.roots s.writer.X.env))] ++
     (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf R n 0))
-  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, first := g, binds, invitation }
+  pure { sys := s, host, mem, genesis := g, lineage := g.origin, first := g, binds, invitation }
+
+/-- Run a member row against a fresh deployment under the parameters `R` and the plant `m`;
+`times` scales every repeated line. -/
+def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : Option Nat)
+    (budget : Option Nat := none) : IO Result := do
+  let s := sys R m
+  let s := match budget with
+    | some b => { s with writer := { s.writer with pageBudget := b } }
+    | none => s
+  let st0 ← setup s
+  let go : M D (List Expect) := lines.zipIdx.mapM fun (l, i) =>
+    runLine i l (if l.times > 1 then times.getD l.times else l.times)
+  let (outcomes, st) ← go.run st0
   let steps := match ← st.host.stop with
     | .ok (_, r) => r.world.steps
     | .error _ => 0

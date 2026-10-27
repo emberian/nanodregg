@@ -124,6 +124,11 @@ package nanodregg where
 @[default_target] lean_exe «rows» where
   root := `Protocol.Rows.Main
 
+-- PROTOCOL's generated adversary (DESIGN-QA Q6): `adversary --seeds N` runs the follower against generated
+-- Hosts and relays, judged by the member-level spec; a TRACE line per seed, `ALL PASS` or `FINDINGS n`.
+@[default_target] lean_exe «adversary» where
+  root := `Protocol.Rows.AdversaryMain
+
 -- Host/c/*.c: the Store's physical IO (Host.File's externs) and a Unix socket's client end (Host.Sock's). Sorted, so the archive is reproducible.
 extern_lib «ndhost» pkg := do
   let dir := pkg.dir / "Host" / "c"
