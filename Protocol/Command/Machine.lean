@@ -425,7 +425,10 @@ structure SignedReads (D : Type) where
 /-- Derive with the signature not yet known, pinning each cell, and each row (KERNEL-54: the
 receiver's `rowUnpinned` names the row's key), the derivation asks for. A row already pinned and
 asked for again is the receiver's own refusal (a pinned act on a slot no row pin can name), never a
-loop. -/
+loop. A cell the derived Turn would BEAR that the World already holds (the package a `createOf`
+would install again, KERNEL-77) is pinned and the call derived again: the pin is kept when the call
+then no longer bears that cell (the createOf reuses the live package), and dropped otherwise (an
+`install` of an installed package stays the `idTaken` admission names). -/
 def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusal D) (Unsigned D × Turn D)
   | 0, _ => .error .tooManyPins
   | fuel + 1, u =>
@@ -439,7 +442,13 @@ def derivePins (X : Ctx D) (w : World D) : Nat → Unsigned D → Except (Refusa
           else
             derivePins X w fuel { u with rowPins := u.rowPins ++ [rowPinAt X.env w ⟨parent, rel, k⟩] }
       | .error r => .error (.receive r)
-      | .ok t => .ok (u, t)
+      | .ok t =>
+          match (createdIds t).find? (fun c => !(u.pins.any fun p => p.1 = c) && (w.live X.env c).isSome) with
+          | none => .ok (u, t)
+          | some c =>
+            match derivePins X w fuel { u with pins := u.pins ++ [(c, pinOf X.env (w.entry X.env c))] } with
+            | .ok (u', t') => if (createdIds t').contains c then .ok (u, t) else .ok (u', t')
+            | .error _ => .ok (u, t)
 
 /-- The call a member's body derives to on follow's World, with every pin it read and its price the
 derived charge plus headroom, and the Turn it derives: `plan` before follow's own admission. A

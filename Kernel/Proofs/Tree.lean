@@ -57,6 +57,113 @@ theorem stepped_draft {wk : Walk D} {d : Except (Refusal D) (Draft D)} {r : Draf
   | error e => cases h
   | ok d => simp only [Except.map, Except.ok.injEq] at h; subst h; rfl
 
+omit [DecidableEq D] in
+/-- **`install`, unfolded**: the bytes passed the install check, and the Draft bears one ROM package
+cell of them at the birth index and nothing else. -/
+theorem install_draft {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {pkg : ByteArray} {d : Draft D}
+    (h : install X look c a pkg = .ok d) :
+    X.program.checkInstall look pkg = .ok () ∧ d = ⟨bornAt X c a.base [packageCell pkg], [], [], []⟩ := by
+  unfold install at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, hc, h⟩ := h
+  simp only [pure, Except.pure, Except.ok.injEq] at h
+  exact ⟨hc, h.symm⟩
+
+omit [DecidableEq D] in
+/-- **`create`, unfolded** (the parts every tree theorem reads): one object cell of `a.actor` at the
+birth index, no effect on any cell, no nullifier; its row effects are the heads of its relations. -/
+theorem create_draft {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {pkg : Option D} {laws : List D}
+    {state : Slots} {d : Draft D} (h : create X look c a pkg laws state = .ok d) :
+    d.creates = bornAt X c a.base [objectCell X a.actor pkg laws state] ∧ d.effects = [] ∧
+      d.nullifiers = [] ∧ ∀ e ∈ d.rows, ∃ rel, e.1 = .head (cellIdOf X.env (txIdOf X c) a.base) rel := by
+  unfold create at h
+  simp only [except_bind_ok] at h
+  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, -, ⟨⟩, -, h⟩ := h
+  cases pkg with
+  | none =>
+      simp only [bind, Except.bind, pure, Except.pure] at h
+      injection h with h
+      subst h
+      simp
+  | some p =>
+      simp only [except_bind_ok] at h
+      obtain ⟨_, -, h⟩ := h
+      simp only [pure, Except.pure] at h
+      injection h with h
+      subst h
+      refine ⟨rfl, rfl, rfl, ?_⟩
+      intro e he
+      simp only [List.mem_map] at he
+      obtain ⟨q, -, rfl⟩ := he
+      exact ⟨q.2, rfl⟩
+
+/-- **`createOf`, unfolded** (KERNEL-77): a `create` of the package's content id `p` AS THE SIGNER at
+the birth index, over the pinned view when it holds a live cell at `p` (and then nothing else), or
+otherwise over the view with the package born (`withBorn`) and beside an `install` of the bytes one
+index on. -/
+theorem createOf_draft {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {pkg : ByteArray}
+    {laws : List D} {state : Slots} {d : Draft D} (h : createOf X look c a pkg laws state = .ok d) :
+    (∃ cell, look (romIdOf X.env (packageCell pkg)) = .ok (some cell) ∧
+      create X look c ⟨c.unsigned.member, a.base⟩ (some (romIdOf X.env (packageCell pkg))) laws state = .ok d) ∨
+    (∃ o i,
+      install X look c ⟨a.actor, a.base + 1⟩ pkg = .ok i ∧
+      create X (withBorn look (romIdOf X.env (packageCell pkg)) (packageCell pkg)) c
+        ⟨c.unsigned.member, a.base⟩ (some (romIdOf X.env (packageCell pkg))) laws state = .ok o ∧
+      d = o.append i) := by
+  unfold createOf at h
+  dsimp only at h
+  split at h
+  · rename_i cell hl
+    exact .inl ⟨cell, hl, h⟩
+  all_goals first
+    | (cases h; done)
+    | (simp only [except_bind_ok, pure, Except.pure, Except.ok.injEq] at h
+       obtain ⟨i, hi, o, ho, rfl⟩ := h
+       exact .inr ⟨o, i, hi, ho, rfl⟩)
+
+/-- What a `createOf`'s Draft holds, read off `createOf_draft`: no effect on any cell, no nullifier;
+its births are the signer's object of the package at the birth index, and, when the view held no
+cell at the package's id, that package's cell, whose bytes passed the install check. -/
+theorem createOf_parts {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {pkg : ByteArray}
+    {laws : List D} {state : Slots} {d : Draft D} (h : createOf X look c a pkg laws state = .ok d) :
+    d.effects = [] ∧ d.nullifiers = [] ∧
+    (∀ q ∈ d.creates, q.2 = objectCell X c.unsigned.member (some (romIdOf X.env (packageCell pkg))) laws state ∨
+      (q.2 = packageCell pkg ∧ X.program.checkInstall look pkg = .ok ())) ∧
+    ∀ e ∈ d.rows, ∃ rel, e.1 = .head (cellIdOf X.env (txIdOf X c) a.base) rel := by
+  rcases createOf_draft h with ⟨_, -, ho⟩ | ⟨o, i, hi, ho, rfl⟩
+  · obtain ⟨hc, he, hn, hr⟩ := create_draft ho
+    refine ⟨he, hn, ?_, hr⟩
+    intro q hq
+    rw [hc] at hq
+    have := mem_bornAt_cell hq
+    simp only [List.mem_singleton] at this
+    exact .inl this
+  · obtain ⟨hc, he, hn, hr⟩ := create_draft ho
+    obtain ⟨hk, rfl⟩ := install_draft hi
+    refine ⟨by simp [Draft.append, he], by simp [Draft.append, hn], ?_, ?_⟩
+    · intro q hq
+      simp only [Draft.append] at hq
+      rcases List.mem_append.mp hq with hq | hq
+      · rw [hc] at hq
+        have := mem_bornAt_cell hq
+        simp only [List.mem_singleton] at this
+        exact .inl this
+      · have := mem_bornAt_cell hq
+        simp only [List.mem_singleton] at this
+        exact .inr ⟨this, hk⟩
+    · intro e he'
+      simp only [Draft.append, List.append_nil] at he'
+      exact hr e he'
+
+/-- A `createOf` bears an object cell and perhaps a package cell, nothing of another kind. -/
+theorem createOf_kind {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {pkg : ByteArray}
+    {laws : List D} {state : Slots} {d : Draft D} (h : createOf X look c a pkg laws state = .ok d) :
+    ∀ q ∈ d.creates, q.2.kind = kindObject ∨ q.2.kind = kindPackage := by
+  intro q hq
+  rcases (createOf_parts h).2.2.1 q hq with hx | ⟨hx, -⟩ <;> rw [hx]
+  · exact .inl rfl
+  · exact .inr rfl
+
 /-- The deriver one level down, by name: past the depth bound `callTooDeep`; otherwise a callable
 Body goes through `dispatch`, and any other is `notCallable`. -/
 theorem tree_succ {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {n : Nat} {wk : Walk D} {obj : D}

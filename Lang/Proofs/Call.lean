@@ -29,9 +29,9 @@ variable {D : Type}
 /-! ## Read: every Body read is callable -/
 
 section
-variable {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {A : Option Ty}
+variable {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {A T : Option Ty}
 
-theorem bodyOf_callable {d : Data} {b : Body D} (h : bodyOf digestOf A d = .ok b) : b.callable = true := by
+theorem bodyOf_callable {d : Data} {b : Body D} (h : bodyOf digestOf A T d = .ok b) : b.callable = true := by
   unfold bodyOf at h
   split at h
   all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
@@ -180,13 +180,96 @@ theorem argsData_argsBytes {A : Option Ty} {a : Data} {args : ByteArray} (h : ar
       simp [argsData, Except.toOption, Wire.decodeData_eq_ok_iff.mpr hb]
     · cases h
 
+/-! ### A `createOf`'s state: the slots `stateSlots` lays out read back by `stateFields` (LANG-96) -/
+
+/-- Fields read back from slots lay out as those slots. -/
+theorem stateSlots_of_stateFields : ∀ {row : List (Label × Ty)} {s : Slots} {i : Nat} {fs : List (Label × Data)},
+    stateFields row s i = some fs → stateSlots row fs i = some s
+  | [], [], _, fs, h => by simp [stateFields] at h; subst h; rfl
+  | [], _ :: _, _, _, h => by simp [stateFields] at h
+  | _ :: _, [], _, _, h => by simp [stateFields] at h
+  | (ℓ, t) :: row, (k, b) :: s, i, fs, h => by
+    simp only [stateFields] at h
+    split at h
+    · rename_i hk
+      split at h
+      · rename_i d ds hd hds
+        cases h
+        cases hdec : Wire.decodeData t b with
+        | error e => simp [hdec, Except.toOption] at hd
+        | ok d' =>
+          simp only [hdec, Except.toOption, Option.some.injEq] at hd
+          subst hd hk
+          simp [stateSlots, Wire.decodeData_eq_ok_iff.mp hdec, stateSlots_of_stateFields hds]
+      · cases h
+    · cases h
+
+/-- Slots laid out from fields read back, at the row's labels, as the same values. -/
+theorem stateFields_of_stateSlots : ∀ {row : List (Label × Ty)} {fs : List (Label × Data)} {i : Nat} {s : Slots},
+    stateSlots row fs i = some s → ∃ fs', stateFields row s i = some fs'
+  | [], [], _, s, h => by simp [stateSlots] at h; subst h; exact ⟨[], rfl⟩
+  | [], _ :: _, _, _, h => by simp [stateSlots] at h
+  | _ :: _, [], _, _, h => by simp [stateSlots] at h
+  | (ℓ, t) :: row, (_, d) :: ds, i, s, h => by
+    simp only [stateSlots] at h
+    split at h
+    · rename_i b s' hb hs'
+      cases h
+      obtain ⟨fs', hfs'⟩ := stateFields_of_stateSlots hs'
+      refine ⟨(ℓ, d) :: fs', ?_⟩
+      simp [stateFields, Wire.decodeData_eq_ok_iff.mpr hb, Except.toOption, hfs']
+    · cases h
+
+/-- Fields read back conform to the row: each decoded at its field's type. -/
+theorem stateFields_conforms : ∀ {row : List (Label × Ty)} {s : Slots} {i : Nat} {fs : List (Label × Data)},
+    stateFields row s i = some fs → RowConforms fs row
+  | [], [], _, fs, h => by simp [stateFields] at h; subst h; exact .nil
+  | [], _ :: _, _, _, h => by simp [stateFields] at h
+  | _ :: _, [], _, _, h => by simp [stateFields] at h
+  | (ℓ, t) :: row, (k, b) :: s, i, fs, h => by
+    simp only [stateFields] at h
+    split at h
+    · split at h
+      · rename_i d ds hd hds
+        cases h
+        cases hdec : Wire.decodeData t b with
+        | error e => simp [hdec, Except.toOption] at hd
+        | ok d' =>
+          simp only [hdec, Except.toOption, Option.some.injEq] at hd
+          subst hd
+          exact .cons (decodeData_conforms hdec) (stateFields_conforms hds)
+      · cases h
+    · cases h
+
+theorem stateData_some {T : Option Ty} {s : Slots} {sd : Data} (h : stateData T s = some sd) :
+    ∃ row fs, T = some (.record row) ∧ sd = .record fs ∧ stateFields row s 0 = some fs := by
+  unfold stateData at h
+  split at h
+  · rename_i row
+    simp only [Option.map_eq_some_iff] at h
+    obtain ⟨fs, hfs, rfl⟩ := h
+    exact ⟨row, fs, rfl, rfl, hfs⟩
+  · cases h
+
+theorem stateBytes_ok {T : Option Ty} {f : String} {fs : List (Label × Data)} {s : Slots}
+    (h : stateBytes T f fs = .ok s) : ∃ row, T = some (.record row) ∧ stateSlots row fs 0 = some s := by
+  unfold stateBytes at h
+  split at h
+  · rename_i row
+    split at h
+    · rename_i s' hs'
+      cases h
+      exact ⟨row, rfl, hs'⟩
+    · cases h
+  · cases h
+
 section
-variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {A : Option Ty}
+variable {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {A T : Option Ty}
 
 /-- **Every callable Body with call data is expressible**: its call data reads back as exactly it, given
 that a digest's bytes decode to the digest. -/
 theorem bodyOf_callData (hdig : ∀ x, digestOf (bytesOf x) = some x) {b : Body D} {d : Data}
-    (h : callData bytesOf A b = some d) : bodyOf digestOf A d = .ok b := by
+    (h : callData bytesOf A T b = some d) : bodyOf digestOf A T d = .ok b := by
   cases b with
   | account asset owner =>
     simp only [callData, Option.some.injEq] at h; subst h
@@ -219,19 +302,33 @@ theorem bodyOf_callData (hdig : ∀ x, digestOf (bytesOf x) = some x) {b : Body 
   | install pkg =>
     simp only [callData, Option.some.injEq] at h; subst h
     simp [bodyOf, pure, Except.pure]
+  | createOf pkg laws state =>
+    simp only [callData] at h
+    split at h
+    · rename_i hl
+      cases laws with
+      | cons => simp at hl
+      | nil =>
+        simp only [Option.map_eq_some_iff] at h
+        obtain ⟨sd, hsd, rfl⟩ := h
+        obtain ⟨row, fs, rfl, rfl, hfs⟩ := stateData_some hsd
+        simp [bodyOf, stateBytes, stateSlots_of_stateFields hfs, bind, Except.bind, pure, Except.pure]
+    · cases h
   | enroll | rotate | create | write | law | retire | issue => simp [callData] at h
 
 /-- A kind an object may not exercise has no call data. -/
-theorem callData_not_callable {b : Body D} (h : b.callable = false) : callData bytesOf A b = none := by
+theorem callData_not_callable {b : Body D} (h : b.callable = false) : callData bytesOf A T b = none := by
   cases b <;> simp_all [Body.callable, callData]
 
-/-- A callable Body has call data, unless it is a grant with more than `rightsMax` rights or an
+/-- A callable Body has call data, unless it is a grant with more than `rightsMax` rights, an
 invoke whose `args` are not the bytes of a value of the slot's argument type (LANG-77: the one
-power the typed arm takes away is emitting bytes that are not a value). -/
+power the typed arm takes away is emitting bytes that are not a value), or a `createOf` with extra
+laws or a state that is not a layout of a value of the slot's state type (LANG-96). -/
 theorem callData_isSome {b : Body D} (h : b.callable = true)
     (hr : ∀ t g rs p, b = .grant t g rs p → rs.length ≤ rightsMax)
-    (hi : ∀ o m args bud v, b = .invoke o m args bud v → (argsData A args).isSome = true) :
-    (callData bytesOf A b).isSome = true := by
+    (hi : ∀ o m args bud v, b = .invoke o m args bud v → (argsData A args).isSome = true)
+    (hc : ∀ p ls s, b = .createOf p ls s → ls = [] ∧ (stateData T s).isSome = true) :
+    (callData bytesOf A T b).isSome = true := by
   cases b with
   | grant t g rs p =>
     simp only [callData, Option.isSome_map]
@@ -239,11 +336,15 @@ theorem callData_isSome {b : Body D} (h : b.callable = true)
   | invoke o m args bud v =>
     simp only [callData, Option.isSome_map]
     exact hi o m args bud v rfl
+  | createOf p ls s =>
+    obtain ⟨rfl, hs⟩ := hc p ls s rfl
+    simp only [callData, List.isEmpty_nil, if_true, Option.isSome_map]
+    exact hs
   | _ => simp_all [Body.callable, callData]
 
 /-- A grant read back carries at most `rightsMax` rights. -/
 theorem bodyOf_rights {d : Data} {t g p : _} {rs : List Right}
-    (h : bodyOf digestOf A d = .ok (Body.grant t g rs p)) : rs.length ≤ rightsMax := by
+    (h : bodyOf digestOf A T d = .ok (Body.grant t g rs p)) : rs.length ≤ rightsMax := by
   unfold bodyOf at h
   split at h
   all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
@@ -252,26 +353,45 @@ theorem bodyOf_rights {d : Data} {t g p : _} {rs : List Right}
 
 /-- An invoke read back carries `args` that are the bytes of a value of the slot's argument type. -/
 theorem bodyOf_args {d : Data} {o : D} {m : Nat} {args : ByteArray} {bud : Nat} {v : Option D}
-    (h : bodyOf digestOf A d = .ok (Body.invoke o m args bud v)) : (argsData A args).isSome = true := by
+    (h : bodyOf digestOf A T d = .ok (Body.invoke o m args bud v)) : (argsData A args).isSome = true := by
   unfold bodyOf at h
   split at h
   all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
   all_goals (repeat' split at h)
   all_goals first | (simp at h; done) | (cases h; simp [argsData_argsBytes ‹_›])
 
+/-- A `createOf` read back names no extra laws, and its state is a layout of a value of the slot's
+state type. -/
+theorem bodyOf_createOf {d : Data} {p : ByteArray} {ls : List D} {s : Slots}
+    (h : bodyOf digestOf A T d = .ok (Body.createOf p ls s)) : ls = [] ∧ (stateData T s).isSome = true := by
+  unfold bodyOf at h
+  split at h
+  all_goals try simp only [bind, Except.bind, pure, Except.pure] at h
+  all_goals (repeat' split at h)
+  all_goals try (simp at h; done)
+  all_goals first
+    | (cases h; done)
+    | (rename_i hsb; cases h
+       obtain ⟨row, rfl, hss⟩ := stateBytes_ok hsb
+       obtain ⟨fs', hfs'⟩ := stateFields_of_stateSlots hss
+       exact ⟨rfl, by simp [stateData, hfs']⟩)
+
 /-- **Every Body read back has call data reading back to it** (call data is not canonical: an
 option row may leave any slot empty, so the data need not be the one read). -/
 theorem callData_bodyOf (hdig : ∀ x, digestOf (bytesOf x) = some x) {d : Data} {b : Body D}
-    (h : bodyOf digestOf A d = .ok b) :
-    ∃ d', callData bytesOf A b = some d' ∧ bodyOf digestOf A d' = .ok b := by
-  have hs : (callData bytesOf A b).isSome = true := by
-    refine callData_isSome (bodyOf_callable h) ?_ ?_
+    (h : bodyOf digestOf A T d = .ok b) :
+    ∃ d', callData bytesOf A T b = some d' ∧ bodyOf digestOf A T d' = .ok b := by
+  have hs : (callData bytesOf A T b).isSome = true := by
+    refine callData_isSome (bodyOf_callable h) ?_ ?_ ?_
     · intro t g rs p hb
       subst hb
       exact bodyOf_rights h
     · intro o m args bud v hb
       subst hb
       exact bodyOf_args h
+    · intro p ls s hb
+      subst hb
+      exact bodyOf_createOf h
   obtain ⟨d', hd'⟩ := Option.isSome_iff_exists.mp hs
   exact ⟨d', hd', bodyOf_callData hdig hd'⟩
 
@@ -333,22 +453,22 @@ theorem argsData_conforms {A : Ty} {args : ByteArray} {a : Data} (h : argsData (
 /-- **In-bounds call data is a value of the slot's call type**: so a method can return every
 callable Body whose literals are values of the language (`callFits`) and whose invoke argument is a
 value of the slot's type, given the digest codec's bound. -/
-theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) {A : Option Ty} {b : Body D}
-    {d : Data} (hf : callFits b = true) (h : callData bytesOf A b = some d) : Conforms d (callTy A) := by
+theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMax) {A T : Option Ty} {b : Body D}
+    {d : Data} (hf : callFits b = true) (h : callData bytesOf A T b = some d) : Conforms d (callTy A T) := by
   cases b with
   | account asset owner =>
     simp only [callData, Option.some.injEq] at h; subst h
-    cases A <;> exact .inj rfl (.record (.cons (conf_digest hb asset) (.cons (conf_digest hb owner) .nil)))
+    cases A <;> cases T <;> exact .inj rfl (.record (.cons (conf_digest hb asset) (.cons (conf_digest hb owner) .nil)))
   | credit well acct amount via =>
     simp only [callData, Option.some.injEq] at h; subst h
     simp only [callFits, decide_eq_true_eq] at hf
-    cases A <;> exact .inj rfl (.record (.cons (conf_acct hb acct) (.cons (.nat hf) (.cons (conf_optDigest hb via)
+    cases A <;> cases T <;> exact .inj rfl (.record (.cons (conf_acct hb acct) (.cons (.nat hf) (.cons (conf_optDigest hb via)
       (.cons (conf_digest hb well) .nil)))))
   | grant target grantee rights parent =>
     simp only [callData, Option.map_eq_some_iff] at h
     obtain ⟨rs, hrs, rfl⟩ := h
     simp only [callFits, List.all_eq_true] at hf
-    cases A <;> exact .inj rfl (.record (.cons (conf_digest hb grantee) (.cons (conf_optDigest hb parent)
+    cases A <;> cases T <;> exact .inj rfl (.record (.cons (conf_digest hb grantee) (.cons (conf_optDigest hb parent)
       (.cons (.record (conf_rights hrs hf)) (.cons (conf_digest hb target) .nil)))))
   | invoke obj method args budget via =>
     simp only [callData, Option.map_eq_some_iff] at h
@@ -357,6 +477,7 @@ theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMa
     cases A with
     | none => simp [argsData] at ha
     | some A =>
+      cases T <;>
       exact .inj rfl (.record (.cons (argsData_conforms ha) (.cons (.nat hf.2) (.cons (.nat hf.1)
         (.cons (conf_digest hb obj) (.cons (conf_optDigest hb via) .nil))))))
   | transfer src dst amount via once =>
@@ -366,12 +487,21 @@ theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMa
       cases once with
       | none => exact .inj (A := .record []) rfl (.record .nil)
       | some k => exact .inj (A := .bytes) rfl (.bytes (by simpa using hf.2))
-    cases A <;> exact .inj rfl (.record (.cons (.nat hf.1) (.cons (conf_acct hb dst) (.cons ho
+    cases A <;> cases T <;> exact .inj rfl (.record (.cons (.nat hf.1) (.cons (conf_acct hb dst) (.cons ho
       (.cons (conf_acct hb src) (.cons (conf_optDigest hb via) .nil))))))
   | install pkg =>
     simp only [callData, Option.some.injEq] at h; subst h
     simp only [callFits, decide_eq_true_eq] at hf
-    cases A <;> exact .inj rfl (.record (.cons (.bytes hf) .nil))
+    cases A <;> cases T <;> exact .inj rfl (.record (.cons (.bytes hf) .nil))
+  | createOf pkg laws state =>
+    simp only [callData] at h
+    split at h
+    · simp only [Option.map_eq_some_iff] at h
+      obtain ⟨sd, hsd, rfl⟩ := h
+      obtain ⟨row, fs, rfl, rfl, hfs⟩ := stateData_some hsd
+      simp only [callFits, decide_eq_true_eq] at hf
+      cases A <;> exact .inj rfl (.record (.cons (.bytes hf) (.cons (.record (stateFields_conforms hfs)) .nil)))
+    · cases h
   | enroll | rotate | create | write | law | retire | issue => simp [callData] at h
 
 end

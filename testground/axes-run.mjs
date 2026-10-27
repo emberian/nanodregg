@@ -14,7 +14,7 @@ const control = argv.includes('--harness-control');
 const only = argv.find((a) => !a.startsWith('--'));
 const dec = new TextDecoder();
 if (control) demos['harness-control'] = { title: 'harness-control', steps: [{ who: 'alice', argv: () => ['create'], says: 'harness-control: a word no command prints' }] };
-const axes = control ? ['harness-control'] : only ? [only] : ['generator', 'meter', 'timelock', 'document', 'inbox'];
+const axes = control ? ['harness-control'] : only ? [only] : ['generator', 'creator', 'meter', 'timelock', 'document', 'inbox'];
 let bad = 0;
 for (const name of axes) {
   const d = demos[name];

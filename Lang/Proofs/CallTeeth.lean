@@ -86,17 +86,17 @@ theorem callsOf_not_option :
 
 /-- A grant carrying more rights than `rightsMax` has no call data. -/
 theorem callData_five_rights :
-    callData id none (Body.grant obj8 obj8 [.observe, .mutate, .invoke 0, .invoke 1, .enroll 2] none) = none := by
+    callData id none none (Body.grant obj8 obj8 [.observe, .mutate, .invoke 0, .invoke 1, .enroll 2] none) = none := by
   decide +kernel
 
 /-- The same grant at four rights has call data. -/
 theorem callData_four_rights :
-    (callData id none (Body.grant obj8 obj8 [.observe, .mutate, .invoke 0, .enroll 2] none)).isSome = true := by
+    (callData id none none (Body.grant obj8 obj8 [.observe, .mutate, .invoke 0, .enroll 2] none)).isSome = true := by
   decide +kernel
 
 /-- `bodyOf_callData` at the identity digest: its premise is satisfiable. -/
-theorem bodyOf_callData_bytes {A : Option Ty} {b : Body ByteArray} {d : Data} (h : callData id A b = some d) :
-    bodyOf some A d = .ok b :=
+theorem bodyOf_callData_bytes {A T : Option Ty} {b : Body ByteArray} {d : Data} (h : callData id A T b = some d) :
+    bodyOf some A T d = .ok b :=
   bodyOf_callData (fun _ => rfl) h
 
 /-! ## Call slots at install: the slot's type is checked against the call arms, the body against the slot -/
@@ -173,6 +173,21 @@ generator's one call reaches the kernel as the install it is. -/
 theorem install_reads :
     callsIs (callsOf dig8 [callOf ["install"]]
       (.record [("c0", .inj "some" (.inj "install" (.record [("pkg", .bytes obj8)])))])) [.install obj8] = true := by
+  decide +kernel
+
+/-- A `createOf` datum in a createOf slot reads as `.createOf` of its bytes with the state laid out
+as a birth's seed is (LANG-96), so a creator's one call reaches the kernel as the createOf it is. -/
+theorem createOf_reads :
+    callsIs (callsOf dig8 [createOfSlot S1]
+      (.record [("c0", .inj "some" (.inj "createOf" (.record [("pkg", .bytes obj8), ("state", .record [("n", .nat 7)])])))]))
+      [.createOf obj8 [] [(Kernel.Receive.stateBase, (Wire.encodeData .nat (.nat 7)).getD .empty)]] = true := by
+  decide +kernel
+
+/-- A createOf slot at a record state of wire types is a call slot. -/
+theorem createOfSlot_ok : callSlotOk (createOfSlot S1) = true := by decide
+
+/-- A createOf naming extra laws has no call data: an object's createOf carries none (LANG-96). -/
+theorem callData_createOf_laws : callData id none (some S1) (Body.createOf obj8 [obj8] []) = none := by
   decide +kernel
 
 /-! ## Liveness: its premises are met, and the refusal it allows is the real one -/
@@ -307,8 +322,8 @@ theorem sim_digest_roundtrip (x : Kernel.Sim.D) : Kernel.Sim.digestOf (Kernel.Si
   unfold Kernel.Sim.digestOf Kernel.Sim.dc
   rw [Codec.Stream.decode_bytes Codec.Stream.u64_lawful]
 
-theorem bodyOf_callData_sim {A : Option Ty} {b : Body Kernel.Sim.D} {d : Data}
-    (h : callData Kernel.Sim.dc.bytes A b = some d) : bodyOf Kernel.Sim.digestOf A d = .ok b :=
+theorem bodyOf_callData_sim {A T : Option Ty} {b : Body Kernel.Sim.D} {d : Data}
+    (h : callData Kernel.Sim.dc.bytes A T b = some d) : bodyOf Kernel.Sim.digestOf A T d = .ok b :=
   bodyOf_callData sim_digest_roundtrip h
 
 end Nanodregg.Lang.Teeth

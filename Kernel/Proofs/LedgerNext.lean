@@ -303,6 +303,11 @@ theorem derive_born_grant {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
             rw [← hr]
         rw [hc]
         exact notGrant _ _ (by simp [objectCell, kindObject, kindGrant])
+    | createOf pkg laws state =>
+        have hd := stepped_draft h
+        intro x hx hk
+        rcases createOf_kind hd x hx with h' | h' <;> rw [h'] at hk <;>
+          simp [kindObject, kindPackage, kindGrant] at hk
     | write obj edits via =>
         have hd := stepped_draft h
         simp only [write, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

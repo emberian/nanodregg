@@ -670,6 +670,10 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
           simp only [pure, Except.pure] at hd
           injection hd with hd
           rw [← hd] at he; simp at he
+  | createOf pkg laws state =>
+      have hd := stepped_draft h
+      obtain ⟨he, -⟩ := createOf_parts hd
+      intro e he'; rw [he] at he'; simp at he'
   | grant target grantee rights parent =>
       have hd := stepped_draft h
       unfold grant at hd

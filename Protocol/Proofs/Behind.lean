@@ -44,7 +44,21 @@ theorem derivePins_pins {X : Ctx D} {w : World D} :
         · have := derivePins_pins n _ u' t h
           simpa using this
       · cases h
-      · cases h; intro p hp; exact .inl hp
+      · split at h
+        · cases h; intro p hp; exact .inl hp
+        · split at h
+          · rename_i hd
+            split at h
+            · cases h; intro p hp; exact .inl hp
+            · cases h
+              intro p hp
+              rcases derivePins_pins n _ _ _ hd p hp with hm | hk
+              · simp only [List.mem_append, List.mem_singleton] at hm
+                rcases hm with hm | rfl
+                · exact .inl hm
+                · exact .inr rfl
+              · exact .inr hk
+          · cases h; intro p hp; exact .inl hp
 
 /-- `derivePins` never adds a range read. -/
 theorem derivePins_ranges {X : Ctx D} {w : World D} :
@@ -60,7 +74,16 @@ theorem derivePins_ranges {X : Ctx D} {w : World D} :
         · have := derivePins_ranges n _ u' t h
           simpa using this
       · cases h
-      · cases h; rfl
+      · split at h
+        · cases h; rfl
+        · split at h
+          · rename_i hd
+            split at h
+            · cases h; rfl
+            · cases h
+              have := derivePins_ranges n _ _ _ hd
+              simpa using this
+          · cases h; rfl
 
 /-- **The pins `plan` signs are the planning World's** (KERNEL-54, the W0 premise of the BEHIND
 finality): every cell pin is `pinOf` of `w`'s entry, every row pin is `rowPinAt` of `w`, and the

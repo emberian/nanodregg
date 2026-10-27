@@ -297,4 +297,340 @@ theorem generate_owner_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArr
     | zero => exact ⟨hagent, trivial⟩
     | succ j => simp only [List.getElem?_cons_succ, List.getElem?_nil, Quote.ParamAt]
 
+/-! ## Template creators: generate AND instantiate in one Turn (LANG-96, KERNEL-77) -/
+
+theorem templateCreator_body (A : Ty) (ps : List Quote.Param) (p : Package) (init : Term) (doc : String) :
+    (templateCreator A ps p init doc).body = .record [("make", creatorMethod A ps p init)] := rfl
+
+/-- A creator method names no closure package when its parameters' terms and its state term name
+none. -/
+theorem noRef_creatorMethod {A : Ty} {ps : List Quote.Param} {p : Package} {init : Term}
+    (hps : ∀ q ∈ ps, NoRef q.fetch) (hi : NoRef init) : NoRef (creatorMethod A ps p init) := by
+  simp only [creatorMethod, resultT, callsT_one, createOfT, someCallT, NoRef, NoRefRow, and_true]
+  exact ⟨Quote.noRef_quotePackage hps (by simp [NoRef]) _, hi⟩
+
+/-- **A template creator's run makes an object of its specification, owned by the invoker.** For
+`templateCreator A ps p init doc` read at `pkg` (the template's state a record `row`), every admitted
+run of `make` returns exactly `[createOf B [] S]`: `B` is `encodePackage (fillPackage vals p)`, the
+template filled at the parameters' values (as `generate_template_sound`), and `S` the state slots of
+the data `fs` that `init` means — whenever `make` resolves to its declared signature (`hres`, `rfl`
+at a concrete argument and state type), the parameters mean `vals` and `init` means `fs` in the
+method's environment, and the filled package has bytes within a byte value; no row acts. With
+KERNEL-77's `createOf_parts` (the kernel's half) that is the receipt of "make me one at these
+parameters": the Turn bore the signer's object of the package `B` installs as, at state `S`, and
+the package cell too when the World lacked it, checked as any install is. -/
+theorem make_template_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+    {rc : Lang.ReceiptCheck} {A : Ty} {ps : List Quote.Param} {p : Package} {init : Term} {doc : String}
+    {vals : List Val} {row : List (Label × Ty)} {fs : List (Label × Data)} {B : ByteArray} {S : Slots}
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
+    {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (hid : digestOf (bytesOf pkg) = some pkg)
+    (hp : readPackage look pkg = .ok (templateCreator A ps p init doc))
+    (hrow : p.state = .record row)
+    (hres : resolveMethod (D := D) (templateCreator A ps p init doc) 0 =
+      .ok ("make", ⟨A, [createOfSlot p.state], [], 0⟩))
+    (hnoRef : ∀ q ∈ ps, NoRef q.fetch) (hiRef : NoRef init)
+    (hparams : ∀ (lib : List Term) (ad sd wd : Data), Wire.decodeData A args = .ok ad →
+      Quote.Params lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal] ps vals)
+    (hinit : ∀ (lib : List Term) (ad sd wd : Data), Wire.decodeData A args = .ok ad →
+      ∃ v, BigStep lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal] init (.ok v) ∧
+        Means lib p.state v (.record fs))
+    (hB : Wire.encodePackage (fillPackage vals p) = some B) (hsz : B.size ≤ Bounds.bytesMax)
+    (hS : stateSlots row fs 0 = some S)
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state 0 args rq budget = .ok (s, calls, rows, used)) :
+    calls = [.createOf B [] S] ∧ rows = [] := by
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state 0 args rq budget).map _ = _ at h
+  rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state 0 args rq budget with
+  | error e => rw [hm] at h; cases h
+  | ok x =>
+  rw [hm] at h
+  obtain ⟨s', calls', rows', t', n'⟩ := x
+  simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+  obtain ⟨S', v, used, c, e, ds, left, es, hS', hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
+  obtain ⟨L, g, p', ℓ, sg, sd, ad, wd, -, hl, hpg, hres', -, hdec, -, -, rfl⟩ := runSetup_spec hS'
+  obtain ⟨hpg', f', hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
+  rw [hpg'] at hpg
+  cases hpg
+  rw [hres] at hres'
+  cases hres'
+  simp only at hrun hx hes hc hdec
+  have hbig := run_bigStep hrun
+  have hps := hparams L.lib ad sd wd hdec
+  obtain ⟨vI, hI, hIM⟩ := hinit L.lib ad sd wd hdec
+  have hQ : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal] (Quote.quotePackage ps (.bytes .empty) p) (.ok (.bytes B)) := by
+    have := Quote.quotePackage_sound hps hB (.bytes .empty) ByteArray.empty .bytes
+      (by simpa [ByteArray.empty_append] using hsz)
+    simpa [ByteArray.empty_append] using this
+  have fwd : ∀ {r' : Except Fault Val}, BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (resultT (callsT [createOfT p.state (Quote.quotePackage ps (.bytes .empty) p) init]) (.var 2)) r' →
+      BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal] (apply4 g "make") r' :=
+    fun hb => apply4_method (R := .record []) (S := genStateTy) (A := A) (Q := reqTy) hlib
+      (templateCreator_body A ps p init doc) (by simp [Row.find?, creatorMethod]) (noRef_creatorMethod hnoRef hiRef) hb
+  have hbody : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (resultT (callsT [createOfT p.state (Quote.quotePackage ps (.bytes .empty) p) init]) (.var 2))
+      (.ok (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("calls", callsT [createOfT p.state (Quote.quotePackage ps (.bytes .empty) p) init]), ("edits", .record []),
+          ("state", .var 2)]))) :=
+    .record
+  have hM := extract_means _ _ hx
+  cases bigStep_deterministic hbig (fwd hbody)
+  -- the calls field
+  have hwC := BigStep.get (ℓ := "calls") (fwd hbody)
+    (.field (find_suspend_of (t := callsT [createOfT p.state (Quote.quotePackage ps (.bytes .empty) p) init]) rfl) .record)
+  obtain ⟨A', hA, hmC⟩ := means_get (fwd hbody) hM rfl hwC
+  simp only [Row.find?] at hA
+  cases hA
+  have hBig : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+      (createOfT p.state (Quote.quotePackage ps (.bytes .empty) p) init)
+      (.ok (.inj "some" (.inj "createOf" (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("pkg", Quote.quotePackage ps (.bytes .empty) p), ("state", init)]))))) :=
+    .inj (.inj .record)
+  have hMeans : Means L.lib (optTy (createOfSlot p.state))
+      (.inj "some" (.inj "createOf" (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("pkg", Quote.quotePackage ps (.bytes .empty) p), ("state", init)]))))
+      (.inj "some" (.inj "createOf" (.record [("pkg", .bytes B), ("state", .record fs)]))) :=
+    .inj rfl (.inj rfl (.record .record (.cons hQ .bytes (.cons hI hIM .nil))))
+  have hC : Means L.lib (callsTy [createOfSlot p.state])
+      (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal]
+        [("c0", createOfT p.state (Quote.quotePackage ps (.bytes .empty) p) init)]))
+      (.record [("c0", .inj "some" (.inj "createOf" (.record [("pkg", .bytes B), ("state", .record fs)])))]) :=
+    .record .record (.cons hBig hMeans .nil)
+  have hcEq := means_deterministic hmC hC
+  subst hcEq
+  -- the edits field
+  have hwE := BigStep.get (ℓ := "edits") (fwd hbody) (.field (find_suspend_of (t := .record []) rfl) .record)
+  obtain ⟨A'', hA', hmE⟩ := means_get (fwd hbody) hM rfl hwE
+  simp only [Row.find?] at hA'
+  cases hA'
+  have hE : Means L.lib (.record []) (.record (suspend [(reqData bytesOf rq).toVal, ad.toVal, sd.toVal, wd.toVal] []))
+      (.record []) := .record .record .nil
+  have heEq := means_deterministic hmE hE
+  subst heEq
+  have hst : slotCreateState (createOfSlot (.record row)) = some (.record row) := rfl
+  have hc' : callsOf digestOf [createOfSlot p.state]
+      (.record [("c0", .inj "some" (.inj "createOf" (.record [("pkg", .bytes B), ("state", .record fs)])))]) =
+        .ok [.createOf B [] S] := by
+    simp [callsOf, callsOf.go, bodyOf, hst, hrow, stateBytes, hS, bind, Except.bind, pure, Except.pure, Except.map]
+  rw [hc'] at hc
+  have he' : editsOf (D := D) (templateCreator A ps p init doc).rels rq.self (.record []) = .ok [] := rfl
+  rw [he'] at hes
+  cases hc
+  cases hes
+  subst hrows
+  exact ⟨rfl, rfl⟩
+
+/-- `make` resolves to its declared signature at the deployed label (`hres` of `make_bounded_sound`:
+the slot's state type is checked by computation, which a variable label stops). -/
+theorem boundedCreator_resolve {D : Type} (k : Nat) :
+    resolveMethod (D := D) (boundedCreator "n" k) 0 =
+      .ok ("make", ⟨maxArgTy, [createOfSlot (.record [("n", .nat)])], [], 0⟩) := rfl
+
+/-- **The bounded creator's run makes its invoker an object of the Lean generator's package.** For
+`boundedCreator f k` read at `pkg`, every admitted run of `make` whose argument decodes to
+`{max = m}` returns `[createOf B [] S]` where `B` is `encodePackage (boundedPackage {f : nat} f m)`
+— the bytes `generate_bounded_sound` names at the same argument — and `S` is the state `{f = k}`; no
+row acts. -/
+theorem make_bounded_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+    {rc : Lang.ReceiptCheck} {f : Label} {k m : Nat} {B : ByteArray} {S : Slots}
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
+    {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (hid : digestOf (bytesOf pkg) = some pkg)
+    (hp : readPackage look pkg = .ok (boundedCreator f k))
+    (hres : resolveMethod (D := D) (boundedCreator f k) 0 =
+      .ok ("make", ⟨maxArgTy, [createOfSlot (.record [(f, .nat)])], [], 0⟩))
+    (hB : Wire.encodePackage (boundedPackage [(f, .nat)] f m) = some B) (hsz : B.size ≤ Bounds.bytesMax)
+    (hS : stateSlots [(f, .nat)] [(f, .nat k)] 0 = some S)
+    (harg : Wire.decodeData maxArgTy args = .ok (.record [("max", .nat m)]))
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state 0 args rq budget = .ok (s, calls, rows, used)) :
+    calls = [.createOf B [] S] ∧ rows = [] := by
+  refine make_template_sound bytesOf digestOf (row := [(f, .nat)]) (fs := [(f, .nat k)]) hid hp rfl hres ?_
+    (by simp [natT, NoRef, NoRefRow]) ?_ ?_ (by rw [fill_boundedPackage]; exact hB) hsz hS h
+  · intro q hq; simp only [List.mem_singleton] at hq; subst hq; simp [maxParam, NoRef]
+  · intro lib ad sd wd hdec
+    rw [harg] at hdec
+    cases hdec
+    have hmax : BigStep lib [(reqData bytesOf rq).toVal, (Data.record [("max", .nat m)]).toVal, sd.toVal, wd.toVal]
+        (.get (.var 1) "max") (.ok (.nat m)) :=
+      .get (.var rfl) (sel_toVal (d := .record [("max", .nat m)]) (x := .nat m) rfl)
+    intro j
+    cases j with
+    | zero => exact ⟨hmax, trivial⟩
+    | succ j => simp only [List.getElem?_cons_succ, List.getElem?_nil, Quote.ParamAt]
+  · intro lib ad sd wd _
+    exact ⟨_, .record, .record .record (.cons .nat .nat .nil)⟩
+
+/-! ## The quorum generator (LANG-99): an install only on a commit -/
+
+theorem quorumGenerator_body (r : List (Label × Ty)) (f : Label) (members : List ByteArray) (k : Nat) :
+    (quorumGenerator r f members k).body = .record [("approve", approveGenMethod),
+      ("generate", quorumGenerateMethod (boundedPackageWith r f (.var 4))),
+      ("propose", proposeGenMethod), ("quorum", quorumLaw quorumGenStateTy .nat members k "generated")] := rfl
+
+theorem noRef_quorumGenerate (p : Package) : NoRef (quorumGenerateMethod p) := by
+  have hq := Quote.noRef_quotePackage (ps := [⟨.nat, .var 0⟩]) (buf := .bytes .empty) (by simp [NoRef]) (by simp [NoRef]) p
+  simp only [quorumGenerateMethod, resultT, callsT_one, installOf, someCallT, NoRef, NoRefRow, natT, hq,
+    and_self]
+
+/-- **A quorum generator installs only the approved proposal, and only as it commits it.** For
+`quorumGenerator r f members k` read at `pkg`, every admitted run of `generate` (method 1) read the
+object's state as `{approvals = a, generated = g, proposal = set v}` with `v ≠ g`, and returns
+exactly `[install B]` with `B` = `encodePackage (boundedPackage r f v)` — the bounded package at the
+PROPOSED bound — and no row acts. Its new state is `{approvals = 0, generated = v, …}`, a change of
+`generated` that the quorum law in force judges as a commit (k approvals of exactly `set v`); the
+kernel judges the laws before deriving the install (`invoke_ok`), and the Turn fails whole. The
+hypotheses: `generate` resolves to its signature (`rfl` at a concrete label), and the template has
+bytes within a byte value at every bound (it does: a bound is a fixed-width `u64` literal). -/
+theorem generate_quorum_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+    {rc : Lang.ReceiptCheck} {r : List (Label × Ty)} {f : Label} {members : List ByteArray} {k : Nat}
+    {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
+    {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
+    (hid : digestOf (bytesOf pkg) = some pkg)
+    (hp : readPackage look pkg = .ok (quorumGenerator r f members k))
+    (hres : resolveMethod (D := D) (quorumGenerator r f members k) 1 =
+      .ok ("generate", ⟨.record [], [installSlot], [], 0⟩))
+    (hB : ∀ m, ∃ B, Wire.encodePackage (boundedPackage r f m) = some B ∧ B.size ≤ Bounds.bytesMax)
+    (h : (Lang.program bytesOf digestOf rc).run look rv pkg state 1 args rq budget = .ok (s, calls, rows, used)) :
+    ∃ a g v B, readState digestOf quorumGenRow state =
+        .ok (.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj "set" (.nat v))]) ∧
+      v ≠ g ∧ Wire.encodePackage (boundedPackage r f v) = some B ∧ calls = [.install B] ∧ rows = [] := by
+  change (runMeasuredLive bytesOf digestOf rc look rv pkg state 1 args rq budget).map _ = _ at h
+  rw [runMeasuredLive_leaf_closed hid hp rfl rfl] at h
+  cases hm : runMeasured bytesOf digestOf rc look rv pkg state 1 args rq budget with
+  | error e => rw [hm] at h; cases h
+  | ok x =>
+  rw [hm] at h
+  obtain ⟨s', calls', rows', t', n'⟩ := x
+  simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+  obtain ⟨S, v0, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
+  obtain ⟨L, g0, p', ℓ, sg, sd, ad, wd, -, hl, hpg, hres', hst, -, -, -, rfl⟩ := runSetup_spec hS
+  obtain ⟨hpg', f', hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
+  rw [hpg'] at hpg
+  cases hpg
+  rw [hres] at hres'
+  cases hres'
+  simp only at hrun hx hes hc hst
+  have hbig := run_bigStep hrun
+  -- the state the run read: three fields, the proposal one of two arms
+  have hconf := readState_conforms hst
+  cases hconf with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+  cases hr with | cons h3 hr =>
+  cases hr
+  obtain ⟨a, rfl⟩ := conf_nat h1
+  obtain ⟨g, rfl⟩ := conf_nat h2
+  cases h3 with | inj hfp hpd =>
+  rename_i ℓp A pd
+  have env_state : ∀ {r' : Except Fault Val}, BigStep L.lib
+      [(reqData bytesOf rq).toVal, ad.toVal,
+        (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj ℓp pd)]).toVal, wd.toVal]
+      (.case (.get (.var 2) "proposal")
+        [("laws", .refuse quorumGenResultTy "notSet".toUTF8),
+         ("set", .ite (.prim .eq (.var 0) (.get (.var 3) "generated")) (.refuse quorumGenResultTy "notProposed".toUTF8)
+            (resultT (callsT [installOf (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty) (boundedPackageWith r f (.var 4)))])
+              (.record [("approvals", natT 0), ("generated", .var 0), ("proposal", .get (.var 3) "proposal")])))]) r' →
+      BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal,
+        (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj ℓp pd)]).toVal, wd.toVal]
+        (apply4 g0 "generate") r' :=
+    fun hb => apply4_method (R := .record []) (S := quorumGenStateTy) (A := .record []) (Q := reqTy) hlib
+      (quorumGenerator_body r f members k) (by simp [Row.find?, quorumGenerateMethod])
+      (noRef_quorumGenerate _) hb
+  have hprop : BigStep L.lib [(reqData bytesOf rq).toVal, ad.toVal,
+      (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj ℓp pd)]).toVal, wd.toVal]
+      (.get (.var 2) "proposal") (.ok (.inj ℓp pd.toVal)) :=
+    .get (.var rfl) (sel_toVal (d := .record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj ℓp pd)])
+      (x := .inj ℓp pd) rfl)
+  simp only [Row.find?] at hfp
+  split at hfp
+  · -- `laws`: the run is refused `notSet`, never admitted
+    rename_i hl'
+    subst hl'
+    have := env_state (.case hprop rfl .refuse)
+    cases bigStep_deterministic hbig this
+  split at hfp
+  · rename_i hs'
+    subst hs'
+    cases hfp
+    obtain ⟨v, rfl⟩ := conf_nat hpd
+    have hgen : BigStep L.lib [(Data.nat v).toVal, (reqData bytesOf rq).toVal, ad.toVal,
+        (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj "set" (.nat v))]).toVal, wd.toVal]
+        (.get (.var 3) "generated") (.ok (.nat g)) :=
+      .get (.var rfl) (sel_toVal (d := .record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj "set" (.nat v))])
+        (x := .nat g) rfl)
+    have hcond : BigStep L.lib [(Data.nat v).toVal, (reqData bytesOf rq).toVal, ad.toVal,
+        (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj "set" (.nat v))]).toVal, wd.toVal]
+        (.prim .eq (.var 0) (.get (.var 3) "generated")) (.ok (.bool (decide (v = g)))) :=
+      BigStep.prim (p := .eq) (x := .nat v) (y := .nat g) (.var rfl) hgen (by simp [primEval])
+    by_cases hvg : v = g
+    · -- `v = generated`: refused `notProposed`
+      subst hvg
+      have := env_state (.case hprop rfl (.iteT (by simpa using hcond) .refuse))
+      cases bigStep_deterministic hbig this
+    · obtain ⟨B, hBv, hsz⟩ := hB v
+      refine ⟨a, g, v, B, hst, hvg, hBv, ?_⟩
+      have hcondF : BigStep L.lib [(Data.nat v).toVal, (reqData bytesOf rq).toVal, ad.toVal,
+          (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj "set" (.nat v))]).toVal, wd.toVal]
+          (.prim .eq (.var 0) (.get (.var 3) "generated")) (.ok (.bool false)) := by simpa [hvg] using hcond
+      let env' := [(Data.nat v).toVal, (reqData bytesOf rq).toVal, ad.toVal,
+        (Data.record [("approvals", .nat a), ("generated", .nat g), ("proposal", .inj "set" (.nat v))]).toVal, wd.toVal]
+      have hps : ∀ lib, Quote.Params lib env' [⟨.nat, .var 0⟩] [.nat v] := by
+        intro lib j
+        cases j with
+        | zero => exact ⟨.var rfl, trivial⟩
+        | succ j => simp only [List.getElem?_cons_succ, List.getElem?_nil, Quote.ParamAt]
+      have hQ : BigStep L.lib env' (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty) (boundedPackageWith r f (.var 4)))
+          (.ok (.bytes B)) := by
+        have := Quote.quotePackage_sound (hps L.lib) (by rw [fill_boundedPackage]; exact hBv) (.bytes .empty)
+          ByteArray.empty .bytes (by simpa [ByteArray.empty_append] using hsz)
+        simpa [ByteArray.empty_append] using this
+      have hbody : BigStep L.lib env'
+          (resultT (callsT [installOf (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty) (boundedPackageWith r f (.var 4)))])
+            (.record [("approvals", natT 0), ("generated", .var 0), ("proposal", .get (.var 3) "proposal")]))
+          (.ok (.record (suspend env'
+            [("calls", callsT [installOf (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty) (boundedPackageWith r f (.var 4)))]),
+             ("edits", .record []),
+             ("state", .record [("approvals", natT 0), ("generated", .var 0), ("proposal", .get (.var 3) "proposal")])]))) :=
+        .record
+      have hrun' := env_state (.case hprop rfl (.iteF hcondF hbody))
+      cases bigStep_deterministic hbig hrun'
+      have hM := extract_means _ _ hx
+      -- the calls field
+      have hwC := BigStep.get (ℓ := "calls") hrun'
+        (.field (find_suspend_of (t := callsT [installOf (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty)
+          (boundedPackageWith r f (.var 4)))]) rfl) .record)
+      obtain ⟨A', hA, hmC⟩ := means_get hrun' hM rfl hwC
+      simp only [Row.find?] at hA
+      cases hA
+      have hMeans : Means L.lib (optTy installSlot)
+          (.inj "some" (.inj "install" (.record (suspend env'
+            [("pkg", Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty) (boundedPackageWith r f (.var 4)))]))))
+          (.inj "some" (.inj "install" (.record [("pkg", .bytes B)]))) :=
+        .inj rfl (.inj rfl (.record .record (.cons hQ .bytes .nil)))
+      have hC : Means L.lib (callsTy [installSlot])
+          (.record (suspend env' [("c0", installOf (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty)
+            (boundedPackageWith r f (.var 4))))]))
+          (.record [("c0", .inj "some" (.inj "install" (.record [("pkg", .bytes B)])))]) :=
+        .record .record (.cons (.inj (.inj .record)) hMeans .nil)
+      have hcEq := means_deterministic hmC hC
+      subst hcEq
+      -- the edits field
+      have hwE := BigStep.get (ℓ := "edits") hrun' (.field (find_suspend_of (t := .record []) rfl) .record)
+      obtain ⟨A'', hA', hmE⟩ := means_get hrun' hM rfl hwE
+      simp only [Row.find?] at hA'
+      cases hA'
+      have hE : Means L.lib (.record []) (.record (suspend env' [])) (.record []) := .record .record .nil
+      have heEq := means_deterministic hmE hE
+      subst heEq
+      have hc' : callsOf digestOf [installSlot]
+          (.record [("c0", .inj "some" (.inj "install" (.record [("pkg", .bytes B)])))]) = .ok [.install B] := rfl
+      rw [hc'] at hc
+      have he' : editsOf (D := D) (quorumGenerator r f members k).rels rq.self (.record []) = .ok [] := rfl
+      rw [he'] at hes
+      cases hc
+      cases hes
+      subst hrows
+      exact ⟨rfl, rfl⟩
+  · cases hfp
+
 end Nanodregg.Lang.Std

@@ -141,6 +141,42 @@ def create (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (pkg : Option D
   pure ⟨bornAt X c a.base [objectCell X a.actor pkg laws state], [], [],
     decls.zipIdx.map fun d => (.head self d.2, d.1)⟩
 
+/-- The cell `install pkg` bears (`install`'s literal): ROM, the bytes in slot 0, at its content id `romIdOf`. -/
+def packageCell (pkg : ByteArray) : Cell := { kind := kindPackage, discipline := .rom, slots := [(0, pkg)] }
+
+/-- The view a receiver has after a birth earlier in its own call: `look`, and the cell `cell` live
+at `id`. The only view a receiver reads beside the pinned one, and only for the cell its own call
+bears (`createOf`'s package). -/
+def withBorn (look : Pinned D) (id : D) (cell : Cell) : Pinned D := fun i =>
+  if i = id then .ok (some cell) else look i
+
+/-- `createOf pkg laws state` (KERNEL-77): an object of the package the bytes `pkg` install as, born
+in one call and owned by the SIGNER (`c.unsigned.member`), whoever the actor. The package's id is its
+content id, and the signer's pins decide:
+* the signer pinned it LIVE: the package is installed already (a ROM cell is its content), and the
+  object is `create`d of it, at the call's birth index;
+* otherwise (not pinned, or pinned absent): `install pkg` (the one install receiver, its check), then
+  `create` of the new id over the view that holds it (`withBorn`). Admission keeps its rules for the
+  birth: an id already taken is `idTaken`, and a pinned-absent id that is also born is
+  `bornTouched` (a born cell is never touched, KERNEL-11), so a call that reuses pins the package
+  live and a call that installs does not pin it (the client's `derivePins` does both).
+The object is born at the call's birth index and the package after it, so the object's id is the same
+either way.
+Spends nobody's authority: the signer could `install` and `create` the same cells itself; the
+object it bears is the signer's, so a generator that makes one decides its laws and state, never
+its owner. -/
+def createOf (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (pkg : ByteArray) (laws : List D)
+    (state : Slots) : Except (Refusal D) (Draft D) := do
+  let p := romIdOf X.env (packageCell pkg)
+  let me : At D := ⟨c.unsigned.member, a.base⟩
+  match look p with
+  | .ok (some _) => create X look c me (some p) laws state
+  | .error (.unpinned _) | .ok none => do
+      let i ← install X look c ⟨a.actor, a.base + 1⟩ pkg
+      let o ← create X (withBorn look p (packageCell pkg)) c me (some p) laws state
+      pure (o.append i)
+  | .error e => .error e
+
 def applyEdits (s : Slots) (edits : List (Nat × Option ByteArray)) : Slots :=
   edits.foldl (fun s e => match e.2 with
     | some v => s.set (stateBase + e.1) v
@@ -374,6 +410,7 @@ def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : 
   | .rotate key next => stepped wk (rotate X look c key next)
   | .install pkg => stepped wk (install X look c ⟨actor, wk.born⟩ pkg)
   | .create pkg laws state => stepped wk (create X look c ⟨actor, wk.born⟩ pkg laws state)
+  | .createOf pkg laws state => stepped wk (createOf X look c ⟨actor, wk.born⟩ pkg laws state)
   | .write obj edits via => stepped wk (write X look c ⟨actor, wk.born⟩ obj edits via)
   | .law obj laws via => stepped wk (law X look c ⟨actor, wk.born⟩ obj laws via)
   | .invoke obj method args budget via => invoke X look rv c sub wk actor obj method args budget via

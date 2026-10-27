@@ -27,8 +27,8 @@ def PackagesChecked (X : Ctx D) (look : Pinned D) (d : Draft D) : Prop :=
 omit [Ord D] in
 /-- **An object installs only what the install check accepted.** Every package cell in the Draft of a
 call an object makes (any depth of the tree) holds bytes `X.program.checkInstall` accepted at the
-signer's pinned view: `install` is the only callable receiver that bears a package cell, and it checks
-first. -/
+signer's pinned view: `install` is the only receiver that bears a package cell, and it checks
+first, and `createOf` (KERNEL-77) bears a package cell only through that receiver. -/
 theorem tree_package_checked {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} :
     ∀ n wk a b r, tree X look rv c n wk a b = .ok r → PackagesChecked X look r.1 := by
   refine tree_all ?_ ?_ ?_
@@ -78,6 +78,13 @@ theorem tree_package_checked {X : Ctx D} {look : Pinned D} {rv : RowView D} {c :
         have hd := stepped_draft h
         obtain ⟨_, _, _, _, _, _, -, -, -, -, -, -, -, -, -, -, hr⟩ := credit_ok hd
         rw [hr]; simp [PackagesChecked]
+    | createOf pkg laws state =>
+        have hd := stepped_draft h
+        obtain ⟨-, -, hcr, -⟩ := createOf_parts hd
+        intro p hp hk
+        rcases hcr p hp with hx | ⟨hx, hck⟩
+        · rw [hx] at hk; simp [objectCell, kindObject, kindPackage] at hk
+        · exact ⟨pkg, hx, hck⟩
     | _ => simp [Body.callable] at hc
 
 end Nanodregg.Kernel.Receive

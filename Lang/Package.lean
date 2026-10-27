@@ -153,14 +153,29 @@ def installArm : Label × Ty := ("install", .record [("pkg", .bytes)])
 def invokeArm (A : Ty) : Ty :=
   .record [("args", A), ("budget", .nat), ("method", .nat), ("obj", .digest), ("via", optTy .digest)]
 
-/-- The arms a call slot may hold, in canonical order: with an `invoke` arm at argument type `A`
-(`some A`), or without one (`none`). -/
-def callArms : Option Ty → List (Label × Ty)
-  | some A => [accountArm, creditArm, grantArm, installArm, ("invoke", invokeArm A), transferArm]
-  | none => [accountArm, creditArm, grantArm, installArm, transferArm]
+/-- The `createOf` arm's record at state type `T` (LANG-96, KERNEL-77): the package bytes and the new
+object's state, a VALUE of `T` (the record type the package's state is), which the runtime lays out
+as the object's state slots with the one data codec (`Lang.stateSlots`, as a birth's seed is). The
+kernel installs the bytes when the signer's view holds no cell at their content id, and bears an
+object of that package owned by the SIGNER: a generator that generates and instantiates in one
+Turn. An object's `createOf` names no extra laws (the package's own laws judge the object; a
+generator writes its laws into the package). -/
+def createOfArm (T : Ty) : Ty := .record [("pkg", .bytes), ("state", T)]
 
-/-- Any call an object may make, its invokes (if `A` names an argument type) carrying a value of `A`. -/
-def callTy (A : Option Ty) : Ty := .sum (callArms A)
+/-- The arms a call slot may hold, in canonical order: with an `invoke` arm at argument type `A`
+(`some A`) or without one (`none`), and with a `createOf` arm at state type `T` (`some T`) or
+without one (`none`). -/
+def callArms (A : Option Ty) (T : Option Ty := none) : List (Label × Ty) :=
+  match A, T with
+  | some A, none => [accountArm, creditArm, grantArm, installArm, ("invoke", invokeArm A), transferArm]
+  | none, none => [accountArm, creditArm, grantArm, installArm, transferArm]
+  | some A, some T => [accountArm, ("createOf", createOfArm T), creditArm, grantArm, installArm,
+      ("invoke", invokeArm A), transferArm]
+  | none, some T => [accountArm, ("createOf", createOfArm T), creditArm, grantArm, installArm, transferArm]
+
+/-- Any call an object may make, its invokes (if `A` names an argument type) carrying a value of `A`,
+its `createOf`s (if `T` names a state type) a value of `T`. -/
+def callTy (A : Option Ty) (T : Option Ty := none) : Ty := .sum (callArms A T)
 
 /-- A slot of `kinds` other than `invoke`, in canonical order. `invoke` is not an arm here: a slot
 that names only it is empty, and install refuses it `badMethod` (`callSlotOk`). -/
@@ -169,6 +184,21 @@ def callOf (kinds : List Label) : Ty := .sum ((callArms none).filter fun a => ki
 /-- A slot that may invoke with an argument of type `A`, and may make the other `kinds`. -/
 def invokeOf (A : Ty) (kinds : List Label := []) : Ty :=
   .sum ((callArms (some A)).filter fun a => a.1 == "invoke" || kinds.contains a.1)
+
+/-- A slot that may `createOf` an object of state type `T`, and may make the other `kinds`
+(`invoke` is not among them, as in `callOf`). -/
+def createOfSlot (T : Ty) (kinds : List Label := []) : Ty :=
+  .sum ((callArms none (some T)).filter fun a => a.1 == "createOf" || kinds.contains a.1)
+
+/-- The state type of a `createOf` arm's record, if it has the arm's shape. -/
+def createOfStateOf : Ty → Option Ty
+  | .record [("pkg", .bytes), ("state", T)] => some T
+  | _ => none
+
+/-- The state type of a slot's `createOf` arm, if the slot has one of the arm's shape. -/
+def slotCreateState : Ty → Option Ty
+  | .sum arms => (Row.find? "createOf" arms).bind createOfStateOf
+  | _ => none
 
 /-- The argument type of an `invoke` arm's record, if it has the arm's shape. -/
 def invokeArgOf : Ty → Option Ty
@@ -300,13 +330,21 @@ refuse without. The theorems about a checked run take `callSlotOk` alone and get
 totality from it (`Lang.Proofs.CallLive`). -/
 def invokeArgOk (A : Ty) : Bool := A.isData && Wire.dataTy A
 
+/-- A `createOf` arm's state type is a record of first-order data the wire carries field by field,
+so `stateSlots` lays out every value of it (LANG-96): what a birth's seed is. -/
+def createStateOk : Ty → Bool
+  | t@(.record row) => invokeArgOk t && row.all fun f => Wire.dataTy f.2
+  | _ => false
+
 /-- A slot's call type: a sum of at least one of the call arms (an empty sum would be a slot that
 can never hold a call), each at its own type, the `invoke` arm at an argument type the wire can
-carry (`invokeArgOk`). -/
+carry (`invokeArgOk`), the `createOf` arm at a state type it can lay out (`createStateOk`). -/
 def callSlotOk : Ty → Bool
   | .sum arms =>
     let A := (Row.find? "invoke" arms).bind invokeArgOf
-    !arms.isEmpty && A.all invokeArgOk && arms.all fun a => decide (Row.find? a.1 (callArms A) = some a.2)
+    let T := (Row.find? "createOf" arms).bind createOfStateOf
+    !arms.isEmpty && A.all invokeArgOk && T.all createStateOk &&
+      arms.all fun a => decide (Row.find? a.1 (callArms A T) = some a.2)
   | _ => false
 
 /-- A slot type's call type: the slot is an option over a call type. -/

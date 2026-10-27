@@ -250,16 +250,6 @@ def checkInstall (look : Pinned D) (b : ByteArray) : Except (Refusal D) Unit := 
   let _ ← admitContextual digestOf (fun _ => unresolvedBody) b p L gis
   pure ()
 
-/-- The state slots of a record row: field `i` at `stateBase + i`; `none` if a field has no bytes at
-its type (extraction at the state type makes that unreachable; it is refused by name, not written). -/
-def stateSlots : List (Label × Ty) → List (Label × Data) → Nat → Option Slots
-  | [], [], _ => some []
-  | (_, t) :: row, (_, d) :: ds, i =>
-    match Wire.encodeData t d, stateSlots row ds (i + 1) with
-    | some b, some s => some ((stateBase + i, b) :: s)
-    | _, _ => none
-  | _, _, _ => none
-
 def readState (row : List (Label × Ty)) (s : Slots) : Except String Data :=
   go row 0
 where

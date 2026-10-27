@@ -135,4 +135,87 @@ def ownerGenerator (r : List (Label × Ty)) : Package :=
   templateGenerator (.record []) [agentParam] (ownedPackageWith r (.var 4))
     "installs a record only its generating member may use: the allowlist names the invoker"
 
+/-! ## Generate AND instantiate in one Turn (LANG-96, KERNEL-77): `createOf` -/
+
+/-- `some (createOf {pkg = PKG, state = STATE})` in the creator's slot, both terms. -/
+def createOfT (T : Ty) (pkgT stateT : Term) : Term :=
+  someCallT (createOfSlot T) (.inj (createOfSlot T) "createOf" (.record [("pkg", pkgT), ("state", stateT)]))
+
+/-- `make`: `λ rows state arg req. {calls = {c0 = some (createOf {pkg = QUOTED, state = INIT})},
+edits = {}, state = state}` where QUOTED writes the template `p`'s bytes at the parameters `ps` (as
+`templateMethod`'s does) and INIT is the new object's state, a term over the same environment
+(`arg` at `var 1`, `req` at `var 0`) of the template's state type. -/
+def creatorMethod (A : Ty) (ps : List Quote.Param) (p : Package) (init : Term) : Term :=
+  .lam (.record []) (.lam genStateTy (.lam A (.lam reqTy
+    (resultT (callsT [createOfT p.state (Quote.quotePackage ps (.bytes .empty) p) init]) (.var 2)))))
+
+/-- A TEMPLATE CREATOR: one method `make : A`, no state, no laws, whose run makes, in the invoking
+Turn, an object owned by the invoker of the template `p` filled at the parameters' values, at the
+state `init` means (`make_template_sound`); the kernel installs the filled package first when the
+World does not hold it. A member says "make me one at these parameters" once. -/
+def templateCreator (A : Ty) (ps : List Quote.Param) (p : Package) (init : Term) (doc : String) : Package :=
+  { pkgOf genStateTy [] [("make", A, [createOfSlot p.state], creatorMethod A ps p init)] with doc := doc.toUTF8 }
+
+/-- The bounded creator: `make {max}` makes the invoker an object of `boundedPackage {f : nat} f
+max` at `f = init` (the law judges the birth: an `init` past `max` is refused by the law's name). -/
+def boundedCreator (f : Label) (init : Nat) : Package :=
+  templateCreator maxArgTy [maxParam] (boundedPackageWith [(f, .nat)] f (.var 4)) (.record [(f, natT init)])
+    s!"makes its invoker a {f}-bounded record at the bound its argument names, in one Turn"
+
+/-! ## A quorum-gated generator (LANG-99): a package is installed only on a quorum's commit
+
+The first composition of a generator with the kernel's laws-by-act. The generator object's state is a
+quorum's (`Std.quorum` over the field `generated`, the bound last generated): `propose {v}` and
+`approve {bit}` are the quorum's own acts; `generate {}` reads the proposal `set v`, writes
+`generated := v` and `approvals := 0`, and installs the bounded template at `v`, in one Turn. The
+quorum law judges that state change as a COMMIT (k of n approvals of exactly `v`), so the install —
+in the same Turn, which fails whole — happens only when the quorum says so. `generate` refuses by
+name a `laws` proposal (`notSet`) and a `v` equal to `generated` (`notProposed`: a write that leaves
+`generated` unchanged is the quorum's no-op, which needs no approvals, so installing there would
+install without a quorum). -/
+
+/-- The quorum generator's state: the quorum's `approvals` and `proposal`, and `generated`. -/
+def quorumGenRow : List (Label × Ty) := [("approvals", .nat), ("generated", .nat), ("proposal", proposalTy .nat)]
+
+def quorumGenStateTy : Ty := .record quorumGenRow
+
+/-- `approve {bit}`: `approvals := approvals + bit` (the law admits only the signer's own unset bit). -/
+def approveGenMethod : Term :=
+  methodOf quorumGenStateTy (.record [("bit", .nat)])
+    [("approvals", .prim .add (.get (.var 2) "approvals") (.get (.var 1) "bit")),
+     ("generated", .get (.var 2) "generated"), ("proposal", .get (.var 2) "proposal")]
+
+/-- `propose {v}`: `proposal := set v`, `approvals := 0` (the quorum's propose arm). -/
+def proposeGenMethod : Term :=
+  methodOf quorumGenStateTy (.record [("v", .nat)])
+    [("approvals", natT 0), ("generated", .get (.var 2) "generated"),
+     ("proposal", .inj (proposalTy .nat) "set" (.get (.var 1) "v"))]
+
+/-- What `generate` returns. -/
+def quorumGenResultTy : Ty := resultTy quorumGenStateTy [installSlot]
+
+/-- `generate {}`: `case state.proposal` — `laws` refuses `notSet`; `set v` refuses `notProposed` when
+`v` is the bound already generated, and otherwise returns `install` of the template `p` at `v` (the
+parameter the case binds, `var 0`) with `generated := v`, `approvals := 0`. -/
+def quorumGenerateMethod (p : Package) : Term :=
+  .lam (.record []) (.lam quorumGenStateTy (.lam (.record []) (.lam reqTy
+    (.case (.get (.var 2) "proposal")
+      [("laws", .refuse quorumGenResultTy "notSet".toUTF8),
+       ("set", .ite (.prim .eq (.var 0) (.get (.var 3) "generated")) (.refuse quorumGenResultTy "notProposed".toUTF8)
+          (resultT (callsT [installOf (Quote.quotePackage [⟨.nat, .var 0⟩] (.bytes .empty) p)])
+            (.record [("approvals", natT 0), ("generated", .var 0), ("proposal", .get (.var 3) "proposal")])))]))))
+
+/-- The QUORUM GENERATOR of `boundedPackage r f`: members `members`, threshold `k`. Its object's
+`generate` installs the bounded package at a bound k of the members approved, and at no other. -/
+def quorumGenerator (r : List (Label × Ty)) (f : Label) (members : List ByteArray) (k : Nat) : Package :=
+  { imports := [], state := quorumGenStateTy,
+    iface := .record [("approve", methodTy quorumGenStateTy (.record [("bit", .nat)])),
+      ("generate", methodTy quorumGenStateTy (.record []) [installSlot]),
+      ("propose", methodTy quorumGenStateTy (.record [("v", .nat)])), ("quorum", lawTy quorumGenStateTy)],
+    body := .record [("approve", approveGenMethod),
+      ("generate", quorumGenerateMethod (boundedPackageWith r f (.var 4))),
+      ("propose", proposeGenMethod), ("quorum", quorumLaw quorumGenStateTy .nat members k "generated")],
+    methods := ["approve", "generate", "propose"], laws := ["quorum"],
+    doc := s!"installs a {f}-bounded record at a bound {k} of its members approved".toUTF8 }
+
 end Nanodregg.Lang.Std

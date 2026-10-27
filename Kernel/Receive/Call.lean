@@ -66,6 +66,12 @@ inductive Body (D : Type)
   /-- birth an object owned by the signer: programmed by `pkg`, or a data object without one;
   judged by `laws` (and the package's) from birth -/
   | create (pkg : Option D) (laws : List D) (state : Slots)
+  /-- birth an object owned by the SIGNER, programmed by the package `pkg` installs as, in one call
+  (KERNEL-77): the package cell is installed first when the signer's pinned view holds no live cell
+  at its content id, and reused when it does; then `create (some (that id)) laws state`. An object
+  may make this call (a generator that generates AND instantiates): the object born is the
+  signer's, never the calling object's -/
+  | createOf (pkg : ByteArray) (laws : List D) (state : Slots)
   /-- set (`some`) or erase (`none`) state slots of a data object -/
   | write (obj : D) (edits : List (Nat × Option ByteArray)) (via : Option D)
   /-- replace a data object's extra laws (judged by the laws in force) -/
@@ -205,7 +211,7 @@ inductive Refusal (D : Type)
   /-- a credit line out of an account that is not a well (its denomination is not its own id) -/
   | notWell (cell : D)
   /-- a method returned a call of a kind an object may not exercise (only `invoke`, `transfer`,
-  `account`, `credit`, `grant` and `install` are callable): the kernel's own assertion where calls enter -/
+  `account`, `credit`, `grant`, `install` and `createOf` are callable): the kernel's own assertion where calls enter -/
   | notCallable (kind : String)
   /-- a call nested past `Bounds.callDepthMax` -/
   | callTooDeep
@@ -556,9 +562,12 @@ structure At (D : Type) where
   actor : D
   base : Nat
 
-/-- The kinds an object may exercise as a call (KERNEL-28 (a)). -/
+/-- The kinds an object may exercise as a call (KERNEL-28 (a)): the five that spend the calling
+object's authority or none (`invoke`, `transfer`, `account`, `credit`, `grant`), `install`
+(KERNEL-75: spends nobody's), and `createOf` (KERNEL-77: spends nobody's, and the object it bears
+is the signer's). -/
 def Body.callable : Body D → Bool
-  | .invoke .. | .transfer .. | .account .. | .credit .. | .grant .. | .install .. => true
+  | .invoke .. | .transfer .. | .account .. | .credit .. | .grant .. | .install .. | .createOf .. => true
   | _ => false
 
 /-- The World an enrolment's join names (PROTOCOL-79); `none` for every other Body. -/
@@ -574,7 +583,7 @@ def Body.isInvoke : Body D → Bool
 /-- A Body's kind, by name (`notCallable`'s argument). -/
 def Body.kindName : Body D → String
   | .enroll .. => "enroll" | .rotate .. => "rotate" | .install .. => "install"
-  | .create .. => "create" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
+  | .create .. => "create" | .createOf .. => "createOf" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
   | .grant .. => "grant" | .retire .. => "retire" | .issue .. => "issue"
   | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
 

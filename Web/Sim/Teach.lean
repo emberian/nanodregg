@@ -192,6 +192,7 @@ def bodyText : Body D → String
   | .rotate _ _ => "rotate"
   | .install pkg => s!"install {pkg.size} bytes"
   | .create pkg laws state => s!"create {(pkg.map hexOf).getD "data"} laws {laws.length} slots {state.length}"
+  | .createOf pkg laws state => s!"createOf {pkg.size} bytes laws {laws.length} slots {state.length}"
   | .write obj edits _ => s!"write {hexOf obj} slots {",".intercalate (edits.map fun (k, _) => toString k)}"
   | .law obj laws _ => s!"law {hexOf obj} laws {laws.length}"
   | .invoke obj m _ budget _ => s!"invoke {hexOf obj} method {m} budget {budget}"

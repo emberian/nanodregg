@@ -220,6 +220,10 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
       simp only [writeOf, List.mem_singleton] at he
       subst he
       exact .inl ⟨cl, hko⟩
+  | createOf pkg laws state =>
+      intro e he
+      rw [(createOf_parts (stepped_draft h)).1] at he
+      simp at he
   | enroll key next possession via =>
       have hd := stepped_draft h
       unfold enroll at hd

@@ -373,13 +373,6 @@ def note (s : String) : M D Unit := modify fun st => { st with log := st.log.pus
 def sawOp (op : Op) : M D Unit :=
   modify fun st => if st.ops.contains op then st else { st with ops := st.ops ++ [op] }
 
-/-- The receiver kind of a call: its `Body` constructor (Protocol.Rows' `kinds`). -/
-def kindName : Body D → String
-  | .enroll .. => "enroll" | .rotate .. => "rotate" | .install .. => "install"
-  | .create .. => "create" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
-  | .grant .. => "grant" | .retire .. => "retire"
-  | .issue .. => "issue" | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
-
 /-- What an invoke's run costs, measured on the World the call was planned on (the actor's
 follow, caught up to the writer's tip): the receiver's own inputs (`invokeRun` over the call's
 pins), then LANG's `runMeasured`, whose first component IS the deployed `Program.run`. A call
@@ -417,7 +410,7 @@ def measureInvoke (rc : Lang.ReceiptCheck) (X : Ctx D) (w : World D) (c : Call D
 def sawCall (name : String) (call : ByteArray) : M D Unit := do
   let decoded := (← get).sys.writer.R.ctx.decodeCall call
   let k := match decoded with
-    | some c => kindName c.unsigned.body
+    | some c => c.unsigned.body.kindName
     | none => "undecodable"
   modify fun st => if st.kinds.contains k then st else { st with kinds := st.kinds ++ [k] }
   if let (some c, some a) := (decoded, (← get).actors.lookup name) then

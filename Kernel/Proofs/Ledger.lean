@@ -511,8 +511,8 @@ def ZeroBorn (d : Draft D) : Prop :=
 
 omit [Ord D] in
 /-- **An object's calls bear only empty value cells**: no callable receiver issues (`issue` is not
-callable), `account` bears balance and floor 0, `install` a ROM package cell (KERNEL-75), and the
-rest bear no value cell. -/
+callable), `account` bears balance and floor 0, `install` a ROM package cell (KERNEL-75), `createOf` an
+object cell and perhaps a package cell (KERNEL-77), and the rest bear no value cell. -/
 theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} :
     ∀ n wk a b r, tree X look rv c n wk a b = .ok r → ZeroBorn r.1 := by
   refine tree_all ?_ ?_ ?_
@@ -563,6 +563,12 @@ theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D
           simp only [List.mem_singleton] at this
           rw [this, ofCell_not_value (by simp)] at hv
           cases hv
+    | createOf pkg laws state =>
+        have hd := stepped_draft h
+        obtain ⟨-, -, hcr, -⟩ := createOf_parts hd
+        intro p hp v hv
+        rcases hcr p hp with hx | ⟨hx, -⟩ <;>
+          rw [hx, ofCell_not_value (by simp [objectCell, packageCell])] at hv <;> cases hv
     | _ => simp [Body.callable] at hc
 
 omit [Ord D] in
@@ -657,6 +663,12 @@ theorem derive_value_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
       have := mem_bornAt_cell hp
       simp only [List.mem_singleton] at this
       rw [this, ofCell_not_value (by simp [objectCell])] at hv; cases hv
+  | createOf pkg laws state =>
+      have hd := stepped_draft hr
+      obtain ⟨-, -, hcr, -⟩ := createOf_parts hd
+      intro p hp v hv
+      rcases hcr p hp with hx | ⟨hx, -⟩ <;>
+        rw [hx, ofCell_not_value (by simp [objectCell, packageCell])] at hv <;> cases hv
   | grant target grantee rights parent =>
       have hd := stepped_draft hr
       simp only [grant, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

@@ -98,7 +98,16 @@ theorem derivePins_keeps {X : Ctx D} {w : World D} :
         · have := derivePins_keeps n _ u' t h
           simpa using this
       · cases h
-      · cases h; exact ⟨rfl, rfl, rfl⟩
+      · split at h
+        · cases h; exact ⟨rfl, rfl, rfl⟩
+        · split at h
+          · rename_i hd
+            split at h
+            · cases h; exact ⟨rfl, rfl, rfl⟩
+            · cases h
+              have := derivePins_keeps n _ _ _ hd
+              simpa using this
+          · cases h; exact ⟨rfl, rfl, rfl⟩
 
 /-- **Every row pin `derivePins` adds is the planning World's** (KERNEL-54): a row pin of the result
 was the input's, or is `rowPinAt` of follow's World at some row key, the leaf's digest or absence at
@@ -123,7 +132,16 @@ theorem derivePins_rowPins {X : Ctx D} {w : World D} :
             · exact .inr ⟨_, rfl⟩
           · exact .inr hk
       · cases h
-      · cases h; intro p hp; exact .inl hp
+      · split at h
+        · cases h; intro p hp; exact .inl hp
+        · split at h
+          · rename_i hd
+            split at h
+            · cases h; intro p hp; exact .inl hp
+            · cases h
+              have := derivePins_rowPins n _ _ _ hd
+              simpa using this
+          · cases h; intro p hp; exact .inl hp
 
 /-- `planUnchecked` derives `t` from `u` on follow's World, and `u` is the member's own call. -/
 theorem planUnchecked_derives {X : Ctx D} {me : Self D} {w : World D} {key : ByteArray}

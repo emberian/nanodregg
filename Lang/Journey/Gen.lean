@@ -30,6 +30,30 @@ kernel's `Program` (the deployed receipt check at the Sim's parameters, as `Lang
 * GN10 B creates an object O of it and sets n = 7: admitted (B is on the list).
 * GN11 B grants A invoke on O; A sets n = 9 through the grant: refused `lawDenied owner: not on the
   allowlist` — the package B generated admits B by name and no one else.
+* GN12 (LANG-96, KERNEL-77: generate AND instantiate in one Turn) B installs `Std.boundedCreator n 0`
+  and creates a creator object C; B makes at 200 (the package unpinned: the call installs): admitted, and the
+  ONE Turn bears two cells — B's object first (owned by B, of the package id), then the package cell
+  of `encodePackage (boundedPackage {n : nat} n 200)` (`make_bounded_sound`, run).
+* GN13 the made object runs: B sets n = 150, admitted; n = 201 is refused `lawDenied bounded: n over
+  the bound`.
+* GN14 B grants A invoke on C. A makes at 100 without pinning the package (GN6 installed it): the
+  call installs, and admission rejects `idTaken` (the receiver decides install-or-reuse from the
+  signer's pins; a client's `derivePins` pins a live package it would bear); pinned live, admitted:
+  the Turn bears ONE cell, A's object of GN6's package.
+* GN15 the object is the SIGNER's, not the creator's nor its owner's: A sets n = 60, admitted; B sets
+  it, refused by the owner check.
+* GN16 a creator whose state its own law refuses (`boundedCreator n 500` at max 300): refused
+  `lawDenied bounded` at the birth, and the Turn fails whole — the package is not installed either.
+* GN17 a member signs `createOf` itself (no generator): the package of max 300 and B's object of it,
+  one Turn.
+* GN18 (LANG-99: a quorum-gated generator) B installs `Std.quorumGenerator {n : nat} n [B, A] 2` and
+  creates Q at `{approvals 0, generated 0, proposal set 0}`; B generates: refused `notProposed` (the
+  bound in force needs no quorum, so the generator installs nothing there).
+* GN19 B proposes 400 and generates: refused `lawDenied quorum: no quorum` — the install sat in the
+  same Turn as the commit the law refused, so nothing is born.
+* GN20 B approves (bit 1), A through a grant approves (bit 2), B generates: admitted; the Turn bears
+  exactly the package cell of `encodePackage (boundedPackage {n : nat} n 400)` (`generate_quorum_sound`,
+  run) and Q's `generated` is 400.
 -/
 import Lang.Journey.Head
 import Lang.StdGen
@@ -168,6 +192,113 @@ def genRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
     | some x => go prog r19 (Sim.signed r19.st a a.key (Sim.S.pinsFor r19.st.host [a.id, O2, oid, gr]) (.invoke O2 0 x 1000000 (some gr)))
   r := note r20 s!"GN11 B grants A invoke on O ({v19}); A sets n = 9 through the grant: {v20}"
     (v19 == "admitted" && v20.startsWith "refused lawDenied" && (v20.splitOn "owner: not on the allowlist").length > 1)
+  -- GN12 the creator (LANG-96): generate AND instantiate in one Turn
+  let pkgIdOf (m : Nat) : D × ByteArray :=
+    let bytes := (Wire.encodePackage (Std.boundedPackage rty "n" m)).getD .empty
+    (romIdOf Sim.env (packageCell bytes), bytes)
+  let (eid200, bytes200) := pkgIdOf 200
+  let (r21, v21, g21?) := generator r "GN12" (Std.boundedCreator "n" 0)
+  let some (cpkg, C) := g21? | return note r21 s!"GN12 {v21}" false
+  let make (r : Run) (m : Sim.Member) (max : Nat) (extra : List D) (via : Option D) : Run × String × Option (Turn D) :=
+    match Wire.encodeData Std.maxArgTy (.record [("max", .nat max)]) with
+    | none => (r, "no argument bytes", none)
+    | some x => go prog r (Sim.signed r.st m m.key (Sim.S.pinsFor r.st.host ([m.id, C, cpkg] ++ extra))
+        (.invoke C 0 x 1000000 via))
+  let ownedBy (r : Run) (o : D) (m : Sim.Member) (pid : D) : Bool :=
+    match r.st.host.live Sim.env o with
+    | some cell => cell.slots.get slotOwner == some (Sim.env.bytes m.id) &&
+        cell.slots.get slotPackage == some (Sim.env.bytes pid)
+    | none => false
+  let (r22, v22, t22) := make r21 b 200 [] none
+  let born22 := (t22.map createdIds).getD []
+  let some O3 := bornOf t22 | return note r22 s!"GN12 B makes at 200: {v22}" false
+  r := note r22 s!"GN12 B installs Std.boundedCreator n 0 and creates C ({v21}); B makes at 200: {v22}; the ONE Turn bears {born22.length} cells: B's object of the package id, owned by B: {ownedBy r22 O3 b eid200}; then the package cell of encodePackage (boundedPackage \{n : nat} n 200) ({bytes200.size} bytes): {born22.getLast? == some eid200}"
+    (v22 == "admitted" && born22.length == 2 && ownedBy r22 O3 b eid200 && born22.getLast? == some eid200 &&
+      bytes200.size > 0)
+  -- GN13 the made object runs under the generated law
+  let setOn (r : Run) (m : Sim.Member) (o pid : D) (k : Nat) : Run × String × Option (Turn D) :=
+    match setArg k with
+    | none => (r, "no argument bytes", none)
+    | some x => go prog r (Sim.signed r.st m m.key (Sim.S.pinsFor r.st.host [m.id, o, pid]) (.invoke o 0 x 1000000 none))
+  let (r23, v23, _) := setOn r b O3 eid200 150
+  let (r24, v24, _) := setOn r23 b O3 eid200 201
+  r := note r24 s!"GN13 B sets n = 150: {v23}; n = 201: {v24}"
+    (v23 == "admitted" && v24.startsWith "refused lawDenied" && (v24.splitOn "bounded: n over the bound").length > 1)
+  -- GN14 A makes at 100: GN6's package exists; unpinned, then pinned
+  let (r25, v25, t25) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, a.id, C]) (.grant C a.id [.invoke 0] none))
+  let some gc := bornOf t25 | return note r25 s!"GN14 B grants A invoke on C: {v25}" false
+  let (r26, v26, _) := make r25 a 100 [gc] (some gc)
+  let (r27, v27, t27) := make r26 a 100 [gc, eid] (some gc)
+  let born27 := (t27.map createdIds).getD []
+  let some O4 := bornOf t27 | return note r27 s!"GN14 A makes at 100, pinned: {v27}" false
+  r := note r27 s!"GN14 B grants A invoke on C ({v25}); A makes at 100 without pinning the package (so the call installs it): {v26}; pinned live (so the call reuses it): {v27}; the Turn bears {born27.length} cell, A's object of GN6's package: {ownedBy r27 O4 a eid}"
+    (v25 == "admitted" && v26 == "rejected idTaken" && v27 == "admitted" && born27 == [O4] &&
+      ownedBy r27 O4 a eid)
+  -- GN15 the object is the signer's
+  let (r28, v28, _) := setOn r a O4 eid 60
+  let (r29, v29, _) := setOn r28 b O4 eid 61
+  r := note r29 s!"GN15 A sets n = 60 on A's object: {v28}; B (who owns the creator) sets it, refused by the owner check (noGrant): {v29}"
+    (v28 == "admitted" && v29.startsWith "refused noGrant")
+  -- GN16 a creator whose state the law it writes refuses: nothing born, the package not installed
+  let (eid300, bytes300) := pkgIdOf 300
+  let (r30, v30, g30?) := generator r "GN16" (Std.boundedCreator "n" 500)
+  let some (cpkg5, C5) := g30? | return note r30 s!"GN16 {v30}" false
+  let (r31, v31, t31) := match Wire.encodeData Std.maxArgTy (.record [("max", .nat 300)]) with
+    | none => (r30, "no argument bytes", none)
+    | some x => go prog r30 (Sim.signed r30.st b b.key (Sim.S.pinsFor r30.st.host [b.id, C5, cpkg5])
+        (.invoke C5 0 x 1000000 none))
+  r := note r31 s!"GN16 B makes at 300 from a creator of n = 500: {v31}; nothing born: {t31.isNone}; the package not installed: {(r31.st.host.live Sim.env eid300).isNone}"
+    (v31.startsWith "refused lawDenied" && (v31.splitOn "bounded: n over the bound").length > 1 && t31.isNone &&
+      (r31.st.host.live Sim.env eid300).isNone)
+  -- GN17 a member's own createOf
+  let (r32, v32, t32) := match stateSlots (recordRow (.record rty)) [("n", .nat 0)] 0 with
+    | none => (r, "no seed bytes", none)
+    | some seed => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id]) (.createOf bytes300 [] seed))
+  let born32 := (t32.map createdIds).getD []
+  let some O5 := bornOf t32 | return note r32 s!"GN17 B signs createOf: {v32}" false
+  r := note r32 s!"GN17 B signs createOf of the max-300 package itself: {v32}; the Turn bears B's object and the package: {born32 == [O5, eid300] && ownedBy r32 O5 b eid300}"
+    (v32 == "admitted" && born32 == [O5, eid300] && ownedBy r32 O5 b eid300)
+  -- GN18 the quorum generator (LANG-99)
+  let (eid400, bytes400) := pkgIdOf 400
+  let qg := Std.quorumGenerator rty "n" [Sim.dc.bytes b.id, Sim.dc.bytes a.id] 2
+  let (r33, v33, t33) := match Wire.encodePackage qg with
+    | none => (r, "no generator bytes", none)
+    | some gb => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id]) (.install gb))
+  let some qpkg := bornOf t33 | return note r33 s!"GN18 install the quorum generator: {v33}" false
+  let qseed := stateSlots Std.quorumGenRow
+    [("approvals", .nat 0), ("generated", .nat 0), ("proposal", .inj "set" (.nat 0))] 0
+  let (r34, v34, t34) := match qseed with
+    | none => (r33, "no seed bytes", none)
+    | some seed => go prog r33 (Sim.signed r33.st b b.key (Sim.S.pinsFor r33.st.host [b.id, qpkg]) (.create (some qpkg) [] seed))
+  let some Q := bornOf t34 | return note r34 s!"GN18 create Q: {v34}" false
+  let onQ (r : Run) (m : Sim.Member) (method : Nat) (x : Option ByteArray) (extra : List D) (via : Option D) :
+      Run × String × Option (Turn D) :=
+    match x with
+    | none => (r, "no argument bytes", none)
+    | some x => go prog r (Sim.signed r.st m m.key (Sim.S.pinsFor r.st.host ([m.id, Q, qpkg] ++ extra)) (.invoke Q method x 1000000 via))
+  let natArg1 (ℓ : Label) (n : Nat) := Wire.encodeData (.record [(ℓ, .nat)]) (.record [(ℓ, .nat n)])
+  let (r35, v35, _) := onQ r34 b 1 genArg [] none
+  r := note r35 s!"GN18 B installs the quorum generator of [B, A] at 2 ({v33}) and creates Q ({v34}); B generates at the bound in force: {v35}"
+    (v33 == "admitted" && v34 == "admitted" && programRefused v35 "notProposed")
+  -- GN19 a proposal without a quorum: the commit and its install refused together
+  let (r36, v36, _) := onQ r b 2 (natArg1 "v" 400) [] none
+  let (r37, v37, t37) := onQ r36 b 1 genArg [] none
+  r := note r37 s!"GN19 B proposes 400 ({v36}) and generates: {v37}; nothing born: {t37.isNone}"
+    (v36 == "admitted" && v37.startsWith "refused lawDenied" && (v37.splitOn "quorum: no quorum").length > 1 && t37.isNone)
+  -- GN20 two approvals, then the generation
+  let (r38, v38, t38) := go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id, a.id, Q]) (.grant Q a.id [.invoke 0] none))
+  let some gq := bornOf t38 | return note r38 s!"GN20 B grants A approve: {v38}" false
+  let (r39, v39, _) := onQ r38 b 0 (natArg1 "bit" 1) [] none
+  let (r40, v40, _) := onQ r39 a 0 (natArg1 "bit" 2) [gq] (some gq)
+  let (r41, v41, t41) := onQ r40 b 1 genArg [] none
+  let born41 := (t41.map createdIds).getD []
+  let gen41 := (r41.st.host.live Sim.env Q).bind fun cell =>
+    match readState Sim.digestOf Std.quorumGenRow cell.slots with
+    | .ok d => d.field "generated"
+    | .error _ => none
+  r := note r41 s!"GN20 B approves ({v39}), A approves through a grant ({v40}), B generates: {v41}; the Turn bears exactly the package cell of encodePackage (boundedPackage \{n : nat} n 400) ({bytes400.size} bytes): {born41 == [eid400]}; Q's generated: {match gen41 with | some (.nat n) => toString n | _ => "?"}"
+    (v38 == "admitted" && v39 == "admitted" && v40 == "admitted" && v41 == "admitted" && born41 == [eid400] &&
+      (match gen41 with | some (.nat 400) => true | _ => false))
   return r
 
 /-- A fresh session for the GN rows. -/

@@ -133,7 +133,8 @@ section Births
 
 omit [Ord D] in
 /-- **No receiver bears an authority cell**, anywhere in a call's tree: `enroll` bears a member,
-`install` a package, `create` an object, `grant` a grant, `issue` and `account` an account; the rest
+`install` a package, `create` an object, `createOf` an object and perhaps a package, `grant` a grant,
+`issue` and `account` an account; the rest
 bear nothing. -/
 theorem derive_born_not_authority {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {d : Draft D}
     (h : derive X look rv c = .ok d) : ∀ p ∈ d.creates, p.2.kind ≠ kindAuthority := by
@@ -184,6 +185,11 @@ theorem derive_born_not_authority {X : Ctx D} {look : Pinned D} {rv : RowView D}
             rw [← hr]
         rw [hc]
         exact one _ _ (by simp [objectCell, kindObject, kindAuthority])
+    | createOf pkg laws state =>
+        have hd := stepped_draft h
+        intro x hx hk
+        rcases createOf_kind hd x hx with h' | h' <;> rw [h'] at hk <;>
+          simp [kindObject, kindPackage, kindAuthority] at hk
     | write obj edits via =>
         have hd := stepped_draft h
         simp only [write, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

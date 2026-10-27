@@ -56,6 +56,32 @@ demos.generator = {
   ],
 };
 
+// META (KERNEL-77, LANG-96, journey GN12–GN17): generate AND instantiate in one Turn. `make {max}`
+// returns `createOf`: the kernel installs the generated package when the World lacks it and bears an
+// object of it owned by the member who signed, in the same Turn; the object is born first, so the
+// step binds it. bob's `make` at the same bound finds the package installed: one cell, his own object.
+demos.creator = {
+  title: 'Creator: a package and an object of it in one call',
+  texts: { maker: 'kernel:boundedCreator' },
+  steps: [
+    { who: 'alice', say: 'alice installs a creator. Its one method (make) returns one call (createOf): a package it writes, and an object of that package.',
+      argv: (v) => ['install', v.text.maker], bind: 'maker' },
+    { who: 'alice', argv: (v) => ['create', '--pkg', v.maker, '(record)'], bind: 'M', open: 'M' },
+    { who: 'alice', argv: (v) => ['grant', v.M, 'anyone', 'invoke:0'], bind: 'pub' },
+    { who: 'alice', say: 'alice makes one with bound 100. One Turn creates her object and the package, because the World did not have the package yet.',
+      argv: (v) => ['invoke', v.M, '0', '(record (max 100))'], bind: 'V', open: 'V' },
+    { who: 'alice', argv: (v) => ['read', v.V, '?'], method: { set: 'set' } },
+    { who: 'alice', argv: (v) => ['invoke', v.V, v.set, '(record (n 50))'] },
+    { who: 'alice', say: 'Setting n = 101 is refused. The creator wrote the bound 100 into the law (lawDenied).',
+      argv: (v) => ['invoke', v.V, v.set, '(record (n 101))'], expect: 'refused' },
+    { who: 'bob', say: 'bob makes one with bound 100. The package exists, so the Turn creates one cell: his object.',
+      argv: (v) => ['invoke', v.M, '0', '(record (max 100))', '--via', v.pub], bind: 'W', open: 'W' },
+    { who: 'bob', argv: (v) => ['invoke', v.W, v.set, '(record (n 7))'] },
+    { who: 'alice', say: 'The object belongs to bob. alice cannot write it (refused).',
+      argv: (v) => ['invoke', v.W, v.set, '(record (n 8))'], expect: 'refused' },
+  ],
+};
+
 // OBS (KERNEL-68, DESIGN-OBS §1): the meter. A Turn names its member and the ticks its run spent; the
 // kernel counts them per member per window and refuses past `ticksPerWindow` (`ticksBudget`). Each
 // member reads the meter back from its OWN fold (`tg_meter`: World.ticksUsed). `spin {n}` counts n

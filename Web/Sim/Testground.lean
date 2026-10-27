@@ -433,11 +433,13 @@ end Spin
 /-- A row's own texts by name: the package a scene installs and the seed it creates with, and the
 journey's generators (§GN, `Lang.Std`): `boundedGenerator` (GN6–GN8: `generate {max}` installs a
 record bounded at `max`) and `ownerGenerator` (GN9–GN11: `generate {}` installs a record only its
-invoker may use); and the journey's offer (§LF), the tutorial's last step. -/
+invoker may use), `boundedCreator` (GN12–GN17: `make {max}` makes its invoker a record bounded
+at `max` in one Turn, installing the package when the World lacks it); and the journey's offer (§LF), the tutorial's last step. -/
 def texts : List (String × String) :=
   [("slot", Protocol.slot), ("selfHeadSeed", Protocol.selfHeadSeed),
    ("boundedGenerator", packageText (Lang.Std.boundedGenerator [("n", .nat)] "n")),
    ("ownerGenerator", packageText (Lang.Std.ownerGenerator [("n", .nat)])),
+   ("boundedCreator", packageText (Lang.Std.boundedCreator "n" 0)),
    ("spin", packageText spinPackage),
    -- the journey's offer (§LF, `Lang.Journey.Offer`): one term `price`, roles buyer and seller
    ("offer", match Lang.Std.offerPackage ["price"] ["buyer", "seller"] with

@@ -11,14 +11,19 @@ method composes a nested call from values it computed (LANG-77; before it, `args
 method had to hold). Every Body it returns is of a kind an object may exercise
 (`Lang.Proofs.Call.callsOf_callable`), so KERNEL's `notCallable` is unreachable from
 `Lang.program`; KERNEL still asserts it where calls enter (law 4). An `install` slot (LANG-86)
-carries the package bytes a method computed: the kernel installs them as it would a member's. On a checked run the encoder
+carries the package bytes a method computed: the kernel installs them as it would a member's. A
+`createOf` slot (LANG-96, KERNEL-77) carries package bytes and a VALUE of the slot's declared state
+type (`slotCreateState`), laid out as state slots with the codec a birth's seed uses
+(`stateSlots`): the kernel installs the package if the World lacks it and bears an object of it,
+owned by the signer, in the same Turn. On a checked run the encoder
 never refuses: the extracted datum conforms to the slot's type and the type is one the wire carries
 (`callSlotOk`), so `Lang.Proofs.CallLive.callsOf_live` keeps the digest refusal as the only one.
 
 `callData` is the other direction, over `Body`'s every constructor (a new kernel constructor does
 not build here until it is classified): the data a method returns for that call, `none` for a
-kind an object may not exercise, for a grant with more than `rightsMax` rights, or for an invoke
-whose `args` are not the bytes of a value of the slot's argument type. `Lang.Proofs.Call`:
+kind an object may not exercise, for a grant with more than `rightsMax` rights, for an invoke
+whose `args` are not the bytes of a value of the slot's argument type, or for a `createOf` with
+extra laws or a state that is not a layout of a value of the slot's state type. `Lang.Proofs.Call`:
 the round trip over data (`bodyOf_callData`, `callData_bodyOf`), and `callData_conforms`: the call
 data of a callable Body within the language's bounds (`callFits`) is a value of `callTy`, so a
 method can return it.
@@ -33,9 +38,33 @@ import Lang.Wire.Data
 
 namespace Nanodregg.Lang
 
-open Nanodregg.Kernel.Receive
+open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 variable {D : Type}
+
+/-! ## A state as slots (a birth's seed, a run's new state, a `createOf`'s object) -/
+
+/-- The state slots of a record row: field `i` at `stateBase + i`; `none` if a field has no bytes at
+its type (extraction at the state type makes that unreachable; it is refused by name, not written). -/
+def stateSlots : List (Label × Ty) → List (Label × Data) → Nat → Option Slots
+  | [], [], _ => some []
+  | (_, t) :: row, (_, d) :: ds, i =>
+    match Wire.encodeData t d, stateSlots row ds (i + 1) with
+    | some b, some s => some ((stateBase + i, b) :: s)
+    | _, _ => none
+  | _, _, _ => none
+
+/-- The fields `stateSlots row · i` laid out as `s`, read back: slot by slot in order, each at its
+field's key and decoding at its field's type; `none` for slots that are not such a layout. -/
+def stateFields : List (Label × Ty) → Slots → Nat → Option (List (Label × Data))
+  | [], [], _ => some []
+  | (ℓ, t) :: row, (k, b) :: s, i =>
+    if k = stateBase + i then
+      match (Wire.decodeData t b).toOption, stateFields row s (i + 1) with
+      | some d, some ds => some ((ℓ, d) :: ds)
+      | _, _ => none
+    else none
+  | _, _, _ => none
 
 /-! ## Body → data -/
 
@@ -73,10 +102,18 @@ slot has no invoke arm or the bytes are not a value of `A`. -/
 def argsData (A : Option Ty) (args : ByteArray) : Option Data :=
   A.bind fun A => (Wire.decodeData A args).toOption
 
+/-- A `createOf`'s state read back at the slot's state type `T` (a record): its fields, or `none`
+when the slot has no `createOf` arm of a record type or the slots are not a layout of a value of it. -/
+def stateData : Option Ty → Slots → Option Data
+  | some (.record row), s => (stateFields row s 0).map .record
+  | _, _ => none
+
 /-- The data a method returns to make call `b` in a slot whose invoke arm (if any) is at argument
-type `A`, at that slot's call type; `none` when an object may not make it (`Body.callable` is
-false), a grant carries more than `rightsMax` rights, or an invoke's `args` are not a value of `A`. -/
-def callData (A : Option Ty) : Body D → Option Data
+type `A` and whose `createOf` arm (if any) is at state type `T`, at that slot's call type; `none`
+when an object may not make it (`Body.callable` is false), a grant carries more than `rightsMax`
+rights, an invoke's `args` are not a value of `A`, or a `createOf` names extra laws or a state that
+is not a value of `T`. -/
+def callData (A : Option Ty) (T : Option Ty) : Body D → Option Data
   | .account asset owner =>
       some (.inj "account" (.record [("asset", digestData bytesOf asset), ("owner", digestData bytesOf owner)]))
   | .credit well acct amount via =>
@@ -96,6 +133,10 @@ def callData (A : Option Ty) : Body D → Option Data
         ("once", optData Data.bytes once), ("src", acctRefData bytesOf src),
         ("via", optData (digestData bytesOf) via)]))
   | .install pkg => some (.inj "install" (.record [("pkg", .bytes pkg)]))
+  | .createOf pkg laws state =>
+      if laws.isEmpty then
+        (stateData T state).map fun d => .inj "createOf" (.record [("pkg", .bytes pkg), ("state", d)])
+      else none
   | .enroll .. | .rotate .. | .create .. | .write .. | .law .. | .retire .. | .issue .. =>
       none
 
@@ -111,6 +152,7 @@ def rightFits : Right → Bool
 def callFits : Body D → Bool
   | .credit _ _ amount _ => decide (amount < Bounds.natLimit)
   | .install pkg => decide (pkg.size ≤ Bounds.bytesMax)
+  | .createOf pkg _ _ => decide (pkg.size ≤ Bounds.bytesMax)
   | .grant _ _ rights _ => rights.all rightFits
   | .invoke _ method _ budget _ => decide (method < Bounds.natLimit) && decide (budget < Bounds.natLimit)
   | .transfer _ _ amount _ once =>
@@ -176,9 +218,21 @@ def argsBytes (A : Option Ty) (f : String) (a : Data) : Except String ByteArray 
     | some b => .ok b
     | none => .error s!"{f}: no bytes at the slot's type"
 
+/-- A `createOf`'s state, a value of the slot's state type `T`, as the object's state slots
+(`stateSlots`, the layout a birth's seed has). Refused by name when the slot has no `createOf` arm
+of a record type or the value has no bytes at it; neither is reachable from a checked run
+(`Lang.Proofs.CallLive.callsOf_live`). -/
+def stateBytes (T : Option Ty) (f : String) (fs : List (Label × Data)) : Except String Slots :=
+  match T with
+  | some (.record row) =>
+    match stateSlots row fs 0 with
+    | some s => .ok s
+    | none => .error s!"{f}: no bytes at the slot's type"
+  | _ => .error s!"{f}: no createOf arm"
+
 /-- The Body that call data at a slot's call type asks for, the slot's invoke arm (if any) at
-argument type `A`. -/
-def bodyOf (A : Option Ty) : Data → Except String (Body D)
+argument type `A`, its `createOf` arm (if any) at state type `T`. -/
+def bodyOf (A : Option Ty) (T : Option Ty) : Data → Except String (Body D)
   | .inj "account" (.record [("asset", a), ("owner", o)]) => do
       pure (.account (← digestAt digestOf "asset" a) (← digestAt digestOf "owner" o))
   | .inj "credit" (.record [("acct", ac), ("amount", n), ("via", v), ("well", w)]) => do
@@ -190,6 +244,8 @@ def bodyOf (A : Option Ty) : Data → Except String (Body D)
           (← rightsOf rs) (← optOf (digestAt digestOf "parent") "parent" pa))
       else throw "rights: too many"
   | .inj "install" (.record [("pkg", .bytes pkg)]) => pure (.install pkg)
+  | .inj "createOf" (.record [("pkg", .bytes pkg), ("state", .record fs)]) => do
+      pure (.createOf pkg [] (← stateBytes T "state" fs))
   | .inj "invoke" (.record [("args", a), ("budget", b), ("method", m), ("obj", o), ("via", v)]) => do
       pure (.invoke (← digestAt digestOf "obj" o) (← natOf "method" m) (← argsBytes A "args" a)
         (← natOf "budget" b) (← optOf (digestAt digestOf "via") "via" v))
@@ -212,7 +268,7 @@ where
       match o with
       | .inj "none" (.record []) => go ks fs
       | .inj "some" d =>
-        match bodyOf digestOf (slotInvokeArg k) d with
+        match bodyOf digestOf (slotInvokeArg k) (slotCreateState k) d with
         | .ok b => (go ks fs).map (b :: ·)
         | .error e => .error (.program s!"calls: {ℓ} {e}")
       | _ => .error (.program s!"calls: {ℓ}: not an option")

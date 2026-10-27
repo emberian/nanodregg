@@ -205,10 +205,34 @@ theorem argsBytes_live {A : Ty} {a : Data} (hA : Wire.dataTy A = true) (h : Conf
   simp only [argsBytes, hb]
   exact Live.pure _
 
-/-- The five arms every slot may hold, read at any invoke argument type (they do not read it). -/
-private theorem bodyOf_live_fixed {A : Option Ty} {ℓ : Label} {T : Ty} {d' : Data}
+/-- A record value of a row of wire types lays out as state slots (`stateSlots`): the encoder is
+live at every field (`encodeData_of_conforms`, LANG-96). -/
+theorem stateSlots_of_conforms : ∀ {row : List (Label × Ty)} {fs : List (Label × Data)} (i : Nat),
+    RowConforms fs row → (∀ f ∈ row, Wire.dataTy f.2 = true) → ∃ s, stateSlots row fs i = some s
+  | [], [], _, .nil, _ => ⟨[], rfl⟩
+  | (ℓ, t) :: row, (_, d) :: fs, i, .cons hd hr, hw => by
+    obtain ⟨b, hb⟩ := encodeData_of_conforms (hw (ℓ, t) (List.mem_cons_self ..)) hd
+    obtain ⟨s, hs⟩ := stateSlots_of_conforms (i + 1) hr (fun f hf => hw f (List.mem_cons_of_mem _ hf))
+    exact ⟨(stateBase + i, b) :: s, by simp only at hb; simp [stateSlots, hb, hs]⟩
+
+/-- The `createOf` arm's state, a value of a state type the slot can lay out, has slots: the
+encoder is live at any data. -/
+theorem stateBytes_live {T : Ty} {sd : Data} (hT : createStateOk T = true) (h : Conforms sd T) :
+    ∃ fs s, sd = .record fs ∧ stateBytes (some T) "state" fs = .ok s := by
+  cases T with
+  | record row =>
+    cases h with
+    | record hr =>
+      simp only [createStateOk, Bool.and_eq_true, List.all_eq_true] at hT
+      obtain ⟨s, hs⟩ := stateSlots_of_conforms 0 hr hT.2
+      exact ⟨_, s, rfl, by simp [stateBytes, hs]⟩
+  | _ => simp [createStateOk] at hT
+
+/-- The five arms every slot may hold, read at any invoke argument and state type (they read
+neither). -/
+private theorem bodyOf_live_fixed {A T' : Option Ty} {ℓ : Label} {T : Ty} {d' : Data}
     (hf : Row.find? ℓ (callArms none) = some T) (hd : Conforms d' T) :
-    Live digestOf (.inj ℓ d') (bodyOf digestOf A (.inj ℓ d')) := by
+    Live digestOf (.inj ℓ d') (bodyOf digestOf A T' (.inj ℓ d')) := by
   simp only [callArms, accountArm, creditArm, grantArm, installArm, transferArm, Row.find?] at hf
   split at hf
   · cases hf; subst_vars
@@ -254,36 +278,23 @@ private theorem bodyOf_live_fixed {A : Option Ty} {ℓ : Label} {T : Ty} {d' : D
       Live.bind (optBytes_live _ _ h3) fun _ => Live.pure _
   cases hf
 
-/-- The arm a value of `callTy (some A')` sits at: one of the five every slot has, or the `invoke`
-arm at `A'`. -/
-private theorem find_some {ℓ : Label} {A' T : Ty} (hf : Row.find? ℓ (callArms (some A')) = some T) :
-    Row.find? ℓ (callArms none) = some T ∨ (ℓ = "invoke" ∧ T = invokeArm A') := by
-  simp only [callArms, Row.find?] at hf ⊢
-  split at hf
-  · cases hf; subst_vars; left; rfl
-  split at hf
-  · cases hf; subst_vars; left; rfl
-  split at hf
-  · cases hf; subst_vars; left; rfl
-  split at hf
-  · cases hf; subst_vars; left; rfl
-  split at hf
-  · cases hf; subst_vars; right; exact ⟨rfl, rfl⟩
-  split at hf
-  · cases hf; subst_vars; left; rfl
-  cases hf
+/-- The arm a value of `callTy A T` sits at: one of the five every slot has, the `invoke` arm at
+`A`, or the `createOf` arm at `T`. -/
+private theorem find_some {ℓ : Label} {A T : Option Ty} {U : Ty} (hf : Row.find? ℓ (callArms A T) = some U) :
+    Row.find? ℓ (callArms none) = some U ∨ (ℓ = "invoke" ∧ ∃ A', A = some A' ∧ U = invokeArm A') ∨
+      (ℓ = "createOf" ∧ ∃ T', T = some T' ∧ U = createOfArm T') := by
+  cases A <;> cases T <;> simp only [callArms, Row.find?] at hf ⊢ <;> (repeat' split at hf) <;> simp_all
 
-/-- **Liveness**: data conforming to `callTy A` (the slot's invoke arm at `A`, a type the wire
-carries) reads as a Body, unless some field's bytes are not a digest (`bodyOf`'s only refusal the
-type does not rule out: the encoder never refuses a value of `A`, `argsBytes_live`). -/
-theorem bodyOf_live {A : Option Ty} (hA : ∀ A', A = some A' → Wire.dataTy A' = true) {d : Data}
-    (h : Conforms d (callTy A)) : Live digestOf d (bodyOf digestOf A d) := by
+/-- **Liveness**: data conforming to `callTy A T` (the slot's invoke arm at `A`, a type the wire
+carries; its `createOf` arm at `T`, a state type it lays out) reads as a Body, unless some field's
+bytes are not a digest (`bodyOf`'s only refusal the type does not rule out: the encoder never
+refuses a value of `A`, `argsBytes_live`, nor of `T`, `stateBytes_live`). -/
+theorem bodyOf_live {A T : Option Ty} (hA : ∀ A', A = some A' → Wire.dataTy A' = true)
+    (hT : ∀ T', T = some T' → createStateOk T' = true) {d : Data}
+    (h : Conforms d (callTy A T)) : Live digestOf d (bodyOf digestOf A T d) := by
   cases h with
   | inj hf hd =>
-    cases A with
-    | none => exact bodyOf_live_fixed hf hd
-    | some A' =>
-      rcases find_some hf with hf' | ⟨rfl, rfl⟩
+      rcases find_some hf with hf' | ⟨rfl, A', rfl, rfl⟩ | ⟨rfl, T', rfl, rfl⟩
       · exact bodyOf_live_fixed hf' hd
       · simp only [invokeArm] at hd
         cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
@@ -293,16 +304,24 @@ theorem bodyOf_live {A : Option Ty} (hA : ∀ A', A = some A' → Wire.dataTy A'
         exact Live.bind (digest_live _ (.one _) h4 (under_field (by simp))) fun _ => Live.bind (natOf_live _ h3) fun _ =>
           Live.bind (argsBytes_live (hA A' rfl) h1) fun _ => Live.bind (natOf_live _ h2) fun _ =>
           Live.bind (optDigest_live _ _ (.one _) h5 (under_field (by simp))) fun _ => Live.pure _
+      · simp only [createOfArm] at hd
+        cases hd with | record hr => cases hr with | cons h1 hr => cases hr with | cons h2 hr =>
+        cases hr
+        obtain ⟨b, rfl⟩ := conf_bytes h1
+        obtain ⟨fs, st, rfl, hst⟩ := stateBytes_live (hT T' rfl) h2
+        simp only [bodyOf, hst]
+        exact Live.pure _
 
 /-- The identity-digest corollary (no real digest codec is total; `bodyOf_live` is the statement):
 under a decoder that accepts every byte string, conforming call data always reads. -/
-theorem bodyOf_ok_of_total (htot : ∀ b, (digestOf b).isSome = true) {A : Option Ty}
-    (hA : ∀ A', A = some A' → Wire.dataTy A' = true) {d : Data} (h : Conforms d (callTy A)) :
-    ∃ b : Body D, bodyOf digestOf A d = .ok b := by
-  cases hb : bodyOf digestOf A d with
+theorem bodyOf_ok_of_total (htot : ∀ b, (digestOf b).isSome = true) {A T : Option Ty}
+    (hA : ∀ A', A = some A' → Wire.dataTy A' = true) (hT : ∀ T', T = some T' → createStateOk T' = true)
+    {d : Data} (h : Conforms d (callTy A T)) :
+    ∃ b : Body D, bodyOf digestOf A T d = .ok b := by
+  cases hb : bodyOf digestOf A T d with
   | ok b => exact ⟨b, rfl⟩
   | error e =>
-    obtain ⟨_, _, b, hn, -, -, -⟩ := bodyOf_live hA h e hb
+    obtain ⟨_, _, b, hn, -, -, -⟩ := bodyOf_live hA hT h e hb
     have := htot b
     rw [hn] at this; cases this
 
@@ -426,16 +445,17 @@ theorem find?_mem {α : Type} : ∀ {r : List (Label × α)} {ℓ : Label} {a : 
     · rename_i hk; cases h; subst hk; exact List.mem_cons_self ..
     · exact List.mem_cons_of_mem _ (find?_mem h)
 
-/-- A value of a call slot's type is a value of `callTy` at the slot's invoke argument, injected
-at one of the slot's arms. -/
+/-- A value of a call slot's type is a value of `callTy` at the slot's invoke argument and
+`createOf` state type, injected at one of the slot's arms. -/
 theorem slot_conforms {T : Ty} {d : Data} (hT : callSlotOk T = true) (h : Conforms d T) :
-    Conforms d (callTy (slotInvokeArg T)) ∧ ∃ arms ℓ d', T = .sum arms ∧ d = .inj ℓ d' ∧ ℓ ∈ arms.map Prod.fst := by
+    Conforms d (callTy (slotInvokeArg T) (slotCreateState T)) ∧
+      ∃ arms ℓ d', T = .sum arms ∧ d = .inj ℓ d' ∧ ℓ ∈ arms.map Prod.fst := by
   cases T with
   | sum arms =>
     cases h with
     | inj hf hd =>
       simp only [callSlotOk, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hT
-      obtain ⟨⟨-, -⟩, harms⟩ := hT
+      obtain ⟨⟨⟨-, -⟩, -⟩, harms⟩ := hT
       have hm := find?_mem hf
       exact ⟨.inj (harms _ hm) hd, arms, _, _, rfl, rfl, List.mem_map.2 ⟨_, hm, rfl⟩⟩
   | _ => simp [callSlotOk] at hT
@@ -450,13 +470,27 @@ theorem callSlotOk_dataTy {T : Ty} (hT : callSlotOk T = true) :
     simp only [callSlotOk, Bool.and_eq_true] at hT
     simp only [slotInvokeArg] at hA
     rw [hA] at hT
-    have h2 : (some A).all invokeArgOk = true := hT.1.2
+    have h2 : (some A).all invokeArgOk = true := hT.1.1.2
     simp only [Option.all, invokeArgOk, Bool.and_eq_true] at h2
     exact h2.2
   | _ => simp [callSlotOk] at hT
 
+/-- A call slot's `createOf` state type is one the slot can lay out (`callSlotOk` asks
+`createStateOk`, LANG-96): what `bodyOf_live` needs of it. -/
+theorem callSlotOk_createState {T : Ty} (hT : callSlotOk T = true) :
+    ∀ T', slotCreateState T = some T' → createStateOk T' = true := by
+  intro T' hT'
+  cases T with
+  | sum arms =>
+    simp only [callSlotOk, Bool.and_eq_true] at hT
+    simp only [slotCreateState] at hT'
+    rw [hT'] at hT
+    have h2 : (some T').all createStateOk = true := hT.1.2
+    simpa only [Option.all] using h2
+  | _ => simp [callSlotOk] at hT
+
 /-- The Body read from call data is of the kind its arm names. -/
-theorem bodyOf_kind {A : Option Ty} {d : Data} {b : Body D} (h : bodyOf digestOf A d = .ok b) :
+theorem bodyOf_kind {A T : Option Ty} {d : Data} {b : Body D} (h : bodyOf digestOf A T d = .ok b) :
     ∃ d', d = .inj b.kindName d' := by
   unfold bodyOf at h
   split at h
@@ -528,7 +562,7 @@ theorem callsOf_go_live : ∀ {ks : List Ty} {ls : List Label} {fs : List (Label
         · rename_i m hm
           cases h
           obtain ⟨p, f, b, hn, hb, hf, rfl⟩ :=
-            bodyOf_live (callSlotOk_dataTy hok) (slot_conforms hok hd).1 m hm
+            bodyOf_live (callSlotOk_dataTy hok) (callSlotOk_createState hok) (slot_conforms hok hd).1 m hm
           exact ⟨ℓ, p, f, b, hn, .field (List.mem_cons_self ..) (.inj hb), hf, rfl⟩
   | [], _ :: _, _, hl, _, _, _, _ => by simp at hl
   | _ :: _, [], _, hl, _, _, _, _ => by simp at hl

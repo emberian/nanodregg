@@ -2,7 +2,7 @@
 # testground/build/gate.sh FRESH [--harness-control] — the testground's lies as a verdict (gates/runs.tsv
 # `script:testground/build/gate.sh`): the kernel the page loads, built from THIS tree (build.sh all), runs
 # every Writer-menu scene (lies-run.mjs) and its control with the lies off (--honest), then each axis's
-# demo (axes-run.mjs: the generator, the meter to ticksBudget, the time-lock, the document), the tutorial's
+# demo (axes-run.mjs: the generator, the creator, the meter to ticksBudget, the time-lock, the document), the tutorial's
 # steps in order (teach-run.mjs: each command ends as its step says), then a real
 # hosted World on a fresh genesis (hosted-run.mjs basic, document and door: the live World's door, CLIENT-49). The expectation
 # of each scene is its row's, read off Protocol.rows by the kernel, so a row that changes its lines is
