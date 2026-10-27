@@ -219,9 +219,12 @@ a doc that is not `Bounds.docOk`. -/
 def docSx (w : ByteArray) : Option SExp :=
   if Bounds.docOk w then some (list (atom "doc" :: if w.isEmpty then [] else [bytesSx w])) else none
 
-/-- A method's grades (LANG-89): `(ℓ N)`, `N` its `moves`. -/
+/-- A method's grades (LANG-89): `(ℓ N)`, `N` its `moves`; `(ℓ N I)` when it declares the interface
+`I` it produces (LANG-103). -/
 def effectSx (e : Label × Effect) : Option SExp := do
-  pure (list [← label e.1, atom (Nat.repr e.2.moves)])
+  match e.2.produces with
+  | none => pure (list [← label e.1, atom (Nat.repr e.2.moves)])
+  | some I => pure (list [← label e.1, atom (Nat.repr e.2.moves), ← tySx I])
 
 def supportPinSx : SupportPin → SExp
   | .row rel key ver => list [atom "pin", atom (Nat.repr rel), digestSx key, atom (Nat.repr ver)]

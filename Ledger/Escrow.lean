@@ -152,7 +152,7 @@ def movesMax : Nat := 1000
 def escrow : Package :=
   { Std.pkgOf stateTy [("escrow", law)] methods with
     doc := escrowDoc.toUTF8
-    effects := [("deposit", ⟨movesMax⟩), ("refund", ⟨movesMax⟩), ("release", ⟨movesMax⟩)] }
+    effects := [("deposit", { moves := movesMax }), ("refund", { moves := movesMax }), ("release", { moves := movesMax })] }
 
 /-- The method indices `invoke` names. -/
 def deposit : Nat := 0

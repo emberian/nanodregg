@@ -1400,22 +1400,50 @@ theorem doc_read {w : ByteArray} {x y : SExp} (h : docSx w = some x) (hs : Same 
 /-! ## The grades (LANG-89): `(effects (ℓ N) …)` printed as `Read.effect` reads it -/
 
 theorem effectSx_ok {e : Label × Effect} {x : SExp} (h : effectSx e = some x) : Ok x := by
-  simp only [effectSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
-  obtain ⟨xl, hl, rfl⟩ := h
-  exact .list (.cons (label_ok hl) (.cons (repr_ok _) .nil))
+  obtain ⟨ℓ, moves, produces⟩ := e
+  cases produces with
+  | none =>
+    simp only [effectSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xl, hl, rfl⟩ := h
+    exact .list (.cons (label_ok hl) (.cons (repr_ok _) .nil))
+  | some I =>
+    simp only [effectSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xl, hl, xi, hi, rfl⟩ := h
+    exact .list (.cons (label_ok hl) (.cons (repr_ok _) (.cons (tySx_ok I hi) .nil)))
 
-theorem effect_read {e : Label × Effect} {x y : SExp} (h : effectSx e = some x) (hs : Same x y) :
+/-- A grade reads back; a produced interface reads back when it is well-formed and the form is within
+the reader's depth. -/
+theorem effect_read {e : Label × Effect} {x y : SExp} (h : effectSx e = some x) (hs : Same x y)
+    (hn : need x ≤ depthMax) (hw : e.2.produces.all Ty.wf = true) :
     Read.effect y = .ok e := by
-  simp only [effectSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
-  obtain ⟨xl, hl, rfl⟩ := h
-  obtain ⟨rfl, -⟩ := label_some hl
-  obtain ⟨q, ys, rfl, hys⟩ := same_list hs
-  obtain ⟨y1, ys, rfl, h1, hys⟩ := sameL_cons hys
-  obtain ⟨y2, ys, rfl, h2, hys⟩ := sameL_cons hys
-  cases sameL_nil hys
-  obtain ⟨q1, rfl⟩ := same_atom h1
-  obtain ⟨q2, rfl⟩ := same_atom h2
-  simp only [Read.effect, toNat_repr]
+  obtain ⟨ℓ, moves, produces⟩ := e
+  cases produces with
+  | none =>
+    simp only [effectSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xl, hl, rfl⟩ := h
+    obtain ⟨rfl, -⟩ := label_some hl
+    obtain ⟨q, ys, rfl, hys⟩ := same_list hs
+    obtain ⟨y1, ys, rfl, h1, hys⟩ := sameL_cons hys
+    obtain ⟨y2, ys, rfl, h2, hys⟩ := sameL_cons hys
+    cases sameL_nil hys
+    obtain ⟨q1, rfl⟩ := same_atom h1
+    obtain ⟨q2, rfl⟩ := same_atom h2
+    simp only [Read.effect, toNat_repr]
+  | some I =>
+    simp only [effectSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨xl, hl, xi, hi, rfl⟩ := h
+    obtain ⟨rfl, -⟩ := label_some hl
+    simp only [Option.all_some] at hw
+    have hni : need xi ≤ depthMax :=
+      Nat.le_trans (Nat.le_of_lt (need_lt_list (by simp))) hn
+    obtain ⟨q, ys, rfl, hys⟩ := same_list hs
+    obtain ⟨y1, ys, rfl, h1, hys⟩ := sameL_cons hys
+    obtain ⟨y2, ys, rfl, h2, hys⟩ := sameL_cons hys
+    obtain ⟨y3, ys, rfl, h3, hys⟩ := sameL_cons hys
+    cases sameL_nil hys
+    obtain ⟨q1, rfl⟩ := same_atom h1
+    obtain ⟨q2, rfl⟩ := same_atom h2
+    simp only [Read.effect, toNat_repr, ty_tySx I depthMax hi h3 hni hw, bind, Except.bind, pure, Except.pure]
 
 theorem effects_ok : ∀ (es : List (Label × Effect)) {xs : List SExp}, es.mapM effectSx = some xs → OkL xs
   | [], _, h => by simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; exact .nil
@@ -1425,14 +1453,17 @@ theorem effects_ok : ∀ (es : List (Label × Effect)) {xs : List SExp}, es.mapM
     exact .cons (effectSx_ok hx) (effects_ok es hr)
 
 theorem effects_mapM : ∀ (es : List (Label × Effect)) {xs ys : List SExp}, es.mapM effectSx = some xs →
-    SameL xs ys → ys.mapM Read.effect = .ok es
-  | [], _, _, h, hs => by
+    SameL xs ys → (∀ x ∈ xs, need x ≤ depthMax) → es.all (fun e => e.2.produces.all Ty.wf) = true →
+    ys.mapM Read.effect = .ok es
+  | [], _, _, h, hs, _, _ => by
     simp only [List.mapM_nil, pure, Option.some.injEq] at h; subst h; cases sameL_nil hs; rfl
-  | e :: es, _, _, h, hs => by
+  | e :: es, _, _, h, hs, hn, hw => by
     simp only [List.mapM_cons, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
     obtain ⟨x, hx, xr, hr, rfl⟩ := h
     obtain ⟨y, ys, rfl, hy, hrest⟩ := sameL_cons hs
-    simp [List.mapM_cons, effect_read hx hy, effects_mapM es hr hrest]
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    simp [List.mapM_cons, effect_read hx hy (hn x (by simp)) hw.1,
+      effects_mapM es hr hrest (fun x hx => hn x (by simp [hx])) hw.2]
     rfl
 
 /-! ## Claims (LANG-93): each prints as `Read.claim` reads it -/
@@ -1601,7 +1632,9 @@ private theorem packageBase_reads {p : Package} {xs : List SExp} (hs : p.state.w
   · intro q i; simp [hex, unhex_hexChars]
 
 theorem readPackage_closedText {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
-    (hr : p.rels.all relWf = true) (hb : Canon p.body) (he : p.holes = []) (h : packageText p = some s) : Read.readPackage s = .ok p := by
+    (hr : p.rels.all relWf = true) (hb : Canon p.body) (he : p.holes = [])
+    (hpw : p.effects.all (fun e => e.2.produces.all Ty.wf) = true)
+    (h : packageText p = some s) : Read.readPackage s = .ok p := by
   unfold packageText at h
   generalize hE : optSection "effects" effectSx p.effects = mE at h
   generalize hC : optSection "claims" claimSx p.claims = mC at h
@@ -1668,7 +1701,11 @@ theorem readPackage_closedText {p : Package} {s : String} (hs : p.state.wf = tru
          obtain ⟨qe, ze, rfl, ge⟩ := same_list hye
          obtain ⟨we, ze, rfl, ke, te⟩ := sameL_cons ge
          obtain ⟨re, rfl⟩ := same_atom ke
-         have eE := effects_mapM p.effects hmE te
+         have eE := effects_mapM p.effects hmE te (fun x hx => by
+           have h1 : need x < need (list (atom "effects" :: xE)) := need_lt_list (List.mem_cons_of_mem _ hx)
+           have h2 : need (list (atom "effects" :: xE)) <
+               need (list (atom "package" :: (xs ++ [list (atom "effects" :: xE)]))) := need_lt_list (by simp)
+           omega) hpw
          have hp : { ({ p with holes := [], effects := [], claims := [] } : Package) with effects := p.effects } = p := by
            obtain ⟨⟩ := p; simp only at he hpc; subst he hpc; rfl
          simp only [List.cons_append, List.nil_append, Read.package, hbase, eE, bind, Except.bind, pure, Except.pure, hp])
@@ -1691,7 +1728,12 @@ theorem readPackage_closedText {p : Package} {s : String} (hs : p.state.wf = tru
          obtain ⟨qc, zc, rfl, gc⟩ := same_list hyc
          obtain ⟨wc, zc, rfl, kc, tc⟩ := sameL_cons gc
          obtain ⟨rc, rfl⟩ := same_atom kc
-         have eE := effects_mapM p.effects hmE te
+         have eE := effects_mapM p.effects hmE te (fun x hx => by
+           have h1 : need x < need (list (atom "effects" :: xE)) := need_lt_list (List.mem_cons_of_mem _ hx)
+           have h2 : need (list (atom "effects" :: xE)) <
+               need (list (atom "package" :: (xs ++ [list (atom "effects" :: xE)] ++ [list (atom "claims" :: xC)]))) :=
+             need_lt_list (by simp)
+           omega) hpw
          have eC := claims_mapM p.claims hmC tc
          have hp : { ({ p with holes := [], effects := [], claims := [] } : Package) with effects := p.effects, claims := p.claims } = p := by
            obtain ⟨⟩ := p; simp only at he; subst he; rfl
@@ -1699,7 +1741,9 @@ theorem readPackage_closedText {p : Package} {s : String} (hs : p.state.wf = tru
   · cases h
 
 theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) (hi : p.iface.wf = true)
-    (hr : p.rels.all relWf = true) (hb : Canon p.body) (h : package p = some s) : Read.readPackage s = .ok p := by
+    (hr : p.rels.all relWf = true) (hb : Canon p.body)
+    (hpw : p.effects.all (fun e => e.2.produces.all Ty.wf) = true)
+    (h : package p = some s) : Read.readPackage s = .ok p := by
   unfold package at h
   simp only [bind, Option.bind_eq_some_iff] at h
   obtain ⟨text, ht, h⟩ := h
@@ -1707,7 +1751,7 @@ theorem readPackage_package {p : Package} {s : String} (hs : p.state.wf = true) 
   · rename_i hempty
     have he : p.holes = [] := List.isEmpty_iff.mp hempty
     cases h
-    exact readPackage_closedText hs hi hr hb he ht
+    exact readPackage_closedText hs hi hr hb he hpw ht
   · unfold contextualText at h
     split at h
     · split at h
@@ -1831,6 +1875,39 @@ theorem checkFields_rels {p : Package} (h : p.checkFields = .ok ()) : p.rels.all
     · rename_i hr; exact checkRels_wf hr
   · cases h
 
+/-- The install check's grade clause makes every interface a method declares it produces a
+well-formed record (`badProduces`, LANG-103). -/
+theorem checkEffects_produces_wf {p : Package} {row : List (Label × Ty)} (h : checkEffects p row = .ok ()) :
+    p.effects.all (fun e => e.2.produces.all Ty.wf) = true := by
+  unfold checkEffects at h
+  repeat' split at h
+  all_goals first | cases h | skip
+  rename_i hnone
+  rw [List.all_eq_true]
+  intro e he
+  have hn := List.find?_eq_none.mp hnone e he
+  cases hp : e.2.produces with
+  | none => rfl
+  | some I =>
+    rw [hp] at hn
+    simp at hn
+    simp only [Option.all_some]
+    cases I <;> simp_all [producesOk]
+
+theorem checkFields_produces_wf {p : Package} (h : p.checkFields = .ok ()) :
+    p.effects.all (fun e => e.2.produces.all Ty.wf) = true := by
+  unfold Package.checkFields at h
+  split at h
+  · simp only [bind, Except.bind] at h
+    split at h
+    · cases h
+    · split at h
+      · cases h
+      · split at h
+        · cases h
+        · rename_i he; exact checkEffects_produces_wf he
+  · cases h
+
 /-- A package the install check accepts reads back from its text (over canonical import
 interfaces; `Package.checkShape` checks the package's own types). -/
 theorem readPackage_checked {ifaces : List Ty} {p : Package} {s : String} (hΔ : ∀ A ∈ ifaces, A.wf = true)
@@ -1848,7 +1925,8 @@ theorem readPackage_checked {ifaces : List Ty} {p : Package} {s : String} (hΔ :
       split at hbody
       · rename_i heq
         subst heq
-        exact readPackage_package hS hI (checkFields_rels hfields) (hasType_canon hΔ (by simp) (inferE_sound hT)) h
+        exact readPackage_package hS hI (checkFields_rels hfields) (hasType_canon hΔ (by simp) (inferE_sound hT))
+          (checkFields_produces_wf hfields) h
       · cases hbody
     · cases hbody
 

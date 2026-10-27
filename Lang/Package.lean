@@ -46,7 +46,19 @@ structure Effect where
   (`Lang.movesOf`); install refuses `effectExceeded` a value-moving arm under a grade of 0, the run
   refuses `effectExceeded` by name past it (`Lang.checkMoves`) -/
   moves : Nat := 0
-  deriving Inhabited, DecidableEq, Repr
+  /-- the INTERFACE every package one run installs or `createOf`s has (LANG-103): its `iface` equals
+  this type, syntactically. Install refuses `badProduces` a method that declares it without an
+  `install` or `createOf` arm, or at a type that is not a well-formed record; the run refuses by name
+  a call whose package has another interface (`Lang.checkProduces`). `none`: any package. -/
+  produces : Option Ty := none
+  deriving Inhabited, DecidableEq
+
+/-- A grade prints as a record of its fields, `produces` only when declared: a grade without one
+prints as it did before LANG-103 (the codec vectors pin decoded meanings by this text). -/
+instance : Repr Effect where
+  reprPrec e _ := match e.produces with
+    | none => Std.Format.text "{ moves := " ++ repr e.moves ++ " }"
+    | some I => Std.Format.text "{ moves := " ++ repr e.moves ++ ", produces := some " ++ reprArg I ++ " }"
 
 structure Package where
   /-- ids of installed packages, as the digest bytes the kernel uses -/
@@ -411,6 +423,9 @@ inductive CheckError
   | effectExceeded (label : Label)
   /-- an `effects` entry out of order or naming no method -/
   | badEffect (label : Label)
+  /-- a method declares the interface it produces (LANG-103) but has no `install` or `createOf` arm,
+  or the interface is not a well-formed record type -/
+  | badProduces (label : Label)
   /-- a claim names a law that is not one of the package's laws (LANG-93) -/
   | claimNotLaw (label : Label)
   /-- a claim's invariant is not an interface field of type `fn S bool` -/
@@ -434,7 +449,7 @@ def CheckError.name : CheckError → String
   | .tooManyRels => "tooManyRels" | .relKey _ => "relKey" | .badRel _ => "badRel"
   | .liveNotCellKeyed _ => "liveNotCellKeyed"
   | .peerNotNamed _ => "peerNotNamed" | .receiptRead _ => "receiptRead"
-  | .effectExceeded _ => "effectExceeded" | .badEffect _ => "badEffect"
+  | .effectExceeded _ => "effectExceeded" | .badEffect _ => "badEffect" | .badProduces _ => "badProduces"
   | .claimNotLaw _ => "claimNotLaw" | .claimNotInvariant _ => "claimNotInvariant"
   | .claimShape _ => "claimShape" | .claimUnproved _ => "claimUnproved"
 
@@ -443,7 +458,7 @@ def CheckError.name : CheckError → String
 def CheckError.wire : CheckError → String
   | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) | e@(.relKey ℓ) | e@(.badRel ℓ)
   | e@(.liveNotCellKeyed ℓ) | e@(.peerNotNamed ℓ) | e@(.receiptRead ℓ) | e@(.effectExceeded ℓ)
-  | e@(.badEffect ℓ) | e@(.claimNotLaw ℓ) | e@(.claimNotInvariant ℓ) | e@(.claimShape ℓ) | e@(.claimUnproved ℓ) =>
+  | e@(.badEffect ℓ) | e@(.badProduces ℓ) | e@(.claimNotLaw ℓ) | e@(.claimNotInvariant ℓ) | e@(.claimShape ℓ) | e@(.claimUnproved ℓ) =>
       s!"{e.name} {ℓ}"
   | e@(.illTyped why) => s!"{e.name} {why.text}"
   | e => e.name
@@ -465,6 +480,7 @@ def CheckError.text : CheckError → String
   | .receiptRead ℓ => s!"method {ℓ} reads a receipt column without a cell-keyed relation and a receipt argument"
   | .effectExceeded ℓ => s!"method {ℓ} may move value and declares no grade (effect (moves N))"
   | .badEffect ℓ => s!"effect {ℓ} names no method or is out of order"
+  | .badProduces ℓ => s!"method {ℓ} declares the interface it produces, but has no install or createOf arm or the interface is not a record"
   | .claimNotLaw ℓ => s!"claim names {ℓ}, which is not a law of the package"
   | .claimNotInvariant ℓ => s!"claim names {ℓ}, which is not an interface field of type fn S bool"
   | .claimShape ℓ => s!"claim on law {ℓ}: the body holds no literal invariant and law to walk"
@@ -728,14 +744,30 @@ def slotMoves : Ty → Bool
   | .sum [("none", .record []), ("some", .sum arms)] => arms.any fun a => movesArm a.1
   | _ => false
 
+/-- A call slot type (`optTy` of a call sum) has an arm that carries package bytes. -/
+def slotInstalls : Ty → Bool
+  | .sum [("none", .record []), ("some", .sum arms)] => arms.any fun a => a.1 == "install" || a.1 == "createOf"
+  | _ => false
+
+/-- A method type's call slots can install a package (`install` or `createOf`). -/
+def methodInstalls : Ty → Bool
+  | .fn _ (.fn _ (.fn _ (.fn _ (.record [("calls", .record row), _, _])))) => row.any fun e => slotInstalls e.2
+  | _ => false
+
+/-- An interface a method may declare it produces: a well-formed record type. -/
+def producesOk : Ty → Bool
+  | I@(.record _) => I.wf
+  | _ => false
+
 /-- A method type's call slots name a value-moving arm: the body, by its type, may move value. -/
 def methodMoves : Ty → Bool
   | .fn _ (.fn _ (.fn _ (.fn _ (.record [("calls", .record row), _, _])))) => row.any fun e => slotMoves e.2
   | _ => false
 
 /-- The `effects` table is ascending and names methods only (`badEffect`), and every method whose
-type may move value has a grade above 0 (`effectExceeded`): the one syntactic check of a grade. A
-grade a type does not use is allowed, as a slot left `none` is. -/
+type may move value has a grade above 0 (`effectExceeded`), and every method that declares the
+interface it produces can install by its type, at a well-formed record interface (`badProduces`): the
+syntactic checks of a grade. A grade a type does not use is allowed, as a slot left `none` is. -/
 def checkEffects (p : Package) (row : List (Label × Ty)) : Except CheckError Unit :=
   if !Row.ascending p.effects then .error (.badEffect ((p.effects.head?.map (·.1)).getD ""))
   else match p.effects.find? (fun e => !p.methods.contains e.1) with
@@ -745,7 +777,12 @@ def checkEffects (p : Package) (row : List (Label × Ty)) : Except CheckError Un
           | some t => methodMoves t && (p.effectOf ℓ).moves == 0
           | none => false) with
       | some ℓ => .error (.effectExceeded ℓ)
-      | none => .ok ()
+      | none =>
+        match p.effects.find? (fun e => match e.2.produces with
+            | some I => !(producesOk I && (Row.find? e.1 row).any methodInstalls)
+            | none => false) with
+        | some e => .error (.badProduces e.1)
+        | none => .ok ()
 /-! ## Claims (LANG-93, `Lang.Claim`): what the package says of itself, checked against its own term
 
 A claim is checked at install beside the type, by the shape of the term: for `keeps inv law`, the
@@ -935,19 +972,26 @@ def relsOf : List Tree → Option (List (Label × RelDecl))
     | some r, some rs => some (r :: rs)
     | _, _ => none
 
-/-- A method's grades (LANG-89): `node 0 ℓ [node 0 u64 moves]`. -/
-def effectTree (e : Label × Effect) : Tree := .node 0 e.1.toUTF8 [.node 0 (u64Bytes e.2.moves) []]
+/-- A method's grades (LANG-89): `node 0 ℓ [node 0 u64 moves]`, then the interface it produces as a
+type tree when it declares one (LANG-103); a grade without one has the tree it had before. -/
+def effectTree (e : Label × Effect) : Tree :=
+  .node 0 e.1.toUTF8 (.node 0 (u64Bytes e.2.moves) [] :: e.2.produces.toList.map tyTree)
 
 def effectOf : Tree → Option (Label × Effect)
   | .node 0 p [.node 0 m []] =>
     match labelOf p, u64Of m with
     | some ℓ, some moves => some (ℓ, { moves })
     | _, _ => none
+  | .node 0 p [.node 0 m [], t] =>
+    match labelOf p, u64Of m, tyOf t with
+    | some ℓ, some moves, some I => some (ℓ, { moves, produces := some I })
+    | _, _, _ => none
   | _ => none
 
 def effectsOf (ts : List Tree) : Option (List (Label × Effect)) := ts.mapM effectOf
 
-def effectWire (e : Label × Effect) : Bool := labelOk e.1 && decide (e.2.moves < 2 ^ 64)
+def effectWire (e : Label × Effect) : Bool :=
+  labelOk e.1 && decide (e.2.moves < 2 ^ 64) && e.2.produces.all tyWire
 
 /-- A relation has a tree that reads back to it. -/
 def relWire (r : Label × RelDecl) : Bool :=

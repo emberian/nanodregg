@@ -777,8 +777,14 @@ theorem tree_of_holeROMOf {t : Tree} {r : HoleROM} (h : holeROMOf t = some r) :
   · simp at h
 
 theorem effectOf_tree {e : Label × Effect} (h : effectWire e = true) : effectOf (effectTree e) = some e := by
+  obtain ⟨ℓ, moves, produces⟩ := e
   simp only [effectWire, Bool.and_eq_true, decide_eq_true_eq] at h
-  simp [effectOf, effectTree, labelOf_toUTF8 h.1, u64Of_bytes h.2]
+  obtain ⟨⟨hl, hm⟩, hp⟩ := h
+  cases produces with
+  | none => simp [effectOf, effectTree, labelOf_toUTF8 hl, u64Of_bytes hm]
+  | some I =>
+    simp only [Option.all_some] at hp
+    simp [effectOf, effectTree, labelOf_toUTF8 hl, u64Of_bytes hm, tyOf_tyTree I hp]
 
 theorem tree_of_effectOf {t : Tree} {e : Label × Effect} (h : effectOf t = some e) :
     effectTree e = t ∧ effectWire e = true := by
@@ -791,6 +797,15 @@ theorem tree_of_effectOf {t : Tree} {e : Label × Effect} (h : effectOf t = some
       obtain ⟨hp, hw⟩ := labelOf_some hl
       obtain ⟨hb, hn⟩ := u64Of_some hm
       simp [effectTree, effectWire, hp, hw, hb, hn]
+    · cases h
+  · rename_i p m t
+    split at h
+    · rename_i ℓ moves I hl hm ht
+      cases h
+      obtain ⟨hp, hw⟩ := labelOf_some hl
+      obtain ⟨hb, hn⟩ := u64Of_some hm
+      obtain ⟨htt, htw⟩ := tree_of_tyOf ht
+      simp [effectTree, effectWire, hp, hw, hb, hn, htt, htw]
     · cases h
   · cases h
 /-! ### Claims (LANG-93): one claim, one tree -/

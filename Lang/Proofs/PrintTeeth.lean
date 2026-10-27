@@ -61,7 +61,7 @@ theorem empty_package_prints : (package (Package.mk [] (.record []) (.record [])
 theorem empty_package_reads :
     Read.readPackage ((package (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [] [] [])).get empty_package_prints) =
       .ok (Package.mk [] (.record []) (.record []) (.record []) [] [] [] .empty [] [] []) :=
-  readPackage_package rfl rfl rfl (.record rfl .nil) (Option.some_get _).symm
+  readPackage_package rfl rfl rfl (.record rfl .nil) rfl (Option.some_get _).symm
 
 /-- A relation whose value type is not canonical (a record with its fields descending): the
 package prints, and reads back as a DIFFERENT package (the reader sorts the fields), so

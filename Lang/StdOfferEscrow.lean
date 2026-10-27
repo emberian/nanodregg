@@ -159,7 +159,7 @@ def escrowMovesMax : Nat := 2 ^ 32
 
 /-- The escrow's grades (LANG-89): each value-moving method may move up to `escrowMovesMax` per run. -/
 def escrowEffects : List (Label × Effect) :=
-  [("fuse", ⟨escrowMovesMax⟩), ("post", ⟨escrowMovesMax⟩), ("take", ⟨escrowMovesMax⟩), ("withdraw", ⟨escrowMovesMax⟩)]
+  [("fuse", { moves := escrowMovesMax }), ("post", { moves := escrowMovesMax }), ("take", { moves := escrowMovesMax }), ("withdraw", { moves := escrowMovesMax })]
 
 /-- The package, emitted directly, with `Std.offer`'s method names and indices. -/
 def offerEscrowPackageOf (theta roles : List Label) (offerLimit sessionLimit sessionPatience budget : Nat) : Package :=

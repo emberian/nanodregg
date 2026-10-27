@@ -418,7 +418,7 @@ structure RunSetup where
   term : Term
   env : Env
   preparation : Nat := 0
-  /-- the method's grades (LANG-89): `checkMoves` bounds the calls the run returns -/
+  /-- the method's grades (LANG-89): `checkEffect` bounds the calls the run returns -/
   effect : Effect := {}
 
 /-- The front half of every method run: the request's bounds, the closure loaded and re-checked
@@ -493,7 +493,7 @@ def runMeasuredWith
       match stateSlots S.row ds 0 with
       | some slots => do
         let calls ← callsOf digestOf S.calls c
-        checkMoves S.effect calls
+        checkEffect S.label S.effect calls
         let es ← editsOf S.rels r.self e
         guardEdits bytesOf digestOf S rv pkg r es
         checkLegs digestOf rv r.self calls es

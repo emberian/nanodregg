@@ -413,12 +413,16 @@ def packageBase (x : SExp) : P Package :=
            methods := ← labels ms, laws := ← labels ls, rels := ← rs.mapM rel, doc }
   | y => .error (.notPackage y.pos)
 
-/-- A method's grades (LANG-89): `(ℓ N)`; `N` is bounded at encode (`effectWire`), as a relation's
+/-- A method's grades (LANG-89): `(ℓ N)` or `(ℓ N I)` with the interface it produces (LANG-103); `N` is bounded at encode (`effectWire`), as a relation's
 `limit` is (`relWire`), not here. -/
 def effect : SExp → P (Label × Effect)
   | .list _ [.atom _ ℓ, .atom q n] =>
     match n.toNat? with
     | some m => .ok (ℓ, { moves := m })
+    | none => .error (.notOfType q)
+  | .list _ [.atom _ ℓ, .atom q n, i] =>
+    match n.toNat? with
+    | some m => do pure (ℓ, { moves := m, produces := some (← ty depthMax i) })
     | none => .error (.notOfType q)
   | y => .error (.notOfType y.pos)
 

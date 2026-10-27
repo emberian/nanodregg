@@ -57,6 +57,13 @@ kernel's `Program` (the deployed receipt check at the Sim's parameters, as `Lang
   history's witnesses).
 * GN21 the checked constructor: `Std.quorumGenerator` refuses `[B, B]` by name (`duplicateMember`: one
   member, two bits) and a threshold of 0 (`badThreshold`: an install with no approval at all).
+* GN22 (LANG-103: the interface a method produces) a constant generator of `boundedPackage {n : nat} n
+  500` whose `generate` declares it produces that package's interface: generate admitted, the package
+  born.
+* GN23 the same generator declaring an interface with one more method, `reset`: generate refused
+  `produces generate: lacks reset` (`runMeasured_produces`), nothing born.
+* GN24 a bounded package whose `set` (no install or createOf arm) declares it produces an interface:
+  install refused `badProduces set`.
 -/
 import Lang.Journey.Head
 import Lang.StdGen
@@ -310,6 +317,34 @@ def genRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
   let v43 := refusedAs (Std.quorumGenerator rty "n" [Sim.dc.bytes b.id, Sim.dc.bytes a.id] 0)
   r := note r s!"GN21 the quorum generator of [B, B] at 2: {v42}; of [B, A] at 0: {v43}"
     (v42 == "refused duplicateMember" && v43 == "refused badThreshold")
+  -- GN22 a generator that declares the interface it produces, and produces it (LANG-103)
+  let p500 := Std.boundedPackage rty "n" 500
+  let (eid500, bytes500) := pkgIdOf 500
+  let I := p500.iface
+  let producing (J : Ty) (doc : String) : Package :=
+    { Std.generatorOf bytes500 doc with effects := [("generate", { produces := some J })] }
+  let (r44, v44, g44?) := generator r "GN22" (producing I "installs the bound-500 package, of its own interface")
+  let some (gpkg44, G44) := g44? | return note r44 s!"GN22 {v44}" false
+  let (r45, v45, t45) := generate r44 gpkg44 G44
+  let born45 := (t45.map createdIds).getD []
+  r := note r45 s!"GN22 a generator declaring it produces the interface of boundedPackage n 500 ({v44}); generate: {v45}; the Turn bears that package: {born45 == [eid500]}"
+    (v45 == "admitted" && born45 == [eid500])
+  -- GN23 the declared interface has a method the output lacks
+  let I' := match I with
+    | .record row => Ty.record (Row.sort (("reset", (Row.find? "set" row).getD .nat) :: row))
+    | t => t
+  let (r46, v46, g46?) := generator r "GN23" (producing I' "claims to install a package with reset")
+  let some (gpkg46, G46) := g46? | return note r46 s!"GN23 {v46}" false
+  let (r47, v47, t47) := generate r46 gpkg46 G46
+  r := note r47 s!"GN23 the same generator declaring an interface with reset ({v46}); generate: {v47}; nothing born: {t47.isNone}"
+    (programRefused v47 "produces generate: lacks reset" && t47.isNone)
+  -- GN24 a method that cannot install declares what it produces
+  let notInstalling : Package := { Std.boundedPackage rty "n" 5 with effects := [("set", { produces := some I })] }
+  let (r48, v48, _) := match Wire.encodePackage notInstalling with
+    | none => (r, "no bytes", none)
+    | some nb => go prog r (Sim.signed r.st b b.key (Sim.S.pinsFor r.st.host [b.id]) (.install nb))
+  r := note r48 s!"GN24 a bounded package whose set declares it produces an interface: {v48}"
+    (programRefused v48 "badProduces set")
   return r
 
 /-- A fresh session for the GN rows. -/

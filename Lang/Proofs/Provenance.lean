@@ -1180,7 +1180,7 @@ private theorem runMeasured_past_extraction_of [DecidableEq D] {rc : Lang.Receip
       runMeasured bytesOf digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
-            checkMoves S.effect calls
+            checkEffect S.label S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits bytesOf digestOf S rv pkg r es
             checkLegs digestOf rv r.self calls es
@@ -1232,7 +1232,7 @@ private theorem runMeasuredLive_past_extraction_of [DecidableEq D] {rc : Lang.Re
       runMeasuredLive bytesOf digestOf rc look rv pkg state method args r (budget + S.preparation) =
         match stateSlots S.row ds 0 with
         | some slots => do
-            checkMoves S.effect calls
+            checkEffect S.label S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits bytesOf digestOf S rv pkg r es
             checkLegs digestOf rv r.self calls es
@@ -1306,7 +1306,7 @@ theorem runMeasured_past_extraction {rc : Lang.ReceiptCheck} {D : Type} [Decidab
       runMeasured X.env.bytes X.digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
-            checkMoves S.effect calls
+            checkEffect S.label S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
             checkLegs X.digestOf rv r.self calls es
@@ -1334,7 +1334,7 @@ theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} [De
       X.program.run look rv pkg state method args r (budget + S.preparation) =
         match stateSlots S.row ds 0 with
         | some slots => do
-            checkMoves S.effect calls
+            checkEffect S.label S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
             checkLegs X.digestOf rv r.self calls es
@@ -1349,7 +1349,7 @@ theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} [De
   | none => rfl
   | some slots =>
     simp only [bind, Except.bind]
-    cases checkMoves S.effect calls with
+    cases checkEffect S.label S.effect calls with
     | error _ => rfl
     | ok _ =>
       cases editsOf S.rels r.self e with
@@ -1371,7 +1371,7 @@ theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} [Decidab
       X.program.run look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
-            checkMoves S.effect calls
+            checkEffect S.label S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
             checkLegs X.digestOf rv r.self calls es
@@ -1384,7 +1384,7 @@ theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} [Decidab
   | none => rfl
   | some slots =>
     simp only [bind, Except.bind]
-    cases checkMoves S.effect calls with
+    cases checkEffect S.label S.effect calls with
     | error _ => rfl
     | ok _ =>
       cases editsOf S.rels r.self e with
@@ -1434,7 +1434,7 @@ theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {rv : RowVi
       runMeasured Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
-            checkMoves S.effect calls
+            checkEffect S.label S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits Kernel.Sim.dc.bytes Kernel.Sim.digestOf S rv pkg r es
             checkLegs Kernel.Sim.digestOf rv r.self calls es

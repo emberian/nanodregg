@@ -292,4 +292,50 @@ def checkMoves (e : Effect) (calls : List (Body D)) : Except (Refusal D) Unit :=
   if movesOf calls ≤ e.moves then .ok ()
   else .error (.program s!"effectExceeded moves {movesOf calls} past {e.moves}")
 
+/-! ## The interface a run produces (LANG-103) -/
+
+/-- Where interface `got` first differs from `want`, by the method or law it is about: a label of
+`want` that `got` lacks, holds at another type, or a label of `got` that `want` lacks. -/
+def ifaceGap (want got : Ty) : String :=
+  match want, got with
+  | .record w, .record g =>
+    match w.find? (fun e => Row.find? e.1 g != some e.2) with
+    | some e => if (Row.find? e.1 g).isSome then s!"type {e.1}" else s!"lacks {e.1}"
+    | none =>
+      match g.find? (fun e => (Row.find? e.1 w).isNone) with
+      | some e => s!"extra {e.1}"
+      | none => "shape"
+  | _, _ => "shape"
+
+/-- The package bytes a call carries, if it is an `install` or a `createOf`. -/
+def pkgBytesOf : Body D → Option ByteArray
+  | .install b => some b
+  | .createOf b _ _ => some b
+  | _ => none
+
+/-- Every package the calls install or `createOf` has the interface the grade declares, refused by
+name otherwise: `produces LABEL: lacks M` (or `type M`, `extra M`), the first method or law where the
+package's interface differs. Bytes that do not decode are left to the kernel's install check, which
+refuses them by its own name. -/
+def checkProduces (label : Label) (e : Effect) (calls : List (Body D)) : Except (Refusal D) Unit :=
+  match e.produces with
+  | none => .ok ()
+  | some I =>
+    match calls.find? (fun b => match pkgBytesOf b with
+        | some B => match Wire.decodePackage B with
+          | .ok p => p.iface != I
+          | .error _ => false
+        | none => false) with
+    | none => .ok ()
+    | some b =>
+      match (pkgBytesOf b).map Wire.decodePackage with
+      | some (.ok p) => .error (.program s!"produces {label}: {ifaceGap I p.iface}")
+      | _ => .error (.program s!"produces {label}")
+
+/-- A run's calls against the method's grades: the value they move (`checkMoves`) and the interface of
+every package they install (`checkProduces`). -/
+def checkEffect (label : Label) (e : Effect) (calls : List (Body D)) : Except (Refusal D) Unit := do
+  checkMoves e calls
+  checkProduces label e calls
+
 end Nanodregg.Lang
