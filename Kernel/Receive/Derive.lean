@@ -110,6 +110,25 @@ def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : 
   let ops := [Op.set slotKey key, Op.set slotNext (X.env.bytes next)]
   pure ⟨[], [(u.member, .write ops)], [], []⟩
 
+/-- The two slots a rotation of certifier `i` to `key`, committing `next`, writes (KERNEL-79). -/
+def rotationOps (X : Ctx D) (i : Nat) (key : ByteArray) (next : D) : List Op :=
+  [Op.set (certifierBase + i) key, Op.set (nextBase + i) (X.env.bytes next)]
+
+/-- `rotateCertifier index key next` (KERNEL-79): the call's member is the World's authority cell,
+read as one; it is signed by `key` (`u.key = key`; `checkSignature` has verified the signature under
+`u.key`), and `key` is certifier `index`'s committed successor (`Authority.preRotated`): else
+`notPreRotated index`. The effect writes certifier `index`'s key and its next commitment; nothing
+else of the authority moves. -/
+def rotateCertifier (X : Ctx D) (look : Pinned D) (c : Call D) (index : Nat) (key : ByteArray) (next : D) :
+    Except (Refusal D) (Draft D) := do
+  let u := c.unsigned
+  let cell ← readKind look u.member kindAuthority
+  let a ← match authorityOfCell cell with
+    | some a => .ok a
+    | none => .error (.malformedCell u.member slotCertifierCount)
+  req (decide (u.key = key) && a.preRotated X index key) (.notPreRotated index)
+  pure ⟨[], [(u.member, .write (rotationOps X index key next))], [], []⟩
+
 /-- `install pkg`: a ROM package cell, its id its content digest (KERNEL-3). -/
 def install (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (pkg : ByteArray) :
     Except (Refusal D) (Draft D) := do
@@ -409,6 +428,7 @@ def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : 
     Body D → Except (Refusal D) (Draft D × Walk D)
   | .enroll key next origin join via => stepped wk (enroll X look ⟨actor, wk.born, caller⟩ key next origin join via)
   | .rotate key next => stepped wk (rotate X look c key next)
+  | .rotateCertifier index key next => stepped wk (rotateCertifier X look c index key next)
   | .install pkg => stepped wk (install X look c ⟨actor, wk.born, caller⟩ pkg)
   | .create pkg laws state => stepped wk (create X look c ⟨actor, wk.born, caller⟩ pkg laws state)
   | .createOf pkg laws state => stepped wk (createOf X look c ⟨actor, wk.born, caller⟩ pkg laws state)
@@ -450,10 +470,12 @@ def deriveWithTicks (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) 
 def derive (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Draft D) :=
   (deriveWithTicks X look rv c).map (·.1)
 
-/-- A rotation is signed by the incoming key; every other call by the member's current key. -/
+/-- A rotation is signed by the incoming key (a member's, or a certifier's, KERNEL-79: its receiver
+checks the key); every other call by the member's current key. -/
 def keyRule (look : Pinned D) (u : Unsigned D) : Except (Refusal D) Unit :=
   match u.body with
   | .rotate _ _ => .ok ()
+  | .rotateCertifier _ _ _ => .ok ()
   | _ => checkKey look u
 
 /-- The signed call's Turn: its tree's Draft, sealed ONCE (KERNEL-28 (c)). -/

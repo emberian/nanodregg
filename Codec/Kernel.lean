@@ -239,7 +239,7 @@ def acctRef (dc : Stream D) : Stream (AcctRef D) :=
     (fun | ⟨0, a⟩ => some (.well a) | ⟨1, (o, a)⟩ => some (.of o a))
     (fun | .well a => ⟨0, a⟩ | .of o a => ⟨1, (o, a)⟩)
 
-abbrev BodyF (D : Type) : Fin 14 → Type
+abbrev BodyF (D : Type) : Fin 15 → Type
   | 0 => ByteArray × D × D × ByteArray × D
   | 1 => ByteArray × D
   | 2 => ByteArray
@@ -254,8 +254,9 @@ abbrev BodyF (D : Type) : Fin 14 → Type
   | 11 => AcctRef D × AcctRef D × Nat × Option D × Option ByteArray
   | 12 => D × AcctRef D × Nat × Option D
   | 13 => ByteArray × List D × Slots
+  | 14 => Nat × ByteArray × D
 
-def bodyWire (dc : Stream D) : (s : Fin 14) → Stream (BodyF D s)
+def bodyWire (dc : Stream D) : (s : Fin 15) → Stream (BodyF D s)
   | 0 => product (rawBytes callMax) (product dc (product dc (product (rawBytes callMax) dc)))
   | 1 => product (rawBytes callMax) dc
   | 2 => rawBytes callMax
@@ -271,9 +272,10 @@ def bodyWire (dc : Stream D) : (s : Fin 14) → Stream (BodyF D s)
   | 11 => product (acctRef dc) (product (acctRef dc) (product nat64 (product (option dc) (option (rawBytes callMax)))))
   | 12 => product dc (product (acctRef dc) (product nat64 (option dc)))
   | 13 => product (rawBytes callMax) (product (rawList callMax dc) slots)
+  | 14 => product nat64 (product (rawBytes callMax) dc)
 
 def body (dc : Stream D) : Stream (Body D) :=
-  refine "kernel/body" (choice 14 (bodyWire dc))
+  refine "kernel/body" (choice 15 (bodyWire dc))
     (fun
       | ⟨0, (k, n, o, j, v)⟩ => some (.enroll k n o j v)
       | ⟨1, (k, n)⟩ => some (.rotate k n)
@@ -288,7 +290,8 @@ def body (dc : Stream D) : Stream (Body D) :=
       | ⟨10, (a, o)⟩ => some (.account a o)
       | ⟨11, (s, d, n, v, o)⟩ => some (.transfer s d n v o)
       | ⟨12, (w, a, n, v)⟩ => some (.credit w a n v)
-      | ⟨13, (p, ls, s)⟩ => some (.createOf p ls s))
+      | ⟨13, (p, ls, s)⟩ => some (.createOf p ls s)
+      | ⟨14, (i, k, n)⟩ => some (.rotateCertifier i k n))
     (fun
       | .enroll k n o j v => ⟨0, (k, n, o, j, v)⟩
       | .rotate k n => ⟨1, (k, n)⟩
@@ -303,7 +306,8 @@ def body (dc : Stream D) : Stream (Body D) :=
       | .account a o => ⟨10, (a, o)⟩
       | .transfer s d n v o => ⟨11, (s, d, n, v, o)⟩
       | .credit w a n v => ⟨12, (w, a, n, v)⟩
-      | .createOf p ls s => ⟨13, (p, ls, s)⟩)
+      | .createOf p ls s => ⟨13, (p, ls, s)⟩
+      | .rotateCertifier i k n => ⟨14, (i, k, n)⟩)
 
 def unsigned (dc : Stream D) : Stream (Unsigned D) :=
   refine "kernel/unsigned"

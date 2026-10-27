@@ -173,7 +173,8 @@ def body (k : Nat) : G (Body Sim.D) := do
   | 10 => return .account (← dig) (← dig)
   | 11 => return .transfer (← acctRef (← below 2)) (← acctRef (← below 2)) (← nat64) (← opt dig) (← opt (bytes 4))
   | 12 => return .credit (← dig) (← acctRef (← below 2)) (← nat64) (← opt dig)
-  | _ => return .createOf (← bytes 4) (← list 2 dig) (← slots)
+  | 13 => return .createOf (← bytes 4) (← list 2 dig) (← slots)
+  | _ => return .rotateCertifier (← nat64) (← bytes 4) (← dig)
 def unsigned (k : Nat) : G (Unsigned Sim.D) := do
   return ⟨← dig, ← dig, ← bytes 4, ← nat64, ← nat64, ← list 2 (do return (← dig, ← dig)), ← nat64, ← body k,
     ← list 1 (do return (← rowSlot (← below 2), ← dig)), ← list 1 rangeRead⟩
@@ -817,7 +818,7 @@ def sites : List Site :=
     site "kernel/turn" (Codec.Kernel.turn Sim.dc) (each 2 fun _ => Vectors.turn) text,
     site "kernel/right" Codec.Kernel.right (each 6 Vectors.right) text,
     site "kernel/acct-ref" (Codec.Kernel.acctRef Sim.dc) (each 2 Vectors.acctRef) text,
-    site "kernel/body" (Codec.Kernel.body Sim.dc) (each 14 Vectors.body) text,
+    site "kernel/body" (Codec.Kernel.body Sim.dc) (each 15 Vectors.body) text,
     site "kernel/unsigned" (Codec.Kernel.unsigned Sim.dc) (each 2 fun k => Vectors.unsigned (k * 6)) text,
     site "kernel/call" (Codec.Kernel.call Sim.dc) (each 2 fun k => do return ⟨← Vectors.unsigned (k * 7), ← bytes 8⟩) text,
     ⟨"varint64", Tag.of "varint64" Stream.varint64, pure varint64Vecs, print Stream.varint64 text⟩,

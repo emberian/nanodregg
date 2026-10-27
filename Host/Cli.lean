@@ -15,6 +15,15 @@
     host follow STORE MEMBER_HEX GRANT_HEX         the follower loop on stdin/stdout (Host.Follow)
     host check STORE [--anchor STEPS:CHAIN_HEX]   open read-only, print one STATUS line, refuse a
                                                    Store behind or off the anchor (Host.Check)
+    host rotate-certifier STORE SEED NEXT_HEX      KERNEL-79: on a STOPPED writer's Store, rotate the
+                                                   certifier whose committed next-key digest the
+                                                   key of SEED (a `certify HEX` file, as
+                                                   `keybroker --certify-keygen` writes) opens, to that
+                                                   key, committing NEXT_HEX (the public key after it);
+                                                   the call is signed by SEED, admitted by the kernel's
+                                                   one receiver (`notPreRotated` otherwise), appended,
+                                                   and a base sealed after it; `serve --certify` then
+                                                   certifies that base under the new key
     host certified INPUT_HEX CERT                  the stranger's check (Protocol.Certified): the
                                                    head CERT certifies under the authority the
                                                    genesis input commits; no Store read
@@ -97,7 +106,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] [--certify SOCK] | host seal STORE [--retain N] [--certify SOCK] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host certified INPUT_HEX CERT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
+  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32 --certifier-next HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host rotate-certifier STORE SEED NEXT_HEX | host serve STORE [--retain N] [--certify SOCK] | host seal STORE [--retain N] [--certify SOCK] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host certified INPUT_HEX CERT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -128,7 +137,8 @@ def genesisLines (w₀ : World D) (nonce : ByteArray) (n : Nat) (auth : Receive.
   [s!"origin {w₀.origin.toHex}", s!"nonce {Protocol.Text.toHex nonce}"] ++
   (List.range n).map (fun i =>
     s!"founder {i} member {(Receive.founderId X w₀.origin i).toHex} grant {(Receive.founderGrantId X w₀.origin i).toHex}") ++
-  [s!"chain {w₀.chain.toHex}", s!"authority {auth.threshold} {auth.certifiers.length}"]
+  [s!"chain {w₀.chain.toHex}", s!"authority {auth.threshold} {auth.certifiers.length}"] ++
+  auth.next.zipIdx.map fun (d, i) => s!"certifier-next {i} {Protocol.Text.toHex d}"
 
 /-- The certifier keys from `--certifier HEX` options, in order: each exactly 32 bytes. The quorum
 itself is not judged here: `Receive.genesis` refuses `badThreshold`, `repeatedCertifier`, … by name. -/
@@ -149,12 +159,19 @@ def budgetFault (w : World D) : Option Status :=
   else if potentialMax < potential w then some .potentialPastBound
   else none
 
-def genesisVerb (store name : String) (nonceArg : Option String) (certifierArgs : List String)
+/-- The committed next-key digests (KERNEL-79) of the `--certifier-next HEX32` public keys, in order:
+each exactly 32 bytes; the genesis commits only their digests (`Receive.certifyNextDigest`, which
+only Lean computes). One per certifier, or `Receive.genesis` refuses `badNext`. -/
+def certifierNexts (args : List String) : Option (List ByteArray) :=
+  (certifiers args).map fun ks => ks.map fun k => X.env.bytes (Receive.certifyNextDigest X k)
+
+def genesisVerb (store name : String) (nonceArg : Option String) (certifierArgs nextArgs : List String)
     (thresholdArg : Option String) (fs : List String) : IO UInt32 := do
   let some fs := founders fs | refuse .usage "founders"
   let some cs := certifiers certifierArgs | refuse .usage "certifier"
+  let some ns := certifierNexts nextArgs | refuse .usage "certifierNext"
   let some t := (match thresholdArg with | none => some 0 | some v => v.toNat?) | refuse .usage "threshold"
-  let auth : Receive.Authority := ⟨cs, t⟩
+  let auth : Receive.Authority := ⟨cs, t, ns⟩
   let nonce ← match ← genesisNonce nonceArg with
     | .ok b => pure b
     | .error s => return ← refuse s "nonce"
@@ -393,7 +410,7 @@ def runResident (verb : String) (r₀ : Resident (World D))
 
 /-- `host serve STORE [--retain N] [--certify SOCK]`: with `--certify`, every base a seal installs is
 certified through keybroker's writer socket SOCK and `base.cert` replaced (`Host.Certify`, HOST-80), and
-a Store that holds no certificate yet has its newest base certified at the start (PROTOCOL-84). -/
+a Store whose certificate does not certify its newest base (none yet; the retired key's after a rotation) has it certified at the start, before the first frame (PROTOCOL-84, KERNEL-79). -/ 
 def serveVerb (store : String) (retain : Retain) (certify : Option String := none) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
   | .error f => refuseStore f
@@ -407,13 +424,16 @@ def serveVerb (store : String) (retain : Retain) (certify : Option String := non
       let ck := fileCheckpoint store keys c world recorder.mark originChain wr
       let ck ← match certify with
         | some sock => do
+          -- a Store whose certificate does not certify its newest base under that base's own authority
+          -- (none yet, after a genesis; the retired key's, after `host rotate-certifier`, KERNEL-79) has
+          -- that base certified now, INLINE, before the loop serves its first frame: queued, the start
+          -- certification raced the first page, which then went out without one and was refused
+          -- `uncertifiedPage absent` (PROTOCOL-84; MEASURED in launcher/tests/certify.rs under load)
+          let file ← IO.FS.readBinFile (basePath store)
+          if let .ok w := world.decode (worldBytesOf file wr.opening.sealed.bytes) then
+            if let .error _ := Protocol.Head.certifiesWorld X w (← readCert store) then
+              Certify.certifyBase store sock w
           let queue ← Certify.start store sock lifetimeFrames
-          -- a Store with no certificate yet (a fresh genesis): its newest base is certified now, not at
-          -- the next seal, so under an authority that certifies no honest page goes out without one
-          -- (followers refuse such a page `uncertifiedPage`, PROTOCOL-84)
-          if (← readCert store).isEmpty then
-            let file ← IO.FS.readBinFile (basePath store)
-            if let .ok w := world.decode (worldBytesOf file wr.opening.sealed.bytes) then queue w
           pure (Certify.certifying ck queue)
         | none => pure ck
       let code ← runResident "serve" wr.opening.resident fun port =>
@@ -494,6 +514,57 @@ def sealVerb (store : String) (retain : Retain) (certify : Option String := none
       refuse := fun s n => refuse s n
       report := fun s => IO.println s!"sealed steps={s.steps} chain={Protocol.Text.toHex s.chain} digest={Protocol.Text.toHex s.digest}" }
 
+/-- The seed of a `certify HEX` file (keybroker's slot line; `keybroker --certify-keygen OUT` writes
+one, the operator keeps it apart from KEYS until the rotation): exactly one line, 32 bytes. -/
+def certifySeed (text : String) : Option ByteArray :=
+  match (text.splitOn "\n").filter (· ≠ "") with
+  | [l] => match l.splitOn " " with
+    | ["certify", h] => match Protocol.Text.ofHex h with
+      | some b => if b.size = 32 then some b else none
+      | none => none
+    | _ => none
+  | _ => none
+
+/-- `host rotate-certifier STORE SEED NEXT_HEX` (KERNEL-79): the operator's rotation of the writer's
+certify key, on a STOPPED writer's Store (its lock: a live writer refuses it `locked`). SEED is the
+successor seed the genesis committed (a `certify HEX` file); the rotation call
+(`Protocol.Head.rotationCall`: member the authority cell, the slot the key's digest opens, signed by
+SEED, committing NEXT_HEX's digest) is judged by `Receive.submit` against the Store's World: a key
+no commitment opens is refused `notPreRotated` by name and nothing is written. An admitted rotation
+is appended as one record and a base sealed after it, so the newest base is the rotated World:
+`serve --certify` with the new seed in KEYS certifies it at start. Prints `rotated certifier=I
+key=HEX steps=S chain=C`. -/
+def rotateVerb (store seedPath nextHex : String) : IO UInt32 := do
+  let some nextPub := Protocol.Text.ofHex nextHex | refuse .usage "next"
+  if nextPub.size ≠ 32 then return ← refuse .usage "next"
+  let some seed := certifySeed (← IO.FS.readFile seedPath) | refuse .usage "seed"
+  let key := Codec.Ed25519.publicKey seed
+  match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
+  | .error f => refuseStore f
+  | .ok skey =>
+    let keys := Keys.ofKey skey shapes
+    match ← openWriter store keys c world recorder.mark originChain foldStep none with
+    | .error f => refuseStore f
+    | .ok wr =>
+      let r := wr.opening.resident
+      let w := r.world
+      let some a := Receive.authorityOf w | refuse .usage "noAuthority"
+      let i := Protocol.Head.rotationSlot X a key
+      let call := Protocol.Head.rotationCall X w Kernel.Bounds.windowMax i key
+        (Receive.certifyNextDigest X nextPub) (Codec.Ed25519.sign seed)
+      match Receive.submit X w call with
+      | .error v => refuse .usage v.name
+      | .ok (t, w') =>
+        let ck := fileCheckpoint store keys c world recorder.mark originChain wr (async := false)
+        match ← append recorder keys.segment ck c (fileStore wr) r w' #[(.turn t, World.roots X.env w')] with
+        | .error e => do IO.eprintln s!"refused {e.name}"; return exitCode e
+        | .ok r' =>
+          match ← sealNow ck recorder.mark r' with
+          | .error f => refuse f.status f.name
+          | .ok r'' =>
+            IO.println s!"rotated certifier={i} key={Protocol.Text.toHex key} steps={r''.world.steps} chain={r''.world.chain.toHex}"
+            return 0
+
 /-- `--retain N`: refused `usage` by the name `retainBelowFloor` under the floor of two files
 (`Host.retainFloor`), `usage retain` when N is not a number; nothing is opened before it parses. -/
 def withRetain (n : String) (k : Retain → IO UInt32) : IO UInt32 :=
@@ -502,13 +573,15 @@ def withRetain (n : String) (k : Retain → IO UInt32) : IO UInt32 :=
   | .error name => refuse .usage name
 
 /-- `host genesis`'s options, in any order before the founders: `--nonce HEX32` (KERNEL-24),
-`--certifier HEX32` (repeatable, in order) and `--threshold N` (KERNEL-69; neither given is
-`Authority.none`). -/
-def genesisOpts (store name : String) : List String → Option String → List String → Option String → IO UInt32
-  | "--nonce" :: n :: rest, _, cs, t => genesisOpts store name rest (some n) cs t
-  | "--certifier" :: k :: rest, n, cs, t => genesisOpts store name rest n (cs ++ [k]) t
-  | "--threshold" :: v :: rest, n, cs, _ => genesisOpts store name rest n cs (some v)
-  | fs, n, cs, t => genesisVerb store name n cs t fs
+`--certifier HEX32` and `--certifier-next HEX32` (repeatable, in order: each certifier's key and its
+successor's public key, KERNEL-79) and `--threshold N` (KERNEL-69; none given is `Authority.none`). -/
+def genesisOpts (store name : String) :
+    List String → Option String → List String → List String → Option String → IO UInt32
+  | "--nonce" :: n :: rest, _, cs, ns, t => genesisOpts store name rest (some n) cs ns t
+  | "--certifier" :: k :: rest, n, cs, ns, t => genesisOpts store name rest n (cs ++ [k]) ns t
+  | "--certifier-next" :: k :: rest, n, cs, ns, t => genesisOpts store name rest n cs (ns ++ [k]) t
+  | "--threshold" :: v :: rest, n, cs, ns, _ => genesisOpts store name rest n cs ns (some v)
+  | fs, n, cs, ns, t => genesisVerb store name n cs ns t fs
 
 /-- `host certified INPUT_HEX CERT`: the stranger's check (PROTOCOL-78, DESIGN-TRUST T3e). From a
 World's genesis input (`host genesis`'s `input` line) and a certificate file alone, the head the
@@ -525,7 +598,8 @@ def certifiedVerb (inputHex certPath : String) : IO UInt32 := do
     return 0
 
 def verb : List String → IO UInt32
-  | "genesis" :: store :: name :: rest => genesisOpts store name rest none [] none
+  | "genesis" :: store :: name :: rest => genesisOpts store name rest none [] [] none
+  | ["rotate-certifier", store, seed, next] => rotateVerb store seed next
   | ["serve", store] => serveVerb store none
   | ["serve", store, "--retain", n] => withRetain n (serveVerb store)
   | ["serve", store, "--certify", sock] => serveVerb store none (some sock)

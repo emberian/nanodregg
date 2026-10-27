@@ -109,7 +109,7 @@ The receive layer assigns kinds and reads slots (`Kernel/Receive/Call.lean`, "Ce
 | object | `kindObject` = 2 | `ram` | 0: package id (absent for a data object); 1: owner; 2–15: extra law ids (`lawBase` = 2); 16 on: state (`stateBase` = 16) | `create`, `createOf` |
 | grant | `kindGrant` = 3 | `appendOnly` | 0: target; 1: grantee; 2: issuer; 3: parent (absent at a root); 16: `observe`; 17: `mutate`; 1024 + i: enrolment ledger; 2048 + i: transfer ledger; 2560 + i: credit ledger; 4096 + j: `invoke j` | `grant`, genesis |
 | member | `kindMember` = 4 | `ram` | 0: current key (`slotKey`); 1: digest of the next key (`slotNext`); 2: sponsor (`slotSponsor`; absent for a founder) | `enroll`, genesis |
-| authority | `kindAuthority` = 5 | `rom` | 0: threshold; 1: certifier count; 2 + i: certifier `i`'s key | genesis only |
+| authority | `kindAuthority` = 5 | `ram` | 0: threshold; 1: certifier count; 2 + i: certifier `i`'s key (`certifierBase` = 2); 513 + i: certifier `i`'s committed next-key digest (`nextBase` = 513) | genesis only; written only by `rotateCertifier` (KERNEL-79) |
 | account | `kindAccount` = 6 | `value` | 1: owner; 8: denomination; 9: balance; 10: floor | `issue`, `account` |
 
 A *data object* has no package slot; a *programmed object* has one.
@@ -131,7 +131,7 @@ No id is chosen by a writer: a follower re-derives every Turn from its call (sec
 | account id | `H("nanodregg/kernel/account/v1", bytes(owner) · bytes(asset))` | `accountId` |
 | the World as a grant target | `H("nanodregg/kernel/world/v1", ε)`; no cell is born there | `worldId` |
 | founder `i`, its root grant | `H("nanodregg/kernel/founder/v2", bytes(origin) · u32le(i))`, `H("nanodregg/kernel/founder-grant/v2", …)` | `founderId`, `founderGrantId` |
-| the authority cell | `romIdOf (authorityCell a)` | `authorityId` |
+| the authority cell | `H("nanodregg/kernel/authority/v1", ∅)`, one per World (KERNEL-79) | `authorityId` |
 | a `once` nullifier | `H("nanodregg/kernel/once/v1", bytes(src) · key)` | `onceNullifier` |
 
 The index `i` of a birth counts the fresh births before it in the call's whole tree (`Walk.born`, `bornAt`).
@@ -276,7 +276,7 @@ The signature is over `callMessage u = "nanodregg/kernel/call-signature" · unsi
 ### 2.2 Bodies
 
 ```
-body β ::= enroll key next origin join via | rotate key next | install p
+body β ::= enroll key next origin join via | rotate key next | rotateCertifier i key next | install p
          | create pkg? laws state | createOf p laws state
          | write o edits via? | law o laws via? | invoke o j args budget via?
          | grant target grantee rights parent? | retire id
@@ -290,6 +290,7 @@ right    ::= observe | mutate | invoke j | enroll n | transfer n | credit n
 |---|---|---|
 | `enroll key next origin join via` | sponsor a new member with `key`, precommitting `next`; `join` is the key's consent to join `origin` through this sponsor; `via` is a World grant carrying `enroll` | no |
 | `rotate key next` | move the signer's member to the precommitted `key` and precommit `next`; signed by `key` | no |
+| `rotateCertifier i key next` | move certifier `i` of the World's authority to its committed successor `key` and commit `next`; the call's member is the authority cell; signed by `key` (KERNEL-79) | no |
 | `install p` | bear a ROM package cell holding the bytes `p` | yes (KERNEL-75) |
 | `create pkg laws state` | bear an object owned by the actor, programmed by `pkg` or a data object | no |
 | `createOf p laws state` | install `p` if the signer's view holds no package there, then bear an object of it owned by the signer (KERNEL-77) | yes |
@@ -411,6 +412,19 @@ L; a ⊢ rotate key next ⇓ ⟨[], [(u.member, write [set 0 key, set 1 bytes(ne
 
 The call is signed by the new key, and the new key's digest is the one the member precommitted; otherwise `notPrecommitted`.
 The write installs the key and the next precommitment.
+
+#### rotateCertifier
+
+```
+readKind L u.member kindAuthority = κ     authorityOfCell κ = A     u.key = key
+i < |A.certifiers|     A.next[i] = bytes(H("nanodregg/kernel/certify-next/v1", key))     key ∉ A.certifiers
+──────────────────────────────────────────────────────────────────  D-RotateCertifier    Receive.rotateCertifier
+L; a ⊢ rotateCertifier i key next ⇓ ⟨[], [(u.member, write [set (2 + i) key, set (513 + i) bytes(next)])], [], []⟩
+```
+
+The call names the World's authority cell as its member and is signed by the successor key; any premise failing is `notPreRotated i` (KERNEL-79).
+The holder of the current certifier key cannot rotate it.
+No other receiver writes the authority cell (`Kernel/Proofs/InvokeTree.lean` `effect_at_authority`).
 
 #### install
 

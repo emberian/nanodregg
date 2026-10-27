@@ -46,6 +46,7 @@ the precommitted next key (`rotate`'s own check: KERNEL-47 amendment 7). -/
 def authKey (X : Ctx D) (look : Pinned D) (c : Call D) : Except (Refusal D) Unit :=
   match c.unsigned.body with
   | .rotate key next => (rotate X look c key next).map fun _ => ()
+  | .rotateCertifier index key next => (rotateCertifier X look c index key next).map fun _ => ()
   | _ => checkKey look c.unsigned
 
 /-- The signature check, or nothing when it is already known to pass (`verified`): the verify is
@@ -100,7 +101,7 @@ def refusalNames : List String :=
    "duplicateEffect", "sameAccount", "zeroAmount", "assetMismatch", "overflow", "notWell",
    "notCallable", "callTooDeep", "revisited", "tooManyCalls", "overTicks", "rowUnpinned", "rangeUnpinned",
    "rangeTooLong", "rowParent", "duplicateRow",
-   "cancelled", "cancelForged"]
+   "cancelled", "cancelForged", "notPreRotated"]
 
 /-- The wire names of the kernel's rejections, in constructor order (checked against `Reject.name`). -/
 def rejectNames : List String :=

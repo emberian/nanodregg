@@ -314,7 +314,7 @@ theorem bodyOf_callData (hdig : ∀ x, digestOf (bytesOf x) = some x) {b : Body 
         obtain ⟨row, fs, rfl, rfl, hfs⟩ := stateData_some hsd
         simp [bodyOf, stateBytes, stateSlots_of_stateFields hfs, bind, Except.bind, pure, Except.pure]
     · cases h
-  | enroll | rotate | create | write | law | retire | issue => simp [callData] at h
+  | enroll | rotate | rotateCertifier | create | write | law | retire | issue => simp [callData] at h
 
 /-- A kind an object may not exercise has no call data. -/
 theorem callData_not_callable {b : Body D} (h : b.callable = false) : callData bytesOf A T b = none := by
@@ -502,7 +502,7 @@ theorem callData_conforms (hb : ∀ x, (bytesOf x).size ≤ Bounds.digestBytesMa
       simp only [callFits, decide_eq_true_eq] at hf
       cases A <;> exact .inj rfl (.record (.cons (.bytes hf) (.cons (.record (stateFields_conforms hfs)) .nil)))
     · cases h
-  | enroll | rotate | create | write | law | retire | issue => simp [callData] at h
+  | enroll | rotate | rotateCertifier | create | write | law | retire | issue => simp [callData] at h
 
 end
 

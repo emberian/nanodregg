@@ -84,8 +84,9 @@ def certificate (sock : String) (w : World D) : Nat → IO (Except Miss ByteArra
     | .ok (.refused why) => return .error (.answer why)
     | .ok (.signed key sig) =>
       let some auth := authorityOf w | return .error .notCertifier
-      let some i := auth.certifiers.idxOf? key | return .error .notCertifier
-      let some cert := certificateBytes bytes [(i, sig)] | return .error .unencodable
+      -- the slot the key holds (KERNEL-79): a listed certifier's, or a committed successor's
+      let some i := Protocol.Head.slotOf X auth key | return .error .notCertifier
+      let some cert := certificateBytes bytes [(i, key, sig)] | return .error .unencodable
       match certifiesWorld X w cert with
       | .error why => return .error (.selfCheck why)
       | .ok () => return .ok cert

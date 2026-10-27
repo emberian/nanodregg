@@ -53,7 +53,13 @@
 //! `signed` with the public key. The seed signs nothing else: no path signs raw bytes with it, and
 //! the domain is pairwise disjoint from every other a key signs under (`Protocol.Proofs.Domains`).
 //! `keybroker --certify-pub KEYS` prints the certify public key (`certify HEX`), for `host genesis
-//! --certifier HEX --threshold 1`.
+//! --certifier HEX --threshold 1`. `keybroker --certify-keygen OUT` makes the successor seed
+//! (KERNEL-79, HOSTING-61): fresh from the OS's randomness, written to OUT (created new, 0600) and
+//! never read by keybroker; it prints the successor's public key (`certify-next HEX`) for `host
+//! genesis --certifier-next HEX` (the genesis commits only its digest). OUT is the operator's to keep
+//! apart from KEYS (offline media, another account). At the rotation the operator signs it with that
+//! seed (`host rotate-certifier STORE OUT NEXT`, NEXT the public key of a fresh `--certify-keygen`),
+//! then makes OUT's line the `certify` line of KEYS and restarts keybroker and `host serve --certify`.
 //!
 //! THE OPERATOR'S DAILY ASK CAP (HOSTING-62). KEYS may also hold the line `asks N` (N ≥ 1, decimal):
 //! at most N asks a day are sent upstream, whatever the World's allowances say. The count lives in
@@ -165,6 +171,20 @@ impl End {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if let [flag, out] = args.as_slice()
+        && flag == "--certify-keygen"
+    {
+        return match certify_keygen(Path::new(out)) {
+            End::Printed => ExitCode::SUCCESS,
+            end => {
+                nanodregg_launcher::say("keybroker", &end.describe());
+                ExitCode::from(match end {
+                    End::File(_, code) => code,
+                    _ => keybroker_exit::USAGE,
+                })
+            }
+        };
+    }
     if let [flag, keys] = args.as_slice()
         && flag == "--certify-pub"
     {
@@ -424,6 +444,43 @@ fn certify_pub(keys_path: &Path) -> End {
         return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
     };
     println!("certify {}", hex(cur.public_key().as_ref()));
+    End::Printed
+}
+
+/// `keybroker --certify-keygen OUT` (KERNEL-79, HOSTING-61): a fresh certify seed from the OS's
+/// randomness, never derived from another, written to OUT as one `certify HEX` line (created new,
+/// 0600, synced; an existing OUT is refused `keygenExists` and left as it was), and its public key
+/// printed `certify-next HEX`. keybroker never reads OUT: the successor secret is outside the running
+/// key file, so a thief of KEYS cannot open the committed digest.
+fn certify_keygen(out: &Path) -> End {
+    use ring::rand::SecureRandom as _;
+    use ring::signature::KeyPair as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut seed = Zeroizing::new([0u8; 32]);
+    if ring::rand::SystemRandom::new().fill(seed.as_mut()).is_err() {
+        return End::File("keygenEntropy", keybroker_exit::USAGE);
+    }
+    let Ok(pair) = ring::signature::Ed25519KeyPair::from_seed_unchecked(seed.as_ref()) else {
+        return End::File("keygenEntropy", keybroker_exit::USAGE);
+    };
+    let line = Zeroizing::new(format!("certify {}\n", hex(seed.as_ref())));
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(out)
+    {
+        Ok(f) => f,
+        Err(_) => return End::File("keygenExists", keybroker_exit::USAGE),
+    };
+    if file
+        .write_all(line.as_bytes())
+        .and_then(|()| file.sync_all())
+        .is_err()
+    {
+        return End::File("keygenWrite", keybroker_exit::USAGE);
+    }
+    println!("certify-next {}", hex(pair.public_key().as_ref()));
     End::Printed
 }
 

@@ -87,6 +87,14 @@ inductive Authorized (X : Ctx D) (w : World D) (c : Call D) (id : D) (cell : Cel
       c.unsigned.key = key → slotDigest X id cell slotNext = .ok (nextKeyDigest X key) →
       X.verify key (X.callMessage c.unsigned) c.signature = true →
       Authorized X w c id cell after
+  /-- KERNEL-79: certifier `i` of the World's authority moved to `key`, the successor its digest
+  committed, by a call naming the authority cell and signed by `key`; the cell left is the rotation's
+  two writes -/
+  | certifier {i : Nat} {key : ByteArray} {next : D} {a : Authority} :
+      cell.kind = kindAuthority → c.unsigned.body = .rotateCertifier i key next → id = c.unsigned.member →
+      c.unsigned.key = key → authorityOfCell cell = some a → a.preRotated X i key = true →
+      X.verify key (X.callMessage c.unsigned) c.signature = true →
+      Authorized X w c id cell (some { cell with slots := applyOps cell.slots (rotationOps X i key next) })
   | grantRetired {n : Nat} {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} :
       cell.kind = kindGrant → Dispatched X w c n wk actor caller b →
       slotDigest X id cell grantIssuer = .ok actor → Authorized X w c id cell none
@@ -162,7 +170,7 @@ theorem step_authorized [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' :
   simp only at heid hxa
   subst heid
   rcases hnode with ⟨cl, hko⟩ | ⟨key, next, m, hb, hm, hkm, hkey, hslot⟩ | ⟨cl, hkg, hret | ⟨hsp, hh⟩⟩ |
-      ⟨cl, hka, hmove⟩
+      ⟨cl, hka, hmove⟩ | ⟨i, key, next, cl, au, hb, hm, hka, hdec, hkey, hpre, hact⟩
   · exact absurd (readKind_live hko hl).2 hk
   · obtain ⟨rfl, hkind⟩ := readKind_live hkm hl
     have hb' : c.unsigned.body = .rotate key next := by
@@ -193,6 +201,20 @@ theorem step_authorized [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' :
       rw [hxc] at hnone
       rw [hnone]
       exact .accountRetired hkind hd hown
+  · obtain ⟨rfl, hkind⟩ := readKind_live hka hl
+    have hb' : c.unsigned.body = .rotateCertifier i key next := by
+      rcases hroot with ⟨hb0, -⟩ | hcall
+      · exact hb0.symm.trans hb
+      · rw [hb] at hcall; simp [Body.callable] at hcall
+    obtain ⟨-, hw⟩ := receive_ok_with hc
+    obtain ⟨hv, -⟩ := receiveWith_sealed hw
+    rw [hkey] at hv
+    obtain ⟨cell1, post, hc1, hp, hl'⟩ := admit_written ha hx (hxa.trans hact)
+    rw [hxc] at hc1 hl'
+    rw [hl] at hc1
+    cases hc1
+    rw [hl', postWrite_eq hp]
+    exact .certifier hkind hb' hm hkey hdec hpre hv
 
 /-- **B1 of every system whose kernel is the kernel**: each step of the audited log is a refusal
 (which keeps every cell, `refuse_live`) or the kernel's derived and admitted Turn
@@ -352,6 +374,7 @@ theorem floor_integrity_authority (d : ByteArray → ByteArray) :
               · rw [hb] at h'; cases h'
               · rw [hb] at h'; cases h'
           | member hk' => exact absurd (hk.symm.trans hk') (by decide)
+          | certifier hk' => exact absurd (hk.symm.trans hk') (by decide)
           | grantRetired hk' => exact absurd (hk.symm.trans hk') (by decide)
           | grantSpent hk' => exact absurd (hk.symm.trans hk') (by decide)
           | account hk' => exact absurd (hk.symm.trans hk') (by decide)

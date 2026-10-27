@@ -526,11 +526,12 @@ needs only `threshold` of them, so every authority of at most this threshold cer
 def pageCertifiersMax : Nat := 16
 /-- The widest certificate a `log` page carries (`Protocol.Head.certificateLayout` at the deployed
 widths): the certified bytes (origin, roots and chain behind their lengths, two `u64`s behind theirs)
-behind a length, then `pageCertifiersMax` signer indices (`u64`) and Ed25519 signatures, each list
-behind its count. A wider one is not served on pages (the `read` reply still carries it). -/
+behind a length, then `pageCertifiersMax` signer indices (`u64`), Ed25519 public keys (KERNEL-79)
+and Ed25519 signatures, each list behind its count. A wider one is not served on pages (the `read`
+reply still carries it). -/
 def certificateBytesMax : Nat :=
   (4 + (3 * (4 + Host.digestBytes) + 2 * (4 + 8))) + (4 + pageCertifiersMax * (4 + 8)) +
-    (4 + pageCertifiersMax * (4 + custodySignatureBytes))
+    (4 + pageCertifiersMax * (4 + custodyKeyBytes)) + (4 + pageCertifiersMax * (4 + custodySignatureBytes))
 /-- What a `log` reply spends beside its events' bytes: the status byte, the events' `u32` count,
 the four `u64` positions behind their lengths, the chain and base digest behind theirs, and room for
 the widest certificate behind its length (`logReplyLayout`). A `read` reply spends less (`readReplyLayout`: two `u64`s and two digests). -/

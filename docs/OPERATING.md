@@ -4,7 +4,8 @@ The [RUNBOOK](../deploy/RUNBOOK.md) contains installation/recovery detail. [Host
 
 | Operation | Form and responsibility |
 |---|---|
-| Genesis | host genesis STORE NAME [--nonce HEX32] [--certifier HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... checks founders, authority and budget before creation. Founders independently check the inputs. |
+| Genesis | host genesis STORE NAME [--nonce HEX32] [--certifier HEX32 --certifier-next HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... checks founders, authority and budget before creation. `--certifier-next` is the public key `keybroker --certify-keygen OUT` printed; keep OUT away from KEYS. Founders independently check the inputs. |
+| Certify-key rotation | stop `host serve`; `keybroker --certify-keygen NEXT2`; `host rotate-certifier STORE OUT NEXT2_PUB` (refused `notPreRotated` unless OUT's key is the committed successor); put OUT's `certify` line in KEYS; start keybroker and `host serve --certify`, which certifies the rotated base at start (HOSTING-61). |
 | Writer | host serve STORE [--retain N] serves framed requests. The key-file handle holds the writer lock. Default retention keeps history; an explicit count must meet the floor. |
 | Follower | host follow STORE MEMBER_HEX GRANT_HEX owns a separate writable Store and executes member commands. |
 | Join | host join STORE INVITE_HEX KEY_HEX [IN] authenticates the invitation under the trusted sponsor key. IN is for a carried invitation. |

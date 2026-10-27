@@ -126,6 +126,11 @@ def accountByAsset (X : Ctx D) : Ctx D :=
   { X with env := { X.env with hash := fun dom b =>
       if dom = domAccount then X.env.hash dom (b.extract (b.size / 2) b.size) else X.env.hash dom b } }
 
+/-- The certify next-key digest of every key is the digest of none (the plant `nextIgnoresKey`). -/
+def nextIgnoresKey (X : Ctx D) : Ctx D :=
+  { X with env := { X.env with hash := fun dom b =>
+      if dom = domCertifyNext then X.env.hash dom ByteArray.empty else X.env.hash dom b } }
+
 /-- The run's system under the parameters `R`, mutated by a plant. -/
 def sys (R : Rows.Params D) : Option Mutation → Sys D
   | none => { writer := { R, X := R.ctx }, follow := R.ctx }
@@ -150,6 +155,9 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .writerForgetsSpent => { writer := { R, X := R.ctx, forgetSpent := true }, follow := R.ctx }
   | some .importTrustsFile => { writer := { R, X := R.ctx }, follow := R.ctx, importTrustsFile := true }
   | some .admitsRecorded => { writer := { R, X := R.ctx, admitsRecorded := true }, follow := R.ctx }
+  | some .retiredCertifier => { writer := { R, X := R.ctx, retiredCertifier := true }, follow := R.ctx }
+  | some .nextIgnoresKey =>
+      { writer := { R := { R with ctx := nextIgnoresKey R.ctx }, X := nextIgnoresKey R.ctx }, follow := nextIgnoresKey R.ctx }
   | some .settleDecline => { writer := { R, X := R.ctx }, follow := R.ctx, settleDecline := true }
   | some .trustFirstUse => { writer := { R, X := R.ctx }, follow := R.ctx, trustFirstUse := true }
   | some .oneMember => { writer := { R, X := R.ctx }, follow := R.ctx, oneMember := true }
@@ -1473,6 +1481,28 @@ def runAct (l : Line) : M D (Expect × String) := do
       match ← subst argv with
       | .error e => pure (.refused e, "")
       | .ok av => forged l.actor av
+  | .rotateCertifier byNext => do
+      -- the operator's rotation (KERNEL-79): planned on the actor's follow World, signed by the
+      -- successor secret or by one no commitment opens
+      let st ← get
+      let X := st.sys.writer.X
+      let R := st.sys.writer.R
+      let a ← actor l.actor
+      let w := a.follow.world
+      let secret := if byNext then Writer.certifierNextSecret else Writer.certifierThirdSecret
+      let key := R.pub secret
+      let i := match authorityOf w with
+        | some au => Head.rotationSlot X au key
+        | none => 0
+      let call := X.callBytes (Head.rotationCall X w a.self.window i key
+        (certifyNextDigest X (R.pub Writer.certifierThirdSecret)) (R.sign secret))
+      sawCall l.actor call
+      match ← ask .submit call with
+      | none => pure (.refused "writerStopped", "")
+      | some res =>
+          if classify res = .committed then
+            modify fun st => { st with committed := st.committed.push call }
+          pure (statusOutcome res, "")
   | .carry rightDigest => do
       let st ← get
       match ← st.host.stop with

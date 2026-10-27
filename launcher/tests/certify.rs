@@ -18,6 +18,15 @@
 //!   writer has moved past it), signs the same head again (byte-identical signature) and still
 //!   refuses another head at that step `regressed`: no restart resets what the key signed.
 //!
+//! - ROTATION (KERNEL-79, HOSTING-61): the genesis commits the digest of a successor seed that
+//!   `keybroker --certify-keygen` wrote OUTSIDE KEYS. On the stopped writer's Store, `host
+//!   rotate-certifier` with a seed no commitment opens is refused `notPreRotated` by name and writes
+//!   nothing; with the committed successor it is admitted and a base sealed after it. KEYS takes the
+//!   successor's line; `host serve --certify` certifies the rotated base at start (the old
+//!   certificate does not certify it); the stranger with the genesis input alone takes the new
+//!   certificate (the successor's key opens the committed digest) and still takes the old one for
+//!   the head it signed; the founder writes and catches up past the rotation.
+//!
 //! CONTROL: the joiner's adoption of the true certificate succeeds (so the forged refusal is the
 //! signature check, not a broken path), and the true head is granted after every refusal above.
 //! The Lean exes and the client's `nd` / `nd-supervise` come from `nanodregg_devtools`.
@@ -165,6 +174,35 @@ fn with_other_chain(certified: &[u8]) -> Vec<u8> {
     b
 }
 
+/// `keybroker --certify-keygen OUT`: the public key it printed (`certify-next HEX`).
+fn keygen(out: &Path) -> String {
+    let o = Command::new(env!("CARGO_BIN_EXE_keybroker"))
+        .arg("--certify-keygen")
+        .arg(out)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "--certify-keygen: {}", err(&o));
+    line(&text(&o), "certify-next ").to_owned()
+}
+
+/// `host rotate-certifier STORE SEED NEXT` once the stopped writer has let go of the Store's lock.
+fn rotate(store: &Path, seed: &Path, next: &str) -> Output {
+    for _ in 0..200 {
+        let o = Command::new(lean_bin("host"))
+            .arg("rotate-certifier")
+            .arg(store)
+            .arg(seed)
+            .arg(next)
+            .output()
+            .unwrap();
+        if !err(&o).contains("locked") {
+            return o;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("plant: neverUnlocked: {}", store.display())
+}
+
 /// `host seal STORE --certify SOCK` once the stopped writer has let go of the Store's lock.
 fn seal_certify(store: &Path, sock: &Path) -> (String, String) {
     for _ in 0..200 {
@@ -217,6 +255,24 @@ fn the_certify_key_signs_only_heads_of_the_deciders_fold() {
     assert!(o.status.success(), "--certify-pub: {}", err(&o));
     let pubs = text(&o);
     let certifier = line(&pubs, "certify ").to_owned();
+    // The successor seed: written outside KEYS, its public key's digest committed at genesis.
+    let next_seed = d.join("certify-next.seed");
+    let next_pub = keygen(&next_seed);
+    assert_eq!(
+        fs::metadata(&next_seed).unwrap().permissions().mode() & 0o777,
+        0o600,
+        "the successor seed is the operator's alone"
+    );
+    let o = Command::new(env!("CARGO_BIN_EXE_keybroker"))
+        .arg("--certify-keygen")
+        .arg(&next_seed)
+        .output()
+        .unwrap();
+    assert!(
+        !o.status.success() && err(&o).contains("keygenExists"),
+        "keygen never overwrites a seed: {}",
+        err(&o)
+    );
 
     // A World whose authority is the certify key, its writer and the founder's follower.
     let root = nanodregg_devtools::scratch(&format!("kbz{}", std::process::id()));
@@ -236,7 +292,16 @@ fn the_certify_key_signs_only_heads_of_the_deciders_fold() {
             c.args(["--nonce", n]);
         }
         let o = c
-            .args(["--certifier", &certifier, "--threshold", "1", &key, &nextk])
+            .args([
+                "--certifier",
+                &certifier,
+                "--certifier-next",
+                &next_pub,
+                "--threshold",
+                "1",
+                &key,
+                &nextk,
+            ])
             .output()
             .unwrap();
         assert!(o.status.success(), "genesis: {}", err(&o));
@@ -456,6 +521,57 @@ fn the_certify_key_signs_only_heads_of_the_deciders_fold() {
     let certified2 = certified_of(&cert2);
     assert!(steps_of(&certified2) > s, "the next base is past the first");
     assert_eq!(fs::read(d.join("keys.certified")).unwrap(), certified2);
+
+    // ROTATION (KERNEL-79): the writer and keybroker are stopped; the operator rotates.
+    drop(kb);
+    let after = d.join("certify-after.seed");
+    let after_pub = keygen(&after);
+    let o = rotate(&w, &after, &after_pub);
+    assert_eq!(
+        err(&o),
+        "refused notPreRotated\n",
+        "a seed the genesis did not commit"
+    );
+    let o = rotate(&w, &next_seed, &after_pub);
+    assert!(o.status.success(), "rotate-certifier: {}", err(&o));
+    assert!(
+        text(&o).starts_with(&format!("rotated certifier=0 key={next_pub} ")),
+        "{}",
+        text(&o)
+    );
+    let next_line = fs::read_to_string(&next_seed).unwrap();
+    fs::write(&keys, format!("7 provider-key\n{next_line}")).unwrap();
+    let kb = Kill(keybroker(&d, &keys, &anchors, &w, member));
+    let writer = serve(&a);
+    // serve certifies the rotated base at start: the old certificate does not certify it
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let cert3 = loop {
+        let c3 = fs::read(w.join("base.cert")).unwrap();
+        if steps_of(&certified_of(&c3)) > steps_of(&certified2) {
+            break c3;
+        }
+        assert!(Instant::now() < deadline, "serve never certified the rotated base");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let rotated_cert = root.join("rotated.cert");
+    fs::write(&rotated_cert, &cert3).unwrap();
+    let o = stranger(&rotated_cert);
+    assert!(
+        o.status.success(),
+        "the stranger takes the successor's certificate: {}",
+        err(&o)
+    );
+    let old_cert = root.join("old.cert");
+    fs::write(&old_cert, &cert2).unwrap();
+    let o = stranger(&old_cert);
+    assert!(
+        o.status.success(),
+        "an old certificate stays valid for the head it signed: {}",
+        err(&o)
+    );
+    a.ok(&["write", &obj, "4", "after the rotation"]);
+    a.ok(&["sync"]);
+    drop(writer);
     drop(kb);
     fs::remove_dir_all(&root).unwrap();
 }

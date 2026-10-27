@@ -207,8 +207,8 @@ theorem spendAll_cellFit {E : Env D} {F : Cell → Prop} :
 /-! ## Genesis, admit, fold -/
 
 /-- **Genesis fits.** A founder's member cell holds its key and its next-key digest bytes; its root
-grant holds three digests and two rights slots; the authority cell two counts and at most
-`slotsPerCellMax - 2` keys (`Authority.Fits`). -/
+grant holds three digests and two rights slots; the authority cell two counts, at most
+`nextBase - certifierBase` keys and as many next-key digests (`Authority.Fits`, KERNEL-79). -/
 theorem genesis_cellsFit {X : Receive.Ctx D} {name nonce : ByteArray} {allowance : Nat}
     {founders : List (ByteArray × D)} {auth : Receive.Authority}
     (hf : Receive.GenesisFits X name nonce allowance founders auth)
@@ -236,21 +236,28 @@ theorem genesis_cellsFit {X : Receive.Ctx D} {name nonce : ByteArray} {allowance
   rintro ⟨id, e⟩ hq
   rcases Receive.mem_genesisEntries hq with hq | ⟨rfl, rfl⟩
   case inr =>
-    obtain ⟨ha1, ha2, -, -⟩ := hf.2.2.2.2.1
+    obtain ⟨ha1, ha2, -, -, hnx, hnb⟩ := hf.2.2.2.2.1
     have kA : Receive.kindAuthority < 2 ^ 32 := by decide
-    have hsm : Bounds.slotsPerCellMax < 2 ^ 32 := by decide
+    have hsm : Bounds.slotsPerCellMax = 1024 := rfl
     have kS0 : Receive.slotThreshold < 2 ^ 32 := by decide
     have kS1 : Receive.slotCertifierCount < 2 ^ 32 := by decide
+    have hcb : Receive.certifierBase = 2 := rfl
+    have hnb' : Receive.nextBase = 513 := rfl
+    rw [hcb, hnb'] at ha1
     refine ⟨⟨kA, slotsOf_fits ?_ fun q hq => ?_⟩, by decide⟩
     · simp only [List.length_append, List.length_map, List.length_zipIdx, List.length_cons, List.length_nil]
       omega
-    · simp only [List.cons_append, List.nil_append, List.mem_cons, List.mem_map] at hq
-      rcases hq with rfl | rfl | ⟨p, hp, rfl⟩
+    · simp only [List.cons_append, List.nil_append, List.mem_cons, List.mem_append, List.mem_map] at hq
+      rcases hq with rfl | rfl | ⟨p, hp, rfl⟩ | ⟨p, hp, rfl⟩
       · exact ⟨kS0, v8 _⟩
       · exact ⟨kS1, v8 _⟩
       · refine ⟨?_, hv ▸ ha2 p.1 (List.fst_mem_of_mem_zipIdx hp)⟩
         have hi := List.snd_lt_add_of_mem_zipIdx hp
-        simp only [Receive.certifierBase]
+        rw [hcb]
+        omega
+      · refine ⟨?_, hv ▸ hnb p.1 (List.fst_mem_of_mem_zipIdx hp)⟩
+        have hi := List.snd_lt_add_of_mem_zipIdx hp
+        rw [hnb']
         omega
   obtain ⟨p, hp, ⟨_, he⟩ | ⟨_, he⟩⟩ := Receive.mem_founderEntries hq
   · subst he

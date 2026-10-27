@@ -110,8 +110,8 @@ def foundersOf (X : Ctx D) : List (ByteArray × ByteArray) → Option (List (Byt
 def startOf (X : Ctx D) (b : ByteArray) : Option (Start D) := do
   let .ok raw := startInput.decode b | none
   match raw with
-  | .inl (name, nonce, allowance, fs, cs, t) =>
-    pure (.genesis name nonce allowance (← foundersOf X fs) ⟨cs, t⟩)
+  | .inl (name, nonce, allowance, fs, cs, ns, t) =>
+    pure (.genesis name nonce allowance (← foundersOf X fs) ⟨cs, t, ns⟩)
   | .inr (o, name, nonce, fromO, height, chain) =>
     pure (.carried (← X.digestOf o) name nonce (← X.digestOf fromO) height (← X.digestOf chain))
 

@@ -59,7 +59,10 @@ def NodeEffect (X : Ctx D) (look : Pinned D) (c : Call D) (a : D) (b : Body D) (
       (e.2 = .retire ∧ slotDigest X e.1 cl grantIssuer = .ok a ∨
         LedgerSpend e.1 cl e.2 ∧ granteeHolds X look e.1 cl a true = .ok ())) ∨
   (∃ cl, readKind look e.1 kindAccount = .ok cl ∧
-      (AccountMove X look a b e.1 ∨ e.2 = .retire ∧ slotDigest X e.1 cl slotOwner = .ok a))
+      (AccountMove X look a b e.1 ∨ e.2 = .retire ∧ slotDigest X e.1 cl slotOwner = .ok a)) ∨
+  (∃ i key next cl au, b = .rotateCertifier i key next ∧ e.1 = c.unsigned.member ∧
+      readKind look e.1 kindAuthority = .ok cl ∧ authorityOfCell cl = some au ∧ c.unsigned.key = key ∧
+      au.preRotated X i key = true ∧ e.2 = .write (rotationOps X i key next))
 
 /-- **Where an effect of `c`'s walk on `w` comes from**: a receiver the walk dispatched (the signed
 body as the signer, or a callable body), and either that receiver, if not an invoke, derived it, or
@@ -249,6 +252,13 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
       simp only [List.mem_singleton] at he
       subst he
       exact .inr (.inl ⟨key, next, m, rfl, rfl, hm, hk, hcm⟩)
+  | rotateCertifier i key next =>
+      obtain ⟨cl, au, hka, hdec, hkey, hpre, hd⟩ := rotateCertifier_ok (stepped_draft h)
+      intro e he
+      rw [hd] at he
+      simp only [List.mem_singleton] at he
+      subst he
+      exact .inr (.inr (.inr (.inr ⟨i, key, next, cl, au, rfl, rfl, hka, hdec, hkey, hpre, rfl⟩)))
   | install pkg =>
       have hd := stepped_draft h
       unfold install at hd
@@ -325,7 +335,7 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
         obtain ⟨owner, hown, ⟨⟩, hoe, -⟩ := hchk
         rw [req_ok, decide_eq_true_eq] at hoe
         rw [hoe] at hown
-        exact .inr (.inr (.inr ⟨cell, hrk _ ha, .inr ⟨rfl, hown⟩⟩))
+        exact .inr (.inr (.inr (.inl ⟨cell, hrk _ ha, .inr ⟨rfl, hown⟩⟩)))
       rw [if_neg ha] at hchk
       cases hchk
   | issue cap =>
@@ -352,8 +362,8 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
       rw [hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact .inr (.inr (.inr ⟨scell, hks, .inl (hmove _ (.inl rfl))⟩))
-      · exact .inr (.inr (.inr ⟨dcell, hkd, .inl (hmove _ (.inr rfl))⟩))
+      · exact .inr (.inr (.inr (.inl ⟨scell, hks, .inl (hmove _ (.inl rfl))⟩)))
+      · exact .inr (.inr (.inr (.inl ⟨dcell, hkd, .inl (hmove _ (.inr rfl))⟩)))
       · exact spendVia_node (.inr (.inl rfl)) hx hsp e he
   | credit well acctR amount via =>
       intro e he
@@ -367,8 +377,8 @@ theorem node_effect {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
       rw [hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact .inr (.inr (.inr ⟨wcell, hkw, .inl (hmove _ (.inl rfl))⟩))
-      · exact .inr (.inr (.inr ⟨acell, hka, .inl (hmove _ (.inr rfl))⟩))
+      · exact .inr (.inr (.inr (.inl ⟨wcell, hkw, .inl (hmove _ (.inl rfl))⟩)))
+      · exact .inr (.inr (.inr (.inl ⟨acell, hka, .inl (hmove _ (.inr rfl))⟩)))
       · exact spendVia_node (.inr (.inr rfl)) hx hsp e he
 
 /-! ## The walk -/

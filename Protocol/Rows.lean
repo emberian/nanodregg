@@ -103,6 +103,11 @@ inductive Act
   follow's own admission; what the writer answers is the outcome. Custody is not advanced (only
   a rotation advances it, and a forged rotation is not a row's business) -/
   | forge (argv : List String)
+  /-- the operator rotates the writer's certifier 0 (KERNEL-79): a call whose member is the World's
+  authority cell, planned on the actor's follow World, signed by the committed successor's secret
+  (`byNext`) or by a key no commitment opens, committing a fresh next key. The outcome is the
+  writer's answer -/
+  | rotateCertifier (byNext : Bool)
   /-- the operator stops the writer, exports its World (`Host.Carry.exportFile`) and imports it as
   a NEW World (`Host.Carry.importWorld`: the one decision `host import` makes), under the rows'
   name and another nonce, with the file's digest (`rightDigest`) or a digest with one bit flipped;
@@ -268,6 +273,12 @@ inductive Mutation
   unpinned-insert arm: an insert refused `relationFull` is recorded, a retract frees the slot, and
   the same signed bytes would then derive and admit -/
   | admitsRecorded
+  /-- the writer goes on certifying with the genesis certify key after a rotation retired it: a
+  broker that never took the successor seed (KERNEL-79) -/
+  | retiredCertifier
+  /-- the certify next-key digest ignores the key (every key opens every commitment), for the
+  writer and every follower: pre-rotation without its commitment (KERNEL-79) -/
+  | nextIgnoresKey
   /-- the attempt store takes the Host's `declined` as final and settles the attempt `refused`
   (KERNEL-54: the writer declines a stale, never records it; only the member's own fold settles
   it, PROTOCOL-15's condition 1) -/
@@ -1943,12 +1954,55 @@ def certifiedPageRow : Row where
     { actor := "operator", act := .cmd ["sync"], expect := .ok, fault := .cold }])
   plant := .caught .forkCertificate 9 (.refused "forkedCertified")
 
+/-- KERNEL-79: a rotation of the writer's certify key is admitted only to the successor its genesis
+committed. The rows' World names one certifier and commits the digest of its next key
+(`Writer.authority`). The operator, caught up, asks for a rotation of certifier 0 signed by a key
+the commitment does not open: the writer declines it `notPreRotated` by name and records nothing
+(line 7: the signer holds no authority, KERNEL-44's first class, as a member's `rotate` to an
+uncommitted key), and the operator's next catch-up finds the authority unchanged. The plant
+(`nextIgnoresKey`: the commitment does not depend on the key) admits line 7. -/
+def rotateRefusedRow : Row where
+  name := "rotateRefused"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "rotateCertifier"]
+  drive := .members (welcome ++ [
+    ok "operator" ["sync"],
+    { actor := "operator", act := .rotateCertifier false, expect := .declined "notPreRotated" },
+    ok "operator" ["sync"]])
+  plant := .caught .nextIgnoresKey 7 .ok
+
+/-- KERNEL-79: a consumer follows a rotation of the writer's certify key. The operator rotates
+certifier 0 to the committed successor (line 7, committed), catches up past it, and seals: the
+newest base is certified by the successor key, and the operator's next catch-up (line 10) takes
+that certificate as its World's current key's. The newcomer, behind the rotation, writes: its
+catch-up page holds the rotation and the successor's certificate, which verifies under the
+newcomer's World before the page by the next-key digest its authority committed. The sponsor
+catches up twice across and past the rotation. The plant (`retiredCertifier`: the writer goes on
+certifying with the genesis key) is refused `uncertifiedPage` by name at line 10, the first catch-up
+of a member whose World holds the rotation, where the retired key holds no slot (`otherKey`). -/
+def certifierRotationRow : Row where
+  name := "certifierRotation"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "grant", "install", "create", "write", "rotateCertifier"]
+  drive := .members (welcome ++ [
+    ok "operator" ["sync"],
+    { actor := "operator", act := .rotateCertifier true, expect := .ok },
+    ok "operator" ["sync"],
+    { actor := "operator", act := .seal, expect := .ok },
+    ok "operator" ["sync"],
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    ok "sponsor" ["sync"],
+    ok "sponsor" ["sync"]])
+  plant := .caught .retiredCertifier 10 (.refused "uncertifiedPage")
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, healthRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
    forgedRefusalRow, forkRow, selfHeadRow, selfHeadPageRow, certifiedRow, certifiedPageRow, rerunRow,
-   strippedCertificateRow]
+   strippedCertificateRow, rotateRefusedRow, certifierRotationRow]
 
 end Nanodregg.Protocol

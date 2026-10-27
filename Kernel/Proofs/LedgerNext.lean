@@ -286,6 +286,10 @@ theorem derive_born_grant {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
         obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, hr⟩ := hd
         rw [← hr]
         simp
+    | rotateCertifier index key next =>
+        obtain ⟨-, -, -, -, -, -, hr⟩ := rotateCertifier_ok (stepped_draft h)
+        rw [hr]
+        simp
     | install pkg =>
         have hd := stepped_draft h
         simp only [install, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

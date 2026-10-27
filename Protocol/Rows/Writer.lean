@@ -59,6 +59,9 @@ structure Params (D : Type) [Ord D] where
   forkCertificate : Bool := false
   /-- `log` pages carry no certificate (a plant: a relay that strips it, PROTOCOL-84) -/
   stripCertificate : Bool := false
+  /-- the writer goes on certifying with the genesis certify key after a rotation retired it (a
+  plant: a broker that never took the successor seed, KERNEL-79) -/
+  retiredCertifier : Bool := false
   /-- an `expired` refusal states the name alone, no height (a plant: the shape before
   PROTOCOL-19, which leaves a follower more than a window behind unable to catch up) -/
   unstatedExpiry : Bool := false
@@ -166,8 +169,17 @@ and signs as the deployed writer's custody does (HOST-80); the follower only eve
 certificate. -/
 def certifierSecret : ByteArray := "key:writer:certify".toUTF8
 
-/-- The rows' genesis authority: the writer's certify key, threshold 1. -/
-def authority (R : Rows.Params D) : Authority := ⟨[R.pub certifierSecret], 1⟩
+/-- The successor the rows' genesis commits for the certify key (KERNEL-79): the operator's, held
+apart from the writer's custody; `rotateCertifier true` rotates to it. -/
+def certifierNextSecret : ByteArray := "key:writer:certify:next".toUTF8
+
+/-- The key the rows' rotation commits next; never committed at genesis, so a rotation signed by it
+there is refused `notPreRotated`. -/
+def certifierThirdSecret : ByteArray := "key:writer:certify:third".toUTF8
+
+/-- The rows' genesis authority: the writer's certify key, threshold 1, its successor committed. -/
+def authority (R : Rows.Params D) : Authority :=
+  ⟨[R.pub certifierSecret], 1, [R.ctx.env.bytes (certifyNextDigest R.ctx (R.pub certifierNextSecret))]⟩
 
 /-- The writer's certificate of its newest base's head (PROTOCOL-77.1): the base's World decoded from
 the base file, its head (`Head.headOf`) signed under `domCertify` with the rows' certifier key at its
@@ -184,12 +196,17 @@ def certificate (P : Params D) (m : Mem) (r : Resident (World D)) : IO ByteArray
     | some auth =>
       let h := Head.headOf P.X.env w
       let h := if P.forkCertificate then { h with chain := P.X.env.hash "nanodregg/rows/forked" (P.X.env.bytes h.chain) } else h
-      match auth.certifiers.idxOf? (P.R.pub certifierSecret), Head.certifiedBytes P.X.env h with
-      | some i, some u =>
-          let sig := P.R.sign certifierSecret (Head.certifyMessage u)
+      -- the secret whose key the base's authority lists (KERNEL-79: the successor after a rotation);
+      -- the retired-key plant signs with the genesis key at its old slot
+      let s := if P.retiredCertifier then certifierSecret
+        else ([certifierSecret, certifierNextSecret, certifierThirdSecret].find? fun s =>
+          auth.certifiers.contains (P.R.pub s)).getD certifierSecret
+      match (auth.certifiers.idxOf? (P.R.pub s)).getD 0, Head.certifiedBytes P.X.env h with
+      | i, some u =>
+          let sig := P.R.sign s (Head.certifyMessage u)
           let sig := if P.forgeCertificate then Host.Sim.flipByte sig 0 else sig
-          pure ((Head.certificateBytes u [(i, sig)]).getD ByteArray.empty)
-      | _, _ => pure ByteArray.empty
+          pure ((Head.certificateBytes u [(i, P.R.pub s, sig)]).getD ByteArray.empty)
+      | _, none => pure ByteArray.empty
 
 /-- HOST's pager (`Host.Page.build` + `Host.Page.bytes`) over the in-memory segment's synced bytes
 and `index.log` (`Host.Page.entryAt`): what `Host.Deployed.pager` does over the files. -/

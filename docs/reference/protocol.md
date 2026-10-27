@@ -231,7 +231,7 @@ A log page lists steps from the requested step count, in log order.
 `steps` and `chain` are the writer's step count and chain after the page's last step.
 `tipSteps` and `tipHeight` are the writer's tip when it built the page.
 `baseSteps` and `baseDigest` are the writer's newest durable base.
-`certificate` is the writer's certificate of that base's head, or empty when the writer holds none or it exceeds `Bounds.certificateBytesMax` = 1424 (`Host/Page.lean` `pageCert`).
+`certificate` is the writer's certificate of that base's head, or empty when the writer holds none or it exceeds `Bounds.certificateBytesMax` = 2004 (`Host/Page.lean` `pageCert`).
 The follower reads a page with `logPage`, which refuses a page whose `steps` or `baseSteps` exceeds `tipSteps` (`Protocol/Command/Machine.lean` `logPage`).
 
 A base page carries World bytes `[start, start + len)` of the writer's newest base, with that base's step count, total size, digest and chain, and the writer's certificate of the base's head (`Host/Page.lean` `basePage`).
@@ -388,8 +388,8 @@ A frozen call in flight at a close is unsettled, and its attempt goes on by `loo
 | `Bounds.sendsMax` | 8 | sends of one frozen call |
 | `Bounds.pagesPerCommandMax` | 28 | log or base pages one catch-up reads |
 | `Bounds.pageStepsMax` | 64 (`Host.recordTurnsMax`) | steps one log page carries |
-| `Bounds.pageBytesMax` | 128289 | event bytes of one log page; World bytes of one base page |
-| `Bounds.certificateBytesMax` | 1424 | a certificate on a log page |
+| `Bounds.pageBytesMax` | 127709 | event bytes of one log page; World bytes of one base page |
+| `Bounds.certificateBytesMax` | 2004 | a certificate on a log page |
 | `Bounds.pageCertifiersMax` | 16 | signatures in a certificate on a log page |
 | `Bounds.hintBytesMax` | 512 | an `uncertain` end's hint payload |
 | `Bounds.replyMsMax` | 120000 | the client's wait for one reply |
@@ -1092,40 +1092,43 @@ Follow makes one only of its own World's head (`attestTip`; `Protocol/Proofs/Hea
 
 ### 5.3 Certificates
 
-A World's authority is fixed at its genesis (`Kernel/Receive/Follow.lean` `Authority`).
+A World's authority is made at its genesis (`Kernel/Receive/Call.lean` `Authority`); its certifiers rotate only to committed successors (KERNEL-79).
 
 ```
-Authority ::= { certifiers : bytes*, threshold : nat }
-Authority.none = { certifiers = [], threshold = 0 }
+Authority ::= { certifiers : bytes*, threshold : nat, next : bytes* }
+Authority.none = { certifiers = [], threshold = 0, next = [] }
 ```
 
 The genesis input carries the authority, and the World's origin is the digest of that input (`originOf`), so the origin commits to the authority.
 The genesis refuses a threshold of zero with certifiers listed, or a threshold past their count, as `badThreshold`, and a repeated certifier as `repeatedCertifier` (`checkGenesis`).
-The genesis World holds the authority as one ROM cell of kind `kindAuthority` (`authorityCell`), and `authorityOf(W)` reads it back; a World with two such cells or none has no authority (`authorityOf`).
-On every World an honest log folds to from a checked genesis, `authorityOf` is the genesis authority (`Kernel/Proofs/AuthorityOf.lean` `authorityOf_honest_fold`).
+The genesis World holds the authority as one RAM cell of kind `kindAuthority` at `authorityId` (`authorityCell`), and `authorityOf(W)` reads it back; a World with two such cells or none has no authority (`authorityOf`).
+Each certifier commits the digest of its next key, `H("nanodregg/kernel/certify-next/v1", key)` (`next`; `badNext` when not one per certifier). The one change to the authority is `rotateCertifier`, signed by a committed successor (KERNEL-79).
+On every World an honest log folds to from a checked genesis, `authorityOf` is the genesis authority or a run of such rotations of it (`Kernel/Proofs/AuthorityOf.lean` `authorityOf_honest_fold`); after a rotation the old key is listed nowhere (`rotate_retires`).
 
 A certificate is a head signed by certifiers (`Protocol/Head.lean`).
 
 ```
 certifiedLayout    = [bytes origin, u64 steps, u64 height, bytes roots, bytes chain]
-certificateLayout  = [bytes certified, list signers, list signatures]
+certificateLayout  = [bytes certified, list signers, list keys, list signatures]
 certifyMessage(x)  = "nanodregg/protocol/certify/v1" · x
 ```
 
-`signers` are indices into the authority's list, each as `u64le` bytes; `signatures` are read in step with them.
+`signers` are indices into the authority's list, each as `u64le` bytes; `keys` (the key each signed under) and `signatures` are read in step with them (PROTOCOL-86).
+Signer `i` holds its slot under `key` when `key = A.certifiers[i]` or `A.next[i] = bytes(H("nanodregg/kernel/certify-next/v1", key))` (`holds`): a consumer that has not reached a rotation takes the committed successor's signature.
 
 ```
 A.threshold > 0    certificateOfBytes(b) = c    c.head.origin = origin
-the pairs (i, s) of c.sigs are walked in order: A.certifiers[i] = k, i not seen before, verify(k, certifyMessage(c.certified), s)
+the triples (i, k, s) of c.sigs are walked in order: i < |A.certifiers|, holds(A, i, k), i not seen before, verify(k, certifyMessage(c.certified), s)
 the number of signers walked ≥ A.threshold
 ──────────────────────────────────────────────────────────────  H-Certified    Head.certified
 Head.certified(A, origin, b) = ok c
 ```
 
-The refusals are `noAuthority` (threshold 0), `badCertificate`, `otherWorld`, `unlisted i`, `repeated i`, `badCertifySignature i` and `belowThreshold` (`CertRefusal`).
+The refusals are `noAuthority` (threshold 0), `badCertificate`, `otherWorld`, `unlisted i`, `otherKey i` (the key holds no slot `i`), `repeated i`, `badCertifySignature i` and `belowThreshold` (`CertRefusal`).
 `Protocol/Proofs/Head.lean` `certified_ok` restates what an accepted certificate is.
-`certified_intersect`: when fewer than two thresholds of certifiers are listed, two certified heads were both signed by one listed certifier.
-`certified_equivocation`: two such heads at one step count with different chains name a certifier that signed both.
+`certified_intersect`: when fewer than two thresholds of certifiers are listed, two certified heads were both signed for one listed slot, each by a key that slot holds.
+`certified_equivocation`: two such heads at one step count with different chains name a slot that signed both.
+`holds_rotated`: under a rotated authority, slot `i` is held by the new key or by a key the fresh commitment opens.
 
 ```
 authorityOf(W) = A    A.threshold = 0

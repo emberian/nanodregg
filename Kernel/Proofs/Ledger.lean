@@ -683,6 +683,9 @@ theorem derive_value_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
       simp only [rotate, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
       obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, hd⟩ := hd
       rw [← hd]; simp
+  | rotateCertifier index key next =>
+      obtain ⟨-, -, -, -, -, -, hd⟩ := rotateCertifier_ok (stepped_draft hr)
+      rw [hd]; simp
   | write obj edits via =>
       have hd := stepped_draft hr
       simp only [write, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

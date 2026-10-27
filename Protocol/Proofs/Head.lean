@@ -366,6 +366,37 @@ theorem body_post {X : Ctx D} {me : Command.Self D} {w : World D} {s : Command.S
 
 /-! ## Certified heads (PROTOCOL-76): what `certified` accepted, and the quorum instance -/
 
+omit [Ord D] [DecidableEq D] in
+/-- A signer that holds a key is listed. -/
+theorem holds_lt {X : Ctx D} {auth : Authority} {i : Nat} {k : ByteArray} (h : holds X auth i k = true) :
+    i < auth.certifiers.length := by
+  simp only [holds, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h.1
+
+omit [Ord D] [DecidableEq D] in
+/-- **After a rotation, certifier `i`'s slot is the new key's** (KERNEL-79): under `a.rotate i key nb`
+a signer at index `i` holds `key`, or a key the fresh commitment `nb` opens, and nothing else. With
+`key` the committed successor and the keys distinct, certifier `i`'s old key is no certifier's
+(`Kernel.Receive.rotate_retires`), so it signs for slot `i` only if the rotation committed it again
+as the next key. -/
+theorem holds_rotated {X : Ctx D} {a : Authority} {i : Nat} {key nb k : ByteArray}
+    (h : holds X (a.rotate i key nb) i k = true) :
+    k = key ∨ X.env.bytes (certifyNextDigest X k) = nb := by
+  simp only [holds, Authority.rotate, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq,
+    List.length_set] at h
+  obtain ⟨hi, h | h⟩ := h
+  · left
+    rw [List.getElem?_set_self hi, Option.some.injEq] at h
+    exact h.symm
+  · right
+    rw [List.getElem?_set] at h
+    split at h
+    · split at h
+      · exact (Option.some.inj h).symm
+      · cases h
+    · rename_i hne
+      exact absurd rfl hne
+
 theorem CertRefusal.name_injective (a b : CertRefusal) (h : a.name = b.name) : a.tag = b.tag := by
   cases a <;> cases b <;> simp_all [CertRefusal.name, CertRefusal.tag]
 
@@ -385,48 +416,51 @@ theorem certificateOfBytes_head {X : Ctx D} {b : ByteArray} {c : Certificate D}
 
 omit [Ord D] [DecidableEq D] in
 /-- What `certifySigners` accepted, walking from `seen`: the signers it returns are distinct, keep
-`seen`, and each is `seen` already or a listed certifier whose signature over `msg` verifies, named
-by a pair of `sigs`. -/
+`seen`, and each is `seen` already or a listed certifier signing under a key it holds (its key, or
+its committed successor: `holds`, KERNEL-79) whose signature over `msg` verifies, named by a triple
+of `sigs`. -/
 theorem certifySigners_ok {X : Ctx D} {auth : Authority} {msg : ByteArray} :
-    ∀ {sigs : List (Nat × ByteArray)} {seen out : List Nat}, seen.Nodup →
+    ∀ {sigs : List (Nat × ByteArray × ByteArray)} {seen out : List Nat}, seen.Nodup →
       certifySigners X auth msg sigs seen = .ok out →
       out.Nodup ∧ seen.length ≤ out.length ∧ (∀ i ∈ seen, i ∈ out) ∧
-        ∀ i ∈ out, i ∈ seen ∨ ∃ s k, (i, s) ∈ sigs ∧ auth.certifiers[i]? = some k ∧
+        ∀ i ∈ out, i ∈ seen ∨ ∃ k s, (i, k, s) ∈ sigs ∧ holds X auth i k = true ∧
           X.verify k msg s = true
   | [], seen, out, hn, h => by
       simp only [certifySigners, Except.ok.injEq] at h
       subst h
       exact ⟨hn, Nat.le_refl _, fun _ hi => hi, fun i hi => .inl hi⟩
-  | (i, s) :: rest, seen, out, hn, h => by
+  | (i, k, s) :: rest, seen, out, hn, h => by
       simp only [certifySigners] at h
       split at h
       · cases h
-      · rename_i k hk
-        split at h
+      · split at h
         · cases h
-        · rename_i hseen
+        · rename_i hk
           split at h
           · cases h
-          · rename_i hv
-            have hn' : (i :: seen).Nodup := List.nodup_cons.mpr ⟨hseen, hn⟩
-            obtain ⟨h1, h2, h3, h4⟩ := certifySigners_ok hn' h
-            refine ⟨h1, ?_, fun j hj => h3 j (List.mem_cons_of_mem _ hj), fun j hj => ?_⟩
-            · simp only [List.length_cons] at h2; omega
-            · rcases h4 j hj with hj' | ⟨s', k', hm, hk', hv'⟩
-              · rcases List.mem_cons.mp hj' with rfl | hj''
-                · exact .inr ⟨s, k, List.mem_cons_self .., hk, by simpa using hv⟩
-                · exact .inl hj''
-              · exact .inr ⟨s', k', List.mem_cons_of_mem _ hm, hk', hv'⟩
+          · rename_i hseen
+            split at h
+            · cases h
+            · rename_i hv
+              have hn' : (i :: seen).Nodup := List.nodup_cons.mpr ⟨hseen, hn⟩
+              obtain ⟨h1, h2, h3, h4⟩ := certifySigners_ok hn' h
+              refine ⟨h1, ?_, fun j hj => h3 j (List.mem_cons_of_mem _ hj), fun j hj => ?_⟩
+              · simp only [List.length_cons] at h2; omega
+              · rcases h4 j hj with hj' | ⟨k', s', hm, hk', hv'⟩
+                · rcases List.mem_cons.mp hj' with rfl | hj''
+                  · exact .inr ⟨k, s, List.mem_cons_self .., by simpa using hk, by simpa using hv⟩
+                  · exact .inl hj''
+                · exact .inr ⟨k', s', List.mem_cons_of_mem _ hm, hk', hv'⟩
 
 omit [Ord D] in
 /-- What `certified` accepted: the authority names somebody, the bytes decode to it, it names
 `origin`, and at least `threshold` (at least one) distinct listed certifiers each signed its
-certified bytes under `domCertify`. -/
+certified bytes under `domCertify`, each under a key it holds (`holds`). -/
 theorem certified_ok {X : Ctx D} {auth : Authority} {origin : D} {b : ByteArray} {c : Certificate D}
     (h : certified X auth origin b = .ok c) :
     0 < auth.threshold ∧ certificateOfBytes X b = some c ∧ c.head.origin = origin ∧
       ∃ signers : List Nat, signers.Nodup ∧ auth.threshold ≤ signers.length ∧
-        ∀ i ∈ signers, ∃ s k, (i, s) ∈ c.sigs ∧ auth.certifiers[i]? = some k ∧
+        ∀ i ∈ signers, ∃ k s, (i, k, s) ∈ c.sigs ∧ holds X auth i k = true ∧
           X.verify k (certifyMessage c.certified) s = true := by
   unfold certified at h
   split at h
@@ -480,9 +514,9 @@ says, and the one-writer and committee rows are this statement at `n = t = 1` an
 theorem certified_intersect {X : Ctx D} {auth : Authority} {origin : D} {b₁ b₂ : ByteArray}
     {c₁ c₂ : Certificate D} (h₁ : certified X auth origin b₁ = .ok c₁)
     (h₂ : certified X auth origin b₂ = .ok c₂) (hq : auth.certifiers.length < 2 * auth.threshold) :
-    ∃ i k, auth.certifiers[i]? = some k ∧
-      (∃ s, (i, s) ∈ c₁.sigs ∧ X.verify k (certifyMessage c₁.certified) s = true) ∧
-      (∃ s, (i, s) ∈ c₂.sigs ∧ X.verify k (certifyMessage c₂.certified) s = true) := by
+    ∃ i, i < auth.certifiers.length ∧
+      (∃ k s, (i, k, s) ∈ c₁.sigs ∧ holds X auth i k = true ∧ X.verify k (certifyMessage c₁.certified) s = true) ∧
+      (∃ k s, (i, k, s) ∈ c₂.sigs ∧ holds X auth i k = true ∧ X.verify k (certifyMessage c₂.certified) s = true) := by
   obtain ⟨-, -, -, s₁, hn₁, ht₁, hall₁⟩ := certified_ok h₁
   obtain ⟨-, -, -, s₂, hn₂, ht₂, hall₂⟩ := certified_ok h₂
   -- pigeonhole over the two signer lists: disjoint and distinct, they would number 2t > n
@@ -494,18 +528,16 @@ theorem certified_intersect {X : Ctx D} {auth : Authority} {origin : D} {b₁ b�
       intro x hx
       rcases List.mem_append.mp hx with hx | hx
       · obtain ⟨_, _, _, hk, _⟩ := hall₁ x hx
-        exact (List.getElem?_eq_some_iff.mp hk).1
+        exact holds_lt hk
       · obtain ⟨_, _, _, hk, _⟩ := hall₂ x hx
-        exact (List.getElem?_eq_some_iff.mp hk).1
+        exact holds_lt hk
     have := nodup_lt_length hnd hb
     rw [List.length_append] at this
     omega
   obtain ⟨i, hi₁, hi₂⟩ := hcommon
-  obtain ⟨sa, k, hma, hk, hva⟩ := hall₁ i hi₁
-  obtain ⟨sb, k', hmb, hk', hvb⟩ := hall₂ i hi₂
-  rw [hk] at hk'
-  cases hk'
-  exact ⟨i, k, hk, ⟨sa, hma, hva⟩, ⟨sb, hmb, hvb⟩⟩
+  obtain ⟨k, sa, hma, hk, hva⟩ := hall₁ i hi₁
+  obtain ⟨k', sb, hmb, hk', hvb⟩ := hall₂ i hi₂
+  exact ⟨i, holds_lt hk, ⟨k, sa, hma, hk, hva⟩, ⟨k', sb, hmb, hk', hvb⟩⟩
 
 omit [Ord D] in
 /-- **Two certified heads at one step count with different chains name an equivocating certifier**:
@@ -516,12 +548,12 @@ theorem certified_equivocation {X : Ctx D} {auth : Authority} {origin : D} {b₁
     {c₁ c₂ : Certificate D} (h₁ : certified X auth origin b₁ = .ok c₁)
     (h₂ : certified X auth origin b₂ = .ok c₂) (hq : auth.certifiers.length < 2 * auth.threshold)
     (hs : c₁.head.steps = c₂.head.steps) (hc : c₁.head.chain ≠ c₂.head.chain) :
-    ∃ i k, auth.certifiers[i]? = some k ∧
-      (∃ s, (i, s) ∈ c₁.sigs ∧ X.verify k (certifyMessage c₁.certified) s = true) ∧
-      (∃ s, (i, s) ∈ c₂.sigs ∧ X.verify k (certifyMessage c₂.certified) s = true) ∧
+    ∃ i, i < auth.certifiers.length ∧
+      (∃ k s, (i, k, s) ∈ c₁.sigs ∧ holds X auth i k = true ∧ X.verify k (certifyMessage c₁.certified) s = true) ∧
+      (∃ k s, (i, k, s) ∈ c₂.sigs ∧ holds X auth i k = true ∧ X.verify k (certifyMessage c₂.certified) s = true) ∧
       c₁.certified ≠ c₂.certified ∧ c₁.head.steps = c₂.head.steps := by
-  obtain ⟨i, k, hk, ha, hb⟩ := certified_intersect h₁ h₂ hq
-  refine ⟨i, k, hk, ha, hb, fun he => hc ?_, hs⟩
+  obtain ⟨i, hi, ha, hb⟩ := certified_intersect h₁ h₂ hq
+  refine ⟨i, hi, ha, hb, fun he => hc ?_, hs⟩
   have e₁ := certificateOfBytes_head (certified_ok h₁).2.1
   have e₂ := certificateOfBytes_head (certified_ok h₂).2.1
   rw [he, e₂] at e₁

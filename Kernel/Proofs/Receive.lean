@@ -207,6 +207,13 @@ theorem keyRule_deriveTurn (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : C
       rw [hb]
       simp [dispatch, stepped, hr, Except.map, bind, Except.bind]
     | ok d => simp [Except.map, bind, Except.bind, hr]
+  | rotateCertifier index key next =>
+    cases hr : rotateCertifier X look c index key next with
+    | error e =>
+      unfold deriveTurn deriveWithTicks
+      rw [hb]
+      simp [dispatch, stepped, hr, Except.map, bind, Except.bind]
+    | ok d => simp [Except.map, bind, Except.bind, hr]
   | _ => rfl
 
 /-- **`submit`'s derivation is `receive`** (law 1, KERNEL-66): `receive` is `signedBy` (the World, the

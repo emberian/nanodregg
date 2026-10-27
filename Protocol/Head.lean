@@ -321,8 +321,10 @@ def certifiedLayout : Layout :=
   [.bytes "origin", .u64 "steps", .u64 "height", .bytes "roots", .bytes "chain"]
 
 /-- A certificate on the wire: the certified bytes as carried, then the signers (each an index into
-the authority's list, as u64 bytes) and their signatures, two lists read in step. -/
-def certificateLayout : Layout := [.bytes "certified", .list "signers", .list "signatures"]
+the authority's list, as u64 bytes), each signer's public key, and their signatures, three lists
+read in step (KERNEL-79: the key is carried so a consumer whose World has not reached a rotation can
+check a signature by the successor key its authority committed; signatures last). -/
+def certificateLayout : Layout := [.bytes "certified", .list "signers", .list "keys", .list "signatures"]
 
 def certifiedFrame : Stream (Layout.Ty Bounds.frameBytesMax certifiedLayout) :=
   Layout.codec Bounds.frameBytesMax (by decide) certifiedLayout
@@ -339,20 +341,22 @@ def certifiedBytes (E : Env D) (h : Head D) : Option ByteArray := do
 /-- What a certifier signs. -/
 def certifyMessage (certified : ByteArray) : ByteArray := domCertify ++ certified
 
-/-- A certificate's wire bytes, or `none` past the frame bounds. -/
-def certificateBytes (certified : ByteArray) (sigs : List (Nat × ByteArray)) : Option ByteArray := do
+/-- A certificate's wire bytes from its `(signer, key, signature)` triples, or `none` past the frame
+bounds. -/
+def certificateBytes (certified : ByteArray) (sigs : List (Nat × ByteArray × ByteArray)) : Option ByteArray := do
   let f := Text.fit Bounds.frameBytesMax
   let l := Text.fitList Bounds.frameBytesMax
   pure (certificateFrame.bytes (← f certified, ← l (sigs.map fun p => Text.u64 p.1),
-    ← l (sigs.map (·.2)), ()))
+    ← l (sigs.map (·.2.1)), ← l (sigs.map (·.2.2)), ()))
 
 /-- A decoded certificate. -/
 structure Certificate (D : Type) where
   head : Head D
   /-- the certified bytes exactly as carried (`certifiedFrame`) -/
   certified : ByteArray
-  /-- the signers (indices into the authority's list) and their signatures, as carried -/
-  sigs : List (Nat × ByteArray)
+  /-- the signers (indices into the authority's list), each with the key it signed under and its
+  signature, as carried -/
+  sigs : List (Nat × ByteArray × ByteArray)
   deriving DecidableEq
 
 /-- Why a certificate is not taken (law 7). -/
@@ -363,6 +367,9 @@ inductive CertRefusal
   | otherWorld
   /-- signer `index` is not in the authority's list -/
   | unlisted (index : Nat)
+  /-- the key carried for signer `index` is neither that certifier's key nor the successor its
+  committed next-key digest opens (KERNEL-79: a retired key, or another key) -/
+  | otherKey (index : Nat)
   /-- certifier `index` signs twice -/
   | repeated (index : Nat)
   /-- certifier `index`'s signature does not verify over the certified bytes -/
@@ -381,16 +388,18 @@ def CertRefusal.name : CertRefusal → String
   | .badCertificate => "badCertificate" | .otherWorld => "otherWorld" | .unlisted _ => "unlisted"
   | .repeated _ => "repeated" | .badCertifySignature _ => "badCertifySignature"
   | .belowThreshold .. => "belowThreshold" | .noAuthority => "noAuthority" | .otherHead => "otherHead"
+  | .otherKey _ => "otherKey"
 
 /-- The constructor's index, the thing a name must determine (`Proofs.Head.CertRefusal.name_injective`). -/
 def CertRefusal.tag : CertRefusal → Nat
   | .badCertificate => 0 | .otherWorld => 1 | .unlisted _ => 2 | .repeated _ => 3
   | .badCertifySignature _ => 4 | .belowThreshold .. => 5 | .noAuthority => 6 | .otherHead => 7
+  | .otherKey _ => 8
 
 /-- One refusal of every name (arguments are placeholders; a name drops them). -/
 def CertRefusal.all : List CertRefusal :=
   [.badCertificate, .otherWorld, .unlisted 0, .repeated 0, .badCertifySignature 0, .belowThreshold 0 0,
-   .noAuthority, .otherHead]
+   .noAuthority, .otherHead, .otherKey 0]
 
 /-- Decode the certified bytes, checking nothing they state. -/
 def certifiedSaid (X : Ctx D) (u : ByteArray) : Option (Head D) :=
@@ -403,26 +412,57 @@ def certifiedSaid (X : Ctx D) (u : ByteArray) : Option (Head D) :=
 def certificateOfBytes (X : Ctx D) (b : ByteArray) : Option (Certificate D) :=
   match certificateFrame.decode b with
   | .error _ => none
-  | .ok (u, ss, sg, ()) =>
+  | .ok (u, ss, ks, sg, ()) =>
       match certifiedSaid X u.1, (Text.unlist ss).mapM Text.ofU64 with
       | some h, some signers =>
-          if signers.length = (Text.unlist sg).length then
-            some { head := h, certified := u.1, sigs := signers.zip (Text.unlist sg) }
+          if signers.length = (Text.unlist ks).length ∧ signers.length = (Text.unlist sg).length then
+            some { head := h, certified := u.1, sigs := signers.zip ((Text.unlist ks).zip (Text.unlist sg)) }
           else none
       | _, _ => none
 
-/-- Walk the signatures from the signers `seen`: each signer listed, not seen, verifying over `msg`.
-Returns every signer accepted. -/
+/-- Certifier `i` of `auth` signs under `key` (KERNEL-79): `i` is listed and `key` is its key, or the
+successor its committed next-key digest opens. A consumer whose World has not yet reached a
+rotation takes the successor's signature; once its World has the rotation the old key is neither
+(`Proofs.Head.holds_rotated`). -/
+def holds (X : Ctx D) (auth : Authority) (i : Nat) (key : ByteArray) : Bool :=
+  decide (i < auth.certifiers.length) &&
+    (decide (auth.certifiers[i]? = some key) ||
+      decide (auth.next[i]? = some (X.env.bytes (certifyNextDigest X key))))
+
+/-- The first certifier slot `key` holds under `auth` (`holds`): its key, or its committed
+successor. A producer names its signer by it. -/
+def slotOf (X : Ctx D) (auth : Authority) (key : ByteArray) : Option Nat :=
+  (List.range auth.certifiers.length).find? fun i => holds X auth i key
+
+/-- The certifier slot whose committed next-key digest `key` opens, else slot 0 (whose check
+`rotateCertifier` then refuses `notPreRotated` by name). -/
+def rotationSlot (X : Ctx D) (auth : Authority) (key : ByteArray) : Nat :=
+  (auth.next.idxOf? (X.env.bytes (certifyNextDigest X key))).getD 0
+
+/-- The certifier rotation call (KERNEL-79) on `w`: certifier `index` moves to `key`, committing
+`next`; its member is the authority cell (pinned at `w`'s entry there), it is signed by `key`
+(`sign` holds `key`'s secret), its window `window` heights from `w`'s. Whoever holds the successor
+secret makes it: the operator, never the writer's custody. -/
+def rotationCall (X : Ctx D) (w : World D) (window index : Nat) (key : ByteArray) (next : D)
+    (sign : ByteArray → ByteArray) : Call D :=
+  let u : Unsigned D :=
+    { world := w.origin, member := authorityId X, key, notBefore := w.height,
+      validUntil := w.height + window,
+      pins := [(authorityId X, pinOf X.env (w.entry X.env (authorityId X)))],
+      maxCharge := Kernel.Bounds.weightMax, body := .rotateCertifier index key next }
+  ⟨u, sign (X.callMessage u)⟩
+
+/-- Walk the signatures from the signers `seen`: each signer listed, signing under a key it holds
+(`holds`), not seen, verifying over `msg`. Returns every signer accepted. -/
 def certifySigners (X : Ctx D) (auth : Authority) (msg : ByteArray) :
-    List (Nat × ByteArray) → List Nat → Except CertRefusal (List Nat)
+    List (Nat × ByteArray × ByteArray) → List Nat → Except CertRefusal (List Nat)
   | [], seen => .ok seen
-  | (i, s) :: rest, seen =>
-      match auth.certifiers[i]? with
-      | none => .error (.unlisted i)
-      | some k =>
-          if i ∈ seen then .error (.repeated i)
-          else if !X.verify k msg s then .error (.badCertifySignature i)
-          else certifySigners X auth msg rest (i :: seen)
+  | (i, k, s) :: rest, seen =>
+      if auth.certifiers.length ≤ i then .error (.unlisted i)
+      else if !holds X auth i k then .error (.otherKey i)
+      else if i ∈ seen then .error (.repeated i)
+      else if !X.verify k msg s then .error (.badCertifySignature i)
+      else certifySigners X auth msg rest (i :: seen)
 
 /-- Decode and verify under `auth`: the authority names somebody (`noAuthority` otherwise: a
 threshold of 0 would take a certificate with no signature), the certificate is for `origin`, and at

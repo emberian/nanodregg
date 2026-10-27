@@ -191,6 +191,7 @@ def rowSlotText : RowSlot D → String
 def bodyText : Body D → String
   | .enroll _ _ _ _ via => s!"enroll via {hexOf via}"
   | .rotate _ _ => "rotate"
+  | .rotateCertifier i _ _ => s!"rotateCertifier {i}"
   | .install pkg => s!"install {pkg.size} bytes"
   | .create pkg laws state => s!"create {(pkg.map hexOf).getD "data"} laws {laws.length} slots {state.length}"
   | .createOf pkg laws state => s!"createOf {pkg.size} bytes laws {laws.length} slots {state.length}"

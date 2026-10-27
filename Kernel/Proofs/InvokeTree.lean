@@ -497,7 +497,8 @@ def LedgerSpend (g : D) (cell : Cell) (a : Act) : Prop :=
 than an object's, and, at a cell read as a grant, its retirement or one append to one of its
 ledgers. -/
 private def OtherEffect (look : Pinned D) (e : D × Act) : Prop :=
-  ReadOther look e.1 ∧ ∀ cl, readKind look e.1 kindGrant = .ok cl → e.2 = .retire ∨ LedgerSpend e.1 cl e.2
+  ReadOther look e.1 ∧ (∀ cl, readKind look e.1 kindGrant = .ok cl → e.2 = .retire ∨ LedgerSpend e.1 cl e.2) ∧
+    ∀ cl, readKind look e.1 kindAuthority = .ok cl → False
 
 omit [Ord D] [DecidableEq D] in
 /-- A pinned id has one cell, of one kind. -/
@@ -513,8 +514,8 @@ private theorem kind_eq {look : Pinned D} {x : D} {k k' : Nat} {a b : Cell}
 
 omit [Ord D] [DecidableEq D] in
 private theorem other_of_kind {look : Pinned D} {e : D × Act} {k : Nat} {cl : Cell} (hk : k ≠ kindObject)
-    (hg : k ≠ kindGrant) (h : readKind look e.1 k = .ok cl) : OtherEffect look e :=
-  ⟨⟨k, cl, hk, h⟩, fun _ h' => absurd (kind_eq h h') hg⟩
+    (hg : k ≠ kindGrant) (ha : k ≠ kindAuthority) (h : readKind look e.1 k = .ok cl) : OtherEffect look e :=
+  ⟨⟨k, cl, hk, h⟩, fun _ h' => absurd (kind_eq h h') hg, fun _ h' => absurd (kind_eq h h') ha⟩
 
 omit [Ord D] [DecidableEq D] in
 /-- A counted right's spend writes only the grant it read, one entry appended to one ledger. -/
@@ -528,7 +529,7 @@ private theorem spendAt_other {look : Pinned D} {base : Nat} {g : D} {cell : Cel
   · intro e he
     simp only [Option.toList_some, List.mem_singleton] at he
     subst he
-    refine ⟨⟨kindGrant, cell, by decide, hg⟩, fun cl hcl => .inr ?_⟩
+    refine ⟨⟨kindGrant, cell, by decide, hg⟩, fun cl hcl => .inr ?_, fun _ h' => absurd (kind_eq hg h') (by decide)⟩
     rw [hg] at hcl
     cases hcl
     exact ⟨base, i, left, units, hb, hl, Nat.pos_of_ne_zero h0, hu, hi, rfl⟩
@@ -619,10 +620,11 @@ a credit line); births are not effects. -/
 private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
     {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} {r : Draft D × Walk D}
     (hi : b.isInvoke = false) (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v)
-    (hr : ∀ x, b ≠ .retire x)
+    (hr : ∀ x, b ≠ .retire x) (hc : ∀ i k n, b ≠ .rotateCertifier i k n)
     (h : dispatch X look rv c sub wk actor caller b = .ok r) : ∀ e ∈ r.1.effects, OtherEffect look e := by
   cases b with
   | invoke => simp [Body.isInvoke] at hi
+  | rotateCertifier i k n => exact absurd rfl (hc i k n)
   | write o e v => exact absurd rfl (hw o e v)
   | law o ls v => exact absurd rfl (hl o ls v)
   | retire x => exact absurd rfl (hr x)
@@ -645,7 +647,7 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       rw [← hd] at he
       simp only [List.mem_singleton] at he
       subst he
-      exact other_of_kind (by decide) (by decide) hm
+      exact other_of_kind (by decide) (by decide) (by decide) hm
   | install pkg =>
       have hd := stepped_draft h
       unfold install at hd
@@ -705,8 +707,8 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       rw [← hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact other_of_kind (by decide) (by decide) (readRef_kind hs)
-      · exact other_of_kind (by decide) (by decide) (readRef_kind hdr)
+      · exact other_of_kind (by decide) (by decide) (by decide) (readRef_kind hs)
+      · exact other_of_kind (by decide) (by decide) (by decide) (readRef_kind hdr)
       · exact spendVia_other (.inr (.inl rfl)) hsp e he
   | credit well acct amount via =>
       have hd := stepped_draft h
@@ -719,8 +721,8 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
       rw [← hd] at he
       simp only [List.cons_append, List.nil_append, List.mem_cons] at he
       rcases he with rfl | rfl | he
-      · exact other_of_kind (by decide) (by decide) (readAccount_kind hwl)
-      · exact other_of_kind (by decide) (by decide) (readRef_kind har)
+      · exact other_of_kind (by decide) (by decide) (by decide) (readAccount_kind hwl)
+      · exact other_of_kind (by decide) (by decide) (by decide) (readRef_kind har)
       · exact spendVia_other (.inr (.inr rfl)) hsp e he
 
 /-- What a Draft's effects are, for the totality: another receiver's (`OtherEffect`), or at an
@@ -739,11 +741,12 @@ private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (
       EffectsAt X w c r.1.effects)
     {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D} (hd : Dispatched X w c n wk a ca b)
     (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v) (hrt : ∀ x, b ≠ .retire x)
+    (hrc : ∀ i k n, b ≠ .rotateCertifier i k n)
     (h : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r) :
     EffectsAt X w c r.1.effects := by
   cases hb : b.isInvoke with
-  | false => exact fun e he => .inl (dispatch_other hb hw hl hrt h e he)
+  | false => exact fun e he => .inl (dispatch_other hb hw hl hrt hrc h e he)
   | true =>
   cases b with
   | invoke obj method args budget via =>
@@ -802,19 +805,22 @@ private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (
 private theorem dispatched_effects {X : Ctx D} {w : World D} {c : Call D} :
     ∀ n {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D}, Dispatched X w c n wk a ca b →
       (∀ o e v, b ≠ .write o e v) → (∀ o ls v, b ≠ .law o ls v) → (∀ x, b ≠ .retire x) →
+      (∀ i k n, b ≠ .rotateCertifier i k n) →
       dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r →
       EffectsAt X w c r.1.effects := by
   intro n
   induction n with
-  | zero => exact fun hd hw hl hrt h => dispatched_effects_step 0 (fun _ h => absurd h (by omega)) hd hw hl hrt h
+  | zero => exact fun hd hw hl hrt hrc h =>
+      dispatched_effects_step 0 (fun _ h => absurd h (by omega)) hd hw hl hrt hrc h
   | succ m ih =>
-      exact fun hd hw hl hrt h => dispatched_effects_step (m + 1) (fun m' hm => by
+      exact fun hd hw hl hrt hrc h => dispatched_effects_step (m + 1) (fun m' hm => by
         obtain rfl : m' = m := by omega
         intro wk' a' ca' b' r' hd' hc h'
         exact ih hd' (fun o e v he => by subst he; simp [Body.callable] at hc)
           (fun o ls v he => by subst he; simp [Body.callable] at hc)
-          (fun x he => by subst he; simp [Body.callable] at hc) h') hd hw hl hrt h
+          (fun x he => by subst he; simp [Body.callable] at hc)
+          (fun i k n he => by subst he; simp [Body.callable] at hc) h') hd hw hl hrt hrc h
 
 /-- **The totality: no receiver but `write`, `law`, `retire` and `invoke` has an effect at an
 object.** An effect of a signed call's derivation on `w` at a cell that `w`'s pinned view reads as an
@@ -867,11 +873,18 @@ theorem effect_at_object {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × 
       simp only [List.mem_singleton] at he
       subst he
       exact .inr (.inr (.inl ⟨rfl, rfl⟩))
+  | rotateCertifier i k n =>
+      rw [hb] at hR
+      obtain ⟨cl, -, hka, -, -, -, hd⟩ := rotateCertifier_ok (stepped_draft hR)
+      rw [hd] at he
+      simp only [List.mem_singleton] at he
+      subst he
+      exact absurd (kind_eq hka hk) (by decide)
   | _ =>
       have hroot := Dispatched.root (X := X) (w := w) (c := c)
       rw [hb] at hroot hR
       rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h)
-          (fun _ h => by cases h) hR e he with
+          (fun _ h => by cases h) (fun _ _ _ h => by cases h) hR e he with
         h | h
       · exact absurd h.1 hother
       · exact .inr (.inr (.inr h.2))
@@ -914,13 +927,87 @@ theorem effect_at_grant {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × W
       simp only [List.mem_singleton] at he
       subst he
       exact .inl rfl
+  | rotateCertifier i k n =>
+      rw [hb] at hR
+      obtain ⟨cl, -, hka, -, -, -, hd⟩ := rotateCertifier_ok (stepped_draft hR)
+      rw [hd] at he
+      simp only [List.mem_singleton] at he
+      subst he
+      exact absurd (kind_eq hka hk) (by decide)
   | _ =>
       have hroot := Dispatched.root (X := X) (w := w) (c := c)
       rw [hb] at hroot hR
       rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h)
-          (fun _ h => by cases h) hR e he with
+          (fun _ h => by cases h) (fun _ _ _ h => by cases h) hR e he with
         h | ⟨⟨cl, hko⟩, -⟩
-      · exact h.2 cell hk
+      · exact h.2.1 cell hk
+      · exact (notObj cl hko).elim
+
+omit [Ord D] in
+/-- A retirement reads its cell as a grant, an object or an account: never the authority. -/
+private theorem retireCheck_not_authority {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {x : D}
+    (h : retireCheck X look c a x = .ok ()) {cell : Cell} (hk : readKind look x kindAuthority = .ok cell) : False := by
+  obtain ⟨hl, hkind⟩ := readKind_look hk
+  unfold retireCheck at h
+  rw [hl] at h
+  simp only [except_bind_ok] at h
+  obtain ⟨cl, hcl, h⟩ := h
+  cases hcl
+  rw [hkind] at h
+  simp [kindAuthority, kindGrant, kindObject, kindAccount] at h
+
+/-- **The totality at the authority** (KERNEL-79): an effect of a signed call's derivation on `w` at a
+cell `w`'s pinned view reads as the authority is that call's own `rotateCertifier`: at the call's
+member, the write of the rotated certifier's two slots. No other receiver, at any depth, writes or
+retires an authority cell: `write`, `law` and an invoke's own write are at objects, a retirement
+refuses the authority (`notRetirable`), the rest write cells read by their own kinds. -/
+theorem effect_at_authority {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
+    (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+      (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok R)
+    {e : D × Act} (he : e ∈ R.1.effects) {cell : Cell}
+    (hk : readKind (pinned X.env w c.unsigned.pins) e.1 kindAuthority = .ok cell) :
+    ∃ i key next, c.unsigned.body = .rotateCertifier i key next ∧
+      e = (c.unsigned.member, .write (rotationOps X i key next)) := by
+  have notObj : ∀ cl, readKind (pinned X.env w c.unsigned.pins) e.1 kindObject = .ok cl → False :=
+    fun _ h => absurd (kind_eq h hk) (by decide)
+  cases hb : c.unsigned.body with
+  | write o edits via =>
+      rw [hb] at hR
+      obtain ⟨cl, _, _, hko, -, -, -, -, hdeq⟩ := write_judged (stepped_draft hR)
+      rw [hdeq] at he
+      simp only [writeOf, List.mem_singleton] at he
+      subst he
+      exact (notObj cl hko).elim
+  | law o laws via =>
+      rw [hb] at hR
+      obtain ⟨cl, _, _, hko, -, -, -, -, -, -, hef⟩ := law_judged (stepped_draft hR)
+      rw [hef] at he
+      simp only [writeOf, List.mem_singleton] at he
+      subst he
+      exact (notObj cl hko).elim
+  | retire x =>
+      rw [hb] at hR
+      have hd := stepped_draft hR
+      simp only [retire, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
+      obtain ⟨_, hrc, hd⟩ := hd
+      rw [← hd] at he
+      simp only [List.mem_singleton] at he
+      subst he
+      exact (retireCheck_not_authority hrc hk).elim
+  | rotateCertifier i k n =>
+      rw [hb] at hR
+      obtain ⟨-, -, -, -, -, -, hd⟩ := rotateCertifier_ok (stepped_draft hR)
+      rw [hd] at he
+      simp only [List.mem_singleton] at he
+      exact ⟨i, k, n, rfl, he⟩
+  | _ =>
+      have hroot := Dispatched.root (X := X) (w := w) (c := c)
+      rw [hb] at hroot hR
+      rcases dispatched_effects _ hroot (fun _ _ _ h => by cases h) (fun _ _ _ h => by cases h)
+          (fun _ h => by cases h) (fun _ _ _ h => by cases h) hR e he with
+        h | ⟨⟨cl, hko⟩, -⟩
+      · exact (h.2.2 cell hk).elim
       · exact (notObj cl hko).elim
 
 omit [Ord D] in

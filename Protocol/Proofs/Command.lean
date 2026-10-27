@@ -1402,6 +1402,18 @@ theorem hintNames_forks (r : Refusal D)
   rcases h with h | h | h | h <;> rw [h] <;> simp [hintNames, hintReps, Refusal.name]
 
 omit [Ord D] [DecidableEq D] in
+/-- The certificate refusals' names are in `hintNames` (out of `hintNames_complete`, whose one budget
+the whole constructor list shares). -/
+theorem hintNames_certified (a : Head.CertRefusal) : (Refusal.certified (D := D) a).name ∈ hintNames := by
+  cases a <;> simp [Refusal.name, Head.CertRefusal.name, Head.CertRefusal.all, hintNames, hintReps]
+
+omit [Ord D] [DecidableEq D] in
+/-- The genesis refusals' names, as an invitation's inputs refusal, are in `hintNames` (out of
+`hintNames_complete`'s budget). -/
+theorem hintNames_inputs (g : GenesisRefusal) : (Refusal.invite (D := D) (.inputs g)).name ∈ hintNames := by
+  cases g <;> simp [Refusal.name, Invite.Refusal.name, GenesisRefusal.name, hintNames, hintReps]
+
+omit [Ord D] [DecidableEq D] in
 /-- **Every refusal follow's machine prints is in `hintNames`, but the Host's word**: the table a hint
 is read against misses no name Lean's own refusals produce. -/
 theorem hintNames_complete (r : Refusal D) (h : ∀ n, r ≠ .host n) : r.name ∈ hintNames := by
@@ -1429,12 +1441,11 @@ theorem hintNames_complete (r : Refusal D) (h : ∀ n, r ≠ .host n) : r.name �
       cases c <;> simp [Refusal.name, CustodyRefusal.name, CustodyRefusal.all, hintNames, hintReps]
   | invite i =>
       cases i with
-      | inputs g => cases g <;> simp [Refusal.name, Invite.Refusal.name, GenesisRefusal.name, hintNames, hintReps]
+      | inputs g => exact hintNames_inputs g
       | _ => simp [Refusal.name, Invite.Refusal.name, hintNames, hintReps]
   | attest a =>
       cases a <;> simp [Refusal.name, Head.Refusal.name, Head.Refusal.all, hintNames, hintReps]
-  | certified a =>
-      cases a <;> simp [Refusal.name, Head.CertRefusal.name, Head.CertRefusal.all, hintNames, hintReps]
+  | certified a => exact hintNames_certified a
   | forkedPost _ _ => exact hintNames_forks _ (by simp [Refusal.name])
   | postBeyondPage _ _ _ => exact hintNames_forks _ (by simp [Refusal.name])
   | forkedCertified _ => exact hintNames_forks _ (by simp [Refusal.name])

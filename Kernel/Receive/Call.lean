@@ -14,7 +14,9 @@ and `World.admit` compares them again for every Turn a log carries.
 
 Identity is a MEMBER cell (its id is stable; its key rotates). A call names its member and the
 key it signs with; the key must be the member's current one (`unknownKey`), except for `rotate`,
-which is signed by the precommitted next key (`notPrecommitted`).
+which is signed by the precommitted next key (`notPrecommitted`), and `rotateCertifier`, which names
+the World's authority cell as its member and is signed by a certifier's committed next key
+(`notPreRotated`, KERNEL-79).
 -/
 import Kernel.World
 
@@ -62,6 +64,11 @@ inductive Body (D : Type)
   /-- the signer's member moves to `key`, which must be the precommitted one, and precommits
   `next`; the call is signed by `key` -/
   | rotate (key : ByteArray) (next : D)
+  /-- certifier `index` of the World's authority moves to `key`, which must be the one its
+  committed next-key digest opens, and commits `next` (KERNEL-79). The call's member is the
+  authority cell (`authorityId`) and it is signed by `key`: only the holder of the successor secret
+  rotates, never the holder of the current one -/
+  | rotateCertifier (index : Nat) (key : ByteArray) (next : D)
   /-- install a package: canonical package bytes (LANG's encoding) -/
   | install (pkg : ByteArray)
   /-- birth an object owned by the signer: programmed by `pkg`, or a data object without one;
@@ -241,6 +248,10 @@ inductive Refusal (D : Type)
   /-- a log records a cancel whose signature does not verify under the member's key on the World
   before it, or that is not exactly the cancel of its own event (the follower's re-derivation) -/
   | cancelForged
+  /-- a certifier rotation whose key is not certifier `index`'s committed successor: `index` is
+  not listed, the key's digest is not the one committed there, the call is not signed by that key,
+  or the key is already a certifier's (KERNEL-79) -/
+  | notPreRotated (index : Nat)
   deriving DecidableEq, Repr
 
 /-- The refusal's name on the wire (law 7): its constructor's, arguments dropped
@@ -296,6 +307,7 @@ def Refusal.name {D : Type} : Refusal D → String
   | .duplicateRow _ => "duplicateRow"
   | .cancelled => "cancelled"
   | .cancelForged => "cancelForged"
+  | .notPreRotated _ => "notPreRotated"
 
 /-- A receiver's only access to state: live cells at pinned ids. -/
 abbrev Pinned (D : Type) := D → Except (Refusal D) (Option Cell)
@@ -400,7 +412,7 @@ def kindObject : Nat := 2
 def kindGrant : Nat := 3
 def kindMember : Nat := 4
 /-- The World's authority (KERNEL-69): who certifies a head as the World's. Born at genesis only,
-ROM at its content id; no receiver reads or writes it (`readKind` names every other kind). -/
+at `authorityId`; one receiver reads and writes it (`rotateCertifier`, KERNEL-79). -/
 def kindAuthority : Nat := 5
 
 /-- Object: 0 package id (absent: a data object), 1 owner, `2 ≤ k < stateBase` extra law ids,
@@ -414,10 +426,11 @@ def slotKey : Nat := 0
 def slotNext : Nat := 1
 def slotSponsor : Nat := 2
 /-- Authority: 0 the threshold, 1 the certifier count (both `countBytes`), certifier `i`'s key at
-`certifierBase + i`. -/
+`certifierBase + i`, its committed next-key digest bytes at `nextBase + i` (KERNEL-79). -/
 def slotThreshold : Nat := 0
 def slotCertifierCount : Nat := 1
 def certifierBase : Nat := 2
+def nextBase : Nat := 513
 /-- Grant: 0 target, 1 grantee, 2 issuer, 3 parent (absent at a root), the rights at `rightKey`.
 A COUNTED right's (`enroll`, `transfer`, `credit`) slot is the first of its LEDGER, `base + i` for
 `i ≤ ledgerSpendsMax`: slot `i` holds what is left after the grant's `i`-th spend (slot 0: as
@@ -590,7 +603,8 @@ def Body.isInvoke : Body D → Bool
 
 /-- A Body's kind, by name (`notCallable`'s argument). -/
 def Body.kindName : Body D → String
-  | .enroll .. => "enroll" | .rotate .. => "rotate" | .install .. => "install"
+  | .enroll .. => "enroll" | .rotate .. => "rotate" | .rotateCertifier .. => "rotateCertifier"
+  | .install .. => "install"
   | .create .. => "create" | .createOf .. => "createOf" | .write .. => "write" | .law .. => "law" | .invoke .. => "invoke"
   | .grant .. => "grant" | .retire .. => "retire" | .issue .. => "issue"
   | .account .. => "account" | .transfer .. => "transfer" | .credit .. => "credit"
@@ -642,6 +656,55 @@ def sealTurn [DecidableEq D] (X : Ctx D) (c : Call D) (creates : List (D × Cell
       member := c.unsigned.member, ticks }
   let t := { t0 with charge := t0.weight }
   if t.charge ≤ c.unsigned.maxCharge then .ok t else .error (.overPrice t.charge)
+
+/-! ## The World's authority (KERNEL-69, KERNEL-79) -/
+
+/-- The domain of a certifier's committed next-key digest (KERNEL-79): disjoint from a member's
+`domNextKey`, so a digest committed for one role never opens the other. -/
+def domCertifyNext : String := "nanodregg/kernel/certify-next/v1"
+
+/-- The domain of the authority cell's id (KERNEL-79): one fixed id per World, so a rotation that
+rewrites the cell keeps its name. -/
+def domAuthority : String := "nanodregg/kernel/authority/v1"
+
+/-- Who may certify a position as the World's, and how many of them must (KERNEL-69; DESIGN-TRUST
+§1.2): made at genesis, committed in the origin, carried in the World as one cell at a fixed id
+(`authorityCell`, `authorityId`). A certificate names its signers as indices into `certifiers`
+(`Protocol.Head.certified`). Each certifier commits the digest of its NEXT key (`next`, KERNEL-79,
+`certifyNextDigest`): the one change the World admits to the authority is a certifier's rotation to
+that key, signed by it (`rotateCertifier`). The threshold and the count never change. -/
+structure Authority where
+  certifiers : List ByteArray
+  threshold : Nat
+  /-- certifier `i`'s committed next-key digest, as bytes (`certifyNextDigest`), one per certifier -/
+  next : List ByteArray := []
+  deriving DecidableEq, Repr
+
+/-- Nobody certifies: every World that names nobody. `certified` refuses a certificate under it
+`noAuthority` before it reads a signer (PROTOCOL-77.1). -/
+def Authority.none : Authority := ⟨[], 0, []⟩
+
+/-- The digest a certifier commits for its next key (KERNEL-79). -/
+def certifyNextDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domCertifyNext key
+
+/-- Certifier `i` moved to `key`, committing `next` (digest bytes) for the key after it. -/
+def Authority.rotate (a : Authority) (i : Nat) (key next : ByteArray) : Authority :=
+  { a with certifiers := a.certifiers.set i key, next := a.next.set i next }
+
+/-- `key` is certifier `i`'s committed successor (KERNEL-79): `i` is listed, `key`'s digest is the
+one committed at `i`, and `key` is no listed certifier's (a quorum counts distinct keys). -/
+def Authority.preRotated (X : Ctx D) (a : Authority) (i : Nat) (key : ByteArray) : Bool :=
+  decide (i < a.certifiers.length) && decide (a.next[i]? = some (X.env.bytes (certifyNextDigest X key))) &&
+    a.certifiers.all fun k => decide (k ≠ key)
+
+/-- An authority cell read back: the threshold, then `count` keys from `certifierBase` and `count`
+next-key digests from `nextBase`. -/
+def authorityOfCell (c : Cell) : Option Authority := do
+  let t ← countOf (← c.slots.get slotThreshold)
+  let n ← countOf (← c.slots.get slotCertifierCount)
+  let ks ← (List.range n).mapM fun i => c.slots.get (certifierBase + i)
+  let ns ← (List.range n).mapM fun i => c.slots.get (nextBase + i)
+  pure ⟨ks, t, ns⟩
 
 /-- A pinned live cell of a kind. -/
 def readKind (look : Pinned D) (c : D) (kind : Nat) : Except (Refusal D) Cell :=

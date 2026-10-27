@@ -44,12 +44,15 @@ theorem genesis_chain (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (fo
     (genesisWorld X name nonce allowance founders auth).chain =
       World.genesisChain X.env (genesisWorld X name nonce allowance founders auth).origin := rfl
 
-/-- An authority one cell carries and somebody can meet: at most `slotsPerCellMax - 2` certifiers,
-each key within the raw codec's bound, no key twice (a quorum counts distinct keys), the threshold
-within the count and zero only when nobody is listed (`Authority.none`). -/
+/-- An authority one cell carries and somebody can meet: no more certifiers than the cell's key range
+holds (`nextBase - certifierBase`), each key within the raw codec's bound, no key twice (a quorum
+counts distinct keys), the threshold within the count and zero only when nobody is listed
+(`Authority.none`), and one committed next-key digest per certifier, each within the codec's bound
+(KERNEL-79). -/
 def Authority.Fits (a : Authority) : Prop :=
-  a.certifiers.length + 2 ≤ Bounds.slotsPerCellMax ∧ (∀ k ∈ a.certifiers, k.size ≤ Bounds.eventBytesMax) ∧
-    a.certifiers.Nodup ∧ (a.threshold ≤ a.certifiers.length ∧ (a.threshold = 0 → a.certifiers = []))
+  a.certifiers.length + certifierBase ≤ nextBase ∧ (∀ k ∈ a.certifiers, k.size ≤ Bounds.eventBytesMax) ∧
+    a.certifiers.Nodup ∧ (a.threshold ≤ a.certifiers.length ∧ (a.threshold = 0 → a.certifiers = [])) ∧
+    a.next.length = a.certifiers.length ∧ ∀ d ∈ a.next, d.size ≤ Bounds.eventBytesMax
 
 /-- A genesis input within the raw codec's bounds (every length at most `Bounds.eventBytesMax`) whose
 allowance plus the genesis World's storage is below 2^64 (so the allowance is, and `fold_conserves`
@@ -100,6 +103,14 @@ theorem checkCertifiers_ok : ∀ {i : Nat} {seen ks : List ByteArray},
         · exact hk hk'
         · exact hseen k' hk' h
 
+omit [Ord D] [DecidableEq D] in
+theorem checkNext_ok : ∀ {i : Nat} {ds : List ByteArray},
+    checkNext i ds = .ok () ↔ ∀ d ∈ ds, d.size ≤ Bounds.eventBytesMax
+  | _, [] => by simp [checkNext]
+  | i, d :: rest => by
+      simp only [checkNext, req_bind_ok, decide_eq_true_eq, List.mem_cons, forall_eq_or_imp]
+      rw [checkNext_ok]
+
 /-- **The genesis check is `GenesisFits`**, clause by clause. -/
 theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
     {auth : Authority} :
@@ -109,11 +120,12 @@ theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {
   simp only [except_bind_ok, req_ok, decide_eq_true_eq]
   unfold GenesisFits Authority.Fits
   constructor
-  · rintro ⟨h1, h2, h3, h6, h8, ⟨⟩, h4, ⟨⟩, h7, h5⟩
+  · rintro ⟨h1, h2, h3, h6, h8, hn, ⟨⟩, h4, ⟨⟩, h7, ⟨⟩, hx, h5⟩
     obtain ⟨h7a, h7b, -⟩ := checkCertifiers_ok.mp h7
-    exact ⟨h1, h2, h3, checkFounders_ok.mp h4, ⟨h6, h7a, h7b, h8⟩, h5⟩
-  · rintro ⟨h1, h2, h3, h4, ⟨h6, h7a, h7b, h8⟩, h5⟩
-    exact ⟨h1, h2, h3, h6, h8, (), checkFounders_ok.mpr h4, (), checkCertifiers_ok.mpr ⟨h7a, h7b, by simp⟩, h5⟩
+    exact ⟨h1, h2, h3, checkFounders_ok.mp h4, ⟨h6, h7a, h7b, h8, hn, checkNext_ok.mp hx⟩, h5⟩
+  · rintro ⟨h1, h2, h3, h4, ⟨h6, h7a, h7b, h8, hn, hx⟩, h5⟩
+    exact ⟨h1, h2, h3, h6, h8, hn, (), checkFounders_ok.mpr h4, (), checkCertifiers_ok.mpr ⟨h7a, h7b, by simp⟩,
+      (), checkNext_ok.mpr hx, h5⟩
 
 /-- **Genesis is checked** (KERNEL-31): it returns a World exactly on a `GenesisFits` input, and
 that World is `genesisWorld`. Every theorem about `genesisWorld` is a theorem about what `genesis`
@@ -136,11 +148,13 @@ theorem genesisInput_lawfulOn :
       (v.2.2.1 < 2 ^ 64 ∧ ((v.2.2.2.1.length ≤ Bounds.eventBytesMax ∧
         ∀ x ∈ v.2.2.2.1, x.1.size ≤ Bounds.eventBytesMax ∧ x.2.size ≤ Bounds.eventBytesMax) ∧
         ((v.2.2.2.2.1.length ≤ Bounds.eventBytesMax ∧ ∀ x ∈ v.2.2.2.2.1, x.size ≤ Bounds.eventBytesMax) ∧
-          v.2.2.2.2.2 < 2 ^ 64))))) genesisInput :=
+          ((v.2.2.2.2.2.1.length ≤ Bounds.eventBytesMax ∧ ∀ x ∈ v.2.2.2.2.2.1, x.size ≤ Bounds.eventBytesMax) ∧
+            v.2.2.2.2.2.2 < 2 ^ 64)))))) genesisInput :=
   product_lawfulOn (rawBytes_lawfulOn _ (by decide)) (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
     (product_lawfulOn nat64_lawfulOn (product_lawfulOn (rawList_lawfulOn (product_lawfulOn (rawBytes_lawfulOn _ (by decide))
       (rawBytes_lawfulOn _ (by decide))) _ (by decide))
-      (product_lawfulOn (rawList_lawfulOn (rawBytes_lawfulOn _ (by decide)) _ (by decide)) nat64_lawfulOn))))
+      (product_lawfulOn (rawList_lawfulOn (rawBytes_lawfulOn _ (by decide)) _ (by decide))
+        (product_lawfulOn (rawList_lawfulOn (rawBytes_lawfulOn _ (by decide)) _ (by decide)) nat64_lawfulOn)))))
 
 theorem inputOf_fits {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
     {auth : Authority} (h : GenesisFits X name nonce allowance founders auth) :
@@ -149,12 +163,15 @@ theorem inputOf_fits {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {fou
       (v.2.2.1 < 2 ^ 64 ∧ ((v.2.2.2.1.length ≤ Bounds.eventBytesMax ∧
         ∀ x ∈ v.2.2.2.1, x.1.size ≤ Bounds.eventBytesMax ∧ x.2.size ≤ Bounds.eventBytesMax) ∧
         ((v.2.2.2.2.1.length ≤ Bounds.eventBytesMax ∧ ∀ x ∈ v.2.2.2.2.1, x.size ≤ Bounds.eventBytesMax) ∧
-          v.2.2.2.2.2 < 2 ^ 64)))) := by
-  obtain ⟨h1, h2, h4, h5, ⟨ha1, ha2, -, ha4, -⟩, h3⟩ := h
-  have hs1 : Bounds.slotsPerCellMax = 1024 := rfl
+          ((v.2.2.2.2.2.1.length ≤ Bounds.eventBytesMax ∧ ∀ x ∈ v.2.2.2.2.2.1, x.size ≤ Bounds.eventBytesMax) ∧
+            v.2.2.2.2.2.2 < 2 ^ 64))))) := by
+  obtain ⟨h1, h2, h4, h5, ⟨ha1, ha2, -, ⟨ha4, -⟩, han, hax⟩, h3⟩ := h
+  have hs1 : nextBase = 513 := rfl
+  have hs3 : certifierBase = 2 := rfl
   have hs2 : Bounds.eventBytesMax = 65536 := rfl
   refine ⟨h1, h2, by simp only [inputOf]; omega, ⟨by simpa [inputOf] using h4, ?_⟩,
-    ⟨by simp only [inputOf]; omega, fun x hx => ha2 x hx⟩, by simp only [inputOf]; omega⟩
+    ⟨by simp only [inputOf]; omega, fun x hx => ha2 x hx⟩, ⟨by simp only [inputOf]; omega, fun x hx => hax x hx⟩,
+    by simp only [inputOf]; omega⟩
   intro x hx
   simp only [inputOf, List.mem_map] at hx
   obtain ⟨f, hf, rfl⟩ := hx
@@ -216,8 +233,8 @@ theorem genesis_inj {X : Ctx D} {n : Nat} (hE : X.env.Lawful n)
     have he := genesisInput_lawfulOn.bytes_injective (inputOf_fits hf) (inputOf_fits hf')
       (ba_append_cancel _ _ _ hbytes)
     simp only [inputOf, Prod.mk.injEq] at he
-    obtain ⟨rfl, rfl, rfl, hl, hc, ht⟩ := he
-    refine ⟨rfl, rfl, rfl, ?_, by cases auth; cases auth'; cases hc; cases ht; rfl⟩
+    obtain ⟨rfl, rfl, rfl, hl, hc, hn, ht⟩ := he
+    refine ⟨rfl, rfl, rfl, ?_, by cases auth; cases auth'; cases hc; cases hn; cases ht; rfl⟩
     have hinj : Function.Injective (fun f : ByteArray × D => (f.1, X.env.bytes f.2)) := by
       intro a b hab
       simp only [Prod.mk.injEq] at hab

@@ -274,16 +274,18 @@ theorem write_law_refused {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} 
   rw [forEx_ok.mpr (fun x hx => req_ok.mpr (decide_eq_true (hk x hx)))]
   simp only [hc, hp, ha, hl, hj, req, bind, Except.bind, Option.isNone_none, if_true]
 
-/-- **Current key.** Every derived call that is not a rotation is signed by a key its member cell
+/-- **Current key.** Every derived call that is not a rotation (a member's or a certifier's) is signed by a key its member cell
 holds as current. -/
 theorem key_current {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {t : Turn D}
-    (h : receiveWith X look rv c = .ok t) (hnr : ∀ k n, c.unsigned.body ≠ .rotate k n) :
+    (h : receiveWith X look rv c = .ok t) (hnr : ∀ k n, c.unsigned.body ≠ .rotate k n)
+    (hnc : ∀ i k n, c.unsigned.body ≠ .rotateCertifier i k n) :
     ∃ m, readKind look c.unsigned.member kindMember = .ok m ∧
       m.slots.get slotKey = some c.unsigned.key := by
   have hk := receiveWith_key h
   unfold keyRule at hk
   split at hk
   · rename_i k n hb; exact absurd hb (hnr k n)
+  · rename_i i k n hb; exact absurd hb (hnc i k n)
   · unfold checkKey at hk
     split at hk
     · simp at hk
@@ -303,6 +305,30 @@ theorem rotate_precommitted {X : Ctx D} {look : Pinned D} {c : Call D} {key : By
   obtain ⟨m, hm, ⟨⟩, hkey, committed, hc, ⟨⟩, heq, _⟩ := h
   rw [req_ok, decide_eq_true_eq] at hkey heq
   exact ⟨hkey, m, hm, heq ▸ hc⟩
+
+omit [Ord D] [DecidableEq D] in
+/-- **Pre-rotation of a certifier** (KERNEL-79). A derived certifier rotation read the call's member
+as an authority cell, is signed by `key`, `key` is certifier `index`'s committed successor
+(`Authority.preRotated`: its digest the one committed there, no listed certifier's key), and its
+one effect writes that certifier's key and next commitment at the authority cell; it bears nothing. -/
+theorem rotateCertifier_ok {X : Ctx D} {look : Pinned D} {c : Call D} {index : Nat} {key : ByteArray}
+    {next : D} {d : Draft D} (h : rotateCertifier X look c index key next = .ok d) :
+    ∃ cell a, readKind look c.unsigned.member kindAuthority = .ok cell ∧ authorityOfCell cell = some a ∧
+      c.unsigned.key = key ∧ a.preRotated X index key = true ∧
+      d = ⟨[], [(c.unsigned.member, .write (rotationOps X index key next))], [], []⟩ := by
+  unfold rotateCertifier at h
+  simp only [except_bind_ok] at h
+  obtain ⟨cell, hc, h⟩ := h
+  cases ha : authorityOfCell cell with
+  | none => rw [ha] at h; simp [bind, Except.bind] at h
+  | some a =>
+    rw [ha] at h
+    simp only [except_bind_ok] at h
+    obtain ⟨a', ha', ⟨⟩, hreq, hd⟩ := h
+    cases ha'
+    rw [req_ok, Bool.and_eq_true, decide_eq_true_eq] at hreq
+    simp only [pure, Except.pure, Except.ok.injEq] at hd
+    exact ⟨cell, a, hc, ha, hreq.1, hreq.2, hd.symm⟩
 
 omit [Ord D] [DecidableEq D] in
 /-- **A spend of a counted right** (KERNEL-60: one mechanism for enrolment, transfer and credit):

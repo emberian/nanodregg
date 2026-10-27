@@ -137,7 +137,7 @@ def callData (A : Option Ty) (T : Option Ty) : Body D → Option Data
       if laws.isEmpty then
         (stateData T state).map fun d => .inj "createOf" (.record [("pkg", .bytes pkg), ("state", d)])
       else none
-  | .enroll .. | .rotate .. | .create .. | .write .. | .law .. | .retire .. | .issue .. =>
+  | .enroll .. | .rotate .. | .rotateCertifier .. | .create .. | .write .. | .law .. | .retire .. | .issue .. =>
       none
 
 end

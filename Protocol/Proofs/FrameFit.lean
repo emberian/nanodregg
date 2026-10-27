@@ -154,8 +154,8 @@ theorem resume_frame_fits {argv : List ByteArray} {startB pagesB upToB triedB si
   simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil] at hks
   obtain ⟨h1, h2, h3, h4⟩ := hu
   obtain ⟨w1, w2, w3⟩ := hw
-  have nb : Host.Page.budget = 128289 := by decide
-  have nc : Bounds.certificateBytesMax = 1424 := by decide
+  have nb : Host.Page.budget = 127709 := by decide
+  have nc : Bounds.certificateBytesMax = 2004 := by decide
   have na : Bounds.argvBytesMax = 132096 := by decide
   have nf : Bounds.frameBytesMax = 262144 := rfl
   have nk : Bounds.custodyKeyBytes = 32 := rfl

@@ -381,6 +381,10 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
         obtain ⟨_, _, ⟨⟩, _, _, _, ⟨⟩, _, hr⟩ := hd
         rw [← hr]
         simp
+    | rotateCertifier index key next =>
+        obtain ⟨-, -, -, -, -, -, hr⟩ := rotateCertifier_ok (stepped_draft h)
+        rw [hr]
+        simp
     | install pkg =>
         have hd := stepped_draft h
         simp only [install, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
@@ -532,7 +536,7 @@ omit [Ord D] [DecidableEq D] in
 /-- A genesis entry is a founder's or the authority's. -/
 theorem mem_genesisEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)} {a : Authority} {id : D}
     {e : Entry} (h : (id, e) ∈ genesisEntries X o founders a) :
-    (id, e) ∈ founderEntries X o founders ∨ (id = authorityId X a ∧ e = .live (authorityCell a) 0) := by
+    (id, e) ∈ founderEntries X o founders ∨ (id = authorityId X ∧ e = .live (authorityCell a) 0) := by
   unfold genesisEntries at h
   rcases List.mem_append.mp h with h | h
   · exact .inl h
@@ -543,7 +547,7 @@ omit [Ord D] [DecidableEq D] in
 /-- What holds of every founder entry and of the authority entry holds of every genesis entry. -/
 theorem forall_mem_genesisEntries {X : Ctx D} {o : D} {founders : List (ByteArray × D)} {a : Authority}
     {Q : D × Entry → Prop} (hf : ∀ q ∈ founderEntries X o founders, Q q)
-    (ha : Q (authorityId X a, .live (authorityCell a) 0)) : ∀ q ∈ genesisEntries X o founders a, Q q := by
+    (ha : Q (authorityId X, .live (authorityCell a) 0)) : ∀ q ∈ genesisEntries X o founders a, Q q := by
   intro q hq
   rcases mem_genesisEntries hq with h | ⟨h1, h2⟩
   · exact hf q h
@@ -608,18 +612,18 @@ theorem empty_romContent (E : Env D) (o : D) (a : Nat) : RomContent E (World.gen
   obtain ⟨v, hg⟩ := live_get hl
   exact absurd (hg.symm.trans (Trie.get_empty _ _)) (by simp)
 
-/-- **Genesis bears one ROM cell, the authority, at its content id**, so `fold_romContent` starts
-from it: the founders' cells are a RAM member and an append-only grant. -/
+/-- **Genesis bears no ROM cell**, so `fold_romContent` starts from it: the founders' cells are a RAM
+member and an append-only grant, the authority a RAM cell (KERNEL-79). -/
 theorem genesis_romContent (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
     (founders : List (ByteArray × D)) (auth : Authority) :
     RomContent X.env (genesisWorld X name nonce allowance founders auth) := by
   intro id cell hl hrom
+  exfalso
   rcases mem_genesisEntries (genesis_live hl) with hm | ⟨hid, he⟩
   case inr =>
     injection he with he _
-    subst hid he
-    rfl
-  exfalso
+    subst he
+    simp [authorityCell] at hrom
   obtain ⟨p, _, ⟨_, he⟩ | ⟨_, he⟩⟩ := mem_founderEntries hm
   · injection he with he _
     subst he

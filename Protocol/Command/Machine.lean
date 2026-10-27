@@ -1235,8 +1235,8 @@ def hintReps : List (Refusal Nat) :=
   CustodyRefusal.all.map Refusal.custody ++
   (([.badInvitation, .notSponsor, .pinMismatch, .otherWorld, .noBase, .baseMismatch, .carried] : List Invite.Refusal) ++
     ([.nameTooLong, .nonceTooLong, .tooManyFounders, .founderKeyTooLong 0, .founderNextTooLong 0,
-      .tooManyCertifiers, .certifierTooLong 0, .repeatedCertifier 0, .badThreshold,
-      .allowanceTooLarge] : List GenesisRefusal).map Invite.Refusal.inputs).map Refusal.invite
+      .tooManyCertifiers, .certifierTooLong 0, .repeatedCertifier 0, .badNext,
+      .certifierNextTooLong 0, .badThreshold, .allowanceTooLarge] : List GenesisRefusal).map Invite.Refusal.inputs).map Refusal.invite
 
 /-- The names a hint may carry: every `refused NAME` follow's machine prints but the Host's word
 (`Proofs.Command.hintNames_complete`). -/
