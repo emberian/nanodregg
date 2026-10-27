@@ -13,6 +13,7 @@ These are command forms: uppercase words stand for the member's values. Digests 
 | Invoke: nd invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--pin REL KEY]... [--via GRANT] | Arguments are read at the method's type. Follow plans against authenticated reads and checks the derived turn before requesting its signature. |
 | Sync: nd sync | Each event is re-derived; reached steps and chain must match the page. Only read envelopes are signed. |
 | Receipt: nd receipt CALL | Follow catches up and builds trie evidence and settlement against its own head. Output includes receipt, head and settlement. |
+| Health: nd receipt --health [MEMBER] | Follow catches up and reads the member's counters from its own World: its ticks in the window its next turn lands in (the meter), its recorded refusals and the World's. Output is a health receipt (the four roots and a window-trie path per counter), the head it was built at, and the three counters with their bounds; another member holding the same head checks it with Protocol.Health.check. Nothing is signed. |
 | Cancel: nd cancel CALL | Follow checks the member's own signed call can be cancelled, requests a cancel signature and sends it. A second catch-up must show the recorded cancellation before success. |
 
 Writes and invokes first sign envelopes for bounded log pages. The eventual call signs its World, member, window, pins and body. A resumed plan is re-derived; changed signed bytes are planMoved. The sponsor key during adoption remains a trust premise described in [TRUST](TRUST.md).

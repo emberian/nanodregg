@@ -62,6 +62,7 @@ import Protocol.Invite
 import Protocol.Head
 import Protocol.Command.Describe
 import Protocol.Receipt
+import Protocol.Health
 import Protocol.Settle
 import Protocol.Attempt
 import Protocol.Command.Exit
@@ -1026,13 +1027,29 @@ def receiptText (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (c : Cal
     s!"{Attempt.receiptWord} {Text.toHex b}\n{Attempt.headWord} {w.steps} {w.height} {hex X (w.roots X.env)} {hex X w.chain}\n" ++
       s!"{Attempt.settleWord} {v.text X.env.bytes}\n"
 
-def receiptLines (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) (cb : ByteArray) : Reply :=
-  match X.decodeCall cb with
-  | none => refused (D := D) .badCall
-  | some c =>
-      match receiptText X dc me w c with
-      | some t => printed t
-      | none => refused (D := D) .badState
+/-- The `receipt --health [MEMBER]` lines (DESIGN-OBS §1.5): the health receipt of the member on
+follow's World, the head it was built at (as `receipt CALL` prints it), and its three counters. -/
+def healthText (X : Ctx D) (dc : Stream D) (w : World D) (m : D) : Option String :=
+  let r := Health.build X.env w m
+  (Health.bytes X.env dc r).map fun b =>
+    s!"{Health.word} {Text.toHex b}\n{Attempt.headWord} {w.steps} {w.height} {hex X (w.roots X.env)} {hex X w.chain}\n" ++
+      r.answer.text w.height
+
+def healthLines (X : Ctx D) (dc : Stream D) (w : World D) (m : D) : Reply :=
+  match healthText X dc w m with
+  | some t => printed t
+  | none => refused (D := D) .badState
+
+/-- `receipt CALL` and `receipt --health [MEMBER]`: what each prints, from follow's World `w`. -/
+def receiptLines (X : Ctx D) (dc : Stream D) (me : Self D) (w : World D) : ReceiptOf D → Reply
+  | .health mo => healthLines X dc w (mo.getD me.member)
+  | .call cb =>
+    match X.decodeCall cb with
+    | none => refused (D := D) .badCall
+    | some c =>
+        match receiptText X dc me w c with
+        | some t => printed t
+        | none => refused (D := D) .badState
 
 /-! ## `sync` (PROTOCOL-74) -/
 
@@ -1460,7 +1477,8 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                       | .sync mode, _ => moved w' ts (syncTip X me w' st.argv signedB mode)
                       -- the receipt for a signed call, against the World follow just caught up to,
                       -- and the member's settlement of it (PROTOCOL-46)
-                      | .receipt cb, _ => moved w' ts (receiptLines X dc me w' cb)
+                      -- or the member's health receipt (DESIGN-OBS §1.5), from follow's own fold
+                      | .receipt q, _ => moved w' ts (receiptLines X dc me w' q)
                       -- cancel: custody signs the cancel message of the call (`domCancel ‖ txId`)
                       -- cancel: custody signs the cancel message of the call (`domCancel ‖ txId`);
                       -- after the writer's final answer, follow settles it here (`cancelTip`)

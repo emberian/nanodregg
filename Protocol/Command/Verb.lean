@@ -102,7 +102,12 @@ inductive Verb
   follow's World (its roots and the trie paths that show it committed, refused or absent,
   `Protocol.Receipt`, PROTOCOL-45), the head it was built at, and the member's settlement of the
   call (`Protocol.Settle.ofReceipt`, PROTOCOL-46): `receipt HEX`, `head STEPS HEIGHT ROOTS`,
-  `settle VERDICT`. The attempt store's `confirm` and `probe` (`Protocol.Attempt`) -/
+  `settle VERDICT`. The attempt store's `confirm` and `probe` (`Protocol.Attempt`).
+  `receipt --health [MEMBER]`: catch up, then print a HEALTH RECEIPT for MEMBER (default: the signer)
+  against follow's World (`Protocol.Health`, DESIGN-OBS §1.5): the member's ticks this window (the
+  meter, KERNEL-68), its recorded refusals and the World's, each with its window-trie path: `health HEX`,
+  `head STEPS HEIGHT ROOTS CHAIN`, then `ticks N of BUDGET in window W`, `refusals …`, `total …`. Read
+  from the member's own fold: nothing is asked of the writer and nothing is signed -/
   | receipt
   /-- `cancel CALL`: catch up, then sign a cancel of the member's own signed call CALL (the member's
   signature over `domCancel ‖ txId`, `Ctx.cancelMessage`) and send it to the writer as the `cancel`
@@ -162,6 +167,12 @@ inductive SyncMode
   | check (attestation : ByteArray)
   deriving DecidableEq, Repr
 
+/-- What a `receipt` is about: a signed call (its bytes, `Ctx.callBytes`, decoded by the machine),
+or a member's health (DESIGN-OBS §1.5; `none` is the signer). -/
+inductive ReceiptOf (D : Type)
+  | call (bytes : ByteArray)
+  | health (member : Option D)
+
 /-- A parsed command. -/
 inductive Cmd (D : Type)
   | init (sponsor : D)
@@ -198,7 +209,7 @@ inductive Cmd (D : Type)
   /-- the World's signed-start inputs (`Invite.startInput` bytes) -/
   | invite (input : ByteArray)
   /-- the signed call's bytes (`Ctx.callBytes`), decoded by the machine -/
-  | receipt (call : ByteArray)
+  | receipt (q : ReceiptOf D)
   /-- the signed call's bytes (`Ctx.callBytes`) of the call to cancel, decoded by the machine -/
   | cancel (call : ByteArray)
 
@@ -252,7 +263,7 @@ def usage : Verb → String
   | .transfer => "transfer SRC DST AMOUNT [--via GRANT] [--once HEX]"
   | .credit => "credit WELL ACCT AMOUNT [--via GRANT]"
   | .invite => "invite INPUT"
-  | .receipt => "receipt CALL"
+  | .receipt => "receipt CALL | receipt --health [MEMBER]"
   | .cancel => "cancel CALL"
 
 def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
@@ -433,9 +444,11 @@ def parseVerb (v : Verb) (args : List String) : Except ParseRefusal (Cmd D) :=
       | some inv, some key => .ok (.adopt inv key)
       | none, _ => .error (.badToken i)
       | _, none => .error (.badToken k)
+  | .receipt, ["--health"] => .ok (.receipt (.health none))
+  | .receipt, ["--health", m] => do pure (.receipt (.health (some (← digestArg digestOf m))))
   | .receipt, [c] =>
       match Text.ofHex c with
-      | some call => .ok (.receipt call)
+      | some call => .ok (.receipt (.call call))
       | none => .error (.badToken c)
   | .cancel, [c] =>
       match Text.ofHex c with

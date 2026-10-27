@@ -37,6 +37,7 @@ import Host.Carry
 import Protocol.Invite
 import Protocol.Use
 import Protocol.Receipt
+import Protocol.Health
 
 namespace Nanodregg.Protocol.Rows.Loopback
 
@@ -452,6 +453,7 @@ def boundToken (out : String) : Option String :=
     | ["join", h] => some h
     | ["invite", h] => some h
     | ["receipt", h] => some h
+    | ["health", h] => some h
     | ["attest", h] => some h
     | _ => none
 
@@ -1212,6 +1214,24 @@ def runAct (l : Line) : M D (Expect × String) := do
         else Receipt.check X.env w.height (w.roots X.env) (txIdOf X c) c.unsigned.notBefore r
       match ans with
       | .ok a => pure (.ok, Receipt.Answer.text X.env.bytes a)
+      | .error e => pure (.refused e.name, "")
+  | .verifyHealth owner hb => do
+      let st ← get
+      let X := st.sys.follow
+      let some b := st.binds.lookup hb >>= Text.ofHex | return (.refused s!"unbound {hb}", "")
+      let some r := Health.ofBytes X.env st.sys.writer.R.dc b | return (.refused "badHealth", "")
+      let r := match l.fault with
+        | .forgeReceipt => { r with answer := { r.answer with ticks := 0 } }
+        | _ => r
+      -- the checker's head: its own World's, nothing the receipt states
+      let w := (← actor l.actor).follow.world
+      let m := (← actor owner).self.member
+      let ans := if st.sys.trustReceipt then
+          (if rootsDigest X.env r.root r.jroot r.rroot r.rowsroot = w.roots X.env then .ok r.answer
+           else .error .headMismatch)
+        else Health.check X.env (Head.headOf X.env w) m r
+      match ans with
+      | .ok a => pure (.ok, a.text w.height)
       | .error e => pure (.refused e.name, "")
   | .used atLeast => do
       -- the member's own World, caught up; the calls the writer committed, as its clients sent them

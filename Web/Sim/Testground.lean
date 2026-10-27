@@ -47,6 +47,7 @@ import Protocol.Rows.Loopback
 import Host.Follow
 import Host.Cli
 import Protocol.Attempt
+import Protocol.Health
 import Protocol.Command.Exit
 import Lang.StdGen
 import Lang.StdOffer
@@ -448,15 +449,24 @@ def texts : List (String × String) :=
   | some t => reply Protocol.Status.ok.code t.toUTF8
   | none => refusedText "noText"
 
-/-- The meter, read back from founder `I`'s OWN fold (KERNEL-68: `World.ticksUsed`, the ticks its
-admitted Turns spent in the window its next Turn would land in, against `Bounds.ticksPerWindow`):
-`ticks N`, `budget M`, `height H`. Nothing here asks the writer. -/
+/-- The meter, read back from member `I`'s OWN fold as its HEALTH RECEIPT (DESIGN-OBS §1.5,
+`Protocol.Health`): the receipt `nd receipt --health` prints, built from the member's follow's World,
+written to its bytes, read back and CHECKED against that World's head (`Health.checkBytes`), so the page
+shows what the receipt states and that it checks, never a number beside it. Lines: `ticks N`, `budget M`,
+`refusals R`, `total T`, `height H`, `health HEX`, `checked ok` (or `checked NAME`). Nothing here asks the
+writer. -/
 @[export tg_meter] def tgMeter (i : UInt32) : IO ByteArray := do
   let some g ← ground.get | return refusedText "noWorld"
   let some m := g.members[i.toNat]? | return refusedText "noMember"
   let w := m.follow.world
+  let E := P.X.env
+  let some b := Health.bytes E P.R.dc (Health.build E w m.self.member) | return refusedText "badHealth"
+  let (verdict, a) := match Health.checkBytes E P.R.dc (Head.headOf E w) m.self.member b with
+    | .ok a => ("ok", a)
+    | .error r => (r.name, Health.answerOf E w m.self.member)
   return reply Protocol.Status.ok.code
-    s!"ticks {ticksUsed P.X.env w m.self.member}\nbudget {Bounds.ticksPerWindow}\nheight {w.height}\n".toUTF8
+    (s!"ticks {a.ticks}\nbudget {Bounds.ticksPerWindow}\nrefusals {a.refusals}\ntotal {a.total}\n" ++
+      s!"height {w.height}\nhealth {Text.toHex b}\nchecked {verdict}\n").toUTF8
 
 /-! ## A hosted World: the follows in the tab, the writer elsewhere -/
 

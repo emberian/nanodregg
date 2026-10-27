@@ -48,7 +48,7 @@ export async function loadKernel(factory, opts = {}) {
     join: (invitation, key) => call(K._w_join, invitation, key),
     self: (i, member, grant) => call(K._w_self, i, enc.encode(member), enc.encode(grant)),
     // the rows' relay around a hosted tab's socket: before it (an answer of its own, or forward) and after
-    // the meter, read back from member i's own fold (World.ticksUsed)
+    // the meter, read back from member i's own fold as its checked health receipt (Protocol.Health)
     meter: (i) => call(K._w_meter, i),
     // the members of member i's World, read off its own fold (a hosted tab's roster)
     members: (i) => call(K._w_members, i),

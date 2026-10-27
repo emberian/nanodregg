@@ -40,7 +40,14 @@ for (const name of axes) {
   if (!r.ok) bad++;
   console.log(`${r.ok ? 'OK  ' : 'FAIL'} ${name.padEnd(10)} ${n} commands, ${((performance.now() - t) / 1000).toFixed(1)} s; last: ${last?.exit} ${(last?.stderr ?? '').trim().split('\n').pop()}${r.ok ? '' : `  STOPPED at ${(r.at?.say ?? r.at?.argv?.toString() ?? '').slice(0, 90)}`}`);
   const meter = members.find((m) => m.name === 'bob');
-  if (name === 'meter') console.log(`     bob's meter, read back from his own fold: ${dec.decode(K.meter(meter.index).slice(1)).trim().replace(/\n/g, ' · ')}`);
+  if (name === 'meter') {
+    // bob's health receipt (Protocol.Health), built from his own fold and checked against his own head:
+    // a receipt that does not check, or that states no ticks after the spins, is red
+    const kv = Object.fromEntries(dec.decode(K.meter(meter.index).slice(1)).trim().split('\n').map((l) => l.split(' ')));
+    const ok = kv.checked === 'ok' && +kv.ticks > 0;
+    if (!ok) bad++;
+    console.log(`${ok ? '    ' : 'FAIL'} bob's health receipt (${(kv.health ?? '').length / 2} bytes, checked ${kv.checked}): ticks ${kv.ticks} of ${kv.budget} · refusals ${kv.refusals} · total ${kv.total} · height ${kv.height}`);
+  }
 }
 console.log(bad ? `TESTGROUND AXES RED: ${bad} demo(s)` : `TESTGROUND AXES GREEN: ${axes.length} demo(s)`);
 process.exit(bad ? 1 : 0);

@@ -89,6 +89,10 @@ inductive Act
   receipt bound to `receipt` for OWNER's last call (`Protocol.Receipt.check`); `ok` prints the
   answer, else `refused NAME` -/
   | verify (owner receipt : String)
+  /-- the actor, holding only its own head (`Head.headOf` its follow World), checks the HEALTH
+  receipt bound to `health` for OWNER's member (`Protocol.Health.check`, DESIGN-OBS §1.5); `ok` prints
+  the three counters, else `refused NAME` -/
+  | verifyHealth (owner health : String)
   /-- every call the writer committed so far is submitted, byte-identical and in order, to a SECOND
   writer made by a second genesis with the same name, allowance and founders, and the same nonce
   (`sameNonce`: a restore of the same World) or another one (OPS's cross-World replay). The outcome
@@ -156,7 +160,8 @@ inductive Fault
   relay's own World); `resign`: the relay also re-signs it with its own key -/
   | forgeInvite (resign : Bool)
   /-- the receipt reaches the checker through a relay that states `absent` over the same paths (a
-  host that says "not admitted") -/
+  host that says "not admitted"); a health receipt, through one that states the member spent no
+  ticks this window -/
   | forgeReceipt
   /-- the Host commits the submit, the reply is lost, and its lookup lies: `refused stale` for the
   committed call (PROTOCOL-46: the Host hints, follow settles) -/
@@ -1118,6 +1123,36 @@ def receiptRow : Row where
     { actor := "operator", act := .verify "sponsor" "rc3", expect := .ok, prints := some "absent" }])
   plant := .caught .trustReceipt 10 .ok
 
+/-- DESIGN-OBS §1.5, the HEALTH RECEIPT: a member asks its World what it has spent this window and
+hands the answer to another member, who checks it against the head it holds alone. The sponsor's
+invoke spent ticks; its own follow prints `receipt --health` (the meter, its refusals and the World's,
+each with its window-trie path); the operator, caught up to the same tip, checks it (`Health.check`):
+`ok`, with the ticks. The same receipt relayed as "spent nothing" (ticks 0 over the same paths) is
+`pathMismatch`; asked about another member, `otherMember`; checked after the World moved, against
+the newer head, `headMismatch` — a health receipt is a statement about ONE head, never a standing
+one. A fresh receipt at the new head checks. The plant is a phone that believes the stated answer
+once the roots match: the relayed "spent nothing" line reads `ok`. -/
+def healthRow : Row where
+  name := "health"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write", "invoke"]
+  drive := .members (welcome ++ boardWith "newcomer" ++ [
+    { actor := "sponsor", act := .cmd ["receipt", "--health"], expect := .ok, bind := some "h1",
+      prints := some "ticks " },
+    ok "operator" ["sync"],
+    { actor := "operator", act := .verifyHealth "sponsor" "h1", expect := .ok, prints := some "ticks " },
+    { actor := "operator", act := .verifyHealth "sponsor" "h1", expect := .refused "pathMismatch",
+      fault := .forgeReceipt },
+    { actor := "operator", act := .verifyHealth "newcomer" "h1", expect := .refused "otherMember" },
+    ok "sponsor" ["write", "@shared", "2", "5"],
+    ok "operator" ["sync"],
+    { actor := "operator", act := .verifyHealth "sponsor" "h1", expect := .refused "headMismatch" },
+    { actor := "sponsor", act := .cmd ["receipt", "--health"], expect := .ok, bind := some "h2" },
+    ok "operator" ["sync"],
+    { actor := "operator", act := .verifyHealth "sponsor" "h2", expect := .ok, prints := some "ticks " }])
+  plant := .caught .trustReceipt 14 .ok
+
 /-- OPS-P1's carry (KERNEL-29, HOST-28 at 6b89d6f): state crosses to a NEW World by export and
 import, never by history. A committed call; an import with a wrong digest is refused
 `carryMismatch` and the old writer still serves; the import with the file's digest makes the
@@ -1831,7 +1866,7 @@ def certifiedRow : Row where
   plant := .caught .forgeCertificate 14 (.refused "badCertifySignature")
 
 def rows : List Row :=
-  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
+  [journey, reopen, laws, rotate, audit, paging, coldCatchUp, inflatedHeight, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, healthRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,

@@ -236,9 +236,9 @@ theorem envelopeRefused_ne_submit {X : Ctx D} {me : Self D} {argv : List ByteArr
   all_goals first | exact refusedAt_ne_submit h | (simp [refused] at h; done) | (simp [notServed] at h; done) | exact unknownKeyEnd_ne_submit h | ((try dsimp only at h); exact envelopeSign_ne_submit h)
 
 theorem receiptLines_ne_submit {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w : World D}
-    {cb call k : ByteArray} : receiptLines X dc me w cb ≠ .submit call k := by
+    {q : ReceiptOf D} {call k : ByteArray} : receiptLines X dc me w q ≠ .submit call k := by
   intro h
-  unfold receiptLines at h
+  unfold receiptLines healthLines at h
   repeat' split at h
   all_goals simp [refused, printed] at h
 
@@ -1589,9 +1589,9 @@ theorem envelopeRefused_ne_host {X : Ctx D} {me : Self D} {argv : List ByteArray
   all_goals first | exact refusedAt_ne_host h | (simp [refused] at h; done) | (simp [notServed] at h; done) | exact unknownKeyEnd_ne_host h | ((try dsimp only at h); exact envelopeSign_ne_host h) | simp at h
 
 theorem receiptLines_ne_host {X : Ctx D} {dc : Codec.Stream D} {me : Self D} {w : World D}
-    {cb : ByteArray} {op : Op} {p k : ByteArray} : receiptLines X dc me w cb ≠ .host op p k := by
+    {q : ReceiptOf D} {op : Op} {p k : ByteArray} : receiptLines X dc me w q ≠ .host op p k := by
   intro h
-  unfold receiptLines at h
+  unfold receiptLines healthLines at h
   repeat' split at h
   all_goals simp [refused, printed] at h
 

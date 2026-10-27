@@ -459,12 +459,15 @@ async function runOne(m, argv, why, { forge = false, quiet = false, typed = null
   return r;
 }
 
-// the meter (KERNEL-68), read back from the member's OWN fold (tg_meter: World.ticksUsed), not asked of the writer
+// the meter (KERNEL-68), read back from the member's OWN fold as its health receipt (tg_meter: Protocol.Health), not asked of the writer
 function meterOf(m) {
   const r = (m.K ?? K).meter(m.index);
   if (r[0] !== K.table.statuses.find((x) => x.name === 'ok').code) return '';
   const kv = Object.fromEntries(new TextDecoder().decode(r.slice(1)).trim().split('\n').map((l) => l.split(' ')));
-  return `ticks ${(+kv.ticks).toLocaleString()} / ${(+kv.budget).toLocaleString()} this window`;
+  // the member's health receipt (Protocol.Health): built from its own fold, read back from its bytes and
+  // checked against its own head; the numbers shown are the checked receipt's
+  const checked = kv.checked === 'ok' ? 'receipt checks' : `receipt refused: ${kv.checked}`;
+  return `ticks ${(+kv.ticks).toLocaleString()} / ${(+kv.budget).toLocaleString()} this window · ${kv.refusals} refusals · ${checked}`;
 }
 
 // ---------------------------------------------------------------- refusals are dialogs, by name
