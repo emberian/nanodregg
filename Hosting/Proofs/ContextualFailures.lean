@@ -1,5 +1,5 @@
 /-
-# Lang.Proofs.Contextual.Failures — lost replies over the deployed objects (PROT-5, LANG-75.16)
+# Hosting.Proofs.ContextualFailures — lost replies over the deployed objects (PROT-5, LANG-75.16)
 
 The protocol calculus's `Hist.inflight` is a dispatched call whose reply was lost. In the deployed
 system that state has two owners, and they differ in one Boolean (`Nano.Peer.reliable`, Barwell
@@ -31,7 +31,7 @@ exact retry (a client re-sending the bytes whose reply it lost). This module rep
 calculus's private delivery model (`External`, `Internal`, `Consistent` and the theorems over them,
 deleted): the deployed objects state the failures themselves.
 -/
-import Lang.Proofs.Contextual.Protocol
+import Hosting.Proofs.ContextualNano
 import Hosting.Proofs.BellConform
 import Kernel.Proofs.Journal
 

@@ -1,16 +1,16 @@
 /-
-# Lang.Contextual.NanoBridge — nano's free program over effects as an open protocol (lane PROTOCOL)
+# Hosting.Contextual.NanoBridge — nano's free program over effects as an open protocol (lane PROTOCOL)
 
 `Hosting.Resident.Prog` (`cmd | keep | forget | ask | say`, a continuation per result) is the
 instance of `Lang.Contextual.Protocol.Prot` with a trivial index (`Unit`) and no holes (`Empty`):
 `ofProg` embeds a program, `toEv` reads a performed interaction as nano's trace event, `oracleH` is
 nano's oracle as a deterministic environment. Definitions only; the theorems (`nano_runs_iff`,
-`nano_interp_agrees`, `nano_interp_runs`) are in `Lang.Proofs.Contextual.Protocol`.
+`nano_interp_agrees`, `nano_interp_runs`) are in `Hosting.Proofs.ContextualNano`.
 
 The resident's two peers and their reliability (PROT-5, Barwell et al.'s reliable roles): `Peer`,
 one Boolean per peer (`Peer.reliable`), the ring an effect asks a peer about (`Peer.req`) and
 whether its reply was lost (`lostReply`). The theorem reading the Boolean is
-`Lang.Proofs.Contextual.Failures` (`Failures.lost_reply_policy`).
+`Hosting.Proofs.ContextualFailures` (`Failures.lost_reply_policy`).
 -/
 import Lang.Contextual.Protocol
 import Hosting.Resident.Trace

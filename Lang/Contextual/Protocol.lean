@@ -22,7 +22,7 @@ retract of its row. A linear `Val` kind here would be a second count of the same
 deployed reader. Its executed prefix is a history (`Hist`), possibly ending in a call
 whose reply was lost (`inflight`), and a re-substitution must leave every hole the history has
 already entered alone (`Dispatched`). The deployed lost reply is the resident's `AskEnd.lost` and
-the kernel's journal-first retry; what each does with it is `Lang.Proofs.Contextual.Failures`
+the kernel's journal-first retry; what each does with it is `Hosting.Proofs.ContextualFailures`
 (PROT-5: one Boolean per peer, `Nano.Peer.reliable`).
 
 The shape generalises minidregg's `Theory/IndexedProgram.lean` (restated in Lean core, law 11): its
@@ -38,7 +38,7 @@ bound). Substitution is SINGLE-PASS: `subst σ` replaces each hole by its fillin
 substitute into the filling, so a filling's own holes stay open under the same `σ`. Definitions only. The statements (`HasProt`, `Runs`, `Reach`, `Started`, `Dispatched`, `SubBag`,
 `Fills`, `SubstOK`, ...) are in `Lang.Proofs.Contextual.ProtocolTyping`; the theorems are in
 `Lang.Proofs.Contextual.Protocol`, `Lang.Proofs.Contextual.Negotiation` and
-`Lang.Proofs.Contextual.Failures`.
+`Hosting.Proofs.ContextualFailures`.
 -/
 
 namespace Nanodregg.Lang.Contextual.Protocol
