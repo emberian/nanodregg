@@ -94,7 +94,7 @@ theorem inhabited_law (d : ByteArray → ByteArray) (trusted : ByteArray) :
     unfold wGenesis at hs
     exact fold_cellsCanon (genesis_cellsCanon Xd _ _ _ _ _) hs
   have hfh := rederiveLog_sound ho
-  have hst : Start (deployed d) sMe trusted wGenesis := .genesis _ _ _ _ _
+  have hst : Start (deployed d) sMe trusted wGenesis := .genesis _ _ _ _ _ rfl
   have hb : (lWrite 3).unsigned.body = .write lObj [(0, some (natBytes 3))] none := rfl
   revert hst
   revert hfh
@@ -338,7 +338,7 @@ theorem inhabited_cancelOk (trusted : ByteArray) :
         rw [hw] at hr
         dsimp only at hr
         have hfh := rederiveLog_sound hw
-        have hst : Start (deployed storeDigest) sMe trusted wGenesis := .genesis _ _ _ _ _
+        have hst : Start (deployed storeDigest) sMe trusted wGenesis := .genesis _ _ _ _ _ rfl
         revert hst
         revert hfh
         revert hr

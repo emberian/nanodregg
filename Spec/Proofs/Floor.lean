@@ -16,6 +16,7 @@ hash and signature, which the kernel cannot reduce (cSHAKE256 and Ed25519 under 
 -/
 import Spec.Proofs.Bridge
 import Spec.Sim.Run
+import Spec.Sim.Member
 import Kernel.Proofs.Origin
 import Kernel.Proofs.Refusals
 import Kernel.Sim.Deployed
@@ -52,10 +53,11 @@ theorem deployed_run : ∃ (name nonce : ByteArray) (allowance : Nat) (founders 
     exact ⟨_, _, _, _, _, l, w, hs.1, hs.2, by omega⟩
 
 /-- **INHABITED (§2, §3).** The deployed system has an audited log from a start that admits a Turn. -/
-theorem inhabited_audited (d : ByteArray → ByteArray) (me : Command.Self Digest) (trusted : ByteArray) :
-    ∃ g l w, Start (deployed d) me trusted g ∧ Audited (deployed d) g l w ∧ 0 < w.height := by
+theorem inhabited_audited (d : ByteArray → ByteArray) (trusted : ByteArray) :
+    ∃ me g l w, Start (deployed d) me trusted g ∧ Audited (deployed d) g l w ∧ 0 < w.height := by
   obtain ⟨name, nonce, a, fs, au, l, w, hf, hh, hw⟩ := deployed_run
-  refine ⟨genesisWorld Host.Deployed.X name nonce a fs au, l, w, Start.genesis name nonce a fs au, ?_, hw⟩
+  refine ⟨⟨(genesisWorld Host.Deployed.X name nonce a fs au).origin, oneDigest, oneDigest, 0⟩,
+    genesisWorld Host.Deployed.X name nonce a fs au, l, w, Start.genesis name nonce a fs au rfl, ?_, hw⟩
   exact audited_deployed.mpr ⟨hf, hh⟩
 
 /-! ## §2 ONE HISTORY: the follower that takes the World it is told -/
@@ -63,8 +65,9 @@ theorem inhabited_audited (d : ByteArray → ByteArray) (me : Command.Self Diges
 theorem state_empty : Command.State.ofBytes ByteArray.empty = none := by decide +kernel
 
 /-- **FLOOR (A1).** Even under the relay premise the deployed theorem needs, the claim refuses the
-trusting follower: the World it reaches has more Turns than steps and another World's origin, which
-no audited fold from a genesis or from a pinned base of the member's own World can reach. -/
+trusting follower, on one frame: from the genesis World it reaches a World with more Turns than
+steps (no audited fold from a genesis does) and another World's origin (no base pinned for the
+member's own World has). -/
 theorem floor_oneHistory_member (d : ByteArray → ByteArray) :
     ¬ OneHistory.member (trustingFollower d) (keyFaithful (trustingFollower d)) := by
   intro h
@@ -76,20 +79,37 @@ theorem floor_oneHistory_member (d : ByteArray → ByteArray) :
       intro st _ _ hs
       rw [state_empty] at hs
       cases hs
-  obtain ⟨w₁, l, hs, ha⟩ := h me .empty _ _
-    (.genesis "spec".toUTF8 "spec-0".toUTF8 100000000 [(wKey, nextKeyDigest Xd wNext)] Authority.none)
-    (.tail (.refl _) hmove)
-  have hf := ((audited_iff (trustingFollower d) rfl rfl rfl rfl).mp ha).1
-  cases hs with
-  | genesis name nonce a fs au =>
-    have := reach_height_le_steps hf
+  rcases h.1 me .empty _ _ hmove with ⟨l, ha⟩ | ⟨-, ⟨inv, i, -, -, -, ho⟩, -⟩
+  · have hf := ((audited_iff (trustingFollower d) rfl rfl rfl rfl).mp ha).1
+    have hf' : World.fold Xd.env (genesisWorld Xd "spec".toUTF8 "spec-0".toUTF8 100000000
+        [(wKey, nextKeyDigest Xd wNext)] Authority.none) l = .ok (told wGenesis) := hf
+    have := reach_height_le_steps hf'
     simp only [told] at this
     omega
-  | pinned _ _ _ ho =>
-    have := fold_origin hf
-    simp only [told] at this
-    rw [ho] at this
-    exact absurd (congrArg (fun x : Digest => x.bytes.data) this) (by decide)
+  · simp only [told] at ho
+    exact absurd (congrArg (fun x : Digest => x.bytes.data) ho) (by decide)
+
+/-- **FLOOR (A1), the reset follower.** The claim refuses a follower that replaces its World by one
+fixed genesis on every frame (the review's countermodel to the endpoint form, whose witness was
+that genesis and the empty log): from a World one step past it, the frame neither extends the World
+by an audited log (a fold never lowers the step count) nor adopts (the World it left held a step). -/
+theorem floor_oneHistory_reset (d : ByteArray → ByteArray) :
+    ¬ OneHistory.member (resetFollower d) (keyFaithful (resetFollower d)) := by
+  intro h
+  have hmove : Moves (resetFollower d) (keyFaithful (resetFollower d)) wMe .empty
+      { wGenesis with steps := wGenesis.steps + 1 } wGenesis :=
+    by
+      refine ⟨⟨{ wGenesis with steps := wGenesis.steps + 1 }, none, none⟩, _, .empty, .empty, _, _, ?_,
+        rfl, rfl, rfl⟩
+      intro st _ _ hs
+      rw [state_empty] at hs
+      cases hs
+  rcases h.1 wMe .empty _ _ hmove with ⟨l, ha⟩ | ⟨hg, -⟩
+  · have hf := ((audited_iff (resetFollower d) rfl rfl rfl rfl).mp ha).1
+    have := fold_steps hf
+    simp only at this
+    omega
+  · simp [Command.atGenesis] at hg
 
 /-! ## §2 ONE HISTORY (A2): the chain that binds nothing -/
 
@@ -392,6 +412,44 @@ theorem inhabited_okCommitted :
         subst hd
         exact ⟨wMe, ⟨w, none, none⟩, f', kb, res, o, e, p, argv, acc, hs, hR⟩
 
+/-- **FLOOR (C(ii)), the forgetful follower.** The claim refuses a follower that answers as the
+deployed one but keeps the genesis World: on the settled run it ends `done ok`, and the World it
+keeps journals nothing (a success that erases the journal). -/
+theorem floor_consent_okCommitted_kept : ¬ Consent.okCommitted (forgetful storeDigest) := by
+  intro h
+  have hr := run_settled
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨hk, hr⟩ := hr
+  cases hs : Command.State.ofBytes wKbS with
+  | none => rw [hs] at hk; cases hk
+  | some st =>
+    rw [hs] at hk
+    obtain ⟨argv, ph, acc⟩ := st
+    have hph : ph = 4 := of_decide_eq_true hk
+    subst hph
+    cases hw : rederiveLog Xd wGenesis wLog with
+    | error e => rw [hw] at hr; cases hr
+    | ok w =>
+      rw [hw] at hr
+      dsimp only at hr
+      revert hs hr
+      generalize wKbS = kb
+      generalize wRes = res
+      intro hs hr
+      cases hR : (deployed storeDigest).follow wMe ⟨w, none, none⟩ kb res with
+      | mk f' rest =>
+        obtain ⟨p, rp⟩ := rest
+        rw [hR] at hr
+        obtain ⟨o, e, hd⟩ := okDone_eq hr
+        subst hd
+        have hF : (forgetful storeDigest).follow wMe ⟨w, none, none⟩ kb res =
+            forget ((deployed storeDigest).follow wMe ⟨w, none, none⟩ kb res) := rfl
+        rw [hR] at hF
+        obtain ⟨cb, c, hh, td, -, -, hj⟩ := h wMe ⟨w, none, none⟩ _ kb res o e p argv acc hs hF
+        have hj' : wGenesis.journalAt Xd.env (txIdOf Xd c) = some (hh, td) := hj
+        rw [wGenesis, Foreign.genesisWorld_journalAt] at hj'
+        cases hj'
+
 /-- **The expired run**: the writer would admit `cExp` at the genesis World; after the run's one
 step, follow settles it `expired`. -/
 theorem run_expired :
@@ -472,7 +530,7 @@ theorem floor_consent_cancelOk (d : ByteArray → ByteArray) : ¬ Consent.cancel
       rename_i cb
       have hcb : cb = wCb := of_decide_eq_true hk
       subst hcb
-      obtain ⟨c, hd, hset⟩ := h wMe ⟨wGenesis, none, none⟩ _ wKbC .empty .empty .empty _ st _ hs hp rfl
+      obtain ⟨c, hd, hset, -⟩ := h wMe ⟨wGenesis, none, none⟩ _ wKbC .empty .empty .empty _ st _ hs hp rfl
       have hd' : Xd.decodeCall wCb = some c := hd
       rw [run_call_decodes] at hd'
       cases hd'
@@ -483,6 +541,38 @@ theorem floor_consent_cancelOk (d : ByteArray → ByteArray) : ¬ Consent.cancel
       have hset' : Command.settleOf Xd wMe g c = .refused Command.cancelledCode := hset
       rw [hset'] at hv
       simp at hv
+
+theorem genesisWorld_refusalAt {D : Type} [Ord D] [DecidableEq D] (X : Ctx D) (name nonce : ByteArray)
+    (a : Nat) (fs : List (ByteArray × D)) (au : Authority) (k : RefusalSlot D) :
+    (genesisWorld X name nonce a fs au).refusalAt X.env k = none := by
+  simp [genesisWorld, World.genesis, World.refusalAt, Trie.T.get, Trie.getAt]
+
+/-- **FLOOR (C(ii), cancel), the settled word.** The claim refuses the Host's-word follower paired
+with a settlement that always says `cancelled` (the review's countermodel, which the settlement
+clause alone admits): the genesis World holds no record of the run's call. -/
+theorem floor_consent_cancelOk_record (d : ByteArray → ByteArray) : ¬ Consent.cancelOk (settledWord d) := by
+  intro h
+  have hr := run_cancel_state
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨hk, -⟩ := hr
+  cases hs : Command.State.ofBytes wKbC with
+  | none => rw [hs] at hk; cases hk
+  | some st =>
+    rw [hs] at hk
+    dsimp only at hk
+    cases hp : Command.parse (D := Digest) Xd.digestOf st.argv with
+    | error e => rw [hp] at hk; cases hk
+    | ok cmd =>
+      rw [hp] at hk
+      cases cmd
+      all_goals dsimp only at hk
+      all_goals first | (cases hk; done) | skip
+      rename_i cb
+      obtain ⟨c, -, -, -, hh, m, hrec⟩ :=
+        h wMe ⟨wGenesis, none, none⟩ _ wKbC .empty .empty .empty _ st _ hs hp rfl
+      have hrec' : wGenesis.refusalAt Xd.env (.tx (txIdOf Xd c)) = some (.refused hh Command.cancelledCode m) := hrec
+      rw [wGenesis, genesisWorld_refusalAt] at hrec'
+      cases hrec'
 
 /-! ## §8 SHOWN, inhabited: a page served past a passing envelope -/
 

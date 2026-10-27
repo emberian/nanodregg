@@ -47,13 +47,14 @@ own decision. -/
 def Audited (S : System D) (w : World D) (l : List (Step D)) (w' : World D) : Prop :=
   S.fold w l = .ok w' ∧ Decided S w l
 
-/-- A World a member's follower may start from: a genesis World (built by the kernel from the
-signed inputs), or a base whose bytes hash to the pin of an invitation that the sponsor key the
+/-- A World a member's follower may start from: a genesis World of the member's own World (built by
+the kernel from the signed inputs, its origin the World the member was invited to), or a base whose bytes hash to the pin of an invitation that the sponsor key the
 member trusts signed, for the member's own World (thin consent: the history before the pin is the
 sponsor's word, PROTOCOL-14). -/
 inductive Start (S : System D) (me : Command.Self D) (trusted : ByteArray) : World D → Prop
   | genesis (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
-      (auth : Authority) : Start S me trusted (genesisWorld S.X name nonce allowance founders auth)
+      (auth : Authority) : (genesisWorld S.X name nonce allowance founders auth).origin = me.world →
+      Start S me trusted (genesisWorld S.X name nonce allowance founders auth)
   | pinned {inv : ByteArray} {i : Invite.Invitation D} {w : World D} :
       Command.adoptPin S.X me inv trusted = .ok i →
       S.B.digest (S.B.world.bytes w) = i.pin.digest → S.B.stepsOf w = i.pin.steps →
@@ -82,15 +83,38 @@ inductive Reach (S : System D) (relay : ByteArray → ByteArray → Prop) (me : 
   | tail {w w₁ w₂ : World D} : Reach S relay me trusted w w₁ → Moves S relay me trusted w₁ w₂ →
       Reach S relay me trusted w w₂
 
+/-- A base the member's follower may adopt: its bytes hash to the pin of an invitation the sponsor
+key the member trusts signed, for the member's own World (`Start.pinned`'s evidence). -/
+def PinnedBase (S : System D) (me : Command.Self D) (trusted : ByteArray) (w : World D) : Prop :=
+  ∃ (inv : ByteArray) (i : Invite.Invitation D), Command.adoptPin S.X me inv trusted = .ok i ∧
+    S.B.digest (S.B.world.bytes w) = i.pin.digest ∧ S.B.stepsOf w = i.pin.steps ∧ w.origin = me.world
+
+/-- The member's history from a start: audited extensions, and adoptions of a pinned base only
+from a World that holds nothing (`Command.atGenesis`, the guard `Command.step`'s adopt arm runs). -/
+inductive Kept (S : System D) (me : Command.Self D) (trusted : ByteArray) : World D → World D → Prop
+  | refl (w : World D) : Kept S me trusted w w
+  | extend {w₀ w w' : World D} {l : List (Step D)} : Kept S me trusted w₀ w → Audited S w l w' →
+      Kept S me trusted w₀ w'
+  | adopt {w₀ w w' : World D} : Kept S me trusted w₀ w → Command.atGenesis w = true →
+      PinnedBase S me trusted w' → Kept S me trusted w₀ w'
+
 /-! ## §2 ONE HISTORY (the apex, with §3) -/
 
-/-- **A1. The member's World is an audited fold from a start.** Whatever frames follow is fed —
-any Host replies, any continuation the relay allows, any interleaving of the member's commands —
-the World it holds is an audited log's fold from a start (`∃ w₁`: an adopt replaces a World that
-holds nothing by a pinned base, a new start). -/
+/-- **A1. The member's World is its own start, audited forward.** PER FRAME: whatever follow is
+fed — any Host reply, any continuation the relay allows — the World it keeps is an audited
+extension of the World it held, or (an adopt) a base pinned by the trusted sponsor for the member's
+own World, the writer's certificate of it checked, adopted only from a World that holds nothing.
+ALONG A RUN: from the member's own start (a genesis of its own World, or such a base), every World
+any interleaving of frames reaches is `Kept`: audited extensions, adoptions only from empty Worlds.
+(A follower that resets to an unrelated genesis, or takes the World it is told, is refused per
+frame: `Spec.Proofs.Floor`.) The relay premise is the parameter `relay` (`keyFaithful`, §11.2). -/
 def OneHistory.member (S : System D) (relay : ByteArray → ByteArray → Prop) : Prop :=
+  (∀ (me : Command.Self D) (trusted : ByteArray) (w w' : World D), Moves S relay me trusted w w' →
+    (∃ l, Audited S w l w') ∨
+      (Command.atGenesis w = true ∧ PinnedBase S me trusted w' ∧
+        ∃ cert, Head.certifiesWorld S.X w' cert = .ok ())) ∧
   ∀ (me : Command.Self D) (trusted : ByteArray) (w₀ w : World D), Start S me trusted w₀ →
-    Reach S relay me trusted w₀ w → ∃ w₁ l, Start S me trusted w₁ ∧ Audited S w₁ l w
+    Reach S relay me trusted w₀ w → Kept S me trusted w₀ w
 
 /-- **A2. Two logs the kernel folds from one World, agreeing on step count and chain, reach one
 World**, or the hash collides among the two folds' link inputs. (Any folds, audited or not: the
@@ -139,13 +163,15 @@ def Integrity.law (S : System D) : Prop :=
 /-! ## §4 CONSENT AND SETTLEMENT — what a member is promised of its own follower -/
 
 /-- **C(ii), submit-class. `ok` means committed.** A follow step that ends a command `done ok` at
-the settle phase (4) means follow's own World journals the call the continuation carries. -/
+the settle phase (4) means the World follow KEEPS after the step (`f'`) journals the call the
+continuation carries. OWED (§11.2): that this call is the one the command's argv planned; the
+continuation is client-held bytes, so tying them needs the command's state kept inside follow. -/
 def Consent.okCommitted (S : System D) : Prop :=
   ∀ (me : Command.Self D) (f f' : Command.Follow D) (kb res o e : ByteArray) (p : Command.Persist D)
     (argv acc : List ByteArray), Command.State.ofBytes kb = some ⟨argv, 4, acc⟩ →
     S.follow me f kb res = (f', p, .done CommandExit.ok.code.toUInt8 o e) →
     ∃ cb c hh td, acc.getLast? = some cb ∧ S.X.decodeCall cb = some c ∧
-      f.world.journalAt S.X.env (txIdOf S.X c) = some (hh, td)
+      f'.world.journalAt S.X.env (txIdOf S.X c) = some (hh, td)
 
 /-- **C(iii). Final is final.** A settlement follow prints as `expired`, or `refused` by a name
 other than `stale`, is never contradicted: on no extension of the log does the writer admit the
@@ -159,13 +185,17 @@ def Consent.final (S : System D) : Prop :=
 
 /-- **C(ii), cancel. `ok` means cancelled on the member's own World.** A follow step of a
 `cancel CALL` command that ends `done ok` leaves follow at a World whose settlement of the call is
-`refused cancelled`: the writer's word that it recorded the cancel is never enough (collation A7). -/
+`refused cancelled`, and that World HOLDS the record: no journal entry for the call, and a recorded
+refusal of it with the cancel's code. The writer's word that it recorded the cancel is never enough
+(collation A7), nor is a settlement's word alone (a settle that always says `cancelled`). -/
 def Consent.cancelOk (S : System D) : Prop :=
   ∀ (me : Command.Self D) (f f' : Command.Follow D) (kb res o e : ByteArray) (p : Command.Persist D)
     (st : Command.State) (cb : ByteArray), Command.State.ofBytes kb = some st →
     Command.parse S.X.digestOf st.argv = .ok (Command.Cmd.cancel cb) →
     S.follow me f kb res = (f', p, .done CommandExit.ok.code.toUInt8 o e) →
-    ∃ c, S.X.decodeCall cb = some c ∧ S.settle me f'.world c = .refused (Command.cancelledCode (D := D))
+    ∃ c, S.X.decodeCall cb = some c ∧ S.settle me f'.world c = .refused (Command.cancelledCode (D := D)) ∧
+      f'.world.journalAt S.X.env (txIdOf S.X c) = none ∧
+      ∃ h m, f'.world.refusalAt S.X.env (.tx (txIdOf S.X c)) = some (.refused h (Command.cancelledCode (D := D)) m)
 
 /-- **C(iii), stale. `refused stale` is final for the member's own call.** A call the member's
 follower planned at a World `w₀` of its fold (`signedReads`, `plan`), that a later World `w` of the
