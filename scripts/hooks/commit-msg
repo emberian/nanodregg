@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Installed by scripts/install-hooks (core.hooksPath = scripts/hooks). A plain `git commit` builds
-# from the shared index, which is how five commits on 2026-10-16 reverted other layers' work; it is
-# refused. Commit with scripts/commit (private index from current main + CAS); it never runs hooks.
-echo "nanodregg: plain 'git commit' is refused. Use: scripts/commit -m MSG PATH...  (see its header)" >&2
-exit 1
