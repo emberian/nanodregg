@@ -126,7 +126,7 @@ print(s.makefile("rb").readline().decode().strip())' "$st/gb/guestbook.sock")
   mkdir -p "$P/pkg" "$P/vol" "$HROOT/worlds/testground/store" "$MROOT"
   # keybroker's socket directory (02710, its own uid's): made here, so a unit that may write only
   # inside it never needs to make it
-  mkdir -p "$KBDIR"; chmod 2710 "$KBDIR"
+  mkdir -p "$KBDIR"; [ "$(stat -c %a "$KBDIR")" = 2710 ] || chmod 2710 "$KBDIR"
   printf '(record (bell #%s) (grant #%s) (maxTokens 300) (model "%s") (system "%s"))\n' \
     "$(jsonget "$st/gb/resident.json" bell)" "$(jsonget "$st/gb/resident.json" bellGrant)" "${ND_MODEL:-claude-haiku-5-5}" \
     "${ND_SYSTEM:-Answer in one or two plain sentences. The question comes from a visitor of a public demo page.}" > "$P/pkg/resident.conf"
@@ -138,7 +138,7 @@ keys)
   mkdir -p -m 0700 "$KEYDIR"
   install -m 0644 "$TLS/anchors.pem" "$KEYDIR/anchors.pem"           # the build's, each start
   [ -e "$KEYDIR/pins" ] || install -m 0644 "$TLS/pins" "$KEYDIR/pins"   # the operator may re-pin
-  mkdir -p -m 0700 "$KEYDIR/run"; mkdir -p "$KBDIR"; chmod 2710 "$KBDIR"
+  mkdir -p -m 0700 "$KEYDIR/run"; mkdir -p "$KBDIR"; [ "$(stat -c %a "$KBDIR")" = 2710 ] || chmod 2710 "$KBDIR"
   # each resident's directory under the setgid KBDIR must come out 02710 (RUNBOOK §2a: UMask 0027)
   umask 027
   exec "$KB" "$KEYS" "$KEYDIR/anchors.pem" "$KEYDIR/pins" "$KBDIR" "$KEYDIR/run" \
