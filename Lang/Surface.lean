@@ -515,11 +515,14 @@ structure Decls where
   imports : List (Nat × String × String) := []
   layer : Option (Nat × String) := none
   doc : Option (Nat × String) := none
+  /-- `(claim keeps INV LAW)` (LANG-93), in declared order -/
+  claims : List (Nat × Claim) := []
 
 def declsOf (d : Decls) : List SExp → P Decls
   | [] => .ok { d with types := d.types.reverse, rels := d.rels.reverse, methods := d.methods.reverse,
                        laws := d.laws.reverse, guards := d.guards.reverse, machines := d.machines.reverse,
-                       imports := d.imports.reverse, activities := d.activities.reverse }
+                       imports := d.imports.reverse, activities := d.activities.reverse,
+                       claims := d.claims.reverse }
   | .list p [.atom _ "type", .atom _ n, t] :: rest => declsOf { d with types := (p, n, t) :: d.types } rest
   | .list p [.atom _ "state", t] :: rest =>
     if d.state.isSome then .error (.duplicate p "state") else declsOf { d with state := some (p, t) } rest
@@ -536,6 +539,8 @@ def declsOf (d : Decls) : List SExp → P Decls
     if d.doc.isSome then .error (.duplicate p "doc") else declsOf { d with doc := some (q, t) } rest
   | .list p [.atom _ "layer", .atom _ n] :: rest =>
     if d.layer.isSome then .error (.duplicate p "layer") else declsOf { d with layer := some (p, n) } rest
+  | .list p [.atom _ "claim", .atom _ "keeps", .atom _ inv, .atom _ law] :: rest =>
+    declsOf { d with claims := (p, .keeps inv law) :: d.claims } rest
   | x :: _ => .error (.badDecl x.pos)
 
 /-- Each label once among methods, laws, guards and machines. -/
@@ -999,7 +1004,8 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
   | some (sid, P) =>
     -- a layer's doc is its own (the super's is the super's)
     pure ⟨{ ← layerOf (fun ℓ => ((Row.find? ℓ sxs).map (·.1.pos)).getD p) sid P fields lawLabels
-      (allMethods.drop P.methods.length) with doc, effects := Row.sort (P.effects ++ effects) }, sxs⟩
+      (allMethods.drop P.methods.length) with
+        doc, effects := Row.sort (P.effects ++ effects), claims := d.claims.map (·.2) }, sxs⟩
   | none =>
     let imports ← d.imports.mapM fun (q, _, h) =>
       match Read.unhex .empty h.toList with
@@ -1009,7 +1015,7 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
             iface := .record (Row.sort (fields.map fun (ℓ, T, _) => (ℓ, T))),
             body := .record (Row.sort (fields.map fun (ℓ, _, t) => (ℓ, t))),
             methods := allMethods,
-            laws := (Row.sort (lawLabels.map (·, ()))).map (·.1), doc, effects }, sxs⟩
+            laws := (Row.sort (lawLabels.map (·, ()))).map (·.1), doc, effects, claims := d.claims.map (·.2) }, sxs⟩
 
 /-- A core package text: `(package (imports …) …)`. -/
 def isCore : SExp → Bool

@@ -11,6 +11,7 @@ the import ids and through them to the whole closure.
 import Lang.Wire
 import Lang.Check
 import Lang.HoleWire
+import Lang.Claim
 
 namespace Nanodregg.Lang
 
@@ -64,6 +65,10 @@ structure Package where
   holes : List HoleROM := []
   /-- each method's grades (LANG-89), labels ascending, each a method's; absent: the zero grade -/
   effects : List (Label × Effect) := []
+  /-- What the package claims of itself (LANG-93, `Lang.Claim`): sentences install refuses unless the
+  body bears them (`checkClaims`), carried in the package's identity: a package cannot gain or lose a
+  claim without becoming another package. -/
+  claims : List Claim := []
   deriving Inhabited, DecidableEq
 
 /-- Method `ℓ`'s grades: its entry, or the zero grade. -/
@@ -376,10 +381,11 @@ def resultT (calls state : Term) (edits : Term := .record []) : Term :=
 def importsMax : Nat := 16
 def methodsMax : Nat := 64
 def lawsMax : Nat := 16
+def claimsMax : Nat := 16
 
 /-- Why `install` refuses a package (as `Refusal.program` text on the wire). -/
 inductive CheckError
-  | tooManyImports | tooManyMethods | tooManyLaws
+  | tooManyImports | tooManyMethods | tooManyLaws | tooManyClaims
   | contextualSignature | importType
   | stateNotData | ifaceNotRecord
   /-- the body does not check at the interface: which rule, where (`TypeErr`) -/
@@ -405,13 +411,23 @@ inductive CheckError
   | effectExceeded (label : Label)
   /-- an `effects` entry out of order or naming no method -/
   | badEffect (label : Label)
+  /-- a claim names a law that is not one of the package's laws (LANG-93) -/
+  | claimNotLaw (label : Label)
+  /-- a claim's invariant is not an interface field of type `fn S bool` -/
+  | claimNotInvariant (label : Label)
+  /-- the body is not a record literal holding the invariant as `lam S _` and the law as a
+  three-binder lambda at the state and request types: nothing to walk -/
+  | claimShape (label : Label)
+  /-- the law is not in certifying shape for the claim: an `ok` leaf the invariant's test does not
+  dominate (`Term.guardedBy`) -/
+  | claimUnproved (label : Label)
   deriving DecidableEq, Repr
 
 /-- The refusal's name (law 7): its constructor's. -/
 def CheckError.name : CheckError → String
   | .contextualSignature => "contextualSignature" | .importType => "importType"
   | .tooManyImports => "tooManyImports" | .tooManyMethods => "tooManyMethods"
-  | .tooManyLaws => "tooManyLaws" | .stateNotData => "stateNotData"
+  | .tooManyLaws => "tooManyLaws" | .tooManyClaims => "tooManyClaims" | .stateNotData => "stateNotData"
   | .ifaceNotRecord => "ifaceNotRecord" | .illTyped _ => "illTyped"
   | .noMethod _ => "noMethod" | .badMethod _ => "badMethod"
   | .noLaw _ => "noLaw" | .badLaw _ => "badLaw"
@@ -419,13 +435,15 @@ def CheckError.name : CheckError → String
   | .liveNotCellKeyed _ => "liveNotCellKeyed"
   | .peerNotNamed _ => "peerNotNamed" | .receiptRead _ => "receiptRead"
   | .effectExceeded _ => "effectExceeded" | .badEffect _ => "badEffect"
+  | .claimNotLaw _ => "claimNotLaw" | .claimNotInvariant _ => "claimNotInvariant"
+  | .claimShape _ => "claimShape" | .claimUnproved _ => "claimUnproved"
 
 /-- What goes on the wire inside `Refusal.program`: the name, then the label it is about (for
 `illTyped`, the failed rule and its path: `illTyped noField @body.f`). -/
 def CheckError.wire : CheckError → String
   | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) | e@(.relKey ℓ) | e@(.badRel ℓ)
   | e@(.liveNotCellKeyed ℓ) | e@(.peerNotNamed ℓ) | e@(.receiptRead ℓ) | e@(.effectExceeded ℓ)
-  | e@(.badEffect ℓ) =>
+  | e@(.badEffect ℓ) | e@(.claimNotLaw ℓ) | e@(.claimNotInvariant ℓ) | e@(.claimShape ℓ) | e@(.claimUnproved ℓ) =>
       s!"{e.name} {ℓ}"
   | e@(.illTyped why) => s!"{e.name} {why.text}"
   | e => e.name
@@ -435,6 +453,7 @@ def CheckError.text : CheckError → String
   | .contextualSignature => "contextual signature requires live checking"
   | .importType => "import interface is not well formed"
   | .tooManyImports => "imports" | .tooManyMethods => "methods" | .tooManyLaws => "laws"
+  | .tooManyClaims => "claims"
   | .stateNotData => "state type" | .ifaceNotRecord => "interface type"
   | .illTyped why => s!"body does not check at its interface: {why.text}"
   | .noMethod ℓ => s!"no method {ℓ}" | .badMethod ℓ => s!"method {ℓ} has the wrong type"
@@ -446,6 +465,10 @@ def CheckError.text : CheckError → String
   | .receiptRead ℓ => s!"method {ℓ} reads a receipt column without a cell-keyed relation and a receipt argument"
   | .effectExceeded ℓ => s!"method {ℓ} may move value and declares no grade (effect (moves N))"
   | .badEffect ℓ => s!"effect {ℓ} names no method or is out of order"
+  | .claimNotLaw ℓ => s!"claim names {ℓ}, which is not a law of the package"
+  | .claimNotInvariant ℓ => s!"claim names {ℓ}, which is not an interface field of type fn S bool"
+  | .claimShape ℓ => s!"claim on law {ℓ}: the body holds no literal invariant and law to walk"
+  | .claimUnproved ℓ => s!"claim on law {ℓ}: an ok leaf the invariant does not dominate"
 
 def isRecordData : Ty → Bool
   | t@(.record _) => t.wf && t.isData
@@ -723,16 +746,52 @@ def checkEffects (p : Package) (row : List (Label × Ty)) : Except CheckError Un
           | none => false) with
       | some ℓ => .error (.effectExceeded ℓ)
       | none => .ok ()
+/-! ## Claims (LANG-93, `Lang.Claim`): what the package says of itself, checked against its own term
+
+A claim is checked at install beside the type, by the shape of the term: for `keeps inv law`, the
+law named is one of the package's laws (`claimNotLaw`), the invariant is an interface field at
+`fn S bool` (`claimNotInvariant`), the body is a record literal holding the invariant as the closed
+literal `lam S ib` and the law as `lam S (lam S (lam reqTy b))` (`claimShape`: a layer's body is
+`extend (ref 0) _`, so a layer cannot yet claim), and every `ok` leaf of `b` lies under the test
+`app (lam S ib) new` (`Term.guardedBy`; else `claimUnproved`). The meaning of the sentence is
+`Lang.Proofs.Claim.Keeps`; that a package the check admits bears it is `install_claims`; that every
+object of such a package keeps it along every audited log is KERNEL-73's
+`Kernel.Proofs.Logic.Claims.object_history_keeps`. The walk is O(|law|), unmetered as `checkE` is. -/
+
+/-- One claim against the package's state type `S`, interface row `row`, law labels `laws` and body. -/
+def checkClaim (S : Ty) (row : List (Label × Ty)) (laws : List Label) (body : Term) :
+    Claim → Except CheckError Unit
+  | .keeps inv law =>
+    if law ∉ laws then .error (.claimNotLaw law)
+    else if Row.find? inv row ≠ some (.fn S .bool) then .error (.claimNotInvariant inv)
+    else match body with
+      | .record fs =>
+        match Row.find? inv fs, Row.find? law fs with
+        | some (.lam A ib), some (.lam B (.lam C (.lam Q b))) =>
+          if A = S ∧ B = S ∧ C = S ∧ Q = reqTy then
+            match Term.guardedBy (.lam S ib) 1 0 b with
+            | true => .ok ()
+            | false => .error (.claimUnproved law)
+          else .error (.claimShape law)
+        | _, _ => .error (.claimShape law)
+      | _ => .error (.claimShape law)
+
+def checkClaims (S : Ty) (row : List (Label × Ty)) (laws : List Label) (body : Term) :
+    List Claim → Except CheckError Unit
+  | [] => .ok ()
+  | c :: cs => do checkClaim S row laws body c; checkClaims S row laws body cs
 
 /-- Everything about a package but its body: bounds, a data state, a canonical record interface. -/
 def Package.checkShape (p : Package) : Except CheckError Unit := do
   if p.imports.length > importsMax then throw .tooManyImports
   if p.methods.length > methodsMax then throw .tooManyMethods
   if p.laws.length > lawsMax then throw .tooManyLaws
+  if p.claims.length > claimsMax then throw .tooManyClaims
   unless isRecordData p.state do throw .stateNotData
   unless p.iface.wf do throw .ifaceNotRecord
 
-/-- Its methods and laws are fields of its interface record at their shapes. -/
+/-- Its methods and laws are fields of its interface record at their shapes, and its claims are
+borne by its body (`checkClaims`, LANG-93). -/
 def Package.checkFields (p : Package) : Except CheckError Unit :=
   match p.iface with
   | .record row => do
@@ -740,6 +799,7 @@ def Package.checkFields (p : Package) : Except CheckError Unit :=
       checkMethods p.state p.rels row p.methods
       checkEffects p row
       checkLaws p.state row p.laws
+      checkClaims p.state row p.laws p.body p.claims
   | _ => .error .ifaceNotRecord
 
 /-- The install check, given the interfaces of the imports in order: the shape, then the body
@@ -895,28 +955,47 @@ def relWire (r : Label × RelDecl) : Bool :=
     decide (r.2.limit < 2 ^ 64) && decide (r.2.cap < 2 ^ 64) && r.2.sum.all labelOk && r.2.guard.all labelOk &&
     r.2.holds.all labelOk
 
-/-- `node 0 [imports state iface body methods laws rels doc holes effects]`; imports are `node 0 id`
+/-- A claim (LANG-93): `keeps inv law` is `node 0 [] [labelLeaf inv, labelLeaf law]`. -/
+def claimTree : Claim → Tree
+  | .keeps inv law => .node 0 .empty [labelLeaf inv, labelLeaf law]
+
+def claimOf : Tree → Option Claim
+  | .node 0 e [.node 1 pi [], .node 1 pl []] =>
+    if e = .empty then
+      match labelOf pi, labelOf pl with
+      | some inv, some law => some (.keeps inv law)
+      | _, _ => none
+    else none
+  | _ => none
+
+/-- A claim has a tree that reads back to it. -/
+def claimWire : Claim → Bool
+  | .keeps inv law => labelOk inv && labelOk law
+
+/-- `node 0 [imports state iface body methods laws rels doc holes effects claims]`; imports are `node 0 id`
 leaves under a `node 0`, methods and laws `node 1 ℓ` leaves under a `node 1`, relations `relTree`s
 under a `node 2`, the doc a `node 0` leaf whose payload is its bytes (LANG-60), the holes under a
-`node 3`, the grades `effectTree`s under a `node 4` (LANG-89). -/
+`node 3`, the grades `effectTree`s under a `node 4` (LANG-89), the claims `claimTree`s under a
+`node 5` (LANG-93). -/
 def packageTree (p : Package) : Tree :=
   .node 0 .empty
     [.node 0 .empty (p.imports.map fun d => .node 0 d []), tyTree p.state, tyTree p.iface,
      termTree p.body, .node 1 .empty (p.methods.map labelLeaf), .node 1 .empty (p.laws.map labelLeaf),
      .node 2 .empty (p.rels.map relTree), .node 0 p.doc [],
-     .node 3 .empty (p.holes.map holeROMTree), .node 4 .empty (p.effects.map effectTree)]
+     .node 3 .empty (p.holes.map holeROMTree), .node 4 .empty (p.effects.map effectTree),
+     .node 5 .empty (p.claims.map claimTree)]
 
 def packageOf : Tree → Option Package
   | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls, .node 2 er rs, .node 0 doc [], .node 3 eh hs,
-      .node 4 ee es] =>
+      .node 4 ee es, .node 5 ec cs] =>
     if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty ∧ er = .empty ∧ eh = .empty ∧ ee = .empty ∧
-        Bounds.docOk doc = true then
+        ec = .empty ∧ Bounds.docOk doc = true then
       match importsOf is, tyOf s, tyOf i, termOf b, labelsOf ms, labelsOf ls, relsOf rs, hs.mapM holeROMOf,
-          effectsOf es with
+          effectsOf es, cs.mapM claimOf with
       | some imports, some state, some iface, some body, some methods, some laws, some rels, some holes,
-          some effects =>
-        some { imports, state, iface, body, methods, laws, rels, doc, holes, effects }
-      | _, _, _, _, _, _, _, _, _ => none
+          some effects, some claims =>
+        some { imports, state, iface, body, methods, laws, rels, doc, holes, effects, claims }
+      | _, _, _, _, _, _, _, _, _, _ => none
     else none
   | _ => none
 
@@ -924,15 +1003,15 @@ def packageOf : Tree → Option Package
 def packageWire (p : Package) : Bool :=
   Bounds.docOk p.doc && p.imports.all (fun d => decide (d.size ≤ importBytesMax)) && tyWire p.state &&
     tyWire p.iface && termWire p.body && p.methods.all labelOk && p.laws.all labelOk && p.rels.all relWire && p.holes.all holeROMWire &&
-    p.effects.all effectWire
+    p.effects.all effectWire && p.claims.all claimWire
 
 /-- The package tree stream at the language's bounds. -/
 def treeStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
 
 /-- The version byte (LANG-60): exactly `Bounds.packageWireVersion`; any other byte is refused
-`lang/package-version/9` by name, so bytes written at another version are never read as a package. -/
+`lang/package-version/10` by name, so bytes written at another version are never read as a package. -/
 def packageVersion : Stream Unit :=
-  Stream.refine "lang/package-version/9" Stream.u8
+  Stream.refine "lang/package-version/10" Stream.u8
     (fun v => if v = Bounds.packageWireVersion then some () else none) (fun _ => Bounds.packageWireVersion)
 
 /-- The one stream of a package: its version byte, then its tree. -/
@@ -945,12 +1024,12 @@ def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
 /-- The package codec: the version byte and the tree stream, refined by `packageOf`, refused
-`lang/package/9` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
+`lang/package/10` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
 new term, type or primitive tag turns a refused boundary row into a read one, and the version must
 move, and with it this label, `lang/package/N` at version N: `Lang.Proofs.Wire.packageCodec_label`
 fails the build otherwise; cv 01a14e58-1586, LANG-60). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package/9" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
+  Stream.refine "lang/package/10" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -960,7 +1039,7 @@ def encodePackage (p : Package) : Option ByteArray :=
     else none
   else none
 
-/-- The version byte (any other refused `lang/package-version/9`), then exactly one package tree, which reads as
+/-- The version byte (any other refused `lang/package-version/10`), then exactly one package tree, which reads as
 a package. `packageCodec`'s reading, with the tree
 stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
 packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
@@ -970,7 +1049,7 @@ def decodePackage (b : ByteArray) : Except Refusal Package :=
   | .ok t =>
     match packageOf t.2.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package/9")
+    | none => .error (.rejected 0 "lang/package/10")
 
 end Wire
 end Nanodregg.Lang

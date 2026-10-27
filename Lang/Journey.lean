@@ -524,6 +524,18 @@ def foreignRow : Program D :=
             | .row k => .row { k with parent := r.agent }
             | x => x), act)), t) }
 
+/-- Plant 12 (LANG-93, `skip-claims`): the install check before claims, `uncheckedInstallKernel` of
+DESIGN-PCC §4: the package's claims are dropped before the check, so a claim the term does not bear
+installs, and the claim rows LK6–LK8 must flip to ADMITTED under it. -/
+def skipClaims : Program D :=
+  { langProgram with checkInstall := fun look b => do
+      let p ← match Wire.decodePackage b with
+        | .ok p => pure p
+        | .error e => throw (.program (decodeText e))
+      match Wire.encodePackage { p with claims := [] } with
+      | some b' => langProgram.checkInstall look b'
+      | none => throw (.program "plant: no bytes") }
+
 /-- A package with nothing in it but its imports (LI). -/
 def importer (imports : List ByteArray) : Package :=
   { imports, state := .record [], iface := .record [], body := .record [], methods := [], laws := [] }
@@ -531,7 +543,7 @@ def importer (imports : List ByteArray) : Package :=
 /-- Which program the journey runs under. -/
 inductive Mode
   | honest | skipJudge | eraseOccasion | erasePayload | dropCalls | rawInstall | bytesIds | skipLits
-  | totalDigest | unlawfulCodec | dropRangeRow | foreignRow
+  | totalDigest | unlawfulCodec | dropRangeRow | foreignRow | skipClaims
   deriving DecidableEq
 
 def Mode.program : Mode → Program D
@@ -548,6 +560,7 @@ def Mode.program : Mode → Program D
   | .unlawfulCodec => langProgram
   | .dropRangeRow => Journey.dropRangeRow
   | .foreignRow => Journey.foreignRow
+  | .skipClaims => Journey.skipClaims
 
 /-- A method's refusal by name (LANG-51): `program "m: refused why"`. -/
 def refusedBy (v m why : String) : Bool := v.startsWith "refused program" && (v.splitOn s!"{m}: refused {why}").length > 1

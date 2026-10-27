@@ -256,14 +256,24 @@ def sectionsSx (p : Package) : Option (List SExp) := do
     list (atom "rels" :: (← p.rels.mapM relSx)),
     list [atom "body", ← termSx 0 p.body]]
 
-/-- The package's text, one section per line. -/
+/-- A claim (LANG-93), as `Read.claim` reads it. -/
+def claimSx : Claim → Option SExp
+  | .keeps inv law => do pure (list [atom "keeps", ← label inv, ← label law])
+
+/-- An optional section: none when `l` is empty, else one `(kw …)` form over its printed entries. -/
+def optSection {α : Type} (kw : String) (f : α → Option SExp) (l : List α) : Option (List SExp) :=
+  if l.isEmpty then some [] else do pure [list (atom kw :: (← l.mapM f))]
+
+/-- The package's text, one section per line: the eight sections, then `(effects …)` when a method is
+graded (LANG-89), then `(claims …)` when the package claims anything (LANG-93), then `(holes …)` when it
+has holes. -/
 def packageText (p : Package) : Option String := do
   let base ← sectionsSx p
-  let eff ← if p.effects.isEmpty then some [] else do
-    pure [list (atom "effects" :: (← p.effects.mapM effectSx))]
+  let eff ← optSection "effects" effectSx p.effects
+  let cl ← optSection "claims" claimSx p.claims
   let extra ← if p.holes.isEmpty then some [] else do
     pure [list (atom "holes" :: (← p.holes.mapM holeROMSx))]
-  let xs := atom "package" :: (base ++ eff ++ extra)
+  let xs := atom "package" :: (base ++ eff ++ cl ++ extra)
   if fitsB (list xs) then
     pure (String.ofList ('(' :: items ['\n', ' ', ' '] xs ++ ['\n']))
   else none

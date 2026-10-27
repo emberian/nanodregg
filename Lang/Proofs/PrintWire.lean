@@ -206,13 +206,41 @@ theorem checkShape_bounds {p : Package} (h : p.checkShape = .ok ()) :
   simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, Except.pure, pure] at h
   repeat' split at h
   all_goals first | cases h | skip
-  all_goals rename_i h1 h2 h3 _ _; simp only [gt_iff_lt, Nat.not_lt] at h1 h2 h3; exact ⟨h1, h2, h3⟩
+  all_goals rename_i h1 h2 h3 _ _ _; simp only [gt_iff_lt, Nat.not_lt] at h1 h2 h3; exact ⟨h1, h2, h3⟩
+
+theorem checkShape_claims {p : Package} (h : p.checkShape = .ok ()) : p.claims.length ≤ claimsMax := by
+  unfold Package.checkShape at h
+  simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, Except.pure, pure] at h
+  repeat' split at h
+  all_goals first | cases h | skip
+  all_goals rename_i h4 _ _; simp only [gt_iff_lt, Nat.not_lt] at h4; exact h4
 
 theorem labels_mapM_atoms : ∀ (ls : List Label), ls.all labelOk = true → ls.mapM label = some (ls.map atom)
   | [], _ => rfl
   | ℓ :: ls, h => by
     simp only [List.all_cons, Bool.and_eq_true] at h
     simp [List.mapM_cons, label, h.1, labels_mapM_atoms ls h.2]
+
+/-- A claim's form (LANG-93): `(keeps inv law)`. -/
+private def claimAtoms : Claim → Read.SExp
+  | .keeps inv law => list [atom "keeps", atom inv, atom law]
+
+theorem claims_mapM_atoms : ∀ (cs : List Claim), cs.all Wire.claimWire = true → cs.mapM claimSx = some (cs.map claimAtoms)
+  | [], _ => rfl
+  | .keeps inv law :: cs, h => by
+    simp only [List.all_cons, Wire.claimWire, Bool.and_eq_true] at h
+    simp [List.mapM_cons, claimSx, label, h.1.1, h.1.2, claims_mapM_atoms cs h.2, claimAtoms]
+
+theorem claimAtoms_need (c : Claim) : need (claimAtoms c) = 2 := by
+  cases c; simp [claimAtoms, need, needs, list, atom]
+theorem claimAtoms_width (c : Claim) : width (claimAtoms c) = 3 := by
+  cases c; simp [claimAtoms, width, widths, list, atom]
+theorem claims_needs : ∀ (cs : List Claim), needs (cs.map claimAtoms) ≤ 2
+  | [] => by simp [needs]
+  | c :: cs => by simp only [List.map_cons, needs, claimAtoms_need]; have := claims_needs cs; omega
+theorem claims_widths : ∀ (cs : List Claim), widths (cs.map claimAtoms) ≤ 3
+  | [] => by simp [widths]
+  | c :: cs => by simp only [List.map_cons, widths, claimAtoms_width]; have := claims_widths cs; omega
 
 theorem needs_map {α : Type} (f : α → Read.SExp) (hf : ∀ a, need (f a) = 1) : ∀ l : List α, needs (l.map f) ≤ 1
   | [] => by simp [needs]
@@ -415,41 +443,17 @@ theorem effects_widths : ∀ (es : List (Label × Effect)),
     simp only [list, atom] at this
     omega
 
-theorem package_fitsB_effects {is : List ByteArray} {ms ls : List Label} {xs xi xb xd : Read.SExp}
-    (hdn : need xd ≤ 2) (hdw : width xd ≤ 2)
-    (hi : is.length ≤ importsMax) (hm : ms.length ≤ methodsMax) (hl : ls.length ≤ lawsMax)
-    (hs : need xs ≤ Wire.depthMax) (hsw : width xs ≤ listMax) (hf : need xi ≤ Wire.depthMax) (hfw : width xi ≤ listMax)
-    (hb : need xb ≤ Wire.depthMax) (hbw : width xb ≤ listMax)
-    {xR : List Read.SExp} (hr : needs xR ≤ Wire.depthMax) (hrw : widths xR ≤ listMax) (hrl : xR.length ≤ relsMax)
-    {xE : List Read.SExp} (hen : needs xE ≤ 2) (hew : widths xE ≤ 2) (hel : xE.length ≤ methodsMax) :
-    fitsB (list (atom "package" ::
-      [list (atom "imports" :: is.map fun i => .str 0 (hex i)), xd, list [atom "state", xs],
-       list [atom "iface", xi], list (atom "methods" :: ms.map atom),
-       list (atom "laws" :: ls.map atom), list (atom "rels" :: xR), list [atom "body", xb],
-       list (atom "effects" :: xE)])) = true := by
-  have him := needs_map (fun i : ByteArray => Read.SExp.str 0 (hex i)) (fun _ => rfl) is
-  have hiw := widths_map (fun i : ByteArray => Read.SExp.str 0 (hex i)) (fun _ => rfl) is
-  have hmm := needs_map atom (fun _ => rfl) ms
-  have hmw := widths_map atom (fun _ => rfl) ms
-  have hlm := needs_map atom (fun _ => rfl) ls
-  have hlw := widths_map atom (fun _ => rfl) ls
-  rw [fitsB_iff]
-  simp only [importsMax, methodsMax, lawsMax, relsMax] at hi hm hl hrl hel
-  simp only [listMax_eq, Wire.depthMax] at hs hsw hf hfw hb hbw hr hrw ⊢
-  simp only [depthMax, Wire.depthMax, need, needs, width, widths, list, atom, List.length_cons, List.length_map]
-  simp only [List.length_nil, Nat.add_one_le_iff, Nat.max_lt, Nat.max_le]
-  omega
-
 theorem package_fitsB {is : List ByteArray} {ms ls : List Label} {xs xi xb xd : Read.SExp}
     (hdn : need xd ≤ 2) (hdw : width xd ≤ 2)
     (hi : is.length ≤ importsMax) (hm : ms.length ≤ methodsMax) (hl : ls.length ≤ lawsMax)
     (hs : need xs ≤ Wire.depthMax) (hsw : width xs ≤ listMax) (hf : need xi ≤ Wire.depthMax) (hfw : width xi ≤ listMax)
     (hb : need xb ≤ Wire.depthMax) (hbw : width xb ≤ listMax)
-    {xR : List Read.SExp} (hr : needs xR ≤ Wire.depthMax) (hrw : widths xR ≤ listMax) (hrl : xR.length ≤ relsMax) :
+    {xR : List Read.SExp} (hr : needs xR ≤ Wire.depthMax) (hrw : widths xR ≤ listMax) (hrl : xR.length ≤ relsMax)
+    {tail : List Read.SExp} (htn : needs tail ≤ Wire.depthMax + 1) (htw : widths tail ≤ listMax) (htl : tail.length ≤ 2) :
     fitsB (list (atom "package" ::
-      [list (atom "imports" :: is.map fun i => .str 0 (hex i)), xd, list [atom "state", xs],
+      ([list (atom "imports" :: is.map fun i => .str 0 (hex i)), xd, list [atom "state", xs],
        list [atom "iface", xi], list (atom "methods" :: ms.map atom),
-       list (atom "laws" :: ls.map atom), list (atom "rels" :: xR), list [atom "body", xb]])) = true := by
+       list (atom "laws" :: ls.map atom), list (atom "rels" :: xR), list [atom "body", xb]] ++ tail))) = true := by
   have him := needs_map (fun i : ByteArray => Read.SExp.str 0 (hex i)) (fun _ => rfl) is
   have hiw := widths_map (fun i : ByteArray => Read.SExp.str 0 (hex i)) (fun _ => rfl) is
   have hmm := needs_map atom (fun _ => rfl) ms
@@ -458,8 +462,9 @@ theorem package_fitsB {is : List ByteArray} {ms ls : List Label} {xs xi xb xd : 
   have hlw := widths_map atom (fun _ => rfl) ls
   rw [fitsB_iff]
   simp only [importsMax, methodsMax, lawsMax, relsMax] at hi hm hl hrl
-  simp only [listMax_eq, Wire.depthMax] at hs hsw hf hfw hb hbw hr hrw ⊢
-  simp only [depthMax, Wire.depthMax, need, needs, width, widths, list, atom, List.length_cons, List.length_map]
+  simp only [listMax_eq, Wire.depthMax] at hs hsw hf hfw hb hbw hr hrw htn htw ⊢
+  simp only [depthMax, Wire.depthMax, need, needs, width, widths, list, atom, List.length_cons, List.length_map,
+    List.cons_append, List.nil_append]
   simp only [List.length_nil, Nat.add_one_le_iff, Nat.max_lt, Nat.max_le]
   omega
 
@@ -470,7 +475,7 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
   obtain ⟨hshape, T, hT⟩ := checkWith_parts hc
   obtain ⟨hni, hnm, hnl⟩ := checkShape_bounds hshape
   simp only [Wire.packageWire, Bool.and_eq_true] at hw
-  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨hwd, -⟩, hws⟩, hwi⟩, hwb⟩, hwm⟩, hwl⟩, hwr⟩, -⟩, hwe⟩ := hw
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hwd, -⟩, hws⟩, hwi⟩, hwb⟩, hwm⟩, hwl⟩, hwr⟩, -⟩, hwe⟩, hwc⟩ := hw
   obtain ⟨xd, hxd, hnd, hwxd⟩ := docSx_prints hwd
   obtain ⟨D, hD, hcs⟩ := fits_node hf
   simp only [Wire.depthMax] at hD
@@ -486,21 +491,49 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
   obtain ⟨D2, hD2, hc2⟩ := fits_node (hcs (.node 2 .empty (p.rels.map Wire.relTree)) (by simp))
   obtain ⟨xR, hxR, hnR, hwR, hlR⟩ := rels_prints p.rels (fun r hr =>
     ⟨List.all_eq_true.mp hwr r hr, hc2 _ (List.mem_map.mpr ⟨r, hr, rfl⟩), hkl r hr⟩)
-  have hfit := package_fitsB (is := p.imports) (ms := p.methods) (ls := p.laws) hnd hwxd hni hnm hnl hns hwxs hni' hwxi hnb hwxb
-    (xR := xR) (by simp only [Wire.depthMax] at hnR ⊢; omega) hwR (by omega)
+  have hcl := checkShape_claims hshape
+  have hC := claims_mapM_atoms p.claims hwc
   obtain ⟨he, hΔ⟩ := checkWith_closed hc
   obtain ⟨rowE, hce⟩ := checkFields_checkEffects hfields
-  have hfitE := package_fitsB_effects (is := p.imports) (ms := p.methods) (ls := p.laws) hnd hwxd hni hnm hnl hns hwxs hni' hwxi hnb hwxb
-    (xR := xR) (by simp only [Wire.depthMax] at hnR ⊢; omega) hwR (by omega)
-    (xE := p.effects.map fun e => list [atom e.1, atom (Nat.repr e.2.moves)]) (effects_needs p.effects)
-    (effects_widths p.effects) (by rw [List.length_map]; exact Nat.le_trans (checkEffects_length hce) hnm)
   have htext : (packageText p).isSome = true := by
-    rcases hee : p.effects.isEmpty with _ | _
-    · -- grades: the ninth section
-      simp [packageText, he, hee, sectionsSx, hxd, hxs, hxi, hxb,
-        labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, effects_mapM_sx _ hwe, hfitE]
-    · simp [packageText, he, hee, sectionsSx, hxd, hxs, hxi, hxb,
+    have hEl : (p.effects.map fun e => list [atom e.1, atom (Nat.repr e.2.moves)]).length ≤ methodsMax := by
+      rw [List.length_map]; exact Nat.le_trans (checkEffects_length hce) hnm
+    have hEn := effects_needs p.effects
+    have hEw := effects_widths p.effects
+    have hCn := claims_needs p.claims
+    have hCw := claims_widths p.claims
+    have fit := fun (tail : List Read.SExp) (htn : needs tail ≤ Wire.depthMax + 1) (htw : widths tail ≤ listMax)
+        (htl : tail.length ≤ 2) =>
+      package_fitsB (is := p.imports) (ms := p.methods) (ls := p.laws) hnd hwxd hni hnm hnl hns hwxs hni' hwxi hnb hwxb
+        (xR := xR) (by simp only [Wire.depthMax] at hnR ⊢; omega) hwR (by omega) (tail := tail) htn htw htl
+    by_cases hee : p.effects.isEmpty <;> by_cases hcc : p.claims.isEmpty
+    · have hfit := fit [] (by simp [needs]) (by simp [widths]) (by simp)
+      simp only [List.append_nil] at hfit
+      simp [packageText, optSection, he, hee, hcc, sectionsSx, hxd, hxs, hxi, hxb,
         labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, hfit]
+    · have hfit := fit [list (atom "claims" :: p.claims.map claimAtoms)]
+        (by simp only [needs, need, list, atom, Wire.depthMax] at hCn ⊢; omega)
+        (by simp only [widths, width, list, atom, listMax_eq, List.length_cons, List.length_map, claimsMax] at hcl hCw ⊢; omega)
+        (by simp)
+      simp only [List.cons_append, List.nil_append] at hfit
+      simp [packageText, optSection, he, hee, hcc, sectionsSx, hxd, hxs, hxi, hxb,
+        labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, hC, hfit]
+    · have hfit := fit [list (atom "effects" :: p.effects.map fun e => list [atom e.1, atom (Nat.repr e.2.moves)])]
+        (by simp only [needs, need, list, atom, Wire.depthMax] at hEn ⊢; omega)
+        (by simp only [widths, width, list, atom, listMax_eq, List.length_cons, List.length_map, methodsMax] at hEl hEw ⊢; omega)
+        (by simp)
+      simp only [List.cons_append, List.nil_append] at hfit
+      simp [packageText, optSection, he, hee, hcc, sectionsSx, hxd, hxs, hxi, hxb,
+        labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, effects_mapM_sx _ hwe, hfit]
+    · have hfit := fit [list (atom "effects" :: p.effects.map fun e => list [atom e.1, atom (Nat.repr e.2.moves)]),
+          list (atom "claims" :: p.claims.map claimAtoms)]
+        (by simp only [needs, need, list, atom, Wire.depthMax] at hEn hCn ⊢; omega)
+        (by simp only [widths, width, list, atom, listMax_eq, List.length_cons, List.length_map, methodsMax, claimsMax]
+              at hEl hEw hcl hCw ⊢; omega)
+        (by simp)
+      simp only [List.cons_append, List.nil_append] at hfit
+      simp [packageText, optSection, he, hee, hcc, sectionsSx, hxd, hxs, hxi, hxb,
+        labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR, effects_mapM_sx _ hwe, hC, hfit]
   obtain ⟨text, ht⟩ := Option.isSome_iff_exists.mp htext
   have hread := readPackage_closedText (checkShape_wf hshape).1 (checkShape_wf hshape).2
     (checkFields_rels hfields) (hasType_canon hΔ (by simp) (inferE_sound hT)) he ht
@@ -575,7 +608,7 @@ theorem state_prints {p : Package} {b : ByteArray} (he : Wire.encodePackage p = 
     · rename_i hf
       simp only [Wire.packageWire, Bool.and_eq_true] at hw
       obtain ⟨D, hD, hcs⟩ := fits_node hf
-      have := tyWire_prints p.state hw.1.1.1.1.1.1.1.2 (hcs _ (by simp))
+      have := tyWire_prints p.state hw.1.1.1.1.1.1.1.1.2 (hcs _ (by simp))
       exact this.mono (by simp only [depthMax, Wire.depthMax] at hD ⊢; omega)
     · cases he
   · cases he
@@ -610,7 +643,7 @@ private def deepT : Nat → Term
   | n + 1 => .record [("f", deepT n)]
 
 /-- A package at the wire's depth bound: its body's and its interface's trees are 1023 deep. -/
-private def deepPkg : Package := ⟨[], .record [], deepTy 511, deepT 511, [], [], [], .empty, [], []⟩
+private def deepPkg : Package := ⟨[], .record [], deepTy 511, deepT 511, [], [], [], .empty, [], [], []⟩
 
 theorem deep_wire : Wire.packageWire deepPkg = true := by decide +kernel
 
@@ -636,13 +669,13 @@ theorem deep_needs_depthMax :
 
 /-- A label with a space is not one atom, so the wire refuses it as the printer does. -/
 theorem spaced_label_no_bytes :
-    (Wire.encodePackage ⟨[], .record [], .record [("a b", .nat)], .record [("a b", .nat 0)], [], [], [], .empty, [], []⟩).isNone = true := by
+    (Wire.encodePackage ⟨[], .record [], .record [("a b", .nat)], .record [("a b", .nat 0)], [], [], [], .empty, [], [], []⟩).isNone = true := by
   decide +kernel
 
 private def labelTree (ℓ : Label) : Tree :=
   .node 0 .empty [.node 0 .empty [], Wire.tyTree (.record []), .node 4 .empty [.node 6 ℓ.toUTF8 [.node 0 .empty []]],
     Wire.termTree (.record []), .node 1 .empty [], .node 1 .empty [], .node 2 .empty [], .node 0 .empty [], .node 3 .empty [],
-    .node 4 .empty []]
+    .node 4 .empty [], .node 5 .empty []]
 
 /-- The decoder's side of the narrowing: a package tree whose interface row holds the label `a b`
 reads as no package, and the same tree with `ab` reads. -/

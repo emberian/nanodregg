@@ -10,10 +10,15 @@
   (`Kernel.Proofs.Logic.History.object_history_chain`) produces exactly such a chain from a World's
   history around an object, so this is the term half of INTEGRITY's claim clause (DESIGN-PCC §4).
 * `keeps_guarded`, `isLaw_keeps`, `noRef_keeps`: `Std.keeps` is in shape, and has the shape the lift wants.
+* `checkFields_claim`, `install_claims` (LANG-93): what the install check admitted BEARS every claim it
+  carries: the body is a record literal holding the invariant and the law as literals, and the law is
+  in certifying shape (`checkClaim_keeps`); so the carried sentence is exactly what `keeps_step` and
+  `chain_keeps` are about, and KERNEL-73 (`Kernel.Proofs.Logic.Claims`) lifts it to the World.
 -/
 import Lang.Claim
 import Lang.Proofs.Chain
 import Lang.Proofs.Receiver
+import Lang.Proofs.LiveHoles
 
 namespace Nanodregg.Lang
 
@@ -136,5 +141,113 @@ theorem noRef_keeps (S : Ty) {inv : Term} (h : NoRef inv) : NoRef (Std.keeps S i
     simp only [Std.guard, NoRef, Std.At.new]
     exact ⟨⟨h, trivial⟩, NoRefStd.okT_, NoRefStd.refusedT_⟩
   exact NoRefStd.lawOf_ hc hc NoRefStd.okT_ hc hc
+
+/-! ## The install layer (LANG-93): what the check admitted bears the claim -/
+
+/-- The witness `checkClaim` walked for a `keeps` claim it admitted: the law is one of the package's,
+the invariant an interface field at `fn S bool`, the body a record literal holding the invariant as
+`lam S ib` and the law as `lam S (lam S (lam reqTy b))`, and `b` in certifying shape. -/
+theorem checkClaim_keeps {S : Ty} {row : List (Label × Ty)} {laws : List Label} {body : Term}
+    {inv law : Label} (h : checkClaim S row laws body (.keeps inv law) = .ok ()) :
+    law ∈ laws ∧ Row.find? inv row = some (.fn S .bool) ∧
+      ∃ fs ib b, body = .record fs ∧ Row.find? inv fs = some (.lam S ib) ∧
+        Row.find? law fs = some (.lam S (.lam S (.lam reqTy b))) ∧ Term.guardedBy (.lam S ib) 1 0 b = true := by
+  simp only [checkClaim] at h
+  by_cases h1 : law ∉ laws
+  · rw [if_pos h1] at h; cases h
+  rw [if_neg h1] at h
+  by_cases h2 : Row.find? inv row ≠ some (.fn S .bool)
+  · rw [if_pos h2] at h; cases h
+  rw [if_neg h2] at h
+  split at h
+  · rename_i fs
+    split at h
+    · rename_i A ib B C Q b hi hl
+      by_cases h3 : A = S ∧ B = S ∧ C = S ∧ Q = reqTy
+      · rw [if_pos h3] at h
+        obtain ⟨rfl, rfl, rfl, rfl⟩ := h3
+        split at h
+        · rename_i hg
+          exact ⟨by simpa using h1, by simpa using h2, fs, ib, b, rfl, hi, hl, hg⟩
+        · cases h
+      · rw [if_neg h3] at h; cases h
+    · cases h
+  · cases h
+
+theorem checkClaims_mem {S : Ty} {row : List (Label × Ty)} {laws : List Label} {body : Term} :
+    ∀ {cs : List Claim}, checkClaims S row laws body cs = .ok () → ∀ c ∈ cs, checkClaim S row laws body c = .ok ()
+  | [], _, _, hc => by simp at hc
+  | c :: cs, h, c', hc => by
+    simp only [checkClaims, bind, Except.bind] at h
+    split at h
+    · cases h
+    · rename_i u hu
+      cases u
+      rcases List.mem_cons.1 hc with rfl | hc
+      · exact hu
+      · exact checkClaims_mem h c' hc
+
+/-- **The field check bears every claim**: a package whose `checkFields` admits carries, for each
+`keeps inv law` it claims, the witness `checkClaim_keeps` names, at the package's own state type. -/
+theorem checkFields_claim {p : Package} (h : p.checkFields = .ok ()) {inv law : Label}
+    (hc : Claim.keeps inv law ∈ p.claims) :
+    law ∈ p.laws ∧ Row.find? inv (recordRow p.iface) = some (.fn p.state .bool) ∧
+      ∃ fs ib b, p.body = .record fs ∧ Row.find? inv fs = some (.lam p.state ib) ∧
+        Row.find? law fs = some (.lam p.state (.lam p.state (.lam reqTy b))) ∧
+        Term.guardedBy (.lam p.state ib) 1 0 b = true := by
+  unfold Package.checkFields at h
+  split at h
+  · rename_i row hrow
+    simp only [bind, Except.bind] at h
+    split at h
+    · simp at h
+    · split at h
+      · simp at h
+      · split at h
+        · simp at h
+        · split at h
+          · simp at h
+          · rw [hrow]; exact checkClaim_keeps (checkClaims_mem h _ hc)
+  · simp at h
+
+/-- The install check admits only a package whose field check admits: install's own admission of
+the package (`admitContextual`, LANG-78) keeps the closure invariant, which holds `checkFields`. -/
+theorem checkInstall_fields {D : Type} {digestOf : ByteArray → Option D} {look : Kernel.Receive.Pinned D}
+    {b : ByteArray} {p : Package} (h : checkInstall digestOf look b = .ok ())
+    (hd : Wire.decodePackage b = .ok p) : p.checkFields = .ok () := by
+  have hpw : Wire.packageWire p = true := by
+    obtain ⟨b', hb⟩ : ∃ b', Wire.encodePackage p = some b' := ⟨_, Wire.decodePackage_eq_ok_iff.mp hd⟩
+    unfold Wire.encodePackage at hb
+    split at hb
+    · assumption
+    · simp at hb
+  unfold checkInstall at h
+  simp only [bind, Except.bind, pure, Except.pure, hd] at h
+  cases hl : loadAllContextual digestOf look (closureDepthMax - 1) p.imports ⟨[], [], []⟩ with
+  | error e => simp [hl] at h
+  | ok x =>
+  obtain ⟨L, gis⟩ := x
+  simp only [hl] at h
+  cases ha : admitContextual digestOf (fun _ => unresolvedBody) b p L gis with
+  | error e => simp [ha] at h
+  | ok y =>
+  obtain ⟨L', g⟩ := y
+  have hinv := (loadAllUsing_inv digestOf look _ (fun hi hw ha => admitContextual_inv hi hw ha)
+    _ _ _ Inv.empty hl).1
+  obtain ⟨hinv', -, hpk⟩ := admitContextual_inv hinv hpw ha
+  exact (hinv'.2.2.2 L.pkgs.length p (by simp [hpk])).2.1
+
+/-- **An installed package bears its claims** (DESIGN-PCC §3.3(b)): bytes the install check admits
+decode to a package that carries, for each `keeps inv law` it claims, a body in certifying shape for
+it. With `keeps_step`/`chain_keeps` that makes the claim a sentence about every admitted step of the
+law; KERNEL-73 composes it with THE LIFT. -/
+theorem install_claims {D : Type} {digestOf : ByteArray → Option D} {look : Kernel.Receive.Pinned D}
+    {b : ByteArray} {p : Package} (h : checkInstall digestOf look b = .ok ())
+    (hd : Wire.decodePackage b = .ok p) {inv law : Label} (hc : Claim.keeps inv law ∈ p.claims) :
+    law ∈ p.laws ∧ Row.find? inv (recordRow p.iface) = some (.fn p.state .bool) ∧
+      ∃ fs ib b', p.body = .record fs ∧ Row.find? inv fs = some (.lam p.state ib) ∧
+        Row.find? law fs = some (.lam p.state (.lam p.state (.lam reqTy b'))) ∧
+        Term.guardedBy (.lam p.state ib) 1 0 b' = true :=
+  checkFields_claim (checkInstall_fields h hd) hc
 
 end Nanodregg.Lang

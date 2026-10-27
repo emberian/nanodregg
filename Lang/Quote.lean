@@ -197,18 +197,19 @@ def quoteTerms (ps : List Param) (d : Nat) (buf : Term) : List Term → Term
   | t :: ts => quoteTerms ps d (quoteTerm ps d buf t) ts
 end
 
-/-- The package tree's sections after the body (methods, laws, relations, doc, holes, grades), closed. -/
+/-- The package tree's sections after the body (methods, laws, relations, doc, holes, grades, claims), closed. -/
 def sectionsAfter (p : Package) : ByteArray :=
   treeBytes (.node 1 .empty (p.methods.map Wire.labelLeaf)) ++
     treeBytes (.node 1 .empty (p.laws.map Wire.labelLeaf)) ++
     treeBytes (.node 2 .empty (p.rels.map Wire.relTree)) ++ treeBytes (.node 0 p.doc []) ++
     treeBytes (.node 3 .empty (p.holes.map Wire.holeROMTree)) ++
-    treeBytes (.node 4 .empty (p.effects.map Wire.effectTree))
+    treeBytes (.node 4 .empty (p.effects.map Wire.effectTree)) ++
+    treeBytes (.node 5 .empty (p.claims.map Wire.claimTree))
 
 /-- The package's bytes before the body: the version byte, the package node's frame, and the
 imports, state and interface sections, closed. -/
 def sectionsBefore (p : Package) : ByteArray :=
-  ByteArray.mk #[Bounds.packageWireVersion] ++ frame 0 .empty 10 ++
+  ByteArray.mk #[Bounds.packageWireVersion] ++ frame 0 .empty 11 ++
     treeBytes (.node 0 .empty (p.imports.map fun d => .node 0 d [])) ++
     treeBytes (Wire.tyTree p.state) ++ treeBytes (Wire.tyTree p.iface)
 

@@ -422,16 +422,34 @@ def effect : SExp → P (Label × Effect)
     | none => .error (.notOfType q)
   | y => .error (.notOfType y.pos)
 
-/-- The eight sections, then optionally `(effects …)` (LANG-89), then optionally `(holes …)`. -/
+/-- A claim (LANG-93): `(keeps INV LAW)`. -/
+def claim : SExp → P Claim
+  | .list _ [.atom _ "keeps", .atom _ inv, .atom _ law] => .ok (.keeps inv law)
+  | x => .error (.badEntry x.pos)
+
+/-- The eight sections, then the optional `(effects …)` (LANG-89), `(claims …)` (LANG-93) and
+`(holes …)`, in that order; each is absent exactly when empty (`Print.packageText`), so a core text
+without one means a package with none of it. -/
 def package (x : SExp) : P Package :=
   match x with
-  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "effects" :: es),
-      .list _ (.atom _ "holes" :: hs)] => do
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "effects" :: es), .list _ (.atom _ "claims" :: cs), .list _ (.atom _ "holes" :: hs)] => do
+    let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
+    pure { base with effects := ← es.mapM effect, claims := ← cs.mapM claim, holes := ← hs.mapM holeROM }
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "effects" :: es), .list _ (.atom _ "claims" :: cs)] => do
+    let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
+    pure { base with effects := ← es.mapM effect, claims := ← cs.mapM claim }
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "effects" :: es), .list _ (.atom _ "holes" :: hs)] => do
     let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
     pure { base with effects := ← es.mapM effect, holes := ← hs.mapM holeROM }
   | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "effects" :: es)] => do
     let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
     pure { base with effects := ← es.mapM effect }
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "claims" :: cs), .list _ (.atom _ "holes" :: hs)] => do
+    let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
+    pure { base with claims := ← cs.mapM claim, holes := ← hs.mapM holeROM }
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "claims" :: cs)] => do
+    let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
+    pure { base with claims := ← cs.mapM claim }
   | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "holes" :: hs)] => do
     let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
     pure { base with holes := ← hs.mapM holeROM }

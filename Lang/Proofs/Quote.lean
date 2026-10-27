@@ -550,7 +550,8 @@ theorem quotePackage_sound {ps : List Param} {vals : List Val} (hps : Params lib
       have lit7 := treeBytes_eq (hk (.node 0 p.doc []) (by simp)) (by decide)
       have lit8 := treeBytes_eq (hk (.node 3 .empty (p.holes.map holeROMTree)) (by simp)) (by decide)
       have lit9 := treeBytes_eq (hk (.node 4 .empty (p.effects.map effectTree)) (by simp)) (by decide)
-      rw [← lit1, ← lit2, ← lit3, ← lit4, ← lit5, ← lit6, ← lit7, ← lit8, ← lit9]
+      have lit10 := treeBytes_eq (hk (.node 5 .empty (p.claims.map claimTree)) (by simp)) (by decide)
+      rw [← lit1, ← lit2, ← lit3, ← lit4, ← lit5, ← lit6, ← lit7, ← lit8, ← lit9, ← lit10]
       refine (((appends_lit (sectionsBefore p)).comp hbody).comp (appends_lit (sectionsAfter p))).congr
         (fun _ => rfl) ?_
       simp only [sectionsBefore, sectionsAfter, List.length_cons, List.length_nil, ByteArray.append_assoc,
