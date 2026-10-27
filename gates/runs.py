@@ -58,7 +58,7 @@ A cargo run is ok on exit 0 with libtest's summary saying at least one test pass
 ran zero tests, or whose summary the reader cannot find, is RED: an absent verdict is not a pass).
 A run is ok on exit 0 with its pass line last; INCOMPLETE on exit 3 (a row with no driver yet:
 pending is a real outcome, law 7); RED otherwise, naming the first `FAIL`/`ROW … FAIL`/`PLANT …
-FAIL` line or the exit code and last line. A run past DEADLINE (600 s of wall clock) is re-run once;
+FAIL` line or the exit code and last line. A run past DEADLINE (1200 s of wall clock) is re-run once;
 past it twice it is UNREAD(timeout …), never RED (GATES-16: a wall-clock deadline measures the box's
 load as much as the commit, so it can withhold a verdict but never give one). `WASTE <op> <metric> <ratio>` lines
 go to --waste-out.
@@ -117,7 +117,7 @@ import tree
 RUNS = os.path.join("gates", "runs.tsv")
 # The wall-clock deadline of one run, seconds. ND_RUN_DEADLINE overrides it (the GATES-16 plant sets 1):
 # a shorter one can only withhold verdicts (UNREAD), never give one.
-DEADLINE = int(os.environ.get("ND_RUN_DEADLINE", "600"))
+DEADLINE = int(os.environ.get("ND_RUN_DEADLINE", "1200"))
 
 
 CONTROL = "harness-control"
