@@ -170,7 +170,7 @@ theorem ofNode_group (n : Node) (u : Service) (h : Service.ofNode n = .ok u) :
     (n.group = true → u.exec.take 8 = [.lit (supervisor n), .lit n.sock, .lit "--write", .lit n.store,
       .lit "--exec", .lit (hostExe n), .lit "--group", .var envGid]) ∧
     (n.group = false → u.exec.drop 6 = n.abiArgs ++ n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++
-      [.lit "--", .lit (hostExe n)] ++ n.args) := by
+      n.connectArgs ++ [.lit "--", .lit (hostExe n)] ++ n.args) := by
   obtain rfl := ofNode_ok n u h
   constructor
   · intro hg; simp [Node.exec, hg]
@@ -182,7 +182,8 @@ argv (after it, it would be the Host's argument and the floor would launch). -/
 theorem ofNode_landlock_abi (n : Node) (u : Service) (h : Service.ofNode n = .ok u) (hk : n.landlockAbi ≠ 0) :
     u.exec.drop 6 = (if n.group then [.lit "--group", .var envGid] else []) ++
       [.lit "--landlock-abi", .lit (toString n.landlockAbi)] ++
-      n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++ [.lit "--", .lit (hostExe n)] ++ n.args := by
+      n.hide.flatMap (fun h => [.lit "--hide", .lit h]) ++ n.connectArgs ++ [.lit "--", .lit (hostExe n)] ++
+      n.args := by
   obtain rfl := ofNode_ok n u h
   simp [Node.exec, Node.abiArgs, hk]
 
@@ -262,6 +263,22 @@ theorem checkRetain_sound (n : Node) (h : n.checkRetain = .ok ()) (k : Nat) (hk 
 
 /-- A finite retention renders the flag `host serve` reads. -/
 theorem writer_retain_two_args :
-    ({ writer with retain := some 2 } : Node).args = [.lit "serve", .lit writer.store, .lit "--retain", .lit "2"] := rfl
+    ({ writer with retain := some 2, certify := none } : Node).args =
+      [.lit "serve", .lit writer.store, .lit "--retain", .lit "2"] := rfl
+
+/-- The deployed writer certifies through keybroker's writer socket (OPS-22). -/
+theorem writer_certify_args :
+    writer.args = [.lit "serve", .lit writer.store, .lit "--certify", .lit (certifySock keybroker)] := rfl
+
+/-- **A node that certifies may reach the socket it certifies through**: its `--certify SOCK` comes with
+nd-supervise's `--connect SOCK`, the one socket the sandbox lets the child reach. -/
+theorem exec_connects_certify (n : Node) (sock : String) (h : n.certify = some sock) :
+    Arg.lit "--connect" ∈ n.exec ∧ Arg.lit sock ∈ n.exec := by
+  simp [Node.exec, Node.connectArgs, h]
+
+/-- The deployed writer's view and its unit exclude keybroker's key directory (OPS-22): nd-supervise's
+`--hide` (refused at launch if the policy exposes it) and the unit's `InaccessiblePaths=`. -/
+theorem writer_hides_keys : keybroker.etc ∈ writer.hide ∧ keybroker.etc ∈ writer.inaccessible := by
+  decide
 
 end Nanodregg.Ops.Units

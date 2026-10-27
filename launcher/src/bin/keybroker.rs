@@ -683,6 +683,10 @@ fn run() -> End {
     // Which sockets to serve is the World's: asked at start and every tick, until the decider ends
     // (its end is keybroker's: an ask could no longer be decided).
     let mut served: BTreeMap<Vec<u8>, Served> = BTreeMap::new();
+    // READY=1 to the service manager once the writer's socket and the first residents' are bound
+    // (OPS-22): a `Type=notify` unit's dependents (the certifying writer, which must find
+    // `.writer/certify.sock` at its launch) start only then
+    let mut ready = nanodregg_client::notify::Notify::from_env();
     let ended = 'life: {
         for _ in 0..LIFETIME {
             if let Ok(Some(st)) = child.try_wait() {
@@ -700,6 +704,9 @@ fn run() -> End {
                         let _ = child.wait();
                         let _ = std::fs::remove_file(&pid_file);
                         return end;
+                    }
+                    if let Some(n) = ready.take() {
+                        let _ = n.send("READY=1");
                     }
                 }
                 // the decider is gone, or answered out of turn: its own end names the run when it

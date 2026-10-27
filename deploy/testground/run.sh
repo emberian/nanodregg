@@ -2,7 +2,10 @@
 # deploy/testground/run.sh — the testground's hosted World (DESIGN-TESTGROUND §3.2), by hand, every
 # process with a PID file. The systemd units beside this file run the same three commands.
 #
-#   run.sh genesis STATE      seeds for the guest-book (founder 0), `host genesis`, its inputs kept
+#   run.sh genesis STATE      seeds for the guest-book (founder 0), `host genesis`, its inputs kept; with
+#                             ND_CERTIFIER and ND_CERTIFIER_NEXT (`keybroker --certify-pub KEYS` and the
+#                             successor's `--certify-keygen`, RUNBOOK §2 THE SEED) the World's authority is
+#                             that key at threshold 1, and its writer certifies through keybroker (OPS-22)
 #   run.sh start   STATE      host serve under nd-supervise, the guest-book, the relay (127.0.0.1:PORT)
 #   run.sh serve   STATE      the same three in the FOREGROUND, for a service manager (systemd
 #                             Type=simple): it waits; when any of the three exits it stops the other
@@ -74,7 +77,9 @@ case $cmd in
 genesis)
   [ -e "$st/store" ] && { echo "store: exists" >&2; exit 17; }
   read -r _ key _ next < <(node "$TG/guestbook.mjs" init "$st/gb")
-  "$HOST" genesis "$st/store" testground "$key" "$next" | tee "$st/genesis.txt"
+  cert=()
+  [ -n "${ND_CERTIFIER:-}" ] && cert=(--certifier "$ND_CERTIFIER" --certifier-next "${ND_CERTIFIER_NEXT:?ND_CERTIFIER_NEXT}" --threshold 1)
+  "$HOST" genesis "$st/store" testground "${cert[@]}" "$key" "$next" | tee "$st/genesis.txt"
   grep '^input ' "$st/genesis.txt" > "$st/gb/input" ;;
 start)
   [ -e "$st/run/host.pid" ] && kill -0 "$(cat "$st/run/host.pid")" 2>/dev/null && { echo "host: running" >&2; exit 1; }
@@ -93,7 +98,9 @@ fork)
   [ -e "$fk/store" ] && { echo "fork store: exists" >&2; exit 17; }
   mkdir -p "$fk/gb" "$fk/run"; chmod 700 "$fk/gb"; cp -p "$st/gb/seeds" "$fk/gb/seeds"
   read -r _ key _ next < <(node "$TG/guestbook.mjs" keys "$fk/gb")
-  "$HOST" genesis "$fk/store" testground --nonce "$(sed -n 's/^nonce //p' "$st/genesis.txt")" "$key" "$next" | tee "$fk/genesis.txt"
+  cert=()
+  [ -n "${ND_CERTIFIER:-}" ] && cert=(--certifier "$ND_CERTIFIER" --certifier-next "${ND_CERTIFIER_NEXT:?ND_CERTIFIER_NEXT}" --threshold 1)
+  "$HOST" genesis "$fk/store" testground --nonce "$(sed -n 's/^nonce //p' "$st/genesis.txt")" "${cert[@]}" "$key" "$next" | tee "$fk/genesis.txt"
   grep '^input ' "$fk/genesis.txt" > "$fk/gb/input"
   cmp -s "$fk/gb/input" "$st/gb/input" || { echo "fork: the genesis input differs from STATE's" >&2; exit 1; } ;;
 stop)

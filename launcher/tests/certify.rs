@@ -89,10 +89,15 @@ impl Member {
     }
 }
 
-/// keybroker over `store`, its certify socket bound (bounded wait); its stderr piped.
+/// keybroker over `store`, its certify socket bound (bounded wait); its stderr piped. It runs as a
+/// `Type=notify` unit would (OPS-22): its `READY=1` must reach the manager's socket, and only once the
+/// writer's socket exists, since the writer's unit starts on it.
 fn keybroker(d: &Scratch, keys: &Path, anchors: &Path, store: &Path, operator: &str) -> Child {
     let sock = certify_sock(d);
     let _ = fs::remove_file(&sock);
+    let notify = d.join("notify");
+    let _ = fs::remove_file(&notify);
+    let manager = std::os::unix::net::UnixDatagram::bind(&notify).unwrap();
     let mut child = argv(
         keys,
         anchors,
@@ -103,9 +108,20 @@ fn keybroker(d: &Scratch, keys: &Path, anchors: &Path, store: &Path, operator: &
         operator,
         &me(d).0.to_string(),
     )
+    .env("NOTIFY_SOCKET", &notify)
     .stderr(Stdio::piped())
     .spawn()
     .unwrap();
+    manager
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    let mut said = [0u8; 64];
+    let n = manager.recv(&mut said).unwrap_or(0);
+    assert_eq!(&said[..n], b"READY=1", "keybroker tells the manager it is ready");
+    assert!(
+        fs::symlink_metadata(&sock).is_ok_and(|m| m.file_type().is_socket()),
+        "READY before the writer's socket was bound"
+    );
     let deadline = Instant::now() + Duration::from_secs(30);
     // bound, never probed by a connection (one connection at a time: a probe would make the
     // first ask `busy`)
@@ -658,6 +674,8 @@ fn a_restore_meets_the_certified_head() {
         .unwrap();
     assert!(o.status.success(), "--certify-pub: {}", err(&o));
     let certifier = line(&text(&o), "certify ").to_owned();
+    // the successor the genesis commits (KERNEL-79), outside KEYS
+    let successor = keygen(&d.join("certify-next.seed"));
 
     let root = nanodregg_devtools::scratch(&format!("kbr{}", std::process::id()));
     for s in ["stores/W", "stores/F", "b1", "b2"] {
@@ -676,7 +694,7 @@ fn a_restore_meets_the_certified_head() {
             c.args(["--nonce", n]);
         }
         let o = c
-            .args(["--certifier", &certifier, "--threshold", "1", &key, &nextk])
+            .args(["--certifier", &certifier, "--certifier-next", &successor, "--threshold", "1", &key, &nextk])
             .output()
             .unwrap();
         assert!(o.status.success(), "genesis: {}", err(&o));
@@ -759,7 +777,15 @@ fn a_restore_meets_the_certified_head() {
         said.contains("refused=unanchored"),
         "an older Store beside the live record: {said}"
     );
-    let r = certify(&mut conn(&d), &c1);
+    // one connection at a time: the seal's may still be closing (`busy`), so ask until it is not
+    let mut r = certify(&mut conn(&d), &c1);
+    for _ in 0..50 {
+        if !refused(&r, BrokerRefusal::Busy) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        r = certify(&mut conn(&d), &c1);
+    }
     assert!(
         refused(&r, BrokerRefusal::Unanchored),
         "the older Store's own head: {r:?}"

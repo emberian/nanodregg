@@ -14,6 +14,7 @@ pub mod fsx;
 pub mod generated;
 pub mod join;
 pub mod mux;
+pub mod notify;
 pub mod run;
 pub mod sockets;
 pub mod stdio;

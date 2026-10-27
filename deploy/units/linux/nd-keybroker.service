@@ -7,7 +7,9 @@ StartLimitIntervalSec=120
 StartLimitBurst=5
 
 [Service]
-Type=simple
+# READY once the writer's certify socket and the residents' sockets are bound (OPS-22): the writer starts after
+Type=notify
+NotifyAccess=main
 User=nd
 EnvironmentFile=/etc/nd/keybroker/keybroker.env
 RuntimeDirectory=nd-keybroker

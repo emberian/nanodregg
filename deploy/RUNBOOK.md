@@ -55,7 +55,40 @@ Writer's node (systemd system unit, `deploy/units/linux/nd-host-serve.service`, 
 `emit-units deploy/units` from Host.Status and Protocol.SupervisorExit; `gates/generated.tsv`
 refuses a unit file that differs from the tables):
 
-    nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --landlock-abi 6 --hide /srv/nd/ws --hide /home -- /opt/nd/bin/host serve /srv/nd/store
+    nd-supervise /run/nd/host.sock --write /srv/nd/store --exec /opt/nd/bin/host --landlock-abi 6 --hide /srv/nd/ws --hide /home --hide /etc/nd/keybroker --connect /run/nd-broker/.writer/certify.sock -- /opt/nd/bin/host serve /srv/nd/store --certify /run/nd-broker/.writer/certify.sock
+
+THE SEED (HOSTING-56, HOST-80, KERNEL-79; OPS-22, cv 01a17b00-67a4). The writer certifies each base it
+seals through keybroker, which holds the certify key (`Ops.Units.writer`: `--certify` keybroker's writer
+socket, reached by `--connect` alone). The key never reaches the writer: `--hide /etc/nd/keybroker` keeps it
+out of the child's view (nd-supervise refuses a policy that exposes it), and `InaccessiblePaths=-/etc/nd/keybroker`
+keeps it out of the whole unit, nd-supervise included, because the writer runs as `nd`, the key holder's uid.
+To make a certifying World:
+
+1. The certify seed, fresh from the OS's randomness, into the key file (as `nd`; `--certify-keygen` writes
+   one `certify HEX` line to a new 0600 file and never overwrites):
+
+       sudo -u nd /opt/nd/bin/keybroker --certify-keygen /etc/nd/keybroker/certify.seed
+       sudo -u nd sh -c 'cat /etc/nd/keybroker/certify.seed >> /etc/nd/keybroker/provider.key'
+       sudo -u nd rm /etc/nd/keybroker/certify.seed
+
+   One `certify` line; a second, or a `certify.next` line, is refused `keyFileFormat` (88).
+2. The SUCCESSOR seed (KERNEL-79, HOSTING-61), made the same way but kept OFF this box (offline media,
+   another account): `keybroker --certify-keygen OFFLINE/certify.next` prints `certify-next NEXT`.
+   keybroker never reads it; it is what rotates the key if this one is lost or stolen
+   (`host rotate-certifier`, KERNEL-79).
+3. `sudo -u nd /opt/nd/bin/keybroker --certify-pub /etc/nd/keybroker/provider.key` prints `certify PUB`.
+4. Genesis with them as the World's authority (§1): `host genesis /srv/nd/store NAME --certifier PUB
+   --certifier-next NEXT --threshold 1 KEY_HEX NEXT_HEX…`. A stranger then trusts the World's genesis
+   input, never the host (`host certified INPUT CERT`).
+
+ORDER. keybroker's unit is `Type=notify`: keybroker reports READY only once the writer's socket
+(`/run/nd-broker/.writer/certify.sock`) and its first residents' sockets are bound, and the writer's unit
+`Wants=` and starts `After=` it. nd-supervise checks a `--connect` socket at launch: if keybroker is down
+when the writer (re)starts, the launch is refused (`refusedAtLaunch`, 64, fatal: the unit stays stopped, the
+journal names the socket). Start keybroker, then `systemctl start nd-host-serve`. A running writer is not
+affected by a keybroker restart (each seal connects anew; a seal while keybroker is away keeps the old
+certificate, `STATUS certify … refused=io`). A World made without `--certifier` needs no keybroker: set
+`certify := none` on `Ops.Units.writer` and re-render (no `--certify`, no `--connect`, no ordering).
 
 THE PRODUCTION PROFILE (CLIENT-52). The writer's and the hosted follower's units carry the confinement
 profile `Ops.Units.Node.profile` renders: the tree read-only but the Store (and the follower's socket
@@ -537,7 +570,8 @@ Store as above:
 The key signs only heads its decider's fold of the Store already holds, so a Store copied after the record
 extends the recorded head. The other order can leave a backup whose record is past its own Store, which no
 restore can certify from. Back up `provider.key` itself (the seed) only to custody as private as the live
-file: a thief of it signs any head (DESIGN-TRUST §4.4b). Planted: launcher `certify`
+file: a thief of it signs any head (DESIGN-TRUST §4.4b). The successor seed (§2, THE SEED step 2) is never on the box: it is backed up only in its own
+custody, apart from `provider.key`, or a thief of one backup holds both keys. Planted: launcher `certify`
 (`a_restore_meets_the_certified_head`).
 
 ## 5. Restore — RAN (store-plants; a sealed Store too: `sealed-*`)
@@ -583,7 +617,9 @@ extend it.** Two cases, each planted by name (launcher `certify`, `a_restore_mee
    second head at a step it signed after the backup: an equivocation any member holding both certificates
    can show (`Protocol.Proofs.Head.certified_equivocation`). Planted: the pair restored from an older backup
    certifies another head at the step count of a certificate the key signed after that backup. So after a
-   box loss never certify under the old key: remove the `certify` line from `provider.key`, render the
+   box loss never certify under the old key. The successor (§2, KERNEL-79) can take over from the restored
+   Store (`host rotate-certifier`), but a member that holds a certificate of the lost history past the backup
+   then holds two certified histories: a fork the restore made, to be reported, not hidden. Until then: remove the `certify` line from `provider.key`, render the
    writer without `--certify`, and restore the Store with
    its `base.cert`; pages carry that certificate, stale but valid, as in case 1.
 
