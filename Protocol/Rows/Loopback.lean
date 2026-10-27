@@ -113,6 +113,8 @@ structure Sys (D : Type) [Ord D] where
   /-- the client drops `sync --to`'s anchor: a catch-up that compares with nobody (a plant,
   PROTOCOL-74) -/
   ignoreAnchor : Bool := false
+  /-- nd's re-run of an argv whose attempt is open plans afresh (a plant, A6: before CLIENT-37) -/
+  rerunFresh : Bool := false
 
 def skipJudge (X : Ctx D) : Ctx D :=
   { X with program := { X.program with judge := fun _ _ _ _ _ _ => .ok () } }
@@ -174,6 +176,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .perFieldBudget =>
       { writer := { R, X := R.ctx, pageBudget := Bounds.frameBytesMax - 1024 }, follow := R.ctx }
   | some .forgesRefusal => { writer := { R, X := R.ctx, forgeRefusal := true }, follow := R.ctx }
+  | some .rerunFresh => { writer := { R, X := R.ctx }, follow := R.ctx, rerunFresh := true }
 
 /-! ## Actors -/
 
@@ -185,6 +188,16 @@ def secretOf (name : String) (gen : Nat) : ByteArray := s!"key:{name}:{gen}".toU
 
 /-- The public key of custody's secret of generation `gen`. -/
 def keyOf (R : Rows.Params D) (name : String) (gen : Nat) : ByteArray := R.pub (secretOf name gen)
+
+/-- One frozen attempt as nd's attempt store holds it (`client/src/attempt.rs`): the argv it was
+signed for, the call, follow's continuation at the submit step, the sends started, and whether the
+member's own follow settled it. -/
+structure Frozen where
+  argv : List String
+  call : ByteArray
+  k : ByteArray
+  sends : Nat := 0
+  settled : Bool := false
 
 structure Actor (D : Type) [Ord D] where
   self : Self D
@@ -198,6 +211,9 @@ structure Actor (D : Type) [Ord D] where
   arming : Bool := false
   /-- the rotation attempt: its settlement as committed advances custody (CLIENT-13) -/
   armed : Option ByteArray := none
+  /-- the attempt store: every call this actor's nd froze, oldest first; the next run of an argv
+  whose attempt is open continues it (CLIENT-37) -/
+  attempts : List Frozen := []
 
 /-- Custody's secrets: the current key's, the next one's and the pending one's. -/
 def Actor.key (n : String) (a : Actor D) : ByteArray := secretOf n a.gen
@@ -255,6 +271,16 @@ structure St (D : Type) [Ord D] where
   /-- the attempt's hint: the last confirm or probe `receipt CALL` stderr that was not empty and at
   most `Bounds.hintBytesMax` bytes, as nd's attempt store keeps it (cv 01a150b1) -/
   hint : ByteArray := ByteArray.empty
+  /-- record the trace (Q5): every exchange nd makes on its two sockets, by run -/
+  tracing : Bool := false
+  /-- the trace's lines (`traceLine`), when `tracing` -/
+  trace : Array String := #[]
+  /-- the nd runs started so far: the next run's number -/
+  runs : Nat := 0
+  /-- the nd run each actor is in, and the depth its command's own steps run at -/
+  runOf : List (String × Nat × Nat) := []
+  /-- each run's last `done` at its own depth: its exit, stdout and stderr -/
+  ended : List (Nat × UInt8 × ByteArray × ByteArray) := []
 
 abbrev M (D : Type) [Ord D] := StateT (St D) IO
 
@@ -522,6 +548,65 @@ def ask (op : Op) (payload : ByteArray) : M D (Option ByteArray) := do
   | some r => pure (some (ByteArray.mk #[r.status] ++ r.payload))
   | none => pure none
 
+/-! ## The trace (Q5)
+
+A run that records (`tracing`) writes, for every `nd` invocation, the argv nd is handed, every
+exchange nd makes on follow's socket and on the Host's (the request it sends, the reply it reads, or
+`lost` when it reads none), and the command's end. That is nd's whole conversation: a Rust test
+replays it against nd's own step loop and custody (`client/tests/trace.rs`), so what nd must send is
+what this driver sent, never a test author's copy of it. -/
+
+/-- A field of a trace line: the bytes in hex, `-` for none. -/
+def hexOf (b : ByteArray) : String := if b.isEmpty then "-" else Text.toHex b
+
+def traceLine (s : String) : M D Unit :=
+  modify fun st => if st.tracing then { st with trace := st.trace.push s } else st
+
+/-- A trace line for actor `name`'s run, when it is in one. -/
+def traced (name : String) (line : Nat → String) : M D Unit := do
+  if let some (n, _) := (← get).runOf.lookup name then traceLine (line n)
+
+def firstByte (b : ByteArray) : UInt8 := if h : 0 < b.size then b[0] else 0
+
+/-- An exchange on the Host's socket as nd saw it: the reply `status ‖ payload`, or `lost`. -/
+def tracedHost (name : String) (op : Op) (req : ByteArray) (res : Option ByteArray) : M D Unit :=
+  traced name fun n => match res with
+    | some r => s!"host {n} {op.code} {hexOf req} {firstByte r} {hexOf (r.extract 1 r.size)}"
+    | none => s!"host {n} {op.code} {hexOf req} lost"
+
+/-- A `done` step at depth `depth` ends actor `name`'s run when the run's command steps there. -/
+def sawDone (name : String) (depth : Nat) (exit : UInt8) (out err : ByteArray) : M D Unit := do
+  if let some (n, top) := (← get).runOf.lookup name then
+    if top = depth then
+      modify fun st => { st with ended := (n, exit, out, err) :: st.ended.filter (·.1 ≠ n) }
+
+/-- Run `act` as one `nd ARGV` of actor `name`, whose command's steps run at depth `top`: the trace's
+`run` line, then what `act` exchanges, then the `end` line (`end N EXIT STDOUT STDERR`, or `end N
+error` when the run stopped without follow's `done`, as nd stops on a transport or loop error). -/
+def withRun (name : String) (argv : List String) (top : Nat) (act : M D (Expect × String)) :
+    M D (Expect × String) := do
+  let st ← get
+  let n := st.runs
+  let prev := st.runOf.lookup name
+  set { st with runs := n + 1, runOf := (name, n, top) :: st.runOf.filter (·.1 ≠ name) }
+  traceLine s!"run {n} {name}{String.join (argv.map fun a => " " ++ hexOf a.toUTF8)}"
+  let r ← act
+  let st ← get
+  traceLine (match st.ended.lookup n with
+    | some (e, o, er) => s!"end {n} {e} {hexOf o} {hexOf er}"
+    | none => s!"end {n} error")
+  modify fun st => { st with
+    ended := st.ended.filter (·.1 ≠ n)
+    runOf := match prev with
+      | some p => (name, p) :: st.runOf.filter (·.1 ≠ name)
+      | none => st.runOf.filter (·.1 ≠ name) }
+  pure r
+
+/-- Update actor `name`'s frozen attempt of `call`. -/
+def touchFrozen (name : String) (call : ByteArray) (f : Frozen → Frozen) : M D Unit := do
+  let a ← actor name
+  setActor name { a with attempts := a.attempts.map fun x => if x.call == call then f x else x }
+
 /-- How the rows' followers read a base: the run's World codec and the writer's own `worldDigest`. -/
 def base (R : Rows.Params D) : Thin.Base (World D) :=
   ⟨R.world, World.steps, R.keys.worldDigest, Host.Cadence.deployed.worldBytesMax⟩
@@ -542,6 +627,7 @@ def followAsk (name : String) (self : Self D) (op : Op) (payload : ByteArray) :
   let (fs', _, status, p) :=
     Host.Follow.answer (← X) (← params).dc (base (← params)) self a.follow ⟨UInt32.ofNat st.conn, op.code, payload⟩
   setActor name { a with follow := fs' }
+  traced name fun n => s!"follow {n} {op.code} {hexOf payload} {status} {hexOf p}"
   -- and a reply past it is never read (`read_body`)
   if !bodyFits p then return .error "pastBound"
   pure (if status = Status.ok.code then .ok p else .error (Command.hostName p))
@@ -732,6 +818,7 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           let (exit, err) := if (← get).sys.pageIoFatal && exit.toNat == CommandExit.pageIo.code then
               (CommandExit.refused.code.toUInt8, s!"refused {pageIoName}\n".toUTF8) else (exit, err)
           modify fun st => { st with lastErr := err }
+          sawDone name depth exit out err
           pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
       | some (.sign msg k) =>
           let (n, a, key) ← custodyOf name fault
@@ -759,13 +846,18 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           -- `lieCancel`: the relay keeps the cancel from the writer and answers it `refused cancelled`
           let lie : Option ByteArray := cancelLie (D := D) fault op
           match ← (match lie with | some r => pure (some r) | none => ask op p) with
-          | none => pure (.refused "writerStopped", "")
+          | none => tracedHost name op p none; pure (.refused "writerStopped", "")
           | some res =>
               let res := match fault with
                 | .pageIo => if op = .log || op = .read then
                     ByteArray.mk #[Host.pageIoReply.1] ++ Host.pageIoReply.2 else res
                 | _ => res
               let st ← get
+              -- what nd reads: the reply after every relay fault below
+              let seen := if st.sys.staleRange && argv.contains "--range" && op = .log then
+                  hideLog st.sys.follow ((st.actors.lookup name).map (·.follow.world) |>.getD st.genesis) res
+                else res
+              tracedHost name op p (some (if op = .log then pageFault fault seen else seen))
               -- the plant `trustCancel`: follow's old phase 10, `cancelled` on the writer's word
               if st.sys.trustCancel && op = .cancel &&
                   Command.hostReply res == some (.refused, (Receive.Refusal.cancelled : Receive.Refusal D).name.toUTF8) then
@@ -779,13 +871,15 @@ def steps (name : String) (argv : List String) (fault : Fault) (depth : Nat) (b 
           sawCall name call
           let a ← actor name
           setActor name { a with last := some call, arming := false,
-                                 armed := if a.arming then some call else a.armed }
+                                 armed := if a.arming then some call else a.armed,
+                                 attempts := a.attempts ++ [{ argv, call, k }] }
           match fault with
           | .race other otherArgv =>
               match ← subst otherArgv with
               | .error e => return (.refused e, "")
               | .ok av =>
-                  let (o, _) ← command other av .none depth
+                  -- another member's nd, run to its end between this command's signature and its submit
+                  let (o, _) ← withRun other av (depth - 1) (command other av .none depth)
                   if o ≠ .ok then return (.refused s!"race:{o.text}", "")
           | _ => pure ()
           match fault, (← get).sys.resendFresh with
@@ -817,20 +911,30 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
       let a := Attempt.next (decide (sends < Bounds.sendsMax)) last
       match a with
       | .submit =>
-          if !forwards fault then drive name call fault depth fuel (sends + 1) (some (.submit, .lost)) reply host said
+          touchFrozen name call fun f => { f with sends := f.sends + 1 }
+          if !forwards fault then
+              tracedHost name .submit call none
+              drive name call fault depth fuel (sends + 1) (some (.submit, .lost)) reply host said
           else
               match ← ask .submit call with
-              | none => pure (.error "writerStopped")
+              | none => tracedHost name .submit call none; pure (.error "writerStopped")
               | some res =>
-                  if losesFirstReply fault && sends = 0 then
+                  if (losesFirstReply fault || fault matches .dropReplies) && sends = 0 then
+                      tracedHost name .submit call none
                       drive name call fault depth fuel (sends + 1) (some (.submit, .lost)) reply host said
                   else
+                      tracedHost name .submit call (some res)
                       drive name call fault depth fuel (sends + 1) (some (.submit, hostSaid res)) (some res) (some (hostSaid res)) said
       | .lookup =>
+          if fault matches .dropReplies then
+            tracedHost name .lookup call none
+            drive name call fault depth fuel sends (some (.lookup, .lost)) reply host said
+          else
           match ← ask .lookup call with
-          | none => pure (.error "writerStopped")
+          | none => tracedHost name .lookup call none; pure (.error "writerStopped")
           | some res =>
               let res := lookupLie fault res
+              tracedHost name .lookup call (some res)
               drive name call fault depth fuel sends (some (.lookup, hostSaid res)) (some res)
                 (some (hostSaid res)) said
       | .confirm | .probe =>
@@ -855,9 +959,12 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
                 drive name call fault depth fuel sends (some (req, .lost)) reply host said
       | .committed =>
           modify fun st => { st with committed := st.committed.push call }
+          touchFrozen name call fun f => { f with settled := true }
           settle name call .committed
           pure (.ok (ended .committed said))
-      | .refused => settle name call .refused; pure (.ok (ended .refused said))
+      | .refused =>
+          touchFrozen name call fun f => { f with settled := true }
+          settle name call .refused; pure (.ok (ended .refused said))
       | .declined =>
           match reply.bind Command.hostReply with
           | some (_, p) =>
@@ -877,6 +984,33 @@ def drive (name : String) (call : ByteArray) (fault : Fault) (depth : Nat) :
       | .badReply => pure (.ok (ended .badReply ""))
 termination_by fuel => (depth, 0, fuel + 1)
 end
+
+/-- One `nd ARGV` of actor `name` (`client/src/run.rs`'s `run`, CLIENT-37). When an earlier run of the
+same argv left its attempt open, this run IS that attempt: it is driven from where it stands (sent,
+outcome lost, with the sends it has made), and follow is resumed with the attempt's own continuation
+and its end, so follow is never asked to plan and nothing new is signed. When that end is `refused`
+and follow agrees (`done` with exit `refused`: its own World holds the call refused or expired, so
+nothing of it can land), the command is planned afresh. Otherwise follow plans the command. -/
+def ndRun (name : String) (argv : List String) (fault : Fault) : M D (Expect × String) :=
+  withRun name argv 3 do
+    let a ← actor name
+    let frozen := if (← get).sys.rerunFresh then none
+      else a.attempts.reverse.find? fun f => f.argv == argv && !f.settled
+    match frozen with
+    | none => command name argv fault 4
+    | some f =>
+        modify fun st => { st with hint := ByteArray.empty }
+        match ← drive name f.call fault 3 attemptFuel f.sends (some (.submit, .lost)) none none "" with
+        | .error e => pure (.refused e, "")
+        | .ok res =>
+            let n := ((← get).runOf.lookup name).map (·.1)
+            let r ← resume name argv fault 3 f.k res Bounds.stepsPerCommandMax
+            let st ← get
+            let followRefused := match n.bind (fun i => st.ended.lookup i) with
+              | some (e, _, _) => e.toNat == CommandExit.refused.code
+              | none => false
+            if firstByte res == Attempt.Action.refused.code && followRefused then command name argv fault 4
+            else pure r
 
 /-! ## The operator's and the attempt store's acts -/
 
@@ -1025,13 +1159,13 @@ def runAct (l : Line) : M D (Expect × String) := do
           let av := if (← get).sys.dropRange then dropRangeFlag av else av
           -- the plant (PROTOCOL-74): a client that compares with nobody
           let av := if (← get).sys.ignoreAnchor then dropAnchor av else av
-          let (o, out) ← command l.actor av l.fault 4
+          let (o, out) ← ndRun l.actor av l.fault
           -- the plant: follow acts on the writer's `beforeLog`, taking its first step (the carried
           -- World) as the base on the writer's word, and reads again
           let (o, out) ← if (← get).sys.actOnBeforeLog && o == .refused "beforeLog" then do
               let a ← actor l.actor
               setActor l.actor { a with follow := { world := (← get).genesis } }
-              command l.actor av l.fault 4
+              ndRun l.actor av l.fault
             else pure (o, out)
           -- the plant: a description with its `doc` line dropped
           let out := if (← get).sys.dropDoc && av.length == 3 && av.getLast? == some "?" then
@@ -1040,7 +1174,7 @@ def runAct (l : Line) : M D (Expect × String) := do
           -- the plant: a client that runs every write command again (the line's outcome, output
           -- and binds are the first run's; only the work doubles)
           if (← get).sys.twiceEach && av.head? ≠ some "read" then
-            discard <| command l.actor av l.fault 4
+            discard <| ndRun l.actor av l.fault
           let sy := (← get).sys
           -- the plant: the output of a method's refusal flattened to its verdict, the reason dropped
           if sy.flatProgram && o == .refused "program" then
@@ -1190,12 +1324,12 @@ def runAct (l : Line) : M D (Expect × String) := do
       let st ← get
       match (← actor owner).last >>= st.sys.follow.decodeCall with
       | none => pure (.refused "noAttempt", "")
-      | some _ => command l.actor ["receipt", Text.toHex ((← actor owner).last.getD ByteArray.empty)] .none 4
+      | some _ => ndRun l.actor ["receipt", Text.toHex ((← actor owner).last.getD ByteArray.empty)] .none
   | .cancelOf owner => do
       let st ← get
       match (← actor owner).last >>= st.sys.follow.decodeCall with
       | none => pure (.refused "noAttempt", "")
-      | some _ => command l.actor ["cancel", Text.toHex ((← actor owner).last.getD ByteArray.empty)] l.fault 4
+      | some _ => ndRun l.actor ["cancel", Text.toHex ((← actor owner).last.getD ByteArray.empty)] l.fault
   | .verify owner rc => do
       let st ← get
       let X := st.sys.follow
@@ -1215,7 +1349,7 @@ def runAct (l : Line) : M D (Expect × String) := do
       | .error e => pure (.refused e.name, "")
   | .used atLeast => do
       -- the member's own World, caught up; the calls the writer committed, as its clients sent them
-      let (o, _) ← command l.actor ["sync"] .none 4
+      let (o, _) ← ndRun l.actor ["sync"] .none
       if o ≠ .ok then return (.refused s!"sync:{o.text}", "")
       let st ← get
       let a ← actor l.actor
@@ -1225,18 +1359,9 @@ def runAct (l : Line) : M D (Expect × String) := do
       if atLeast ≤ n then pure (.ok, "") else pure (.refused s!"unshared:{n}", "")
   | .retry => pure (← retry l.actor, "")
   | .rerun => do
-      match (← actor l.actor).last with
+      match (← actor l.actor).attempts.getLast? with
       | none => pure (.refused "noAttempt", "")
-      | some call =>
-          -- the next run of the open attempt: "sent, outcome lost"
-          match ← drive l.actor call .none 4 attemptFuel 0 (some (.submit, .lost)) none none "" with
-          | .error e => pure (.refused e, "")
-          | .ok res =>
-              -- step 4 is follow's: it settles the frozen call on the actor's own World (R7)
-              let self ← selfOf l.actor .none
-              match Command.settled (← X) self (← actor l.actor).follow.world ByteArray.empty call res with
-              | .done exit out err => pure (outcomeOf exit err, (String.fromUTF8? out).getD "")
-              | _ => pure (.refused "badFrame", "")
+      | some f => ndRun l.actor f.argv .none
   | .resubmit => do
       match (← actor l.actor).last with
       | none => pure (.refused "noAttempt", "")
@@ -1300,11 +1425,14 @@ structure Result where
   writer's World when it stopped -/
   frames : Nat
   steps : Nat
+  /-- the trace (Q5), when the run recorded one: a `custody NAME CURRENT NEXT PENDING` line per actor
+  (its key file's seeds of generations 0, 1 and 2), then the runs in the order they started -/
+  trace : Array String := #[]
 
 /-- Run a member row against a fresh deployment under the parameters `R` and the plant `m`;
 `times` scales every repeated line. -/
 def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : Option Nat)
-    (budget : Option Nat := none) : IO Result := do
+    (budget : Option Nat := none) (tracing : Bool := false) : IO Result := do
   let s := sys R m
   let s := match budget with
     | some b => { s with writer := { s.writer with pageBudget := b } }
@@ -1339,11 +1467,14 @@ def run (R : Rows.Params D) (m : Option Mutation) (lines : List Line) (times : O
     [("inputs", Text.toHex inputs), ("otherInputs", Text.toHex other), ("world", hex g.origin),
      ("chain0", hex g.chain), ("roots0", hex (g.roots s.writer.X.env))] ++
     (founders ++ ["newcomer"]).map fun n => (n ++ ".key", Text.toHex (keyOf R n 0))
-  let (outcomes, st) ← go.run { sys := s, host, mem, genesis := g, lineage := g.origin, first := g, binds, invitation }
+  let st0 : St D := { sys := s, host, mem, genesis := g, lineage := g.origin, first := g, binds, invitation }
+  let (outcomes, st) ← go.run { st0 with tracing }
   let steps := match ← st.host.stop with
     | .ok (_, r) => r.world.steps
     | .error _ => 0
+  let seeds (n : String) : String := String.join ([0, 1, 2].map fun g => " " ++ hexOf (R.seedOf (secretOf n g)))
+  let custody := st.actors.toArray.map fun (n, _) => "custody " ++ n ++ seeds n
   pure ⟨{ outcomes, ops := st.ops, kinds := st.kinds }, st.log, st.times, st.reopenNs, st.reopenReads, st.invokes,
-    st.conn, steps⟩
+    st.conn, steps, if tracing then custody ++ st.trace else #[]⟩
 
 end Nanodregg.Protocol.Rows.Loopback

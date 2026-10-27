@@ -98,6 +98,11 @@ package nanodregg where
 @[default_target] lean_exe «emit-pins» where
   root := `Emit.PinsMain
 
+-- The member rows' conversations with nd (client/tests/traces/ROW.trace, DESIGN-QA Q5): what nd's own
+-- step loop and custody must send, replayed by client/tests/trace.rs. Imports Protocol.Rows.Run.
+@[default_target] lean_exe «emit-traces» where
+  root := `Emit.TracesMain
+
 -- The codec vectors (gates/codec-vectors.tsv, CODEC-28): a change of meaning under the same tag is red.
 @[default_target] lean_exe «codec-vectors» where
   root := `Emit.VectorsMain

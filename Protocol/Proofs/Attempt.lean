@@ -86,7 +86,8 @@ theorem table_complete (b : Bool) (l : Option (Request × Seen)) : ((b, l), next
   cases b <;> rcases l with _ | ⟨r, s⟩ <;> (try cases r) <;> (try cases s) <;> decide
 
 /-- **A declined submit ends the run `declined`**, never `refused` (so the client writes no
-settlement: its plant is client/tests/attempt.rs `declined_leaves_the_attempt_open_and_the_next_run_looks_up`). -/
+settlement: the `staleRefusing` row's trace, which client/tests/trace.rs replays against nd, holds a
+declined submit and the next run's lookup of the same bytes). -/
 theorem next_declined (b : Bool) : next b (some (.submit, .declined)) = .declined := rfl
 
 /-- **A declined lookup ends the run `declined`** (HOST-74): the writer declines a lookup it decided
