@@ -7,10 +7,10 @@ closure C7, and two `main`s cannot share one environment), then runs
 `#statement_census ".lake/gates/statements.tsv" …` over elaborated theorem conclusions under `lake env lean`
 (GATES-20s: a disjunct comparing two inputs the statement chooses is red, and its fixtures are judged first:
 a misread fixture prints `STATEMENT-CENSUS harness:`, never `STATEMENT-CENSUS ok`).
-Every module must already be built (scripts/pre-push builds first).
+Every module must already be built (scripts/standing.sh builds first).
 
 gates/census.py TREE --changed FILE — THE REACH CENSUS (GATES-20v (c)), the fast judge's: the axiom census and the
-statement census over the modules a landing reaches (the changed modules and their importers, gates/decls.py's
+statement census over the modules a landing reaches (the changed modules and their importers, gates/tree.py's
 `reach`), importing only those. A theorem outside the reach has the parent's statement, axioms and definitions, so
 nothing outside it can read differently; an allow row is judged when its declaration is in the reach. The
 refine census (whose allow rows and vectors are tree-wide) and an allow row whose declaration is gone run at
@@ -34,7 +34,6 @@ def modules(t: tree.Tree) -> tuple[list[str], list[str]]:
 
 
 def reach_main(root: str, changed_file: str) -> int:
-    import decls
     t = tree.read(root)
     changed = [l.strip() for l in open(changed_file, encoding="utf-8") if l.strip()]
     mods_all, libs = modules(t)
@@ -42,7 +41,7 @@ def reach_main(root: str, changed_file: str) -> int:
         mods = mods_all
     else:
         lean = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean") and p != "lakefile.lean"}
-        mods = sorted(decls.reach(t, lean) & set(mods_all))
+        mods = sorted(tree.reach(t, lean) & set(mods_all))
     if not mods:
         print("census (reach): ok (no module of the census changed)")
         return 0

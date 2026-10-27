@@ -1,28 +1,26 @@
-"""gates/converge.py — a convergence's verdict, its attribution, its time-to-fix and its reverts (GATES-22).
+"""gates/converge.py — the convergence REPORT: what is red on origin/main, the landings it came from, time-to-fix.
 
   converge.py record --repo DIR --sha SHA --line FILE --dir STANDING_DIR --tree TREE --traces DIR [--now EPOCH]
-  converge.py owners --repo DIR --commit C
   converge.py build [--tool lake|cargo] --out FILE --rc N --cgroup FILE [--peaks FILE --sha SHA --threads N]
   converge.py floor --peaks FILE [--days N]
 
-A CONVERGENCE is scripts/standing.sh on main (every 3 h while landings happen; scripts/converge). Landings between
-two convergences are judged FAST (gates/fast.py): what the standing judges and a fast landing does not (the census,
-every row, the benches, the waste measurements, the generated files, the whole Rust workspace with clippy) is judged
-here, over the RANGE since the last GREEN standing. `record` reads the STANDING line (FILE), the standing's per-sha
+A CONVERGENCE is scripts/standing.sh on origin/main (every 3 h while landings happen; scripts/converge). A landing
+builds what it changed and runs what it touched (scripts/commit); everything else (the whole build, the census, every
+row, the benches, the waste measurements, the generated files, the Rust workspace with clippy, the source checks) is
+looked at here, over the RANGE since the last GREEN report. It refuses nothing and reverts nothing.
+`record` reads the STANDING line (FILE), the standing's per-sha
 log and runs output (STANDING_DIR/<sha12>.log, .runs.out) and prints:
 
-  CONVERGENCE <sha> range <green>..<sha> landings=N (fast F, full U) => GREEN|RED|INCOMPLETE reds=K fixed=J
+  CONVERGENCE <sha> range <green>..<sha> landings=N => GREEN|RED|INCOMPLETE reds=K fixed=J
   RED <unit> (red at N convergences since <sha>, <h> h): attributed to <c> <OWNER> "<subject>" (<why>) | …
   FIXED <unit> after <h> h (red at N convergences; first <sha>)
-  REVERT <c> <unit>                   (scripts/converge lands the revert: --reverts C, C's owners named)
-  REVERT-PENDING <unit>: <c> <c> …    (more than one commit attributed: ROOT picks, `scripts/converge --revert C`)
   TIMES stages: gates=Ns build=Ns … total=Ns       (standing.sh's own clock, STANDING_DIR/<sha12>.times; GATES-20g)
   ROWS wall Ns; concurrency …; ran N: ROW Ns (where), …; carried N: ROW …; daily N: ROW …
                                       (runs.py's own `  time ROW:` lines; reported, never gated)
 
 A UNIT is one red thing: `gates`, `build`, `census`, `generated:<out>`, `cargo`, `run:<row>` (a row, its re-trace
 included), `waste:<op> <metric>`. ATTRIBUTION names the commits of the range that the red unit READ:
-  run:<row>    the commits a full judge of that commit alone would have selected the row for: its row line changed,
+  run:<row>    the commits whose change the row reads: its row line changed,
                the runner changed, a module of its reach changed, its crate changed (a cargo row), a waste row it
                measured changed, or its newest stored read-set (gates/readset.py) was touched by the commit (a path
                it read, a path it stat'ed added/removed/re-kinded, an add or remove in a directory it listed); a
@@ -35,15 +33,12 @@ included), `waste:<op> <metric>`. ATTRIBUTION names the commits of the range tha
   waste:W      the commits that changed W's row in gates/waste.tsv, and the attribution of every row whose
                stored read-set says it measured W;
   gates        the commits that changed a path a red gate line names; none named: every commit of the range.
-Each attributed commit is printed with its OWNER (the layer of its subject prefix, gates/owners.py SUBJECT).
+Each attributed commit is printed with its OWNER (the layer of its subject prefix, SUBJECT below).
 A unit's history is kept in STANDING_DIR/converge-state.json: first seen (sha, time), the commits attributed then,
 how many convergences it has been red. A unit whose stage reads ok is FIXED (time-to-fix printed); a stage that did
 not run (ABSENT, INCOMPLETE, UNJUDGED) leaves its units as they were (a stage that cannot run proves nothing).
-THE REVERT RULE (Ember via ROOT, 10-21): a unit still red at the NEXT convergence is reverted by name. Its commit is
-the one attributed both at its first sighting and now; exactly one: REVERT (scripts/converge lands it, the owners
-named in CROSS-LAYER, --reverts C); several: REVERT-PENDING naming them, for ROOT. A commit is reverted once.
-The NEXT convergence is one at another main (GATES-24): a re-run at the sha of the last sighting is not a second
-sighting (at 2d5056e two runs a minute apart counted twice and wrote 67 REVERT lines at the first sighting).
+A red is a task for the lane whose landing it names; it is fixed forward (WORK-RULES 10-27 rule 3).
+A unit's sightings are counted per origin/main, never per re-run at the same sha (GATES-24).
 
 THE BUILD'S VERDICT (`build`, GATES-24; cv 01a16f6d): standing.sh's whole-tree `lake build` reads
   ok      lake exit 0 and its `Build completed successfully (N jobs)` line;
@@ -69,8 +64,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import fast  # noqa: E402
-import owners  # noqa: E402
+import touched  # noqa: E402
 import readset  # noqa: E402
 import runs  # noqa: E402
 import tree as treemod  # noqa: E402
@@ -110,11 +104,19 @@ def judged(v: str | None) -> str:
     return "RED" if v.startswith("RED") else "not"
 
 
+# subject prefix -> the layer a landing's subject names, for the report's labels (gates/OWNERS maps paths to layers)
+SUBJECT = {"kernel": {"KERNEL"}, "ledger": {"LEDGER"}, "codec": {"CODEC"}, "emit": {"CODEC"}, "host": {"HOST"},
+           "protocol": {"PROTOCOL"}, "rows": {"PROTOCOL"}, "client": {"CLIENT"}, "sandbox": {"CLIENT"},
+           "lang": {"LANG"}, "hosting": {"HOSTING"}, "ops": {"OPS"}, "perf": {"PERF"},
+           "transport": {"TRANSPORT"}, "spec": {"SPEC"}, "gates": {"GATES"}, "build": {"GATES"}, "charter": {"ROOT"},
+           "root": {"ROOT"}}
+
+
 def owner_of(subject: str) -> str:
     m = re.match(r"([a-z]+)(?:\([^)]*\))?!?:", subject)
     if not m:
         return "ROOT"
-    return "/".join(sorted(owners.SUBJECT.get(m.group(1), {m.group(1).upper()})))
+    return "/".join(sorted(SUBJECT.get(m.group(1), {m.group(1).upper()})))
 
 
 class Commit:
@@ -122,7 +124,6 @@ class Commit:
         self.sha = sha
         body = git(repo, "log", "-1", "--format=%B", sha)
         self.subject = body.split("\n", 1)[0]
-        self.fast = bool(re.search(r"(?m)^JUDGED: fast", body))
         st = git(repo, "diff", "--name-status", "--no-renames", f"{sha}^", sha).splitlines()
         self.changed = [l.split("\t")[-1] for l in st if l]
         self.ad = {l.split("\t")[-1] for l in st if l[:1] in ("A", "D", "T")}
@@ -190,7 +191,7 @@ def attribute_build(t, log: str, cs: list[Commit]) -> list[tuple[Commit, str]]:
     clo = t.closure(sorted(named)) | named if named else set()
     out = []
     for c in cs:
-        bi = next((p for p in c.changed if p in fast.BUILD_INPUTS or p.endswith((".c", ".h"))), None)
+        bi = next((p for p in c.changed if p in touched.BUILD_INPUTS or p.endswith((".c", ".h"))), None)
         if bi:
             out.append((c, f"changed build input {bi}"))
         elif named and c.mods & clo:
@@ -209,7 +210,7 @@ def attribute_unit(unit: str, t, rows, store: str, log: str, cs: list[Commit], g
         return [(c, "changed a module or the axiom allow-list") for c in cs
                 if c.mods or "gates/axioms-allow.tsv" in c.changed]
     if unit == "cargo":
-        return [(c, "changed the Rust workspace") for c in cs if fast.crates(t.root, c.changed)]
+        return [(c, "changed the Rust workspace") for c in cs if touched.crates(t.root, c.changed)]
     if unit.startswith("generated:"):
         out_path = unit.split(":", 1)[1]
         exe = gen.get(out_path, "")
@@ -217,7 +218,7 @@ def attribute_unit(unit: str, t, rows, store: str, log: str, cs: list[Commit], g
         for c in cs:
             if out_path in c.changed:
                 res.append((c, f"changed {out_path}"))
-            elif exe.startswith("cargo:") and fast.crates(t.root, c.changed):
+            elif exe.startswith("cargo:") and touched.crates(t.root, c.changed):
                 res.append((c, "changed the Rust workspace (its generator)"))
             elif exe in t.exes and runs.reach(t, exe) & c.mods:
                 res.append((c, f"changed {sorted(runs.reach(t, exe) & c.mods)[0]}, of its generator's reach"))
@@ -327,7 +328,6 @@ def record(a) -> int:
     rng = f"{green}..{sha}" if green else sha
     shas = git(a.repo, "rev-list", "--first-parent", *(["--max-count=300"] if not green else []), rng).split()
     cs = [Commit(a.repo, c) for c in shas]
-    nf = sum(c.fast for c in cs)
     t = treemod.read(a.tree)
     try:
         rows = runs.table(a.tree)
@@ -355,37 +355,25 @@ def record(a) -> int:
             h = (now - e["first"]) / 3600
             fixed.append(f"FIXED {u} after {h:.1f} h (red at {e['seen']} convergence(s); first {e['first_sha'][:12]})")
     reds = sorted(set().union(*(v for v in units.values() if v)))
-    reverts = []
     for u in reds:
         att = attribute_unit(u, t, rows, a.traces, log, cs, gen)
         now_c = [c.sha for c, _ in att]
         e = state.get(u)
         if e is None:
-            e = state[u] = {"first": now, "first_sha": sha, "commits": now_c, "seen": 0, "reverted": []}
+            e = state[u] = {"first": now, "first_sha": sha, "commits": now_c, "seen": 0}
         if e.get("last_sha", e["first_sha"] if e["seen"] else None) != sha:
             e["seen"] += 1   # GATES-24: a sighting per main, never per re-run at the same main
         e["last_sha"] = sha
         h = (now - e["first"]) / 3600
         who = " | ".join(f"{c.label()} ({why})" for c, why in att) or "no commit of the range (ROOT)"
         out.append(f"RED {u} (red at {e['seen']} convergence(s) since {e['first_sha'][:12]}, {h:.1f} h): attributed to {who}")
-        if e["seen"] >= 2:
-            cand = [c for c in e["commits"] if c in now_c and c not in e["reverted"]]
-            if len(cand) == 1:
-                reverts.append(f"REVERT {cand[0]} {u}")
-                e["reverted"].append(cand[0])
-            elif cand:
-                reverts.append(f"REVERT-PENDING {u}: {' '.join(c[:12] for c in cand)} (several commits read it: ROOT "
-                               f"picks, scripts/converge --revert C)")
-            elif not e["reverted"]:
-                reverts.append(f"REVERT-PENDING {u}: no commit attributed at both sightings (ROOT routes)")
     tmp = statep + f".{os.getpid()}"
     json.dump(state, open(tmp, "w", encoding="utf-8"), indent=1, sort_keys=True)
     os.replace(tmp, statep)
     head = (f"CONVERGENCE {s12} range {green[:12] + '..' if green else '(no GREEN standing in the log; the last 300) ..'}{s12} "
-            f"landings={len(cs)} "
-            f"(fast {nf}, full {len(cs) - nf}) => {verdict} reds={len(reds)} fixed={len(fixed)} "
+            f"landings={len(cs)} => {verdict} reds={len(reds)} fixed={len(fixed)} "
             f"at {time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime(now))}")
-    text = "\n".join([head] + times(a.dir, s12, runs_out) + out + fixed + reverts)
+    text = "\n".join([head] + times(a.dir, s12, runs_out) + out + fixed)
     print(text)
     with open(os.path.join(a.dir, "convergence.log"), "a", encoding="utf-8") as fh:
         fh.write(text + "\n")
@@ -503,16 +491,6 @@ def floor_cmd(a) -> int:
     return 0
 
 
-def owners_cmd(a) -> int:
-    """The layers owning C's paths, and C's subject layer: what a revert of C names in CROSS-LAYER."""
-    c = Commit(a.repo, a.commit)
-    rows = owners.table(git(a.repo, "rev-parse", "--show-toplevel").strip())
-    names = {owners.owner(rows, p) for p in c.changed} - {"SHARED"}
-    names |= set(c.owner.split("/"))
-    print(" ".join(sorted(names)))
-    return 0
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -520,9 +498,6 @@ def main() -> int:
     for x in ("--repo", "--sha", "--line", "--dir", "--tree", "--traces"):
         r.add_argument(x, required=True)
     r.add_argument("--now", type=int)
-    o = sub.add_parser("owners")
-    o.add_argument("--repo", required=True)
-    o.add_argument("--commit", required=True)
     b = sub.add_parser("build")
     b.add_argument("--tool", choices=("lake", "cargo"), default="lake")
     b.add_argument("--out", required=True)
@@ -535,7 +510,7 @@ def main() -> int:
     f.add_argument("--peaks", required=True)
     f.add_argument("--days", type=int, default=14)
     a = ap.parse_args()
-    return {"record": record, "owners": owners_cmd, "build": build_cmd, "floor": floor_cmd}[a.cmd](a)
+    return {"record": record, "build": build_cmd, "floor": floor_cmd}[a.cmd](a)
 
 
 if __name__ == "__main__":

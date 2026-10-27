@@ -2,11 +2,11 @@
 
 A landing rebases on origin/main, builds the changed modules and their dependents, runs the affected tests and journeys, then pushes to main. Documentation-only changes require no build. The commit message explains what changed and what the system can do because of it.
 
-Use git fetch origin, git rebase origin/main and git push origin HEAD:main from the lane's own worktree. Resolve a rebase conflict against both changes. If main moves again before the push, fetch, rebase and retry. Keep the worktree's build products and Cargo target separate from other lanes.
+`scripts/commit` does this from the lane's own worktree: commit with git, then run it (or name paths: `scripts/commit -F MESSAGE PATH...`). It replays the commit onto origin/main, builds what the change touched and runs the rows it reaches in `~/nd-land/<worktree>/` on the home disk (the NVMe on the build host), at idle priority under swarm-build, and pushes. A conflict stops it and names the paths; resolve it against both changes and run it again. If main moves before the push it rebases and pushes again, rebuilding only when main changed one of the same paths. A build killed by its memory cap reads NOT BUILT, never red.
 
 Whole-system validation is a periodic report through scripts/converge or its successor. It builds the tree, runs the rows and tests, and attributes failures to the changes that introduced them. A reported failure becomes work for that change's owner to fix forward.
 
-Per-landing judge slots, displacement queues and message-form gates are not part of this workflow. Censuses, vector tables, pins, ceilings, TCB and waste measurements serve the convergence report. Existing source-check implementations cover closure, refusals, size, size_limit, paths, runs, rebase, TCB, vectors, waste, owners and targets; they are evidence tools, not landing authorization.
+Nothing else judges a landing: there are no judge slots, no queue, no message-form lines. The census, the codec vector table, the TCB table and the waste ceilings are read by the convergence report. The source checks it prints (gates/check.py) cover module closure, refusal names, the 1 MB file law, paths, the runs table, the TCB table, the codec vectors and the waste ratchet.
 
 Keep design decisions in the layer's decision ledger, with critique and meta-critique. Write an entry for a real design choice rather than for every commit.
 

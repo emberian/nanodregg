@@ -11,7 +11,7 @@ Nanodregg is a shared World with one writer and members who check its history th
 | [Host](../Host/Store.lean) | One locked Store persists authenticated records and atomic bases. Bounded pages serve a base or log; a follower persists its own checked history. |
 | [Client](../client/src/bin/nd.rs) | Rust holds member secrets, freezes signed attempts, transports frames and performs the steps Lean requests. |
 | [Hosting](../Hosting/Resident/Run.lean) | World objects describe resident grains. Confined processes use member and broker sockets; the keybroker holds provider credentials. |
-| [Ops and judge](JUDGE.md) | Rendered units operate the processes. Source gates, builds, simulations, journeys and convergence check changes. |
+| [Ops and judge](JUDGE.md) | Rendered units operate the processes. A landing builds what it changed and runs what it touched; the periodic convergence report checks the whole. |
 
 Objects run installed packages. Laws judge changes; relations hold bounded keyed rows. Activities, offers, escrow and generators are package constructions over these mechanisms. [OBJECTS](OBJECTS.md) connects them to executable journeys.
 

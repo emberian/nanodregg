@@ -90,24 +90,24 @@ empty proof slot, an agreement mesh with one host.
    own that representation. Measure
    at range ends with `perf stat --no-scale`; the waste ratio of every operation is pinned and may
    only fall.
-6. **Named theorems, never `#guard`.** `theorem … := by decide/rfl`; the ONE tree-wide axiom census
-   (`Census/Axioms.lean`, gate `gates/census.py`) replaces per-theorem `#assert_axioms` lines, because
-   it checks every declaration rather than the ones someone remembered (GATES-4, accepted 10-16);
-   only where the compiler must be trusted, `native_decide` with an allow row in
-   `gates/axioms-allow.tsv`, which is its record. No `sorry` ever lands. Every
-   theorem statement is read by a second agent before it lands (vacuity check: identity carriers,
-   `P → P`, empty premises).
+6. **Named theorems, never `#guard`.** `theorem … := by decide/rfl`. One tree-wide axiom census
+   (`Census/Axioms.lean`, run by `gates/census.py` in the convergence report) lists every declaration's
+   axioms instead of per-theorem `#assert_axioms` lines; where the compiler must be trusted,
+   `native_decide` with a row in `gates/axioms-allow.tsv`, which is its record. No `sorry` lands. A
+   theorem's statement says something: the top-level claims (Spec/) are refused by a trivial system,
+   and that is where vacuity is checked.
 7. **Refusals by name.** Every refusal is a constructor with a name on the wire; a parse failure is
    never rendered as a verdict; "uncertain" is a real outcome.
 8. **Small modules, split proofs.** A module exports definitions OR proofs about them, not both,
    so a proof edit rebuilds nothing downstream; the split is BY FILE (a `Proofs` path component),
    because Lean v4.30.0's `module` system still rebuilds importers on a proof-only edit (GATES-2,
-   measured 10-16). "No import hubs" is measured as the SIZE metric `max dependents of one module`
-   with a ceiling (GATES-6). Target: the Host closure under 150 modules; a one-module edit rebuilds
-   its dependents in under 2 minutes on a laptop.
-9. **Every commit builds.** `lake build` of the commit's import closure (and `cargo check` where
-   Rust exists) passes BEFORE push. Main is the only branch. Small commits, often. A red on main is
-   fixed forward within the hour by whoever sees it; `git revert` is always allowed.
+   measured 10-16). No import hubs. Target: the Host closure under 150 modules; a one-module edit
+   rebuilds its dependents in under 2 minutes on a laptop.
+9. **Every landing builds what it changed and runs what it touched.** `scripts/commit` rebases on
+   origin/main, builds the changed modules and their importers (and `cargo check` of the reached Rust
+   packages), runs the rows those reach, and pushes. Main is the only branch. Small commits, often. A red
+   the convergence report names is fixed forward by the lane whose landing it names; `git revert` is
+   always allowed.
 10. **Decisions are examined, then re-examined.** Every design decision goes in `decisions/<layer>.md` (one file per layer; `DECISIONS.md` is frozen after 10-16: seven writers on one append-only file collided twice):
     the decision, the alternatives, why this one, the CRITIQUE (what would make it wrong), and the
     META-CRITIQUE (what bias produced it: familiarity with minidregg's shape, an estimate mistaken
@@ -117,9 +117,8 @@ empty proof slot, an agreement mesh with one host.
     copying a file is not. If a minidregg definition is right, restate it from its theorem, smaller.
     Carve-out (PROTOCOL, 10-16): the conformance ROWS restate the minidregg journeys step for step,
     because the journeys ARE the spec; that is restating the spec, not copying code.
-12. **Size is a ratchet.** `SIZE.md` holds the counts (modules, lines per layer, opcodes,
-    constructors, Rust lines, partial defs, theorems); a commit that raises a count explains why in
-    the message or is reverted.
+12. **Small is a design goal.** Fewer modules, opcodes, constructors and lines is better, argued in
+    the decision that adds them; no file over 1 MB lands (`gates/size_limit.py`, in the report).
 
 ## Layers and owners (the six rebuild agents)
 
@@ -134,7 +133,7 @@ above has committed, never against prose.
 | HOST | DISCOVER-HOST → BUILD-HOST | `Host/`: the resident loop (one per Store), batched admission, the single dispatcher over the op table, the durable Store (SQLite or a flat log: decide and critique), checkpoints, crash protocol, the consent provider as the SAME code path in a second process | `Host/Loop.lean` admitting Turns through `World.admit`, persisting through one append, with the crash-restart plant |
 | PROTOCOL | DISCOVER-PROTOCOL → BUILD-PROTOCOL | `protocol/`: the operation table (target ≤ 40 ops), consent frames (merged), client commands, the SPK broker verbs; every op's receiver named; the conformance rows (the journeys rewritten as executable rows against nanodregg) | `protocol/operations.lean` (the table as data with a theorem that every op has exactly one receiver) + `rows/` (journey J0–J8, JPAY, jwell, m6grain, hermes as nanodregg rows) |
 | CLIENT | DISCOVER-RUST → BUILD-CLIENT | `client/` (Rust, one crate, one process over two sockets: custody + transport + workspace; decides nothing) and `sandbox/` (bwrap launcher, SPK broker, grain runtime as thin plumbing over Lean-decided policy) | `client/` that performs challenge → prepare → assemble → submit → lookup against BUILD-HOST's loop, with the generated op table as its only protocol knowledge |
-| CLOSURE | DISCOVER-CLOSURE → BUILD-GATES | `gates/` + the build: lakefile with small modules and the def/proof split enforced, the size ratchet, the waste ratchet, the import-closure gate, `#assert_axioms` census, the standing service script (tip → build → sim → rows), the CI that runs on a laptop | `lakefile`, `gates/size`, `gates/closure` (refuses a def-module importing a proof-module), `SIZE.md` seeded, `scripts/standing.sh` |
+| CLOSURE | DISCOVER-CLOSURE → BUILD-GATES | `gates/` + the build: the lakefile, `scripts/commit` (a landing: build what changed, run what it touched, push) and the convergence report (`scripts/converge`, `scripts/standing.sh`: the whole build, every row, the census, the source checks) | `lakefile`, `gates/closure` (a def-module importing a proof-module, in the report), `scripts/standing.sh` |
 | HOSTING | BUILD-HOSTING | `Hosting/` (lifecycle generator + theorems, Plan, controller + broker decisions with the lease, resident profile), the `launcher/` Rust crate, `world/grain/` + `world/hosting/` package texts, `decisions/hosting.md`; must never hold a member seed in a process that parses model/provider bytes, keep grain phase/pid/volumes as truth outside the World, or add a Body constructor/receiver without KERNEL (current contracts: `docs/OPERATING.md` and `decisions/hosting.md`) | the grain lifecycle green through `Receive.submit`; the broker's first refusal by name with no key reaching the resident |
 | LEDGER | BUILD-LEDGER (a KERNEL deliverable, prefix `kernel:`) | `Kernel/Value.lean`, `Kernel/Proofs/Value.lean`, `Kernel/Receive/Ledger.lean`, `Kernel/Proofs/Ledger.lean`, the ledger arms of `Kernel/Sim/Gen.lean`; edits Cell/World/Call/Derive only by agreement with KERNEL (full row: `ASSEMBLY-ledger.md`) | value conservation as an equality with its plant; floors + wells (pug's rule); escrow never both released and refunded |
 | OPS | BUILD-OPS | `Ops/` (unit renderer emitted with `--check`, Node values, the BAR driver), `ops/` (units, RUNBOOK, live/), `decisions/ops.md`; must never decide what HOST/KERNEL/CLIENT decide, touch a service manager outside its scratch, hold key material, or delete a Store (full row: `ASSEMBLY-ops.md`) | units emitted + live harness green against the real `host`; world-carry round trip with its check |
@@ -142,7 +141,7 @@ above has committed, never against prose.
 | TRANSPORT | BUILD-TRANSPORT (temporary; dissolves when D1–D7 land) | nothing permanently: drives store identity, the mux close, thin-consent plumbing into the owners' paths under their prefixes (full row: `ASSEMBLY-transport-consent.md`) | D1+D2: a request and an envelope bound to their Store (flag day), with the foreign-segment plant |
 | SPEC | SPEC (a ROOT lane) | `Spec/` (the top-level claims over the deployed entry points: `System`, the trivial systems, each claim with its top theorem, floor and deployed run), `decisions/spec.md`; must never restate a deployed definition (a field of `deployed` names it) or land a claim without a floor | every TOPLEVEL-SPEC claim proved of `deployed` and refused by a trivial system |
 
-The 10-17 rows (HOSTING, LEDGER, OPS, PERF, TRANSPORT) came from the scoutotype swarm (27 Sonnet scouts → 6 Opus assemblies, recorded in historical assembly dossiers; surviving obligations are in `decisions/root.md`); the primary checkout `~/dev/nanodregg` is the READ-ONLY reference at main, moved by `scripts/commit` after each landing.
+The 10-17 rows (HOSTING, LEDGER, OPS, PERF, TRANSPORT) came from the scoutotype swarm (27 Sonnet scouts → 6 Opus assemblies, recorded in historical assembly dossiers; surviving obligations are in `decisions/root.md`); the primary checkout `~/dev/nanodregg` is a read-only reference that follows origin/main (`scripts/mac-pull`).
 
 Until KERNEL commits its first signatures, the other five write their layer's `DESIGN.md`
 (decisions with critiques) and their interface PROPOSAL as Lean/Rust signatures in a
@@ -152,40 +151,28 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
 
 ## Working rules
 
-- Repo: `~/dev/nanodregg` (git, branch `main`, no other branches); remote `origin` = github.com/emberian/nanodregg (public, created by Ember's order 10-17). Until scripts/commit pushes after landing (a GATES successor item), ROOT pushes main to origin at each report. Commit messages: what, why, what
-  it refuses, with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (unsigned is fine).
-- Build on the Mac: `lake build` / `cargo check` of your import closure before every push. Keep
-  `.lake` small; the Mac data volume is nearly full: no large artifacts, no fixtures over 1 MB, no
-  copies of minidregg. hbox is Ember's: do not use it. No box builds until ROOT says.
-- Seven agents, ONE REPO, SEPARATE WORKTREES (ruled 10-16 after six collisions in one shared
-  checkout): every layer edits in its own `git worktree` (`scripts/worktree <layer>` →
-  `~/dev/nanodregg-wt/<layer>`, same `.git`, same `refs/heads/main`); the primary checkout
-  `~/dev/nanodregg` is nobody's editing surface. Commit ONLY with `scripts/commit -m MSG PATH...`
-  from your worktree: it builds the candidate from CURRENT main plus exactly your paths, runs the
-  gates, and lands on main by compare-and-swap (retrying when main moved). A plain `git commit` is
-  refused by the hook. Commit small, commit only your layer's files, never `git add -A`, never
-  `git stash`, never rewrite history. THE SHARED INDEX IS NOT YOURS: never stage into the default index (another agent's
-  stale index reverted a charter commit on 10-16, 65e3c1c → fixed forward feeaed3). Either commit
-  with explicit paths (`git commit --only`) or use a private index (`GIT_INDEX_FILE=$(mktemp)`,
-  `git read-tree HEAD`, add your paths, `write-tree`, `commit-tree`, `update-ref`). Before every
-  push, `git show --stat HEAD` must list ONLY your files; a commit that touches another layer's file
-  or reverts someone's hunk is a defect: fix forward, tell the owner.
-- The primary checkout `~/dev/nanodregg` is the READ-ONLY reference (scouts, evaluators, `lake env lean` against its .lake); `scripts/commit` refuses to commit from it and moves it to each new main when clean. Lane-private file names in the shared scratchpad (a message file overwritten by another lane was judged under the wrong subject).
-- Lakefile rule (GATES): add your `lean_lib` entry (`globs = ["X.+"]`) in the SAME commit as your
-  first `.lean` file; a glob over a directory missing from the commit breaks everyone's build. A conflict in a shared file (lakefile, DECISIONS.md, SIZE.md) is resolved by reading
-  both sides. Talk to the owner of a layer you need something from (SendMessage); do not build
-  your own copy of their thing.
-- Tests are theorems, plants and rows. A plant is a mutation that goes red by name: a vacuity check
-  on a theorem or a gate, run when it is cheap. It is not required of every theorem, it is not a
-  landing gate, and a plant line in a commit is a courtesy, not a rule (Ember, 2026-10-24). A
-  landing goes when its builder's build and tests are green; the whole system is re-judged by a
-  convergence per batch. No unfiltered test suites.
-- Process rules from minidregg still apply: PID file or nothing for kills; every loop sleeps and
-  has a deadline; disk pressure is Ember's (stop and report, delete nothing).
-- Report to ROOT ("main") on events only: first signatures committed, a decision that another
-  layer must answer, a law you think is wrong (argue it in DECISIONS.md with both critiques; ROOT
-  rules), your first green row, your handoff (write `<LAYER>-LOG.md` in `~/dev/redregg/work/` as
-  your continuation before 350K tokens).
+- Repo: github.com/emberian/nanodregg, branch `main`, no other branches; origin/main on GitHub is the
+  truth. Clones: the Mac (`~/dev/nanodregg`) and hbox (`/tank/dregg-build/nanodregg/main`, the build box,
+  shared with other work: be considerate).
+- One agent per worktree (`scripts/worktree <layer>`). Commit with git in your worktree, or name your
+  paths to `scripts/commit -m MSG PATH...`. Never `git add -A` in a tree others touch, never
+  `git stash`, never rewrite pushed history.
+- **A landing** (`scripts/commit`): rebase on origin/main; build what you changed (the modules your diff
+  touches and their importers; `cargo check` of the reached packages); run the rows and journeys your
+  change touches; push to main. If main moved, it rebases and pushes again; if the rebase conflicts,
+  you resolve it. Its build and test trees live on the home disk (`~/nd-land/<worktree>/`; on hbox the
+  NVMe, never /tank), at idle priority under swarm-build. That is the whole gate.
+- The commit message is prose: what changed and what it lets the system do. No form lines.
+- Tests are theorems, journeys and rows. The whole is a periodic REPORT: `scripts/converge` builds
+  the tree, runs every row, test and bench, the census and the tables, and says what is red and
+  which landing it came from. It never refuses and never reverts; a red is a task for that lane,
+  fixed forward. No unfiltered test suites.
+- Decisions: `decisions/<layer>.md`, append-only, one critiqued entry per real design choice (law 10).
+- Box safety: PID file or nothing for kills (never by pattern); every loop sleeps and has a deadline;
+  builds under swarm-build at a lane budget (6G a module, 24G a tree), at `ionice -c3 nice -n 15`;
+  disk pressure is Ember's (stop and report, delete nothing outside your own scratch).
+- When a process constraint appears, the first question is "do we need this at all?". When a lane
+  spends more time landing than building, the gate is the defect.
 
 ## The meta-critique that applies to this whole charter
 

@@ -17,7 +17,7 @@ TABLE = os.path.join("gates", "size-allow.tsv")
 
 def listing(root: str) -> dict[str, int]:
     """Every file of ROOT, name -> size on disk. A git tree lists `git ls-files` (every tracked file,
-    SKIP_DIRS or not); an exported tree (scripts/pre-push runs gates/check.py on one) is walked outside SKIP_DIRS. Symlinks and
+    SKIP_DIRS or not); an exported tree (scripts/standing.sh runs gates/check.py on one) is walked outside SKIP_DIRS. Symlinks and
     non-regular files are skipped, as is a git path deleted from the worktree."""
     names: list[str] = []
     if os.path.exists(os.path.join(root, ".git")):

@@ -1,4 +1,4 @@
-# gates/rebase.py (GATES-19): the doc allow-list, path prefixes no judged unit reads at run time.
-# A path here is in no input key; gates/rebase.py check refuses any file outside it that names one in a string literal.
+# The doc allow-list: path prefixes no run reads. The convergence's attribution (gates/runs.py data_paths) does not
+# count a change under them as an input of any row.
 decisions/
 docs/

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# scripts/standing.sh [--here] [REV] — the standing verdict of one commit (default HEAD), on a
-# laptop. Refused unless this checkout is at main (--here: judge with this checkout's scripts).
+# scripts/standing.sh [--here] [REV] — the standing REPORT of one commit (default HEAD): what is red in the whole tree.
+# Refused unless this checkout is at origin/main (--here: report with this checkout's scripts). It refuses no landing.
 #
 #   tip -> gates -> full build -> census -> generated files -> the Rust workspace -> runs -> waste -> one line:
 #   STANDING <sha> gates=… build=… census=… generated=… cargo=… runs=… waste=… unmeasured=N … carried=N daily=N => GREEN|RED|INCOMPLETE
@@ -15,10 +15,10 @@
 #   census  the same over the build inputs and every path under gates/ (the census reads the allow tables there);
 #   rows    gates/runs.py --reuse/--record/--daily: a row whose traced key is byte-identical to its last ok run's.
 # Everything else (the gates, the generated files, the Rust workspace, the waste ceilings) runs every time.
-# It is THE CONVERGENCE (GATES-22): scripts/converge runs it on main every 3 h while landings happen, and every
-# check a FAST landing does not run is here: the census, the generated files, the whole Rust workspace (cargo
-# check, clippy -D warnings, rustfmt; per landing since GATES-22 only check + fmt of the reached packages), every
-# row (the benches included) and the waste ceilings.
+# It is THE CONVERGENCE: scripts/converge runs it on origin/main every 3 h while landings happen. A landing builds
+# what it changed and runs the rows it touched (scripts/commit); everything else is here: the whole build, the census,
+# the generated files, the whole Rust workspace (cargo check, clippy -D warnings, rustfmt), every row (the benches
+# included), the waste ceilings and the source checks (gates/check.py).
 #
 # GREEN only when every stage's value is exactly `ok` and no ceiling is unmeasured; any RED stage
 # makes the line RED; anything else (ABSENT, INCOMPLETE, KILLED(load)) is INCOMPLETE: a gate that
@@ -40,10 +40,10 @@ set -uo pipefail
 here=0
 [ "${1:-}" = --here ] && { here=1; shift; }
 rev=${1:-HEAD}
-# These scripts and gates are the checkout's own: a checkout behind main judges with old gates.
-# Run from a checkout at main, or say --here to judge with this checkout's scripts on purpose.
-if [ $here = 0 ] && [ "$(git -C "$repo" rev-parse HEAD)" != "$(git -C "$repo" rev-parse refs/heads/main)" ]; then
-  echo "standing: REFUSED — this checkout is at $(git -C "$repo" rev-parse --short HEAD), main is $(git -C "$repo" rev-parse --short refs/heads/main): git checkout --detach main, or pass --here" >&2
+# These scripts and gates are the checkout's own: a checkout behind origin/main reports with old ones.
+# Run from a checkout at origin/main, or say --here to report with this checkout's scripts on purpose.
+if [ $here = 0 ] && [ "$(git -C "$repo" rev-parse HEAD)" != "$(git -C "$repo" rev-parse origin/main)" ]; then
+  echo "standing: REFUSED — this checkout is at $(git -C "$repo" rev-parse --short HEAD), origin/main is $(git -C "$repo" rev-parse --short origin/main): git checkout --detach origin/main, or pass --here" >&2
   exit 2
 fi
 sha=$(git -C "$repo" rev-parse "$rev") || exit 2
@@ -111,7 +111,7 @@ census=ABSENT; generated=ABSENT; runs=ABSENT; : > "$G/waste.measured"
 # A runs output is this run's or none: the counters below and converge.py read it (GATES-24: at 2d5056e an unbuilt
 # tree printed the previous run's carried=5 outside=30).
 : > "$G/runs.out"; rm -f "$G/${sha:0:12}.runs.out"
-# The Rust workspace whole (it needs no Lean build): what pre-push judged on every Rust landing until GATES-22.
+# The Rust workspace whole (it needs no Lean build).
 cargo=ok
 if [ -f "$T/Cargo.toml" ]; then
   for c in "check --quiet --locked --workspace --all-targets" "clippy --quiet --locked --workspace --all-targets" "fmt --all --check"; do
@@ -145,9 +145,8 @@ if [ $built = 1 ]; then
   # GATES-20: every run traced; the re-trace check reds a fresh read-set the stored one (same key) omits;
   # reads outside the tree are REPORTED (`outside=N` below; RED is GATES-20c, trigger: the census sorted);
   # a row whose trace could not be read (`untraced=N`, GATES-20d) leaves its re-trace unjudged: INCOMPLETE.
-  # GATES-20g: rows run concurrently, at most N (the judge slot count) at once: standing's own lock runs one row and
-  # each further row borrows a FREE judge slot for its run (never while a lander waits for one), so a convergence
-  # holds at most N-1 judge slots at any moment and gives each back at its row's end.
+  # GATES-20g: rows run concurrently, at most N (gate-lib.sh slot_count) at once, each further row taking a free row
+  # token (<common>/nanodregg-gate-K.flock) for its run and giving it back at its end.
   # GATES-20l: a row whose traced key is byte-identical to its last ok run's (carry.record) is carried, unless that
   # run is older than $daily s; the record is replaced by this run's (ok rows only: a red is never carried).
   : > "$G/carry.new"

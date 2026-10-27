@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# scripts/mac-pull [REPO] — a reader clone (no nanodregg.landing; default ~/dev/nanodregg) follows
-# origin/main: fast-forward refs/heads/main, then move the primary checkout when it has no tracked
-# edits. Never builds, never commits. (MIGRATE-HBOX 10-17: main lives on hbox.) refs/heads/main is
-# fetched into directly, not `pull --ff-only`: the primary is detached and refs/heads/main is what
-# every script reads; the fetch refuses a non-fast-forward by itself.
+# scripts/mac-pull [REPO] — a clone (default ~/dev/nanodregg) follows origin/main: fast-forward refs/heads/main, then
+# move the primary checkout when it has no tracked edits. Never builds, never commits. refs/heads/main is fetched into
+# directly, not `pull --ff-only`: the primary is detached; the fetch refuses a non-fast-forward by itself.
 set -eu
 r=${1:-$HOME/dev/nanodregg}
-[ "$(git -C "$r" config --bool nanodregg.landing || echo false)" = true ] && {
-  echo "mac-pull: $r is the landing repo; it is never pulled" >&2; exit 2; }
 git -C "$r" fetch -q origin main:refs/heads/main
 if [ -n "$(git -C "$r" status --porcelain --untracked-files=no)" ]; then
   echo "mac-pull: $r has tracked edits; refs/heads/main moved, checkout left at $(git -C "$r" rev-parse --short HEAD)"; exit 1

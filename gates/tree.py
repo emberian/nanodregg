@@ -195,6 +195,23 @@ class Tree:
         return out
 
 
+def reach(t: "Tree", changed_mods: set[str]) -> set[str]:
+    """The changed modules present in T, their importers, and the importers of a changed module T lacks: what a
+    change of those modules can move (the landing's build, the census's reach)."""
+    present = {m for m in changed_mods if m in t.modules}
+    gone = changed_mods - present
+    dep = t.dependents()
+    r = set(present).union(*(dep[m] for m in present)) if present else set()
+    for m, mod in t.modules.items():
+        if gone & set(mod.imports):
+            r |= {m} | dep[m]
+    return r
+
+
+def changed_modules(changed: list[str]) -> set[str]:
+    return {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean") and p != "lakefile.lean"}
+
+
 def decls(code: str) -> list[Decl]:
     out = []
     for m in _DECL.finditer(code):

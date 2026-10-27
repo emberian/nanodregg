@@ -117,7 +117,7 @@ def measurers(traces: str | None, rows: list[str]) -> dict[tuple[str, str], set[
 def measured_check(text: str, measured: str, partial: bool = False, status: dict[str, str] | None = None,
                    who: dict[tuple[str, str], set[str]] | None = None, table_rows: list[str] | None = None,
                    judged: bool = False) -> tuple[list[str], list[str], list[str]]:
-    """(red, unpinned, absent). partial (pre-push, which runs only the exes a commit can affect): a pinned row
+    """(red, unpinned, absent). partial (a run of only some exes): a pinned row
     nothing measured is neither. judged (standing with --runs-out): an unmeasured row is RED only when a row that
     measures it ran ok (status, who; table_rows: every row of gates/runs.tsv), else ABSENT; status None: the runs
     did not finish, every unmeasured row is ABSENT. Not judged: every unmeasured row is RED (the old caller)."""

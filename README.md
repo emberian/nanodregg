@@ -135,13 +135,15 @@ The claim's named premises are part of its meaning: these include canonical
 tries, faithful handling of the trusted adoption key, and `NoRef` laws for the
 law-history claim (laws without references to other packages).
 
-**Census, gates and scripts — checking the implementation.** Start at
-[`gates/check.py`](gates/check.py) and [`gates/runs.tsv`](gates/runs.tsv):
-source gates enforce ownership, module boundaries and size limits, while
-[`Census/`](Census/) inspects elaborated declarations and their dependencies.
-[`scripts/commit`](scripts/commit) is the concrete landing path, refusing a
-candidate whose required checks fail; verdict readers themselves face known-red
-controls.
+**Rows, the census and the report — checking the implementation.** Start at
+[`gates/runs.tsv`](gates/runs.tsv), the simulations, journeys, conformance rows
+and Rust tests, each with the line a passing run prints. A landing
+([`scripts/commit`](scripts/commit)) builds what it changed and runs the rows it
+touched; [`scripts/converge`](scripts/converge) periodically builds the whole
+tree and runs every row, the benches, the axiom census over elaborated
+declarations ([`Census/`](Census/)) and the source checks
+([`gates/check.py`](gates/check.py): module boundaries, the TCB table, the
+codec vectors), and reports what is red and which landing it came from.
 These checks assume Lean's kernel and the explicitly listed trusted components,
 and keep the distinction between a failed check and a check that could not run.
 
@@ -237,9 +239,9 @@ running system.
 | Why is a layer designed this way? | [`decisions/`](decisions/README.md), one append-only file per layer, with alternatives, critique and meta-critique. Read later entries for revisions. |
 | What does the system claim? | [`Spec/`](Spec/README.md), then its linked definitions and proofs. |
 | How does a complete scenario work? | [`Lang/Journey/`](Lang/Journey/): documents, generators, heads, holes, offers and the inbox; [`Protocol/Rows.lean`](Protocol/Rows.lean) for member conversations. |
-| What does the judge check? | [`gates/`](gates/), especially `runs.tsv`, `tcb.tsv` and `OWNERS`; [`scripts/commit`](scripts/commit) for landing. |
+| What is checked, and when? | [`scripts/commit`](scripts/commit) (a landing: build what changed, run what it touched, push); [`scripts/converge`](scripts/converge) (the periodic report on the whole); [`gates/runs.tsv`](gates/runs.tsv), [`gates/tcb.tsv`](gates/tcb.tsv). |
 | How do I run a World? | [`deploy/RUNBOOK.md`](deploy/RUNBOOK.md) and [`deploy/testground/README.md`](deploy/testground/README.md). |
-| Where are the original design records? | [`docs/record/`](docs/record/README.md), a historical archive; [`proposals/`](proposals/README.md), the interface proposals. |
+| Where is the current system guide? | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) and the pages it links; [`proposals/`](proposals/README.md), the interface proposals; the original design records are in git history. |
 | Where are the research memos and outside reviews? | In the separate **redregg** repository, under `work/promo/` and `work/readers/`. `DESIGN-CTX.md`, `TOPLEVEL-SPEC.md` and `DESIGN-TESTGROUND.md` explain the larger designs; the reader verdict and holistic reviews place them against the literature. |
 
 ## Building, running and working
@@ -266,8 +268,9 @@ lake exe rows --deployed receipt
 runs all registered language scenarios; select the scenarios or named protocol
 rows relevant to a change while developing. Rust tests are filtered, for example
 `cargo test --locked -p nanodregg-client --test frame`.
-On the shared build host, use its `swarm-build` resource controls and the
-layer's memory budget; whole-tree builds belong to the coordinated convergence.
+On the shared build host, use its `swarm-build` resource controls and a lane's
+memory budget (6G a module, 24G a tree) at idle I/O priority; whole-tree builds
+belong to the convergence.
 
 The host executable is `.lake/build/bin/host`; the release client is
 `target/release/nd`. Follow the runbook to create a Store and connect each
@@ -276,19 +279,19 @@ member's follower through `nd-supervise`. For the browser, follow
 builds the WebAssembly module with Emscripten, and copies the demo packages for
 a static server.
 
-Main is the integration branch. Work in a detached worktree within
-[`gates/OWNERS`](gates/OWNERS), run the affected checks, and land exactly the
-paths intended with `scripts/commit -F MESSAGE_FILE PATH...`.
-The script merges against current main and judges the candidate before landing
-by compare-and-swap. Ordinary changes take the source gates and the build they
-reach; flag days and judge-code changes take the full judge.
-[`scripts/converge`](scripts/converge) coordinates the whole-system check, and
-[`scripts/standing.sh`](scripts/standing.sh) produces its verdict.
+Main (origin/main on GitHub) is the only branch. Work in your own worktree,
+commit with git, and land with `scripts/commit` (or name the paths:
+`scripts/commit -F MESSAGE_FILE PATH...`): it rebases on origin/main, builds
+the changed modules and their importers and checks the reached Rust packages,
+runs the rows the change touches, and pushes, rebasing again if main moved. The
+message is prose: what changed and what it lets the system do.
+[`scripts/converge`](scripts/converge) is the periodic report on the whole tree
+([`scripts/standing.sh`](scripts/standing.sh) computes it); a red it names is
+fixed forward by the lane whose landing it names.
 
 Definitions and proofs live in separate modules. Changes to decisions append
-their reasons and both critiques. [`SIZE.md`](SIZE.md) is generated;
-[`gates/ceilings.tsv`](gates/ceilings.tsv) and
-[`gates/waste.tsv`](gates/waste.tsv) hold the size and work limits.
+their reasons and both critiques. [`gates/waste.tsv`](gates/waste.tsv) records
+the work ratios the benches measure.
 
 ## Provenance
 

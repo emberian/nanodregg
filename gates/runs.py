@@ -1,5 +1,6 @@
-"""gates/runs.py TREE [--changed FILE] [--waste-out FILE] — the verdict runs (sims, journeys, rows,
-plants): every lean_exe whose answer is a verdict, run over the built TREE as gates/runs.tsv says.
+"""gates/runs.py TREE [--standing] [--waste-out FILE] … — the verdict runs (sims, journeys, rows, plants): every
+lean_exe whose answer is a verdict, run over the built TREE as gates/runs.tsv says. The convergence's runner
+(scripts/standing.sh); a landing runs only the rows its change touched, through gates/touched.py, with run() below.
 
 gates/runs.tsv rows, `exe<TAB>runs<TAB>pass<TAB>control`:
   runs  the argument lists, separated by ` ; `, each one run of the exe (`(none)`: no arguments). `{host}` is the built
@@ -30,13 +31,12 @@ any exe it drives is selected.
 A row `cargo-untraced:CRATE:TEST` (GATES-20j, HOSTING-15's fence) is a cargo row that runs WITHOUT the GATES-20
 tracer: a test that must cross a setuid boundary (sudo to the deployed uids) cannot run under it, since strace
 --seccomp-bpf sets no_new_privs and sudo refuses (measured on hbox 10-21: `sudo -n -u nd true` exit 0 plain, exit 1
-traced). It holds no read-set, so it is selected by the static rules alone (its crate, its drives' closures, and
-every non-.lean change) and its verdict is carried only under GATES-19's byte-identical static key.
+traced). It holds no read-set, so it is attributed by the static rules alone (its crate, its drives' closures, and
+every non-.lean change) and is never carried.
 A cargo run (either kind) that prints a line starting `skipped: ` (stdout or stderr) is never ok, whatever its exit
 and libtest's summary: libtest counts a test that returned early as PASSED, so a test whose environment is absent
-would read ok on a box without it (HOSTING-15: the fence absent). ROOT 10-21: in pre-push it reads
-INCOMPLETE(skipped: N, first: LINE), pending, named in the verdict line, and the landing proceeds; in standing
-(--standing) it reads RED(skipped: N, first: LINE), so an environment that went missing (a reboot cleared /run) is a
+would read ok on a box without it (HOSTING-15: the fence absent). Outside standing it reads
+INCOMPLETE(skipped: N, first: LINE); in standing (--standing) it reads RED(skipped: N, first: LINE), so an environment that went missing (a reboot cleared /run) is a
 standing red until restored. The test's skip line carries its restore command. Neither is recorded or carried; on a
 `nobin RED` control a skip is a control that did not read red.
 
@@ -46,16 +46,11 @@ as for an exe (`{fresh}` is a fresh directory that exists when the run starts an
 `pass` its last stdout line, and `control` its known-red control (an argument list with
 --harness-control, read exactly as an exe's). It runs with ND_LEAN_BIN = the built bin directory and
 the cargo target directory a cargo row uses, so it builds no Lean and shares the cargo artifacts;
-ND_BIN is removed from its environment, so it builds the candidate's client (GATES-6). It has
-no import closure to select it by, so it is selected on every judge (fail-closed: a script row is never
-skipped because its inputs are unknown).
+ND_BIN is removed from its environment, so it builds the tree's own client (GATES-6). It runs in every report.
 
 A row `standing:EXE` is a verdict row of the lean_exe EXE that runs in standing only (GATES-17: a
 bench whose run costs minutes). It is read exactly as an exe's row and needs a --harness-control
-control; `-` is refused. runs.py runs it only with --standing (scripts/standing.sh); a pre-push run
-prints `run standing:EXE: NOT RUN(standing-only; its inputs are unchanged)` unless this commit changed its inputs (a data
-path, or a module of EXE's closure): then it runs in pre-push like any selected row (GATES-19, ROOT: standing-only is a
-cost choice, never a correctness one). An EXE has
+control; `-` is refused. runs.py runs it only with --standing (scripts/standing.sh). An EXE has
 one row, plain or standing. Its WASTE rows are judged by standing's full waste check, where a pinned
 row with no measurement is red, so a standing row that stops running is red there.
 
@@ -66,33 +61,17 @@ pending is a real outcome, law 7); RED otherwise, naming the first `FAIL`/`ROW �
 FAIL` line or the exit code and last line. A run past DEADLINE (600 s of wall clock) is re-run once;
 past it twice it is UNREAD(timeout …), never RED (GATES-16: a wall-clock deadline measures the box's
 load as much as the commit, so it can withhold a verdict but never give one). `WASTE <op> <metric> <ratio>` lines
-go to --waste-out. With --changed (pre-push), only the exes whose import closure holds a changed
-module run (all of them when any changed path is not a .lean source, outside gates/doc-allow.tsv and SIZE.md:
-the lakefile, the toolchain, a C source, runs.tsv, world/ texts, deploy/, the Rust tree, the runner; GATES-19): a sim is a verdict
-a build cannot give, so the importers of a change are RUN, not only built (ROOT/HOSTING 10-17, after
-HOSTING's grain text went stale under LANG's ID-1 with every build green).
+go to --waste-out.
 A run killed by signal 9/15 (earlyoom, the cgroup) is KILLED(load), not RED (GATES-11's amendment).
-With --keys/--reuse/--record (pre-push on a lander's candidate; GATES-19): a row whose input key
-(gates/rebase.py, computed by the JUDGE's copy before the runs) is byte-identical to the key under
-which the lander's previous judge recorded it ok is not run: its lines and WASTE lines are carried,
-`  reuse EXE: reused (key …)`; a row whose key differs prints `  reuse EXE: re-run (key changed)` and
-runs. Every row that reads ok (its control and every run) is written to --record; nothing else is,
-so a red, INCOMPLETE, UNREAD, KILLED or ABSENT verdict is never carried.
-With --traces DIR (GATES-20; pre-push on every judge, and standing): every run executes under
-strace (gates/readset.py) and a row whose runs all read ok stores its READ-SET under its traced key.
-Selection (with --base/--git-dir): a row holding a read-set valid for the parent is selected only by
-its reach and by a change its read-set touched; a row with none falls to the static rules
-(fail-closed). A lander's verdict is carried under the traced key of its own previous run's read-set
-when that key is byte-identical on the candidate. Standing (--standing) re-traces every row and reads
+With --traces DIR (GATES-20): every run executes under strace (gates/readset.py) and a row whose runs all read ok
+stores its READ-SET under its traced key; the convergence attributes a red row to the landings that touched what it
+read. Standing (--standing) re-traces every row and reads
 RED when a fresh read-set exceeds the stored one under an equal key, and reports reads outside the
 tree (F2; RED is GATES-20c).
 CONCURRENT ROWS (GATES-20g; Ember 10-21: the convergence's 46 min were ~43 min of rows run one after another).
-With --slots-dir/--slots N (pre-push's full judge and standing) the rows run concurrently, at most N at once in
-this tree: the caller's own place (a judge's gate slot; standing's lock) runs one row, and each further row
-BORROWS a free judge slot (gate-lib.sh gate_slot's flock, taken non-blocking) for as long as that one row runs,
-then gives it back. Nothing is borrowed while a lander waits for a slot (gate_slot keeps
-nanodregg-slot-wait/<its pid> while it waits), so a lander that arrives waits at most for the borrowed slot's
-current row to end; the box never runs more judges' work than its N slots plus standing, as before. A row's own
+With --slots-dir/--slots N (standing) the rows run concurrently, at most N at once in this tree: standing's own
+lock runs one row, and each further row takes a free row token (<common>/nanodregg-gate-K.flock, non-blocking) for
+as long as that one row runs, then gives it back. A row's own
 runs stay in order, one at a time; its lines are printed in row order whatever order the rows finished in, each
 row followed by `  time ROW: N s (own|borrowed slot K|alone)` read by this runner's own clock.
 Every run has a TMPDIR of its own (GATES-25), made by this runner and removed after, which the read-set excludes as
@@ -143,7 +122,7 @@ DEADLINE = int(os.environ.get("ND_RUN_DEADLINE", "600"))
 
 CONTROL = "harness-control"
 CARGO = ("cargo:", "cargo-untraced:")
-STANDING_RUN = {"on": False}   # set by --standing: a skipped cargo run is RED there, INCOMPLETE in pre-push
+STANDING_RUN = {"on": False}   # set by --standing: a skipped cargo run is RED there, INCOMPLETE elsewhere
 SKIPPED = re.compile(r"(?m)^skipped: .*$")
 NOBIN = ("nobin RED", "nobin ok")
 STANDING = "standing:"
@@ -472,47 +451,6 @@ def row_line(root: str, table_path: str | None, exe: str) -> str | None:
     return None
 
 
-def git_out(gitdir: str, *args: str) -> str | None:
-    r = subprocess.run(["git", "-C", gitdir, *args], capture_output=True, text=True)
-    return r.stdout if r.returncode == 0 else None
-
-
-def added_or_deleted(gitdir: str, a: str, b: str) -> set[str] | None:
-    """Paths added, deleted or changed in kind between two tree-ishes (a listing sees these; an edit it
-    does not), or None when git cannot say (the caller then counts every changed path)."""
-    out = git_out(gitdir, "diff", "--name-status", "--no-renames", a, b)
-    if out is None:
-        return None
-    return {l.split("\t")[-1] for l in out.splitlines() if l[:1] in ("A", "D", "T")}
-
-
-def valid_readset(t: tree.Tree, exe: str, store: str, gitdir: str, base: str, line: str | None):
-    """The newest stored read-set of `exe` valid for the parent `base`, or None. Valid: traced on a
-    tree S such that nothing between S and base can move the run: no changed path it touched, no
-    path changed in a directory it listed, no .lean of its reach, no runner file, and the same row
-    line. Only the git-tracked part is checked here (the parent is not built at selection time); the
-    .lake part (binaries, build products) is a function of the .lean sources, which the reach covers."""
-    if line is None:
-        return None
-    reach_mods = reach_of(t, exe)
-    for k, rec in readset.stored(store, exe)[:3]:
-        rs, src = rec.get("readset"), rec.get("tree")
-        if not rs or not src or rec.get("line") != line or not readset.keyable(rs):
-            # GATES-20m: a namespace read-set narrows only if its bound reads were translated
-            # into host paths; older records or unsupported mounts use the static rules.
-            continue
-        diff = git_out(gitdir, "diff", "--name-only", src, base)
-        if diff is None:
-            continue
-        d = diff.split()
-        ad = added_or_deleted(gitdir, src, base)
-        if (readset.touched_by(rs, d, set(d) if ad is None else ad) or any(x in readset.RUNNER for x in d)
-                or {x[:-5].replace("/", ".") for x in d if x.endswith(".lean")} & reach_mods):
-            continue
-        return rs
-    return None
-
-
 def reach_of(t: tree.Tree, exe: str) -> set[str]:
     """The modules whose change can move a row: a Lean row's reach; a cargo row's drives' reach; a
     script row every exe's closure (it has no closure of its own)."""
@@ -524,72 +462,6 @@ def reach_of(t: tree.Tree, exe: str) -> set[str]:
         return set().union(*(t.closure([r]) for r in t.exes.values()))
     e = exe.removeprefix(STANDING)
     return reach(t, e) if e in t.exes else set()
-
-
-def traced_selected(t: tree.Tree, changed: list[str], rows: dict, store: str, gitdir: str, base: str,
-                    table_path: str | None, base_table: str | None,
-                    tree_oid: str | None) -> tuple[set[str], dict[str, str]]:
-    """GATES-20's selection: per row, a valid read-set narrows; none falls to the static rule. Returns
-    (selected rows, why) over every verdict row, standing rows included."""
-    static = selected(t, changed, rows)
-    static_standing = standing_selected(t, changed, rows)
-    mods = {p[:-5].replace("/", ".") for p in changed if p.endswith(".lean")}
-    ad = added_or_deleted(gitdir, base, tree_oid) if tree_oid else None
-    # GATES-20e: gates/waste.tsv is read by the JUDGE, never by a run, so no trace holds it; a changed
-    # ceiling or measured value selects every row that measured that waste row (its read-set's W), and
-    # a row whose read-set does not say what it measured (no W: a record from before GATES-20e).
-    wchg: set[str] = set()
-    if readset.WASTE in changed:
-        old = readset._text(os.path.dirname(os.path.dirname(base_table)), readset.WASTE) if base_table else ""
-        wchg = readset.waste_changed(old, readset._text(t.root, readset.WASTE))
-    out, why = set(), {}
-    measured: set[str] = set()   # every waste row some valid read-set says its row measures
-    for exe in sorted(rows):
-        if not rows[exe][0]:
-            continue
-        line = row_line(t.root, table_path, exe)
-        rs = valid_readset(t, exe, store, gitdir, base, row_line(t.root, base_table, exe) if base_table else line)
-        is_static = exe in static or exe in static_standing
-        if rs is not None:
-            measured |= set(rs.get("W", []))
-        if rs is None:
-            if is_static:
-                out.add(exe); why[exe] = "no read-set valid for the parent: the static rule"
-            continue
-        hit = sorted(reach_of(t, exe) & mods)
-        crate = exe.split(":")[1] + "/" if exe.startswith(CARGO) else None
-        if base_table and row_line(t.root, base_table, exe) != line:
-            why[exe] = "its row changed"
-        elif any(x in readset.RUNNER for x in changed):
-            why[exe] = "the runner changed"
-        elif hit:
-            why[exe] = f"changed module {hit[0]}"
-        elif crate and any(x.startswith(crate) for x in changed):
-            why[exe] = f"its crate {crate} changed"
-        elif exe.startswith("script:"):
-            why[exe] = "a script row (no closure: every judge)"
-        elif wchg and "W" not in rs:
-            why[exe] = (f"waste row {sorted(wchg)[0].replace(chr(9), ' ')} changed (gates/waste.tsv, a judge input) "
-                        f"and its read-set does not say what it measures")
-        elif wchg and wchg & set(rs["W"]):   # (a record without W was taken by the branch above)
-            why[exe] = (f"its waste row {sorted(wchg & set(rs['W']))[0].replace(chr(9), ' ')} changed "
-                        f"(gates/waste.tsv, a judge input)")
-        else:
-            w = readset.touched_by(rs, changed, set(changed) if ad is None else ad)
-            if not w:
-                continue
-            why[exe] = w
-        out.add(exe)
-    orphan = sorted(wchg - measured)
-    if orphan:
-        # a changed waste row no read-set claims (new, removed, or measured by a row whose record predates
-        # GATES-20e): which row it judges is unknown, so every row the static rule selects runs
-        for exe in sorted(set(static) | set(static_standing)):
-            if exe not in out:
-                out.add(exe)
-                why[exe] = (f"waste row {orphan[0].replace(chr(9), ' ')} changed (gates/waste.tsv, a judge input) "
-                            f"and no read-set says which row measures it")
-    return out, why
 
 
 def run_once_more(t: tree.Tree, exe: str, args: list[str], passline: str, fresh: str, bindir: str,
@@ -665,36 +537,14 @@ class Row:
 
 
 class Slots:
-    """GATES-20g: the box's judge slots (gate-lib.sh gate_slot: <common>/nanodregg-gate-K.flock, K = 1..N) as row
-    tokens. The caller already holds its own place; a further row borrows a slot whose flock is free (non-blocking)
-    and gives it back when the row ends. Nothing is borrowed while a lander waits for a slot: gate_slot keeps
-    <common>/nanodregg-slot-wait/<its pid> while it waits (a dead pid's file is ignored), so a waiting lander waits
-    at most for one borrowed row to end. The descriptor is os.open's, not inheritable (PEP 446): no run's child
-    keeps a borrowed slot after its row."""
+    """GATES-20g: row tokens (<common>/nanodregg-gate-K.flock, K = 1..N). The caller already holds its own place; a
+    further row takes a token whose flock is free (non-blocking) and gives it back when the row ends. The descriptor
+    is os.open's, not inheritable (PEP 446): no run's child keeps a token after its row."""
 
     def __init__(self, common: str, n: int) -> None:
         self.common, self.n = common, n
 
-    def lander_waits(self) -> bool:
-        d = os.path.join(self.common, "nanodregg-slot-wait")
-        try:
-            names = os.listdir(d)
-        except OSError:
-            return False
-        for name in names:
-            if name.isdigit():
-                try:
-                    os.kill(int(name), 0)
-                    return True
-                except ProcessLookupError:
-                    continue
-                except PermissionError:
-                    return True
-        return False
-
     def borrow(self) -> tuple[int, int] | None:
-        if self.lander_waits():
-            return None
         for k in range(1, self.n + 1):
             try:
                 fd = os.open(os.path.join(self.common, f"nanodregg-gate-{k}.flock"), os.O_WRONLY | os.O_CREAT, 0o664)
@@ -767,68 +617,27 @@ def collisions(rs: dict[str, dict]) -> list[tuple[str, str, str]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("root")
-    ap.add_argument("--changed")
     ap.add_argument("--waste-out")
-    ap.add_argument("--standing", action="store_true", help="also run the `standing:` rows (scripts/standing.sh\n"
-                    "only; pre-push never passes it: GATES-17)")
-    ap.add_argument("--keys", help="unit<TAB>key per unit (gates/rebase.py keys), for --reuse/--record")
-    ap.add_argument("--reuse", help="the lander's previous judge's record (GATES-19)")
-    ap.add_argument("--record", help="write this judge's ok rows here (GATES-19)")
-    ap.add_argument("--table", help="judge with this runs.tsv instead of TREE's (pre-push runs the\n"
-                    "candidate's table over the parent tree, so both sides make the same runs)")
+    ap.add_argument("--standing", action="store_true", help="also run the `standing:` rows (scripts/standing.sh)")
+    ap.add_argument("--reuse", help="the previous report's record (GATES-20l)")
+    ap.add_argument("--record", help="write this report's ok rows here (GATES-20l)")
     ap.add_argument("--traces", help="GATES-20: trace every run and keep read-sets in this store")
-    ap.add_argument("--git-dir", help="GATES-20: the repository, for a read-set's validity on --base")
-    ap.add_argument("--base", help="GATES-20: the parent commit the selection is against")
-    ap.add_argument("--base-table", help="GATES-20: the parent's runs.tsv (a changed row line selects its row)")
     ap.add_argument("--tree-oid", help="GATES-20: the tree object judged here (a stored read-set names it)")
-    ap.add_argument("--slots-dir", help="GATES-20g: the git common dir, where the judge slots' flocks are")
-    ap.add_argument("--slots", type=int, default=1, help="GATES-20g: the box's judge slot count N: at most N rows at once")
+    ap.add_argument("--slots-dir", help="GATES-20g: the git common dir, where the row tokens' flocks are")
+    ap.add_argument("--slots", type=int, default=1, help="GATES-20g: at most N rows at once")
     ap.add_argument("--daily", type=int, help="GATES-20l (standing): a record older than this many seconds is not carried")
     a = ap.parse_args()
     t = tree.read(a.root)
     STANDING_RUN["on"] = a.standing
-    rows = table(os.path.dirname(os.path.dirname(os.path.abspath(a.table)))) if a.table else table(t.root)
-    # Judging a PARENT with the candidate's table (pre-push): a run the parent's own table does not
-    # hold, row for row (same exe, same argument list, same pass line, same control; for a cargo
-    # row, the parent has the test file too), was never a verdict of the parent. It is NOT RUN
-    # there, so the candidate's red is new. An absent verdict is never a red one (the fail-open
-    # class: cc4f6fe's new `cargo:launcher:broker` row, red in its own judge, landed as
-    # "PRE-EXISTING"). A parent table this runner cannot read holds no comparable verdict at all.
-    try:
-        own = table(t.root) if a.table else rows
-    except ValueError:
-        own = {}
-    changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
-    want = selected(t, changed, rows)
-    if changed is not None and data_paths(t.root, changed):
-        d = data_paths(t.root, changed)
-        print(f"  selection: every row ({len(d)} changed path(s) a run may read: {', '.join(d[:3])}{' …' if len(d) > 3 else ''})")
-    traced_why = None
+    rows = table(t.root)
+    own = rows
+    want = set(t.exes) | {k for k in rows if k.startswith(CARGO + ("script:",))}
     if a.traces:
         TRACING["strace"] = readset.available()
         if not TRACING["strace"]:
             print("  trace: strace unavailable on this box: no read-set is recorded and every key is static")
-    if TRACING["strace"] and changed is not None and a.git_dir and a.base and not a.standing:
-        tw, traced_why = traced_selected(t, changed, rows, a.traces, a.git_dir, a.base, a.table, a.base_table, a.tree_oid)
-        want = {e for e in tw if not e.startswith(STANDING)}
-        for e in sorted(tw):
-            print(f"  select {e}: {traced_why[e]}")
-    standing = sorted(k for k in rows if k.startswith(STANDING))
     if a.standing:
-        want |= set(standing)
-    else:
-        # Standing-only is a COST choice, never a correctness one (ROOT 10-19, LANG-18/PERF-9): a standing row
-        # whose inputs this commit changed (a data path, or a module of its exe's closure) runs here like
-        # any selected row, control included; only an unchanged one waits for standing.
-        sel = standing_selected(t, changed, rows) if traced_why is None else \
-            {k: traced_why[k] for k in standing if k in traced_why}
-        for k in standing:
-            why = sel.get(k)
-            if why:
-                want.add(k)
-                print(f"  run {k}: selected in pre-push (its inputs changed: {why}; a standing-only row costs minutes)")
-            else:
-                print(f"  run {k}: NOT RUN(standing-only; its inputs are unchanged)")
+        want |= {k for k in rows if k.startswith(STANDING)}
     bindir = os.path.join(t.root, ".lake", "build", "bin")
     nobin = os.path.join(t.root, ".lake", "runs", "nobin")
     scratch = os.path.join(t.root, ".lake", "runs")
@@ -846,7 +655,6 @@ def main() -> int:
     head = Row("")   # the carried rows' lines and the cargo reader's control, printed before the rows run now
     now = time.time()
     todo = sorted(e for e in want & set(rows) if rows[e][0])
-    keys = dict(l.rstrip("\n").split("\t", 1) for l in open(a.keys, encoding="utf-8") if "\t" in l) if a.keys else {}
     prev = {}
     if a.reuse and os.path.isfile(a.reuse):
         for l in open(a.reuse, encoding="utf-8"):
@@ -857,10 +665,10 @@ def main() -> int:
     reused = set()
     word = "carry" if a.standing else "reuse"
     for exe in todo:
-        k = keys.get("run:" + exe)
+        k = None
         if exe in prev and prev[exe][0].startswith("t:"):
             # GATES-20: the previous judge's own read-set for this verdict, keyed on this tree
-            rs0, line = prev[exe][1].get("readset"), row_line(t.root, a.table, exe)
+            rs0, line = prev[exe][1].get("readset"), row_line(t.root, None, exe)
             k = "t:" + readset.key(rs0, t.root, line) if rs0 and line else None
         at = prev[exe][1].get("at") if exe in prev else None
         if exe in prev and prev[exe][0].startswith("t:") and not readset.keyable(prev[exe][1].get("readset") or {}):
@@ -955,7 +763,7 @@ def main() -> int:
             # standing's re-trace check cannot run on it (standing counts these lines: INCOMPLETE).
             o.say(f"  untraced {exe}: no read-set ({readset.why_none() or 'a run held none'}); "
                   f"the static rules apply")
-        line = row_line(t.root, a.table, exe)
+        line = row_line(t.root, None, exe)
         tk = readset.key(rs, t.root, line) if rs and line else None
         if rs and a.traces:
             oc = {c: n for c, n in rs["outside"].items() if c in ("tmp", "home")}
@@ -981,8 +789,6 @@ def main() -> int:
         ran = {"at": int(time.time()), "tree": a.tree_oid or ""}
         if ok_all and tk:
             o.record.append(f"run:{exe}\tt:{tk}\trun\t{json.dumps({'lines': o.lines, 'waste': o.waste, 'readset': rs, **ran})}\n")
-        elif keys.get("run:" + exe) and ok_all:
-            o.record.append(f"run:{exe}\t{keys['run:' + exe]}\trun\t{json.dumps({'lines': o.lines, 'waste': o.waste, **ran})}\n")
 
     # GATES-20g: at most N rows at once, this judge's own place plus free judge slots borrowed per row. A row with
     # no read-set (a cargo-untraced row; every row of an untraced judge) runs alone, after the rest.

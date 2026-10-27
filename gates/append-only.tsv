@@ -1,4 +1,0 @@
-# gates/rebase.py candidate (GATES-22 (b)): directories whose *.md files are append-only records. When a lander and
-# main both only APPENDED to one since the lander's base, the landed copy is main's with the lander's addition after
-# it, never a merge conflict; an edit above the end on either side is merged (and refused on overlap) as any file.
-decisions/

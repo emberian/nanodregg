@@ -1,16 +1,15 @@
-"""gates/check.py TREE [--base-waste F] [--message F] [--changed F]
-[--base-tree DIR] — every source gate, one line each, exit 1 if any is red. The build and the census are scripts/pre-push's."""
+"""gates/check.py TREE [--base-waste F] [--message F] [--changed F] [--base-tree DIR] — the source checks, one line
+each, exit 1 if any is red. A REPORT: scripts/standing.sh (the convergence) prints it; no landing is refused by it
+(WORK-RULES 10-27). What it reads: the import closure rules, the refusal names, the 1 MB file law, case collisions and
+conflict markers, the runs table's classification, the TCB table, the codec vectors, the waste ceilings."""
 import argparse
 import os
 import re
 import sys
 
 import closure
-import owners
-import rebase
 import refusals
 import runs
-import size
 import size_limit
 import tcb
 import tree
@@ -22,8 +21,7 @@ ap.add_argument("root")
 ap.add_argument("--base-waste")
 ap.add_argument("--base-tree", help="the parent tree: size rises are measured against it, and a\n                closure/refusal red the parent already had is reported as PRE-EXISTING, not red")
 ap.add_argument("--message")
-ap.add_argument("--owners-from", help="tree whose gates/OWNERS judges ownership (the parent)")
-ap.add_argument("--changed", help="file listing the paths the commit changes (enables the owners gate)")
+ap.add_argument("--changed", help="file listing the paths the commit changes (accepted; unused)")
 a, _unknown = ap.parse_known_args()  # a parent's check.py must accept a child's new flags
 t = tree.read(a.root)
 msg = open(a.message, encoding="utf-8").read() if a.message else ""
@@ -37,7 +35,6 @@ def read(p):
     return open(p, encoding="utf-8").read() if p and os.path.exists(p) else None
 
 
-changed = open(a.changed, encoding="utf-8").read().split() if a.changed else None
 
 
 MARKER = re.compile(r"^(<{7}|>{7})(?: |$)")
@@ -81,31 +78,14 @@ def case_collisions(root: str) -> list[str]:
 results = {
     "closure": closure.check(t),
     "refusals": refusals.check(t),
-    "size": size.check(t, msg, tree.read(a.base_tree) if a.base_tree and has_lakefile(a.base_tree) else None),
     "size_limit": size_limit.check(t.root),
     "paths": case_collisions(t.root) + conflict_markers(t.root),
     "runs": runs.check(t),
-    "rebase": rebase.check(t.root),
     "tcb": tcb.check(t.root),
     "vectors": vectors.check(t.root, a.base_tree if a.base_tree and has_lakefile(a.base_tree) else None),
     "waste": waste.check(read(os.path.join(t.root, "gates", "waste.tsv")) or "", read(a.base_waste), msg),
 }
-if changed is not None:
-    src = a.owners_from if a.owners_from and os.path.exists(os.path.join(a.owners_from, "gates", "OWNERS")) else t.root
-    results["owners"] = owners.check(src, changed, msg)
-# Targets: a lib or exe the parent's lakefile declared and the candidate's does not is red by
-# name, unless the message says `LAKE-DROP: <name>: <why>` (the toml -> lean switch must carry
-# every target across).
-if a.base_tree and has_lakefile(a.base_tree):
-    bl = tree.lakefile(a.base_tree)
-    before = {x["name"] for k in ("lean_lib", "lean_exe") for x in bl[k]}
-    after = {x["name"] for k in ("lean_lib", "lean_exe") for x in t.lake[k]}
-    results["targets"] = [f"lakefile dropped target {n}; needs 'LAKE-DROP: {n}: <why>'"
-                          for n in sorted(before - after)
-                          if not re.search(r"(?m)^LAKE-DROP:\s*" + re.escape(n) + r"\s*:\s*\S", msg)]
-# A commit is refused for the reds it introduces. Reds its parent already had are printed (they
-# are some layer's to fix forward, and scripts/standing.sh counts every one) but do not block an
-# unrelated commit: otherwise one layer's red stops all six.
+# Reds the parent already had are printed PRE-EXISTING: the report names what this commit added.
 old = set()
 if a.base_tree and has_lakefile(a.base_tree):
     bt = tree.read(a.base_tree)
@@ -121,6 +101,4 @@ for gate, reds in results.items():
             new.append(r)
     print(f"{gate}: {'RED' if new else 'ok'}")
     red |= bool(new)
-for w in size.WARN:
-    print(f"WARN {w}")
 sys.exit(1 if red else 0)

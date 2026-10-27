@@ -13,7 +13,7 @@ and a literal any elaboration produces all reach the same emitter. So this gate 
 SCAN. Every `.c` the build emitted for a module of the tree (`.lake/build/ir/<module path>.c`), each C string literal
 parsed escape by escape: a `\\x` escape followed by a hex digit is RED, naming the module, the C line and the literal.
 A module with no `.c` (not built) is RED in scan of the whole tree, skipped with --changed only when outside the
-reach. It runs after the build (scripts/pre-push, both modes).
+reach. It runs after the build (scripts/standing.sh, the convergence report).
 
 VECTORS. A scratch package whose exe prints the UTF-8 bytes of one literal per class the emitter distinguishes
 (printable; \\n \\r \\t \\\\ \\" ? escapes; a control character before a non-hex and before a hex digit, spelled
@@ -51,13 +51,12 @@ def greedy(c_text: str) -> list[tuple[int, str]]:
 
 
 def scan(root: str, changed: str | None) -> int:
-    import decls
     t = tree.read(root)
     mods = set(t.modules)
     if changed:
         ch = [l.strip() for l in open(changed, encoding="utf-8") if l.strip()]
         if not any(p in ("lakefile.lean", "lean-toolchain", "lake-manifest.json") for p in ch):
-            mods = decls.reach(t, {p[:-5].replace("/", ".") for p in ch if p.endswith(".lean") and p != "lakefile.lean"})
+            mods = tree.reach(t, {p[:-5].replace("/", ".") for p in ch if p.endswith(".lean") and p != "lakefile.lean"})
     red = []
     for m in sorted(mods):
         c = os.path.join(t.root, ".lake", "build", "ir", *m.split(".")) + ".c"

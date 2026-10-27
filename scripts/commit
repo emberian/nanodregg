@@ -1,314 +1,199 @@
 #!/usr/bin/env bash
-# scripts/commit — THE way to commit to nanodregg main (ROOT ruling 2026-10-16, after five
-# stale-index incidents in one day: a commit built from a private or shared index read before
-# someone else's commit silently reverted their files).
+# scripts/commit — land a change on main: rebase on origin/main, build what it changed, run what it touched, push.
 #
-#   scripts/commit (-m MSG | -F FILE) [--cross-layer REASON] [--no-build REASON] [--reverts C]... PATH...
+#   scripts/commit [-m MSG | -F FILE] [PATH...]
 #
-#  1. reads the CURRENT main into a private GIT_INDEX_FILE (never the shared index);
-#  2. adds exactly PATH... as the lander's FIRST attempt recorded them (gates/rebase.py snapshot: the
-#     worktree's HEAD copy as the base, the working copy; a directory means every file under it, a
-#     deleted file is recorded as deleted), each merged 3-way with main's copy (GATES-20b); a path
-#     that would revert a commit of main's last 300 is refused `stale path: P` unless named by
-#     --reverts C (C's layer named in a CROSS-LAYER line when it is another layer's); a `.lean` module's
-#     lack is not refused by text: the judge decides it from the declarations holding those lines, and
-#     every declaration the landing deletes or restates is named by a `RESTATES:`/`RENAMES:`/`DELETES:`
-#     message line (gates/decls.py, GATES-20t), and so is every definition whose body changed under a theorem
-#     statement that names it (`undeclared redefinition`, GATES-20v′);
-#  3. writes SIZE.md, a purely generated view, for that candidate (gates/size.py --write). SIZE.md
-#     is refused as a PATH: ceilings are edited in gates/ceilings.tsv;
-#  4. refuses if the candidate differs from main anywhere outside PATH... and SIZE.md;
-#  5. judges the candidate (GATES-22, Ember 10-21: converge periodically, do not judge every landing).
-#     FAST, the default (gates/fast.py mode): scripts/pre-push --fast — ownership (the subject prefix
-#     `kernel:` … names the layer, gates/OWNERS; --cross-layer records `CROSS-LAYER: REASON`), every
-#     source gate (the parent's too), `lake build` of only the targets the change reaches, `cargo check`
-#     + `cargo fmt --check` of only the packages it reaches; minutes. The census, the rows, the benches,
-#     the waste measurements, the generated files and clippy judge it at the next CONVERGENCE
-#     (scripts/converge, every 3 h while landings happen), which names the commits a red row read.
-#     FULL, for a flag day (`kernel!:`) or a change of the judge's code (gates/*.py, scripts/): the
-#     whole scripts/pre-push (every target, the census, the selected rows, waste, generated files, the
-#     Rust workspace with clippy), judged by main's code (--no-build records `NO-BUILD: REASON` and
-#     skips build + census);
-#  6. commit-tree on main + compare-and-swap `update-ref refs/heads/main NEW BASE`: if main moved
-#     while you were being judged, nothing is written and steps 1-6 re-run. FAST: a plain re-base and
-#     retry (FAST_RETRIES, 12 attempts), no queue ticket; it lets a FULL lander displaced twice land
-#     first (gates/land.py --fast; a full judge is ~40 min and would otherwise never win the race).
-#     FULL: the landing queue: COMMIT_RETRIES (5) counts only displacements while this lander was not
-#     head (gates/land.py --charge): a head lander waits for the tie winners, it never fails for them
-#     (LANG-21's c1166ce);
-#  7. leaves this worktree on the new main (`checkout --detach NEW`), moves the primary checkout
-#     (the read-only reference) to it when that is clean, and pushes main to origin.
-# Works from any worktree of the repo (scripts/worktree LAYER makes one).
+# With a message and PATHs, the commit is this worktree's HEAD plus exactly those paths as they are in the working
+# tree (a directory means every file under it; a deleted file is deleted). With neither, the commits already on HEAD
+# that origin/main lacks are landed as they are. The message is prose: what changed and what it lets the system do.
 #
-# Detached landing (GATES-14): record the PID of scripts/commit ITSELF, not of a wrapping subshell:
-#     nohup bash -c 'exec scripts/commit -m MSG PATH...' > LOG 2>&1 & echo $! > job.pid
-# (`exec` makes $! the script's own PID; a bare `( ... ) &` records the subshell and orphans the
-# judge, KERNEL-12). The attempt that judges is a re-exec of main's own copy; when
-# NANODREGG_COMMIT_PID_FILE is set it writes ITS PID there. Never stop a judge by its PID file: a
-# killed judge writes nothing and its slot is taken by flock until it exits. Wait for it, with a
-# deadline, and read the log.
+#  1. fetch origin; replay the commit(s) onto origin/main (git merge-tree, no checkout). A conflict stops here and
+#     names the paths: resolve it in this worktree (git rebase origin/main) and run this again;
+#  2. materialize the rebased tree in the lane's build directory on the home disk (hbox: NVMe, never /tank):
+#     ~/nd-land/<worktree name>/tree, its .lake and cargo target kept between landings (seeded once from this
+#     worktree's .lake/build), so a build re-hashes only that tree;
+#  3. build what the change touched (gates/touched.py: the changed modules and their importers, their libs and the
+#     exes whose closure holds one; `cargo check` of the reached packages), under the clone's build wrapper
+#     (hbox: swarm-build, SWARM_MEM_MAX default 24G) at idle priority (ionice -c3, nice 15);
+#  4. run the rows the change touched (gates/touched.py rows: the Lean verdict rows whose exe it reaches, the cargo
+#     rows whose crate or driven exes it reaches), at idle priority;
+#  5. push to origin main. A push refused because main moved is re-based and pushed again; it is rebuilt and re-run
+#     only when the commits that moved main changed a path this change changed;
+#  6. refs/heads/main of this clone follows origin/main, and this worktree moves to the landed commit when its
+#     uncommitted edits allow.
+# A build killed by a signal (the memory cap, earlyoom) is NOT BUILT (exit 76), never RED: run it again with a larger
+# SWARM_MEM_MAX or fewer LEAN_NUM_THREADS.
+# Green or red, nothing else judges a landing. The whole tree, every row, the benches, the census and the tables are
+# the convergence's report (scripts/converge), which names the landing a red came from; that lane fixes it forward.
+#
+# Run detached with a PID file: nohup bash -c 'exec scripts/commit -F MSG PATH...' > LOG 2>&1 & echo $! > job.pid
+# Every lander also writes <git common dir>/nanodregg-pids/<pid> (its worktree, its stage, the commit), removed
+# when it exits, so another session on the box can see what is landing.
+# Flags of the old judge (--cross-layer, --no-build, --reverts) are accepted and ignored.
 set -uo pipefail
-. "$(dirname "$0")/gate-lib.sh"
-# Every attempt runs main's OWN copy of scripts/commit and scripts/pre-push, materialized fresh
-# from refs/heads/main: a worktree's scripts, OWNERS and gates may be behind main, and the
-# parent's gates are the judge. A moved main (exit 75) re-reads main and re-runs; COMMIT_RETRIES
-# (default 5) bounds the displacements charged to this lander (land.py --charge), not the attempts.
-# The outer loop is the LANDER: it holds a landing-queue ticket for its whole life (fd 6, closed in
-# each attempt so no judge's child can keep a dead lander's ticket alive) and a directory of its own
-# that carries what one attempt leaves the next (the merge bases; GATES-19).
-# reap_dead (GATES-20f): a lander killed before its EXIT trap ran leaves its scratch behind for good
-# (PROTOCOL-21's 709572, 10-21): nanodregg-commit-main/<pid> and nanodregg-landers/<ticket>. Each is
-# reaped at a later lander's start ONLY by liveness, never by name: a pid dir whose pid no longer
-# exists (kill -0 and /proc both say so; a reused pid keeps its dir, which is the safe side), a lander
-# dir whose queue ticket nobody holds flock'd (the ticket itself is land.py's to remove).
-reap_dead() {
-  local d p t
-  for d in "$common"/nanodregg-commit-main/* "$common"/nanodregg-landers/p*; do
-    [ -d "$d" ] || continue
-    p=${d##*/}; p=${p#p}
-    case $p in ''|*[!0-9]*) continue ;; esac
-    { [ "$p" = $$ ] || kill -0 "$p" 2>/dev/null || [ -e "/proc/$p" ]; } && continue
-    rm -rf "$d" && echo "scripts/commit: reaped a dead lander's scratch $d (pid $p is gone)"
-  done
-  for d in "$common"/nanodregg-landers/*; do
-    [ -d "$d" ] || continue
-    case ${d##*/} in p*) continue ;; esac   # a fast lander's directory: by its pid, above
-    t=$common/nanodregg-queue/${d##*/}
-    [ -e "$t" ] && ! flock -n "$t" true 2>/dev/null && continue
-    rm -rf "$d" && echo "scripts/commit: reaped a dead lander's directory $d (its ticket is not held)"
-  done
-}
-# lander_mode ARGS...: `full` when the subject is a flag day or a named path is the judge's code
-# (gates/*.py, scripts/), else `fast` (GATES-22). The attempt (main's own copy, gates/fast.py mode on the
-# real candidate) decides what judges it; this only decides whether the lander holds a queue ticket.
-lander_mode() {
-  local subj="" r
-  while [ $# -gt 0 ]; do
-    case $1 in
-      -m) subj=${2%%$'\n'*}; shift ;;
-      -F) subj=$(head -1 "$2" 2>/dev/null); shift ;;
-      --cross-layer|--no-build|--reverts) shift ;;
-      --) shift; for r in "$@"; do lander_path "$r" && { echo full; return; }; done; break ;;
-      -*) ;;
-      *) lander_path "$1" && { echo full; return; } ;;
-    esac
-    shift
-  done
-  [[ $subj =~ ^[a-z]+(\([^\)]*\))?!: ]] && { echo full; return; }
-  echo fast
-}
-lander_path() {
-  local r; r=$(git rev-parse --show-prefix)${1#./}; r=${r%/}
-  case $r in scripts|scripts/*|gates|gates/*.py) return 0 ;; esac
-  return 1
-}
-if [ -z "${ND_COMMIT_ATTEMPT:-}" ]; then
-  lmode=$(lander_mode "$@")
-  if [ "$lmode" = full ]; then
-    new_ticket || exit 2
-    export ND_TICKET=$ticket ND_LANDER_DIR=$common/nanodregg-landers/${ticket##*/}
-  else
-    export ND_LANDER_DIR=$common/nanodregg-landers/p$$
-  fi
-  mkdir -p "$ND_LANDER_DIR" || exit 2
-  trap 'rm -rf "$ND_LANDER_DIR" ${ND_TICKET:+"$ND_TICKET"}' EXIT
-  reap_dead
-  attempt=0 charged=0
-  while :; do
-    attempt=$((attempt + 1))
-    # A private copy per process: a running bash script must never be rewritten under it.
-    M=$common/nanodregg-commit-main/$$
-    rm -rf "$M"; materialize refs/heads/main "$M/tree" || exit 2
-    if [ -x "$M/tree/scripts/commit" ]; then runner=$M/tree/scripts/commit; else runner=$0; fi
-    before=$(cat "${ND_TICKET:-/dev/null}" 2>/dev/null || true)   # a fast lander holds no ticket (GATES-22 fix)
-    out=$(ND_COMMIT_ATTEMPT=$attempt ND_COMMIT_SCRIPTS="$M/tree/scripts" "$runner" "$@" 2>&1 6>&-); rc=$?
-    printf '%s\n' "$out"
-    if [ $rc -eq 75 ] && [ "$lmode" = fast ]; then
-      charged=$((charged + 1))   # a fast lander re-judges in minutes: every displacement counts, of FAST_RETRIES
-    elif [ $rc -eq 75 ]; then
-      # A displacement is charged only when this lander was not head (land.py decides; an old
-      # land.py without --charge charges every one, as before).
-      python3 "$M/tree/gates/land.py" --charge --ticket "$ND_TICKET" --before "${before:-0}"; c=$?
-      [ $c -eq 1 ] || charged=$((charged + 1))
-    fi
-    rm -rf "$M" "$M/tree.index"
-    [ $rc -eq 75 ] || exit $rc
-    if [ "$lmode" = fast ]; then budget=${FAST_RETRIES:-12}; else budget=${COMMIT_RETRIES:-5}; fi
-    if [ $charged -ge "$budget" ]; then
-      echo "scripts/commit: main kept moving; gave up after $charged displacements ($lmode lander, $attempt attempts)"; exit 1
-    fi
-    echo "scripts/commit: main moved (attempt $attempt, $charged of $budget charged); re-reading main and re-basing onto it"
-  done
-fi
-scripts=${ND_COMMIT_SCRIPTS:-$(dirname "$0")}
-[ -n "${NANODREGG_COMMIT_PID_FILE:-}" ] && echo $$ > "$NANODREGG_COMMIT_PID_FILE"
-msgsrc="" msgfile="" cross="" nobuild=""
-paths=() reverts=()
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(git rev-parse --show-toplevel) || exit 2
+common=$(cd "$repo" && cd "$(git rev-parse --git-common-dir)" && pwd)
+export PATH=$HOME/.elan/bin:$PATH
+msgsrc="" msgfile="" paths=()
 while [ $# -gt 0 ]; do
   case $1 in
     -m) msgsrc=$2; shift ;;
     -F) msgfile=$2; shift ;;
-    --cross-layer) cross=$2; shift ;;
-    --no-build) nobuild=$2; shift ;;
-    --reverts) reverts+=(--reverts "$2"); shift ;;
+    --cross-layer|--no-build|--reverts) echo "scripts/commit: $1 is ignored (rule 1 has no such line)"; shift ;;
     --) shift; paths+=("$@"); break ;;
     -*) echo "scripts/commit: unknown flag $1" >&2; exit 2 ;;
     *) paths+=("$1") ;;
   esac
   shift
 done
-[ ${#paths[@]} -gt 0 ] && { [ -n "$msgsrc" ] || [ -n "$msgfile" ]; } || {
-  echo "usage: scripts/commit (-m MSG | -F FILE) [--cross-layer REASON] [--no-build REASON] [--reverts C]... PATH..." >&2; exit 2; }
+if [ ${#paths[@]} -gt 0 ] && [ -z "$msgsrc$msgfile" ]; then echo "scripts/commit: PATHs need -m or -F" >&2; exit 2; fi
+if [ ${#paths[@]} -eq 0 ] && [ -n "$msgsrc$msgfile" ]; then echo "scripts/commit: a message needs PATHs (or commit with git, then run scripts/commit alone)" >&2; exit 2; fi
 
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-msg=$tmp/msg
-if [ -n "$msgfile" ]; then cat "$msgfile" > "$msg"; else printf '%s\n' "$msgsrc" > "$msg"; fi
-if [ -n "$cross" ] || [ -n "$nobuild" ]; then
-  printf '\n' >> "$msg"
-  [ -n "$cross" ] && printf 'CROSS-LAYER: %s\n' "$cross" >> "$msg"
-  [ -n "$nobuild" ] && printf 'NO-BUILD: %s\n' "$nobuild" >> "$msg"
-fi
-grep -q '^Co-Authored-By:' "$msg" || printf '\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n' >> "$msg"
+tmp=$(mktemp -d)
+pids=$common/nanodregg-pids; mkdir -p "$pids"
+trap 'rm -rf "$tmp" "$pids/$$"' EXIT
+stage() { printf '%s\t%s\t%s\n' "$repo" "$1" "${2:-}" > "$pids/$$"; echo "scripts/commit: $1${2:+ $2}"; }
 
-base=$(git -C "$repo" rev-parse refs/heads/main) || exit 2
-# Main lives in ONE clone (hbox, 10-17); every other clone is a reader that follows origin
-# (scripts/mac-pull). The landing clone says so in its own config, which no pull can carry.
-if [ "$(git -C "$repo" config --bool nanodregg.landing || true)" != true ]; then
-  echo "scripts/commit: REFUSED — this clone is a reader; main lives on hbox: ssh hbox, cd /tank/dregg-build/nanodregg/wt/<layer>"; exit 1
+# idle CMD…: at idle I/O and low CPU priority, under the clone's build wrapper (hbox: swarm-build's cgroup)
+read -r -a wrap <<< "$(git -C "$repo" config nanodregg.buildwrap || true)"
+export SWARM_MEM_MAX=${SWARM_MEM_MAX:-24G}
+idle() {
+  local p=(nice -n 15)
+  command -v ionice > /dev/null && p=(ionice -c3 "${p[@]}")
+  "${p[@]}" "${wrap[@]}" "$@"
+}
+
+# 1. the commit, replayed onto origin/main
+stage fetching
+git -C "$repo" fetch -q origin main || { echo "scripts/commit: git fetch origin failed"; exit 1; }
+if [ ${#paths[@]} -gt 0 ]; then
+  msg=$tmp/msg
+  if [ -n "$msgfile" ]; then cat "$msgfile" > "$msg"; else printf '%s\n' "$msgsrc" > "$msg"; fi
+  grep -q '^Co-Authored-By:' "$msg" || printf '\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n' >> "$msg"
+  prefix=$(git rev-parse --show-prefix)
+  export GIT_INDEX_FILE=$tmp/index
+  git -C "$repo" read-tree HEAD || exit 2
+  for p in "${paths[@]}"; do
+    r=$prefix${p#./}; r=${r%/}
+    if [ -e "$repo/$r" ]; then git -C "$repo" add -A -- "$r" || exit 2
+    else git -C "$repo" rm -q -r --cached --ignore-unmatch -- "$r" || exit 2; fi
+  done
+  t=$(git -C "$repo" write-tree) || exit 2
+  unset GIT_INDEX_FILE
+  [ "$t" != "$(git -C "$repo" rev-parse 'HEAD^{tree}')" ] || { echo "scripts/commit: nothing to commit in those paths"; exit 1; }
+  tip=$(git -C "$repo" commit-tree "$t" -p HEAD -F "$msg") || exit 2
+else
+  tip=$(git -C "$repo" rev-parse HEAD) || exit 2
 fi
-# Only a layer worktree, detached, commits. The primary checkout is the read-only reference
-# (scouts, evaluators, `lake env lean` against its .lake), never an editing surface.
-if [ "$repo" = "$(cd "$common/.." && pwd)" ]; then
-  echo "scripts/commit: REFUSED — $repo is the primary checkout, the read-only reference; commit from a layer worktree (scripts/worktree LAYER)"; exit 1
-fi
-if git symbolic-ref -q HEAD > /dev/null; then
-  echo "scripts/commit: REFUSED — this checkout is on branch $(git symbolic-ref --short HEAD); a layer worktree is detached at main: git checkout --detach main"; exit 1
-fi
-# The candidate is CURRENT main plus exactly PATH... as this LANDER recorded them at its first attempt
-# (gates/rebase.py snapshot: base = the worktree's HEAD copy then, ours = the working copy then), each
-# merged 3-way with main's copy, never the working copy as it is now (GATES-20b, ROOT 10-21). Until
-# GATES-20b the merge ran only where HEAD's copy differed from main's and the working copy was then
-# added whole, so a copy not made on top of HEAD (a scratch copy copied in, a `git reset`, a rewrite
-# between attempts) reverted main's newer change through a GREEN judge: logs/gates9-verify.sh, where
-# launcher/tests/members.rs from a1ca640 plus one line in a worktree at main lost CLIENT-31's 70 lines.
-# A conflict is refused by name; a path that would revert a recent commit is refused `stale path: P`.
-prefix=$(git rev-parse --show-prefix)
-rel=(); for p in "${paths[@]}"; do r=$prefix${p#./}; rel+=("${r%/}"); done
-for r in "${rel[@]}"; do
-  if [ "$r" = SIZE.md ]; then
-    echo "scripts/commit: REFUSED — SIZE.md is generated for every commit; edit ceilings in gates/ceilings.tsv"; exit 1
+# replay ONTO: every commit of TIP that ONTO lacks, oldest first; prints the new tip, or the conflict and fails
+replay() {
+  local onto=$1 c out
+  for c in $(git -C "$repo" rev-list --reverse --topo-order --no-merges "$onto..$tip"); do
+    if ! out=$(git -C "$repo" merge-tree --write-tree --name-only --merge-base="$c^" "$onto" "$c"); then
+      echo "scripts/commit: CONFLICT replaying $(git -C "$repo" log -1 --format='%h %s' "$c" | cut -c1-100) onto origin/main:" >&2
+      printf '%s\n' "$out" | sed -n '2,/^$/p' | sed '/^$/d; s/^/  /' >&2
+      echo "  resolve it here (git rebase origin/main), then run scripts/commit again" >&2
+      return 1
+    fi
+    onto=$(GIT_AUTHOR_NAME=$(git -C "$repo" log -1 --format=%an "$c") GIT_AUTHOR_EMAIL=$(git -C "$repo" log -1 --format=%ae "$c") \
+           GIT_AUTHOR_DATE=$(git -C "$repo" log -1 --format=%aD "$c") \
+           git -C "$repo" commit-tree "$(head -1 <<< "$out")" -p "$onto" -m "$(git -C "$repo" log -1 --format=%B "$c")") || return 1
+  done
+  echo "$onto"
+}
+base=$(git -C "$repo" rev-parse origin/main)
+[ -n "$(git -C "$repo" rev-list -1 --no-merges "$base..$tip")" ] || { echo "scripts/commit: origin/main already holds this"; exit 0; }
+R=$(replay "$base") || exit 1
+git -C "$repo" log --oneline "$base..$R" | sed 's/^/  landing: /' | cut -c1-140
+
+# 2-4. build what it changed, run what it touched, in the lane's build directory on the home disk
+D=${ND_LAND_DIR:-$HOME/nd-land/$(basename "$repo")}
+judge() {
+  local c=$1 plan targets crates rowsel exes
+  mkdir -p "$D"
+  GIT_INDEX_FILE=$D/tree.index git -C "$repo" --work-tree="$D/tree" read-tree --reset -u "$c" 2>/dev/null ||
+    { mkdir -p "$D/tree" && GIT_INDEX_FILE=$D/tree.index git -C "$repo" --work-tree="$D/tree" read-tree --reset -u "$c"; } || return 2
+  if [ ! -d "$D/tree/.lake/build" ] && [ -d "$repo/.lake/build" ]; then
+    stage seeding "the build directory from this worktree's .lake/build (once)"
+    mkdir -p "$D/tree/.lake" && cp -a "$repo/.lake/build" "$D/tree/.lake/" || return 2
+  fi
+  git -C "$repo" diff --name-only "$base" "$c" > "$tmp/changed"
+  git -C "$repo" show "$base:gates/runs.tsv" > "$tmp/runs.base" 2>/dev/null || : > "$tmp/runs.base"
+  plan=$(python3 "$D/tree/gates/touched.py" plan "$D/tree" --changed "$tmp/changed" --base-table "$tmp/runs.base") ||
+    { echo "scripts/commit: gates/touched.py plan failed"; return 1; }
+  targets=$(sed -n 's/^targets: //p' <<< "$plan"); crates=$(sed -n 's/^crates: //p' <<< "$plan")
+  rowsel=$(sed -n 's/^rows: //p' <<< "$plan"); exes=$(sed -n 's/^exes: //p' <<< "$plan")
+  # shellcheck disable=SC2086
+  local build=$(printf '%s\n' $targets $exes | awk 'NF && !seen[$0]++' | tr '\n' ' ')
+  if [ -n "${build// }" ]; then
+    stage building "$build"
+    # shellcheck disable=SC2086
+    idle env -C "$D/tree" LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}" lake build $build > "$tmp/build.log" 2>&1
+    local rc=$?
+    cp "$tmp/build.log" "$D/build.log"
+    if [ $rc -ne 0 ]; then
+      if ! grep -qE '^error: [^ ]+\.lean:[0-9]+:[0-9]+:' "$tmp/build.log" &&
+         { [ $rc -ge 128 ] || grep -qE '^Terminated|^Killed|exited with code (137|143)|signal: (9|15)' "$tmp/build.log"; }; then
+        tail -3 "$tmp/build.log"
+        echo "scripts/commit: NOT BUILT — the build was killed (exit $rc; SWARM_MEM_MAX=$SWARM_MEM_MAX, LEAN_NUM_THREADS=${LEAN_NUM_THREADS:-4}): not a verdict about the change; run again with a larger budget or fewer threads (log: $D/build.log)"
+        return 76
+      fi
+      grep -E '^error|error:' "$tmp/build.log" | head -30; tail -5 "$tmp/build.log"
+      echo "scripts/commit: RED — the build of what this change touched failed (log: $D/build.log)"; return 1
+    fi
+  else echo "scripts/commit: no module changed; nothing to build"; fi
+  export CARGO_TARGET_DIR=$D/cargo-target
+  case $crates in
+    "") ;;
+    workspace) stage checking "the Rust workspace"
+      idle cargo check --quiet --locked --workspace --all-targets --manifest-path "$D/tree/Cargo.toml" > "$tmp/cargo.log" 2>&1 ||
+        { tail -30 "$tmp/cargo.log"; echo "scripts/commit: RED — cargo check"; return 1; } ;;
+    *) stage checking "$crates"; local pk=(); for x in $crates; do pk+=(-p "$x"); done
+      idle cargo check --quiet --locked "${pk[@]}" --all-targets --manifest-path "$D/tree/Cargo.toml" > "$tmp/cargo.log" 2>&1 ||
+        { tail -30 "$tmp/cargo.log"; echo "scripts/commit: RED — cargo check"; return 1; } ;;
+  esac
+  if [ -n "$rowsel" ]; then
+    stage running "$rowsel"
+    idle python3 "$D/tree/gates/touched.py" rows "$D/tree" --changed "$tmp/changed" --base-table "$tmp/runs.base" \
+      --bin "$D/tree/.lake/build/bin" || { echo "scripts/commit: RED — a row this change touched"; return 1; }
+  else echo "scripts/commit: no row touched"; fi
+  return 0
+}
+judge "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
+
+# 5. push; a moved main is re-based, and re-judged only when it changed a path this change changed
+mine=$(git -C "$repo" diff --name-only "$base" "$R")
+for attempt in $(seq 1 20); do
+  stage pushing "$(git -C "$repo" rev-parse --short "$R")"
+  if GIT_SSH_COMMAND=${GIT_SSH_COMMAND:-"ssh -o BatchMode=yes -o ConnectTimeout=20"} git -C "$repo" push -q origin "$R:refs/heads/main" 2> "$tmp/push"; then
+    break
+  fi
+  [ "$attempt" = 20 ] && { cat "$tmp/push"; echo "scripts/commit: push refused 20 times"; exit 1; }
+  git -C "$repo" fetch -q origin main || { cat "$tmp/push"; exit 1; }
+  nb=$(git -C "$repo" rev-parse origin/main)
+  [ "$nb" != "$base" ] || { cat "$tmp/push"; echo "scripts/commit: push refused and origin/main did not move"; exit 1; }
+  overlap=$(git -C "$repo" diff --name-only "$base" "$nb" | grep -Fxf <(printf '%s\n' "$mine") || true)
+  old=$base; base=$nb
+  R=$(replay "$base") || exit 1
+  if [ -n "$overlap" ]; then
+    echo "scripts/commit: main moved and changed $(wc -l <<< "$overlap") path(s) this change changed ($(head -3 <<< "$overlap" | tr '\n' ' ')); building and running again"
+    judge "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
+  else
+    echo "scripts/commit: main moved (${old:0:9}..${base:0:9}), touching none of this change's paths; re-based, pushing"
   fi
 done
-snap=${ND_LANDER_DIR:-$tmp}/snapshot.tsv
-if [ ! -f "$snap" ]; then
-  python3 "$scripts/../gates/rebase.py" snapshot --repo "$repo" --out "$snap" -- "${rel[@]}" || exit 2
-fi
-idx=$tmp/index
-export GIT_INDEX_FILE=$idx
-git -C "$repo" read-tree "$base" || exit 2
-python3 "$scripts/../gates/rebase.py" candidate --repo "$repo" --snapshot "$snap" --main "$base" || {
-  echo "scripts/commit: nothing was written to your worktree"; exit 1; }
-# SIZE.md: the generated view of exactly this candidate, measured in a directory of this
-# process's own (two commits judged at once must never measure each other's tree).
-S=$tmp/size
-materialize "$(git -C "$repo" write-tree)" "$S" || exit 2
-python3 "$S/gates/size.py" "$S" --write > /dev/null || { echo "scripts/commit: gates/size.py --write failed"; exit 2; }
-b=$(git -C "$repo" hash-object -w "$S/SIZE.md") && git -C "$repo" update-index --add --cacheinfo "100644,$b,SIZE.md"
-cand=$(git -C "$repo" write-tree)
+echo "scripts/commit: landed $(git -C "$repo" log --oneline -1 "$R" | cut -c1-140)"
 
-# Every changed path must be one you named.
-prefixes=$(printf '%s\n' "${rel[@]}")
-extra=$(git -C "$repo" diff --name-only "$base" "$cand" | while read -r f; do
-  ok=0; [ "$f" = SIZE.md ] && ok=1
-  while read -r p; do case $f in "$p"|"$p"/*) ok=1 ;; esac; done <<< "$prefixes"
-  [ $ok = 1 ] || echo "$f"
-done)
-if [ -n "$extra" ]; then echo "scripts/commit: REFUSED — the candidate changes files you did not name:"; echo "$extra"; exit 1; fi
-if git -C "$repo" diff --quiet "$base" "$cand"; then echo "scripts/commit: nothing to commit"; exit 1; fi
-git -C "$repo" diff --stat "$base" "$cand"
-# On the FINAL candidate (after the merge): a path that lacks the change of a commit of main's last 300
-# that main's copy holds would revert it; refused unless named (--reverts C), and a named revert's hunk
-# is appended to the message under REVERTS:.
-python3 "$scripts/../gates/rebase.py" stale --repo "$repo" --snapshot "$snap" --main "$base" --message "$msg" \
-  --lean-lacks "$tmp/lean-lacks" "${reverts[@]}" || { echo "scripts/commit: REFUSED — nothing was written"; exit 1; }
-
-# GATES-22: FAST unless a flag day or a change of the judge's code (main's gates/fast.py decides, on the
-# real candidate).
-git -C "$repo" diff --name-only "$base" "$cand" > "$tmp/changed"
-mode=$(python3 "$scripts/../gates/fast.py" mode --message "$msg" --changed "$tmp/changed") ||
-  { echo "scripts/commit: gates/fast.py mode failed; nothing written"; exit 2; }
-echo "scripts/commit: judge: ${mode}"
-pp=(--index --base "$base" --message "$msg" --lean-lacks "$tmp/lean-lacks"); [ -n "$nobuild" ] && pp+=(--no-build)
-if [ "$mode" = fast ]; then
-  pp+=(--fast)
-else
-  # GATES-19: the judge records each ok unit under its input key; a re-based attempt carries a unit of
-  # the previous attempt's record only when its key is byte-identical (pre-push re-checks every key).
-  [ -n "${ND_LANDER_DIR:-}" ] && pp+=(--record "$ND_LANDER_DIR/record.new" --reuse "$ND_LANDER_DIR/record.prev")
+# 6. this clone's main follows origin; this worktree moves to the landed commit
+git -C "$repo" fetch -q origin main
+lm=$(git -C "$repo" rev-parse -q --verify refs/heads/main || true)
+if [ -n "$lm" ] && [ "$lm" != "$(git -C "$repo" rev-parse origin/main)" ]; then
+  git -C "$repo" merge-base --is-ancestor "$lm" origin/main ||
+    echo "scripts/commit: NOTE refs/heads/main held commits origin/main lacks; it now follows origin: $(git -C "$repo" log --oneline origin/main.."$lm" | head -5 | tr '\n' ';' | cut -c1-300)"
+  git -C "$repo" update-ref refs/heads/main origin/main
 fi
-"$scripts/pre-push" "${pp[@]}" | tee "$tmp/verdict"; rc=${PIPESTATUS[0]}
-if [ $rc -eq 76 ]; then echo "scripts/commit: NOT JUDGED — the judge was killed under load (KILLED(load)), a run timed out twice (UNREAD(timeout), GATES-16) or no judge slot freed in 30 min; nothing written: re-run scripts/commit"; exit 76; fi
-[ $rc -eq 0 ] || { echo "scripts/commit: REFUSED by scripts/pre-push"; exit 1; }
-# A fast landing says so in its message: the next convergence reads which commits it has not yet judged.
-if [ "$mode" = fast ]; then
-  printf 'JUDGED: fast (GATES-22) — %s\n' "$(sed -n 's/^PRE-PUSH FAST GREEN tree [0-9a-f]* *\(.*\)$/\1/p' "$tmp/verdict" | tail -1)" >> "$msg"
+if ! git -C "$repo" checkout -q --detach "$R" 2> "$tmp/co"; then
+  echo "scripts/commit: landed; this worktree stays where it was (an uncommitted edit conflicts with the landed tree): git checkout --detach origin/main when ready"
 fi
-
-new=$(git -C "$repo" commit-tree "$cand" -p "$base" -F "$msg") || exit 2
-# The landing queue (gates/land.py, GATES-19): a green lander whose base is still main lands by
-# compare-and-swap unless a lander displaced twice is alive (that one is head regardless; this one
-# waits). Main moved: displaced, exit 75, and the outer loop re-bases. An outer loop older than
-# GATES-19 holds no ticket; then this attempt takes one of its own, which starts at zero.
-if [ "$mode" = fast ]; then
-  # GATES-22: a plain compare-and-swap, no ticket; a full lander displaced twice lands first (land.py --fast)
-  mkdir -p "$common/nanodregg-queue"
-  python3 "$scripts/../gates/land.py" --fast --queue "$common/nanodregg-queue" --repo "$repo" \
-    --ref refs/heads/main --new "$new" --base "$base"; rc=$?
-else
-  if [ -z "${ND_TICKET:-}" ]; then new_ticket || exit 2; ND_TICKET=$ticket; trap 'rm -rf "$tmp" "$ND_TICKET"' EXIT; fi
-  python3 "$scripts/../gates/land.py" --queue "$common/nanodregg-queue" --ticket "$ND_TICKET" --repo "$repo" \
-    --ref refs/heads/main --new "$new" --base "$base"; rc=$?
-fi
-case $rc in
-  0) ;;
-  75) [ -n "${ND_LANDER_DIR:-}" ] && [ -f "$ND_LANDER_DIR/record.new" ] && mv -f "$ND_LANDER_DIR/record.new" "$ND_LANDER_DIR/record.prev"
-      echo "scripts/commit: main moved while this commit was judged; nothing written."; exit 75 ;;
-  *) echo "scripts/commit: the landing queue failed (exit $rc); nothing written."; exit 1 ;;
-esac
-unset GIT_INDEX_FILE
-echo "scripts/commit: main = $(git -C "$repo" log --oneline -1 "$new")"
-# Leave this worktree on the new main: write each landed copy into its working file where that file
-# still holds what the lander recorded (rebase.py writeback names any edited meanwhile), point the
-# landed paths' index entries at it, take the landed (generated) SIZE.md, and check out the new
-# commit, which carries other uncommitted edits along and refuses if one conflicts.
-python3 "$scripts/../gates/rebase.py" writeback --repo "$repo" --snapshot "$snap" --landed "$new" ||
-  echo "scripts/commit: WARNING the landed copies could not all be written into this worktree"
-if ! { (cd "$repo" && git reset -q "$new" -- SIZE.md $(git diff --name-only "$base" "$new") 2>/dev/null)
-       git -C "$repo" checkout -q "$new" -- SIZE.md
-       git -C "$repo" checkout -q --detach "$new"; }; then
-  echo "scripts/commit: landed, but this worktree could not move to $new (an uncommitted edit"
-  echo "  conflicts with main); resolve it, then: git checkout --detach main"
-fi
-# The primary checkout is the read-only reference every scout and evaluator reads: it follows
-# main, but only when clean (nobody edits it; a dirty file there is someone's to look at, and is
-# never overwritten; an untracked file is not an edit, and checkout refuses to clobber one).
-# ROOT 10-16, after it sat 87 commits behind for a day.
-primary=$(cd "$common/.." && pwd)
-dirty=$(git -C "$primary" status --porcelain --untracked-files=no 2>&1)
-if [ -n "$dirty" ]; then
-  echo "scripts/commit: WARNING the primary checkout $primary is dirty, left at $(git -C "$primary" rev-parse --short HEAD):"
-  printf '%s\n' "$dirty" | head -20 | sed 's/^/  /'
-elif git -C "$primary" symbolic-ref -q HEAD > /dev/null; then
-  echo "scripts/commit: WARNING the primary checkout $primary is on a branch; the reference is detached: git -C $primary checkout --detach main"
-elif ! git -C "$primary" checkout -q --detach "$new"; then
-  echo "scripts/commit: WARNING the primary checkout $primary could not move to $new"
-fi
-# origin (github.com/emberian/nanodregg) follows main. A failed push leaves the landing standing
-# (the next landing pushes it too); a rejected one usually means a later landing pushed first.
-if git -C "$repo" remote get-url origin > /dev/null 2>&1; then
-  if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=20" git -C "$repo" push -q origin "$new:refs/heads/main" 2>"$tmp/push"; then
-    echo "scripts/commit: pushed $(git -C "$repo" rev-parse --short "$new") to origin"
-  else
-    echo "scripts/commit: WARNING push to origin failed (landed on main all the same):"; sed 's/^/  /' "$tmp/push"
-  fi
-fi
+exit 0
