@@ -219,6 +219,10 @@ a doc that is not `Bounds.docOk`. -/
 def docSx (w : ByteArray) : Option SExp :=
   if Bounds.docOk w then some (list (atom "doc" :: if w.isEmpty then [] else [bytesSx w])) else none
 
+/-- A method's grades (LANG-89): `(ℓ N)`, `N` its `moves`. -/
+def effectSx (e : Label × Effect) : Option SExp := do
+  pure (list [← label e.1, atom (Nat.repr e.2.moves)])
+
 def supportPinSx : SupportPin → SExp
   | .row rel key ver => list [atom "pin", atom (Nat.repr rel), digestSx key, atom (Nat.repr ver)]
   | .cell id => list [atom "cell", digestSx id]
@@ -255,9 +259,11 @@ def sectionsSx (p : Package) : Option (List SExp) := do
 /-- The package's text, one section per line. -/
 def packageText (p : Package) : Option String := do
   let base ← sectionsSx p
+  let eff ← if p.effects.isEmpty then some [] else do
+    pure [list (atom "effects" :: (← p.effects.mapM effectSx))]
   let extra ← if p.holes.isEmpty then some [] else do
     pure [list (atom "holes" :: (← p.holes.mapM holeROMSx))]
-  let xs := atom "package" :: (base ++ extra)
+  let xs := atom "package" :: (base ++ eff ++ extra)
   if fitsB (list xs) then
     pure (String.ofList ('(' :: items ['\n', ' ', ' '] xs ++ ['\n']))
   else none

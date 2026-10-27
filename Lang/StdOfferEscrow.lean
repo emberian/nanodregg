@@ -155,6 +155,14 @@ def escrowWithdrawBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
       ("none", fail "noOffer"),
       ("some", escrowWithdrawDone rels od)])]
 
+/-- The escrow's declared grade (LANG-89): one run of `post`, `take`, `fuse` or `withdraw` moves at most
+this many units (a leg above it is refused `effectExceeded` at run). -/
+def escrowMovesMax : Nat := 2 ^ 32
+
+/-- The escrow's grades (LANG-89): each value-moving method may move up to `escrowMovesMax` per run. -/
+def escrowEffects : List (Label × Effect) :=
+  [("fuse", ⟨escrowMovesMax⟩), ("post", ⟨escrowMovesMax⟩), ("take", ⟨escrowMovesMax⟩), ("withdraw", ⟨escrowMovesMax⟩)]
+
 /-- The package, emitted directly, with `Std.offer`'s method names and indices. -/
 def offerEscrowPackageOf (theta roles : List Label) (offerLimit sessionLimit sessionPatience budget : Nat) : Package :=
   let rels := escrowRels theta roles offerLimit sessionLimit
@@ -178,7 +186,8 @@ def offerEscrowPackageOf (theta roles : List Label) (offerLimit sessionLimit ses
   { imports := [], state := S,
     iface := .record (fields.map fun (l, T, _) => (l, T)),
     body := .record (fields.map fun (l, _, t) => (l, t)),
-    methods := offerMethods, laws := [], rels }
+    methods := offerMethods, laws := [], rels,
+    effects := escrowEffects }
 
 /-- **`Std.offer` with a value leg**: the checked escrow package over terms `theta` and roles
 `roles` (`Std.offerPackage`'s refusals). -/

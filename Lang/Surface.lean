@@ -34,7 +34,7 @@ def grammar : String :=
   "package ::= (package decl…)\n" ++
   "decl    ::= (type N T) | (state T) | (import N \"hex\") | (layer N) | (doc \"text\")\n" ++
   "          | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)])\n" ++
-  "          | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] body)\n" ++
+  "          | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] [(effect (moves n))] body)\n" ++
   "          kind    ::= account | credit | grant | transfer | (invoke T)   — T the argument the invoke sends (LANG-77)\n" ++
   "          | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))\n" ++
   "          | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))\n" ++
@@ -576,6 +576,8 @@ structure MethodHead where
   /-- each slot: its kinds, and the argument type of its `(invoke T)` kind if it has one (LANG-77) -/
   calls : List (List Label × Option SExp) := []
   edits : Nat := 0
+  /-- `(effect (moves N))`: the method's grades (LANG-89) -/
+  effect : Option Effect := none
 
 def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
   | [b] => .ok (h, b)
@@ -630,6 +632,11 @@ def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
     match n.toNat? with
     | some n => methodHead { h with edits := n } rest
     | none => .error (.badClause q)
+  | .list q [.atom _ "effect", .list _ [.atom _ "moves", .atom r n]] :: rest =>
+    if h.effect.isSome then .error (.duplicate q "effect") else
+    match n.toNat? with
+    | some n => methodHead { h with effect := some { moves := n } } rest
+    | none => .error (.badClause r)
   | x :: _ => .error (.badClause x.pos)
   | [] => .error (.badClause 0)
 
@@ -665,7 +672,7 @@ def wrapMethod (p : Nat) (res : Ty) (bs : List Bound) : Term → P Term
 
 /-- One method, lowered: its type, its core s-expression (the body unchecked), its result type
 and its bounds. -/
-def methodSx (c : Ctx) (p : Nat) (xs : List SExp) : P (Ty × SExp × Ty × List Bound) := do
+def methodSx (c : Ctx) (p : Nat) (xs : List SExp) : P (Ty × SExp × Ty × List Bound × Option Effect) := do
   let (h, body) ← methodHead {} xs
   for (rel, _) in h.reads do
     unless (Row.find? rel c.rels).isSome do throw (.noRel p rel)
@@ -681,7 +688,7 @@ def methodSx (c : Ctx) (p : Nat) (xs : List SExp) : P (Ty × SExp × Ty × List 
   let b ← term cm Read.depthMax ["req", "arg", "state", "rows"] body
   let sx := L p [A p "lam", A p "rows", ← tyAt p R, L p [A p "lam", A p "state", ← tyAt p c.state,
     L p [A p "lam", A p "arg", ← tyAt p A', L p [A p "lam", A p "req", ← tyAt p reqTy, b]]]]
-  pure (methodTy c.state A' ks R E h.edits, sx, res, bounds)
+  pure (methodTy c.state A' ks R E h.edits, sx, res, bounds, h.effect)
 
 def occasions : List Label := ["adopt", "birth", "invoke", "relaw", "write"]
 
@@ -926,8 +933,8 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
   c := { c with state := S, rels, methods := allMethods, activityCode, layered := sup.isSome }
   -- methods
   let ms ← d.methods.mapM fun (q, ℓ, xs) => do
-    let (T, sx, res, bs) ← methodSx c q xs
-    pure (ℓ, T, sx, res, bs)
+    let (T, sx, res, bs, ef) ← methodSx c q xs
+    pure (ℓ, T, sx, res, bs, ef)
   -- machines: the law, and a step method for each method label it names that is not declared
   let mut mlaws : List (Label × SExp × Term) := []
   let mut mmethods : List (Label × Ty × SExp × Term) := []
@@ -959,8 +966,13 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
   -- read every field's core text with the one reader
   let mut fields : List (Label × Ty × Term) := []
   let mut sxs : List (Label × SExp × Nat) := []
-  for (ℓ, T, sx, res, bs) in ms do
+  for (ℓ, T, sx, res, bs, _) in ms do
     fields := fields ++ [(ℓ, T, ← wrapMethod sx.pos res bs (← readTermAt sx))]; sxs := sxs ++ [(ℓ, sx, bs.length)]
+  -- the grades (LANG-89), by method label ascending; a layer may not re-grade an inherited method
+  let effects := Row.sort (ms.filterMap fun (ℓ, _, _, _, _, ef) => ef.map (ℓ, ·))
+  if let some (_, P) := sup then
+    for (ℓ, _) in effects do
+      if P.methods.contains ℓ then throw (.retypedOverride p ℓ)
   for (ℓ, T, sx, t) in mmethods do
     fields := fields ++ [(ℓ, T, t)]; sxs := sxs ++ [(ℓ, sx, 0)]
   for (ℓ, sx, t) in mlaws do
@@ -984,7 +996,7 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
   | some (sid, P) =>
     -- a layer's doc is its own (the super's is the super's)
     pure ⟨{ ← layerOf (fun ℓ => ((Row.find? ℓ sxs).map (·.1.pos)).getD p) sid P fields lawLabels
-      (allMethods.drop P.methods.length) with doc }, sxs⟩
+      (allMethods.drop P.methods.length) with doc, effects := Row.sort (P.effects ++ effects) }, sxs⟩
   | none =>
     let imports ← d.imports.mapM fun (q, _, h) =>
       match Read.unhex .empty h.toList with
@@ -994,7 +1006,7 @@ def lower (supers : List (ByteArray × Package)) (p : Nat) (ds : List SExp) : P 
             iface := .record (Row.sort (fields.map fun (ℓ, T, _) => (ℓ, T))),
             body := .record (Row.sort (fields.map fun (ℓ, _, t) => (ℓ, t))),
             methods := allMethods,
-            laws := (Row.sort (lawLabels.map (·, ()))).map (·.1), doc }, sxs⟩
+            laws := (Row.sort (lawLabels.map (·, ()))).map (·.1), doc, effects }, sxs⟩
 
 /-- A core package text: `(package (imports …) …)`. -/
 def isCore : SExp → Bool

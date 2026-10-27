@@ -29,7 +29,7 @@ def grammar : String :=
   "        | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)\n" ++
   "        | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T \"why\") | (e e…)\n" ++
   "package ::= (package (imports \"hex\"…) (doc [\"text\"]) (state T) (iface T) (methods l…) (laws l…) (rels rel…)\n" ++
-  "            (body e))\n" ++
+  "            (body e) [(effects (l n)…)])\n" ++
   "rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))\n"
 
 /-- An s-expression; every node carries the character offset where it starts. -/
@@ -413,8 +413,25 @@ def packageBase (x : SExp) : P Package :=
            methods := ← labels ms, laws := ← labels ls, rels := ← rs.mapM rel, doc }
   | y => .error (.notPackage y.pos)
 
+/-- A method's grades (LANG-89): `(ℓ N)`; `N` is bounded at encode (`effectWire`), as a relation's
+`limit` is (`relWire`), not here. -/
+def effect : SExp → P (Label × Effect)
+  | .list _ [.atom _ ℓ, .atom q n] =>
+    match n.toNat? with
+    | some m => .ok (ℓ, { moves := m })
+    | none => .error (.notOfType q)
+  | y => .error (.notOfType y.pos)
+
+/-- The eight sections, then optionally `(effects …)` (LANG-89), then optionally `(holes …)`. -/
 def package (x : SExp) : P Package :=
   match x with
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "effects" :: es),
+      .list _ (.atom _ "holes" :: hs)] => do
+    let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
+    pure { base with effects := ← es.mapM effect, holes := ← hs.mapM holeROM }
+  | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "effects" :: es)] => do
+    let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
+    pure { base with effects := ← es.mapM effect }
   | .list p [.atom q "package", is, ds, s, i, ms, ls, rs, b, .list _ (.atom _ "holes" :: hs)] => do
     let base ← packageBase (.list p [.atom q "package", is, ds, s, i, ms, ls, rs, b])
     pure { base with holes := ← hs.mapM holeROM }

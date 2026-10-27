@@ -1172,6 +1172,7 @@ private theorem runMeasured_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : 
       runMeasured bytesOf digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
+            checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits bytesOf digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
@@ -1222,6 +1223,7 @@ private theorem runMeasuredLive_past_extraction_of {rc : Lang.ReceiptCheck} (hdi
       runMeasuredLive bytesOf digestOf rc look rv pkg state method args r (budget + S.preparation) =
         match stateSlots S.row ds 0 with
         | some slots => do
+            checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits bytesOf digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget + S.preparation - left, S.pkgs)
@@ -1294,6 +1296,7 @@ theorem runMeasured_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
       runMeasured X.env.bytes X.digestOf rc look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
+            checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
@@ -1320,6 +1323,7 @@ theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} {X 
       X.program.run look rv pkg state method args r (budget + S.preparation) =
         match stateSlots S.row ds 0 with
         | some slots => do
+            checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget + S.preparation - left)
@@ -1333,9 +1337,12 @@ theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} {X 
   | none => rfl
   | some slots =>
     simp only [bind, Except.bind]
-    cases editsOf S.rels r.self e with
+    cases checkMoves S.effect calls with
     | error _ => rfl
-    | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
+    | ok _ =>
+      cases editsOf S.rels r.self e with
+      | error _ => rfl
+      | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
 
 /- Landed closed statement preserved through the proved deployment bridge. -/
 theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful)
@@ -1350,6 +1357,7 @@ theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
       X.program.run look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
+            checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left)
@@ -1361,9 +1369,12 @@ theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
   | none => rfl
   | some slots =>
     simp only [bind, Except.bind]
-    cases editsOf S.rels r.self e with
+    cases checkMoves S.effect calls with
     | error _ => rfl
-    | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
+    | ok _ =>
+      cases editsOf S.rels r.self e with
+      | error _ => rfl
+      | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
 
 /-- The deployed `Ctx`'s program is the language over the deployed codec itself: the second
 premise of `program_run_past_extraction` holds there by construction. -/
@@ -1406,6 +1417,7 @@ theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {rv : RowVi
       runMeasured Kernel.Sim.dc.bytes Kernel.Sim.digestOf noReceipts look rv pkg state method args r budget =
         match stateSlots S.row ds 0 with
         | some slots => do
+            checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits Kernel.Sim.dc.bytes Kernel.Sim.digestOf S rv pkg r es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)

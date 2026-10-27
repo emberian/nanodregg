@@ -72,14 +72,15 @@ def skipJudge : Program D := { langProgram with judge := fun _ _ _ _ _ _ => .ok 
 def dropCalls : Program D :=
   { langProgram with run := fun look rv p s m a r b => (langProgram.run look rv p s m a r b).map fun x => (x.1, [], x.2.2) }
 
-/-- The plant package: `refund` spends its own key, so the two payouts are two nullifiers. -/
+/-- The plant package: `refund` spends its own key, so the two payouts are two nullifiers. It carries the
+escrow grades (LANG-89): its tooth is the second key, so it installs as the honest escrow does. -/
 def twoKeys : Package :=
-  Std.pkgOf stateTy [("escrow", law)] (methods.map fun (ℓ, A, ks, t) =>
+  { Std.pkgOf stateTy [("escrow", law)] (methods.map fun (ℓ, A, ks, t) =>
     if ℓ = "refund" then
       (ℓ, A, ks, .lam (.record []) (.lam stateTy (.lam unit (.lam reqTy (resultT
         (callsT [someCallT T (transferT (ofT (rq "self")) (ofT (st "depositor")) noneD (someB (.bytes "refund".toUTF8)))])
         (.record (keep "refunded")))))))
-    else (ℓ, A, ks, t))
+    else (ℓ, A, ks, t)) with effects := escrow.effects }
 
 inductive Mode | honest | skipJudge | twoKeys | dropCalls | shortCap
   deriving DecidableEq

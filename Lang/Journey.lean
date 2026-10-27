@@ -2368,6 +2368,7 @@ def p8CommitPackage (p : Package) : Except String Package := do
     (.ite (.prim .le (.get (.var 0) "validUntil") (.get (.var 2) "closes"))
       (.app (.lam SR finish) selected) (.refuse RT "closed".toUTF8)))))
   return { p with
+    effects := [("commit", { moves := 1 })],
     iface := .record (Row.sort (ts ++ [("commit", methodTy p.state A [C] R (editTy p.rels) 1)])),
     body := .record (Row.sort (fs ++ [("commit", body)])),
     methods := (Row.sort ((p.methods ++ ["commit"]).map (·, ()))).map (·.1) }

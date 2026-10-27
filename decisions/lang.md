@@ -7221,6 +7221,87 @@ Deleted: the two per-generator method definitions and six per-generator lemmas. 
 The third generator (a quorum-gated one, or any template with a `bytes`/`bool` parameter) now costs a template, a
 fill lemma and a `Params` proof.
 
+## LANG-89 A method declares its GRADE: `(effect (moves N))` bounds what one run may move; install refuses by name a value-moving arm under no grade, the run refuses by name a run past it (2026-10-26; FABLE-TYPES; design `redregg/work/promo/DESIGN-TYPES.md` §2; axis 7 of FRONTIER-AXES-20261026)
+
+**The gap (MEASURED).** A method's type is already an effect ROW: which call KINDS each slot may carry
+(`callOf kinds`, a sub-sum of the five arms, `callSlotOk`), which relations and columns it READS (`R`,
+pinned, `receive_congr`), how many EDITS it returns. Nothing says HOW MUCH. `Program.judge` sees
+`old new : Slots` and `Req`, never the calls (`Kernel/Receive/Call.lean:337`; the calls are derived after
+the judge, `Derive.lean:230-233`), so no law can bound what a method MOVES; a method moving the object's
+own accounts (actor = obj, no `via`) is bounded by the balance alone. "A retract pays its leg" is a
+run-sound theorem of one generator (LANG-75.18's P8d/P8e), not a check any package gets.
+
+**Decision.** A package carries `effects : List (Label × Effect)` (labels ascending, each a method);
+`Effect := { moves : Nat := 0 }`, the most one run may move, summed over the `transfer` and `credit`
+calls it returns (`Lang.movesOf`). A method with no entry has the zero grade: the safe default.
+- INSTALL (`checkEffects`, in `Package.checkFields` after `checkMethods`): the table ascending and
+  naming methods (`badEffect ℓ`); a method whose TYPE names a value-moving arm in any call slot
+  (`methodMoves`) under a grade of 0 is refused **`effectExceeded ℓ`**: the body, by its type, exceeds
+  its declared effect. A grade a type does not use is allowed (a slot left `none` is).
+- RUN (`Lang.checkMoves`, in `runMeasuredWith` right after `callsOf`, before any call is derived):
+  `movesOf calls ≤ grade.moves` or the run is refused **`program "effectExceeded moves M past N"`**
+  (the first token names it). O(`callsMax`). The tree fails whole, as any run refusal fails it.
+- WIRE (`lang!`): `packageWireVersion` 7 → 8 (by landing order: META's LANG-87 took 6, CTX's LANG-84 took 7); the package tree gains a tenth child `node 4 [effect*]`,
+  each `node 0 ℓ [node 0 u64 moves]` (`effectTree`/`effectOf`/`effectWire`); labels `lang/package/8`,
+  `lang/package-version/8`; a version-7 package refuses before its tree is read (LANG-60's rule).
+  `gates/codec-vectors.tsv` re-drawn by `codec-vectors --write`.
+- TEXT: core `(effects (ℓ N) …)` as an optional ninth section before `(holes …)` (`Print.effectSx`,
+  `Read.effect`; a package without grades prints as before); surface `(method ℓ … (effect (moves N)) body)`;
+  a layer inherits its super's grades and may not re-grade an inherited method (`retypedOverride`).
+- Declared grades: `world/escrow/Escrow.ob` and `Ledger.Escrow.escrow` (`deposit`/`refund`/`release`
+  at 1000; the journey's deposit is 30); `Std.offerEscrowPackage` (`post`/`take`/`fuse`/`withdraw` at
+  `escrowMovesMax = 2^32`); the journey's P8 commit package (`commit` at 1).
+- Rows (`Lang/Journey/Effect.lean`, §EF): EF0 a Treasury `pay {amount}` `(calls (transfer)) (effect (moves 10))`
+  and `pay2 {amount}` with two transfer slots (`amount` of α, `amount + 1` of β: one effect per cell per Turn
+  is the kernel's rule) at the same grade, installed, its object funded 50; EF1
+  `pay {amount 10}` admitted, 50 → 40; EF2 the same package with no grade refused at install
+  `effectExceeded pay`; EF3 `pay {amount 20}` refused at run `effectExceeded moves 20 past 10`, nothing
+  moves; EF4 `pay2 {amount 4}` (4 α + 5 β = 9) admitted, X 40 → 36 α and 50 → 45 β;
+  EF5 `pay2 {amount 5}` (5 α + 6 β = 11) refused `effectExceeded moves 11 past 10` though each call is
+  within the grade: the grade is the SUM, and a `movesOf` taking the largest call (6) admits EF5's run: EF5 red.
+- The text reader (`Read.effect`) bounds nothing: `N < 2^64` is `effectWire`'s at encode, as a relation's
+  `limit` is `relWire`'s (`Read.rel` reads a bare `toNat?`); so `readPackage_closedText` holds as stated.
+
+**Why beside the type, not in it.** `Ty` is monomorphic first-order data with no indices (LANG-3); the
+codec, the checker and every metatheorem are over it. The ROW stays in the type (a sub-sum per slot);
+the GRADE sits beside it by the method's label. Graded effects in the field (Katsumata POPL 2014;
+Orchard–Petricek–Mycroft ICFP 2014; Gaboardi et al. ICFP 2016) put the grade on the arrow; nano's arrow
+is `.fn` and the package is the signature that carries the grade. If `Ty` ever gains a bounded natural,
+the field is deletable in a day (DESIGN-TYPES §10).
+
+**Why not linear value in the type.** A nano method never HOLDS value (no term has a value type;
+`transfer` is data the run returns; `World.admit` is the only mover, `admit_value`). Linear types
+control duplication and dropping of a TERM; there is no term to type. PROT-8's "second count with no
+reader" (LANG-75.18) was right for a deeper reason: nothing to count. The reader for what linearity
+buys is `admit_value` (no creation) + this grade (an affine bound per run) + the row-holds-a-leg
+coupling (DESIGN-TYPES §3, the next landing: `legStranded`/`legUnfunded` by name).
+
+**Theorems** (`Lang/Proofs/Effect.lean`). `runMeasuredWith_moves_le`: a returned run's calls satisfy
+`movesOf calls ≤ S.effect.moves` for its setup `S`, whatever the setup; `runMeasured_moves_le`: for the
+deployed setup (`runSetupWith`, so every run path), `movesOf calls ≤ (p.effectOf ℓ).moves` for the
+resolved method `ℓ` of the loaded package `p`. `readPackage_closedText` keeps its statement: the
+`(effects …)` section prints iff nonempty and reads back (`effect_read`, `effects_mapM`). Plant:
+`checkMoves := fun _ _ => .ok ()` reds `checkMoves_le` (so both theorems) and EF3/EF5. The floor
+`ungradedKernel` (TOPLEVEL-SPEC §3.FLOOR's style) is refuted by EF3.
+
+**Price.** `lang!`: every package id moves (the version byte and the empty `node 4`); every journey
+World re-runs from genesis; no deployed Store holds a package. Map lines: the judge's export names them
+(RESTATES-MEANING on `Package`, `packageTree`, `packageOf`, `packageWire`, `CheckError`, `checkFields`,
+`RunSetup`, `runSetupWith`, `runMeasuredWith`, `packageText`, `Read.package`, `packageVersion`,
+`packageCodec`, `decodePackage`, `packageWireVersion`, `methodSx`, `lower`, `layerOf`,
+`offerEscrowPackageOf`, `Ledger.Escrow.escrow`, `rawPackage`, and the label-renamed Wire theorems).
+
+**Critique.** `moves` sums units across denominations: a grade of 12 admits 12 α or 12 β. It is a
+bound every run respects, and the per-asset grade (digest literals, LANG-38-checked) is the next grade
+(DESIGN-TYPES §2.6). The escrow's `2^32` is a declared finite bound, not a design limit; a leg is tiny.
+`credit` is counted though no deployed slot carries one.
+
+**Meta-critique.** The pull was to put the grade IN `Ty` (a refinement `nat≤n` on the transfer arm's
+`amount`) because "in the type" is the brief's phrase. That would have reopened the checker, the codec
+and the metatheorems for one number, and put the one quantitative thing the language has into the one
+place that cannot carry quantities. The design keeps the row where it is and adds the grade where a
+quantity can live, and says in §10 what would make the other choice right.
+
 ## LANG-83 The document: a section is a `Std.hole` at `bytes` whose candidates are members' posts, justified by their grants, selected by an editor, withdrawn by name on revocation; its refusals name the justification that failed (2026-10-26; FABLE-CTX; design `redregg/work/promo/DESIGN-CTX.md` §2.3, §4, S0 + S1; method R-0069)
 
 **Ember's ask.** "Elaborating the contextual theory thoroughly into the most powerful possible instantiation of itself seems reasonable." The design memo answers it (what the theory is: justified instantiation of contextual types inside a replicated state machine; the SLOT as the one object the ROM hole, the activity's waiting row, the offer, the law list and the package link all inhabit; the top clause CONTEXTUAL INTEGRITY ∧ REPAIR as a clause of INTEGRITY with its floor). The first two steps of its sequence land here, because together they make the top clause inhabited by a run a member can see, and neither needs the kernel.

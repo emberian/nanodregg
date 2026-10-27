@@ -390,7 +390,10 @@ theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → 
   all_goals first | (simp at h; done) | skip
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl, -, -, -⟩ := h
-  rename_i _ _ hrun _ _ _ _ _ hext _ _ hss _ _ _ _ _ _ _ _ _
+  -- the split hypotheses by their types (the `checkMoves` split, LANG-89, moved every position)
+  have hrun := ‹run _ _ _ _ _ = .value _ _›
+  have hext := ‹Machine.extract _ _ _ _ = .ok _›
+  have hss := ‹stateSlots _ _ _ = some _›
   have hm := extract_means _ _ hext
   have hc := stateSlots_conforms _ _ _ _ (means_state_labels hm) hss
   refine ⟨L, g, p, (ℓ, sg), sd, ad, wd, _, _, _, _, hl, hp, hres, hsd, had, hwd, run_bigStep hrun,

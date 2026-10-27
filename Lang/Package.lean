@@ -33,6 +33,16 @@ structure RelDecl where
   guard : Option Label
   deriving Inhabited, DecidableEq
 
+/-- A method's GRADES (LANG-89): the quantities its row of effects is bounded by. The ROW (which call
+kinds, which relations, which reads) is in the method's TYPE; the grade sits beside it, by the method's
+label, because `Ty` carries no quantities (LANG-3). A method with no entry has the zero grade. -/
+structure Effect where
+  /-- the most one run may MOVE: the sum of `amount` over the `transfer` and `credit` calls it returns
+  (`Lang.movesOf`); install refuses `effectExceeded` a value-moving arm under a grade of 0, the run
+  refuses `effectExceeded` by name past it (`Lang.checkMoves`) -/
+  moves : Nat := 0
+  deriving Inhabited, DecidableEq, Repr
+
 structure Package where
   /-- ids of installed packages, as the digest bytes the kernel uses -/
   imports : List ByteArray
@@ -48,7 +58,12 @@ structure Package where
   doc : ByteArray := .empty
   /-- Live contextual declarations and candidate syntax committed by the ROM id. -/
   holes : List HoleROM := []
+  /-- each method's grades (LANG-89), labels ascending, each a method's; absent: the zero grade -/
+  effects : List (Label × Effect) := []
   deriving Inhabited, DecidableEq
+
+/-- Method `ℓ`'s grades: its entry, or the zero grade. -/
+def Package.effectOf (p : Package) (ℓ : Label) : Effect := (Row.find? ℓ p.effects).getD {}
 
 /-- Which act is judged (KERNEL's `Occasion`): a birth (the seed is `old = new`), a write, a law
 replacement by the listed law ids (their digest bytes concatenated in order; the state is unchanged),
@@ -340,6 +355,11 @@ inductive CheckError
   /-- a method reads a receipt column of a relation that is not cell-keyed, or has no
   `receipt : bytes` argument (E5) -/
   | receiptRead (label : Label)
+  /-- a method's type names a value-moving call arm (`transfer`, `credit`) under a grade of 0 (LANG-89):
+  the body, by its type, exceeds its declared effect -/
+  | effectExceeded (label : Label)
+  /-- an `effects` entry out of order or naming no method -/
+  | badEffect (label : Label)
   deriving DecidableEq, Repr
 
 /-- The refusal's name (law 7): its constructor's. -/
@@ -353,12 +373,14 @@ def CheckError.name : CheckError → String
   | .tooManyRels => "tooManyRels" | .relKey _ => "relKey" | .badRel _ => "badRel"
   | .liveNotCellKeyed _ => "liveNotCellKeyed"
   | .peerNotNamed _ => "peerNotNamed" | .receiptRead _ => "receiptRead"
+  | .effectExceeded _ => "effectExceeded" | .badEffect _ => "badEffect"
 
 /-- What goes on the wire inside `Refusal.program`: the name, then the label it is about (for
 `illTyped`, the failed rule and its path: `illTyped noField @body.f`). -/
 def CheckError.wire : CheckError → String
   | e@(.noMethod ℓ) | e@(.badMethod ℓ) | e@(.noLaw ℓ) | e@(.badLaw ℓ) | e@(.relKey ℓ) | e@(.badRel ℓ)
-  | e@(.liveNotCellKeyed ℓ) | e@(.peerNotNamed ℓ) | e@(.receiptRead ℓ) =>
+  | e@(.liveNotCellKeyed ℓ) | e@(.peerNotNamed ℓ) | e@(.receiptRead ℓ) | e@(.effectExceeded ℓ)
+  | e@(.badEffect ℓ) =>
       s!"{e.name} {ℓ}"
   | e@(.illTyped why) => s!"{e.name} {why.text}"
   | e => e.name
@@ -377,6 +399,8 @@ def CheckError.text : CheckError → String
   | .liveNotCellKeyed ℓ => s!"method {ℓ} reads a relation that is not cell-keyed (live)"
   | .peerNotNamed ℓ => s!"method {ℓ} reads a peer's rows and its argument names no pair"
   | .receiptRead ℓ => s!"method {ℓ} reads a receipt column without a cell-keyed relation and a receipt argument"
+  | .effectExceeded ℓ => s!"method {ℓ} may move value and declares no grade (effect (moves N))"
+  | .badEffect ℓ => s!"effect {ℓ} names no method or is out of order"
 
 def isRecordData : Ty → Bool
   | t@(.record _) => t.wf && t.isData
@@ -614,6 +638,35 @@ def checkLaws (S : Ty) (row : List (Label × Ty)) : List Label → Except CheckE
       | none => .error (.noLaw ℓ)
       | some t => if t = lawTy S then checkLaws S row ls else .error (.badLaw ℓ)
 
+/-! ## Grades against the type (LANG-89): what install decides of a method's effect -/
+
+/-- The call arms that move value. -/
+def movesArm (ℓ : Label) : Bool := ℓ == "transfer" || ℓ == "credit"
+
+/-- A call slot type (`optTy` of a call sum) names a value-moving arm. -/
+def slotMoves : Ty → Bool
+  | .sum [("none", .record []), ("some", .sum arms)] => arms.any fun a => movesArm a.1
+  | _ => false
+
+/-- A method type's call slots name a value-moving arm: the body, by its type, may move value. -/
+def methodMoves : Ty → Bool
+  | .fn _ (.fn _ (.fn _ (.fn _ (.record [("calls", .record row), _, _])))) => row.any fun e => slotMoves e.2
+  | _ => false
+
+/-- The `effects` table is ascending and names methods only (`badEffect`), and every method whose
+type may move value has a grade above 0 (`effectExceeded`): the one syntactic check of a grade. A
+grade a type does not use is allowed, as a slot left `none` is. -/
+def checkEffects (p : Package) (row : List (Label × Ty)) : Except CheckError Unit :=
+  if !Row.ascending p.effects then .error (.badEffect ((p.effects.head?.map (·.1)).getD ""))
+  else match p.effects.find? (fun e => !p.methods.contains e.1) with
+    | some e => .error (.badEffect e.1)
+    | none =>
+      match p.methods.find? (fun ℓ => match Row.find? ℓ row with
+          | some t => methodMoves t && (p.effectOf ℓ).moves == 0
+          | none => false) with
+      | some ℓ => .error (.effectExceeded ℓ)
+      | none => .ok ()
+
 /-- Everything about a package but its body: bounds, a data state, a canonical record interface. -/
 def Package.checkShape (p : Package) : Except CheckError Unit := do
   if p.imports.length > importsMax then throw .tooManyImports
@@ -628,6 +681,7 @@ def Package.checkFields (p : Package) : Except CheckError Unit :=
   | .record row => do
       checkRels p.state row p.rels
       checkMethods p.state p.rels row p.methods
+      checkEffects p row
       checkLaws p.state row p.laws
   | _ => .error .ifaceNotRecord
 
@@ -764,43 +818,63 @@ def relsOf : List Tree → Option (List (Label × RelDecl))
     | some r, some rs => some (r :: rs)
     | _, _ => none
 
+/-- A method's grades (LANG-89): `node 0 ℓ [node 0 u64 moves]`. -/
+def effectTree (e : Label × Effect) : Tree := .node 0 e.1.toUTF8 [.node 0 (u64Bytes e.2.moves) []]
+
+def effectOf : Tree → Option (Label × Effect)
+  | .node 0 p [.node 0 m []] =>
+    match labelOf p, u64Of m with
+    | some ℓ, some moves => some (ℓ, { moves })
+    | _, _ => none
+  | _ => none
+
+def effectsOf (ts : List Tree) : Option (List (Label × Effect)) := ts.mapM effectOf
+
+def effectWire (e : Label × Effect) : Bool := labelOk e.1 && decide (e.2.moves < 2 ^ 64)
+
 /-- A relation has a tree that reads back to it. -/
 def relWire (r : Label × RelDecl) : Bool :=
   labelOk r.1 && r.2.key.all (fun f => labelOk f.1 && tyWire f.2) && tyWire r.2.val &&
     decide (r.2.limit < 2 ^ 64) && decide (r.2.cap < 2 ^ 64) && r.2.sum.all labelOk && r.2.guard.all labelOk
 
-/-- `node 0 [imports state iface body methods laws rels doc]`; imports are `node 0 id` leaves under a
-`node 0`, methods and laws `node 1 ℓ` leaves under a `node 1`, relations `relTree`s under a
-`node 2`, the doc a `node 0` leaf whose payload is its bytes (LANG-60). -/
+/-- `node 0 [imports state iface body methods laws rels doc holes effects]`; imports are `node 0 id`
+leaves under a `node 0`, methods and laws `node 1 ℓ` leaves under a `node 1`, relations `relTree`s
+under a `node 2`, the doc a `node 0` leaf whose payload is its bytes (LANG-60), the holes under a
+`node 3`, the grades `effectTree`s under a `node 4` (LANG-89). -/
 def packageTree (p : Package) : Tree :=
   .node 0 .empty
     [.node 0 .empty (p.imports.map fun d => .node 0 d []), tyTree p.state, tyTree p.iface,
      termTree p.body, .node 1 .empty (p.methods.map labelLeaf), .node 1 .empty (p.laws.map labelLeaf),
      .node 2 .empty (p.rels.map relTree), .node 0 p.doc [],
-     .node 3 .empty (p.holes.map holeROMTree)]
+     .node 3 .empty (p.holes.map holeROMTree), .node 4 .empty (p.effects.map effectTree)]
 
 def packageOf : Tree → Option Package
-  | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls, .node 2 er rs, .node 0 doc [], .node 3 eh hs] =>
-    if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty ∧ er = .empty ∧ eh = .empty ∧ Bounds.docOk doc = true then
-      match importsOf is, tyOf s, tyOf i, termOf b, labelsOf ms, labelsOf ls, relsOf rs, hs.mapM holeROMOf with
-      | some imports, some state, some iface, some body, some methods, some laws, some rels, some holes =>
-        some { imports, state, iface, body, methods, laws, rels, doc, holes }
-      | _, _, _, _, _, _, _, _ => none
+  | .node 0 e [.node 0 ei is, s, i, b, .node 1 em ms, .node 1 el ls, .node 2 er rs, .node 0 doc [], .node 3 eh hs,
+      .node 4 ee es] =>
+    if e = .empty ∧ ei = .empty ∧ em = .empty ∧ el = .empty ∧ er = .empty ∧ eh = .empty ∧ ee = .empty ∧
+        Bounds.docOk doc = true then
+      match importsOf is, tyOf s, tyOf i, termOf b, labelsOf ms, labelsOf ls, relsOf rs, hs.mapM holeROMOf,
+          effectsOf es with
+      | some imports, some state, some iface, some body, some methods, some laws, some rels, some holes,
+          some effects =>
+        some { imports, state, iface, body, methods, laws, rels, doc, holes, effects }
+      | _, _, _, _, _, _, _, _, _ => none
     else none
   | _ => none
 
 /-- The package has a tree that reads back to it. -/
 def packageWire (p : Package) : Bool :=
   Bounds.docOk p.doc && p.imports.all (fun d => decide (d.size ≤ importBytesMax)) && tyWire p.state &&
-    tyWire p.iface && termWire p.body && p.methods.all labelOk && p.laws.all labelOk && p.rels.all relWire && p.holes.all holeROMWire
+    tyWire p.iface && termWire p.body && p.methods.all labelOk && p.laws.all labelOk && p.rels.all relWire && p.holes.all holeROMWire &&
+    p.effects.all effectWire
 
 /-- The package tree stream at the language's bounds. -/
 def treeStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
 
 /-- The version byte (LANG-60): exactly `Bounds.packageWireVersion`; any other byte is refused
-`lang/package-version/7` by name, so bytes written at another version are never read as a package. -/
+`lang/package-version/8` by name, so bytes written at another version are never read as a package. -/
 def packageVersion : Stream Unit :=
-  Stream.refine "lang/package-version/7" Stream.u8
+  Stream.refine "lang/package-version/8" Stream.u8
     (fun v => if v = Bounds.packageWireVersion then some () else none) (fun _ => Bounds.packageWireVersion)
 
 /-- The one stream of a package: its version byte, then its tree. -/
@@ -813,12 +887,12 @@ def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
 /-- The package codec: the version byte and the tree stream, refined by `packageOf`, refused
-`lang/package/7` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
+`lang/package/8` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
 new term, type or primitive tag turns a refused boundary row into a read one, and the version must
 move, and with it this label, `lang/package/N` at version N: `Lang.Proofs.Wire.packageCodec_label`
 fails the build otherwise; cv 01a14e58-1586, LANG-60). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package/7" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
+  Stream.refine "lang/package/8" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -828,7 +902,7 @@ def encodePackage (p : Package) : Option ByteArray :=
     else none
   else none
 
-/-- The version byte (any other refused `lang/package-version/7`), then exactly one package tree, which reads as
+/-- The version byte (any other refused `lang/package-version/8`), then exactly one package tree, which reads as
 a package. `packageCodec`'s reading, with the tree
 stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
 packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
@@ -838,7 +912,7 @@ def decodePackage (b : ByteArray) : Except Refusal Package :=
   | .ok t =>
     match packageOf t.2.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package/7")
+    | none => .error (.rejected 0 "lang/package/8")
 
 end Wire
 end Nanodregg.Lang

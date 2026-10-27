@@ -220,4 +220,20 @@ where
 
 end
 
+/-! ## Grades at run (LANG-89): what a run's calls MOVE against the method's declared effect -/
+
+/-- What the calls move: the sum of `amount` over every `transfer` and `credit`. -/
+def movesOf : List (Body D) → Nat
+  | [] => 0
+  | .transfer _ _ amount _ _ :: bs => amount + movesOf bs
+  | .credit _ _ amount _ :: bs => amount + movesOf bs
+  | _ :: bs => movesOf bs
+
+/-- A run's calls move at most the method's grade, or the run is refused by name `effectExceeded`
+(the first token names it, law 7's `program` convention): O(`callsMax`), after `callsOf`, before any
+call is derived. -/
+def checkMoves (e : Effect) (calls : List (Body D)) : Except (Refusal D) Unit :=
+  if movesOf calls ≤ e.moves then .ok ()
+  else .error (.program s!"effectExceeded moves {movesOf calls} past {e.moves}")
+
 end Nanodregg.Lang

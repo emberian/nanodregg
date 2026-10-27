@@ -47,7 +47,7 @@ def escrowPackageWith (fair : Term) (theta roles : List Label) (offerLimit sessi
   { imports := [], state := S,
     iface := .record (fields.map fun (l, T, _) => (l, T)),
     body := .record (fields.map fun (l, _, t) => (l, t)),
-    methods := offerMethods, laws := [], rels }
+    methods := offerMethods, laws := [], rels, effects := escrowEffects }
 
 /-- **The lazy exchange** (P8j): the judge of the legs replaced by `true`; every other check of the
 take and the fuse (`offerTakeTree`'s naming, roles, terms, `offerJoint`) stands. -/

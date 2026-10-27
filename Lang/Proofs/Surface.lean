@@ -26,38 +26,85 @@ open Print
 
 theorem read_closedText_surface {p : Package} {s : String} (he : p.holes = [])
     (h : Print.packageText p = some s) : readPackage s = liftR (Read.readPackage s) := by
-  simp only [Print.packageText, he, List.isEmpty_nil, if_true, pure] at h
-  simp only [bind, Option.bind_eq_some_iff] at h
-  obtain ⟨xs, hxs, extra, hext, h⟩ := h
-  cases hext
-  simp only [List.append_nil] at h
-  split at h
-  · rename_i hf
-    obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
-    simp only [Option.some.injEq] at h; subst h
-    simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
-    obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
-    have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
-        list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
-        list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB]]) :=
-      .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _))) (.cons (docSx_ok hD)
-        (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hS) .nil)))
-        (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hI) .nil)))
-        (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
-        (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
-        (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
-        (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))))
-    obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
-    obtain ⟨y0, ys', rfl, h0, hl⟩ := sameL_cons hsame
-    obtain ⟨y1, ys'', rfl, h1, _⟩ := sameL_cons hl
-    obtain ⟨r0, rfl⟩ := same_atom h0
-    obtain ⟨q1, zs, rfl, hz⟩ := same_list h1
-    obtain ⟨z0, zs', rfl, hz0, _⟩ := sameL_cons hz
-    obtain ⟨r1, rfl⟩ := same_atom hz0
-    have hc : isCore (.list 0 (.atom r0 "package" :: .list q1 (.atom r1 "imports" :: zs') :: ys'')) = true := rfl
-    simp only [readPackage, readWith, Read.readPackage, hy, liftR, bind, Except.bind, readSExpWith, hc, if_true]
-    cases Read.package (.list 0 (.atom r0 "package" :: .list q1 (.atom r1 "imports" :: zs') :: ys'')) <;> rfl
-  · cases h
+  unfold Print.packageText at h
+  by_cases hee : p.effects.isEmpty = true
+  · -- no grades (LANG-89): the eight sections
+    simp only [hee, he, List.isEmpty_nil, if_true, pure] at h
+    simp only [bind, Option.bind_eq_some_iff] at h
+    obtain ⟨xs, hxs, eff, heff, extra, hext, h⟩ := h
+    cases heff
+    cases hext
+    simp only [List.append_nil] at h
+    split at h
+    · rename_i hf
+      obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
+      simp only [Option.some.injEq] at h; subst h
+      simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
+      obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
+      have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
+          list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
+          list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB]]) :=
+        .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _))) (.cons (docSx_ok hD)
+          (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hS) .nil)))
+          (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hI) .nil)))
+          (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
+          (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
+          (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
+          (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) .nil))))))))
+      obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
+      obtain ⟨y0, ys', rfl, h0, hl⟩ := sameL_cons hsame
+      obtain ⟨y1, ys'', rfl, h1, _⟩ := sameL_cons hl
+      obtain ⟨r0, rfl⟩ := same_atom h0
+      obtain ⟨q1, zs, rfl, hz⟩ := same_list h1
+      obtain ⟨z0, zs', rfl, hz0, _⟩ := sameL_cons hz
+      obtain ⟨r1, rfl⟩ := same_atom hz0
+      have hc : isCore (.list 0 (.atom r0 "package" :: .list q1 (.atom r1 "imports" :: zs') :: ys'')) = true := rfl
+      simp only [readPackage, readWith, Read.readPackage, hy, liftR, bind, Except.bind, readSExpWith, hc, if_true]
+      cases Read.package (.list 0 (.atom r0 "package" :: .list q1 (.atom r1 "imports" :: zs') :: ys'')) <;> rfl
+    · cases h
+  · -- grades (LANG-89): the ninth section `(effects …)`
+    simp only [hee, he, List.isEmpty_nil, if_true, pure] at h
+    simp only [bind, Option.bind_eq_some_iff] at h
+    obtain ⟨xs, hxs, h⟩ := h
+    rcases hE : List.mapM effectSx p.effects with _ | xE
+    · simp only [hE] at h; cases h
+    · simp only [hE] at h
+      simp only [sectionsSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at hxs
+      obtain ⟨xD, hD, xS, hS, xI, hI, xm, hm, xl, hlw, xR, hR, xB, hB, rfl⟩ := hxs
+      have h : (if fitsB (list (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
+            list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
+            list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB],
+            list (atom "effects" :: xE)])) = true then
+          some (String.ofList ('(' :: items ['\n', ' ', ' '] (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
+            list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
+            list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB],
+            list (atom "effects" :: xE)]) ++ ['\n']))
+        else none) = some s := h
+      split at h
+      · rename_i hf
+        obtain ⟨hn, hw⟩ := fitsB_iff.mp hf
+        simp only [Option.some.injEq] at h; subst h
+        have hok : OkL (atom "package" :: [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xD,
+            list [atom "state", xS], list [atom "iface", xI], list (atom "methods" :: xm),
+            list (atom "laws" :: xl), list (atom "rels" :: xR), list [atom "body", xB], list (atom "effects" :: xE)]) :=
+          .cons (kw_ok _) (.cons (.list (.cons (kw_ok _) (imports_ok _))) (.cons (docSx_ok hD)
+            (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hS) .nil)))
+            (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hI) .nil)))
+            (.cons (.list (.cons (kw_ok _) (labels_ok _ hm)))
+            (.cons (.list (.cons (kw_ok _) (labels_ok _ hlw)))
+            (.cons (.list (.cons (kw_ok _) (rels_ok _ hR)))
+            (.cons (.list (.cons (kw_ok _) (.cons (termSx_ok _ 0 hB) .nil))) (.cons (.list (.cons (kw_ok _) (effects_ok _ hE))) .nil)))))))))
+        obtain ⟨ys, hy, hsame⟩ := parse_layout (sep := ['\n', ' ', ' ']) ⟨by decide, by decide⟩ hok hn hw
+        obtain ⟨y0, ys', rfl, h0, hl⟩ := sameL_cons hsame
+        obtain ⟨y1, ys'', rfl, h1, _⟩ := sameL_cons hl
+        obtain ⟨r0, rfl⟩ := same_atom h0
+        obtain ⟨q1, zs, rfl, hz⟩ := same_list h1
+        obtain ⟨z0, zs', rfl, hz0, _⟩ := sameL_cons hz
+        obtain ⟨r1, rfl⟩ := same_atom hz0
+        have hc : isCore (.list 0 (.atom r0 "package" :: .list q1 (.atom r1 "imports" :: zs') :: ys'')) = true := rfl
+        simp only [readPackage, readWith, Read.readPackage, hy, liftR, bind, Except.bind, readSExpWith, hc, if_true]
+        cases Read.package (.list 0 (.atom r0 "package" :: .list q1 (.atom r1 "imports" :: zs') :: ys'')) <;> rfl
+      · cases h
 
 theorem packageBase_isCore {x : SExp} {p : Package} (h : Read.packageBase x = .ok p) :
     isCore x = true := by
@@ -70,7 +117,11 @@ theorem package_isCore {x : SExp} {p : Package} (h : Read.package x = .ok p) :
     isCore x = true := by
   unfold Read.package at h
   split at h
-  · simp only [bind, Except.bind, pure, Except.pure] at h
+  -- the plain arm reads through `packageBase`; the three sectioned arms (effects, holes, both) each
+  -- read their base through it and keep its first two elements
+  all_goals try (exact packageBase_isCore h)
+  all_goals
+    simp only [bind, Except.bind, pure, Except.pure] at h
     split at h
     · cases h
     · rename_i base hbase
@@ -84,7 +135,6 @@ theorem package_isCore {x : SExp} {p : Package} (h : Read.package x = .ok p) :
         rw [his]
         rfl
       · cases hc
-  · exact packageBase_isCore h
 
 theorem read_core_success_surface {s : String} {p : Package}
     (h : Read.readPackage s = .ok p) : readPackage s = liftR (Read.readPackage s) := by

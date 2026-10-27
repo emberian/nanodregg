@@ -425,6 +425,8 @@ structure RunSetup where
   term : Term
   env : Env
   preparation : Nat := 0
+  /-- the method's grades (LANG-89): `checkMoves` bounds the calls the run returns -/
+  effect : Effect := {}
 
 /-- The front half of every method run: the request's bounds, the closure loaded and re-checked
 (LANG-16), the method resolved, the state read at its row and the arguments decoded at their type,
@@ -444,7 +446,8 @@ def runSetupWith (loader : Pinned D → Nat → ByteArray → Loaded → Except 
   let rows ← methodReads bytesOf digestOf rc look pkg p.rels rv r.self a sg.reads (p.peerReads ℓ)
   pure { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row,
          ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, calls := sg.calls, state := s,
-         args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal], preparation := charge L }
+         args := a, reads := rows, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, a.toVal, s.toVal, rows.toVal], preparation := charge L,
+         effect := p.effectOf ℓ }
 
 /-- Closed specialization retained for its landed statements. -/
 def runSetup (look : Pinned D) (rv : RowView D) (pkg : D) (state : Slots) (method : Nat) (args : ByteArray)
@@ -497,6 +500,7 @@ def runMeasuredWith
       match stateSlots S.row ds 0 with
       | some slots => do
         let calls ← callsOf digestOf S.calls c
+        checkMoves S.effect calls
         let es ← editsOf S.rels r.self e
         guardEdits bytesOf digestOf S rv pkg r es
         pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)

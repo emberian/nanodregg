@@ -144,7 +144,13 @@ same line, and E0s / E0 refuse the two apart. -/
 def escrowDoc : String :=
   "The depositor deposits amount of asset into an account the escrow owns; release pays it to the beneficiary (the depositor or arbiter asks), refund back to the depositor (the beneficiary or arbiter asks); exactly one payout."
 
-def escrow : Package := { Std.pkgOf stateTy [("escrow", law)] methods with doc := escrowDoc.toUTF8 }
+/-- Each payout moves at most this per run (LANG-89): the escrow's declared grade. -/
+def movesMax : Nat := 1000
+
+def escrow : Package :=
+  { Std.pkgOf stateTy [("escrow", law)] methods with
+    doc := escrowDoc.toUTF8
+    effects := [("deposit", ⟨movesMax⟩), ("refund", ⟨movesMax⟩), ("release", ⟨movesMax⟩)] }
 
 /-- The method indices `invoke` names. -/
 def deposit : Nat := 0

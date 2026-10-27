@@ -449,7 +449,8 @@ theorem runSetupWith_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : Byt
       methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, calls := sg.calls, state := sd, args := ad,
-            reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal], preparation := charge L } := by
+            reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal], preparation := charge L,
+            effect := p.effectOf ℓ } := by
   unfold runSetupWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
@@ -472,7 +473,8 @@ theorem runSetup_spec {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArr
       methodReads bytesOf digestOf rc look pkg p.rels rv r.self ad sg.reads (p.peerReads ℓ) = .ok wd ∧
       S = { lib := L.lib, pkgs := L.pkgs.length, g, rels := p.rels, label := ℓ, row := recordRow p.state,
             ty := resultTy p.state sg.calls (editTy p.rels) sg.edits, calls := sg.calls, state := sd, args := ad,
-            reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal] } := by
+            reads := wd, term := apply4 g ℓ, env := [(reqData bytesOf r).toVal, ad.toVal, sd.toVal, wd.toVal],
+            effect := p.effectOf ℓ } := by
   unfold runSetup runSetupWith at h
   simp only [bind, Except.bind, pure, Except.pure] at h
   repeat' split at h
