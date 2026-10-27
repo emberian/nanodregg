@@ -61,6 +61,7 @@ inductive Runs : Prog Tick → List Ev → Tick → Prop
   | cmd {c k es a} (x : Except String Reply) : Runs (k x) es a → Runs (.cmd c k) (.cmd c x :: es) a
   | keep {r t k es a} (b : Bool) : Runs (k b) es a → Runs (.keep r t k) (.keep r t b :: es) a
   | forget {k es a} (b : Bool) : Runs (k b) es a → Runs (.forget k) (.forget b :: es) a
+  | note {l k es a} (b : Bool) : Runs (k b) es a → Runs (.note l k) (.note l b :: es) a
   | ask {r q k es a} (x : AskEnd) : Runs (k x) es a → Runs (.ask r q k) (.ask r q x :: es) a
   | say {s k es a} : Runs (k ()) es a → Runs (.sayK s k) (.say s :: es) a
   | hole {h es a} : Runs (fill h) es a → Runs (.hole h) es a
@@ -74,6 +75,8 @@ inductive Runs : Prog Tick → List Ev → Tick → Prop
     core (.keep r t b :: es) = .keep r t b :: core es := by simp [core, Ev.quiet]
 @[simp] theorem core_forget (b : Bool) (es : List Ev) : core (.forget b :: es) = .forget b :: core es := by
   simp [core, Ev.quiet]
+@[simp] theorem core_note (l : List (Ring × String)) (b : Bool) (es : List Ev) :
+    core (.note l b :: es) = .note l b :: core es := by simp [core, Ev.quiet]
 @[simp] theorem core_ask (r : Ring) (q : Broker.Ask) (x : AskEnd) (es : List Ev) :
     core (.ask r q x :: es) = .ask r q x :: core es := by simp [core, Ev.quiet]
 
@@ -125,11 +128,18 @@ theorem done_retried {m : Mem} {why : String} {es : List Ev} {a : Tick} (h : Run
     es = [] ∧ Retried m.retries a := by
   cases h; exact ⟨rfl, retry_retried m why⟩
 
+/-- What the `use` slot's filling does after its say: a stop does nothing; a closed slot forgets; a
+withdrawal keeps the withdrawn rings (`note`) and, only if that keep held, forgets. -/
+def UseCore : UseCand → List Ev → Prop
+  | .stop, rest => rest = []
+  | .closed, rest => ∃ b, rest = [.forget b]
+  | .withdraw _, rest => ∃ l, rest = [.note l false] ∨ ∃ b, rest = [.note l true, .forget b]
+
 /-- The probes of the cells `cs` a waiting ring's answer cites, `gone` the cells found gone so far,
 then the `use` slot's effects: nothing when the queue stops, else one forget. A probe that does not
 settle ends it. -/
 def ProbesCore (r : Ring) (p : List Ring) : List ByteArray → List ByteArray → List Ev → Prop
-  | [], gone, rest => if useChoice r p gone = .stop then rest = [] else ∃ b, rest = [.forget b]
+  | [], gone, rest => UseCore (useChoice r p gone) rest
   | c :: cs, gone, rest => ∃ y rest', rest = .cmd (.probe c) y :: rest' ∧
       match probeGone y with
       | some true => ProbesCore r p cs (c :: gone) rest'
@@ -267,7 +277,7 @@ theorem live_prune (m : Mem) (p : List Ring) : live (m.prune p) p = live m p := 
 else one forget. -/
 theorem useP_core {m : Mem} {r : Ring} {n line : String} {p : List Ring} {gone : List ByteArray}
     {es : List Ev} {a : Tick} (h : Runs (useP m r n line p gone) es a) :
-    if useChoice r p gone = .stop then core es = [] else ∃ b, core es = [.forget b] := by
+    UseCore (useChoice r p gone) (core es) := by
   unfold useP at h
   cases hc : useChoice r p gone with
   | closed =>
@@ -275,8 +285,29 @@ theorem useP_core {m : Mem} {r : Ring} {n line : String} {p : List Ring} {gone :
     cases h with | say h => obtain ⟨b, hb⟩ := forgetThen_core h; exact ⟨b, by simp [hb]⟩
   | withdraw c =>
     rw [hc] at h
-    cases h with | say h => obtain ⟨b, hb⟩ := forgetThen_core h; exact ⟨b, by simp [hb]⟩
+    cases h with
+    | say h =>
+      cases h with
+      | note b h =>
+        cases b
+        · simp at h; cases h; exact ⟨(r, Lang.Print.hex c) :: m.withdrawn, .inl (by simp)⟩
+        · simp only [if_true] at h
+          obtain ⟨b', hb⟩ := forgetThen_core h
+          exact ⟨(r, Lang.Print.hex c) :: m.withdrawn, .inr ⟨b', by simp [hb]⟩⟩
   | stop => rw [hc] at h; cases h; rfl
+
+theorem useCore_mem {u : UseCand} {l : List Ev} (h : UseCore u l) :
+    ∀ e ∈ l, (∃ b, e = .forget b) ∨ ∃ l b, e = .note l b := by
+  intro e he
+  cases u with
+  | stop => simp only [UseCore] at h; subst h; cases he
+  | closed => obtain ⟨b, rfl⟩ := h; simp at he; exact .inl ⟨b, he⟩
+  | withdraw c =>
+    obtain ⟨l', h | ⟨b, h⟩⟩ := h <;> subst h <;> simp at he
+    · exact .inr ⟨l', false, he⟩
+    · rcases he with he | he
+      · exact .inr ⟨l', true, he⟩
+      · exact .inl ⟨b, he⟩
 
 /-- A ring no longer pending closes the `use` slot. -/
 theorem useChoice_gone {r : Ring} {p : List Ring} {gone : List ByteArray} (hr : r ∉ p) :
@@ -319,7 +350,7 @@ theorem refused_core {sh : Shape} {m : Mem} {r : Ring} {n line : String} {p : Li
     | hole h =>
       have hc := useP_core h
       rw [useChoice_gone hr] at hc
-      simpa using hc
+      exact hc
 
 /-- Every path through the probes: the settled probes, then either an unsettled probe and a retry, or
 a path of the `use` hole's filling at the cells found gone. -/
@@ -548,42 +579,44 @@ theorem tick_order {w : Where} {m : Mem} {es : List Ev} {a : Tick} (h : Runs (ti
 
 /-! ## Counted: what the order says, stated on its own -/
 
+/-- An effect after a refused answer's re-read: a forget, a probe, or the withdrawn rings kept. -/
+def AfterRefused (e : Ev) : Prop := (∃ b, e = .forget b) ∨ (∃ c y, e = .cmd (.probe c) y) ∨ ∃ l b, e = .note l b
+
 theorem probesCore_mem {r : Ring} {p : List Ring} :
-    ∀ {cs gone : List ByteArray} {l : List Ev}, ProbesCore r p cs gone l →
-      ∀ e ∈ l, (∃ b, e = .forget b) ∨ ∃ c y, e = .cmd (.probe c) y
+    ∀ {cs gone : List ByteArray} {l : List Ev}, ProbesCore r p cs gone l → ∀ e ∈ l, AfterRefused e
   | [], gone, l, h => by
     intro e he
     simp only [ProbesCore] at h
-    split at h
-    · subst h; cases he
-    · obtain ⟨b, rfl⟩ := h; simp at he; exact .inl ⟨b, he⟩
+    rcases useCore_mem h e he with hb | hn
+    · exact .inl hb
+    · exact .inr (.inr hn)
   | c :: cs, gone, l, h => by
     intro e he
     simp only [ProbesCore] at h
     obtain ⟨y, rest', rfl, h'⟩ := h
     rcases List.mem_cons.mp he with rfl | he
-    · exact .inr ⟨c, y, rfl⟩
+    · exact .inr (.inl ⟨c, y, rfl⟩)
     · split at h'
       · exact probesCore_mem h' e he
       · exact probesCore_mem h' e he
       · subst h'; cases he
 
 theorem refusedCore_mem {r : Ring} {p : List Ring} {l : List Ev} (h : RefusedCore r p l) :
-    ∀ e ∈ l, (∃ b, e = .forget b) ∨ ∃ c y, e = .cmd (.probe c) y := by
+    ∀ e ∈ l, AfterRefused e := by
   unfold RefusedCore at h
   split at h
   · exact probesCore_mem h
   · obtain ⟨b, rfl⟩ := h; intro e he; simp at he; exact .inl ⟨b, he⟩
 
-/-- Forgets and probes ask nothing, invoke nothing, describe nothing. -/
-theorem quiet_counts {l : List Ev} (h : ∀ e ∈ l, (∃ b, e = .forget b) ∨ ∃ c y, e = .cmd (.probe c) y) :
+/-- Forgets, probes and notes ask nothing, invoke nothing, describe nothing. -/
+theorem quiet_counts {l : List Ev} (h : ∀ e ∈ l, AfterRefused e) :
     asks l = [] ∧ invokes l = [] ∧ describes l = 0 := by
   induction l with
   | nil => simp [asks, invokes, describes]
   | cons e l ih =>
     obtain ⟨ha, hi, hd⟩ := ih (fun e he => h e (List.mem_cons_of_mem _ he))
     simp only [asks, invokes, describes] at ha hi hd
-    rcases h e List.mem_cons_self with ⟨b, rfl⟩ | ⟨c, y, rfl⟩ <;>
+    rcases h e List.mem_cons_self with ⟨b, rfl⟩ | ⟨c, y, rfl⟩ | ⟨l', b, rfl⟩ <;>
       simp [asks, invokes, describes, ha, hi, hd]
 
 theorem deliver_counts {sh : Shape} {r : Ring} {t : ByteArray} {es : List Ev}
@@ -761,7 +794,13 @@ theorem useP_kept {m m' : Mem} {r : Ring} {n line : String} {p : List Ring} {gon
     cases h with | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
   | withdraw c =>
     rw [hc] at h
-    cases h with | say h => obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
+    cases h with
+    | say h =>
+      cases h with
+      | note b h =>
+        cases b
+        · simp at h; cases h
+        · simp only [if_true] at h; obtain ⟨hn, rfl⟩ := forgetThen_next h; cases hn; rfl
   | stop => rw [hc] at h; cases h
 
 /-- A ring that still waits, with every cell its answer cites there, stops the queue. -/
@@ -1021,14 +1060,7 @@ theorem refusedP_retry {sh : Shape} {m : Mem} {r : Ring} {n line : String} {p : 
     rcases List.mem_append.mp he with he | he
     · obtain ⟨c, y, rfl, hy⟩ := hpre e (List.mem_filter.mp he).1
       exact hy hue
-    · have hc := useP_core hr
-      split at hc
-      · rw [hc] at he; cases he
-      · obtain ⟨b, hb⟩ := hc
-        rw [hb] at he
-        simp at he
-        subst he
-        exact hue
+    · rcases useCore_mem (useP_core hr) e he with ⟨b, rfl⟩ | ⟨l, b, rfl⟩ <;> exact hue
 
 theorem deliver_retry {sh : Shape} {m : Mem} {r : Ring} {t : ByteArray} {es : List Ev} {a : Tick}
     (h : Runs (deliverP sh m r t) es a) (hu : ∃ e ∈ core es, Unsettled e) : Retried m.retries a := by
@@ -1202,7 +1234,13 @@ theorem useP_lt {m m' : Mem} {r : Ring} {n line : String} {p : List Ring} {gone 
     cases h with | say h => exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
   | withdraw c =>
     rw [hc] at h
-    cases h with | say h => exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
+    cases h with
+    | say h =>
+      cases h with
+      | note b h =>
+        cases b
+        · simp at h; cases h
+        · simp only [if_true] at h; exact forgetThen_lt (fun _ he => by cases he; exact retriesMax_pos) h
   | stop => rw [hc] at h; cases h
 
 theorem refusedP_lt {sh : Shape} {m m' : Mem} {r : Ring} {n line : String} {p : List Ring}
@@ -1405,8 +1443,8 @@ theorem order_refuses_forget_while_pending (sh : Shape) (r : Ring) (t : ByteArra
   | nil =>
     rw [hc] at hd'
     have hs := useChoice_stop (gone := []) hr (fun c h => by simp [hc] at h)
-    rw [ProbesCore, if_pos hs] at hd'
-    cases hd'
+    rw [ProbesCore, hs] at hd'
+    simp [UseCore] at hd'
   | cons c cs =>
     rw [hc] at hd'
     simp only [ProbesCore] at hd'
@@ -1502,7 +1540,11 @@ theorem forgetThen_fits (n : Nat) (t : Tick) : Fits n (forgetThen t) := by
 theorem useP_fits (n : Nat) (m : Mem) (r : Ring) (k line : String) (p : List Ring)
     (gone : List ByteArray) : Fits n (useP m r k line p gone) := by
   unfold useP
-  split <;> first | exact Fits.ret _ | (apply Fits.call; intro _; exact forgetThen_fits _ _)
+  repeat (first
+    | exact Fits.ret _
+    | exact forgetThen_fits _ _
+    | (apply Fits.call; intro x; dsimp only)
+    | split)
 
 theorem probesP_fits (n : Nat) (sh : Shape) (m : Mem) (r : Ring) (k line : String) (p : List Ring) :
     ∀ (cs gone : List ByteArray), Fits (n + 1) (probesP sh m r k line p cs gone)
@@ -1611,6 +1653,10 @@ theorem interp_runs (o : Oracle) {n : Nat} {p : Prog Tick} (hf : Fits n p) (c : 
       obtain ⟨es', h1, h2⟩ := ih (o.forget c) (c + 1) (es ++ [.forget (o.forget c)])
       exact ⟨.forget (o.forget c) :: es', by simpa [Handler.call, recorder] using h1,
         by simpa [Handler.call, recorder] using Runs.forget (o.forget c) h2⟩
+    | note l =>
+      obtain ⟨es', h1, h2⟩ := ih (o.note c) (c + 1) (es ++ [.note l (o.note c)])
+      exact ⟨.note l (o.note c) :: es', by simpa [Handler.call, recorder] using h1,
+        by simpa [Handler.call, recorder] using Runs.note (o.note c) h2⟩
     | ask r q =>
       obtain ⟨es', h1, h2⟩ := ih (o.ask c) (c + 1) (es ++ [.ask r q (o.ask c)])
       exact ⟨.ask r q (o.ask c) :: es', by simpa [Handler.call, recorder] using h1,

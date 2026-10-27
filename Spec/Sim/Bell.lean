@@ -162,7 +162,7 @@ def askFirst : RingAct := fun w sh m pending =>
   | _ => actOn w sh m pending
 
 /-- A resident, a shape, a ring. -/
-def bellWhere : Where := ⟨⟨.empty, .empty, 0, .empty, .empty⟩, "", "", ⟨""⟩, ⟨""⟩⟩
+def bellWhere : Where := ⟨⟨.empty, .empty, 0, .empty, .empty⟩, "", "", ⟨""⟩, ⟨""⟩, ⟨""⟩⟩
 def bellShape : Shape :=
   ⟨0, { key := pendingKey, val := pendingVal, limit := 64, sum := none, cap := 0, retract := true, guard := none },
    rfl, rfl⟩

@@ -90,6 +90,10 @@ theorem keptAfter_some : ∀ {k : Option (Ring × ByteArray)} {es : List Ev} {r 
       rcases keptAfter_some (k := k) (es := es) h with h' | h'
       · exact .inl h'
       · exact .inr (List.mem_cons_of_mem _ h')
+    | note l b =>
+      rcases keptAfter_some (k := k) (es := es) h with h' | h'
+      · exact .inl h'
+      · exact .inr (List.mem_cons_of_mem _ h')
 
 /-- What a tick invokes is the answer it was handed (`m.kept`) or one it kept itself. -/
 theorem tick_invoke_kept {w : Where} {m : Mem} {es : List Ev} {a : Tick}

@@ -33,7 +33,13 @@ theorem useP_shape {m m' : Mem} {r : Ring} {n line : String} {p : List Ring} {go
   unfold useP at h
   split at h
   · cases h with | say h => have hn := forgetThen_shape h; cases hn; rfl
-  · cases h with | say h => have hn := forgetThen_shape h; cases hn; rfl
+  · cases h with
+    | say h =>
+      cases h with
+      | note b h =>
+        cases b
+        · simp at h; cases h
+        · simp only [if_true] at h; have hn := forgetThen_shape h; cases hn; rfl
   · cases h
 
 theorem refusedP_shape {sh : Shape} {m m' : Mem} {r : Ring} {n line : String} {p : List Ring}
@@ -153,22 +159,19 @@ theorem tick_shape {w : Where} {m m' : Mem} {es : List Ev} (h : Runs (tickP w m)
 /-! ## The shape each invoke is sent at -/
 
 theorem deliverAfter_mem {sh : Shape} {r : Ring} {x : Except String Reply} {rest : List Ev}
-    (h : DeliverAfter sh r x rest) : ∀ e ∈ rest, (∃ b, e = .forget b) ∨ (∃ y, e = .cmd (.reread sh) y) ∨
-      ∃ c y, e = .cmd (.probe c) y := by
+    (h : DeliverAfter sh r x rest) : ∀ e ∈ rest, (∃ y, e = .cmd (.reread sh) y) ∨ AfterRefused e := by
   intro e he
   unfold DeliverAfter at h
   split at h
   · subst h; cases he
   · split at h
-    · obtain ⟨b, rfl⟩ := h; simp at he; exact .inl ⟨b, he⟩
+    · obtain ⟨b, rfl⟩ := h; simp at he; exact .inr (.inl ⟨b, he⟩)
     · split at h
       · obtain ⟨y, rest', rfl, hr'⟩ := h
         rcases List.mem_cons.mp he with rfl | he
-        · exact .inr (.inl ⟨y, rfl⟩)
+        · exact .inl ⟨y, rfl⟩
         · split at hr'
-          · rcases refusedCore_mem hr' e he with hb | hc
-            · exact .inl hb
-            · exact .inr (.inr hc)
+          · exact .inr (refusedCore_mem hr' e he)
           · subst hr'; cases he
       · subst h; cases he
 
@@ -177,7 +180,8 @@ theorem deliverCore_invoke {sh sh' : Shape} {r r' : Ring} {t t' : ByteArray} {x 
   obtain ⟨x₀, rest, rfl, hr⟩ := h
   rcases List.mem_cons.mp he with he | he
   · cases he; rfl
-  · rcases deliverAfter_mem hr _ he with ⟨b, hb⟩ | ⟨y, hy⟩ | ⟨c, y, hy⟩
+  · rcases deliverAfter_mem hr _ he with ⟨y, hy⟩ | ⟨b, hb⟩ | ⟨c, y, hy⟩ | ⟨l, b, hy⟩
+    · cases hy
     · cases hb
     · cases hy
     · cases hy
@@ -188,7 +192,8 @@ theorem deliverCore_keep {sh : Shape} {r r' : Ring} {t t' : ByteArray} {b : Bool
   intro he
   rcases List.mem_cons.mp he with he | he
   · cases he
-  · rcases deliverAfter_mem hr _ he with ⟨b, hb⟩ | ⟨y, hy⟩ | ⟨c, y, hy⟩
+  · rcases deliverAfter_mem hr _ he with ⟨y, hy⟩ | ⟨b, hb⟩ | ⟨c, y, hy⟩ | ⟨l, b, hy⟩
+    · cases hy
     · cases hb
     · cases hy
     · cases hy
@@ -509,6 +514,8 @@ theorem keptAfter_ok : ∀ {es : List Ev} {k : Option (Ring × ByteArray)}, Kept
   | .ask _ _ _ :: es, k, hk, he =>
     keptAfter_ok (es := es) (k := k) hk (fun r t h => he r t (List.mem_cons_of_mem _ h))
   | .say _ :: es, k, hk, he =>
+    keptAfter_ok (es := es) (k := k) hk (fun r t h => he r t (List.mem_cons_of_mem _ h))
+  | .note _ _ :: es, k, hk, he =>
     keptAfter_ok (es := es) (k := k) hk (fun r t h => he r t (List.mem_cons_of_mem _ h))
 
 theorem mem_core_keep {r : Ring} {t : ByteArray} {b : Bool} {es : List Ev} (h : Ev.keep r t b ∈ es) :

@@ -28,6 +28,6 @@ def inPlaceKeep (w : Where) (s : String) : List FsOp :=
 /-- A resident's place: its volume and kept name. -/
 def durableWhere : Where :=
   { conf := ⟨.empty, .empty, 0, .empty, .empty⟩, member := "m", broker := "b", vol := "vol",
-    kept := "vol/kept" }
+    kept := "vol/kept", noted := "vol/withdrawn" }
 
 end Nanodregg.Spec

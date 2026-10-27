@@ -16,6 +16,7 @@ inductive Ev
   | cmd (c : Cmd) (x : Except String Reply)
   | keep (r : Ring) (t : ByteArray) (ok : Bool)
   | forget (ok : Bool)
+  | note (l : List (Ring × String)) (ok : Bool)
   | ask (r : Ring) (q : Broker.Ask) (x : AskEnd)
   | say (s : String)
 
@@ -66,6 +67,7 @@ structure Oracle where
   cmd : Nat → Except String Reply
   keep : Nat → Bool
   forget : Nat → Bool
+  note : Nat → Bool
   ask : Nat → AskEnd
 
 /-- The recording handler: each call takes its result from the oracle at its place and appends
@@ -74,6 +76,7 @@ def recorder (o : Oracle) : Handler (StateM (Nat × List Ev)) where
   cmd c := modifyGet fun (n, es) => (o.cmd n, (n + 1, es ++ [.cmd c (o.cmd n)]))
   keep r t := modifyGet fun (n, es) => (o.keep n, (n + 1, es ++ [.keep r t (o.keep n)]))
   forget := modifyGet fun (n, es) => (o.forget n, (n + 1, es ++ [.forget (o.forget n)]))
+  note l := modifyGet fun (n, es) => (o.note n, (n + 1, es ++ [.note l (o.note n)]))
   ask r q := modifyGet fun (n, es) => (o.ask n, (n + 1, es ++ [.ask r q (o.ask n)]))
   say s := modify fun (n, es) => (n + 1, es ++ [.say s])
 
@@ -86,6 +89,7 @@ def Prog.interpTwice {M : Type → Type} [Monad M] (h : Handler M) : Prog Tick �
         | Eff.cmd c, k => do let _ ← h.cmd c; let x ← h.cmd c; k x
         | Eff.keep r t, k => do let b ← h.keep r t; k b
         | Eff.forget, k => do let b ← h.forget; k b
+        | Eff.note l, k => do let b ← h.note l; k b
         | Eff.ask r q, k => do let e ← h.ask r q; k e
         | Eff.say s, k => do h.say s; k ()
       hole := fun _ => pure (.stop .bellShape "holes") }

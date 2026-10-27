@@ -101,14 +101,20 @@ theorem use_withdraws {m m' : Mem} {r : Ring} {n line : String} {p : List Ring} 
     {c : ByteArray} {es : List Ev} (hc : useChoice r p gone = .withdraw c)
     (h : Runs (useP m r n line p gone) es (.next m')) :
     es = [.say s!"answer withdrawn {r.notBefore} {Lang.Print.hex r.ringer}: its support {Lang.Print.hex c} is gone ({line})",
-      .forget true] ∧ (r, Lang.Print.hex c) ∈ m'.withdrawn ∧ m'.kept = none := by
+      .note ((r, Lang.Print.hex c) :: m.withdrawn) true, .forget true] ∧
+      (r, Lang.Print.hex c) ∈ m'.withdrawn ∧ m'.kept = none := by
   unfold useP at h
   rw [hc] at h
   cases h with
   | say h =>
-    obtain ⟨hn, rfl⟩ := forgetThen_next h
-    cases hn
-    exact ⟨rfl, List.mem_cons_self, rfl⟩
+    cases h with
+    | note b h =>
+      cases b
+      · simp at h; cases h
+      · simp only [if_true] at h
+        obtain ⟨hn, rfl⟩ := forgetThen_next h
+        cases hn
+        exact ⟨rfl, List.mem_cons_self, rfl⟩
 
 /-! ## A withdrawal lasts while the ring is listed -/
 
@@ -118,7 +124,13 @@ theorem useP_withdrawn {m m' : Mem} {r : Ring} {n line : String} {p : List Ring}
   split at h
   · cases h with | say h => obtain ⟨hn, -⟩ := forgetThen_next h; cases hn; exact fun x hx => hx
   · cases h with
-    | say h => obtain ⟨hn, -⟩ := forgetThen_next h; cases hn; exact fun x hx => List.mem_cons_of_mem _ hx
+    | say h =>
+      cases h with
+      | note b h =>
+        cases b
+        · simp at h; cases h
+        · simp only [if_true] at h
+          obtain ⟨hn, -⟩ := forgetThen_next h; cases hn; exact fun x hx => List.mem_cons_of_mem _ hx
   · cases h
 
 theorem refusedP_withdrawn {sh : Shape} {m m' : Mem} {r : Ring} {n line : String} {p : List Ring}

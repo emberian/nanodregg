@@ -106,6 +106,7 @@ theorem keptAfter_core (k : Option (Ring × ByteArray)) (es : List Ev) :
     | say s => simp [ih]
     | keep r t b => cases b <;> simp [keptAfter, ih]
     | forget b => cases b <;> simp [keptAfter, ih]
+    | note l b => simp [keptAfter, ih]
     | cmd c x => simp [keptAfter, ih]
     | ask r q x => simp [keptAfter, ih]
 
@@ -207,18 +208,24 @@ private theorem useP_debt {m : Mem} {r : Ring} {t : ByteArray} {n line : String}
     rw [hc] at h
     cases h with
     | say h =>
-      obtain ⟨D', hd, ho⟩ := forgetThen_debt (D := D) h (fun m' hm => by
-        cases hm
-        intro q hq
-        refine .inr ?_
-        by_cases hqr : q = r
-        · subst hqr; simp [stands]
-        · rcases hD q hq with ⟨u, hu⟩ | hs
-          · rw [hk] at hu; cases hu; exact absurd rfl hqr
-          · simp only [stands, Bool.not_eq_false', List.any_eq_true] at hs ⊢
-            obtain ⟨x, hx, he⟩ := hs
-            exact ⟨x, List.mem_cons_of_mem _ hx, he⟩)
-      exact ⟨D', by simpa using hd, ho⟩
+      cases h with
+      | note b h =>
+        cases b
+        · simp at h; cases h
+          exact ⟨D, by simp [debtRun, debtStep, frees], fun _ h => by cases h⟩
+        · simp only [if_true] at h
+          obtain ⟨D', hd, ho⟩ := forgetThen_debt (D := D) h (fun m' hm => by
+            cases hm
+            intro q hq
+            refine .inr ?_
+            by_cases hqr : q = r
+            · subst hqr; simp [stands]
+            · rcases hD q hq with ⟨u, hu⟩ | hs
+              · rw [hk] at hu; cases hu; exact absurd rfl hqr
+              · simp only [stands, Bool.not_eq_false', List.any_eq_true] at hs ⊢
+                obtain ⟨x, hx, he⟩ := hs
+                exact ⟨x, List.mem_cons_of_mem _ hx, he⟩)
+          exact ⟨D', by rw [core_say, core_note, debtRun_quiet (by simp [frees]) (by simp)]; exact hd, ho⟩
   | stop =>
     rw [hc] at h
     cases h

@@ -526,6 +526,7 @@ theorem legFrom_errors {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D
     | .forget _ => exact legFrom_errors (es := es) w h'
     | .ask _ _ _ => exact legFrom_errors (es := es) w h'
     | .say _ => exact legFrom_errors (es := es) w h'
+    | .note _ _ => exact legFrom_errors (es := es) w h'
 
 theorem stdioLeg_errors {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}
     {conf : Resident.Conf} {es : List Resident.Ev} (w : World D)
@@ -552,6 +553,7 @@ theorem legFrom_suffix {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D
     | .forget _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
     | .ask _ _ _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
     | .say _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
+    | .note _ _ => exact legFrom_suffix pre (by simpa [LegFrom] using h)
 
 /-- An `ok` reply at the head of what is read is a follower run of its argv. -/
 theorem legFrom_ok {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)} {me : Self D}

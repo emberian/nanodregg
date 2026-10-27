@@ -347,6 +347,36 @@ def keptRead (s : String) : Option (Ring × ByteArray) :=
     some (⟨n, g, x, some ⟨c, m, o, v⟩⟩, t)
   | _ => none
 
+/-! ## What the volume keeps: the withdrawn rings -/
+
+/-- One withdrawn ring: the ring (key, text and aim) and the name of the cell its probe found gone. -/
+def withdrawnTy : Ty :=
+  .record [("cell", .bytes), ("notBefore", .nat), ("ringer", .digest), ("text", .bytes), ("to", optTy Lang.Bell.aimTy)]
+
+def withdrawnDatum (r : Ring) (c : String) : Data :=
+  .record [("cell", .bytes c.toUTF8), ("notBefore", .nat r.notBefore), ("ringer", .digest r.ringer),
+    ("text", .bytes r.text), ("to", toDatum r.to)]
+
+/-- The withdrawn rings as text: one printed value a line (a printed value is one line,
+`Lang.Proofs.Print.data_one_line`); none withdrawn is the empty text. -/
+def notedText (l : List (Ring × String)) : Option String :=
+  (l.mapM fun x => Print.data (withdrawnDatum x.1 x.2)).map ("\n".intercalate)
+
+/-- One line of the withdrawn file. -/
+def notedLine (s : String) : Option (Ring × String) :=
+  match Read.readData withdrawnTy s with
+  | .ok (.record [("cell", .bytes c), ("notBefore", .nat n), ("ringer", .digest g), ("text", .bytes x),
+      ("to", .inj "none" (.record []))]) =>
+    (String.fromUTF8? c).map fun c => (⟨n, g, x, none⟩, c)
+  | .ok (.record [("cell", .bytes c), ("notBefore", .nat n), ("ringer", .digest g), ("text", .bytes x),
+      ("to", .inj "some" (.record [("cand", .digest d), ("method", .nat m), ("target", .digest o), ("via", .digest v)]))]) =>
+    (String.fromUTF8? c).map fun c => (⟨n, g, x, some ⟨d, m, o, v⟩⟩, c)
+  | _ => none
+
+/-- The withdrawn file's text as the list it holds, or none when a line does not read. -/
+def notedRead (s : String) : Option (List (Ring × String)) :=
+  if s.isEmpty then some [] else (s.splitOn "\n").mapM notedLine
+
 /-! ## The member commands (`nd --stdio`'s argv) -/
 
 def hexOf (b : ByteArray) : ByteArray := (Print.hex b).toUTF8

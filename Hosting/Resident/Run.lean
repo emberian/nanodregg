@@ -186,6 +186,8 @@ structure Where where
   broker : String
   vol : System.FilePath
   kept : System.FilePath
+  /-- the withdrawn rings (`Mem.withdrawn`), kept as the kept answer is -/
+  noted : System.FilePath
 
 /-- The kept file's fresh copy: its name with `.tmp` after it, so never the kept name itself
 (`Proofs.ResidentVolume.keptTmp_ne`). -/
@@ -206,6 +208,10 @@ def describeOut (c : Conf) (r : Reply) : Except (Exit × String) Shape :=
   match String.fromUTF8? r.stdout with
   | none => .error (.undecodable, "describe")
   | some out => (Shape.ofDescription c.bell out).mapError (.bellShape, ·)
+
+/-- The withdrawn file as a kept name: a note IS a keep at `w.noted` (`keepOps w.notedAt`), so every
+theorem of `Proofs.ResidentVolume` about `keepOps` and `forgetOps` holds of it at `w.notedAt`. -/
+def Where.notedAt (w : Where) : Where := { w with kept := w.noted }
 
 /-- One step on the volume, as `keep` and `forget` take them (HOSTING-37). Each is one POSIX call
 (`perform`); `Volume.apply` is the contract each is trusted to meet, and the theorems of
@@ -271,6 +277,17 @@ def keep (w : Where) (r : Ring) (t : ByteArray) : IO Bool := do
   | .ok back => pure (decide (back = some (r, t)))
   | .error _ => pure false
 
+/-- Keep the withdrawn rings `l` durably (`keepOps` at `w.notedAt`), then read them back; `false` unless
+what reads back is exactly `l`. -/
+def note (w : Where) (l : List (Ring × String)) : IO Bool := do
+  let some s := notedText l | return false
+  let act : IO (Option (List (Ring × String))) := do
+    performAll (keepOps w.notedAt s)
+    pure (notedRead (← IO.FS.readFile w.noted))
+  match ← act.toBaseIO with
+  | .ok back => pure (decide (back = some l))
+  | .error _ => pure false
+
 /-- What the start does before its first tick (HOSTING-39): what the volume holds at the kept name,
 made durable by running a whole keep of it again from its first step (absent: a whole forget), so
 a keep or a forget that failed part way in the last life (the rename or the unlink done, the
@@ -288,17 +305,19 @@ def resumeOps (w : Where) : Option (Option String) → List FsOp
 
 /-- Run `resumeOps`, then read the kept name back; `false` unless it reads as `held` again. Only
 then does it say `resumed` (the line the bell test counts at a restart). -/
-def resume (w : Where) (held : Option (Option String)) : IO Bool := do
+def resumeAt (w : Where) (held : Option (Option String)) : IO Bool := do
   let act : IO (Option (Option String)) := do
     performAll (resumeOps w held)
     if ← w.kept.pathExists then pure (some (some (← IO.FS.readFile w.kept))) else pure none
   match ← act.toBaseIO with
-  | .ok back =>
-    if back = held then
-      say s!"resumed {if held.isSome then "the kept answer" else "nothing kept"}"
-      pure true
-    else pure false
+  | .ok back => pure (back = held)
   | .error _ => pure false
+
+/-- `resumeAt` the kept name, saying `resumed` when it holds. -/
+def resume (w : Where) (held : Option (Option String)) : IO Bool := do
+  let ok ← resumeAt w held
+  if ok then say s!"resumed {if held.isSome then "the kept answer" else "nothing kept"}"
+  pure ok
 
 /-- The first tick's kept answer from what the volume holds at the kept name: absent → none;
 unreadable → no seed (`volume`); a text → what it reads as, and no seed when it reads as nothing. -/
@@ -306,6 +325,13 @@ def seedOf : Option (Option String) → Option (Option (Ring × ByteArray))
   | none => some none
   | some none => none
   | some (some s) => (keptRead s).map some
+
+/-- The first tick's withdrawn rings from what the volume holds at the withdrawn name: absent → none
+withdrawn; unreadable, or a line that does not read → no seed (`volume`). -/
+def notedSeed : Option (Option String) → Option (List (Ring × String))
+  | none => some []
+  | some none => none
+  | some (some s) => notedRead s
 
 /-- A member command the tick sends, by what it is for. Its argv is a function of it (`Cmd.argv`):
 a node cannot carry one command's name and another's bytes. -/
@@ -365,6 +391,8 @@ inductive Eff
   | keep (r : Ring) (t : ByteArray)
   /-- forget the kept answer durably (`forget`) -/
   | forget
+  /-- keep the withdrawn rings durably (`note`) -/
+  | note (l : List (Ring × String))
   /-- one ask on the broker socket -/
   | ask (r : Ring) (q : Broker.Ask)
   /-- one line on stderr -/
@@ -375,6 +403,7 @@ def Eff.Resp : Eff → Type
   | .cmd _ => Except String Reply
   | .keep _ _ => Bool
   | .forget => Bool
+  | .note _ => Bool
   | .ask _ _ => AskEnd
   | .say _ => Unit
 
@@ -409,6 +438,9 @@ open Nanodregg.Lang.Contextual.Protocol in
 @[match_pattern] abbrev Prog.forget {α : Type} (k : Bool → Prog α) : Prog α :=
   Prot.call (S := sig) (i := ()) Eff.forget k
 open Nanodregg.Lang.Contextual.Protocol in
+@[match_pattern] abbrev Prog.note {α : Type} (l : List (Ring × String)) (k : Bool → Prog α) : Prog α :=
+  Prot.call (S := sig) (i := ()) (Eff.note l) k
+open Nanodregg.Lang.Contextual.Protocol in
 @[match_pattern] abbrev Prog.ask {α : Type} (r : Ring) (q : Broker.Ask) (k : AskEnd → Prog α) : Prog α :=
   Prot.call (S := sig) (i := ()) (Eff.ask r q) k
 open Nanodregg.Lang.Contextual.Protocol in
@@ -425,6 +457,7 @@ structure Handler (M : Type → Type) where
   cmd : Cmd → M (Except String Reply)
   keep : Ring → ByteArray → M Bool
   forget : M Bool
+  note : List (Ring × String) → M Bool
   ask : Ring → Broker.Ask → M AskEnd
   say : String → M Unit
 
@@ -433,6 +466,7 @@ def Handler.call {M : Type → Type} (h : Handler M) : (op : Eff) → M (Eff.Res
   | .cmd c => h.cmd c
   | .keep r t => h.keep r t
   | .forget => h.forget
+  | .note l => h.note l
   | .ask r q => h.ask r q
   | .say s => h.say s
 
@@ -441,6 +475,7 @@ def ioHandler (w : Where) : Handler IO where
   cmd c := Resident.command w.member (c.argv w.conf)
   keep r t := Resident.keep w r t
   forget := Resident.forget w
+  note l := Resident.note w l
   ask _ q := Resident.ask w.broker q
   say s := Resident.say s
 
@@ -667,7 +702,10 @@ def useP (m : Mem) (ring : Ring) (n line : String) (pending : List Ring) (gone :
       forgetThen (.next { m with kept := none, retries := 0 })
   | .withdraw c =>
     .say s!"answer withdrawn {ring.notBefore} {Lang.Print.hex ring.ringer}: its support {Lang.Print.hex c} is gone ({line})" <|
-      forgetThen (.next { m with kept := none, retries := 0, withdrawn := (ring, Lang.Print.hex c) :: m.withdrawn })
+      .note ((ring, Lang.Print.hex c) :: m.withdrawn) fun ok =>
+        if ok then
+          forgetThen (.next { m with kept := none, retries := 0, withdrawn := (ring, Lang.Print.hex c) :: m.withdrawn })
+        else .done (.stop .volume "withdrawn")
   | .stop => .done (.stop .answerRefused s!"{n} ({line})")
 
 /-- Fill a hole: `serve` by the act the slot chooses, the withdrawn rings that left `pending`
@@ -715,8 +753,9 @@ def run (args : List String) : IO UInt32 := do
   let some conf := Conf.read text | stop .confMalformed ""
   -- the kept answer is named by the bell, so a config naming another bell never meets it
   let kname := s!"kept-{Lang.Print.hex conf.bell}"
-  let w : Where := { conf, member := mem.toString, broker := b.toString, vol, kept := vol / kname,
-}
+  let nname := s!"withdrawn-{Lang.Print.hex conf.bell}"
+  let w : Where :=
+    { conf, member := mem.toString, broker := b.toString, vol, kept := vol / kname, noted := vol / nname }
   let held ← if ← w.kept.pathExists then
       match ← (IO.FS.readFile w.kept).toBaseIO with
       | .ok s => pure (some (some s))
@@ -724,8 +763,15 @@ def run (args : List String) : IO UInt32 := do
     else pure none
   let some kept := seedOf held | stop .volume "kept unreadable"
   unless ← resume w held do return ← stop .volume "resume"
+  let heldNoted ← if ← w.noted.pathExists then
+      match ← (IO.FS.readFile w.noted).toBaseIO with
+      | .ok s => pure (some (some s))
+      | .error _ => pure (some none)
+    else pure none
+  let some withdrawn := notedSeed heldNoted | stop .volume "withdrawn unreadable"
+  unless ← resumeAt w.notedAt heldNoted do return ← stop .volume "resume withdrawn"
   say s!"serving bell {Lang.Print.hex conf.bell}{if kept.isSome then " (an answer is kept)" else ""}"
-  let mut m : Mem := { shape := none, kept }
+  let mut m : Mem := { shape := none, kept, withdrawn }
   for _ in [0:lifetimeTicks] do
     match ← tick w m with
     | .stop e d => return ← stop e d

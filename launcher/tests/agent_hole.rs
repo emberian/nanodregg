@@ -425,7 +425,7 @@ fn tour(provider: Provider) -> String {
         both(&o)
     );
     if !real {
-        h4(&w, &b, &s, &gs, &aim, &answers, &log);
+        h4(&w, &b, &s, &gs, &aim, &vol, &answers, &log);
     }
     drop(gl);
     drop(kb);
@@ -446,6 +446,7 @@ fn h4(
     s: &str,
     gs: &str,
     aim: &str,
+    vol: &Path,
     answers: &dyn Fn() -> Vec<String>,
     log: &dyn Fn() -> String,
 ) {
@@ -484,6 +485,12 @@ fn h4(
         "H4: the withdrawal names the aim's via or target: {named}"
     );
     eprintln!("H4 (measured): {named}");
+    // the withdrawal is on the volume, so a restart does not ask about the ring again
+    let noted = fs::read_to_string(vol.join(format!("withdrawn-{b}"))).unwrap_or_default();
+    assert!(
+        noted.contains(gs) || noted.contains(s),
+        "H4: the volume keeps the withdrawn ring under the cell\x27s name: {noted:?}"
+    );
     assert!(!l.contains("answerRefused"), "H4: the queue stopped:\n{l}");
     let pending = w.run(&["read", b, "pending", "64"]);
     assert!(
