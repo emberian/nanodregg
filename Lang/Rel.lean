@@ -358,4 +358,108 @@ def guardOld {D : Type} (digestOf : ByteArray → Option D) (rv : RowView D) (se
 /-- A guard's input, at `guardInTy`: the edit's data and its old row. -/
 def guardIn (edit old : Data) : Data := .record [("edit", edit), ("old", old)]
 
+/-! ## Held legs (LANG-90): a row of a `holds` relation is backed by value the run moves
+
+A relation declaring `holds f` says each row's field `f` (a `legTy`: `amount` of `asset`) is value the
+object HOLDS for the row. A run that writes such a row (insert or upsert) must move at least the new
+leg's amount of its asset into the object's account of that asset; a run that replaces or retracts
+such a row (its old row, `guardOld`) must move the old leg's amount out. The sums are per asset over the
+whole run, not per edit (two inserts of 3 α under one transfer of 6 α into the object are backed), and
+each direction is its own inequality: a net check would admit a retract that pays nothing when nothing
+else moves, the value left in the object with no row naming it. Under the kernel's one effect per cell
+per Turn (`duplicateEffect`) a run moves one asset of one account in one direction only, so an upsert
+that replaces a held leg with another of the same asset is refused (`legStranded`): a held leg is
+replaced by a retract and an insert in two runs, each paid. -/
+
+/-- The leg a value holds at field `f`: its `amount` and its `asset` bytes. -/
+def legAt (f : Label) : Data → Option (Nat × ByteArray)
+  | .record fs =>
+    match fs.lookup f with
+    | some (.record [("amount", .nat n), ("asset", .digest a)]) => some (n, a)
+    | _ => none
+  | _ => none
+
+/-- A held leg a run must back: its relation, its asset, what must move IN, what must move OUT. -/
+abbrev Leg (D : Type) := Label × D × Nat × Nat
+
+/-- The held legs of one edit, given its old row (`guardOld`'s `optD`): the new value's leg needs
+funding, the old row's leg needs paying out. A leg that is not a leg of a digest refuses by name. -/
+def legsOfEdit {D : Type} (digestOf : ByteArray → Option D) (e : Edit D) (old : Data) :
+    Except (Refusal D) (List (Leg D)) :=
+  match e.decl.holds with
+  | none => .ok []
+  | some f =>
+    let leg (why : String) (v : Data) (mk : D → Nat → Leg D) : Except (Refusal D) (List (Leg D)) :=
+      match legAt f v with
+      | some (n, a) =>
+        match digestOf a with
+        | some d => .ok [mk d n]
+        | none => .error (.program s!"{why} {e.label}")
+      | none => .error (.program s!"{why} {e.label}")
+    let new : Except (Refusal D) (List (Leg D)) :=
+      match e.data with
+      | .inj "insert" (.record [("key", _), ("val", v)]) => leg "legUnfunded" v fun d n => (e.label, d, n, 0)
+      | .inj "upsert" (.record [("key", _), ("val", v)]) => leg "legUnfunded" v fun d n => (e.label, d, n, 0)
+      | _ => .ok []
+    let gone : Except (Refusal D) (List (Leg D)) :=
+      match old with
+      | .inj "some" o => leg "legStranded" o fun d n => (e.label, d, 0, n)
+      | _ => .ok []
+    match new, gone with
+    | .ok xs, .ok ys => .ok (xs ++ ys)
+    | .error x, _ => .error x
+    | _, .error y => .error y
+
+/-- Every held leg of a run's edits, in edit order (each edit's old row by `guardOld`). -/
+def legsOf {D : Type} (digestOf : ByteArray → Option D) (rv : RowView D) (self : D) (es : List (Edit D)) :
+    Except (Refusal D) (List (Leg D)) := do
+  let olds ← es.mapM (guardOld digestOf rv self)
+  let ls ← (es.zip olds).mapM fun (e, o) => legsOfEdit digestOf e o
+  pure ls.flatten
+
+section
+variable {D : Type} [DecidableEq D]
+
+/-- What the legs need moved IN of asset `a`. -/
+def needIn (a : D) : List (Leg D) → Nat
+  | [] => 0
+  | (_, b, i, _) :: ls => (if b = a then i else 0) + needIn a ls
+
+/-- What the legs need moved OUT of asset `a`. -/
+def needOut (a : D) : List (Leg D) → Nat
+  | [] => 0
+  | (_, b, _, o) :: ls => (if b = a then o else 0) + needOut a ls
+
+/-- What the calls move into `self`'s account of `a`: transfers to it and credits to it. -/
+def movedIn (self a : D) : List (Body D) → Nat
+  | [] => 0
+  | .transfer _ dst n _ _ :: bs => (if dst = .of self a then n else 0) + movedIn self a bs
+  | .credit _ acct n _ :: bs => (if acct = .of self a then n else 0) + movedIn self a bs
+  | _ :: bs => movedIn self a bs
+
+/-- What the calls move out of `self`'s account of `a`: transfers from it. -/
+def movedOut (self a : D) : List (Body D) → Nat
+  | [] => 0
+  | .transfer src _ n _ _ :: bs => (if src = .of self a then n else 0) + movedOut self a bs
+  | _ :: bs => movedOut self a bs
+
+/-- Each leg's asset checked against the run's totals, in edit order: the first relation whose asset
+is short refuses by name. -/
+def checkLegsGo (self : D) (calls : List (Body D)) (all : List (Leg D)) : List (Leg D) → Except (Refusal D) Unit
+  | [] => .ok ()
+  | (ℓ, a, _, _) :: ls =>
+    if movedIn self a calls < needIn a all then .error (.program s!"legUnfunded {ℓ}")
+    else if movedOut self a calls < needOut a all then .error (.program s!"legStranded {ℓ}")
+    else checkLegsGo self calls all ls
+
+/-- **The run backs every held leg** (LANG-90): for every asset, what the `holds` rows it writes need
+is moved into the object, and what the rows it replaces or retracts held is moved out; else
+`program "legUnfunded REL"` / `program "legStranded REL"`. O(edits × (edits + calls)). -/
+def checkLegs (digestOf : ByteArray → Option D) (rv : RowView D) (self : D) (calls : List (Body D))
+    (es : List (Edit D)) : Except (Refusal D) Unit := do
+  let ls ← legsOf digestOf rv self es
+  checkLegsGo self calls ls ls
+
+end
+
 end Nanodregg.Lang

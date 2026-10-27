@@ -655,7 +655,7 @@ def cappedTallyText : String := s!"
   (methods reply)
   (laws decider)
   (rels (answers (key (by digest) (n nat)) (val (rec (amount nat))) (limit 64) (sum amount) (cap 1000)
-                 (retract false) (guard mine)))
+                 (retract false) (guard mine) (holds)))
   (body
     (record
       (reply (fn (v (rec)) (s {tallyStText}) (a {tyS tallyArg}) (r {rq})

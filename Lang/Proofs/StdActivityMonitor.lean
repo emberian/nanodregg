@@ -364,7 +364,7 @@ every edit at `ℓ` of a run that returned is a step of the log row's machine (`
 old row the kernel found at its key, under the run's request and the state before the run. Every
 method of such a package, generated or written by hand, is covered: the premises are on the
 package's guard, not on the method. -/
-theorem activity_monitor_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
+theorem activity_monitor_safe [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
     {p : Package} {fs : List (Label × Term)} {ℓ gl : Label} {d : RelDecl} {T : Ty}
@@ -410,7 +410,7 @@ theorem activity_monitor_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : R
 /-- **The monitor on the deployed run**: `activity_monitor_safe` for `Lang.program`'s `run`, the run
 the kernel's history records (`ObjectStep.invoke`), at a package with no imports and no holes, where
 the live setup is the closed one (`runMeasuredLive_leaf_closed`). -/
-theorem activity_program_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
+theorem activity_program_safe [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     {p : Package} {fs : List (Label × Term)} {ℓ gl : Label} {d : RelDecl} {T : Ty}

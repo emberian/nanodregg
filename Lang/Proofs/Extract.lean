@@ -360,7 +360,7 @@ are what `stateSlots` writes of `ds` there, and under a codec that reads its own
 BACK, at that row, to `ds` (`readState_go_stateSlots`; every digest of the result is accepted:
 `runSetup_accepted_of`, Lang.Proofs.Provenance), so the next run of the object reads the state this
 one wrote. -/
-theorem runMeasured_means {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasured_means [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}

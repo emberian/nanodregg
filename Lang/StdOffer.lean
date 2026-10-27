@@ -121,7 +121,7 @@ def offerJoint (theta roles : List Label) (V : Ty) : Term :=
 def offerKey : List (Label × Ty) := [("n", .nat)]
 
 def offerDecl (theta roles : List Label) (limit : Nat) : RelDecl :=
-  ⟨offerKey, offerValTy theta roles, limit, none, 0, true, some "offer_guard"⟩
+  ⟨offerKey, offerValTy theta roles, limit, none, 0, true, some "offer_guard", none⟩
 
 def offerSessionDecl (theta : List Label) (limit : Nat) : RelDecl :=
   activityLog [offerSettlePlan theta] limit "session_waiting"

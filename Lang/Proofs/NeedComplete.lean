@@ -156,7 +156,7 @@ variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option
 /-- **The required count exists for every admitted invoke** (cv 01a14aba-1281): `requiredOf` never
 refuses `required: fuel` or `required: extraction` on an invoke `runMeasured` admits; it counts,
 and the count is below the ticks charged. -/
-theorem requiredOf_total {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+theorem requiredOf_total [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
     (hm : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k)) :

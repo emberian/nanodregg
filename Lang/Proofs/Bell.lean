@@ -60,7 +60,7 @@ variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option
 /-- **The receiver is the Bell's monitor** (`activity_program_safe` at the Bell): every `rings`
 edit of a returning run of any method of the Bell, through `Lang.program`'s `run`, is a step of
 the log row's machine over the old row the kernel found at its key. -/
-theorem bell_monitored {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D}
+theorem bell_monitored [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D}
     {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D}
     {budget : Nat} {s : Kernel.Slots} {calls : List (Kernel.Receive.Body D)}
     {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat} {p : Package}
@@ -250,7 +250,7 @@ none`, no call; `to = some {cand, method, target, via}`, exactly one `invoke tar
 100000 (some via)` (the target and the grant as the digests `digestOf` reads) whose `args` are the
 bytes of `proposalData cand via y`. The answer written and forwarded is the argument's `text`, not
 the ring's. -/
-theorem answer_run {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D}
+theorem answer_run [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D}
     {pkg : D} {state : Kernel.Slots} {m : Nat} {args : ByteArray} {r : Kernel.Receive.Req D}
     {budget : Nat} {s : Kernel.Slots} {calls : List (Kernel.Receive.Body D)}
     {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat} {p : Package} {sg : Sig}

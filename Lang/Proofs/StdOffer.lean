@@ -1138,7 +1138,7 @@ retract keyed by the peer's point (`.var 2`) instead of its own (`.var 4`): the 
 then the peer key's bytes. P5 (the retract became an upsert) is refused earlier, by `offer_guard`'s
 `final`, so on P5 the run does not return and this theorem is not its tooth. PA (the name check
 skipped): the run returns at LF8 with `k` Y's offer 0 where the deal names offer 1. -/
-theorem take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
+theorem take_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}

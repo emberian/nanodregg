@@ -701,7 +701,7 @@ theorem requiredOf_spec {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView
 
 /-- `runMeasured`'s front half is `runSetup`, and its tick count is the run of that term in that
 environment plus the extraction at that type. -/
-theorem runMeasured_setup {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
+theorem runMeasured_setup [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
     (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k)) :
@@ -730,7 +730,7 @@ is that term's machine run in that environment plus the extraction at that type,
 run left. The denominator `requiredOf` is the size of the derivation of the very value the
 machine computed (`derives_unique`), plus the size of what extraction must force at that type
 (`forces_unique`). -/
-theorem required_counts_the_run {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+theorem required_counts_the_run [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget N : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
     (hm : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k))
@@ -754,7 +754,7 @@ charged exceed what `requiredOf` counts. The method's run pays more ticks than i
 derivation has rule instances (`derives_lt_used`), and extraction pays at least the size of every
 suspension it must force (`forces_le`). So `ticks-per-required-step` cannot go below 1 for any
 admitted invoke, and a counter that over-counted the requirement would contradict it. -/
-theorem required_lt_ticks {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+theorem required_lt_ticks [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget N : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
     (hm : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, ticks, k))

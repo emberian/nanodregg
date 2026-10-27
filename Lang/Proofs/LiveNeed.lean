@@ -15,7 +15,7 @@ section
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : ReceiptCheck}
 
-theorem runMeasuredLive_setup {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D}
+theorem runMeasuredLive_setup [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D}
     {state : Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
     {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
     (h : runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget =
@@ -50,7 +50,7 @@ theorem requiredOfLive_spec {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : Row
 
 /-- Preparation is counted once on both sides; the remaining denominator is
 the derivation of the very result returned by this live machine invocation. -/
-theorem requiredLive_lt_ticks {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D}
+theorem requiredLive_lt_ticks [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D}
     {state : Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget N : Nat}
     {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
     (hm : runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget =
@@ -69,7 +69,7 @@ theorem requiredLive_lt_ticks {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : R
 
 /-- Every successful deployed invocation has a complete required count within
 its supplied budget; contextual preparation cannot make the denominator disappear. -/
-theorem requiredOfLive_total {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D}
+theorem requiredOfLive_total [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D}
     {state : Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
     {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {ticks k : Nat}
     (hm : runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget =

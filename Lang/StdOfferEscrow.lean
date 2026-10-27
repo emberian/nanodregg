@@ -37,17 +37,15 @@ namespace Nanodregg.Lang.Std
 
 /-! ## Types -/
 
-/-- An offer's leg: the amount of one denomination it holds. -/
-def escrowLegTy : Ty := .record [("amount", .nat), ("asset", .digest)]
-
 /-- An escrow offer row's value: its leg (`give`), where the counterparty's leg is paid, its role and
 box, and the leg it asks for in return (`want`, LANG-82: the least amount of one denomination). -/
 def escrowValTy (theta roles : List Label) : Ty :=
-  .record [("give", escrowLegTy), ("payTo", .digest), ("role", offerRoleTy roles), ("terms", offerTermsTy theta),
-    ("want", escrowLegTy)]
+  .record [("give", legTy), ("payTo", .digest), ("role", offerRoleTy roles), ("terms", offerTermsTy theta),
+    ("want", legTy)]
 
 def escrowDecl (theta roles : List Label) (limit : Nat) : RelDecl :=
-  ⟨offerKey, escrowValTy theta roles, limit, none, 0, true, some "offer_guard"⟩
+  { key := offerKey, val := escrowValTy theta roles, limit, sum := none, cap := 0, retract := true,
+    guard := some "offer_guard", holds := some "give" }
 
 def escrowRels (theta roles : List Label) (offerLimit sessionLimit : Nat) : List (Label × RelDecl) :=
   [("offer", escrowDecl theta roles offerLimit), ("session", offerSessionDecl theta sessionLimit)]
@@ -56,8 +54,8 @@ def escrowRels (theta roles : List Label) (offerLimit sessionLimit : Nat) : List
 def escrowCallTy : Ty := callOf ["transfer"]
 
 def escrowPostArg (theta roles : List Label) : Ty :=
-  .record [("give", escrowLegTy), ("grant", .digest), ("n", .nat), ("payTo", .digest),
-    ("role", offerRoleTy roles), ("terms", offerTermsTy theta), ("want", escrowLegTy)]
+  .record [("give", legTy), ("grant", .digest), ("n", .nat), ("payTo", .digest),
+    ("role", offerRoleTy roles), ("terms", offerTermsTy theta), ("want", legTy)]
 
 /-- `withdraw` reads its own offer point. -/
 def escrowWithdrawRows (rels : List (Label × RelDecl)) : Ty := rowsTy rels offerRead []
@@ -76,7 +74,7 @@ def escrowTransfer (amount src dst via : Term) : Term :=
 
 def escrowNoVia : Term := .inj (optTy .digest) "none" (.record [])
 
-/-- Pay leg `give` (a value of `escrowLegTy`) from the object `self` to `to`. -/
+/-- Pay leg `give` (a value of `legTy`) from the object `self` to `to`. -/
 def escrowPay (self to give : Term) : Term :=
   escrowTransfer (.get give "amount") (escrowAcct self (.get give "asset")) (escrowAcct to (.get give "asset"))
     escrowNoVia
@@ -98,7 +96,7 @@ def escrowPostBody (rels : List (Label × RelDecl)) (od : RelDecl) : Term :=
       (.record [("give", a "give"), ("payTo", a "payTo"), ("role", a "role"), ("terms", a "terms"),
         ("want", a "want")])]
 
-/-- An escrow leg as data: `amount` of the denomination `asset` (a value of `escrowLegTy`). -/
+/-- An escrow leg as data: `amount` of the denomination `asset` (a value of `legTy`). -/
 def escrowLegD (amount : Nat) (asset : ByteArray) : Data :=
   .record [("amount", .nat amount), ("asset", .digest asset)]
 

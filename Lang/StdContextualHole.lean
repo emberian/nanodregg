@@ -8,10 +8,10 @@ namespace Nanodregg.Lang.Std
 open HoleSyntax
 
 def codeSelection : RelDecl :=
-  ⟨[("hole", .nat)], .nat, 16, none, 0, true, some "codeChosen"⟩
+  ⟨[("hole", .nat)], .nat, 16, none, 0, true, some "codeChosen", none⟩
 
 def codeOutput (V : Ty) : RelDecl :=
-  ⟨[("hole", .nat)], V, 16, none, 0, true, none⟩
+  ⟨[("hole", .nat)], V, 16, none, 0, true, none, none⟩
 
 /-- Guard every selection row write, including writes returned by a different
 method: only the chooser before acceptance/deadline can choose an existing code. -/

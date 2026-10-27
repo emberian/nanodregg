@@ -455,7 +455,7 @@ theorem resolveMethod_slots {p : Package} {method : Nat} {x : Label × Sig}
 /-- The calls `runMeasured` returns are `callsOf` of the calls half of the result extracted at
 the method's own result type, read against the method's own slots: the package the run loaded, the
 method it resolved, its slots. -/
-theorem runMeasuredWith_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasuredWith_calls [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
     {charge : Loaded → Nat}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
@@ -484,7 +484,7 @@ theorem runMeasuredWith_calls {bytesOf : D → ByteArray} {digestOf : ByteArray 
 
 /-- **A method makes at most its declared calls**: the calls of a run are no more than the call
 slots of the method resolved in the package the run loaded. -/
-theorem runMeasuredWith_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasuredWith_calls_slots [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
     {charge : Loaded → Nat}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
@@ -506,7 +506,7 @@ theorem runMeasuredWith_calls_slots {bytesOf : D → ByteArray} {digestOf : Byte
   obtain ⟨cs, rfl, hcs⟩ := extract_result_calls he
   exact ⟨hcs ▸ callsOf_length hc, callsOf_callable hc⟩
 
-theorem runMeasured_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasured_calls [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
@@ -522,7 +522,7 @@ theorem runMeasured_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → 
 
 /-- **A method makes at most its declared calls**: the calls of a run are no more than the call
 slots of the method resolved in the package the run loaded. -/
-theorem runMeasured_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasured_calls_slots [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
@@ -534,7 +534,7 @@ theorem runMeasured_calls_slots {bytesOf : D → ByteArray} {digestOf : ByteArra
   exact runMeasuredWith_calls_slots (loader := load digestOf) (charge := fun _ => 0) h hl hp hx
 
 /-- A method with no call slots makes no calls (Hosting's `method_no_calls` is such a type). -/
-theorem runMeasured_no_slots {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasured_no_slots [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
@@ -547,7 +547,7 @@ theorem runMeasured_no_slots {bytesOf : D → ByteArray} {digestOf : ByteArray �
 
 /-- Extraction facts independent of how the invocation's library was prepared.
 The setup may depend on this invocation's authenticated row view and self. -/
-theorem runMeasuredWith_extract {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasuredWith_extract [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {setup : Pinned D → RowView D → D → Slots → Nat → ByteArray → Req D → Except (Refusal D) RunSetup}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
@@ -570,7 +570,7 @@ theorem runMeasuredWith_extract {bytesOf : D → ByteArray} {digestOf : ByteArra
 /-- **The calls `Lang.program` hands KERNEL**: at most `callsMax` of them, each of a kind an object
 may exercise. So KERNEL's `tooManyCalls` and `notCallable` assertions never fire on a Lang method:
 they stay as KERNEL's own checks where calls enter, since `Program` is abstract to it (law 4). -/
-theorem run_calls {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem run_calls [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t : Nat}

@@ -212,7 +212,7 @@ def relSx (r : Label × RelDecl) : Option SExp := do
     list [atom "val", ← tySx d.val], list [atom "limit", atom (Nat.repr d.limit)],
     list (atom "sum" :: (← optLabelSx d.sum)), list [atom "cap", atom (Nat.repr d.cap)],
     list [atom "retract", atom (if d.retract then "true" else "false")],
-    list (atom "guard" :: (← optLabelSx d.guard))])
+    list (atom "guard" :: (← optLabelSx d.guard)), list (atom "holds" :: (← optLabelSx d.holds))])
 
 /-- A package's doc section (LANG-60): `(doc)` for the empty doc, `(doc "text")` otherwise; no text for
 a doc that is not `Bounds.docOk`. -/

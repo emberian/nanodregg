@@ -504,6 +504,7 @@ def runMeasuredWith
         checkMoves S.effect calls
         let es ← editsOf S.rels r.self e
         guardEdits bytesOf digestOf S rv pkg r es
+        checkLegs digestOf rv r.self calls es
         pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
       | none => throw (.program s!"{S.label}: state bytes")
     | .ok _ => throw (.program s!"{S.label}: state")

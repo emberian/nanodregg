@@ -25,7 +25,7 @@ theorem checkMoves_le {D : Type} {e : Effect} {calls : List (Body D)} (h : check
   · cases h
 
 /-- **A returned run's calls are within its setup's grade.** -/
-theorem runMeasuredWith_moves_le {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasuredWith_moves_le {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {setup : Pinned D → RowView D → D → Kernel.Slots → Nat → ByteArray → Req D → Except (Refusal D) RunSetup}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Kernel.Slots} {calls : List (Body D)}
@@ -52,7 +52,7 @@ theorem runMeasuredWith_moves_le {D : Type} {bytesOf : D → ByteArray} {digestO
 /-- **A returned run moves at most the grade its package declares for the method** (LANG-89's
 theorem): for the deployed setup, the resolved method `ℓ` of the loaded package `p` has
 `movesOf calls ≤ (p.effectOf ℓ).moves`. -/
-theorem runMeasured_moves_le {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasured_moves_le {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {rc : ReceiptCheck} {loader : Pinned D → Nat → ByteArray → Loaded → Except (Refusal D) (Loaded × Nat)}
     {charge : Loaded → Nat} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget : Nat} {s : Kernel.Slots} {calls : List (Body D)}

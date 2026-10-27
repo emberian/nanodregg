@@ -87,7 +87,7 @@ theorem apply4_method_iff {lib : List Term} {g : Nat} {f : Nat → Nat} {pb : Te
     fun e => e ▸ apply4_method hlib hb hf hn h⟩
 
 /-- `runMeasured`'s do-block inverted, with the calls conjunct (`runMeasuredWith_ok` with `callsOf`). -/
-theorem runMeasured_inv {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasured_inv {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots}
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots}
     {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {t n : Nat}

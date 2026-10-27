@@ -7302,6 +7302,48 @@ and the metatheorems for one number, and put the one quantitative thing the lang
 place that cannot carry quantities. The design keeps the row where it is and adds the grade where a
 quantity can live, and says in §10 what would make the other choice right.
 
+Landed 6e177d55 (package wire 8), 10-27; the Spec lazy-escrow follow-up ca70d368.
+
+## LANG-90 A relation may HOLD a leg: `(holds f)` makes each row's leg value the object holds, and a run that writes or retracts such a row must move that value in or out (2026-10-27; RELAND-TYPES; design `redregg/work/promo/DESIGN-TYPES.md` §3, build spec §3.1)
+
+**Decision.** `RelDecl.holds : Option Label` names a field of the relation's value that is a LEG (`legTy` =
+`(rec (amount nat) (asset digest))`, moved here from the escrow, whose `escrowLegTy` is deleted). Install refuses
+`badRel` when the field is not a `legTy` field of the value record (`RelDecl.holdsOk`). At run, right after
+`guardEdits`, `checkLegs` reads every edit of a holding relation: the new value's leg (insert, upsert) must be moved
+INTO the object's account of its asset, the old row's leg (upsert, retract; the old row by `guardOld`, so the row must
+be pinned, as a retract already needs) must be moved OUT of it. The sums are per asset over the whole run, one
+inequality per direction: `needIn a ≤ movedIn self a calls` (transfers to `.of self a` plus credits to it) and
+`needOut a ≤ movedOut self a calls` (transfers from `.of self a`); else `program "legUnfunded REL"` /
+`program "legStranded REL"`, REL the first relation whose asset is short, in edit order. Theorem:
+`Lang.Proofs.Holds.runMeasuredWith_legs` (a returned run's row acts are its edits, and every asset is backed both
+ways). The escrow's `offer` declares `holds give`. The wire: `relTree` gains an eighth child (`optLabelLeaf`), the
+package wire moves 8 → 9; the core text gains a mandatory eighth relation section `(holds [l])`; the surface
+`(rel … [(guard g)] [(holds f)])`.
+
+**Why sums and two inequalities, not one-to-one or net.** One-to-one matching (each row to one call) refuses two rows
+of 3 under one transfer of 6, which is ordinary batching (HV4). Net (`needIn − needOut ≤ movedIn − movedOut`) admits a
+retract that pays nothing when nothing else moves: the value stays in the object with no row naming it, exactly the
+stranding (P8d/P8e) this exists to refuse. Under one effect per cell per Turn a run moves one asset of one account in one
+direction only, so an upsert replacing a held leg with one of the same asset is refused `legStranded`; a held leg is
+replaced by a retract and an insert in two runs, each paid. Said in the docstring.
+
+**What it costs.** The run now compares assets, so `runMeasuredWith` and every theorem over a run take
+`[DecidableEq D]` (every deployed `D` has it; ~60 theorem binders gained it, a few `omit [DecidableEq D]` lines
+dropped it). Five statements that spell the run's tail (Provenance's `…_past_extraction` family) gain the
+`checkLegs` step. Every package re-ids (version 9); `world/doc/Section` and `world/resident/Bell` re-emitted,
+CappedTally's core text gains `(holds)`; codec vectors re-drawn (`relAll` now pins a set `holds`). Every Store
+re-geneses; none is deployed.
+
+**Critique.** `holds` names ONE leg field; a row holding two assets needs two relations, or a later
+`holds : List Label` (the sums generalise unchanged). `credit` into the object counts as funding, though no deployed
+package credits itself. The check is per RUN: a leg paid out later by a method that moves the object's value without
+retracting the row (an object's own `pay`) is caught only by the history theorem — the legs a holding relation holds
+never exceed the object's balance of their asset, from `admit_value` plus this per-run check — which is the next
+landing, not this one; until then the grade (LANG-89) is the only bound on such a method. The journey rows (§HV, a
+Vault written in the surface) show each direction refused by name with nothing moved; no plant was run in this
+landing (the refusal names occur only in `checkLegs`).
+
+
 ## LANG-83 The document: a section is a `Std.hole` at `bytes` whose candidates are members' posts, justified by their grants, selected by an editor, withdrawn by name on revocation; its refusals name the justification that failed (2026-10-26; FABLE-CTX; design `redregg/work/promo/DESIGN-CTX.md` §2.3, §4, S0 + S1; method R-0069)
 
 **Ember's ask.** "Elaborating the contextual theory thoroughly into the most powerful possible instantiation of itself seems reasonable." The design memo answers it (what the theory is: justified instantiation of contextual types inside a replicated state machine; the SLOT as the one object the ROM hole, the activity's waiting row, the offer, the law list and the package link all inhabit; the top clause CONTEXTUAL INTEGRITY ∧ REPAIR as a clause of INTEGRITY with its floor). The first two steps of its sequence land here, because together they make the top clause inhabited by a run a member can see, and neither needs the kernel.

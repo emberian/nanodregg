@@ -47,7 +47,7 @@ theorem loadLive_reads {rv : RowView D} {self : D} {look : Pinned D} {fuel : Nat
     · cases h
     · exact ⟨_, ‹_›⟩
 
-omit [Ord D] [DecidableEq D] in
+omit [Ord D] in
 /-- **A returned run read its package through its look**: the deployed program's run of `pkg` (an
 id that is a digest) returns only after `readPackage look pkg` succeeds (the live loader's first read). -/
 theorem program_run_reads {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}

@@ -1161,7 +1161,7 @@ then the edits read into row acts (`editsOf`), then each edit judged by its rela
 digest of the calls is one the boundary or the World accepted (`runSetup_accepted`), and a calls
 row of its type is refused only for a digest `digestOf` refuses (`callsOf_live`). Tooth: journey
 LD5, where `hdig` fails for one member and `callsOf` refuses it. -/
-private theorem runMeasured_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+private theorem runMeasured_past_extraction_of [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D}
     {budget : Nat} {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
     (hS : runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S)
@@ -1175,6 +1175,7 @@ private theorem runMeasured_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : 
             checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits bytesOf digestOf S rv pkg r es
+            checkLegs digestOf rv r.self calls es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") := by
   have hacc := runSetup_accepted_of hdig hS hr hx
@@ -1212,7 +1213,7 @@ private theorem runMeasured_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : 
               simp only [bind, Except.bind, hS', Nat.not_lt_zero, if_false, Nat.sub_zero, hr, hx]
               cases stateSlots (recordRow p.state) ds 0 <;>
                 simp [hc, pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
-private theorem runMeasuredLive_past_extraction_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
+private theorem runMeasuredLive_past_extraction_of [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (bytesOf x)).isSome = true) {look : Pinned D}
     {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D}
     {budget : Nat} {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
     (hS : runSetupLive bytesOf digestOf rc look rv pkg state method args r = .ok S)
@@ -1226,6 +1227,7 @@ private theorem runMeasuredLive_past_extraction_of {rc : Lang.ReceiptCheck} (hdi
             checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits bytesOf digestOf S rv pkg r es
+            checkLegs digestOf rv r.self calls es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget + S.preparation - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") := by
   have hacc := runSetupLive_accepted_of hdig hS hr hx
@@ -1285,7 +1287,7 @@ lawful `Ctx`, past extraction the deployed run reads its calls, and what it does
 state's slots (refused only for state without bytes), `editsOf`, then `guardEdits`. The law can fail
 (`sim_drop_not_lawful`); that the law reaches the decoder the program actually runs with is
 `program_run_past_extraction`'s second premise. -/
-theorem runMeasured_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful) {look : Pinned D}
+theorem runMeasured_past_extraction {rc : Lang.ReceiptCheck} {D : Type} [DecidableEq D] {X : Ctx D} (hX : X.Lawful) {look : Pinned D}
     {rv : RowView D} {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D}
     {budget : Nat} {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
     (hS : runSetup X.env.bytes X.digestOf rc look rv pkg state method args r = .ok S)
@@ -1299,6 +1301,7 @@ theorem runMeasured_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
             checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
+            checkLegs X.digestOf rv r.self calls es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") :=
   runMeasured_past_extraction_of (fun x => by simp [hX.digestOf_bytes x]) hS hr hx
@@ -1311,7 +1314,7 @@ next is exactly the state's slots (refused only for state without bytes), `edits
 premise is shown to bite by a run: journey LD5 (PLANT unlawful-codec), a program whose decoder refuses
 a member's id inside a lawful Sim `Ctx`, where `callsOf` refuses by name. The deployed `Ctx` meets both
 (`Receive.deployed_ctx_lawful`, `deployed_program_own_codec`). -/
-theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful)
+theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} [DecidableEq D] {X : Ctx D} (hX : X.Lawful)
     (hp : X.program = Lang.program X.env.bytes X.digestOf rc) {look : Pinned D} {rv : RowView D}
     {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
     {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
@@ -1326,6 +1329,7 @@ theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} {X 
             checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
+            checkLegs X.digestOf rv r.self calls es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget + S.preparation - left)
         | none => .error (.program s!"{S.label}: state bytes") := by
   obtain ⟨c, e, ds, calls, hd, hc, hm⟩ := runMeasuredLive_past_extraction_of (fun x => by simp [hX.digestOf_bytes x]) hS hr hx
@@ -1342,10 +1346,12 @@ theorem program_run_past_extraction_live {rc : Lang.ReceiptCheck} {D : Type} {X 
     | ok _ =>
       cases editsOf S.rels r.self e with
       | error _ => rfl
-      | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
+      | ok es =>
+        cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;>
+          cases hl : checkLegs X.digestOf rv r.self calls es <;> simp [hg, hl, Except.map, pure, Except.pure]
 
 /- Landed closed statement preserved through the proved deployment bridge. -/
-theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx D} (hX : X.Lawful)
+theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} [DecidableEq D] {X : Ctx D} (hX : X.Lawful)
     (hp : X.program = Lang.program X.env.bytes X.digestOf rc) {look : Pinned D} {rv : RowView D}
     {pkg : D} {state : Kernel.Slots} {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat}
     {S : RunSetup} {used left : Nat} {v : Val} {d : Data}
@@ -1360,6 +1366,7 @@ theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
             checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits X.env.bytes X.digestOf S rv pkg r es
+            checkLegs X.digestOf rv r.self calls es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left)
         | none => .error (.program s!"{S.label}: state bytes") := by
   obtain ⟨c, e, ds, calls, hd, hc, hm⟩ := runMeasured_past_extraction hX hS hr hx
@@ -1374,7 +1381,9 @@ theorem program_run_past_extraction {rc : Lang.ReceiptCheck} {D : Type} {X : Ctx
     | ok _ =>
       cases editsOf S.rels r.self e with
       | error _ => rfl
-      | ok es => cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;> simp [hg, Except.map, pure, Except.pure]
+      | ok es =>
+        cases hg : guardEdits X.env.bytes X.digestOf S rv pkg r es <;>
+          cases hl : checkLegs X.digestOf rv r.self calls es <;> simp [hg, hl, Except.map, pure, Except.pure]
 
 /-- The deployed `Ctx`'s program is the language over the deployed codec itself: the second
 premise of `program_run_past_extraction` holds there by construction. -/
@@ -1420,6 +1429,7 @@ theorem runMeasured_past_extraction_sim {look : Pinned Kernel.Sim.D} {rv : RowVi
             checkMoves S.effect calls
             let es ← editsOf S.rels r.self e
             guardEdits Kernel.Sim.dc.bytes Kernel.Sim.digestOf S rv pkg r es
+            checkLegs Kernel.Sim.digestOf rv r.self calls es
             pure (slots, calls, es.map (fun x => (x.slot, x.act)), budget - left, S.pkgs)
         | none => .error (.program s!"{S.label}: state bytes") :=
   runMeasured_past_extraction_of (fun x => by simp [Teeth.sim_digest_roundtrip]) hS hr hx

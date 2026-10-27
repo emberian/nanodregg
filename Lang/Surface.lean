@@ -33,7 +33,7 @@ namespace Nanodregg.Lang.Surface
 def grammar : String :=
   "package ::= (package decl…)\n" ++
   "decl    ::= (type N T) | (state T) | (import N \"hex\") | (layer N) | (doc \"text\")\n" ++
-  "          | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)])\n" ++
+  "          | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)] [(holds f)])\n" ++
   "          | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] [(effect (moves n))] body)\n" ++
   "          kind    ::= account | credit | grant | transfer | (invoke T)   — T the argument the invoke sends (LANG-77)\n" ++
   "          | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))\n" ++
@@ -563,11 +563,14 @@ def relDecl (c : Ctx) (p : Nat) (xs : List SExp) : P RelDecl := do
   let (retract, rest) := match rest with
     | .list _ [.atom _ "retract"] :: rest => (true, rest)
     | rest => (false, rest)
-  let guard ← match rest with
-    | [.list _ [.atom _ "guard", .atom _ g]] => pure (some g)
+  let (guard, rest) := match rest with
+    | .list _ [.atom _ "guard", .atom _ g] :: rest => (some g, rest)
+    | rest => (none, rest)
+  let holds ← match rest with
+    | [.list _ [.atom _ "holds", .atom _ f]] => pure (some f)
     | [] => pure none
     | x :: _ => throw (.badClause x.pos)
-  pure { key, val, limit, sum, cap, retract, guard }
+  pure { key, val, limit, sum, cap, retract, guard, holds }
 
 /-- A method's clauses before its body. -/
 structure MethodHead where

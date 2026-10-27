@@ -18,10 +18,10 @@ def holeCandidate (V : Ty) : Ty := .record [
   ("s0", optTy holeSupport), ("s1", optTy holeSupport), ("status", holeStatus), ("value", V)]
 
 def holeCandidates (V : Ty) : RelDecl :=
-  ⟨[("cand", .digest)], holeCandidate V, 64, none, 0, false, some "proposed"⟩
+  ⟨[("cand", .digest)], holeCandidate V, 64, none, 0, false, some "proposed", none⟩
 
 def holeFacts : RelDecl := ⟨[("cell", .digest)],
-  .record [("by", .digest), ("pin", .digest)], 64, none, 0, true, some "posted"⟩
+  .record [("by", .digest), ("pin", .digest)], 64, none, 0, true, some "posted", none⟩
 
 /-- A read of at most three fact rows: two positive supports and one blocker, each with its cell's
 liveness in the caller's pinned view (E1: `facts` is keyed by `cell : digest`, so the read is a live

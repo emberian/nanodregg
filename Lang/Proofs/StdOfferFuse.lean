@@ -325,7 +325,7 @@ q}}}}` from the caller's pins, its own pinned key `k` is the one the deal NAMES 
 `{keys, pair, theta}` (LANG-77) — and its row acts are exactly the retract of its named offer and the
 insert of its own session row. Mutations: PT4 (the call dropped) makes the calls conjunct false;
 PT3 (the fuse sends `keys` where it sends `theta`) makes `db` the bytes of another value. -/
-theorem fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
+theorem fuse_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -564,7 +564,7 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
     ⟨_, rqy, _, sy, rowsy, usedy, (Nanodregg.Lang.invokeRun_req hiry).1, hruny,
       fun e he => hcov e (by simp [Draft.append, he])⟩⟩
 
-omit [Ord D] [DecidableEq D] in
+omit [Ord D] in
 /-- One party's take, read off `take_run_sound` at `self = P`, its row acts located in the Turn. -/
 private theorem party {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl pt budget : Nat} {look : Pinned D} {rv : RowView D} {pkg : D}
@@ -596,7 +596,7 @@ private theorem party {bytesOf : D → ByteArray} {digestOf : ByteArray → Opti
   exact ⟨keys, pair, th, k, o, kq, q, kb, sb, vb, hdec, hreads, hnk, hj, hkb, hvb, ⟨τ₁, h₁, hs₁, ha₁⟩,
     ⟨τ₂, h₂, hs₂, ha₂⟩⟩
 
-omit [Ord D] [DecidableEq D] in
+omit [Ord D] in
 /-- The fuser's run, read off `fuse_run_sound` at `self = P`, its row acts located in the Turn. -/
 private theorem fuser {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {theta roles : List Label} {ol sl pt budget : Nat} {look : Pinned D} {rv : RowView D} {pkg : D}

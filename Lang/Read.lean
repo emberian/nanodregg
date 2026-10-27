@@ -30,7 +30,7 @@ def grammar : String :=
   "        | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T \"why\") | (e e…)\n" ++
   "package ::= (package (imports \"hex\"…) (doc [\"text\"]) (state T) (iface T) (methods l…) (laws l…) (rels rel…)\n" ++
   "            (body e) [(effects (l n)…)])\n" ++
-  "rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))\n"
+  "rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]) (holds [l]))\n"
 
 /-- An s-expression; every node carries the character offset where it starts. -/
 inductive SExp
@@ -333,11 +333,11 @@ def optLabel (p : Nat) : List SExp → P (Option Label)
 def rel : SExp → P (Label × RelDecl)
   | .list p [.atom _ ℓ, .list _ (.atom _ "key" :: ks), .list _ [.atom _ "val", v],
       .list _ [.atom _ "limit", .atom _ l], .list _ (.atom _ "sum" :: su), .list _ [.atom _ "cap", .atom _ c],
-      .list _ [.atom _ "retract", .atom _ r], .list _ (.atom _ "guard" :: gu)] =>
+      .list _ [.atom _ "retract", .atom _ r], .list _ (.atom _ "guard" :: gu), .list _ (.atom _ "holds" :: ho)] =>
     match l.toNat?, c.toNat?, (if r = "true" then some true else if r = "false" then some false else none) with
     | some limit, some cap, some retract => do
       pure (ℓ, { key := ← keyFields ks, val := ← ty depthMax v, limit, sum := ← optLabel p su, cap, retract,
-                 guard := ← optLabel p gu })
+                 guard := ← optLabel p gu, holds := ← optLabel p ho })
     | _, _, _ => .error (.badEntry p)
   | y => .error (.badEntry y.pos)
 

@@ -1062,7 +1062,7 @@ theorem guardOld_unpinned_witness :
 as KERNEL's own check where row edits enter, since `Program` is abstract to it, as `run_calls` is
 for `notCallable`. -/
 
-theorem runMeasuredWith_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasuredWith_rows_under {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {setup : Kernel.Receive.Pinned D → Kernel.Receive.RowView D → D → Kernel.Slots → Nat → ByteArray → Kernel.Receive.Req D → Except (Kernel.Receive.Refusal D) RunSetup}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
@@ -1079,7 +1079,7 @@ theorem runMeasuredWith_rows_under {D : Type} {bytesOf : D → ByteArray} {diges
   obtain ⟨-, -, rfl, -, -⟩ := h
   exact editsOf_under ‹editsOf _ _ _ = .ok _›
 
-theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem runMeasured_rows_under {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
@@ -1088,7 +1088,7 @@ theorem runMeasured_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf 
   exact runMeasuredWith_rows_under (setup := runSetup bytesOf digestOf rc) h
 
 /-- **The rows `Lang.program` hands KERNEL**: every row act is under the run's own object. -/
-theorem run_rows_under {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
+theorem run_rows_under {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Kernel.Receive.Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t : Nat}
@@ -1225,7 +1225,7 @@ theorem guardEdits_ok {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArr
 returned had its setup, a machine run within the budget left after preparation, an extraction at the
 result type, its edits read from the edits row, and `guardEdits` accepting them; its rows are those
 edits' slots and acts. -/
-theorem runMeasuredWith_ok {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem runMeasuredWith_ok {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {setup : Kernel.Receive.Pinned D → Kernel.Receive.RowView D → D → Kernel.Slots → Nat → ByteArray → Kernel.Receive.Req D → Except (Kernel.Receive.Refusal D) RunSetup}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}
@@ -1261,7 +1261,7 @@ method run returns, its rows are the slots and acts of the edits it returned, ea
 was found, and every guard the edit's relation declares accepted the edit over that old row, the
 state before the run and the run's request. For every setup (`runMeasured`, `runMeasuredLive`, and
 so `Lang.program`'s `run`). -/
-theorem run_edits_guarded {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
+theorem run_edits_guarded {D : Type} [DecidableEq D] {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D}
     {setup : Kernel.Receive.Pinned D → Kernel.Receive.RowView D → D → Kernel.Slots → Nat → ByteArray → Kernel.Receive.Req D → Except (Kernel.Receive.Refusal D) RunSetup}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {method : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget : Nat} {s : Kernel.Slots}

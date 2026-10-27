@@ -1228,21 +1228,22 @@ private def relWf (r : Label × RelDecl) : Bool := r.2.val.wf && r.2.key.all (fu
 
 theorem relSx_ok {r : Label × RelDecl} {x : SExp} (h : relSx r = some x) : Ok x := by
   simp only [relSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
-  obtain ⟨xl, hl, xk, hk, xv, hv, xs, hsu, xg, hg, rfl⟩ := h
+  obtain ⟨xl, hl, xk, hk, xv, hv, xs, hsu, xg, hg, xh, hh, rfl⟩ := h
   exact .list (.cons (label_ok hl) (.cons (.list (.cons (kw_ok _) (keyFields_ok _ hk)))
     (.cons (.list (.cons (kw_ok _) (.cons (tySx_ok _ hv) .nil)))
     (.cons (.list (.cons (kw_ok _) (.cons (repr_ok _) .nil)))
     (.cons (.list (.cons (kw_ok _) (optLabelSx_ok _ hsu)))
     (.cons (.list (.cons (kw_ok _) (.cons (repr_ok _) .nil)))
     (.cons (.list (.cons (kw_ok _) (.cons (by split <;> exact kw_ok _) .nil)))
-    (.cons (.list (.cons (kw_ok _) (optLabelSx_ok _ hg))) .nil))))))))
+    (.cons (.list (.cons (kw_ok _) (optLabelSx_ok _ hg)))
+    (.cons (.list (.cons (kw_ok _) (optLabelSx_ok _ hh))) .nil)))))))))
 
 theorem rel_relSx {r : Label × RelDecl} {x y : SExp} (h : relSx r = some x) (hs : Same x y)
     (hn : need x ≤ depthMax) (hw : relWf r = true) : Read.rel y = .ok r := by
-  obtain ⟨ℓ, ⟨key, val, limit, sum, cap, retract, guard⟩⟩ := r
+  obtain ⟨ℓ, ⟨key, val, limit, sum, cap, retract, guard, holds⟩⟩ := r
   simp only [relWf, Bool.and_eq_true] at hw
   simp only [relSx, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
-  obtain ⟨xl, hl, xk, hk, xv, hv, xs, hsu, xg, hg, rfl⟩ := h
+  obtain ⟨xl, hl, xk, hk, xv, hv, xs, hsu, xg, hg, xh, hh, rfl⟩ := h
   obtain ⟨rfl, -⟩ := label_some hl
   obtain ⟨q, z, rfl, g⟩ := same_list hs
   obtain ⟨y0, z, rfl, h0, g⟩ := sameL_cons g
@@ -1253,6 +1254,7 @@ theorem rel_relSx {r : Label × RelDecl} {x y : SExp} (h : relSx r = some x) (hs
   obtain ⟨y5, z, rfl, h5, g⟩ := sameL_cons g
   obtain ⟨y6, z, rfl, h6, g⟩ := sameL_cons g
   obtain ⟨y7, z, rfl, h7, g⟩ := sameL_cons g
+  obtain ⟨y8, z, rfl, h8, g⟩ := sameL_cons g
   cases sameL_nil g
   obtain ⟨r0, rfl⟩ := same_atom h0
   -- key
@@ -1293,14 +1295,19 @@ theorem rel_relSx {r : Label × RelDecl} {x y : SExp} (h : relSx r = some x) (hs
   obtain ⟨q7, z7, rfl, g7⟩ := same_list h7
   obtain ⟨w7, z7, rfl, k7, t7⟩ := sameL_cons g7
   obtain ⟨r7, rfl⟩ := same_atom k7
+  -- holds
+  obtain ⟨q8, z8, rfl, g8⟩ := same_list h8
+  obtain ⟨w8, z8, rfl, k8, t8⟩ := sameL_cons g8
+  obtain ⟨r8, rfl⟩ := same_atom k8
   simp only [need, needs, list, atom] at hn
   have eK := keyFields_read key hk t1 (by omega) hw.2
   have eV := ty_tySx val depthMax hv m2 (by omega) hw.1
   have eS := optLabel_read q sum hsu t4
   have eG := optLabel_read q guard hg t7
+  have eH := optLabel_read q holds hh t8
   cases retract <;>
   · obtain ⟨s6, rfl⟩ := same_atom m6
-    simp [Read.rel, eK, eV, eS, eG]
+    simp [Read.rel, eK, eV, eS, eG, eH]
     rfl
 
 theorem rels_ok : ∀ (rs : List (Label × RelDecl)) {xs : List SExp}, rs.mapM relSx = some xs → OkL xs

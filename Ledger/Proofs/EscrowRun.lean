@@ -225,7 +225,7 @@ def RunCalls (digestOf : ByteArray → Option D) (state : Slots) (method : Nat) 
 escrow package (the pinned package cell reads as `escrow`; the World's digest decoder reads every
 id's bytes back) is `RunCalls` of its state, method, arguments, request object, calls and written
 slots, for every value of the terms, of the rest of the request and of the rows. -/
-theorem escrow_run_calls {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x)
+theorem escrow_run_calls [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x)
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
@@ -271,7 +271,7 @@ theorem escrow_run_calls {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytes
         transferD, ofD, optSome, optNone, bind, Except.bind, pure, Except.pure, Except.map] at hc
     exact ⟨_, hsd, rfl, .inr (.inr ⟨rfl, hds ▸ hrb, _, rfl, hc.symm⟩)⟩
 
-private theorem runLive_of_program {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
+private theorem runLive_of_program [DecidableEq D] {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {used : Nat}
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
@@ -289,7 +289,7 @@ private theorem runLive_of_program {rc : Lang.ReceiptCheck} {look : Pinned D} {r
 /-- **At the kernel's call**: `invoke` runs `X.program.run` on the object's package; where that
 program is the language over the World's own codec and the `Ctx` is lawful, a successful run of the
 escrow package returns exactly the method's one transfer (`escrow_run_calls`). -/
-theorem escrow_program_calls {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful) (hp : X.program = Lang.program X.env.bytes X.digestOf rc)
+theorem escrow_program_calls [DecidableEq D] {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful) (hp : X.program = Lang.program X.env.bytes X.digestOf rc)
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {used : Nat}
@@ -463,7 +463,7 @@ variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option
 
 /-- **The receiver's runs on an escrow are a chain of its law**, step for step, each paired with the
 calls its run returned (`escrow_step_admits`; the next run reads what this one wrote, `readState_get`). -/
-theorem runs_chain (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {rc : Lang.ReceiptCheck} :
+theorem runs_chain [DecidableEq D] (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {rc : Lang.ReceiptCheck} :
     ∀ {state : Slots} {runs : List (List (Body D))},
       Runs (Lang.program bytesOf digestOf rc) pkg escrow state runs →
       ∀ {o : Data}, readState digestOf (recordRow escrow.state) state = .ok o →
@@ -489,7 +489,7 @@ theorem runs_chain (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {rc :
       · exact hp x hx
 
 /-- A sequence of runs with a first run starts from a state the escrow reads. -/
-theorem runs_start {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
+theorem runs_start [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
     {calls : List (Body D)} {rest : List (List (Body D))}
     (h : Runs (Lang.program bytesOf digestOf rc) pkg escrow state (calls :: rest)) :
     ∃ o, readState digestOf (recordRow escrow.state) state = .ok o := by
@@ -501,7 +501,7 @@ theorem runs_start {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) 
 /-- **After a payout, the receiver commits nothing more** on the escrow: a run that returned a
 payout (`isPayoutCall`) is the last step of every sequence of committed runs it starts. A
 corollary of the chain: the payout's step leaves a settled state, and `chain_stops`. -/
-theorem escrow_runs_after_payout {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
+theorem escrow_runs_after_payout [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
     {calls : List (Body D)} {rest : List (List (Body D))}
     (h : Runs (Lang.program bytesOf digestOf rc) pkg escrow state (calls :: rest))
     (hp : 0 < payoutCalls [calls]) : rest = [] := by
@@ -525,7 +525,7 @@ the receiver commits on an object whose package cell reads as `escrow` (each a s
 from any state, of any methods on any arguments, requests and budgets, at most one call the runs
 return is a payout (a transfer through no grant), under a decoder that reads every id's bytes
 back. `chain_count` over `runs_chain` (`payoutCalls_le_one`). -/
-theorem escrow_runs_one_payout {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
+theorem escrow_runs_one_payout [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf (bytesOf x) = some x) {pkg : D} {state : Slots}
     {runs : List (List (Body D))} (h : Runs (Lang.program bytesOf digestOf rc) pkg escrow state runs) :
     payoutCalls runs ≤ 1 := by
   cases runs with
@@ -538,7 +538,7 @@ theorem escrow_runs_one_payout {rc : Lang.ReceiptCheck} (hdig : ∀ x, digestOf 
 
 /-- **At the kernel's program**: the same for the runs and judges of a lawful `Ctx` whose program
 is the language over the World's own codec. -/
-theorem escrow_program_one_payout {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful) (hp : X.program = Lang.program X.env.bytes X.digestOf rc)
+theorem escrow_program_one_payout [DecidableEq D] {rc : Lang.ReceiptCheck} {X : Ctx D} (hX : X.Lawful) (hp : X.program = Lang.program X.env.bytes X.digestOf rc)
     {pkg : D} {state : Slots} {runs : List (List (Body D))} (h : Runs X.program pkg escrow state runs) :
     payoutCalls runs ≤ 1 := by
   rw [hp] at h

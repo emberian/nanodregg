@@ -245,7 +245,7 @@ theorem rel_prints {r : Label × RelDecl} {m D : Nat} (hw : Wire.relWire r = tru
     ∃ x, relSx r = some x ∧ need x ≤ D + 2 ∧ width x ≤ listMax := by
   obtain ⟨ℓ, d⟩ := r
   simp only [Wire.relWire, Bool.and_eq_true, decide_eq_true_eq] at hw
-  obtain ⟨⟨⟨⟨⟨⟨hl, hkw⟩, hv⟩, -⟩, -⟩, hsu⟩, hg⟩ := hw
+  obtain ⟨⟨⟨⟨⟨⟨⟨hl, hkw⟩, hv⟩, -⟩, -⟩, hsu⟩, hg⟩, hho⟩ := hw
   obtain ⟨D', rfl, hc⟩ := fits_node hf
   obtain ⟨D'', hD', hkc⟩ := fits_node
     (hc (.node 0 .empty (d.key.map fun f => .node 6 f.1.toUTF8 [Wire.tyTree f.2])) (by simp))
@@ -260,13 +260,14 @@ theorem rel_prints {r : Label × RelDecl} {m D : Nat} (hw : Wire.relWire r = tru
   obtain ⟨xv, hxv, hnv, hwv⟩ := tyWire_prints d.val hv (hc (Wire.tyTree d.val) (by simp))
   obtain ⟨xs, hxs, hns, hws, hls⟩ := optLabel_prints _ hsu
   obtain ⟨xg, hxg, hng, hwg, hlg⟩ := optLabel_prints _ hg
+  obtain ⟨xh, hxh, hnh, hwh, hlh⟩ := optLabel_prints _ hho
   refine ⟨list [atom ℓ, list (atom "key" :: xk), list [atom "val", xv],
     list [atom "limit", atom (Nat.repr d.limit)], list (atom "sum" :: xs),
     list [atom "cap", atom (Nat.repr d.cap)], list [atom "retract", atom (if d.retract then "true" else "false")],
-    list (atom "guard" :: xg)], ?_, ?_, ?_⟩
+    list (atom "guard" :: xg), list (atom "holds" :: xh)], ?_, ?_, ?_⟩
   · simp only [relSx]
     rw [mapM_eq_rowSx, hxk]
-    simp [label, hl, hxv, hxs, hxg]
+    simp [label, hl, hxv, hxs, hxg, hxh]
   · simp only [keyFieldsMax] at hk
     simp only [need, needs, list, atom]
     omega

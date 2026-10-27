@@ -126,7 +126,7 @@ theorem guardOld_some {digestOf : ByteArray → Option D} {rv : RowView D} {self
           exact ⟨k, a, v, n, rfl, hd⟩
         · simp [hd, hc, Except.map] at h
 
-omit [Ord D] [DecidableEq D] in
+omit [Ord D] in
 /-- **The ringer's promise of one run** (any `bytesOf`/`digestOf`, any receipt check): at a package
 the Bell's shape reads (`Lang.Bell.shapeOk`), a returning run's upsert of `rings` at `kb` answers a
 waiting row with its own capture, signed by the resident. `Lang.Bell.bell_monitored`'s proof with

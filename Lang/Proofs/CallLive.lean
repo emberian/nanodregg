@@ -657,7 +657,7 @@ in order and one to one, a sublist of the resolved method's call slot types, eac
 its slot names. So a method makes at most as many calls as it declares slots, and never two from
 one slot (the run's result is typed by `invoke_never_stuck`, the calls row conforms by
 `extract_conforms`, and `callsOf_go_kinds` reads it). Exercised with calls by journey LC0–LC4 and LC6. -/
-theorem runMeasured_kinds {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
+theorem runMeasured_kinds [DecidableEq D] {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}
@@ -702,7 +702,7 @@ theorem runMeasured_kinds {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
         exact ⟨arms, he, hmem⟩
 
 /-- A run makes at most as many calls as the resolved method declares slots. -/
-theorem runMeasured_calls_le {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
+theorem runMeasured_calls_le [DecidableEq D] {rc : Lang.ReceiptCheck} {bytesOf : D → ByteArray}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat} {args : ByteArray}
     {r : Req D} {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)}
     {t n : Nat}

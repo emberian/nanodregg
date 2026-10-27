@@ -47,7 +47,7 @@ private theorem installT_means {lib : List Term} {env : Env} {b : ByteArray} :
 
 /-- **A generator's run returns its install.** For `generatorOf b doc` read at `pkg` with no imports
 and no holes, every admitted run of method 0 returns the calls `[install b]` and no row acts. -/
-theorem generate_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem generate_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {b : ByteArray} {doc : String}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {r : Req D}
     {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
@@ -133,7 +133,7 @@ doc` read at `pkg`, every admitted run of `generate` returns `[install B]` where
 `rfl` at any concrete `A`), the parameters mean those values in the method's environment (`Params`: `req` at `var 0`, the decoded
 argument at `var 1`) and the filled package has bytes within a byte value (`bytesMax`, the honest
 limit of staging at the byte level); and no row acts. -/
-theorem generate_template_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem generate_template_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {A : Ty} {ps : List Quote.Param} {p : Package} {doc : String} {vals : List Val}
     {B : ByteArray} {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
     {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
@@ -238,7 +238,7 @@ theorem fill_boundedPackage (r : List (Label × Ty)) (f : Label) (m : Nat) :
 read at `pkg`, every admitted run of `generate` whose argument decodes to `{max = m}` returns the
 calls `[install B]` where `B` is `encodePackage (boundedPackage r f m)` — the Lean generator's
 bytes at the receipt's argument — and no row acts. -/
-theorem generate_bounded_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem generate_bounded_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {r : List (Label × Ty)} {f : Label} {m : Nat} {B : ByteArray}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
     {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}
@@ -277,7 +277,7 @@ theorem fill_ownedPackage (r : List (Label × Ty)) (i : ByteArray) :
 at `pkg`, every admitted run of `generate` by the request `rq` returns `[install B]` where `B` is
 `encodePackage (ownedPackage r (bytesOf rq.agent))`: the package names the SIGNER of the generating
 Turn, and nobody else, by id — authority by naming, with the receipt as the only input. -/
-theorem generate_owner_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem generate_owner_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {r : List (Label × Ty)} {B : ByteArray}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {args : ByteArray} {rq : Req D}
     {budget : Nat} {s : Slots} {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat}

@@ -221,7 +221,7 @@ theorem escrow_shape {theta roles : List Label} {o : Data} (h : Conforms o (escr
         ("payTo", .digest po), ("role", ro), ("terms", ot),
         ("want", .record [("amount", .nat wamt), ("asset", .digest wab)])] ∧
       Conforms ro (offerRoleTy roles) ∧ Conforms ot (offerTermsTy theta) := by
-  unfold escrowValTy escrowLegTy at h
+  unfold escrowValTy legTy at h
   cases h with
   | record hr =>
     cases hr with
@@ -438,7 +438,7 @@ private abbrev takeOkEnv (rq keys pair th k o kq q : Data) (state : Val) : Env :
 /-- The take's run, all but reading its call off the generator: the call conjunct is stated under
 the premise that the success term's `calls` field is the leg paid to the peer (each theorem below
 discharges it against `escrowTakeDone` itself). -/
-private theorem take_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+private theorem take_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -561,7 +561,7 @@ asset) (of payTo asset) amount` with no grant and no once key, where `{amount, a
 offer's leg and `payTo` the PEER's offer's, and its row acts are exactly the retract of its own offer
 and the insert of its session row. Mutation P8d (the take pays nothing: its call slot `none`) makes
 the call conjunct false: the run returns with no call. -/
-theorem escrow_take_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem escrow_take_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -675,7 +675,7 @@ declared peer read) its own pinned offer `o` and its peer's `q`, its own the one
 with `p` the peer and `db` the bytes of the VALUE `{keys, pair, theta}` (LANG-77) — and its row acts
 are exactly the retract of its own offer and the insert of its session row. Mutations: the leg not
 paid (its call slot `none`) and PT4 (the invoke dropped) each make the calls conjunct false. -/
-theorem escrow_fuse_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem escrow_fuse_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -845,7 +845,7 @@ private theorem wd_ok {rels : List (Label × RelDecl)} {od : RelDecl} {lib : Lis
   rw [hfs]; exact .record
 
 /-- The withdraw's run, all but reading its call off the generator (as `take_core`). -/
-private theorem withdraw_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+private theorem withdraw_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -977,7 +977,7 @@ private theorem key_arg_cases {theta : List Label} {sl : Nat} {ad : Data}
 
 /-- The retire's run: its one row act is the retract of a SESSION row (relation 1), never of an
 offer row, and it makes no call. -/
-private theorem retire_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+private theorem retire_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -1067,7 +1067,7 @@ RETURNED read its own pinned offer `o` (present: `offerUnpinned` and `noOffer` r
 exactly ONE call, paying `o`'s leg from the object back to `o`'s own `payTo` (`transfer (of self
 asset) (of payTo asset) amount`, no grant, no once key), and its one row act is that offer's retract.
 Mutation P8e (the withdraw pays nothing) makes the call conjunct false. -/
-theorem escrow_withdraw_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem escrow_withdraw_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -1096,9 +1096,9 @@ private theorem post_arg_cases {theta roles : List Label} {ad : Data} (h : Confo
     ∃ amt ab grant n payTo role terms want,
       ad = .record [("give", .record [("amount", .nat amt), ("asset", .digest ab)]), ("grant", .digest grant),
         ("n", .nat n), ("payTo", payTo), ("role", role), ("terms", terms), ("want", want)] ∧
-      Conforms (.record [("amount", .nat amt), ("asset", .digest ab)]) escrowLegTy ∧
+      Conforms (.record [("amount", .nat amt), ("asset", .digest ab)]) legTy ∧
       Conforms (.digest grant) .digest ∧ Conforms payTo .digest ∧ Conforms role (offerRoleTy roles) ∧
-      Conforms terms (offerTermsTy theta) ∧ Conforms want escrowLegTy := by
+      Conforms terms (offerTermsTy theta) ∧ Conforms want legTy := by
   unfold escrowPostArg at h
   cases h with
   | record hr =>
@@ -1107,13 +1107,13 @@ private theorem post_arg_cases {theta roles : List Label} {ad : Data} (h : Confo
   cases hr
   have hg := h1
   have hgr := h2
-  unfold escrowLegTy at h1
+  unfold legTy at h1
   cases h1 with | record hg' => cases hg' with | cons ha hg' => cases hg' with | cons hb hg' =>
   cases hg'; cases ha; cases hb; cases h2; cases h3
   exact ⟨_, _, _, _, _, _, _, _, rfl, hg, hgr, h4, h5, h6, h7⟩
 
 /-- The post's run, all but reading its call off the generator. -/
-private theorem post_core {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+private theorem post_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -1259,7 +1259,7 @@ leg from the agent's account into the object's through the poster's grant (`tran
 asset) (of self asset) amount (via := some grant)`, no once key), and its one row act inserts offer
 `n` with exactly the value `{give, payTo, role, terms}`. Mutation P8f (the post deposits nothing)
 makes the call conjunct false. -/
-theorem escrow_post_run_sound {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem escrow_post_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}
@@ -1299,7 +1299,7 @@ read under its peer. `fuse` retracts as a take does, with its leg's transfer bes
 inserts; `retire` retracts only a session row (LANG-80). The kernel
 then conserves the denomination over the Turn (`admit_value`). Mutations P8d (the take pays nothing)
 and P8e (the withdraw pays nothing) each make it false: a retract with no transfer. -/
-theorem escrow_retract_moves_leg {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
+theorem escrow_retract_moves_leg {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D)
     {rc : Lang.ReceiptCheck} {theta roles : List Label} {ol sl pt budget : Nat}
     {look : Kernel.Receive.Pinned D} {rv : Kernel.Receive.RowView D} {pkg : D} {state : Kernel.Slots}
     {m : Nat} {args : ByteArray} {r : Kernel.Receive.Req D} {budget' : Nat} {s : Kernel.Slots}

@@ -119,7 +119,7 @@ theorem Loaded.preparationCost_closed (L : Loaded) (hc : ∀ p ∈ L.pkgs, p.hol
   exact hz _ 0
 
 /-- Closed admission implies the same live library, with zero preparation charge. -/
-theorem loadLive_of_load {D : Type} {digestOf : ByteArray → Option D}
+theorem loadLive_of_load {D : Type} [DecidableEq D] {digestOf : ByteArray → Option D}
     (rv : RowView D) (self : D) {look : Pinned D} {fuel : Nat} {idb : ByteArray}
     {L : Loaded} {g : Nat}
     (h : load digestOf look fuel idb ⟨[], [], []⟩ = .ok (L, g)) :
@@ -130,7 +130,7 @@ theorem loadLive_of_load {D : Type} {digestOf : ByteArray → Option D}
   exact ⟨hl, Loaded.preparationCost_closed L hc⟩
 
 /-- Every successful closed setup is byte-for-byte the setup used by live deployment. -/
-theorem runSetupLive_of_runSetup {D : Type}
+theorem runSetupLive_of_runSetup {D : Type} [DecidableEq D]
     {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup}
@@ -152,7 +152,7 @@ theorem runSetupLive_of_runSetup {D : Type}
   · cases h
 
 /-- Same result, refusal, calls, edits and ticks for every budget after a closed setup. -/
-theorem runMeasuredLive_closed {D : Type}
+theorem runMeasuredLive_closed {D : Type} [DecidableEq D]
     {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup}
@@ -163,7 +163,7 @@ theorem runMeasuredLive_closed {D : Type}
     runSetupLive_of_runSetup h, h, bind, Except.bind]
 
 /-- The actual deployed Program.run preserves the entire closed result, including ticks. -/
-theorem program_run_closed {D : Type}
+theorem program_run_closed {D : Type} [DecidableEq D]
     {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}
     {look : Pinned D} {rv : RowView D} {pkg : D} {state : Slots} {method : Nat}
     {args : ByteArray} {r : Req D} {S : RunSetup}
@@ -210,7 +210,7 @@ theorem loadUsing_leaf_closed {D : Type} {bytesOf : D → ByteArray}
 
 /-- Empty-signature, no-import packages have identical setups on the live path.
 No success or closure assumption is imposed on their callers. -/
-theorem runSetupLive_leaf_closed {D : Type} {bytesOf : D → ByteArray}
+theorem runSetupLive_leaf_closed {D : Type} [DecidableEq D] {bytesOf : D → ByteArray}
     {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D} {pkg : D} {p : Package}
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p)
     (hi : p.imports = []) (hc : p.holes = [])
@@ -232,7 +232,7 @@ theorem runSetupLive_leaf_closed {D : Type} {bytesOf : D → ByteArray}
     simp only [hz]
 
 /-- The full measured result, including failures and charged ticks, is unchanged. -/
-theorem runMeasuredLive_leaf_closed {D : Type} {bytesOf : D → ByteArray}
+theorem runMeasuredLive_leaf_closed {D : Type} [DecidableEq D] {bytesOf : D → ByteArray}
     {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck} {look : Pinned D} {pkg : D} {p : Package}
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p)
     (hi : p.imports = []) (hc : p.holes = [])

@@ -77,7 +77,7 @@ theorem badRel_reads_other :
     (match Read.readPackage ((package badRel).get badRel_prints) with
      | .ok q => decide (q.rels ≠ badRel.rels)
      | .error _ => false) = true := by
-  let xs : List Read.SExp := [(.list 0 [(.atom 0 "imports")]), (.list 0 [(.atom 0 "doc")]), (.list 0 [(.atom 0 "state"), (.list 0 [(.atom 0 "rec")])]), (.list 0 [(.atom 0 "iface"), (.list 0 [(.atom 0 "rec")])]), (.list 0 [(.atom 0 "methods")]), (.list 0 [(.atom 0 "laws")]), (.list 0 [(.atom 0 "rels"), (.list 0 [(.atom 0 "r"), (.list 0 [(.atom 0 "key"), (.list 0 [(.atom 0 "k"), (.atom 0 "nat")])]), (.list 0 [(.atom 0 "val"), (.list 0 [(.atom 0 "rec"), (.list 0 [(.atom 0 "b"), (.atom 0 "nat")]), (.list 0 [(.atom 0 "a"), (.atom 0 "nat")])])]), (.list 0 [(.atom 0 "limit"), (.atom 0 "1")]), (.list 0 [(.atom 0 "sum")]), (.list 0 [(.atom 0 "cap"), (.atom 0 "0")]), (.list 0 [(.atom 0 "retract"), (.atom 0 "false")]), (.list 0 [(.atom 0 "guard")])])]), (.list 0 [(.atom 0 "body"), (.list 0 [(.atom 0 "record")])])]
+  let xs : List Read.SExp := [(.list 0 [(.atom 0 "imports")]), (.list 0 [(.atom 0 "doc")]), (.list 0 [(.atom 0 "state"), (.list 0 [(.atom 0 "rec")])]), (.list 0 [(.atom 0 "iface"), (.list 0 [(.atom 0 "rec")])]), (.list 0 [(.atom 0 "methods")]), (.list 0 [(.atom 0 "laws")]), (.list 0 [(.atom 0 "rels"), (.list 0 [(.atom 0 "r"), (.list 0 [(.atom 0 "key"), (.list 0 [(.atom 0 "k"), (.atom 0 "nat")])]), (.list 0 [(.atom 0 "val"), (.list 0 [(.atom 0 "rec"), (.list 0 [(.atom 0 "b"), (.atom 0 "nat")]), (.list 0 [(.atom 0 "a"), (.atom 0 "nat")])])]), (.list 0 [(.atom 0 "limit"), (.atom 0 "1")]), (.list 0 [(.atom 0 "sum")]), (.list 0 [(.atom 0 "cap"), (.atom 0 "0")]), (.list 0 [(.atom 0 "retract"), (.atom 0 "false")]), (.list 0 [(.atom 0 "guard")]), (.list 0 [(.atom 0 "holds")])])]), (.list 0 [(.atom 0 "body"), (.list 0 [(.atom 0 "record")])])]
   have hx : sectionsSx badRel = some xs := by rfl
   have ht : package badRel = some (String.ofList
       ('(' :: items ['\n', ' ', ' '] (atom "package" :: xs) ++ ['\n'])) := by rfl
@@ -87,7 +87,7 @@ theorem badRel_reads_other :
   rw [hs]
   simp only [Read.readPackage, hp, bind, Except.bind]
   dsimp [xs, atom] at hsame
-  iterate 130 first | cases ‹Same _ _› | cases ‹SameL _ _›
+  repeat (first | cases ‹Same _ _› | cases ‹SameL _ _›)
   simp only [Read.package, Read.packageBase, Read.depthMax, Wire.depthMax,
     List.mapM_cons, List.mapM_nil, Read.rel, Read.ty, Read.entries, Read.term,
     Read.doc, Read.labels, bind, Except.bind, pure, Except.pure]

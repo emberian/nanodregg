@@ -31,6 +31,10 @@ structure RelDecl where
   retract : Bool
   /-- an interface field judging each edit, `fn S (fn reqTy (fn editTy verdictTy))` -/
   guard : Option Label
+  /-- the field of `val` that is a LEG (`legTy`) the object holds for the row (LANG-90): a run that
+  inserts such a row must move the leg's value into the object, a run that retracts it must move it out
+  (`checkLegs`, `legUnfunded`/`legStranded`); none: the rows hold no value -/
+  holds : Option Label := none
   deriving Inhabited, DecidableEq
 
 /-- A method's GRADES (LANG-89): the quantities its row of effects is bounded by. The ROW (which call
@@ -601,6 +605,18 @@ def guardInTy (d : RelDecl) : Ty := .record [("edit", relEditTy d), ("old", optT
 /-- A guard's type: the object's state before, the request, one edit with its old row; a verdict. -/
 def guardTy (S : Ty) (d : RelDecl) : Ty := .fn S (.fn reqTy (.fn (guardInTy d) verdictTy))
 
+/-- A leg of value (LANG-90): `amount` of the denomination `asset`. What a `holds` field is. -/
+def legTy : Ty := .record [("amount", .nat), ("asset", .digest)]
+
+/-- The held field, if any, is a `legTy` field of the value record. -/
+def RelDecl.holdsOk (d : RelDecl) : Bool :=
+  match d.holds with
+  | none => true
+  | some f =>
+      match d.val with
+      | .record r => Row.find? f r == some legTy
+      | _ => false
+
 /-- The sum column is a natural field of the value record; `cap` is set exactly when it is. -/
 def RelDecl.sumOk (d : RelDecl) : Bool :=
   match d.sum with
@@ -620,7 +636,7 @@ def checkRel (S : Ty) (row : List (Label × Ty)) (r : Label × RelDecl) : Except
       (keyTy d).wf &&
       decide (d.width Bounds.digestBytesMax ≤ Kernel.Bounds.keyBytesMax) do throw (.relKey ℓ)
   unless d.val.wf && d.val.isData && Wire.tyWire d.val && decide (1 ≤ d.limit) &&
-      decide (d.limit ≤ Kernel.Bounds.rowsPerRelationMax) && d.sumOk &&
+      decide (d.limit ≤ Kernel.Bounds.rowsPerRelationMax) && d.sumOk && d.holdsOk &&
       (match d.guard with
        | none => true
        | some g => Row.find? g row == some (guardTy S d)) do throw (.badRel ℓ)
@@ -796,20 +812,20 @@ def keyFieldsOf : List Tree → Option (List (Label × Ty))
     | _, _, _ => none
   | _ => none
 
-/-- A relation: `node 0 ℓ [key val limit sum cap retract guard]` (LANG-49). -/
+/-- A relation: `node 0 ℓ [key val limit sum cap retract guard holds]` (LANG-49; `holds` LANG-90). -/
 def relTree (r : Label × RelDecl) : Tree :=
   .node 0 r.1.toUTF8
     [.node 0 .empty (r.2.key.map fun f => .node 6 f.1.toUTF8 [tyTree f.2]), tyTree r.2.val,
      .node 0 (u64Bytes r.2.limit) [], optLabelLeaf r.2.sum, .node 0 (u64Bytes r.2.cap) [],
-     .node (if r.2.retract then 1 else 0) .empty [], optLabelLeaf r.2.guard]
+     .node (if r.2.retract then 1 else 0) .empty [], optLabelLeaf r.2.guard, optLabelLeaf r.2.holds]
 
 def relOf : Tree → Option (Label × RelDecl)
-  | .node 0 p [.node 0 ek ks, v, .node 0 lim [], su, .node 0 ca [], .node rt er [], gu] =>
+  | .node 0 p [.node 0 ek ks, v, .node 0 lim [], su, .node 0 ca [], .node rt er [], gu, ho] =>
     if ek = .empty ∧ er = .empty ∧ (rt = 0 ∨ rt = 1) then
-      match labelOf p, keyFieldsOf ks, tyOf v, u64Of lim, optLabelOf su, u64Of ca, optLabelOf gu with
-      | some ℓ, some key, some val, some limit, some sum, some cap, some guard =>
-        some (ℓ, { key, val, limit, sum, cap, retract := rt = 1, guard })
-      | _, _, _, _, _, _, _ => none
+      match labelOf p, keyFieldsOf ks, tyOf v, u64Of lim, optLabelOf su, u64Of ca, optLabelOf gu, optLabelOf ho with
+      | some ℓ, some key, some val, some limit, some sum, some cap, some guard, some holds =>
+        some (ℓ, { key, val, limit, sum, cap, retract := rt = 1, guard, holds })
+      | _, _, _, _, _, _, _, _ => none
     else none
   | _ => none
 
@@ -837,7 +853,8 @@ def effectWire (e : Label × Effect) : Bool := labelOk e.1 && decide (e.2.moves 
 /-- A relation has a tree that reads back to it. -/
 def relWire (r : Label × RelDecl) : Bool :=
   labelOk r.1 && r.2.key.all (fun f => labelOk f.1 && tyWire f.2) && tyWire r.2.val &&
-    decide (r.2.limit < 2 ^ 64) && decide (r.2.cap < 2 ^ 64) && r.2.sum.all labelOk && r.2.guard.all labelOk
+    decide (r.2.limit < 2 ^ 64) && decide (r.2.cap < 2 ^ 64) && r.2.sum.all labelOk && r.2.guard.all labelOk &&
+    r.2.holds.all labelOk
 
 /-- `node 0 [imports state iface body methods laws rels doc holes effects]`; imports are `node 0 id`
 leaves under a `node 0`, methods and laws `node 1 ℓ` leaves under a `node 1`, relations `relTree`s
@@ -874,9 +891,9 @@ def packageWire (p : Package) : Bool :=
 def treeStream : Stream (Tree.Fitting nodeMax depthMax) := Stream.tree nodeMax depthMax (by decide)
 
 /-- The version byte (LANG-60): exactly `Bounds.packageWireVersion`; any other byte is refused
-`lang/package-version/8` by name, so bytes written at another version are never read as a package. -/
+`lang/package-version/9` by name, so bytes written at another version are never read as a package. -/
 def packageVersion : Stream Unit :=
-  Stream.refine "lang/package-version/8" Stream.u8
+  Stream.refine "lang/package-version/9" Stream.u8
     (fun v => if v = Bounds.packageWireVersion then some () else none) (fun _ => Bounds.packageWireVersion)
 
 /-- The one stream of a package: its version byte, then its tree. -/
@@ -889,12 +906,12 @@ def packageFit (p : Package) : Tree.Fitting nodeMax depthMax :=
   if h : (packageTree p).fits nodeMax depthMax then ⟨packageTree p, h⟩ else ⟨.node 1 .empty [], by decide⟩
 
 /-- The package codec: the version byte and the tree stream, refined by `packageOf`, refused
-`lang/package/8` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
+`lang/package/9` by name (a refine site, so `gates/codec-vectors.tsv` pins what package bytes mean: a
 new term, type or primitive tag turns a refused boundary row into a read one, and the version must
 move, and with it this label, `lang/package/N` at version N: `Lang.Proofs.Wire.packageCodec_label`
 fails the build otherwise; cv 01a14e58-1586, LANG-60). -/
 def packageCodec : Stream Package :=
-  Stream.refine "lang/package/8" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
+  Stream.refine "lang/package/9" packageStream (fun t => packageOf t.2.val) fun p => ((), packageFit p)
 
 /-- The bytes of a package; `none` when it has no tree in bounds (a label, row, index or literal
 past its bound, or nested deeper than `depthMax`). -/
@@ -904,7 +921,7 @@ def encodePackage (p : Package) : Option ByteArray :=
     else none
   else none
 
-/-- The version byte (any other refused `lang/package-version/8`), then exactly one package tree, which reads as
+/-- The version byte (any other refused `lang/package-version/9`), then exactly one package tree, which reads as
 a package. `packageCodec`'s reading, with the tree
 stream's whole-input check (trailing bytes) made before `packageOf`, as it always was: the accepted
 packages are `packageCodec.decode`'s exactly (`decodePackage_eq_codec`). -/
@@ -914,7 +931,7 @@ def decodePackage (b : ByteArray) : Except Refusal Package :=
   | .ok t =>
     match packageOf t.2.val with
     | some p => .ok p
-    | none => .error (.rejected 0 "lang/package/8")
+    | none => .error (.rejected 0 "lang/package/9")
 
 end Wire
 end Nanodregg.Lang
