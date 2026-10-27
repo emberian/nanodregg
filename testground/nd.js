@@ -33,6 +33,10 @@ export async function loadKernel(factory) {
     cold: (i) => call(K._w_cold, i),
     forge: (i, argv, seed, next) => call(K._w_forge, i, argv, seed, next),
     text: (name) => call(K._w_text, enc.encode(name)),
+    // a hosted World: follows here, the writer elsewhere
+    found: (input, i) => call(K._w_found, input, i),
+    join: (invitation, key) => call(K._w_join, invitation, key),
+    self: (i, member, grant) => call(K._w_self, i, enc.encode(member), enc.encode(grant)),
     genesis: (b) => call(K._w_genesis, b),
     host: (op, p) => call(K._w_host, op, p),
     follow: (i, op, p) => call(K._w_follow, i, op, p),
@@ -102,11 +106,19 @@ export function custody(K, seeds) {
 }
 
 // ---- one command, run as nd runs it (client/src/run.rs): follow's steps until done ----
-export function client(K, { onFrame = () => {}, beforeSubmit = null } = {}) {
+// `host` is the transport to the writer: the kernel's own writer in this tab (K.host) unless a
+// hosted World's socket is given (transport.js: the same frames to a real `host serve`)
+export function client(K, { onFrame = () => {}, beforeSubmit = null, host = null } = {}) {
   const C = codec(K.table), N = names(K.table), T = K.table;
   const ok = N.status.ok;
   const reply = (b) => ({ status: b[0], payload: b.slice(1) });
-  const sendHost = (who, op, p) => { const r = K.host(op, p); onFrame({ who, to: 'writer', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]], payload: r.slice(1), lied: K.lied ? K.lied() : false }); return r; };
+  const local = !host;
+  const toWriter = host ?? (async (op, p) => K.host(op, p));
+  const sendHost = async (who, op, p) => {
+    const r = await toWriter(op, p);
+    onFrame({ who, to: local ? 'writer' : 'host', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]], payload: r.slice(1), lied: local ? K.lied() : false });
+    return r;
+  };
   const sendFollow = (who, i, op, p) => { const r = K.follow(i, op, p); onFrame({ who, to: 'follow', op: N.opName[op], bytes: p.length, status: N.statusName[r[0]] }); return r; };
   const signResult = (cu, keyI, nextI, msg) => cat(Uint8Array.of(ok), C.write(T.signResult, { key: cu.pub(keyI), next: cu.pub(nextI), signature: cu.sign(keyI, msg) }));
 
@@ -132,7 +144,7 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null } = {}) {
         case 'precommit': st = await resume(m, st.k, cat(Uint8Array.of(ok), C.write(T.precommitResult, { next: m.custody.pub(1), pending: m.custody.pub(2) }))); break;
         case 'signNext': m.arming = true; st = await resume(m, st.k, signResult(m.custody, 1, 2, st.message)); break;
         case 'signIncoming': st = await resume(m, st.k, signResult(m.custody, 1, 2, st.message)); break;
-        case 'host': st = await resume(m, st.k, sendHost(m.name, st.op, st.payload)); break;
+        case 'host': st = await resume(m, st.k, await sendHost(m.name, st.op, st.payload)); break;
         case 'submit': {
           m.last = st.call;   // the attempt store's frozen bytes: what `cancel CALL` names
           if (beforeSubmit) await beforeSubmit(m, argv, st.call);
@@ -154,7 +166,7 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null } = {}) {
       const ended = (payload) => cat(Uint8Array.of(N.action[a]), enc.encode(payload));
       switch (a) {
         case 'submit': case 'lookup': {
-          const r = sendHost(m.name, a === 'submit' ? N.op.submit : N.op.lookup, call);
+          const r = await sendHost(m.name, a === 'submit' ? N.op.submit : N.op.lookup, call);
           if (a === 'submit') sends++;
           hostReply = r; hostSeen = statusSeen[N.statusName[r[0]]] ?? 'lost';
           last = [req(a), seenI(hostSeen)]; break;
@@ -185,12 +197,12 @@ export function client(K, { onFrame = () => {}, beforeSubmit = null } = {}) {
   // a hostile client (Protocol.Rows.Loopback.forgedCall in the kernel): the argv planned on the
   // member's World WITHOUT its follow's admission, signed with its own seed, sent once; the writer's
   // word is the outcome
-  function forge(m, argv) {
+  async function forge(m, argv) {
     const argvB = argv.map((a) => (a instanceof Uint8Array ? a : enc.encode(a)));
     const r = K.forge(m.index, C.write(T.command, { argv: argvB }, T.bounds.argvBytesMax), m.custody.seeds[0], m.custody.seeds[1]);
     if (r[0] !== ok) return { exit: 'refused', stdout: '', stderr: `refused ${dec.decode(r.slice(1))}\n` };
     m.last = r.slice(1);
-    const h = sendHost(m.name, N.op.submit, m.last);
+    const h = await sendHost(m.name, N.op.submit, m.last);
     const said = N.statusName[h[0]];
     return { exit: said === 'ok' ? 'ok' : said, stdout: '', stderr: said === 'ok' ? '' : `${said} ${dec.decode(h.slice(1))}\n`, forged: true };
   }

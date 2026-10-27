@@ -71,7 +71,7 @@ half_wasm() {
     --no-entry -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,node \
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=8388608 \
     -sERROR_ON_UNDEFINED_SYMBOLS=1 \
-    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_malloc,_free \
+    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_w_found,_w_join,_w_self,_malloc,_free \
     -sEXPORTED_RUNTIME_METHODS=HEAPU8
   for d in doc resident escrow head; do mkdir -p "$root/testground/world/$d" && cp "$root/world/$d"/* "$root/testground/world/$d/"; done
   ls -la "$root/testground/kernel.wasm"; echo "gzip: $(gzip -9 -c "$root/testground/kernel.wasm" | wc -c) bytes"

@@ -31,6 +31,10 @@ accept, refuse, plan, render and attempt decision is one of these exports' Lean:
 * `tg_forge I ARGV SEED NEXT` — a hostile client's call (`Loopback.forgedCall`): ARGV planned on
   founder `I`'s World WITHOUT its follow's admission and signed with the seed it is handed; the page
   submits it like any call. `tg_text NAME` — a row's own package text (`Protocol.slot`, …).
+* `tg_found INPUT I`, `tg_join INVITATION KEY`, `tg_self I MEMBER GRANT` — a HOSTED World (no
+  writer in the tab; the page relays each member's writer frames to a real `host serve`): a founder's
+  follow from the genesis inputs `host genesis` printed, a stranger's from an invitation accepted
+  under the sponsor key the page trusts (`Invite.accept`), and its ids once a sponsor enrolled it.
 
 It is a simulation in the README's sense (the real loop over an in-memory disk), so it is tooling:
 no deployed module imports it (closure C9), and nothing a member trusts runs here.
@@ -100,10 +104,16 @@ structure Member where
   self : Command.Self D
   follow : Command.Follow D
 
-/-- The tab's World: the writer's Store and loop state, and every founder's follow. -/
-structure Ground where
+/-- The writer in the tab: its Store and its loop's state. -/
+structure Writer where
   mem : Rows.Writer.Mem
   res : Resident (World D)
+
+/-- The tab's World: the writer, when it runs in the tab, and every member's follow. A hosted World
+(DESIGN-TESTGROUND §3.2) has no writer here: the page relays the members' writer frames to a real
+`host serve`, and only the follows run in the tab. -/
+structure Ground where
+  writer : Option Writer
   members : Array Member
   conn : Nat := 0
   /-- the genesis World, where a cold follow starts -/
@@ -145,13 +155,13 @@ def genesisOf (argv : List ByteArray) : IO ByteArray := do
         { self := { world := g.origin, member := founderId P.X g.origin i,
                     grant := founderGrantId P.X g.origin i, window := Follow.window }
           follow := { world := g } : Member }
-      ground.set (some { mem, res, members, genesis := g })
+      ground.set (some { writer := some { mem, res }, members, genesis := g })
       let lines := Cli.genesisLines g nonce fs.length authority
       return reply Protocol.Status.ok.code ("\n".intercalate lines ++ "\n").toUTF8
 
 /-- One frame through the deployed loop: a port whose queue holds the frame, served until it is
 empty (`Exit.eof`); the replies it sent. -/
-def serveOne (g : Ground) (f : Frame) : IO (Ground × Array Reply) := do
+def serveOne (g : Ground) (wr : Writer) (f : Frame) : IO (Ground × Array Reply) := do
   let P := writerOf g.lie
   let queue ← IO.mkRef #[f]
   let sent ← IO.mkRef (#[] : Array Reply)
@@ -166,9 +176,9 @@ def serveOne (g : Ground) (f : Frame) : IO (Ground × Array Reply) := do
     { recv := pop, poll := pop, unread := fun f => back.set (some f)
       send := fun r => sent.modify (·.push r), close := pure () }
   let (_, res) ← serve (Rows.Writer.machine P) ⟨fun _ ts => Record.encode P.R.dc ts, Rows.Writer.mark P⟩
-    P.R.keys.segment (Rows.Writer.checkpoint P g.mem) (Rows.Writer.cadence P)
-    (Sim.memStore g.mem.disk none) (Rows.Writer.pager P g.mem) port Rows.Writer.limits 2 g.res
-  return ({ g with res }, ← sent.get)
+    P.R.keys.segment (Rows.Writer.checkpoint P wr.mem) (Rows.Writer.cadence P)
+    (Sim.memStore wr.mem.disk none) (Rows.Writer.pager P wr.mem) port Rows.Writer.limits 2 wr.res
+  return ({ g with writer := some { wr with res } }, ← sent.get)
 
 /-- A lost reply, as the member's transport sees one: the connection closed, nothing said. -/
 def lostReply : ByteArray := reply Protocol.Status.closed.code ByteArray.empty
@@ -178,6 +188,7 @@ relay answers itself, a submit it never forwards or whose first reply it loses, 
 rewrites. -/
 def hostOf (op : UInt8) (payload : ByteArray) : IO ByteArray := do
   let some g ← ground.get | return refusedText "noWorld"
+  let some wr := g.writer | return refusedText "noWriter"
   let g := { g with conn := g.conn + 1, lied := false }
   let fault := match g.lie with | some (.relay f) => some f | _ => none
   let o := Op.all.find? (·.code = op)
@@ -186,7 +197,7 @@ def hostOf (op : UInt8) (payload : ByteArray) : IO ByteArray := do
   if let (some f, some o) := (fault, o) then
     if let some r := Protocol.Rows.Loopback.cancelLie (D := D) f o then return ← said g r true
     if o = .submit && !Protocol.Rows.Loopback.forwards f then return ← said g lostReply true
-  let (g, rs) ← serveOne g ⟨UInt32.ofNat g.conn, op, payload⟩
+  let (g, rs) ← serveOne g wr ⟨UInt32.ofNat g.conn, op, payload⟩
   let r := match rs[0]? with
     | some r => reply r.status r.payload
     | none => refusedText "noReply"
@@ -355,5 +366,62 @@ def texts : List (String × String) :=
   match texts.lookup ((String.fromUTF8? name).getD "") with
   | some t => reply Protocol.Status.ok.code t.toUTF8
   | none => refusedText "noText"
+
+/-! ## A hosted World: the follows in the tab, the writer elsewhere -/
+
+/-- A member of a hosted World whose follow starts at `w` (no writer in the tab); `g` the tab's
+ground when it is already this World's and holds no writer, else a new one. Answers its index. -/
+def addMember (self : Command.Self D) (w : World D) : IO Nat := do
+  let m : Member := { self, follow := { world := w } }
+  match ← ground.get with
+  | some g =>
+    if g.writer.isNone && g.genesis.origin = w.origin then
+      ground.set (some { g with members := g.members.push m }); return g.members.size
+    else ground.set (some { writer := none, members := #[m], genesis := w }); return 0
+  | none => ground.set (some { writer := none, members := #[m], genesis := w }); return 0
+
+def hexOf (d : D) : String := Text.toHex (P.X.env.bytes d)
+
+/-- A founder of a hosted World: its follow starts at the genesis its INPUT makes (the `input HEX`
+`host genesis` prints, as a founder's own follow Store reproduces it, RUNBOOK §2b's residual), its
+ids founder `I`'s. Answers `index N`, `origin`, `member`, `grant`, or `refused NAME`. -/
+@[export tg_found] def tgFound (input : ByteArray) (i : UInt32) : IO ByteArray := do
+  let some st := Invite.startOf P.X input | return refusedText "badInput"
+  match Invite.startGenesis P.X st with
+  | .error r => return refusedText r.name
+  | .ok w =>
+    let self : Command.Self D :=
+      { world := w.origin, member := founderId P.X w.origin i.toNat,
+        grant := founderGrantId P.X w.origin i.toNat, window := Follow.window }
+    let n ← addMember self w
+    return reply Protocol.Status.ok.code
+      s!"index {n}\norigin {hexOf w.origin}\nmember {hexOf self.member}\ngrant {hexOf self.grant}\n".toUTF8
+
+/-- A stranger joins a hosted World over an invitation (`Invite.accept`, PROTOCOL-42): its follow
+starts at the World the invitation's signed inputs make, checked under the sponsor `KEY` the page
+trusts, never the writer's World handed over. Its ids are placeholders until a sponsor enrolls it
+(`tg_self`), as the rows' strangers' are. Answers `index`, `origin`, `sponsor`, or `refused NAME`. -/
+@[export tg_join] def tgJoin (invitation key : ByteArray) : IO ByteArray := do
+  match Invite.accept P.X key invitation with
+  | .error r => return refusedText r.name
+  | .ok (inv, w) =>
+    let self : Command.Self D :=
+      { world := w.origin, member := P.X.env.hash "nanodregg/testground/stranger/v1" key,
+        grant := P.X.env.hash "nanodregg/testground/stranger-grant/v1" key, window := Follow.window }
+    let n ← addMember self w
+    return reply Protocol.Status.ok.code
+      s!"index {n}\norigin {hexOf w.origin}\nsponsor {hexOf inv.sponsor}\n".toUTF8
+
+/-- Member `I`'s ids once its sponsor enrolled it: `MEMBER` and `GRANT` as `enroll` and `grant world`
+printed them (hex). -/
+@[export tg_self] def tgSelf (i : UInt32) (member grant : ByteArray) : IO ByteArray := do
+  let some g ← ground.get | return refusedText "noWorld"
+  let some m := g.members[i.toNat]? | return refusedText "noMember"
+  let dig (b : ByteArray) := (String.fromUTF8? b) >>= Text.ofHex >>= P.X.digestOf
+  match dig member, dig grant with
+  | some mm, some gg =>
+    ground.set (some { g with members := g.members.set! i.toNat { m with self := { m.self with member := mm, grant := gg } } })
+    return reply Protocol.Status.ok.code ByteArray.empty
+  | _, _ => return refusedText "badId"
 
 end Nanodregg.Web.Sim.Testground

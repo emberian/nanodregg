@@ -1,0 +1,1 @@
+{ "type": "module", "private": true, "description": "the testground page modules, also run by node (guestbook.mjs, the harnesses): ES modules" }

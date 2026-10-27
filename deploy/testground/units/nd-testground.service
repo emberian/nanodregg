@@ -1,0 +1,20 @@
+# deploy/testground/units/nd-testground.service — the hosted World as one user unit around run.sh
+# (MEASURED by hand on hbox 10-26; not yet run under systemd). Install:
+#   systemctl --user link /ABS/deploy/testground/units/nd-testground.service
+#   systemctl --user start nd-testground       # after `run.sh genesis STATE` once
+# Edit TREE, STATE and PORT; the relay listens on 127.0.0.1:PORT only.
+[Unit]
+Description=nanodregg testground: a hosted World (host serve, guest-book, WebSocket relay)
+
+[Service]
+Type=forking
+Environment=TREE=/tank/dregg-build/nanodregg/wt/testground-b
+Environment=STATE=/tank/dregg-build/nanodregg/testground-state
+Environment=PORT=8787
+ExecStart=/bin/sh -c 'exec "$TREE/deploy/testground/run.sh" start "$STATE"'
+ExecStop=/bin/sh -c 'exec "$TREE/deploy/testground/run.sh" stop "$STATE"'
+PIDFile=/tank/dregg-build/nanodregg/testground-state/run/relay.pid
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

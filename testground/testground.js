@@ -2,7 +2,8 @@
 // Every word a window shows is printed by the member's own follow (Lean) or is a name from the
 // kernel's table; this file lays it out and never decides what it means.
 import factory from './kernel.mjs';
-import { loadKernel, client, genesis, hex } from './nd.js';
+import { loadKernel, client, genesis, custody, rand32, hex, unhex } from './nd.js';
+import { framed, wsOpen } from './transport.js';
 import { demos, runDemo, lieScenes, memberLies, runScene } from './demos.js';
 
 const $ = (tag, attrs = {}, ...kids) => {
@@ -81,14 +82,65 @@ function newWorld() {
 
 // ---------------------------------------------------------------- the World's properties
 function openWorld() {
+  if (world.hosted) return openHosted();
   const lines = world.text.trim().split('\n');
   const rows = lines.map((l) => { const w = l.split(' '); return $('tr', {}, $('td', {}, w[0] === 'founder' ? `founder ${w[1]}` : w[0]), $('td', {}, w[0] === 'founder' ? `${world.members[+w[1]].name}: member ${w[3]}  grant ${w[5]}` : w.slice(1).join(' '))); });
   const body = $('div', {},
     $('table', { class: 'props sunken' }, rows),
     $('p', { class: 'dim' }, `kernel loaded in ${loadMs.toFixed(0)} ms; genesis in ${world.ms.toFixed(0)} ms, in this tab. One writer, one follow per member, all Lean compiled to WebAssembly; this page moves bytes.`),
-    $('button', { class: 'btn', onclick: () => newWorld() }, 'Re-genesis (a new World)'),
+    $('button', { class: 'btn', onclick: () => newWorld() }, 'Re-genesis (a new World)'), ' ',
+    $('button', { class: 'btn', onclick: () => joinHosted() }, 'Join the hosted World…'),
     writerMenu());
   openWindow({ id: 'world', title: 'World — testground', x: 110, y: 16, w: 570, body });
+}
+
+// ---------------------------------------------------------------- (B) a hosted World
+// The same page with one function swapped: the writer is a real `host serve` behind a WebSocket
+// relay (deploy/testground/ws-relay.py, bytes only); this tab's member still re-derives every step
+// in its own follow. It joins over the guest-book's invitation (Invite.accept under the sponsor key
+// world.json names), is enrolled by the guest-book (a member like any other), and then is a member.
+// The trust caveat (DESIGN-TESTGROUND §7): whoever serves this page and world.json chooses the kernel
+// and the sponsor key; this is a demonstration of the check, not a trust anchor.
+const hostedDefault = () => new URLSearchParams(location.search).get('hosted') ?? '';
+function httpOf(ws) { return ws.replace(/^ws/, 'http').replace(/\/ws$/, ''); }
+async function joinHosted(url = null) {
+  url = url ?? prompt('The hosted World\'s relay (wss://…/ws):', hostedDefault() || 'ws://127.0.0.1:8787/ws');
+  if (!url) return;
+  const say = (t) => { boot.textContent = t; };
+  let wj;
+  try { wj = await (await fetch(`${httpOf(url)}/world.json`)).json(); } catch (e) { alert(`cannot read ${httpOf(url)}/world.json: ${e.message}`); return; }
+  const j = K.join(unhex(wj.invitation), unhex(wj.sponsorKey));
+  const text = new TextDecoder().decode(j.slice(1));
+  if (j[0] !== K.table.statuses.find((x) => x.name === 'ok').code) { alert(`the invitation is refused: ${text}`); return; }
+  const kv = Object.fromEntries(text.trim().split('\n').map((l) => l.split(' ')));
+  for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); }
+  frames = []; cmdNo = 0; lie = 'honest'; setTray();
+  const host = framed(wsOpen(url), { closedStatus: K.table.statuses.find((x) => x.name === 'closed').code, frameMax: K.table.bounds.frameBytesMax });
+  const me = { name: 'you', index: +kv.index, custody: custody(K, [rand32(), rand32(), rand32()]) };
+  me.nd = client(K, { host, onFrame: (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie, ...f }); renderLog(); } });
+  world = { hosted: true, url, wj, origin: kv.origin, members: [me], objects: new Map(), text: '' };
+  openHosted(); openLog(); openTerm(me, 700, 16);
+  print(me, $('div', { class: 'dim' }, `joined over the guest-book's invitation: your follow's World is the one its signed inputs make (origin ${short(kv.origin)}), checked under the sponsor key world.json names. Asking the guest-book to enrol you…`));
+  const init = await runIn(me, ['init', wj.sponsor], 'a join token, signed by your new key');
+  const token = (init.stdout.match(/^join ([0-9a-f]+)/m) || [])[1];
+  if (!token) return;
+  let en;
+  try { en = await (await fetch(`${httpOf(url)}/enroll`, { method: 'POST', body: token })).json(); } catch (e) { en = { refused: e.message }; }
+  if (!en.member) { print(me, $('div', { class: 'bad' }, `the guest-book did not enrol you: ${en.refused}`)); return; }
+  K.self(me.index, en.member, en.grant); me.id = en.member; me.grant = en.grant;
+  print(me, $('div', { class: 'ok' }, `enrolled: member ${short(en.member)}, World grant ${short(en.grant)}. You are a member of a World whose writer is not in this tab; every reply it sends, your follow checks.`));
+  openHosted();
+  await runIn(me, ['sync']);
+}
+function openHosted() {
+  const me = world.members[0];
+  const row = (k, v) => $('tr', {}, $('td', {}, k), $('td', {}, v));
+  const body = $('div', {},
+    $('table', { class: 'props sunken' }, row('relay', world.url), row('origin', world.origin), row('sponsor', `${world.wj.sponsor} (the guest-book)`),
+      row('you', me.id ? `member ${me.id}  grant ${me.grant}` : 'not yet enrolled')),
+    $('p', { class: 'dim' }, 'The writer is a real host serve elsewhere; this tab holds your keys and your follow, which re-derives every step before custody signs. Open this page in a second tab to be a second member of the same World.'),
+    $('button', { class: 'btn', onclick: () => newWorld() }, 'Back to a World in this tab'));
+  openWindow({ id: 'world', title: 'World — hosted', x: 110, y: 16, w: 570, body });
 }
 
 // ---------------------------------------------------------------- the Writer menu: the writer lies
@@ -172,7 +224,7 @@ function linkify(text, m) {
   // every 64-hex id becomes a link that opens the object as a window; a line `tx …` names a
   // transaction, which is not a cell, so it stays text
   return text.split(/(\n)/).flatMap((line) => {
-    if (line.startsWith('tx ')) return [line];
+    if (line.startsWith('tx ') || line.startsWith('join ') || line.startsWith('invite ')) return [line];
     return line.split(/([0-9a-f]{64})/).map((part) => {
       if (!/^[0-9a-f]{64}$/.test(part)) return part;
       const who = world.members.find((x) => x.id === part);
@@ -219,7 +271,8 @@ async function runIn(m, argv, why = '', { forge = false, quiet = false } = {}) {
   const n0 = frames.length, t = performance.now();
   let r;
   forging = forge;
-  try { r = forge ? nd.forge(m, argv) : await nd.run(m, argv); } catch (e) { r = { exit: 'client', stdout: '', stderr: `${e.message}\n` }; }
+  const via = m.nd ?? nd;
+  try { r = forge ? await via.forge(m, argv) : await via.run(m, argv); } catch (e) { r = { exit: 'client', stdout: '', stderr: `${e.message}\n` }; }
   forging = false;
   const ms = performance.now() - t;
   const cls = r.exit === 'ok' ? 'ok' : r.exit === 'declined' || r.exit === 'open' || r.exit === 'uncertain' ? 'warn' : 'bad';
@@ -280,8 +333,8 @@ function prefill(m, text) {
 function openObject(m, id) {
   const w = openWindow({ id: `obj-${id}`, title: `Object ${short(id)}`, w: 560, body: $('div', {}, 'reading…') });
   w.refresh = async () => {
-    const d = await nd.run(m, ['read', id, '?']);
-    const s = await nd.run(m, ['read', id]);
+    const d = await (m.nd ?? nd).run(m, ['read', id, '?']);
+    const s = await (m.nd ?? nd).run(m, ['read', id]);
     const props = [], methods = [], laws = [], rels = [], calls = [];
     let core = null;
     for (const l of (d.exit === 'ok' ? d.stdout : '').trim().split('\n').filter(Boolean)) {
@@ -343,7 +396,7 @@ const tour = [
 let tourAt = 0;
 const firstObj = () => [...world.objects.entries()].find(([, v]) => v === 'create')?.[0] ?? '';
 const firstGrant = () => [...world.objects.entries()].find(([, v]) => v === 'grant')?.[0] ?? '';
-function tourCheck(m, argv, r) { if (tour[tourAt] && r.exit !== 'client' && tour[tourAt].done(argv, m)) { tourAt++; openTour(); } }
+function tourCheck(m, argv, r) { if (!world.hosted && tour[tourAt] && r.exit !== 'client' && tour[tourAt].done(argv, m)) { tourAt++; openTour(); } }
 function openTour() {
   const items = tour.map((s, i) => $('li', { class: i < tourAt ? 'done' : '' }, s.say, i === tourAt ? $('div', {},
     $('code', {}, `${world.members[s.who].name}$ nd ${s.argv().map((a) => short(a)).join(' ')}`), ' ',
@@ -384,10 +437,10 @@ const icons = document.getElementById('icons');
 const icon = (glyph, label, act) => icons.append($('button', { class: 'icon', ondblclick: act, onkeydown: (e) => e.key === 'Enter' && act() }, $('span', { class: 'glyph' }, glyph), $('span', { class: 'label' }, label)));
 icon('◆', 'World', () => openWorld());
 icon('a', 'alice', () => openTerm(world.members[0]));
-icon('b', 'bob', () => openTerm(world.members[1]));
+icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]));
 icon('≡', 'Wire', () => openLog());
 icon('?', 'Start here', () => openTour());
 icon('▶', 'Demos', () => openDemos());
 document.getElementById('start').addEventListener('click', () => openWorld());
-newWorld();
+if (hostedDefault() && new URLSearchParams(location.search).has('join')) { newWorld(); joinHosted(hostedDefault()); } else newWorld();
 window.testground = { K, runIn, world: () => world, frames: () => frames, hex };
