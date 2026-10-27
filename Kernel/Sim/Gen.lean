@@ -2846,7 +2846,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   -- a forged log: the writer changes what the last write of the log wrote (its event, the signed
   -- call, still says otherwise) and re-prices it, so `fold` accepts it; `rederiveLog` must not
   match forge st.log with
-  | none => st
+  | none => failWith st "forgery: the log held no write to forge, so the re-derivation tooth was not run"
   | some (i, bad) =>
       match World.fold P.env g bad, rederiveLog P.ctx g bad with
       | .ok _, .error (j, .refused .eventMismatch) =>

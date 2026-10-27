@@ -672,8 +672,8 @@ def main() -> int:
             k = "t:" + readset.key(rs0, t.root, line) if rs0 and line else None
         at = prev[exe][1].get("at") if exe in prev else None
         if exe in prev and prev[exe][0].startswith("t:") and not readset.keyable(prev[exe][1].get("readset") or {}):
-            head.say(f"  {word} {exe}: re-run (namespace bind sources were not mapped to host paths, "
-                     f"or the record predates GATES-20m)")
+            head.say(f"  {word} {exe}: re-run (traced in a mount namespace, "
+                     f"or the record predates GATES-20g)")
             continue
         if exe in prev and k is not None and prev[exe][0] == k and mine(exe) and a.daily is not None and (
                 not isinstance(at, (int, float)) or now - at > a.daily):
