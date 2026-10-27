@@ -7,7 +7,9 @@ Host's page, so the deployed page budget is the frame less the largest page-phas
 every byte of framing (`Bounds.pageBytesMax`). Here:
 
 * `resume_size`, `State.bytes_size`, `Signed.bytes_size`, `page_size`: what each frame costs, read off
-  the one codec (`Stream.Lawful.size_eq`), never restated;
+  the one codec (`Stream.Lawful.size_eq`), never restated; `command_size`: a command payload's size
+  is `argvSize`, the number `parse` refuses by, and `commandFrame_argv_within`: every argv a decoded
+  command frame carries is within that bound;
 * `resume_frame_fits`: for every phase-2 continuation of an argv `parse` admits (`parse_past_bound`:
   within `argvBytesMax`), custody's answer at the deployed widths, and every page the Host builds at
   `Host.Page.budget` (`Host.Page.build_within`), the resume frame fits;
@@ -33,6 +35,31 @@ theorem list_size {max : Nat} (fits : max < 2 ^ 32) (v : Bounded max (Bytes max)
   simp only [Stream.array, Stream.bytesOf, Text.unlist, ← Array.foldl_toList, List.map_map]
   rw [foldl_add_eq (fun x : Bytes max => 4 + x.val.size)]
   rfl
+
+/-- **A command payload's size is `argvSize`** (PROTOCOL-68's number, read off the one codec): the
+size `commandFrame`'s `within` bounds, for the argv the payload carries, is `argvSize` of that argv.
+So `parse`'s `argvPastBound` and the frame's bound compare the same number, and a change to
+`commandLayout` that changes the payload's size breaks this statement. -/
+theorem command_size {argv : List ByteArray} {v : Bounded Bounds.argvBytesMax (Bytes Bounds.argvBytesMax)}
+    (h : Text.fitList Bounds.argvBytesMax argv = some v) :
+    (Layout.codec Bounds.argvBytesMax (by decide) commandLayout).size (v, ()) = argvSize argv := by
+  simp only [commandLayout, Layout.codec, Field.codec, Stream.product, Stream.unit]
+  rw [list_size, unlist_fitList h]
+  simp only [argvSize]
+  omega
+
+/-- **Every argv a command frame carries is within `parse`'s bound**: the frame admits a payload only
+at most `argvBytesMax` bytes (`Stream.within`), which is `argvSize` of its argv (`command_size`), so
+`parse` never refuses a decoded payload `argvPastBound`. -/
+theorem commandFrame_argv_within
+    (x : { v : Layout.Ty Bounds.argvBytesMax commandLayout //
+      (Layout.codec Bounds.argvBytesMax (by decide) commandLayout).size v ≤ Bounds.argvBytesMax }) :
+    argvSize (Text.unlist x.1.1) ≤ Bounds.argvBytesMax := by
+  obtain ⟨⟨a, ⟨⟩⟩, h⟩ := x
+  simp only [commandLayout, Layout.codec, Field.codec, Stream.product, Stream.unit] at h
+  rw [list_size] at h
+  simp only [argvSize]
+  omega
 
 theorem u64_size (n : Nat) : (Text.u64 n).size = 8 := by
   rw [Text.u64, ← Stream.u64_lawful.size_eq]; rfl
