@@ -508,8 +508,8 @@ readable by the writer's user) and run `host check STORE`. Planted in the Host's
 ## 4. Backup — RAN (stopped and LIVE: store-plants)
 
 Copy the files in the order `deploy/units/STORE.md` lists (generated from
-`Host.Store.backupOrder`: `key`, `base.world`, `index.<k0>.log`, then every `seg.<o>.log` oldest first; the
-base before every append-only file), each whole. The segment files are a family, one per seal start that the
+`Host.Store.backupOrder`: `key`, `base.world`, `base.cert` when the writer certifies, `index.<k0>.log`, then
+every `seg.<o>.log` oldest first; the base before every append-only file), each whole. The segment files are a family, one per seal start that the
 Store still keeps (`--retain N` drops the oldest), so list the directory and copy them all: a copy missing one
 is refused `missing seg.<o>.log` (20) at the restore. It is safe while
 the writer runs, across a seal: a seal installs a new `base.world` atomically and the append-only
@@ -524,6 +524,21 @@ same time: `HEIGHT:CHAIN` from a member follower's head (an operator's `host sea
 cadence's: the same order covers a backup taken across it) (its own `host check` on its follow
 Store) or the highest receipt a client holds. The key travels with the copy (HOST-16: it guards
 integrity, not secrecy; a copy without it is `baseCorrupt`).
+
+A CERTIFYING WRITER (`host serve --certify`, HOSTING-56/60) has state outside the Store: keybroker's
+`/etc/nd/keybroker/provider.key.certified` (`KEYS.certified`), the last head the certify key signed, made
+durable before each signature. The decider refuses a head below or beside it (`regressed`), so the key
+never signs two heads at one step count and every head it signs extends the one before
+(`Hosting.Proofs.Certify.granted_extends`), as long as that file never moves back. Copy it FIRST, then the
+Store as above:
+
+    sudo -u nd cp /etc/nd/keybroker/provider.key.certified BACKUP/provider.key.certified   # 0600, before any Store file
+
+The key signs only heads its decider's fold of the Store already holds, so a Store copied after the record
+extends the recorded head. The other order can leave a backup whose record is past its own Store, which no
+restore can certify from. Back up `provider.key` itself (the seed) only to custody as private as the live
+file: a thief of it signs any head (DESIGN-TRUST §4.4b). Planted: launcher `certify`
+(`a_restore_meets_the_certified_head`).
 
 ## 5. Restore — RAN (store-plants; a sealed Store too: `sealed-*`)
 
@@ -546,6 +561,34 @@ batch ends `uncertain` (3, restarted; nothing is acknowledged) and the restart r
 0 and `anchor=ok` = the copy reaches the anchor with the anchor's chain. Without an anchor, a copy
 cut at a frame boundary, a single foreign last frame and a rollback to an older complete copy ALL
 open cleanly at a lower height; that is why the anchor is not optional.
+
+A CERTIFYING WRITER. The invariant: **`KEYS.certified` never moves back, and the Store beside it must
+extend it.** Two cases, each planted by name (launcher `certify`, `a_restore_meets_the_certified_head`):
+
+1. The live `KEYS.certified` survives (the Store alone was lost or damaged). Never replace the live file
+   with the backup's. Restore the Store beside it and restart keybroker (its decider opens the Store again):
+   - the restored Store extends the live record (its backup was taken after the last certified head): the
+     decider anchors it at the restart from the Store's kept records (`Hosting.Certify.Certifier.opened`,
+     `anchoredBy`), and the writer's next seal is certified (`STATUS certify … certified`);
+   - the restored Store is OLDER than the live record: the decider answers every ask `unanchored`
+     (`STATUS certify … refused=unanchored` at each seal). Nothing can make the key sign a second head at a
+     step it already signed. Leave the writer running as it is: its pages carry the newest certificate the
+     restored Store holds, which still verifies and only grows staler (PROTOCOL-84), and a thin joiner whose
+     pinned base is newer than it is refused `otherHead`. Members may hold a certificate past this Store: the
+     World rolled back, and their follows see it as a fork. Do NOT empty `KEYS.certified` to make it certify
+     again (that is case 2's hazard, chosen). Report it: this binary cannot move the World's state under a
+     new certify key (`host import` keeps the carried authority; the certify key's pre-rotation is TRUST's).
+2. The box is lost with both. The backup's `KEYS.certified` may be OLDER than the last head the key signed,
+   and restoring the pair anchors (the backup's Store extends the backup's record), so the key would sign a
+   second head at a step it signed after the backup: an equivocation any member holding both certificates
+   can show (`Protocol.Proofs.Head.certified_equivocation`). Planted: the pair restored from an older backup
+   certifies another head at the step count of a certificate the key signed after that backup. So after a
+   box loss never certify under the old key: remove the `certify` line from `provider.key`, render the
+   writer without `--certify`, and restore the Store with
+   its `base.cert`; pages carry that certificate, stale but valid, as in case 1.
+
+`host check` reads no certificate: `base.cert` is self-authenticating and stale at worst (a joiner refuses a
+certificate of another head `otherHead`; the next seal replaces it).
 
 ### 5a. A joiner of a CARRIED World pins its origin (HOST-67 832a815)
 

@@ -81,6 +81,8 @@ pub fn dir(name: &str) -> Scratch {
         "real" => 'a',
         // certify.rs (HOSTING-56): the writer's certify slot
         "cert" => 'z',
+        // certify.rs (OPS-21): a restored Store beside the certified-head record
+        "rcert" => 'x',
         // agent_hole.rs (HOSTING-58): the fake provider's tour and the real one's
         "hole" => 'd',
         "holer" => 'v',

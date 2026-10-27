@@ -69,12 +69,13 @@ def copySegs (src dst : System.FilePath) : IO Unit := do
 def removeSegs (dir : System.FilePath) : IO Unit := do
   for (_, p) in ← segFiles dir do IO.FS.removeFile p
 
-/-- A backup of `src` into `dst` in `Store.backupOrder`: the key, the base, the index file, then the
+/-- A backup of `src` into `dst` in `Store.backupOrder`: the key, the base, its certificate when there is one, the index file, then the
 segment files oldest first. -/
 def copyStore (src dst : System.FilePath) : IO Unit := do
   IO.FS.createDirAll dst
   IO.FS.writeBinFile (keyPath dst) (← IO.FS.readBinFile (keyPath src))
   IO.FS.writeBinFile (basePath dst) (← IO.FS.readBinFile (basePath src))
+  if ← (certPath src).pathExists then IO.FS.writeBinFile (certPath dst) (← IO.FS.readBinFile (certPath src))
   let ix ← indexFile src
   IO.FS.writeBinFile (dst / (ix.fileName.getD "")) (← IO.FS.readBinFile ix)
   copySegs src dst

@@ -83,9 +83,10 @@ theorem StorePart.name_injective (a b : StorePart) (h : a.name = b.name) : a = b
 theorem StorePart.mem_layout (p : StorePart) : p.pattern ∈ Store.layout.map (·.name) := by
   cases p <;> simp only [StorePart.pattern] <;> decide
 
-/-- **The families are the layout**: every Store file but the transient ones is a family, so a
-check over `StorePart.families` checks every kind of file an open reads. -/
-theorem StorePart.covers_layout : ∀ f ∈ Store.layout, f.kind ≠ .transient →
+/-- **The families are the layout**: every Store file but the transient ones and the sidecar (the
+certificate, which no open reads) is a family, so a check over `StorePart.families` checks every kind
+of file an open reads. -/
+theorem StorePart.covers_layout : ∀ f ∈ Store.layout, f.kind ≠ .transient → f.kind ≠ .sidecar →
     f.name ∈ StorePart.families.map (·.pattern) := by
   decide
 

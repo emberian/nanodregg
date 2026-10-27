@@ -510,6 +510,13 @@ structure Broker where
 /-- keybroker's PIDS argument. -/
 def Broker.pids (b : Broker) : String := b.pidsDir.getD ("/run/" ++ b.runtime)
 
+/-- The key file keybroker reads (KEYS). -/
+def Broker.keys (b : Broker) : String := b.etc ++ "/provider.key"
+
+/-- `KEYS.certified`: the last head the certify key signed, kept by keybroker beside KEYS
+(`launcher/src/bin/keybroker.rs` appends `.certified` to KEYS' name, HOSTING-56). -/
+def Broker.certified (b : Broker) : String := b.keys ++ ".certified"
+
 def keybroker : Broker :=
   { name := "nd-keybroker", bin := "/opt/nd/bin", etc := "/etc/nd/keybroker", runtime := "nd-keybroker",
     sockdir := "/run/nd-broker", upstream := "api.anthropic.com:443", store := "/srv/nd/store", user := "nd",
@@ -558,7 +565,7 @@ def Broker.sysusers (b : Broker) : Except Refusal String := do
 PINS (HOSTING-28) is the operator's: a provider's key rotation rewrites it with no rebuild, so no
 ExecStartPre compares it with the build's `deploy/tls/pins` (as one does the anchors). -/
 def Broker.exec (b : Broker) : List Arg :=
-  [.lit (b.bin ++ "/keybroker"), .lit (b.etc ++ "/provider.key"), .lit (b.etc ++ "/anchors.pem"),
+  [.lit (b.bin ++ "/keybroker"), .lit b.keys, .lit (b.etc ++ "/anchors.pem"),
    .lit (b.etc ++ "/pins"),
    .lit b.sockdir, .lit b.pids, .lit b.upstream, .lit b.store,
    .var "ND_OPERATOR", .var "ND_PEER", .lit (b.bin ++ "/hosting-broker")]
@@ -1041,6 +1048,7 @@ def kindWord : FileKind → String
   | .appendOnly => "append-only"
   | .replaced => "replaced whole, atomically"
   | .transient => "transient: never read by an open, never backed up"
+  | .sidecar => "optional, replaced whole, atomically; self-authenticating, never read by an open"
 
 def storeTable : String :=
   let rows := Host.Store.layout.map fun f => s!"| `{f.name}` | {kindWord f.kind} | {f.holds} |"
@@ -1058,7 +1066,24 @@ def storeTable : String :=
     "append-only copy holds at least the prefix the copied base names (`Host.Proofs.Base`",
     "`backupOrder_appendOnly_after_base`); a longer copy is a torn tail or orphan index entries, which",
     "an open handles. Restore with `host check STORE --anchor HEIGHT:CHAIN` (RUNBOOK §5).",
-    ""] ++ order ++ [""])
+    ""] ++ order ++ [
+    "",
+    "## A certifying writer (`host serve --certify`): keybroker's record first",
+    "",
+    s!"The certify key's guard is not in the Store: keybroker keeps the last head the key signed in `{keybroker.certified}`",
+    "(`KEYS.certified`), durable before each signature, and its decider refuses a head below or beside it",
+    "(`Hosting.Proofs.Certify.granted_extends` holds while that file never moves back). A backup copies it",
+    "BEFORE every Store file above: the key signs only heads its decider's fold of the Store already holds, so a",
+    "Store copied after the record extends the recorded head.",
+    "",
+    s!"0. `{keybroker.certified}`",
+    "",
+    "A restore never moves `KEYS.certified` back. While the live file survives, restore the Store beside it:",
+    "a Store that extends it is anchored when keybroker restarts and its next seal is certified; an older one",
+    "is answered `unanchored` and its pages carry its last certificate, staler. After a box loss the backup's",
+    "record may be older than the key's last signature, so the restored pair could sign a second head at one",
+    "step: never certify under that key again (RUNBOOK §5).",
+    ""])
 
 def emitted : List Node := [writer, member, hostedFollower]
 

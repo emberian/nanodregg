@@ -576,6 +576,256 @@ fn the_certify_key_signs_only_heads_of_the_deciders_fold() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+/// Copy a directory tree's directories and regular files (sockets and other special files are not
+/// state), keeping each mode: a member's workspace and holding are custody, checked by mode.
+fn copy_tree(src: &Path, dst: &Path) {
+    nanodregg_devtools::mkdirs(dst).unwrap();
+    fs::set_permissions(dst, fs::metadata(src).unwrap().permissions()).unwrap();
+    for e in fs::read_dir(src).unwrap() {
+        let e = e.unwrap();
+        let t = e.file_type().unwrap();
+        if t.is_dir() {
+            copy_tree(&e.path(), &dst.join(e.file_name()));
+        } else if t.is_file() {
+            fs::copy(e.path(), dst.join(e.file_name())).unwrap();
+        }
+    }
+}
+
+/// Empty `dir` and copy `from`'s files into it (a restore into the same path, by hand).
+fn restore_into(from: &Path, dir: &Path) {
+    fs::remove_dir_all(dir).unwrap();
+    copy_tree(from, dir);
+}
+
+/// A backup of a certifying writer's Store in RUNBOOK §4's order: keybroker's `KEYS.certified`
+/// FIRST, then the Store's files in `Host.Store.backupOrder` (`key`, `base.world`, `base.cert`,
+/// the index file, the segment files oldest first).
+fn backup(certified: &Path, store: &Path, to: &Path) {
+    nanodregg_devtools::mkdirs(&to.join("store")).unwrap();
+    fs::copy(certified, to.join("keys.certified")).unwrap();
+    let names: Vec<String> = fs::read_dir(store)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let family = |p: &str, s: &str| {
+        let mut v: Vec<&String> = names
+            .iter()
+            .filter(|n| n.starts_with(p) && n.ends_with(s))
+            .collect();
+        v.sort_by_key(|n| n[p.len()..n.len() - s.len()].parse::<u128>().unwrap_or(0));
+        v
+    };
+    let order: Vec<&String> = names
+        .iter()
+        .filter(|n| *n == "key")
+        .chain(names.iter().filter(|n| *n == "base.world"))
+        .chain(names.iter().filter(|n| *n == "base.cert"))
+        .chain(family("index.", ".log"))
+        .chain(family("seg.", ".log"))
+        .collect();
+    for n in order {
+        fs::copy(store.join(n), to.join("store").join(n)).unwrap();
+    }
+}
+
+/// RUNBOOK §4–5 for a certifying writer: `KEYS.certified` never moves back, and the Store beside
+/// it must extend it. A REAL World certified by keybroker's certify key is backed up in §4's order
+/// (B1 at the first certificate, B2 after the second), advanced, and restored:
+///
+/// - B1's Store (OLDER than the live record) beside the live `KEYS.certified`: the decider answers
+///   `unanchored`, the seal's `STATUS certify` line says `refused=unanchored`, and a direct ask of
+///   B1's own head is refused `unanchored`: the key signs nothing for a rolled-back Store;
+/// - B2's Store (it extends the live record) beside it: the restarted decider anchors it from the
+///   Store's kept records and the next seal is certified;
+/// - the box lost (B1's record, Store, follower and workspace restored together): the pair
+///   anchors, and the key certifies ANOTHER head at the step count of the second certificate, which
+///   it signed after B1: both pass the stranger's `host certified`, an equivocation. This is why a
+///   restore never moves the record back and RUNBOOK §5 says not to certify again after a box loss.
+///
+/// CONTROL: B2's restore is certified, so B1's `unanchored` is the record's age, not a broken path.
+#[test]
+fn a_restore_meets_the_certified_head() {
+    let d = dir("rcert");
+    let keys = d.join("keys");
+    fs::write(&keys, format!("7 provider-key\ncertify {}\n", "3c".repeat(32))).unwrap();
+    fs::set_permissions(&keys, fs::Permissions::from_mode(0o600)).unwrap();
+    let record = d.join("keys.certified");
+    let anchors = Pki::new().anchors(&d, 0o644);
+    let o = Command::new(env!("CARGO_BIN_EXE_keybroker"))
+        .args(["--certify-pub", keys.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "--certify-pub: {}", err(&o));
+    let certifier = line(&text(&o), "certify ").to_owned();
+
+    let root = nanodregg_devtools::scratch(&format!("kbr{}", std::process::id()));
+    for s in ["stores/W", "stores/F", "b1", "b2"] {
+        nanodregg_devtools::mkdirs(&root.join(s)).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    let host_sock = root.join("w.sock");
+    let a = Member::new(&root, "a", &host_sock);
+    let ks = a.ok(&["--keys"]);
+    let (key, nextk) = (line(&ks, "key ").to_owned(), line(&ks, "next ").to_owned());
+    let (w, f) = (root.join("stores/W"), root.join("stores/F"));
+    let genesis = |s: &Path, nonce: Option<&str>| {
+        let mut c = Command::new(lean_bin("host"));
+        c.arg("genesis").arg(s).arg("nano");
+        if let Some(n) = nonce {
+            c.args(["--nonce", n]);
+        }
+        let o = c
+            .args(["--certifier", &certifier, "--threshold", "1", &key, &nextk])
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "genesis: {}", err(&o));
+        text(&o)
+    };
+    let g = genesis(&w, None);
+    genesis(&f, Some(line(&g, "nonce ")));
+    a.ok(&["--input", line(&g, "input ")]);
+    let (member, grant) = line(&g, "founder 0 member ").split_once(" grant ").unwrap();
+    let csock = certify_sock(&d);
+    let serve = || {
+        supervise_host_connecting(
+            &nd_supervise(),
+            &host_sock,
+            &a.ws,
+            &w,
+            &[&csock],
+            &["serve", w.to_str().unwrap(), "--certify", csock.to_str().unwrap()],
+        )
+    };
+    let follow = || {
+        supervise_host(
+            &nd_supervise(),
+            &a.ws.join("follow.sock"),
+            &a.ws,
+            &f,
+            &["follow", f.to_str().unwrap(), member, grant],
+        )
+    };
+    let cert_now = || certified_of(&fs::read(w.join("base.cert")).unwrap());
+    let mut kb = Kill(keybroker(&d, &keys, &anchors, &w, member));
+    let mut fa = follow();
+    let writer = serve();
+    // the fresh Store's base is certified at the writer's start (PROTOCOL-84), by its worker: a page
+    // served before that is refused `uncertifiedPage`, so the first command waits for it
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !w.join("base.cert").exists() {
+        assert!(Instant::now() < deadline, "the start's certificate never came");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let obj = line(&a.ok(&["create"]), "id ").to_owned();
+    a.ok(&["write", &obj, "1", "hello"]);
+    drop(writer);
+    let (_, said) = seal_certify(&w, &csock);
+    assert!(said.contains(" certified"), "the first seal: {said}");
+    let c1 = cert_now();
+
+    // B1: the whole box at the first certificate (the member too, for the box-loss case).
+    drop(fa);
+    let b1 = root.join("b1");
+    backup(&record, &w, &b1);
+    copy_tree(&f, &b1.join("follow"));
+    copy_tree(&a.ws, &b1.join("ws"));
+    copy_tree(&a.holding, &b1.join("holding"));
+    fa = follow();
+
+    let writer = serve();
+    a.ok(&["write", &obj, "2", "two"]);
+    a.ok(&["write", &obj, "3", "three"]);
+    drop(writer);
+    let (_, said) = seal_certify(&w, &csock);
+    assert!(said.contains(" certified"), "the second seal: {said}");
+    let cert2 = fs::read(w.join("base.cert")).unwrap();
+    let c2 = certified_of(&cert2);
+    assert!(steps_of(&c2) > steps_of(&c1));
+    assert_eq!(fs::read(&record).unwrap(), c2, "the live record is the second head");
+
+    // B2: a LIVE backup past the second certificate.
+    let writer = serve();
+    a.ok(&["write", &obj, "4", "four"]);
+    backup(&record, &w, &root.join("b2"));
+    drop(writer);
+
+    // 1a. B1's Store beside the live record (older than it): nothing is certified, by name.
+    drop(kb);
+    restore_into(&b1.join("store"), &w);
+    kb = Kill(keybroker(&d, &keys, &anchors, &w, member));
+    let (_, said) = seal_certify(&w, &csock);
+    assert!(
+        said.contains("refused=unanchored"),
+        "an older Store beside the live record: {said}"
+    );
+    let r = certify(&mut conn(&d), &c1);
+    assert!(
+        refused(&r, BrokerRefusal::Unanchored),
+        "the older Store's own head: {r:?}"
+    );
+    assert_eq!(fs::read(&record).unwrap(), c2, "the record did not move");
+
+    // 1b. CONTROL: B2's Store extends the live record: anchored at the restart, the next seal certified.
+    drop(kb);
+    restore_into(&root.join("b2/store"), &w);
+    kb = Kill(keybroker(&d, &keys, &anchors, &w, member));
+    let (_, said) = seal_certify(&w, &csock);
+    assert!(
+        said.contains(" certified"),
+        "a Store that extends the live record: {said}"
+    );
+    let c3 = cert_now();
+    assert!(steps_of(&c3) > steps_of(&c2));
+    assert_eq!(fs::read(&record).unwrap(), c3);
+
+    // 2. The box lost: B1's record, Store and member together. The pair anchors, and the same
+    // writes with other values reach the second certificate's step count with another head.
+    drop(kb);
+    drop(fa);
+    fs::copy(b1.join("keys.certified"), &record).unwrap();
+    restore_into(&b1.join("store"), &w);
+    restore_into(&b1.join("follow"), &f);
+    restore_into(&b1.join("ws"), &a.ws);
+    restore_into(&b1.join("holding"), &a.holding);
+    kb = Kill(keybroker(&d, &keys, &anchors, &w, member));
+    let fa = follow();
+    let writer = serve();
+    a.ok(&["write", &obj, "2", "other two"]);
+    a.ok(&["write", &obj, "3", "other three"]);
+    drop(writer);
+    let (_, said) = seal_certify(&w, &csock);
+    assert!(
+        said.contains(" certified"),
+        "the restored pair certifies: {said}"
+    );
+    let cert2x = fs::read(w.join("base.cert")).unwrap();
+    let c2x = certified_of(&cert2x);
+    assert_eq!(steps_of(&c2x), steps_of(&c2), "one step count");
+    assert_ne!(c2x, c2, "two heads at it");
+    // Both certificates pass the stranger's check (PROTOCOL-78) under the one genesis input.
+    let input = line(&g, "input ").to_owned();
+    let mut said = Vec::new();
+    for (n, c) in [("c2.cert", &cert2), ("c2x.cert", &cert2x)] {
+        let p = root.join(n);
+        fs::write(&p, c).unwrap();
+        let o = Command::new(lean_bin("host"))
+            .arg("certified")
+            .arg(&input)
+            .arg(&p)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "the stranger, {n}: {}", err(&o));
+        said.push(text(&o));
+    }
+    let at = |t: &str| t.split_whitespace().find(|x| x.starts_with("steps=")).unwrap().to_owned();
+    assert_eq!(at(&said[0]), at(&said[1]), "{said:?}");
+    assert_ne!(said[0], said[1], "an equivocation: {said:?}");
+    drop(fa);
+    drop(kb);
+    fs::remove_dir_all(&root).unwrap();
+}
+
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }

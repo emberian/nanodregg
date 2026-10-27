@@ -402,6 +402,9 @@ inductive FileKind where
   | replaced
   /-- never read by an open, never backed up -/
   | transient
+  /-- optional, replaced whole and atomically, and self-authenticating: no open reads it, a page serves
+  it, and a copy older or newer than the base beside it is answered stale by its reader, never trusted -/
+  | sidecar
   deriving DecidableEq, Repr
 
 structure StoreFile where
@@ -450,15 +453,20 @@ def layout : List StoreFile :=
    ⟨(StorePart.segment 0).pattern, .appendOnly, "an authenticated physical header (Host.Physical), then frames (Host.Log) from the header's logical start; o is generation * 2^64 + start, not a logical offset; the atomic base selects the generation; only its newest file is appended to; adoption creates a fresh generation without replacing old headers; retention drops files before retainedFrom in the selected generation"⟩,
    ⟨(StorePart.index 0).pattern, .appendOnly, "fixed-width keyed entries k0, k0+1, ..., one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33); k0 is the base's indexFrom, 0 unless a drop moved it"⟩,
    ⟨StorePart.base.name, .replaced, "the newest sealed base: the World, logical segment position, index count and last tag, retainedFrom and indexFrom, plus the authenticated generation selecting its physical segment files; the complete base is published atomically"⟩,
+   ⟨"base.cert", .sidecar, "the writer's certificate of the newest base's head (PROTOCOL-77.1, HOST-80), absent until a certifying writer certifies; signed by the World's certifier, so it carries no Store MAC; a read page serves it beside the base, and one that certifies another head than the base's is refused `otherHead` by the joiner until the next seal replaces it"⟩,
    ⟨"base.tmp", .transient, "a base being installed; a crash may leave one, which no open reads"⟩,
+   ⟨"cert.tmp", .transient, "a certificate being installed; a crash may leave one, which no open or page reads"⟩,
    ⟨"seg.tmp", .transient, "a segment file being started; a crash may leave one, which no open reads"⟩,
    ⟨"index.tmp", .transient, "a kept index being written by a drop; a crash may leave one, which no open reads"⟩]
 
-/-- The order a backup copies a LIVE Store's files in: the key, then the base, then the
-append-only files (the index file the base names, then the segment files from its retainedFrom,
-oldest first), so each append-only copy is at least as long as the prefix the copied base names (a
-longer one is a torn tail or orphan entries, which an open handles). -/
-def backupOrder : List String := [StorePart.key, .base, .index 0, .segment 0].map (·.pattern)
+/-- The order a backup copies a LIVE Store's files in: the key, then the base and its certificate
+(when there is one), then the append-only files (the index file the base names, then the segment
+files from its retainedFrom, oldest first), so each append-only copy is at least as long as the prefix
+the copied base names (a longer one is a torn tail or orphan entries, which an open handles). The
+certificate is copied right after the base it most likely certifies; a seal between the two copies
+leaves a certificate of another head, which a joiner refuses `otherHead` and the next seal replaces. -/
+def backupOrder : List String :=
+  [StorePart.key.pattern, StorePart.base.pattern, "base.cert", (StorePart.index 0).pattern, (StorePart.segment 0).pattern]
 
 end Store
 

@@ -600,3 +600,56 @@ processes, 4-5 days old (`nd-supervise`, `host`, `keybroker`, `nd-members` under
 `nanodregg-gate-3` and `wt/client` runs). They hold throwaway Worlds, not a deployment, and nothing here
 stopped them: they have no PID file of this lane's.
 **Status.** landed (this commit). Nothing re-emits; nothing refuses to load.
+
+## OPS-21 · a certifying writer's backup: keybroker's `KEYS.certified` first, the Store after it, and a restore never moves the record back (OPS, 2026-10-27; OVERLOOKED-20261027 A4; HOSTING-56, HOSTING-60; ROOT-DOCS' certificate sidecar)
+
+**The gap.** The seed (HOSTING-56/60) put state outside the Store: keybroker's `KEYS.certified`, the last head the
+certify key signed, which is what keeps the key from signing two heads at one step count or a head that does not
+extend the last. `deploy/units/STORE.md` listed `key`, `base.world`, the index and segment files; `base.cert` was not
+a row, `copyStore` (the store-plants backup) did not copy it, and RUNBOOK §4–5 did not name the broker's file. A
+restore could therefore put an older Store beside a later record (a writer the broker will not certify, with no
+document saying why) or an older record beside the Store (a key that may sign a sibling of a head it already signed).
+
+**Decision.**
+1. `Host.Store.layout` gains `base.cert` as a new kind, `sidecar` (optional, replaced whole and atomically,
+   self-authenticating, never read by an open), and `cert.tmp` as transient. `backupOrder` copies `base.cert` right
+   after `base.world`. `StorePart.covers_layout` now excludes the sidecar with the transients (no open checks it);
+   `backupOrder_covers` and `backupOrder_appendOnly_after_base` hold over the new rows by `decide`. `copyStore` copies
+   the certificate when there is one.
+2. The invariant, written into RUNBOOK §4–5 and rendered into STORE.md (`Ops.Units.storeTable`, the path from
+   `Broker.certified`): **`KEYS.certified` never moves back, and the Store beside it must extend it.** A backup copies
+   the record FIRST, then the Store: the key signs only heads the decider's fold of the Store already holds, so a
+   Store copied after the record extends it.
+3. Restore, by case. The live record survives: restore only the Store beside it; a Store that extends the record is
+   anchored at keybroker's restart (`Certifier.opened`, `anchoredBy`) and certified at the next seal; an older one is
+   answered `unanchored` and the writer serves on with its last certificate, staler (PROTOCOL-84). The box is lost
+   with both: the backup's record may be older than the key's last signature, so the restored pair could sign a
+   second head at one step; never certify under that key again.
+4. A row: `launcher` `certify`, `a_restore_meets_the_certified_head`. It backs up a REAL certified World in this
+   order (B1 at the first certificate, B2 live past the second), and restores: B1's Store beside the live record is
+   `refused=unanchored` on the seal and `Unanchored` on a direct ask of B1's own head, and the record does not move;
+   B2's Store beside it is certified at the next seal (the control); B1's record, Store, follower and workspace
+   together (the box-loss case) certify another head at the step count of the second certificate, and both
+   certificates pass the stranger's `host certified`: the equivocation the rule exists to prevent, shown possible.
+
+**Alternatives.** (a) Back up the record with the Store and restore them together, as the first reading of the
+problem suggested. Rejected: it is safe only when the key signed nothing after the backup, which a box-loss restore
+cannot know; the plant shows the result. (b) Empty `KEYS.certified` after a rollback so the writer certifies again.
+Rejected: it is case (a)'s hazard chosen on purpose. (c) Keep the record off the box (a remote append-only copy on
+every sign). Not built here: it is the one design that would make a box-loss restore safe, and it is a custody
+decision (where the copy lives, who may read it); filed.
+
+**CRITIQUE.** (1) After a box loss, or a Store older than the record, this binary has no way forward but a stale
+certificate: `host import` keeps the carried authority (OVERLOOKED A1) and the certify key's pre-rotation is TRUST's,
+so a certifying World that loses its record keeps serving its last certificate indefinitely; PROTOCOL-84 critique 3
+already names that nothing bounds staleness. (2) The order rule is stated for a live backup but the row backs up a
+stopped writer for B1 and a live one only for B2; the live race between the record copy and a seal is argued (the
+record moves only after the fold holds the head), not planted. (3) `sidecar` is a kind with one member; it exists so
+that `covers_layout` keeps saying something true about what an open reads, rather than widening `replaced`.
+
+**Meta-critique.** The brief offered two restores as equals ("restored together, or re-anchored"). Reading the
+decider showed they are not: re-anchoring is a property of the Store being newer, and "together" is unsafe in the
+one case a backup exists for. Writing the plant for the hazard, rather than only for the refusals, is what keeps a
+later reader from reaching for (a).
+
+**Status.** landed with this entry.

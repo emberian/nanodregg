@@ -7,7 +7,9 @@
 | `seg.<o>.log` | append-only | an authenticated physical header (Host.Physical), then frames (Host.Log) from the header's logical start; o is generation * 2^64 + start, not a logical offset; the atomic base selects the generation; only its newest file is appended to; adoption creates a fresh generation without replacing old headers; retention drops files before retainedFrom in the selected generation |
 | `index.<k0>.log` | append-only | fixed-width keyed entries k0, k0+1, ..., one per record before the newest base, each tagged with its position: what log pages binary-search (HOST-33); k0 is the base's indexFrom, 0 unless a drop moved it |
 | `base.world` | replaced whole, atomically | the newest sealed base: the World, logical segment position, index count and last tag, retainedFrom and indexFrom, plus the authenticated generation selecting its physical segment files; the complete base is published atomically |
+| `base.cert` | optional, replaced whole, atomically; self-authenticating, never read by an open | the writer's certificate of the newest base's head (PROTOCOL-77.1, HOST-80), absent until a certifying writer certifies; signed by the World's certifier, so it carries no Store MAC; a read page serves it beside the base, and one that certifies another head than the base's is refused `otherHead` by the joiner until the next seal replaces it |
 | `base.tmp` | transient: never read by an open, never backed up | a base being installed; a crash may leave one, which no open reads |
+| `cert.tmp` | transient: never read by an open, never backed up | a certificate being installed; a crash may leave one, which no open or page reads |
 | `seg.tmp` | transient: never read by an open, never backed up | a segment file being started; a crash may leave one, which no open reads |
 | `index.tmp` | transient: never read by an open, never backed up | a kept index being written by a drop; a crash may leave one, which no open reads |
 
@@ -20,5 +22,22 @@ an open handles. Restore with `host check STORE --anchor HEIGHT:CHAIN` (RUNBOOK 
 
 1. `key`
 2. `base.world`
-3. `index.<k0>.log`
-4. `seg.<o>.log`
+3. `base.cert`
+4. `index.<k0>.log`
+5. `seg.<o>.log`
+
+## A certifying writer (`host serve --certify`): keybroker's record first
+
+The certify key's guard is not in the Store: keybroker keeps the last head the key signed in `/etc/nd/keybroker/provider.key.certified`
+(`KEYS.certified`), durable before each signature, and its decider refuses a head below or beside it
+(`Hosting.Proofs.Certify.granted_extends` holds while that file never moves back). A backup copies it
+BEFORE every Store file above: the key signs only heads its decider's fold of the Store already holds, so a
+Store copied after the record extends the recorded head.
+
+0. `/etc/nd/keybroker/provider.key.certified`
+
+A restore never moves `KEYS.certified` back. While the live file survives, restore the Store beside it:
+a Store that extends it is anchored when keybroker restarts and its next seal is certified; an older one
+is answered `unanchored` and its pages carry its last certificate, staler. After a box loss the backup's
+record may be older than the key's last signature, so the restored pair could sign a second head at one
+step: never certify under that key again (RUNBOOK §5).
