@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # testground/build/publish.sh OUT LIVE [REPO] — the page as a deployment publishes it: OUT gets exactly
 # the files the browser loads (from testground/, after build.sh), kernel.json as build.sh wrote it,
-# deployment.json naming this deployment's live World (LIVE, a wss://…/ws relay, or `none`) and the
+# deployment.json naming this deployment's live World (LIVE: a wss://…/ws relay; `self`, the page is
+# served by the live World's own host and its relay is the page's origin at /ws; or `none`) and the
 # repository its commit links to, a README with both hashes, LICENSE and .nojekyll. The live origin is
 # this argument, never an edit to the page: testground/PUBLISH.md names the value for each deployment.
 #
 # It refuses (and writes nothing) unless the kernel can be tied to a commit a visitor can fetch:
 # kernel.json's sha256 is kernel.wasm's, its tree was clean, and its commit is on REPO's main as this
-# clone last fetched it (origin/main). And unless LIVE answers: its world.json names an origin.
+# clone last fetched it (origin/main). And unless LIVE answers: its world.json names an origin (a `self`
+# deployment's host is not known here; its tarball is checked on the box).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd); tg=$root/testground
 out=${1:?usage: publish.sh OUT LIVE [REPO]}; live=${2:?usage: publish.sh OUT LIVE [REPO]}
@@ -21,7 +23,7 @@ commit=$(kj commit); tree=$(kj tree); stamped=$(kj sha256); actual=$(sha "$tg/ke
 [ "$stamped" = "$actual" ] || die "kernel.json says sha256 $stamped, kernel.wasm is $actual"
 [ "$tree" = clean ] || die "the kernel was built from a $tree tree: no commit names it"
 git -C "$root" merge-base --is-ancestor "$commit" origin/main 2>/dev/null || die "commit $commit is not on origin/main (git fetch, or push it first)"
-if [ "$live" != none ]; then
+if [ "$live" != none ] && [ "$live" != self ]; then
   http=$(printf '%s' "$live" | sed -e 's|^ws|http|' -e 's|/ws$||')
   origin=$(curl -sf -m 15 "$http/world.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["origin"])') \
     || die "the live World does not answer: $http/world.json"
@@ -38,7 +40,11 @@ import json, sys
 out, live, repo = sys.argv[1:]
 json.dump({"live": "" if live == "none" else live, "repo": repo}, open(out, "w")); open(out, "a").write("\n")
 EOF
-door=$([ "$live" = none ] && echo "No live World is linked from this deployment." || echo "The desktop's **Join the live World** opens \`$live\` (World origin \`${origin:-?}\` when this was published); \`?live\` in the address is the same door.")
+case $live in
+  none) door="No live World is linked from this deployment." ;;
+  self) door="The desktop's **Join the live World** opens the relay at this page's own host (\`wss://HOST/ws\`): the page and the writer are served from one box; \`?live\` in the address is the same door." ;;
+  *) door="The desktop's **Join the live World** opens \`$live\` (World origin \`${origin:-?}\` when this was published); \`?live\` in the address is the same door." ;;
+esac
 cat > "$out/README.md" <<EOF
 # gh-pages: the nanodregg testground, built
 

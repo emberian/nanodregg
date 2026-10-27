@@ -71,7 +71,9 @@ const kernelBytes = new Uint8Array(await (await fetch(new URL('./kernel.wasm', i
 let kernelSha = '';
 try { kernelSha = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', kernelBytes))); } catch { /* no WebCrypto (an insecure origin): shown as unknown */ }
 const [built, deployment] = await Promise.all([fetchJson('kernel.json'), fetchJson('deployment.json')]);
-const LIVE = deployment?.live ?? '';
+// `live: "self"`: the page is served by the live World's own host (the demo box), so its relay is this
+// page's origin at /ws; any other value is the relay's address
+const LIVE = deployment?.live === 'self' ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws` : deployment?.live ?? '';
 K = await loadKernel(factory, { wasmBinary: kernelBytes });
 const loadMs = performance.now() - t0;
 document.getElementById('boot').remove();

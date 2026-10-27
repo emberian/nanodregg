@@ -9,7 +9,10 @@ box's tenant at the same commit when the wire moved (the page's follow and the b
 speak one wire; `dregg-infra-demo-vm/edge/demo/tenants/nd-testground/README.md`, "flag day").
 
 **This deployment's live World:** `wss://nano.demo.dregg.online/ws` (the demo box's tenant
-`nd-testground`). It is the `LIVE` argument of step 3. It is set here and stamped into
+`nd-testground`). It is the `LIVE` argument of step 3 for GitHub Pages (the sandbox mirror, with a door
+to the box). The box serves the page itself at https://nano.demo.dregg.online/ (beside /ws, /world.json,
+/enroll, /attest): its tarball is assembled with `LIVE` = `self`, and the page then joins
+`wss://<its own host>/ws`. It is set here and stamped into
 `deployment.json` at publish time, never edited into the page.
 
 ## 1. Build the kernel at a pushed commit (hbox: the toolchain and emsdk at ~/tools/emsdk)
