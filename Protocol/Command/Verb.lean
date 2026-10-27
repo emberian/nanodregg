@@ -24,7 +24,8 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 /-- Every verb. -/
 inductive Verb
-  /-- `init SPONSOR`: a join token for SPONSOR to enroll (key, next-key digest, possession) -/
+  /-- `init SPONSOR`: a join token for SPONSOR to enroll into follow's World (key, next-key digest,
+  the World's origin, the key's join consent over them: PROTOCOL-79) -/
   | init
   /-- `enroll TOKEN`: sponsor a new member -/
   | enroll
@@ -128,11 +129,13 @@ def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
 end Verb
 
-/-- A join token: what a newcomer hands its sponsor. -/
+/-- A join token: what a newcomer hands its sponsor: its key, its next key's digest, the World it
+consents to join, and its consent (`Receive.joinMessage`, PROTOCOL-79). -/
 structure Join (D : Type) where
   key : ByteArray
   next : D
-  possession : ByteArray
+  origin : D
+  join : ByteArray
   deriving DecidableEq
 
 /-- What a grant is over: the World, an object (or any cell) by id, or a value account by its
@@ -258,10 +261,10 @@ def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
 variable {D : Type}
 
-/-- The join token's bytes: `key ‖ next ‖ possession`, each `u32le len ‖ bytes`. -/
+/-- The join token's bytes: `key ‖ next ‖ origin ‖ join`, each `u32le len ‖ bytes`. -/
 def Join.bytes (dbytes : D → ByteArray) (j : Join D) : ByteArray :=
   let f (b : ByteArray) := Codec.Stream.u32.bytes b.size.toUInt32 ++ b
-  f j.key ++ f (dbytes j.next) ++ f j.possession
+  f j.key ++ f (dbytes j.next) ++ f (dbytes j.origin) ++ f j.join
 
 def Join.ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (Join D) :=
   let field (i : Nat) : Option (ByteArray × Nat) :=
@@ -271,8 +274,9 @@ def Join.ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (J
   do
     let (key, i) ← field 0
     let (nb, i) ← field i
-    let (possession, i) ← field i
-    if i = b.size then some { key, next := ← digestOf nb, possession } else none
+    let (ob, i) ← field i
+    let (join, i) ← field i
+    if i = b.size then some { key, next := ← digestOf nb, origin := ← digestOf ob, join } else none
 
 section
 variable (digestOf : ByteArray → Option D)

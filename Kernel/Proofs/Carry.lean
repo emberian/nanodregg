@@ -263,30 +263,34 @@ World's origin only in its first check (`wrongWorld`), and admission never reads
 any new origin and chain: a call naming the new origin is derived from the OLD World's pinned
 state (`pinned` reads only the trie), whatever the origin and chain were. -/
 theorem receive_reorigin [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D} {o ch : D}
-    {rf : Refusals D} {st : Nat} (hc : c.unsigned.world = o) :
+    {rf : Refusals D} {st : Nat} (hc : c.unsigned.world = o)
+    (hj : c.unsigned.body.joinOrigin.all (· = o) = true) :
     receive X { w with origin := o, chain := ch, refusals := rf, steps := st } c =
       receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c := by
-  unfold receive
-  simp only [req, decide_eq_true hc, if_true]
+  unfold receive receiveWith
+  simp only [req, decide_eq_true hc, if_true, hj]
   rfl
 
 /-- A call that names its World is derived from the World's pinned state alone. -/
 theorem receive_named [DecidableEq D] {X : Ctx D} {w : World D} {c : Call D}
-    (hc : c.unsigned.world = w.origin) :
+    (hc : c.unsigned.world = w.origin) (hj : c.unsigned.body.joinOrigin.all (· = w.origin) = true) :
     receive X w c = receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c := by
-  unfold receive
-  simp only [req, decide_eq_true hc, if_true]
+  unfold receive receiveWith
+  simp only [req, decide_eq_true hc, if_true, hj]
   rfl
 
 /-- **A carry changes no authority.** The carried World derives every call that names it exactly
 as the exported World's own state does past the World check: through the same pinned view (the
 same members, keys, grants and cells at the same ids), so the members keep their ids and their
-rights. (On the old World the same call is `wrongWorld`: it names the new origin.) -/
+rights. (On the old World the same call is `wrongWorld`: it names the new origin.) An enrolment is the
+one call that also names the World in its body: its join must name the carried World
+(PROTOCOL-79: a carried World's join is a new join). -/
 theorem carry_receive [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
-    (h : carry X name nonce w.origin w.carried = .ok w') {c : Call D} (hc : c.unsigned.world = w'.origin) :
+    (h : carry X name nonce w.origin w.carried = .ok w') {c : Call D} (hc : c.unsigned.world = w'.origin)
+    (hj : c.unsigned.body.joinOrigin.all (· = w'.origin) = true) :
     receive X w' c = receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
-  exact receive_reorigin (w := w) hc
+  exact receive_reorigin (w := w) hc hj
 
 /-! ### The call's own world field (KERNEL-40)
 
@@ -364,16 +368,19 @@ theorem rowView_world [DecidableEq D] (E : Env D) (w : World D) (u : Unsigned D)
 World derives a call naming its new origin exactly as the exported World derives the same call
 naming the OLD origin, with the call's two encodings fixed to the new call's own. So nothing on the
 receive path, the pinned view and the row view included, reads the world the call names but the
-`wrongWorld` check and the bytes. -/
+`wrongWorld` check and the bytes. Not an enrolment: its join names the World too (PROTOCOL-79), so
+the old World refuses the carried World's join `otherWorld` and the carried World the old one's. -/
 theorem carry_receive_world [DecidableEq D] {X : Ctx D} {name nonce : ByteArray} {w w' : World D}
-    (h : carry X name nonce w.origin w.carried = .ok w') {c : Call D} (hc : c.unsigned.world = w'.origin) :
+    (h : carry X name nonce w.origin w.carried = .ok w') {c : Call D} (hc : c.unsigned.world = w'.origin)
+    (hj : c.unsigned.body.joinOrigin = none) :
     receive X w' c =
       receive
         { X with
           callBytes := fun _ => X.callBytes c
           unsignedBytes := fun _ => X.unsignedBytes c.unsigned }
         w { c with unsigned := { c.unsigned with world := w.origin } } := by
-  rw [carry_receive h hc, receiveWith_world X _ _ c w.origin, receive_named rfl, rowView_world]
+  rw [carry_receive h hc (by simp [hj]), receiveWith_world X _ _ c w.origin,
+    receive_named rfl (by simp [hj]), rowView_world]
   rfl
 
 /-! #### Tooth: a derivation that recomputes an id from the call's world

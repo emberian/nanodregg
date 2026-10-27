@@ -55,11 +55,13 @@ def checkSignatureBy (X : Ctx D) (c : Call D) (verified : Bool) : Except (Refusa
 
 /-- Is the call signed, for THIS World, by a key the member holds (KERNEL-44's class (A))? The World it
 names first (`wrongWorld`, KERNEL-24), then the signature (skipped when `verified` carries a passing
-one: PERF-1), then the key (`authKey`). `submit` judges nothing else of a call until this passes
+one: PERF-1), then the World an enrolment's join names (`otherWorld`, PROTOCOL-79), then the key
+(`authKey`). `submit` judges nothing else of a call until this passes
 (KERNEL-66), and `judge` records only a refusal of a call it passes. -/
 def signedBy (X : Ctx D) (w : World D) (c : Call D) (verified : Bool) : Except (Refusal D) Unit := do
   req (c.unsigned.world = w.origin) .wrongWorld
   checkSignatureBy X c verified
+  req (c.unsigned.body.joinOrigin.all (Â· = w.origin)) .otherWorld
   authKey X (pinned X.env w c.unsigned.pins) c
 
 /-- Judge a signed call: journal first (an exact retry is `replayed`), then the recorded refusals (a
@@ -91,7 +93,7 @@ def submit (X : Ctx D) (w : World D) (c : Call D) : Except (Verdict D) (Turn D Ã
 /-- The wire names of the receive refusals, in constructor order (checked against `Refusal.name` by
 `codeName_code`). -/
 def refusalNames : List String :=
-  ["wrongWorld", "badSignature", "unknownKey", "notPrecommitted", "badPossession", "unpinned",
+  ["wrongWorld", "badSignature", "unknownKey", "notPrecommitted", "badJoin", "otherWorld", "unpinned",
    "missingCell", "wrongKind", "malformedCell", "lawDenied", "program", "stateKey", "tooManyLaws",
    "hasMethods", "noMethods", "noGrant", "grantTarget", "grantRight", "grantWidens", "unrooted",
    "enrollSpent", "transferSpent", "creditSpent", "rightTarget", "notIssuer", "grantTooDeep", "overPrice", "eventMismatch",

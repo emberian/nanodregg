@@ -1,8 +1,8 @@
 /-
 # Protocol.Proofs.Domains — every message a member key signs begins with its own domain (KERNEL-42)
 
-A member key signs seven shapes, and a World's certifier an eighth (`Head.certifyMessage`, `Head.domCertify`, PROTOCOL-76, never a member's): a call (`Receive.Ctx.callMessage`, `domCall`), a possession
-proof (`Receive.possessionMessage`, `tagPossession`), a read envelope (`Envelope.message`,
+A member key signs seven shapes, and a World's certifier an eighth (`Head.certifyMessage`, `Head.domCertify`, PROTOCOL-76, never a member's): a call (`Receive.Ctx.callMessage`, `domCall`), a join
+consent (`Receive.joinMessage`, `domJoin`, PROTOCOL-79), a read envelope (`Envelope.message`,
 `domEnvelope`), `init`'s identity probe (`Command.whoami`, a constant), an invitation
 (`Invite.message`, `domInvite`, PROTOCOL-42), a cancel (`Receive.Ctx.cancelMessage`,
 `domCancel`, KERNEL-60; PROTOCOL-60) and a head attestation (`Head.message`, `Head.domHead`,
@@ -10,8 +10,8 @@ PROTOCOL-74). Each pair of domains
 differs at a byte both hold, so no message of one shape is a message of another, whatever follows
 the domain: a signature made for one is never one over another, with no hash premise. An observer
 custody that signs only messages beginning with `domEnvelope` (HOSTING-17 §7, CLIENT-22) therefore
-never signs a call, a possession proof, a probe, an invitation, a cancel or an attestation
-(`call_not_envelope`, `possession_not_envelope`, `whoami_not_envelope`, `invite_not_envelope`,
+never signs a call, a join consent, a probe, an invitation, a cancel or an attestation
+(`call_not_envelope`, `join_not_envelope`, `whoami_not_envelope`, `invite_not_envelope`,
 `cancel_not_envelope`, `head_not_envelope`), and
 a cancel signature is never a call's (`cancel_not_call`): a member's cancel of one call cannot be
 replayed as a signed call, nor a signed call as a cancel.
@@ -38,16 +38,16 @@ theorem append_ne_of_byte {a b r s : ByteArray} {i : Nat} (ha : i < a.size) (hb 
 theorem call_envelope_disjoint (r s : ByteArray) : domCall ++ r ≠ domEnvelope ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
-theorem call_possession_disjoint (r s : ByteArray) : domCall ++ r ≠ tagPossession ++ s :=
+theorem call_join_disjoint (r s : ByteArray) : domCall ++ r ≠ domJoin ++ s :=
   append_ne_of_byte (i := 17) (by decide) (by decide) (by decide)
 
 theorem call_whoami_disjoint (r s : ByteArray) : domCall ++ r ≠ Command.whoami ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
-theorem possession_envelope_disjoint (r s : ByteArray) : tagPossession ++ r ≠ domEnvelope ++ s :=
+theorem join_envelope_disjoint (r s : ByteArray) : domJoin ++ r ≠ domEnvelope ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
-theorem possession_whoami_disjoint (r s : ByteArray) : tagPossession ++ r ≠ Command.whoami ++ s :=
+theorem join_whoami_disjoint (r s : ByteArray) : domJoin ++ r ≠ Command.whoami ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
 theorem envelope_whoami_disjoint (r s : ByteArray) : domEnvelope ++ r ≠ Command.whoami ++ s :=
@@ -71,22 +71,22 @@ theorem envelope_call_disjoint (X : Ctx D) (u : Unsigned D) (world member grant 
   simp only [ByteArray.append_assoc]
   exact call_not_envelope X u _
 
-theorem possession_not_envelope (X : Ctx D) (sponsor next : D) (key r : ByteArray) :
-    domEnvelope ++ r ≠ possessionMessage X sponsor next key := by
-  unfold possessionMessage
+theorem join_not_envelope (X : Ctx D) (origin sponsor next : D) (key r : ByteArray) :
+    domEnvelope ++ r ≠ joinMessage X origin sponsor next key := by
+  unfold joinMessage
   simp only [ByteArray.append_assoc]
-  exact fun h => possession_envelope_disjoint _ r h.symm
+  exact fun h => join_envelope_disjoint _ r h.symm
 
 theorem whoami_not_envelope (r : ByteArray) : domEnvelope ++ r ≠ Command.whoami := by
   intro h
   exact envelope_whoami_disjoint r ByteArray.empty (by rw [ByteArray.append_empty]; exact h)
 
-/-- A call's message is never a possession proof's. -/
-theorem call_not_possession (X : Ctx D) (u : Unsigned D) (sponsor next : D) (key : ByteArray) :
-    X.callMessage u ≠ possessionMessage X sponsor next key := by
-  unfold Ctx.callMessage possessionMessage
+/-- A call's message is never a join consent's. -/
+theorem call_not_join (X : Ctx D) (u : Unsigned D) (origin sponsor next : D) (key : ByteArray) :
+    X.callMessage u ≠ joinMessage X origin sponsor next key := by
+  unfold Ctx.callMessage joinMessage
   simp only [ByteArray.append_assoc]
-  exact call_possession_disjoint _ _
+  exact call_join_disjoint _ _
 
 /-- A call's message is never the identity probe. -/
 theorem call_not_whoami (X : Ctx D) (u : Unsigned D) : X.callMessage u ≠ Command.whoami := by
@@ -99,7 +99,7 @@ theorem call_not_whoami (X : Ctx D) (u : Unsigned D) : X.callMessage u ≠ Comma
 theorem invite_call_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ domCall ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
-theorem invite_possession_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ tagPossession ++ s :=
+theorem invite_join_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ domJoin ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
 theorem invite_envelope_disjoint (r s : ByteArray) : Invite.domInvite ++ r ≠ domEnvelope ++ s :=
@@ -117,18 +117,18 @@ theorem invite_not_envelope (u r : ByteArray) : domEnvelope ++ r ≠ Invite.mess
 theorem invite_not_call (X : Ctx D) (v : Unsigned D) (u : ByteArray) : Invite.message u ≠ X.callMessage v :=
   invite_call_disjoint u (X.unsignedBytes v)
 
-theorem invite_not_possession (X : Ctx D) (sponsor next : D) (key u : ByteArray) :
-    Invite.message u ≠ possessionMessage X sponsor next key := by
-  unfold possessionMessage
+theorem invite_not_join (X : Ctx D) (origin sponsor next : D) (key u : ByteArray) :
+    Invite.message u ≠ joinMessage X origin sponsor next key := by
+  unfold joinMessage
   simp only [ByteArray.append_assoc]
-  exact invite_possession_disjoint _ _
+  exact invite_join_disjoint _ _
 
 /-! ## The cancel's domain against the other five (KERNEL-60; byte 19, 17 or 10 differs) -/
 
 theorem cancel_call_disjoint (r s : ByteArray) : domCancel ++ r ≠ domCall ++ s :=
   append_ne_of_byte (i := 19) (by decide) (by decide) (by decide)
 
-theorem cancel_possession_disjoint (r s : ByteArray) : domCancel ++ r ≠ tagPossession ++ s :=
+theorem cancel_join_disjoint (r s : ByteArray) : domCancel ++ r ≠ domJoin ++ s :=
   append_ne_of_byte (i := 17) (by decide) (by decide) (by decide)
 
 theorem cancel_envelope_disjoint (r s : ByteArray) : domCancel ++ r ≠ domEnvelope ++ s :=
@@ -152,11 +152,11 @@ theorem cancel_not_call (X : Ctx D) (c : Call D) (u : Unsigned D) : X.cancelMess
   unfold Ctx.cancelMessage Ctx.callMessage
   exact cancel_call_disjoint _ _
 
-theorem cancel_not_possession (X : Ctx D) (c : Call D) (sponsor next : D) (key : ByteArray) :
-    X.cancelMessage c ≠ possessionMessage X sponsor next key := by
-  unfold Ctx.cancelMessage possessionMessage
+theorem cancel_not_join (X : Ctx D) (c : Call D) (origin sponsor next : D) (key : ByteArray) :
+    X.cancelMessage c ≠ joinMessage X origin sponsor next key := by
+  unfold Ctx.cancelMessage joinMessage
   simp only [ByteArray.append_assoc]
-  exact cancel_possession_disjoint _ _
+  exact cancel_join_disjoint _ _
 
 theorem cancel_not_whoami (X : Ctx D) (c : Call D) : X.cancelMessage c ≠ Command.whoami := by
   intro h
@@ -171,7 +171,7 @@ theorem cancel_not_invite (X : Ctx D) (c : Call D) (u : ByteArray) : X.cancelMes
 theorem head_call_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ domCall ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
-theorem head_possession_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ tagPossession ++ s :=
+theorem head_join_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ domJoin ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
 theorem head_cancel_disjoint (r s : ByteArray) : Head.domHead ++ r ≠ domCancel ++ s :=
@@ -195,11 +195,11 @@ theorem head_not_envelope (u r : ByteArray) : domEnvelope ++ r ≠ Head.message 
 theorem head_not_call (X : Ctx D) (v : Unsigned D) (u : ByteArray) : Head.message u ≠ X.callMessage v :=
   head_call_disjoint u (X.unsignedBytes v)
 
-theorem head_not_possession (X : Ctx D) (sponsor next : D) (key u : ByteArray) :
-    Head.message u ≠ possessionMessage X sponsor next key := by
-  unfold possessionMessage
+theorem head_not_join (X : Ctx D) (origin sponsor next : D) (key u : ByteArray) :
+    Head.message u ≠ joinMessage X origin sponsor next key := by
+  unfold joinMessage
   simp only [ByteArray.append_assoc]
-  exact head_possession_disjoint _ _
+  exact head_join_disjoint _ _
 
 theorem head_not_whoami (u : ByteArray) : Head.message u ≠ Command.whoami := by
   intro h
@@ -217,7 +217,7 @@ theorem head_not_cancel (X : Ctx D) (c : Call D) (u : ByteArray) : Head.message 
 theorem certify_call_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ domCall ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
-theorem certify_possession_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ tagPossession ++ s :=
+theorem certify_join_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ domJoin ++ s :=
   append_ne_of_byte (i := 10) (by decide) (by decide) (by decide)
 
 theorem certify_cancel_disjoint (r s : ByteArray) : Head.domCertify ++ r ≠ domCancel ++ s :=
@@ -249,11 +249,11 @@ theorem certify_not_call (X : Ctx D) (v : Unsigned D) (u : ByteArray) :
     Head.certifyMessage u ≠ X.callMessage v :=
   certify_call_disjoint u (X.unsignedBytes v)
 
-theorem certify_not_possession (X : Ctx D) (sponsor next : D) (key u : ByteArray) :
-    Head.certifyMessage u ≠ possessionMessage X sponsor next key := by
-  unfold possessionMessage
+theorem certify_not_join (X : Ctx D) (origin sponsor next : D) (key u : ByteArray) :
+    Head.certifyMessage u ≠ joinMessage X origin sponsor next key := by
+  unfold joinMessage
   simp only [ByteArray.append_assoc]
-  exact certify_possession_disjoint _ _
+  exact certify_join_disjoint _ _
 
 theorem certify_not_whoami (u : ByteArray) : Head.certifyMessage u ≠ Command.whoami := by
   intro h

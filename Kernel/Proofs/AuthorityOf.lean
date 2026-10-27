@@ -152,12 +152,15 @@ theorem derive_born_not_authority {X : Ctx D} {look : Pinned D} {rv : RowView D}
   · intro sub wk actor b r hb h
     cases b with
     | invoke => simp [Body.isInvoke] at hb
-    | enroll key next possession via =>
+    | enroll key next origin join via =>
         have hd := stepped_draft h
         simp only [enroll, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
         obtain ⟨_, _, _, _, _, _, ⟨⟩, _, hr⟩ := hd
         rw [← hr]
-        exact one _ _ (by simp [kindMember, kindAuthority])
+        intro p hp
+        simp only [List.mem_singleton] at hp
+        subst hp
+        simp [kindMember, kindAuthority]
     | rotate key next =>
         have hd := stepped_draft h
         simp only [rotate, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

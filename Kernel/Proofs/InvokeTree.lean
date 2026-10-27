@@ -624,7 +624,7 @@ private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c
   | invoke => simp [Body.isInvoke] at hi
   | write o e v => exact absurd rfl (hw o e v)
   | law o ls v => exact absurd rfl (hl o ls v)
-  | enroll key next possession via =>
+  | enroll key next origin join via =>
       have hd := stepped_draft h
       unfold enroll at hd
       simp only [except_bind_ok] at hd
