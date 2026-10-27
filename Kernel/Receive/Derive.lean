@@ -82,22 +82,16 @@ def spendEnroll (g : D) (cell : Cell) (units : Nat) (short : Refusal D) :
     Except (Refusal D) (Option (D × Act)) := spendAt enrollBase g cell units short
 
 /-- Enrolment is a right (KERNEL-16): the sponsor acts through a World grant chain carrying
-`enroll`, rooted at a founder's genesis grant, and spends one of its own grant's count. The new key
-consented to this join (PROTOCOL-79): its join verifies under the key over `joinMessage` of the
-World it names (`badJoin`); that the World it names is the receiving one is `receive`'s check
-(`otherWorld`), so the derivation stays blind to the World's name (KERNEL-40). The member is born at
-`memberId`, the digest of that consent, so the same consent enrolled twice is `World.admit`'s
-`idTaken`. -/
-def enroll (X : Ctx D) (look : Pinned D) (a : At D) (key : ByteArray) (next : D)
-    (origin : D) (join : ByteArray) (via : D) : Except (Refusal D) (Draft D) := do
+`enroll`, rooted at a founder's genesis grant, and spends one of its own grant's count. -/
+def enroll (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (key : ByteArray) (next : D)
+    (possession : ByteArray) (via : D) : Except (Refusal D) (Draft D) := do
   let _ ← walk X look (worldId X) (.enroll 0) true grantDepthMax via a.actor
   let g ← readKind look via kindGrant
   let spend ← spendEnroll via g 1 (.enrollSpent via)
-  req (X.verify key (joinMessage X origin a.actor next key) join) .badJoin
+  req (X.verify key (possessionMessage X a.actor next key) possession) .badPossession
   let slots := slotsOf [(slotKey, key), (slotNext, X.env.bytes next),
     (slotSponsor, X.env.bytes a.actor)]
-  pure ⟨[(memberId X origin a.actor next key, { kind := kindMember, discipline := .ram, slots })],
-    spend.toList, [], []⟩
+  pure ⟨bornAt X c a.base [{ kind := kindMember, discipline := .ram, slots }], spend.toList, [], []⟩
 
 /-- Signed by the new key; the new key's digest must be the one precommitted. -/
 def rotate (X : Ctx D) (look : Pinned D) (c : Call D) (key : ByteArray) (next : D) :
@@ -341,7 +335,7 @@ def stepped (wk : Walk D) (d : Except (Refusal D) (Draft D)) : Except (Refusal D
 /-- One receiver of a call's tree, as `actor`; `sub` derives an invoke's calls one level down. -/
 def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D) :
     Body D → Except (Refusal D) (Draft D × Walk D)
-  | .enroll key next origin join via => stepped wk (enroll X look ⟨actor, wk.born⟩ key next origin join via)
+  | .enroll key next possession via => stepped wk (enroll X look c ⟨actor, wk.born⟩ key next possession via)
   | .rotate key next => stepped wk (rotate X look c key next)
   | .install pkg => stepped wk (install X look c ⟨actor, wk.born⟩ pkg)
   | .create pkg laws state => stepped wk (create X look c ⟨actor, wk.born⟩ pkg laws state)
@@ -402,15 +396,9 @@ def receiveWith (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Ex
 
 /-- THE derivation: a signed call against a World, through the caller's pins only. The FIRST
 check is the World the call names (KERNEL-24): a call for another World is `wrongWorld`, never
-`badSignature` or `unknownKey`, whatever else is wrong with it. Past the signature, the World an
-enrolment's join names (PROTOCOL-79): a consent to join another World is `otherWorld`. Then
-`receiveWith`'s key rule and tree, which read the World's name nowhere
-(`Kernel.Proofs.Carry.receiveWith_world`). -/
+`badSignature` or `unknownKey`, whatever else is wrong with it. -/
 def receive (X : Ctx D) (w : World D) (c : Call D) : Except (Refusal D) (Turn D) := do
   req (c.unsigned.world = w.origin) .wrongWorld
-  checkSignature X c
-  req (c.unsigned.body.joinOrigin.all (· = w.origin)) .otherWorld
-  keyRule (pinned X.env w c.unsigned.pins) c.unsigned
-  deriveTurn X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
+  receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
 
 end Nanodregg.Kernel.Receive

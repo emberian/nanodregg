@@ -14,7 +14,7 @@ inductive Refusal where
   | trailing (offset : Nat)
   /-- A length or count `got` exceeded the declared `limit`. -/
   | pastBound (offset limit got : Nat)
-  /-- A tag byte the decoder does not know: not 0 or 1 for a sum or option, not one of the listed codes for `oneOf`, `tagged` and `choice`. -/
+  /-- A sum or option tag byte other than 0 or 1. -/
   | badTag (offset : Nat) (tag : UInt8)
   /-- A frame's 32-byte tag was not the tag this decoder reads. -/
   | wrongFrame (offset : Nat)

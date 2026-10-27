@@ -54,10 +54,9 @@ inductive AcctRef (D : Type)
 /-- What a call asks for, one constructor per operation kind. -/
 inductive Body (D : Type)
   /-- the signer sponsors a new member with `key`, precommitting the digest of its next key;
-  `join` is the new key's consent to join World `origin` through this sponsor (its signature over
-  `joinMessage`, PROTOCOL-79: the consent names the World, so it joins one World once); `via` is
-  the signer's World grant carrying `Right.enroll`, whose count the enrolment spends -/
-  | enroll (key : ByteArray) (next : D) (origin : D) (join : ByteArray) (via : D)
+  `possession` is the new key's signature over the enrolment; `via` is the signer's World grant
+  carrying `Right.enroll`, whose count the enrolment spends -/
+  | enroll (key : ByteArray) (next : D) (possession : ByteArray) (via : D)
   /-- the signer's member moves to `key`, which must be the precommitted one, and precommits
   `next`; the call is signed by `key` -/
   | rotate (key : ByteArray) (next : D)
@@ -129,11 +128,8 @@ inductive Refusal (D : Type)
   | unknownKey (member : D)
   /-- a rotation to a key whose digest is not the precommitted one -/
   | notPrecommitted (member : D)
-  /-- the enrolled key's join does not verify: it did not consent to this join (PROTOCOL-79) -/
-  | badJoin
-  /-- the enrolled key consented to join ANOTHER World (its join names another origin than the
-  call's, PROTOCOL-79): a consent is per World, so one carried from World A joins nothing in B -/
-  | otherWorld
+  /-- the enrolled key did not sign its own enrolment -/
+  | badPossession
   /-- the derivation needed a cell the caller did not pin -/
   | unpinned (cell : D)
   | missingCell (cell : D)
@@ -233,8 +229,7 @@ def Refusal.name {D : Type} : Refusal D → String
   | .badSignature => "badSignature"
   | .unknownKey _ => "unknownKey"
   | .notPrecommitted _ => "notPrecommitted"
-  | .badJoin => "badJoin"
-  | .otherWorld => "otherWorld"
+  | .badPossession => "badPossession"
   | .unpinned _ => "unpinned"
   | .missingCell _ => "missingCell"
   | .wrongKind _ _ => "wrongKind"
@@ -429,11 +424,7 @@ def retryPres {D : Type} (t : Turn D) (l : List (Step D)) : List (String × Byte
 
 def domWorld : String := "nanodregg/kernel/world/v1"
 def domNextKey : String := "nanodregg/kernel/next-key/v1"
-/-- The domain a join consent begins with (PROTOCOL-79; replaces the World-free
-`nanodregg/kernel/possession/v1`, which named the sponsor and not the World). -/
-def domJoin : ByteArray := "nanodregg/kernel/join/v1".toUTF8
-/-- The domain of a member's id: the digest of the join it consented to (PROTOCOL-79). -/
-def domMemberId : String := "nanodregg/kernel/member-id/v1"
+def tagPossession : ByteArray := "nanodregg/kernel/possession/v1".toUTF8
 
 variable {D : Type} [Ord D]
 
@@ -476,26 +467,15 @@ def nextKeyDigest (X : Ctx D) (key : ByteArray) : D := X.env.hash domNextKey key
 
 /-- The call signature's domain (KERNEL-42): every message a member key signs begins with its own
 domain, so a call's signature is never one over another protocol's message (a read envelope, a
-join consent, an identity probe): `Protocol.Proofs.Domains`. -/
+possession proof, an identity probe): `Protocol.Proofs.Domains`. -/
 def domCall : ByteArray := "nanodregg/kernel/call-signature".toUTF8
 
 /-- What a call's signature is over: `domCall`, then the call's canonical unsigned bytes. -/
 def Ctx.callMessage (X : Ctx D) (u : Unsigned D) : ByteArray := domCall ++ X.unsignedBytes u
 
-/-- What a new key signs to consent to join World `origin` through `sponsor`, precommitting `next`
-(PROTOCOL-79). Possession of `key` needs no World: ANY signature `key` makes shows it, so a join
-that verifies under `key` is also its holder's possession proof. What needs the World is the
-CONSENT: a consent naming only the sponsor (the old `possession/v1` message) let that sponsor enrol
-the key again in a carried World, where its member id survives (KERNEL-40), without the holder's
-new consent. -/
-def joinMessage (X : Ctx D) (origin sponsor next : D) (key : ByteArray) : ByteArray :=
-  domJoin ++ X.env.bytes origin ++ X.env.bytes sponsor ++ X.env.bytes next ++ key
-
-/-- A member's id: the digest of the join it consented to (PROTOCOL-79). Content-addressed, so the
-same consent enrolled again in the same World names the same id, which is taken (`idTaken`): one
-consent, one member. -/
-def memberId (X : Ctx D) (origin sponsor next : D) (key : ByteArray) : D :=
-  X.env.hash domMemberId (joinMessage X origin sponsor next key)
+/-- What a new key signs to prove its holder asked to be enrolled by this sponsor. -/
+def possessionMessage (X : Ctx D) (sponsor : D) (next : D) (key : ByteArray) : ByteArray :=
+  tagPossession ++ X.env.bytes sponsor ++ X.env.bytes next ++ key
 
 /-- What `effects` do to `cell`: the act of the effect on it, `keep` when there is none
 (`effectsPinned` has made the effect cells distinct, so "the first" is "the only"). -/
@@ -544,11 +524,6 @@ structure At (D : Type) where
 def Body.callable : Body D → Bool
   | .invoke .. | .transfer .. | .account .. | .credit .. | .grant .. | .install .. => true
   | _ => false
-
-/-- The World an enrolment's join names (PROTOCOL-79); `none` for every other Body. -/
-def Body.joinOrigin : Body D → Option D
-  | .enroll _ _ origin _ _ => some origin
-  | _ => none
 
 /-- The body is an invoke (the one receiver that derives calls through `sub`). -/
 def Body.isInvoke : Body D → Bool

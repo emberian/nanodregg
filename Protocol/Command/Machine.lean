@@ -19,8 +19,7 @@ height and re-signs ONCE a command for that height + window (`reSign`, PROTOCOL-
 (precommitting the digest of its PENDING key) and has it signed by `signNext`; custody advances on
 its own settlement of the submit (CLIENT-13).
 
-`invite INPUT` (PROTOCOL-42) catches up, checks the origin INPUT commits to is the member's own World's
-(a genesis input is recomputed; a carried input's stated origin is taken as stated), pins the
+`invite INPUT` (PROTOCOL-42) catches up, checks that INPUT makes the member's own World, pins the
 writer's newest base as follow verified it itself (PROTOCOL-47, `pinOf`: follow's own World at the
 base's step count, the digest of its bytes; `noBase` / `baseMismatch` otherwise) and has custody
 sign the invitation; it prints `invite HEX`.
@@ -92,8 +91,7 @@ inductive Refusal (D : Type)
   | receive (r : Receive.Refusal D)
   /-- follow's own World rejects the derived Turn -/
   | reject (r : Reject D)
-  /-- the Host refused, by its name; also follow's own settlement of a call (`receipt CALL`), by the
-  refusal's name -/
+  /-- the Host refused, by its name -/
   | host (name : String)
   /-- the logged step at this log position does not re-derive on follow's World: an event that does
   not read (`eventOf`), or one `Receive.rederive` refuses `eventMismatch` (a call that does not
@@ -316,10 +314,9 @@ def hostReply (b : ByteArray) : Option (Status × ByteArray) :=
 
 /-- The phases whose result is custody's: 1 (an envelope's or init's signature, by `sign` or
 `signIncoming`), 2 for `init`
-only (its join signature; every other verb's phase 2 is a `log` reply), 3 (a call's
+only (its possession signature; every other verb's phase 2 is a `log` reply), 3 (a call's
 signature, by `sign` or `signNext`), 5 (`precommit`), 6 (an adopt envelope's signature), 8 (an
-invitation's signature), 9 (a cancel message's signature) and 11 (the `sync --attest` head's
-signature). -/
+invitation's signature). -/
 def custodyPhase (isInit : Bool) (phase : UInt8) : Bool :=
   phase == 1 || phase == 3 || phase == 5 || phase == 6 || phase == 8 || phase == 9 || phase == 11 ||
     (isInit && phase == 2)
@@ -371,7 +368,7 @@ def invokedPackage (X : Ctx D) (w : World D) (obj : D) : Except (Refusal D) D :=
 at its package's type: `Lang.seedOf`, `Lang.argsOf`); `s` is the key it is signed with (for
 `rotate`: the next key, and the pending key it precommits). -/
 def body (X : Ctx D) (me : Self D) (w : World D) (s : Signed) : Cmd D → Except (Refusal D) (Body D)
-  | .enroll j => .ok (.enroll j.key j.next j.origin j.join me.grant)
+  | .enroll j => .ok (.enroll j.key j.next j.possession me.grant)
   | .install p => .ok (.install p)
   | .create none ls => .ok (.create none ls [])
   | .create (some (p, t)) ls => match Lang.seedOf X.digestOf (worldLook X.env w) p t with
@@ -765,15 +762,28 @@ def invokeRange (X : Ctx D) (w : World D) (o : D) (rel : String) (most : Nat) (p
                 seen := rangePin X.env o i width pb (headFloor X.env w.rows o i) l }
       else .error (.rangePastLimit most)
 
-/-- The row an invoke's `--pin REL KEY` pins (CLIENT-35): relation REL of the object's package
-under the object, at KEY's bytes (KEY read at the relation's key type by LANG's reader, its bytes
-LANG's key wire, `Lang.keyBytes`: the bytes a method's edit of that key writes). The plan pins it at
-follow's World (`rowPinAt`), so a method's point read is handed that row, present or absent. -/
-def invokePoint (X : Ctx D) (w : World D) (o : D) (p : String × String) : Except (Refusal D) (RowKey D) :=
+/-- The object and relation an invoke's `--pin` names: `REL` is a relation of the invoked object
+`o`; `OBJ/REL` (OBJ a digest in hex) is a relation of another object, a peer whose row the method
+reads through the call's view (the offer's fuse reads its peer's offer row: `Lang.Std.offer`,
+CLIENT-50). A text whose part before `/` is not a digest names a relation of `o`. -/
+def pinTarget (X : Ctx D) (o : D) (rel : String) : D × String :=
+  match rel.splitOn "/" with
+  | [h, r] => match Text.ofHex h >>= X.digestOf with
+    | some d => (d, r)
+    | none => (o, rel)
+  | _ => (o, rel)
+
+/-- The row an invoke's `--pin [OBJ/]REL KEY` pins (CLIENT-35): relation REL of the object's package
+under the object (the invoked one, or OBJ: `pinTarget`), at KEY's bytes (KEY read at the relation's
+key type by LANG's reader, its bytes LANG's key wire, `Lang.keyBytes`: the bytes a method's edit of
+that key writes). The plan pins it at follow's World (`rowPinAt`), so a method's point read is
+handed that row, present or absent. -/
+def invokePoint (X : Ctx D) (w : World D) (o₀ : D) (p : String × String) : Except (Refusal D) (RowKey D) :=
+  let (o, rel) := pinTarget X o₀ p.1
   match w.live X.env o with
   | none => .error (.missingCell o)
   | some cell =>
-    match relationOf X w o cell p.1 with
+    match relationOf X w o cell rel with
     | .error r => .error r
     | .ok (i, d) =>
       match Lang.Read.readData (Lang.keyTy d) p.2 with
@@ -879,8 +889,7 @@ def adoptPin (X : Ctx D) (me : Self D) (inv key : ByteArray) : Except (Refusal D
   | .error r => .error (.invite r)
   | .ok (i, o) => if o = me.world then .ok i else .error (.invite .otherWorld)
 
-/-- `invite`'s check of its INPUT: the inputs decode and commit to the member's own World's origin. A genesis
-input's origin is recomputed (`Invite.startOrigin`); a carried input's is the one it states. -/
+/-- `invite`'s check of its INPUT: the inputs decode and make the member's own World. -/
 def inviteInput (X : Ctx D) (me : Self D) (input : ByteArray) : Except (Refusal D) Unit :=
   match Invite.startOf X input with
   | none => .error (.invite .badInvitation)
@@ -1384,20 +1393,19 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
       | .error r => same (custodyEnd X cmd st r)
       | .ok result =>
       match cmd, st.phase, st.acc with
-      -- init: learn the key, sign the join to follow's World (PROTOCOL-79), print the token
+      -- init: learn the key, sign the possession, print the token
       | .init sponsor, 1, [] =>
           match Signed.ofBytes result with
           | none => same (refused (D := D) .badResult)
           | some s =>
               same (again 2 [result] fun k =>
-                .sign (joinMessage X w.origin sponsor (nextKeyDigest X s.next) s.key) k)
+                .sign (possessionMessage X sponsor (nextKeyDigest X s.next) s.key) k)
       | .init _, 2, [first] =>
           match Signed.ofBytes first, Signed.ofBytes result with
           | some s0, some s1 =>
               if s1.key = s0.key then
                 same (printed s!"join {Text.toHex (Join.bytes X.env.bytes
-                  { key := s0.key, next := nextKeyDigest X s0.next, origin := w.origin,
-                    join := s1.signature })}\n")
+                  { key := s0.key, next := nextKeyDigest X s0.next, possession := s1.signature })}\n")
               else same (refused (D := D) .badResult)
           | _, _ => same (refused (D := D) .badResult)
       -- every other verb: the envelope, signed; ask for the log (page `pages` of this command)

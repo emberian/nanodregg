@@ -209,7 +209,7 @@ theorem acctRef_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
   · intro y h; cases y <;> exact h
 
 def Body.Fits (PD : D → Prop) : Body D → Prop
-  | .enroll k n o j v => BytesFits k ∧ PD n ∧ PD o ∧ BytesFits j ∧ PD v
+  | .enroll k n p v => BytesFits k ∧ PD n ∧ BytesFits p ∧ PD v
   | .rotate k n => BytesFits k ∧ PD n
   | .install p => BytesFits p
   | .create p ls st => OptionFits PD p ∧ ListFits PD ls ∧ Slots.Fits st
@@ -226,7 +226,7 @@ def Body.Fits (PD : D → Prop) : Body D → Prop
   | .credit w a n v => PD w ∧ AcctRef.Fits PD a ∧ n < 2 ^ 64 ∧ OptionFits PD v
 
 abbrev BodyWireFits (PD : D → Prop) : (s : Fin 13) → BodyF D s → Prop
-  | 0 => fun v => BytesFits v.1 ∧ PD v.2.1 ∧ PD v.2.2.1 ∧ BytesFits v.2.2.2.1 ∧ PD v.2.2.2.2
+  | 0 => fun v => BytesFits v.1 ∧ PD v.2.1 ∧ BytesFits v.2.2.1 ∧ PD v.2.2.2
   | 1 => fun v => BytesFits v.1 ∧ PD v.2
   | 2 => fun v => BytesFits v
   | 3 => fun v => OptionFits PD v.1 ∧ ListFits PD v.2.1 ∧ Slots.Fits v.2.2
@@ -245,7 +245,7 @@ abbrev BodyWireFits (PD : D → Prop) : (s : Fin 13) → BodyF D s → Prop
 theorem bodyWire_lawfulOn {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     ∀ s, LawfulOn (BodyWireFits PD s) (bodyWire dc s)
   | 0 => product_lawfulOn (rawBytes_lawfulOn _ (by decide))
-      (product_lawfulOn hd (product_lawfulOn hd (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) hd)))
+      (product_lawfulOn hd (product_lawfulOn (rawBytes_lawfulOn _ (by decide)) hd))
   | 1 => product_lawfulOn (rawBytes_lawfulOn _ (by decide)) hd
   | 2 => rawBytes_lawfulOn _ (by decide)
   | 3 => product_lawfulOn (option_lawfulOn hd) (product_lawfulOn (rawList_lawfulOn hd _ (by decide)) slots_lawfulOn)

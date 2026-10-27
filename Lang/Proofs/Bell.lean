@@ -5,8 +5,7 @@ What the installed Bell (`world/resident/Bell`) does, at every package `Lang.Bel
 (the journey row LBw computes it of the shipped core text):
 
 * `rung_is_waiting`: the log `rings` is guarded by the field `rung`, and that field is the generated
-  waiting guard over the Bell's plans and resumer (`deq req.agent state.resident`), at its patience
-  and with the ringer's withdrawal (LANG-97: `WaitingStep.withdrawn` is a step of the Bell's machine).
+  waiting guard over the Bell's plans and resumer (`deq req.agent state.resident`).
 * `bell_monitored`: `activity_program_safe` at the Bell, through `Lang.program`'s `run` (the run the
   kernel records): every `rings` edit of a run of ANY Bell method that returned is a step of the log
   row's machine (`WaitingStep`) over the row the kernel found at its key. The Bell's root has no
@@ -49,7 +48,7 @@ guarded by the field `rung`, and that field is `activityWaiting` over the Bell's
 resumer and refusal names; the premises `activity_program_safe` takes of the guard hold. -/
 theorem rung_is_waiting {p : Package} (h : shapeOk p = true) :
     ∃ fs, p.body = .record fs ∧ Row.find? "rings" p.rels = some rings ∧ rings.guard = some "rung" ∧
-      Row.find? "rung" fs = some (activityWaiting S plans rings resumer names (some patience) withdraw) ∧
+      Row.find? "rung" fs = some (activityWaiting S plans rings resumer names (some patience)) ∧
       rings.val = activityLogVal plans ∧ NoRef resumer ∧ (activityCaptured plans).wf = true := by
   obtain ⟨-, -, -, hr, -, fs, hb, -, hg⟩ := shape_parts h
   refine ⟨fs, hb, by rw [hr]; rfl, rfl, hg, rfl, ?_, by decide⟩
@@ -70,7 +69,7 @@ theorem bell_monitored {rc : Lang.ReceiptCheck} {look : Kernel.Receive.Pinned D}
     ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       rows = es.map (fun x => (x.slot, x.act)) ∧
       ∀ x ∈ es, x.label = "rings" → ∃ o, guardOld digestOf rv r.self x = .ok o ∧
-        WaitingStep S.lib resumer (some patience) withdraw (reqData bytesOf r) S.state x.data o := by
+        WaitingStep S.lib resumer (some patience) (reqData bytesOf r) S.state x.data o := by
   obtain ⟨hi, hh, -⟩ := shape_parts hs
   obtain ⟨fs, hb, hrel, hg, hf, hv, hnr, hw⟩ := rung_is_waiting hs
   exact activity_program_safe bytesOf digestOf hid hp hi hh hb hrel hg hf hnr hv hw h

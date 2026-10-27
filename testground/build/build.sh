@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# testground/build/build.sh — the kernel in the browser: Lean's C for Web.Sim.Testground's import
+# testground/build/build.sh — the kernel in the browser: Lean's C for Web.Sim.Teach's import
 # closure, compiled with emscripten into testground/kernel.{mjs,wasm} (measured 10-26: 3.5 MB, 0.66 MB
 # gzipped). Two halves, because the Lean half wants the build box and the wasm half wants emcc:
 #
@@ -10,7 +10,7 @@
 # Then serve testground/ (any static server; GitHub Pages) — `build.sh wasm` also copies the shipped
 # package texts the demos install (world/doc, world/resident, world/escrow) beside the page.
 #
-# The Lean half: `lake build Web.Sim.Testground:c` (the tree's own C), then the toolchain's Init/Std C
+# The Lean half: `lake build Web.Sim.Teach:c` (the tree's own C; Teach imports Web.Sim.Testground), then the toolchain's Init/Std C
 # for the closure, re-emitted from the toolchain's sources with the flag the core build uses
 # (-Dbackward.do.legacy=false). One module differs from the toolchain's own build:
 # Init.Data.String.PosRaw, whose official IR names an auxiliary `instDecidableLtRaw._aux_1` that
@@ -40,8 +40,8 @@ libuv_src() {   # libuv's headers at the tag the toolchain's own wasm build pins
 }
 
 half_c() {
-  ( cd "$root" && lake build Web.Sim.Testground:c )
-  python3 "$here/closure.py" "$root" "$T/src/lean" Web.Sim.Testground > "$work/closure.txt"
+  ( cd "$root" && lake build Web.Sim.Teach:c )
+  python3 "$here/closure.py" "$root" "$T/src/lean" Web.Sim.Teach > "$work/closure.txt"
   rm -rf "$work/pack" && mkdir -p "$work/pack/tree" "$work/pack/std" "$work/stdc"
   for m in $(grep '^T ' "$work/closure.txt" | cut -c3-); do
     cp -p "$root/.lake/build/ir/${m//.//}.c" "$work/pack/tree/${m//./_}.c"
@@ -95,7 +95,7 @@ half_wasm() {
     --no-entry -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,node \
     -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=8388608 \
     -sERROR_ON_UNDEFINED_SYMBOLS=1 \
-    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_w_found,_w_join,_w_self,_w_relay_pre,_w_relay_post,_w_meter,_w_members,_malloc,_free \
+    -sEXPORTED_FUNCTIONS=_w_init,_w_out,_w_genesis,_w_host,_w_follow,_w_pub,_w_sign,_w_attempt,_w_table,_w_lie,_w_lied,_w_lies,_w_cold,_w_forge,_w_text,_w_found,_w_join,_w_self,_w_relay_pre,_w_relay_post,_w_meter,_w_members,_w_ob,_w_grammar,_w_source,_w_grants,_w_turn,_malloc,_free \
     -sEXPORTED_RUNTIME_METHODS=HEAPU8
   echo "$key" > "$root/testground/.kernel-key"
   fi

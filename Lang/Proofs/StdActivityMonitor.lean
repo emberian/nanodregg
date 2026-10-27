@@ -2,13 +2,12 @@
 # Lang.Proofs.StdActivityMonitor — the receiver is the monitor (PROT-4, LANG-75.9)
 
 An activity's protocol is a machine per KEY of its log relation (`absent → waiting → answered →
-absent`, and, under a declared patience, `waiting → absent` from the row's deadline on: LANG-76; under
-`withdraw`, `waiting → absent` by the row's own starter at any time: LANG-97), enforced by the log's row guard (`activityWaiting`), not a phase field in object state
+absent`, and, under a declared patience, `waiting → absent` from the row's deadline on: LANG-76), enforced by the log's row guard (`activityWaiting`), not a phase field in object state
 (`Lang.StdActivity`: "No phase field is written into object state"). So the monitor theorem is at
 the guard's grain:
 
 * `waiting_body_step`: what the waiting guard admits, run as the receiver runs a package field
-  (`Admits`, any closure environment), is one of `WaitingStep`'s five actions.
+  (`Admits`, any closure environment), is one of `WaitingStep`'s four actions.
 * `activity_monitor_safe` (`activity_program_safe` on `Lang.program`'s `run`): for a package meeting
   its premises, every edit at the log of a method run that RETURNED is such a step, for every method
   of the package, generated or hand-written, from
@@ -44,48 +43,41 @@ deadline): the enabled actions of one key of an activity log declared with `pati
 an insert, by the key's own agent, of an unanswered row. `answer`: an upsert, by the resumer, of a
 waiting row, keeping its capture and answering its own plan. `retire`: a retraction of an answered
 row. `timedOut` (LANG-76): with a declared patience `p`, a retraction of an unanswered row by
-anyone, by a call signed at a `notBefore` at least the key's `notBefore` + `p`. `withdrawn`
-(LANG-97): with `withdraw`, a retraction of an unanswered row by its own starter (the request's
-agent is the key's), at any height. Nothing else is a step; with no patience there is no
-`timedOut`, without `withdraw` no `withdrawn`. -/
-inductive WaitingStep (lib : List Term) (resumer : Term) (patience : Option Nat) (withdraw : Bool) (req state : Data) :
+anyone, by a call signed at a `notBefore` at least the key's `notBefore` + `p`. Nothing else is a
+step; with no patience there is no `timedOut`. -/
+inductive WaitingStep (lib : List Term) (resumer : Term) (patience : Option Nat) (req state : Data) :
     Data → Data → Prop
   | start {key c old : Data} {a : ByteArray} :
       key.field "agent" = some (.digest a) → req.field "agent" = some (.digest a) →
-      WaitingStep lib resumer patience withdraw req state
+      WaitingStep lib resumer patience req state
         (.inj "insert" (.record [("key", key),
           ("val", .record [("answered", .inj "none" (.record [])), ("captured", c)])])) old
   | answer {key c x : Data} {l : Label} :
       Resumes lib resumer req state →
-      WaitingStep lib resumer patience withdraw req state
+      WaitingStep lib resumer patience req state
         (.inj "upsert" (.record [("key", key),
           ("val", .record [("answered", .inj "some" (.inj l x)), ("captured", .inj l c)])]))
         (.inj "some" (.record [("answered", .inj "none" (.record [])), ("captured", .inj l c)]))
   | retire {key a c : Data} :
-      WaitingStep lib resumer patience withdraw req state (.inj "retract" (.record [("key", key)]))
+      WaitingStep lib resumer patience req state (.inj "retract" (.record [("key", key)]))
         (.inj "some" (.record [("answered", .inj "some" a), ("captured", c)]))
   | timedOut {key c : Data} {p n m : Nat} :
       patience = some p → key.field "notBefore" = some (.nat n) → req.field "notBefore" = some (.nat m) →
       n + p ≤ m →
-      WaitingStep lib resumer patience withdraw req state (.inj "retract" (.record [("key", key)]))
-        (.inj "some" (.record [("answered", .inj "none" (.record [])), ("captured", c)]))
-  | withdrawn {key c : Data} {a : ByteArray} :
-      withdraw = true → key.field "agent" = some (.digest a) → req.field "agent" = some (.digest a) →
-      WaitingStep lib resumer patience withdraw req state (.inj "retract" (.record [("key", key)]))
+      WaitingStep lib resumer patience req state (.inj "retract" (.record [("key", key)]))
         (.inj "some" (.record [("answered", .inj "none" (.record [])), ("captured", c)]))
 
-theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
+private theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
   cases h with | record hr => cases hr; rfl
 
-/-- A value of an option type is `none` or `some` of a conforming value. -/
-theorem conforms_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
-    d = optD none ∨ ∃ z, d = optD (some z) ∧ Conforms z T := by
+private theorem conforms_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
+    d = .inj "none" (.record []) ∨ ∃ z, d = .inj "some" z ∧ Conforms z T := by
   cases h with
   | inj hf hc =>
     rename_i ℓ A z
     simp only [Row.find?] at hf
     split at hf
-    · cases hf; subst_vars; exact .inl (by rw [conforms_empty hc]; rfl)
+    · cases hf; subst_vars; exact .inl (by rw [conforms_empty hc])
     · split at hf
       · cases hf; subst_vars; exact .inr ⟨z, rfl, hc⟩
       · cases hf
@@ -183,15 +175,15 @@ private theorem samePlan_true {lib : List Term} {env : Env} {plans : List Activi
 /-- **What the waiting guard admits is a step of the log row's machine** (guard grain): over any
 closure environment (as the receiver runs a package field, `Admits`), an edit of the log's edit type
 over an old row of its value type that the generated waiting guard accepts is one of `WaitingStep`'s
-five actions, at the guard's own patience and withdrawal. -/
+four actions, at the guard's own patience. -/
 theorem waiting_body_step {lib : List Term} {T : Ty} {plans : List ActivityPlan} {d : RelDecl}
-    {resumer : Term} {names : ActivityVocabulary} {patience : Option Nat} {withdraw : Bool} {ed old req state : Data}
+    {resumer : Term} {names : ActivityVocabulary} {patience : Option Nat} {ed old req state : Data}
     {cenv : Env} {w : Val}
     (hw : (activityCaptured plans).wf = true) (hv : d.val = activityLogVal plans)
     (hed : Conforms ed (relEditTy d)) (hold : Conforms old (optTy d.val))
     (h : BigStep lib ((guardIn ed old).toVal :: req.toVal :: state.toVal :: cenv)
-      (lawBody (activityWaiting T plans d resumer names patience withdraw)) (.ok (.inj "ok" w))) :
-    WaitingStep lib resumer patience withdraw req state ed old := by
+      (lawBody (activityWaiting T plans d resumer names patience)) (.ok (.inj "ok" w))) :
+    WaitingStep lib resumer patience req state ed old := by
   simp only [activityWaiting, lawBody] at h
   obtain ⟨ℓ, y, body, hfe, harm, hb⟩ := case_field rfl h
   have hed' : ed = .inj ℓ y := by simpa [guardIn, Data.field, Row.find?] using hfe
@@ -232,42 +224,24 @@ theorem waiting_body_step {lib : List Term} {T : Ty} {plans : List ActivityPlan}
       rcases conforms_opt ha0 with rfl | ⟨z, rfl, -⟩
       · obtain ⟨body, hf, hb''⟩ := case_at (.get (.var rfl) (.field rfl (.var rfl))) hb'
         simp [Row.find?] at hf; subst hf
-        -- the deadline arm (LANG-76), reached without `withdraw` or by a request that is not the
-        -- starter's own
-        have late : ∀ {E : Env} {w : Val}, E[2]? = some (Data.record [("key", k)]).toVal → E[4]? = some req.toVal →
-            BigStep lib E (activityLate patience (.get (.var 2) "key") (.var 4)) (.ok (.inj "ok" w)) →
-            WaitingStep lib resumer patience withdraw req state (.inj "retract" (.record [("key", k)]))
-              (.inj "some" (.record [("answered", .inj "none" (.record [])), ("captured", c0)])) := fun h2 h4 hl => by
-          cases patience with
-          | none => exact (refusedT_not_ok hl).elim
-          | some p =>
-            obtain ⟨hc, -⟩ := guard_ok hl
-            simp only [activityDue, natT] at hc
-            obtain ⟨x, y, hx, hy, hle⟩ := bigStep_prim_ok hc
-            obtain ⟨a, b, rfl, rfl, hab⟩ := primEval_le_true hle
-            obtain ⟨x2, y2, hx2, hy2, hadd⟩ := bigStep_prim_ok hx
-            cases bigStep_nat_inv hy2
-            obtain ⟨kn, hkn, rfl⟩ := bigStep_get_data (.get (.var h2) (.field rfl (.var rfl))) hx2
-            cases kn with
-            | nat n =>
-              simp only [Data.toVal, primEval, natResult] at hadd
-              split at hadd
-              · simp only [Except.ok.injEq, Val.nat.injEq] at hadd
-                exact .timedOut rfl hkn (getVar_nat h4 hy) (by omega)
-              · cases hadd
-            | _ => simp [Data.toVal, primEval] at hadd
-        cases withdraw with
-        | false => exact late rfl rfl (by simpa [activityOwn] using hb'')
-        | true =>
-          -- the starter's own withdrawal (LANG-97): the `deq` of the key's agent and the request's
-          rw [activityOwn, if_pos rfl] at hb''
-          rcases bigStep_ite_ok hb'' with ⟨hc, -⟩ | ⟨-, hl⟩
-          · obtain ⟨x1, y1, hx1, hy1, hp⟩ := bigStep_prim_ok hc
-            obtain ⟨ag, hag, rfl⟩ := bigStep_get_data (.get (.var rfl) (.field rfl (.var rfl))) hx1
-            obtain ⟨ra, hra, rfl⟩ := bigStep_getVar rfl hy1
-            obtain ⟨dg, rfl, rfl⟩ := deq_true hp
-            exact .withdrawn rfl hag hra
-          · exact late rfl rfl hl
+        cases patience with
+        | none => exact (refusedT_not_ok hb'').elim
+        | some p =>
+          obtain ⟨hc, -⟩ := guard_ok hb''
+          simp only [activityDue, natT] at hc
+          obtain ⟨x, y, hx, hy, hle⟩ := bigStep_prim_ok hc
+          obtain ⟨a, b, rfl, rfl, hab⟩ := primEval_le_true hle
+          obtain ⟨x2, y2, hx2, hy2, hadd⟩ := bigStep_prim_ok hx
+          cases bigStep_nat_inv hy2
+          obtain ⟨kn, hkn, rfl⟩ := bigStep_get_data (.get (.var rfl) (.field rfl (.var rfl))) hx2
+          cases kn with
+          | nat n =>
+            simp only [Data.toVal, primEval, natResult] at hadd
+            split at hadd
+            · simp only [Except.ok.injEq, Val.nat.injEq] at hadd
+              exact .timedOut rfl hkn (getVar_nat rfl hy) (by omega)
+            · cases hadd
+          | _ => simp [Data.toVal, primEval] at hadd
       · exact .retire
   split at harm
   · -- upsert
@@ -356,13 +330,10 @@ end
 
 /-- The waiting guard names no closure package beyond its resumer. -/
 theorem noRef_activityWaiting (T : Ty) (plans : List ActivityPlan) (d : RelDecl) {resumer : Term}
-    (names : ActivityVocabulary) (patience : Option Nat) (withdraw : Bool) (h : NoRef resumer) :
-    NoRef (activityWaiting T plans d resumer names patience withdraw) := by
+    (names : ActivityVocabulary) (patience : Option Nat) (h : NoRef resumer) :
+    NoRef (activityWaiting T plans d resumer names patience) := by
   have hl : ∀ k r : Term, NoRef k → NoRef r → NoRef (activityLate patience k r) := fun k r hk hr => by
     cases patience <;> simp [activityLate, activityDue, guard, natT, okT, refusedT, NoRef, NoRefRow, hk, hr]
-  have ho : ∀ k r rest : Term, NoRef k → NoRef r → NoRef rest → NoRef (activityOwn withdraw k r rest) :=
-    fun k r rest hk hr hrest => by
-      cases withdraw <;> simp [activityOwn, okT, NoRef, NoRefRow, hk, hr, hrest]
   have hq : ∀ (C : Ty) (x y : Term), NoRef x → NoRef y → NoRef (eqData C x y) := fun C x y hx hy => by
     simp only [eqData, NoRef]; exact ⟨⟨noRef_eqDataBody C, hx⟩, hy⟩
   have hp : ∀ (x y : Term), NoRef x → NoRef y → NoRef (activitySamePlan plans x y) := fun x y hx hy => by
@@ -380,15 +351,14 @@ theorem noRef_activityWaiting (T : Ty) (plans : List ActivityPlan) (d : RelDecl)
     simp [NoRef]
   simp only [activityWaiting, activityApply, List.foldl, guard, NoRef, NoRefRow, okT, refusedT, true_and,
     and_true, h]
-  exact ⟨ho _ _ _ trivial trivial (hl _ _ trivial trivial), hq _ _ _ trivial trivial, hp _ _ trivial trivial⟩
+  exact ⟨hl _ _ trivial trivial, hq _ _ _ trivial trivial, hp _ _ trivial trivial⟩
 
 section
 open Nanodregg.Kernel.Receive
 variable {D : Type} (bytesOf : D → ByteArray) (digestOf : ByteArray → Option D) (rc : ReceiptCheck)
 
 /-- **The receiver is the monitor** (`activity_monitor_safe`, PROT-4; LANG-76 restates it at the
-guard's declared patience, which adds `WaitingStep.timedOut`; LANG-97 at its withdrawal, which adds
-`WaitingStep.withdrawn`): for a method run of a package
+guard's declared patience, which adds `WaitingStep.timedOut`): for a method run of a package
 the pinned cell holds whose relation `ℓ` is guarded by a field that is the generated waiting guard,
 every edit at `ℓ` of a run that returned is a step of the log row's machine (`WaitingStep`) over the
 old row the kernel found at its key, under the run's request and the state before the run. Every
@@ -398,16 +368,16 @@ theorem activity_monitor_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : R
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {t n : Nat}
     {p : Package} {fs : List (Label × Term)} {ℓ gl : Label} {d : RelDecl} {T : Ty}
-    {plans : List ActivityPlan} {resumer : Term} {names : ActivityVocabulary} {patience : Option Nat} {withdraw : Bool}
+    {plans : List ActivityPlan} {resumer : Term} {names : ActivityVocabulary} {patience : Option Nat}
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p)
     (hb : p.body = .record fs) (hrel : Row.find? ℓ p.rels = some d) (hg : d.guard = some gl)
-    (hf : Row.find? gl fs = some (activityWaiting T plans d resumer names patience withdraw)) (hnr : NoRef resumer)
+    (hf : Row.find? gl fs = some (activityWaiting T plans d resumer names patience)) (hnr : NoRef resumer)
     (hv : d.val = activityLogVal plans) (hw : (activityCaptured plans).wf = true)
     (h : runMeasured bytesOf digestOf rc look rv pkg state method args r budget = .ok (s, calls, rows, t, n)) :
     ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       rows = es.map (fun x => (x.slot, x.act)) ∧
       ∀ x ∈ es, x.label = ℓ → ∃ o, guardOld digestOf rv r.self x = .ok o ∧
-        WaitingStep S.lib resumer patience withdraw (reqData bytesOf r) S.state x.data o := by
+        WaitingStep S.lib resumer patience (reqData bytesOf r) S.state x.data o := by
   obtain ⟨S, v, used, c, e, ds, left, es, hS, hrun, hx, hes, hge, rfl⟩ := runMeasuredWith_ok h
   refine ⟨S, es, hS, rfl, fun x hxe hlab => ?_⟩
   obtain ⟨L, g, p', ℓm, sg, sd, ad, wd, hr0, hl, hpg, hres, hst, hargs, -, hrows, rfl⟩ := runSetup_spec hS
@@ -431,7 +401,7 @@ theorem activity_monitor_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : R
         obtain ⟨o, ho, hgl⟩ := guardEdits_ok hge x hxe
         have hadm := Std.runLaw_ref_admits (g := g) (fs := Term.relocateRow f fs)
           (by rw [hlib, hb]; rfl)
-          (by rw [find_relocateRow, hf, Option.map_some, relocate_noRef _ _ (noRef_activityWaiting T plans x.decl names patience withdraw hnr)]; rfl)
+          (by rw [find_relocateRow, hf, Option.map_some, relocate_noRef _ _ (noRef_activityWaiting T plans x.decl names patience hnr)]; rfl)
           (hgl gl hg)
         obtain ⟨cenv, w, hbody⟩ := hadm
         exact ⟨o, ho, waiting_body_step hw hv hc (guardOld_conforms ho) hbody⟩
@@ -444,17 +414,17 @@ theorem activity_program_safe {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : R
     {method : Nat} {args : ByteArray} {r : Req D} {budget : Nat} {s : Kernel.Slots}
     {calls : List (Body D)} {rows : List (Kernel.RowSlot D × Kernel.RowAct)} {used : Nat}
     {p : Package} {fs : List (Label × Term)} {ℓ gl : Label} {d : RelDecl} {T : Ty}
-    {plans : List ActivityPlan} {resumer : Term} {names : ActivityVocabulary} {patience : Option Nat} {withdraw : Bool}
+    {plans : List ActivityPlan} {resumer : Term} {names : ActivityVocabulary} {patience : Option Nat}
     (hid : digestOf (bytesOf pkg) = some pkg) (hp : readPackage look pkg = .ok p)
     (hi : p.imports = []) (hc : p.holes = [])
     (hb : p.body = .record fs) (hrel : Row.find? ℓ p.rels = some d) (hg : d.guard = some gl)
-    (hf : Row.find? gl fs = some (activityWaiting T plans d resumer names patience withdraw)) (hnr : NoRef resumer)
+    (hf : Row.find? gl fs = some (activityWaiting T plans d resumer names patience)) (hnr : NoRef resumer)
     (hv : d.val = activityLogVal plans) (hw : (activityCaptured plans).wf = true)
     (h : (Lang.program bytesOf digestOf rc).run look rv pkg state method args r budget = .ok (s, calls, rows, used)) :
     ∃ S, ∃ es : List (Edit D), runSetup bytesOf digestOf rc look rv pkg state method args r = .ok S ∧
       rows = es.map (fun x => (x.slot, x.act)) ∧
       ∀ x ∈ es, x.label = ℓ → ∃ o, guardOld digestOf rv r.self x = .ok o ∧
-        WaitingStep S.lib resumer patience withdraw (reqData bytesOf r) S.state x.data o := by
+        WaitingStep S.lib resumer patience (reqData bytesOf r) S.state x.data o := by
   change (runMeasuredLive bytesOf digestOf rc look rv pkg state method args r budget).map _ = _ at h
   rw [runMeasuredLive_leaf_closed hid hp hi hc] at h
   cases hm : runMeasured bytesOf digestOf rc look rv pkg state method args r budget with

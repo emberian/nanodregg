@@ -24,8 +24,7 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive
 
 /-- Every verb. -/
 inductive Verb
-  /-- `init SPONSOR`: a join token for SPONSOR to enroll into follow's World (key, next-key digest,
-  the World's origin, the key's join consent over them: PROTOCOL-79) -/
+  /-- `init SPONSOR`: a join token for SPONSOR to enroll (key, next-key digest, possession) -/
   | init
   /-- `enroll TOKEN`: sponsor a new member -/
   | enroll
@@ -44,7 +43,8 @@ inductive Verb
   that reads a relation by range is handed the range `--range` names, signed at follow's listing;
   each `--pin REL KEY` pins the row of relation REL at KEY (LANG text at the relation's key type) at
   follow's World, so a method's POINT read of it is handed that row and, on a `(live)` read, its key's
-  cell liveness (CLIENT-35) -/
+  cell liveness (CLIENT-35); `--pin OBJ/REL KEY` pins a row of another object OBJ's relation REL, a
+  peer the method reads (CLIENT-50) -/
   | invoke
   /-- `grant TARGET MEMBER RIGHTS [--via PARENT]`: TARGET is an object, a value account
   (`well:ASSET` | `of:OWNER:ASSET`: a `transfer:N` grant over it lends at most N of its balance, a
@@ -129,13 +129,11 @@ def ofWord? (s : String) : Option Verb := all.find? (·.word == s)
 
 end Verb
 
-/-- A join token: what a newcomer hands its sponsor: its key, its next key's digest, the World it
-consents to join, and its consent (`Receive.joinMessage`, PROTOCOL-79). -/
+/-- A join token: what a newcomer hands its sponsor. -/
 structure Join (D : Type) where
   key : ByteArray
   next : D
-  origin : D
-  join : ByteArray
+  possession : ByteArray
   deriving DecidableEq
 
 /-- What a grant is over: the World, an object (or any cell) by id, or a value account by its
@@ -245,7 +243,7 @@ def usage : Verb → String
   | .init => "init SPONSOR" | .enroll => "enroll TOKEN"
   | .install => "install TEXT" | .create => "create [--pkg PKG STATE] LAW..."
   | .write => "write OBJ KEY VALUE [--via GRANT]" | .law => "law OBJ LAW... [--via GRANT]"
-  | .invoke => "invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--pin REL KEY]... [--via GRANT]"
+  | .invoke => "invoke OBJ METHOD ARGS [--range REL K [PREFIX]] [--pin [OBJ/]REL KEY]... [--via GRANT]"
   | .grant => "grant TARGET|ACCOUNT|world MEMBER|anyone RIGHTS [--via PARENT]"
   | .revoke => "revoke GRANT" | .read => "read OBJ [KEY=VALUE...] | read OBJ ? | read OBJ REL K [PREFIX]" | .rotate => "rotate"
   | .adopt => "adopt INVITE KEY" | .sync => "sync [--to STEPS:CHAIN | --attest | --check ATTEST | --post OBJ]"
@@ -261,10 +259,10 @@ def argvSize (argv : List ByteArray) : Nat := 4 + (argv.map (4 + ·.size)).sum
 
 variable {D : Type}
 
-/-- The join token's bytes: `key ‖ next ‖ origin ‖ join`, each `u32le len ‖ bytes`. -/
+/-- The join token's bytes: `key ‖ next ‖ possession`, each `u32le len ‖ bytes`. -/
 def Join.bytes (dbytes : D → ByteArray) (j : Join D) : ByteArray :=
   let f (b : ByteArray) := Codec.Stream.u32.bytes b.size.toUInt32 ++ b
-  f j.key ++ f (dbytes j.next) ++ f (dbytes j.origin) ++ f j.join
+  f j.key ++ f (dbytes j.next) ++ f j.possession
 
 def Join.ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (Join D) :=
   let field (i : Nat) : Option (ByteArray × Nat) :=
@@ -274,9 +272,8 @@ def Join.ofBytes (digestOf : ByteArray → Option D) (b : ByteArray) : Option (J
   do
     let (key, i) ← field 0
     let (nb, i) ← field i
-    let (ob, i) ← field i
-    let (join, i) ← field i
-    if i = b.size then some { key, next := ← digestOf nb, origin := ← digestOf ob, join } else none
+    let (possession, i) ← field i
+    if i = b.size then some { key, next := ← digestOf nb, possession } else none
 
 section
 variable (digestOf : ByteArray → Option D)

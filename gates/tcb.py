@@ -23,7 +23,7 @@ Red, by name, on:
     parentheses (`cc (hbox)`, `sandbox-exec (macOS)`) and whose pin holds `<absolute path> … sha256 <hex>` is
     compared on that host (the hostname, or `macOS` on Darwin): the file's sha256 must be the pin's, and the
     file must exist; on another host the row is not this host's to compare (the judge on hbox compares hbox's).
-    A path relative to the tree before a `sha256` pins the tree's own copy of a file the tree carries.
+    A path relative to the tree before a `sha256` pins the tree's own copy (the AppArmor profile's source).
     A `sha256` pin in a row that names no host is red: nothing would ever compare it.
 
 `gates/tcb.py --plants FRESH [--harness-control]` (a gates/runs.tsv script row): a copy of the table and its

@@ -45,10 +45,6 @@ structure Params (D : Type) [Ord D] where
   pub : ByteArray → ByteArray
   /-- custody's signature of a message under a secret -/
   sign : ByteArray → ByteArray → ByteArray
-  /-- custody's key-file bytes of a secret: what nd's one-record `keys` file holds for it (the
-  deployed parameters: the 32-byte Ed25519 seed; the toy's: the secret). A trace names an actor's
-  custody by them, so nd's own custody signs what the rows' custody signed (Q5) -/
-  seedOf : ByteArray → ByteArray
   /-- the Store's sealers and its base digest -/
   keys : Host.Keys
   /-- the rows' writer's seal threshold in bytes: small enough that a row of a few dozen turns
@@ -74,7 +70,6 @@ def toy : Params UInt64 :=
     world := Codec.Kernel.world Kernel.Sim.env Kernel.Sim.dc
     pub := fun k => k
     sign := Kernel.Sim.toySign
-    seedOf := fun k => k
     keys := Host.Sim.keys
     sealMinBytes := 8192 }
 

@@ -27,7 +27,6 @@ def deployed : Params Digest :=
     world := Host.Deployed.world
     pub := fun s => Ed25519.publicKey (Kernel.Sim.Deployed.seed s)
     sign := fun s m => Ed25519.sign (Kernel.Sim.Deployed.seed s) m
-    seedOf := Kernel.Sim.Deployed.seed
     keys := Host.Keys.ofKey storeKey Host.Deployed.shapes
     -- a write's event and record are about four times the toy's (32-byte digests and keys, 64-byte
     -- signatures, against 8 and 8): the toy's seal threshold times four keeps every row's shape

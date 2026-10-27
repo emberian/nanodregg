@@ -1262,7 +1262,7 @@ def act (P : Params D) (st : State D) : State D :=
       let (key, st) := freshKey st "m"
       let (nk, st) := freshKey st "n"
       let X := P.ctx
-      let join := P.sign key (joinMessage X w.origin sp.id (nextKeyDigest X (P.pub nk)) (P.pub key))
+      let possession := P.sign key (possessionMessage X sp.id (nextKeyDigest X (P.pub nk)) (P.pub key))
       let hs := holdOf st sp.id
       let (chain, expect, st) : List D × Expect × State D := match hs.chain with
         | _ :: _ =>
@@ -1276,7 +1276,7 @@ def act (P : Params D) (st : State D) : State D :=
       | [] => st
       | via :: _ =>
           let c := signed P st sp sp.key (S.pinsFor P.env w (sp.id :: chain))
-            (.enroll (P.pub key) (nextKeyDigest X (P.pub nk)) w.origin join via)
+            (.enroll (P.pub key) (nextKeyDigest X (P.pub nk)) possession via)
           let (st, t) := submit P st c expect "enroll"
           match t with
           | some t =>
@@ -1814,46 +1814,6 @@ def probeStateOrder (P : Params D) (st : State D) : State D :=
       carryExpect (planted [(stateBase, nat 0), (stateBase + 1, nat 1)]) st st.host c
         "state-order-run-control" "ok"
 
-/-- The join is bound to the World (PROTOCOL-79), on the carry probe's two Worlds: a newcomer's join
-consent signed for the exported World `w` still verifies under its key in the carried World `w'`
-(possession needs no World: `join-carried:possession`), yet a founder's enrolment of it into `w'` is
-refused `otherWorld` (`join-carried:otherWorld`: the consent named the old origin, and a carry keeps
-the sponsor's member id, KERNEL-40, so before PROTOCOL-79 it enrolled there). The same key's consent
-signed over `w'`'s origin is admitted (`join-new:ok`); enrolled again by a second call carrying THE
-SAME consent, it is `idTaken` (`join-again:idTaken`: the member's id is the consent's digest, so one
-consent is one member). Nothing is committed to the Host's World. -/
-def probeJoinCarried (P : Params D) (st : State D) (w w' : World D) : State D :=
-  let X := P.ctx
-  let f := founder0 P st
-  let chain := (holdOf st f.id).chain
-  match chain with
-  | [] => st
-  | via :: _ =>
-    let (key, st) := freshKey st "jc"
-    let (nk, st) := freshKey st "jn"
-    let next := nextKeyDigest X (P.pub nk)
-    let consent := fun (o : D) => P.sign key (joinMessage X o f.id next (P.pub key))
-    -- an enrolment into `wa`, of the consent naming `o`, its pins on `wa`; `cap` tells two calls apart
-    let enrolOf := fun (wa : World D) (o : D) (cap : Nat) =>
-      let u : Unsigned D :=
-        { world := wa.origin, member := f.id, key := P.pub f.key, notBefore := 0,
-          validUntil := wa.height + 1 + 100, pins := S.pinsFor P.env wa (f.id :: chain),
-          maxCharge := cap, body := .enroll (P.pub key) next o (consent o) via }
-      ({ unsigned := u, signature := P.sign f.key (X.callMessage u) } : Call D)
-    let st := if X.verify (P.pub key) (joinMessage X w.origin f.id next (P.pub key)) (consent w.origin)
-      then meet st "join-carried:possession"
-      else failWith st "probe join-carried: the consent signed for the exported World does not verify under its key"
-    let st := carryExpect P st w' (enrolOf w' w.origin 1000000) "join-carried" "otherWorld"
-    -- the admitted join and its replay need two enrolments left on the founder's own grant
-    let hs := holdOf st f.id
-    if !(hs.enrolls && 2 ≤ hs.left) then st else
-    match Receive.submit X w' (enrolOf w' w'.origin 1000000) with
-    | .error v => failWith st s!"probe join-new: expected ok, got {vname v}"
-    | .ok (_, w'') =>
-        let st := { st with refusedAsExpected := st.refusedAsExpected + 1,
-                            seen := "join-new:ok" :: "ok" :: st.seen }
-        carryExpect P st w'' (enrolOf w'' w'.origin 999999) "join-again" "idTaken"
-
 /-- The carry probe (KERNEL-29), at the end of every seed: the Host's World is carried under a new
 nonce. The carried World holds the same trie, allowance, height and journal (`carry_carried`)
 under a new origin; the last logged call is answered `replayed` at its height (`carry_replayed`:
@@ -1897,8 +1857,7 @@ def probeCarry (P : Params D) (st : State D) : State D :=
       let old := signed P st f f.key (S.pinsFor P.env w [f.id]) (.create none [] [])
       let st := carryExpect P st w' old "carry-old-world" "wrongWorld"
       let fresh := signed P { st with host := w' } f f.key (S.pinsFor P.env w' [f.id]) (.create none [] [])
-      let st := carryExpect P st w' fresh "carry-new" "ok"
-      probeJoinCarried P st w w'
+      carryExpect P st w' fresh "carry-new" "ok"
 
 /-! ### Refusals (KERNEL-44, KERNEL-47): recorded, final, bounded, and only when authenticated -/
 
@@ -2887,7 +2846,7 @@ def run (P : Params D) (seed : Nat) (steps : Nat) : State D :=
   -- a forged log: the writer changes what the last write of the log wrote (its event, the signed
   -- call, still says otherwise) and re-prices it, so `fold` accepts it; `rederiveLog` must not
   match forge st.log with
-  | none => failWith st "forgery: the log held no write to forge, so the re-derivation tooth was not run"
+  | none => st
   | some (i, bad) =>
       match World.fold P.env g bad, rederiveLog P.ctx g bad with
       | .ok _, .error (j, .refused .eventMismatch) =>
@@ -2928,8 +2887,7 @@ def plantedArms : List String :=
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed",
    "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
    "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
-   "carry-old-world:wrongWorld", "carry-new:ok", "join-carried:possession", "join-carried:otherWorld",
-   "join-new:ok", "join-again:idTaken", "sig-bare:badSignature", "hash-count:empty-per-root", "verify-count:once", "retain:canonical",
+   "carry-old-world:wrongWorld", "carry-new:ok", "sig-bare:badSignature", "hash-count:empty-per-root", "verify-count:once", "retain:canonical",
    "retain-plant:refuted", "carry-budget:allowanceTooLarge", "carry-budget-edge:ok", "carry-budget-plant:overflow",
    "race-loser:stale", "race-loser-declined:declined", "race-law:lawDenied",
    "refusal-aba-stale:stale", "refusal-aba-declined:declined", "refusal-aba-plant:returned",

@@ -579,10 +579,8 @@ theorem refine_get_inner {γ : Type} {c : Stream α} {name : String} {accept : �
 A list's count is the input's claim. `rawList` and `array` reserve room for at most the bytes left
 (`min n (b.size - j)`), not for the count: five bytes claiming `2 ^ 32 - 1` one-byte elements once
 made the reader ask for ~32 GB before reading the second element (an out-of-memory panic under an
-8 GB address-space limit, measured on hbox). Each theorem below states the verdict: such an input is
-refused `truncated` at the first missing element, beside its twin whose count is honest. The kernel
-ignores `Array.emptyWithCapacity`'s argument, so these theorems do not see the reservation; only a
-compiled run under a memory limit does. -/
+8 GB address-space limit, measured on hbox). Each tooth: such an input is refused at the first
+missing element, beside its twin whose count is honest. -/
 
 /-- The plant: four bytes claiming `2 ^ 32 - 1` elements and one element are refused `truncated` at the
 second element. -/

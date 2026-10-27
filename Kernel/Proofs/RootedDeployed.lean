@@ -69,9 +69,9 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
     (founders : List (ByteArray × Digest)) (auth : Authority) {w : World Digest} {l : List (Step Digest)}
     (hf : World.fold (ctx program).env (genesisWorld (ctx program) name nonce allowance founders auth) l = .ok w)
     (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders auth) l)
-    {c : Call Digest} {key : ByteArray} {next origin : Digest} {join : ByteArray} {via : Digest}
+    {c : Call Digest} {key : ByteArray} {next : Digest} {possession : ByteArray} {via : Digest}
     {base : Nat} {d : Draft Digest}
-    (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) ⟨c.unsigned.member, base⟩ key next origin join via
+    (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) c ⟨c.unsigned.member, base⟩ key next possession via
       = .ok d) :
     ∃ p r cell, GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders auth) r ∧ w.live (ctx program).env r = some cell ∧
       slotDigest (ctx program) r cell grantIssuer = .ok p ∧

@@ -1230,7 +1230,7 @@ the resident reads `pending` (the unanswered rings, in ring order) and answers o
 `rings[k]` with the answer, sending back the ring's text, and `pending` loses the row. The guard
 `rung` sees the row the upsert or retract replaces: an answer is the resident's, once, over the
 ring's own text; a retire takes an answered ring, or an unanswered one (with its pending row) from its
-deadline on (LANG-76) or by its own ringer at any time (LANG-97). Relations by index: pending 0, rings 1. -/
+deadline on (LANG-76). Relations by index: pending 0, rings 1. -/
 
 /-- Where the Bell's surface source and its emitted core live. -/
 def bellSourcePath : System.FilePath := "world" / "resident" / "Bell.ob"
@@ -1488,22 +1488,6 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
   r := note r s!"LB10d A retires it at its deadline (signed notBefore {h1 + 2048}): {v10d}; its rings row and its pending row both leave"
     (v10d == "admitted" && !present r10d.st.host 1 dR kb && !present r10d.st.host 0 dP kb &&
       headCount r10d.st.host obj 0 == some 0 && headCount r10d.st.host obj 1 == some 1)
-  -- LB10e-LB10g (LANG-97) the ringer withdraws its own unanswered ring at any time. B's resident grant
-  -- names answer and ring only, so A grants B `retire` by a second grant for the row; B retires its
-  -- own ring kb, still pending, before its deadline: admitted, and its rings row and its pending row
-  -- both leave in one Turn (A's attempt on the same ring was refused `rung: unanswered`, LB10b);
-  -- then A revokes that grant, so the rows after read the resident as before
-  let (r10e, v10e, t10e) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, b.id, obj]) (.grant obj b.id [.invoke 3] none))
-  let some gw := t10e.bind fun t => (createdIds t).head? | return note r10e s!"LB10e A grants B retire: {v10e}" false
-  r := note r10e s!"LB10e A grants B retire, a second grant beside the resident's: {v10e}" (v10e == "admitted")
-  let hw := r.st.host.height
-  let (r10f, v10f, _) := go prog r (signedAt r.st b (Sim.S.pinsFor r.st.host [b.id, obj, pkg, gw])
-    (.invoke obj 3 (retireArg h1 b) 100000 (some gw)) hw (hw + 1024) (pinBoth r.st.host kb))
-  r := note r10f s!"LB10f B retires its own ring at {h1}, still pending, before its deadline {h1 + 2048}: {v10f}; its rings row and its pending row both leave"
-    (v10f == "admitted" && !present r10f.st.host 1 dR kb && !present r10f.st.host 0 dP kb &&
-      headCount r10f.st.host obj 0 == some 0 && headCount r10f.st.host obj 1 == some 1)
-  let (r10g, v10g, _) := go prog r (Sim.signed r.st a a.key (Sim.S.pinsFor r.st.host [a.id, gw]) (.revoke gw))
-  r := note r10g s!"LB10g A revokes B's retire grant: {v10g}" (v10g == "admitted")
   -- LB11 the queue's bound: A fills pending to its limit, 64, one ring per height; the 65th is relationFull
   let mut fills := 0
   while headCount r.st.host obj 0 != some 64 && fills < 64 do
@@ -1531,7 +1515,7 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
   r := note r12b s!"LB12b A rings a closed bell: {v12b}" (refusedBy v12b "ring" "closed")
   -- LB13 guards and the law outlive every layer. `layered q` installs package `q` (the Bell, or
   -- `bellPlant` of it), the takeover layer over it, and a bell of the layer whose resident is B,
-  -- with B granted answer, drop, rewrite and say; it gives the run, the closure's ids, the bell and the grant.
+  -- with B granted answer, rewrite and say; it gives the run, the closure's ids, the bell and the grant.
   let layered (q : Package) (installed : Option D) (r : Run) : Except String (Run × List D × D × D) := do
     let some qb := Wire.encodePackage q | throw "no bytes"
     let (ra, qid) ← match installed with
@@ -1553,7 +1537,7 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
     let some lid := tb.bind fun t => (createdIds t).head? | throw s!"layer install: {vb}"
     let (rc, vc, tc) := go prog rb (Sim.signed rb.st a a.key (Sim.S.pinsFor rb.st.host [a.id, lid, qid]) (.create (some lid) [] seed))
     let some lobj := tc.bind fun t => (createdIds t).head? | throw s!"create: {vc}"
-    let (rd, vd, td) := go prog rc (Sim.signed rc.st a a.key (Sim.S.pinsFor rc.st.host [a.id, b.id, lobj]) (.grant lobj b.id [.invoke 0, .invoke 5, .invoke 6, .invoke 7] none))
+    let (rd, vd, td) := go prog rc (Sim.signed rc.st a a.key (Sim.S.pinsFor rc.st.host [a.id, b.id, lobj]) (.grant lobj b.id [.invoke 0, .invoke 6, .invoke 7] none))
     let some gid := td.bind fun t => (createdIds t).head? | throw s!"grant: {vd}"
     pure ({ rd with log := r.log, bad := r.bad }, [lobj, lid, qid], lobj, gid)
   -- one act on a layered bell: `m` signs method `meth` of `lobj` with the argument and the rows pinned
@@ -1566,8 +1550,8 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
     (rr, v)
   -- the four takeovers, each from a fresh ring on the layered bell, each giving its verdict:
   -- T1 A answers through the layer's `answer` (no resident check); T2 B answers a ring, then
-  -- `rewrite`s the answered ring (no pending edit); T3 B, the resident, `drop`s A's unanswered ring
-  -- before its deadline (its ringer alone may withdraw it, LANG-97); T4 B `say`s a ring already answered
+  -- `rewrite`s the answered ring (no pending edit); T3 A `drop`s its unanswered ring; T4 B `say`s
+  -- a ring already answered
   let takeovers (r : Run) (ids : List D) (lobj gid : D) : List String :=
     let ring (r : Run) (m : Sim.Member) (s : String) : Run × Data × String :=
       let h := r.st.host.height
@@ -1584,7 +1568,7 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
       (byL r2a ids lobj gid b 6 (answerArg (nbOf k2) a "answer me once" "twice") (pinAtObj lobj r2a.st.host 1 dR k2)).2
     let (r3, k3, w3) := ring r a "never mind"
     let t3 := if w3 != "admitted" then s!"the ring: {w3}" else
-      (byL r3 ids lobj gid b 5 (retireArg (nbOf k3) a) (both r3.st.host k3)).2
+      (byL r3 ids lobj gid a 5 (retireArg (nbOf k3) a) (both r3.st.host k3)).2
     -- the layer's own `say` takes `(rec (text bytes))`: a text alone, no aim
     let sayArg := argBytes (.record [("text", .bytes)]) (.record [("text", .bytes "asked and answered".toUTF8)])
     let t4 := (byL r ids lobj gid b 7 sayArg []).2
@@ -1597,7 +1581,7 @@ def bellRows (mode : Mode) (r0 : Run) (a b : Sim.Member) (src : String) : Run :=
   let ts := takeovers r ids lobj gid
   let want := [("LB13c A answers a ring through the layer, not being the resident", "rung: notResident"),
     ("LB13e B, the resident, answers a ring and then rewrites the answer through the layer (no pending row)", "rung: answered"),
-    ("LB13f B, the resident, drops A's unanswered ring through the layer before its deadline", "rung: unanswered"),
+    ("LB13f A drops its own unanswered ring through the layer", "rung: unanswered"),
     ("LB13g B says a ring already answered through the layer", "rung: answered")]
   for (w, v) in want.zip ts do
     r := note r s!"{w.1}: {v}" (deniedWith v w.2)

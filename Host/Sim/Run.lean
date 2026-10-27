@@ -2,9 +2,7 @@
 # Host.Sim.Run — the loop end to end, and the crash plants
 
 `Nanodregg.Host.Sim.run [seed]` drives `serve` (the deployed loop) over the
-in-memory disk with toy parameters, admitting every Turn through `Kernel.World.admit` (a toy handler,
-not `Host.Serve.machine`: the sim exercises the log, the open and the pages, not the receive layer;
-HOST-51's plant is the one serve-path tooth here), and checks:
+in-memory disk with toy parameters, admitting every Turn through `Kernel.World.admit`, and checks:
 
 1. one reply per request; a resend of the same txId (the same bytes, or other bytes under it:
    a txId is the digest of the signed call, KERNEL-7) answers `ok` with the original receipt and

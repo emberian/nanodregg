@@ -6,14 +6,7 @@ Not admission: a resident (or its client) reads text into a `Package`, checks it
 (resolved to de Bruijn indices here) and three conveniences: application of many arguments
 `(f a b)`, `(let x T e body)` = `((lam x T body) e)`, and `(fn (x T) (y U) body)` = nested `lam`.
 
-    type  ::= nat | bool | bytes | digest | (-> T U) | (rec (l T)…) | (sum (l T)…)
-    term  ::= x | 123 | true | false | "text" | #hex | (lam x T e) | (fn (x T)… e) | (let x T e e)
-            | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq len<= u64be sized dsized
-            | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)
-            | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T "why") | (e e…)
-    package ::= (package (imports "hex"…) (doc ["text"]) (state T) (iface T) (methods l…) (laws l…) (rels rel…)
-                (body e))
-    rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))
+    (the grammar is `grammar`, below: one text, which this comment and the testground both read)
 
 A binder (`lam`, `let`, `fn`, a `case` arm) may not be named like a literal, a head word or a
 primitive (`reservedBinder`).
@@ -27,6 +20,17 @@ import Lang.Package
 import Lang.Data
 
 namespace Nanodregg.Lang.Read
+
+/-- The core grammar, as a text a tool shows (the testground's grammar window). -/
+def grammar : String :=
+  "type  ::= nat | bool | bytes | digest | (-> T U) | (rec (l T)…) | (sum (l T)…)\n" ++
+  "term  ::= x | 123 | true | false | \"text\" | #hex | (lam x T e) | (fn (x T)… e) | (let x T e e)\n" ++
+  "        | (digest #hex) | (fix e) | (OP e e) with OP ∈ + - * / % == < <= beq cat deq len<= u64be sized dsized\n" ++
+  "        | (record (l e)…) | (. e l) | (extend e (l e)…) | (inj T l e)\n" ++
+  "        | (case e (l x e)…) | (if e e e) | (ref i) | (refuse T \"why\") | (e e…)\n" ++
+  "package ::= (package (imports \"hex\"…) (doc [\"text\"]) (state T) (iface T) (methods l…) (laws l…) (rels rel…)\n" ++
+  "            (body e))\n" ++
+  "rel     ::= (l (key (l T)…) (val T) (limit n) (sum [l]) (cap n) (retract b) (guard [l]))\n"
 
 /-- An s-expression; every node carries the character offset where it starts. -/
 inductive SExp

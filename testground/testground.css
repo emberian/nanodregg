@@ -79,3 +79,19 @@ details.terms dl { display: grid; grid-template-columns: max-content 1fr; gap: 2
 details.terms dt { font: bold 11px var(--mono); } details.terms dd { margin: 0; }
 .props + .props, .props + p, p + .props { margin-top: 6px; }
 .tour p.door { padding: 6px 8px; margin: 0 0 8px; line-height: 1.6; }
+pre.src { font: 11px var(--mono); white-space: pre-wrap; word-break: break-all; padding: 6px; margin: 2px 0; max-height: 260px; overflow: auto; }
+textarea.code { font: 12px var(--mono); color: var(--text); width: 100%; box-sizing: border-box; }
+.editor .edit { display: grid; grid-template-columns: 3em 1fr; gap: 0; margin: 6px 0; }
+.editor .gutter { margin: 0; padding: 3px 4px; font: 12px var(--mono); text-align: right; opacity: .55; overflow: hidden; max-height: 288px; line-height: 15px; }
+.editor textarea.code { line-height: 15px; max-height: 288px; }
+.inspector h4, .turn h4, .tutorial h4 { margin: 10px 0 4px; }
+.inspector details.law { margin: 4px 0; } .inspector details.law textarea { font: 11px var(--mono); width: 100%; }
+.turn .tree { font: 11px var(--mono); padding: 4px; }
+.repl-out { margin-top: 6px; max-height: 320px; overflow: auto; padding: 4px; } .repl-out .props { margin-bottom: 4px; }
+.tutorial .tut-nav { display: flex; flex-wrap: wrap; gap: 4px 14px; list-style: none; padding: 0; margin: 0 0 6px; }
+.tutorial .tut-nav li.on a { font-weight: bold; } .tutorial .tut-nav li.done { opacity: .6; }
+.tutorial .label { margin: 8px 0 2px; font-weight: bold; }
+.tutorial table.steps td:first-child { width: 55%; white-space: normal; word-break: break-all; font-weight: normal; }
+.tutorial table.steps td { word-break: normal; } .tutorial table.steps pre.src { max-height: 120px; }
+.tabs button { cursor: pointer; }
+.inspector table.methods td { word-break: normal; overflow-wrap: anywhere; } .inspector table.methods td:nth-child(2) { white-space: nowrap; }

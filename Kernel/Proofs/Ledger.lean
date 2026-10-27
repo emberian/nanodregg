@@ -626,14 +626,15 @@ theorem derive_value_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
       rw [hp] at hv
       obtain ⟨_, hbal, hf⟩ := accountCell_value hv
       exact ⟨hbal, .inl (by rw [hf])⟩
-  | enroll key next origin join via =>
+  | enroll key next possession via =>
       have hd := stepped_draft hr
       simp only [enroll, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
       obtain ⟨_, _, _, _, _, _, ⟨⟩, _, hd⟩ := hd
       rw [← hd]
       intro p hp v hv
-      simp only [List.mem_singleton] at hp
-      rw [hp, ofCell_not_value (by simp)] at hv; cases hv
+      have := mem_bornAt_cell hp
+      simp only [List.mem_singleton] at this
+      rw [this, ofCell_not_value (by simp)] at hv; cases hv
   | install pkg =>
       have hd := stepped_draft hr
       simp only [install, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

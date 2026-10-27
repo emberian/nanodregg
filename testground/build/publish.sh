@@ -30,7 +30,7 @@ if [ "$live" != none ] && [ "$live" != self ]; then
 fi
 
 mkdir -p "$out"
-for f in index.html testground.css testground.js nd.js transport.js hosted.mjs demos.js kernel.mjs kernel.wasm kernel.json; do
+for f in index.html testground.css testground.js teach.js nd.js transport.js hosted.mjs demos.js kernel.mjs kernel.wasm kernel.json; do
   cp "$tg/$f" "$out/$f"
 done
 rm -rf "$out/world" && cp -R "$tg/world" "$out/world"

@@ -52,6 +52,13 @@ export async function loadKernel(factory, opts = {}) {
     pub: (seed) => call(K._w_pub, seed),
     sign: (seed, msg) => call(K._w_sign, seed, msg),
     attempt: (left, req, seen) => K._w_attempt(left, req, seen),
+    // the teaching windows (Web.Sim.Teach): the resident's checker and evaluator (`ob FORM`), the
+    // grammars, a package's text, an object's grants, a step re-derived
+    ob: (form) => call(K._w_ob, enc.encode(form)),
+    grammar: (which) => call(K._w_grammar, enc.encode(which)),
+    source: (i, pkg) => call(K._w_source, i, enc.encode(pkg)),
+    grants: (i, obj) => call(K._w_grants, i, enc.encode(obj)),
+    turn: (i, tx) => call(K._w_turn, i, enc.encode(tx)),
   };
 }
 

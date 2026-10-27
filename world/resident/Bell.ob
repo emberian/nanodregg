@@ -8,16 +8,13 @@
 ; returns one typed nested call to the target in the same Turn (LANG-77): answered is delivered. The
 ; forward's support is the grant itself (cell = pin = via, the doc row's own shape), so revoking the
 ; grant withdraws the candidate by name.
-; LANG-97: (withdraw): a ringer retires its own unanswered ring at any time (rung and queued admit the
-; ringer's own retraction before the deadline; everyone else waits for it), so a ring aimed at a
-; target that refuses does not hold the queue until the patience.
 (package
-  (doc "A ring is answered once by the resident, its text sent back; a ringer may backdate by the kernel's window (1024 heights); ties go by ringer digest; a ringer withdraws its unanswered ring, anyone from notBefore + 2048; an aimed answer is delivered.")
+  (doc "A ring is answered once by the resident, its text sent back; a ringer may backdate by the kernel's window (1024 heights); ties go by ringer digest; anyone retires an unanswered ring from notBefore + 2048; an aimed ring is delivered by its answer.")
   (state (rec (open bool) (resident digest)))
   (type Aim (rec (cand digest) (method nat) (target digest) (via digest)))
   (type Support (rec (cell digest) (pin digest)))
   (type Proposal (rec (cand digest) (s0 (option Support)) (s1 (option Support)) (value bytes)))
-  (activity pending rings (limits 64 1024) (patience 2048) (withdraw)
+  (activity pending rings (limits 64 1024) (patience 2048)
     (expose) (guards queued rung) (refusals "notResident" "unrung" "text")
     (resumer (deq req.agent state.resident))
     (plan ask (arg (rec (text bytes) (to (option Aim)))) (resp bytes)

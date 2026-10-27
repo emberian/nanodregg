@@ -15,8 +15,7 @@ Every theorem here is about `Lang.program`'s `run` of the generated package
 * `escrow_retract_moves_leg` (the linear corollary, over every method of the package): every
   retract of an offer row among a returned run's row acts comes with a call in the same result that
   transfers THAT row's leg out of the object, to the row's own `payTo` or to the `payTo` of the
-  offer the run read under its peer. `post` only inserts; `fuse` retracts its own offer and pays its leg
-  as `take` does.
+  offer the run read under its peer. `fuse` makes no row act and `post` only inserts.
 
 What leaves the object arrives in the named account by the kernel's conservation of every
 denomination (`Kernel.Proofs.Value.admit_value`); this module states the CALL, not the transfer's

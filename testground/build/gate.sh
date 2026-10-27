@@ -2,7 +2,8 @@
 # testground/build/gate.sh FRESH [--harness-control] — the testground's lies as a verdict (gates/runs.tsv
 # `script:testground/build/gate.sh`): the kernel the page loads, built from THIS tree (build.sh all), runs
 # every Writer-menu scene (lies-run.mjs) and its control with the lies off (--honest), then each axis's
-# demo (axes-run.mjs: the generator, the meter to ticksBudget, the time-lock, the document), then a real
+# demo (axes-run.mjs: the generator, the meter to ticksBudget, the time-lock, the document), the tutorial's
+# steps in order (teach-run.mjs: each command ends as its step says), then a real
 # hosted World on a fresh genesis (hosted-run.mjs basic, document and door: the live World's door, CLIENT-49). The expectation
 # of each scene is its row's, read off Protocol.rows by the kernel, so a row that changes its lines is
 # RED here until its scene follows, never silently left behind.
@@ -58,11 +59,13 @@ if [ "${1-}" = --harness-control ]; then
   # each reader's own known-red control must read red; the row's control reads red only if both did
   if node lies-run.mjs --harness-control; then echo "FAIL harness: lies-run.mjs --harness-control passed"; exit 0; fi
   if node axes-run.mjs --harness-control; then echo "FAIL harness: axes-run.mjs --harness-control passed"; exit 0; fi
+  if node teach-run.mjs --harness-control; then echo "FAIL harness: teach-run.mjs --harness-control passed"; exit 0; fi
   if hosted basic --harness-control; then echo "FAIL harness: hosted-run.mjs --harness-control passed"; exit 0; fi
-  echo "FAIL harness-control: all three readers read their known-red step red"; exit 1
+  echo "FAIL harness-control: every reader read its known-red step red"; exit 1
 fi
 node lies-run.mjs || { echo "FAIL a lie's scene did not end as its row expects (lies-run.mjs)"; exit 1; }
 node lies-run.mjs --honest || { echo "FAIL the control: with the lies off a scene still ended as its row expects (lies-run.mjs --honest)"; exit 1; }
 node axes-run.mjs || { echo "FAIL an axis demo did not answer as scripted (axes-run.mjs)"; exit 1; }
+node teach-run.mjs || { echo "FAIL a tutorial step did not end as it says (teach-run.mjs)"; exit 1; }
 hosted basic document door || { echo "FAIL the hosted World did not answer as scripted (hosted-run.mjs)"; exit 1; }
 echo "TESTGROUND GATE GREEN"

@@ -1,17 +1,14 @@
-//! The step loop against a scripted follow and host, for the cases no member row drives yet: the
-//! steps bound, an armed rotation reconciled before a command, a rotation refused, declined or
-//! contradicted, a submit answered `closed`, custody's refusals, the incoming key refused, a nested
-//! receipt that asks to rotate, a re-run of another argv or of `rotate`. Every case a row drives
-//! (a write's round trip with a lost reply, a lying lookup, a rotation confirmed through its incoming
-//! key, CLIENT-37's re-run of an open attempt and of a dead one) is replayed from the rows' own
-//! trace instead (`tests/trace.rs`, DESIGN-QA Q5); each case here is a stand-in until its row exists.
+//! The step loop against a scripted follow and host: challenge → sign → prepare → sign → submit
+//! (reply lost) → lookup → confirm → done. Follow decides every step; the loop only performs them.
+//! A Host's status byte only steers: what settles a call, and custody's rotation, is the member's
+//! own follow answering `receipt CALL` (PROTOCOL-46). A lying Host is contradicted or overruled.
 #![allow(clippy::unwrap_used)] // a plant that cannot set up is a failed plant
 use std::collections::VecDeque;
 use std::io;
 
 use nanodregg_client::custody::Custody;
 use nanodregg_client::generated::attempt::{Action, HEAD_WORD, RECEIPT_WORD, SETTLE_WORD};
-use nanodregg_client::generated::layout::Step;
+use nanodregg_client::generated::layout::{Op, Step};
 use nanodregg_client::run::{self, Follow, Host, Outcome, RunError, Table};
 
 // Test values, not the protocol's: the real ones are generated from Protocol/Table.lean.
@@ -62,6 +59,13 @@ fn receipt(verdict: &str) -> Step {
     }
 }
 
+fn hex(b: &[u8]) -> Vec<u8> {
+    b.iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<String>()
+        .into_bytes()
+}
+
 struct ScriptedHost {
     replies: VecDeque<io::Result<(u8, Vec<u8>)>>,
     asked: Vec<(u8, Vec<u8>)>,
@@ -88,6 +92,86 @@ fn setup(name: &str) -> (std::path::PathBuf, Custody) {
     Custody::create_same_record(&d).unwrap();
     let c = Custody::open(&d, None).unwrap();
     (d, c)
+}
+
+#[test]
+fn round_trip_with_a_lost_submit_reply() {
+    let (d, custody) = setup("trip");
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Host {
+                op: Op::Read,
+                payload: b"challenge?".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Sign {
+                message: b"observation".to_vec(),
+                k: b"k2".to_vec(),
+            },
+            Step::Sign {
+                message: b"plan".to_vec(),
+                k: b"k3".to_vec(),
+            },
+            Step::Submit {
+                call: b"CALL".to_vec(),
+                k: b"k4".to_vec(),
+            },
+            Step::Done {
+                exit: 0,
+                stdout: b"ok\n".to_vec(),
+                stderr: vec![],
+            },
+        ]),
+        seen: vec![],
+        receipts: VecDeque::from([receipt("committed 3 77")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([
+            Ok((0, b"challenge".to_vec())),
+            Err(io::Error::from(io::ErrorKind::ConnectionReset)), // the submit's reply is lost
+            Ok((0, b"receipt".to_vec())),                         // lookup: committed
+        ]),
+        asked: vec![],
+    };
+    let (exit, out, _) = run::run(
+        &[b"nd".to_vec()],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!((exit, out), (0, b"ok\n".to_vec()));
+    assert_eq!(
+        host.asked,
+        vec![
+            (3, b"challenge?".to_vec()),
+            (1, b"CALL".to_vec()),
+            (2, b"CALL".to_vec())
+        ]
+    );
+    assert_eq!(
+        follow.seen[1].1,
+        Outcome {
+            status: 0,
+            payload: custody.sign(b"observation").unwrap().encode().unwrap(),
+        }
+    );
+    assert_eq!(
+        follow.seen[3],
+        (
+            b"k4".to_vec(),
+            Outcome {
+                status: Action::Committed.code(),
+                payload: b"committed 3 77".to_vec()
+            }
+        ),
+        "follow is told its own verdict, never the Host's reply"
+    );
+    assert_eq!(follow.asked, vec![vec![b"receipt".to_vec(), hex(b"CALL")]]);
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 /// cv 01a150b1 (PROTOCOL-58): a confirm whose `receipt CALL` follow REFUSES reaches follow as
@@ -165,6 +249,47 @@ fn a_follow_that_never_finishes_is_stopped_by_the_bound() {
 }
 
 #[test]
+fn an_unsettled_call_is_handed_to_follow_uncertain() {
+    let (d, custody) = setup("uncertain");
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Submit {
+                call: b"C".to_vec(),
+                k: vec![],
+            },
+            Step::Done {
+                exit: 2,
+                stdout: vec![],
+                stderr: vec![],
+            },
+        ]),
+        seen: vec![],
+        receipts: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((2, vec![])), Ok((2, vec![]))]),
+        asked: vec![],
+    };
+    let r = run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(r.0, 2);
+    let told = &follow.seen[0].1;
+    assert_eq!(
+        (told.status, told.payload.len()),
+        (Action::Uncertain.code(), 0)
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
 fn an_armed_rotation_is_settled_by_its_receipt_before_the_command() {
     use nanodregg_client::attempt::{Attempt, AttemptError, Reply, State};
     let (d, custody) = setup("reconcile");
@@ -210,6 +335,57 @@ fn an_armed_rotation_is_settled_by_its_receipt_before_the_command() {
         next,
         "advanced on custody's own settlement"
     );
+    assert!(custody.armed().unwrap().is_none());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn sign_next_then_a_committed_submit_advances_custody_in_one_command() {
+    let (d, custody) = setup("signnext");
+    let (next, pending) = custody.precommit().unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::SignNext {
+                message: b"rotate".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Submit {
+                call: b"ROTATE".to_vec(),
+                k: b"k2".to_vec(),
+            },
+            Step::Done {
+                exit: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        ]),
+        seen: Vec::new(),
+        receipts: VecDeque::from([receipt("committed 2 aa")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((0, b"receipt".to_vec()))]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(follow.seen[0].1.status, T.ok);
+    let bytes = follow.seen[0].1.payload.clone();
+    let s = nanodregg_client::generated::layout::SignResult::decode(&bytes).unwrap();
+    assert_eq!((s.key, s.next), (next.to_vec(), pending.to_vec()));
+    assert_eq!(
+        custody.public_key().unwrap(),
+        next,
+        "advanced on the committed settlement"
+    );
+    assert_eq!(custody.sign(b"").unwrap().next, pending.to_vec());
     assert!(custody.armed().unwrap().is_none());
     std::fs::remove_dir_all(&d).unwrap();
 }
@@ -346,6 +522,51 @@ fn a_custody_refusal_is_a_result_follow_renders_not_an_exit() {
     assert_eq!(o.status, T.refused);
     let r = nanodregg_client::generated::layout::CustodyRefused::decode(&o.payload).unwrap();
     assert_eq!(r.refusal.name(), "noPending");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_submit_whose_reply_is_lost_is_looked_up_never_resent() {
+    let (d, custody) = setup("lost");
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Submit {
+                call: b"CALL".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Done {
+                exit: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        ]),
+        seen: Vec::new(),
+        receipts: VecDeque::from([receipt("committed 2 aa")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timeout (replyMsMax)",
+            )),
+            Ok((T.ok, b"receipt".to_vec())),
+        ]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(
+        host.asked,
+        vec![(T.submit, b"CALL".to_vec()), (T.lookup, b"CALL".to_vec())]
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -605,6 +826,39 @@ fn verifies(s: &nanodregg_client::generated::layout::SignResult) -> bool {
         .is_ok()
 }
 
+/// CLIENT-27's lockout: a rotation that COMMITTED leaves custody armed on the old key, which the
+/// World no longer accepts, so a confirm signed only by the current key could never build its
+/// receipt and the rotation would stay armed forever. The incoming key reads once; custody advances.
+#[test]
+fn a_landed_rotation_is_confirmed_through_the_incoming_key() {
+    let (d, custody, _, next) = armed("lockout");
+    let mut follow = EnvelopeFollow {
+        world_key: next,
+        incoming_asked: 0,
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.ok, b"receipt".to_vec()))]),
+        asked: Vec::new(),
+    };
+    run::run(
+        &[],
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!(follow.incoming_asked, 1);
+    assert_eq!(
+        custody.public_key().unwrap(),
+        next,
+        "settled from the member's receipt"
+    );
+    assert!(custody.armed().unwrap().is_none());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 /// A Host that refuses the incoming key too: one retry, then the receipt ends refused, the attempt
 /// is uncertain, the rotation stays armed, and the command goes on (never a loop).
 #[test]
@@ -685,6 +939,104 @@ fn a_receipt_not_ok_or_asking_to_rotate_settles_nothing() {
     }
 }
 
+/// CLIENT-37 (A6): a run that ends `uncertain` leaves its attempt open, and the next run of the SAME
+/// argv is that attempt. Follow is never asked to plan again: the run looks up the frozen bytes,
+/// confirms through the member's own follow, and resumes follow with the FIRST run's continuation
+/// and the committed end. One attempt on disk, one call ever signed.
+#[test]
+fn a_rerun_of_the_same_argv_continues_its_open_attempt_and_signs_nothing() {
+    let (d, custody) = setup("rerun");
+    let argv = [
+        b"write".to_vec(),
+        b"obj".to_vec(),
+        b"1".to_vec(),
+        b"v".to_vec(),
+    ];
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            Step::Sign {
+                message: b"plan".to_vec(),
+                k: b"k1".to_vec(),
+            },
+            Step::Submit {
+                call: b"CALL".to_vec(),
+                k: b"k2".to_vec(),
+            },
+            Step::Done {
+                exit: 2,
+                stdout: Vec::new(),
+                stderr: b"uncertain\n".to_vec(),
+            },
+        ]),
+        seen: Vec::new(),
+        receipts: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([
+            Err(io::Error::from(io::ErrorKind::ConnectionReset)), // the submit's reply is lost
+            Err(io::Error::from(io::ErrorKind::ConnectionReset)), // and the lookup's
+        ]),
+        asked: Vec::new(),
+    };
+    let at = d.join("attempts");
+    let (exit, _, _) = run::run(&argv, &mut follow, &mut host, &custody, &at, T).unwrap();
+    assert_eq!(exit, 2);
+    assert_eq!(follow.seen[1].1.status, Action::Uncertain.code());
+
+    // The same command again. Follow's only scripted step is the done of step 4: had the run asked
+    // follow to start the command, follow would have answered that done to `command` and seen no
+    // resume at all.
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([Step::Done {
+            exit: 0,
+            stdout: b"tx 01\n".to_vec(),
+            stderr: Vec::new(),
+        }]),
+        seen: Vec::new(),
+        receipts: VecDeque::from([receipt("committed 3 77")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.ok, b"receipt".to_vec()))]),
+        asked: Vec::new(),
+    };
+    let (exit, out, _) = run::run(&argv, &mut follow, &mut host, &custody, &at, T).unwrap();
+    assert_eq!((exit, out), (0, b"tx 01\n".to_vec()));
+    assert_eq!(
+        host.asked,
+        vec![(T.lookup, b"CALL".to_vec())],
+        "a lookup of the frozen bytes: never a new submit"
+    );
+    assert_eq!(
+        follow.seen,
+        vec![(
+            b"k2".to_vec(),
+            Outcome {
+                status: Action::Committed.code(),
+                payload: b"committed 3 77".to_vec()
+            }
+        )],
+        "follow resumed with the first run's continuation and the call's end"
+    );
+    assert_eq!(std::fs::read_dir(&at).unwrap().count(), 1, "one attempt");
+
+    // Settled now: the next run of the same argv plans afresh.
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([done_step()]),
+        seen: Vec::new(),
+        receipts: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::new(),
+        asked: Vec::new(),
+    };
+    run::run(&argv, &mut follow, &mut host, &custody, &at, T).unwrap();
+    assert!(follow.seen.is_empty(), "a settled attempt is not continued");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 /// CLIENT-37: an open attempt is the command of the argv it was frozen for, and of no other: a
 /// different command plans afresh beside it, and the open one stays as it is.
 #[test]
@@ -763,5 +1115,80 @@ fn a_rerun_of_rotate_continues_the_armed_rotation() {
     assert_eq!(follow.seen[0].0, b"K".to_vec());
     assert_eq!(custody.public_key().unwrap(), next);
     assert!(custody.armed().unwrap().is_none());
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// CLIENT-37 amended: an open attempt the member's own follow now holds REFUSED (a `declined stale`
+/// whose pin a later write passed: final by KERNEL-54) is dead, so the re-run, after follow's step 4
+/// says `refused` on its own World, plans the command afresh: THE BAR's stale re-run after a sync.
+/// Without the replan the re-run ends `refused stale` and the member's write never happens.
+#[test]
+fn a_rerun_whose_open_attempt_is_dead_plans_afresh() {
+    use nanodregg_client::attempt::{Attempt, AttemptError, Reply, State};
+    let (d, custody) = setup("dead");
+    let argv = [
+        b"write".to_vec(),
+        b"o".to_vec(),
+        b"1".to_vec(),
+        b"v".to_vec(),
+    ];
+    let key = nanodregg_client::generated::layout::Command {
+        argv: argv.to_vec(),
+    }
+    .encode()
+    .unwrap();
+    let a = Attempt::freeze(&d.join("attempts/0"), b"OLD", &key, b"k4").unwrap();
+    a.drive(State::Signed, 2, |_, _| {
+        Ok::<_, AttemptError>(Reply::Host(
+            nanodregg_client::generated::attempt::Seen::Declined,
+            b"stale".to_vec(),
+        ))
+    })
+    .unwrap();
+    let mut follow = ScriptedFollow {
+        steps: VecDeque::from([
+            // step 4 of the old call: follow's own World says refused
+            Step::Done {
+                exit: 1,
+                stdout: Vec::new(),
+                stderr: b"refused stale\n".to_vec(),
+            },
+            // the fresh plan
+            Step::Done {
+                exit: 0,
+                stdout: b"tx 02\n".to_vec(),
+                stderr: Vec::new(),
+            },
+        ]),
+        seen: Vec::new(),
+        receipts: VecDeque::from([receipt("refused 3")]),
+        asked: Vec::new(),
+    };
+    let mut host = ScriptedHost {
+        replies: VecDeque::from([Ok((T.absent, Vec::new()))]),
+        asked: Vec::new(),
+    };
+    let (exit, out, _) = run::run(
+        &argv,
+        &mut follow,
+        &mut host,
+        &custody,
+        &d.join("attempts"),
+        T,
+    )
+    .unwrap();
+    assert_eq!((exit, out), (0, b"tx 02\n".to_vec()), "planned afresh");
+    assert_eq!(host.asked, vec![(T.lookup, b"OLD".to_vec())]);
+    assert_eq!(
+        follow.seen,
+        vec![(
+            b"k4".to_vec(),
+            Outcome {
+                status: Action::Refused.code(),
+                payload: b"refused 3".to_vec()
+            }
+        )],
+        "the dead call's end went to follow first"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }

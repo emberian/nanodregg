@@ -271,15 +271,12 @@ theorem derive_born_grant {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
   · intro sub wk actor b r hb h
     cases b with
     | invoke => simp [Body.isInvoke] at hb
-    | enroll key next origin join via =>
+    | enroll key next possession via =>
         have hd := stepped_draft h
         simp only [enroll, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd
         obtain ⟨_, _, _, _, _, _, ⟨⟩, _, hr⟩ := hd
         rw [← hr]
-        intro p hp hpk
-        simp only [List.mem_singleton] at hp
-        subst hp
-        simp [kindMember, kindGrant] at hpk
+        exact notGrant _ _ (by simp [kindMember, kindGrant])
     | rotate key next =>
         have hd := stepped_draft h
         simp only [rotate, except_bind_ok, pure, Except.pure, Except.ok.injEq] at hd

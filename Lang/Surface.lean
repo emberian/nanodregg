@@ -9,33 +9,13 @@ returns is always a package the core reader read from its own text: a bug here m
 program, which the checker and the laws judge like any other, never an unread one. A core package
 text (`(package (imports …) …)`) is read by `Read.package` unchanged (`read_print_surface`).
 
-    package ::= (package decl…)
-    decl    ::= (type N T) | (state T) | (import N "hex") | (layer N) | (doc "text")
-              | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)])
-              | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] body)
-              kind    ::= account | credit | grant | transfer | (invoke T)   — T the argument the invoke sends (LANG-77)
-              | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))
-              | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))
-              | (activity cursor log [(limits cursorLimit logLimit)] [(patience n)] [(withdraw)] [(expose m…)]
-                  [(guards q w)] [(refusals "r" "u" "c")] (resumer e) plan…)
-              | (machine f initial (methods m…) (from m to)…) | (guard g body)
-    plan    ::= (plan name (arg T) (resp U) [(pre e)] (start e) (resume e))
-    type    ::= the core's types | N | Req | Verdict | Occasion | AcctRef | Right
-              | (enum ℓ…) | (option T) | (row rel)
-    arg A   ::= a type, where a record field may be bounded: (nat lo hi) | (bytes lo hi) | N naming one
-    term    ::= the core's terms | x.f.g | ok | (refuse e) | (done state item…) | (with e (f x)…)
-              | (some T e) | (none T) | (N ℓ [e]) | (is N e ℓ) | (all (c "why")…)
-              | (check (c "why")… body) | (any e…) | (and a b) | (not a) | (index m)
-              | (fold (acc T init) (x rel) step body) | (super m)
-    item    ::= (insert rel key val) | (upsert rel key val) | (retract rel key) | (KIND (f e)…)
+    (the grammar is `grammar`, below: one text, which this comment and the testground both read)
 
 An activity precondition/start binds state, arg, req; resume binds state, captured, response,
 req. Its cursor and continuation are rows under self. The generated start_name/resume_name
 methods and retire method use the same row guards and install checker as handwritten methods.
 `(patience n)` (LANG-76, n > 0 heights) adds a `timeout` method: an unanswered row may be retracted
 by anyone at or past its key's `notBefore` + n; without it an unanswered row waits for its resumer.
-`(withdraw)` (LANG-97) lets the member that started a row retract it, unanswered, at any time, with
-its cursor row; the deadline stays everyone else's.
 
 Every annotation the lowering writes comes from a declaration; nothing is inferred, so the
 surface never decides a type (the checker does). A method binds `rows state arg req`, a law
@@ -48,6 +28,28 @@ import Lang.StdActivity
 import Lang.Print
 
 namespace Nanodregg.Lang.Surface
+
+/-- The surface grammar, as a text a tool shows (the testground's grammar window). -/
+def grammar : String :=
+  "package ::= (package decl…)\n" ++
+  "decl    ::= (type N T) | (state T) | (import N \"hex\") | (layer N) | (doc \"text\")\n" ++
+  "          | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)])\n" ++
+  "          | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] body)\n" ++
+  "          kind    ::= account | credit | grant | transfer | (invoke T)   — T the argument the invoke sends (LANG-77)\n" ++
+  "          | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))\n" ++
+  "          | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))\n" ++
+  "          | (activity cursor log [(limits cursorLimit logLimit)] [(patience n)] [(expose m…)]\n" ++
+  "              [(guards q w)] [(refusals \"r\" \"u\" \"c\")] (resumer e) plan…)\n" ++
+  "          | (machine f initial (methods m…) (from m to)…) | (guard g body)\n" ++
+  "plan    ::= (plan name (arg T) (resp U) [(pre e)] (start e) (resume e))\n" ++
+  "type    ::= the core's types | N | Req | Verdict | Occasion | AcctRef | Right\n" ++
+  "          | (enum ℓ…) | (option T) | (row rel)\n" ++
+  "arg A   ::= a type, where a record field may be bounded: (nat lo hi) | (bytes lo hi) | N naming one\n" ++
+  "term    ::= the core's terms | x.f.g | ok | (refuse e) | (done state item…) | (with e (f x)…)\n" ++
+  "          | (some T e) | (none T) | (N ℓ [e]) | (is N e ℓ) | (all (c \"why\")…)\n" ++
+  "          | (check (c \"why\")… body) | (any e…) | (and a b) | (not a) | (index m)\n" ++
+  "          | (fold (acc T init) (x rel) step body) | (super m)\n" ++
+  "item    ::= (insert rel key val) | (upsert rel key val) | (retract rel key) | (KIND (f e)…)\n"
 
 open Read (SExp ReadRefusal)
 
@@ -783,9 +785,6 @@ def activityDecl (c : Ctx) (p : Nat) (cursor log : Label) (xs : List SExp)
       | some n => pure (some n, rest)
       | none => throw (.badClause q)
     | _ => pure (none, rest)
-  let (withdraw, rest) ← match rest with
-    | .list _ [.atom _ "withdraw"] :: rest => pure (true, rest)
-    | _ => pure (false, rest)
   let (expose, rest) ← match rest with
     | .list _ (.atom _ "expose" :: names) :: rest =>
       pure (some (← labelsOf names), rest)
@@ -821,10 +820,10 @@ def activityDecl (c : Ctx) (p : Nat) (cursor log : Label) (xs : List SExp)
             [("state", c.state), ("captured", K), ("response", R), ("req", reqTy)] resume } : Std.ActivityPlan)
       | _ => throw (.badClause q)
     | _ => throw (.badClause x.pos)
-  match Std.activity c.state cursor log cursorLimit logLimit resumer plans patience withdraw with
+  match Std.activity c.state cursor log cursorLimit logLimit resumer plans patience with
   | .ok _ =>
     let pkg := Std.activityPackage c.state cursor log cursorLimit logLimit resumer plans
-      extraRels guardNames vocabulary patience withdraw
+      extraRels guardNames vocabulary patience
     match expose with
     | none => pure pkg
     | some ns =>

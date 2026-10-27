@@ -1,14 +1,14 @@
 /-
-# Lang.Proofs.StdOffer — what the generated offer judge and its take decide (PROT-6)
+# Lang.Proofs.StdOffer — what the generated offer judge, its take and its matcher decide (PROT-6)
 
 Every theorem here is about a term `Lang.StdOffer` generates, by its `BigStep` meaning, or about
 `Lang.program`'s `run` of the generated package:
 
 * `offerJoint_meaning` / `offerJoint_total` (term grain): the joint judge `offerJoint` says
   `sameRole`, `ok` (exactly `JointOk`: different roles, θ inside BOTH boxes) or `notCompliant`.
-* `take_iff_compliant` (method-term grain: the take applied inline, not through the receiver's `apply4`): with both offer slots
+* `take_iff_compliant` (method-term grain, as the receiver applies it): with both offer slots
   present, the take returns iff its own pinned offer is the one the deal names for it (`NamedKey`)
-  and `JointOk` of the two pinned offers and the θ it decoded. No other code is a premise: the take judges the pair itself.
+  and `JointOk` of the two pinned offers and the θ it decoded. The matcher's code is not a premise.
   Its refusals by name: `take_offerUnpinned`, `take_noOffer`, `take_peerRowUnpinned`,
   `take_noPeerOffer`, `take_offerNotNamed`, `take_sameRole`, `take_notCompliant`.
 * `take_run_sound` (the deployed run): a returned take decoded `{keys, pair, theta}`, read both
@@ -577,14 +577,12 @@ private theorem named_in_take {lib : List Term} {state : Val} {rq keys pair th k
     (get_data (d := takeArg keys pair th tail) (BigStep.var (i := 5) rfl) rfl)
     (get_data (d := takeArg keys pair th tail) (BigStep.var (i := 5) rfl) rfl) hkeys hpair hkc
 
-/-- **Each party's honesty** (method-term grain: the generated `take` applied inline over the env
-`rq :: arg :: state :: rows :: env`, so its body runs under that env doubled; the receiver's `apply4`
-runs it under exactly `[req, arg, state, rows]`, and no lemma here transports the statement to that
-grain): with both offer slots pinned and present (own
+/-- **Each party's honesty** (method-term grain, the generated `take` as the receiver applies it,
+over the env `[req, arg, state, rows]` it builds): with both offer slots pinned and present (own
 point `k`/`o`, peer point `kq`/`q`), the argument `{keys, pair, theta := th}` and a request whose
 `self` is `sb`, the take returns iff its own pinned offer is the one the deal NAMES for `sb`
-(`NamedKey`) and `JointOk`: it checks the name and judges the pair itself, whoever called it. No
-other code is a premise. Mutation P2 (`take` without the judge: the `ok` arm taken
+(`NamedKey`) and `JointOk`: it checks the name and judges the pair itself, whoever called it. The
+matcher's code is not a premise. Mutation P2 (`take` without the judge: the `ok` arm taken
 unconditionally) makes it false at F2 (buyer `[5,10]`, seller `[11,12]`, θ = 11: the mutant
 returns, `JointOk` is false); mutation PA (the name check skipped) at LF8 (the deal names Y's offer
 1, the pin is Y's offer 0: the mutant returns, `NamedKey` is false). -/
@@ -758,7 +756,7 @@ private theorem take_rowsOf (theta roles : List Label) (ol sl : Nat) :
   simp [rowsOf, offerTakeRows, rowsTy, readsTy, offerRead, offerRels, Row.find?, relReadTy, readsOf,
     relReadOf, relReadShape, peerLabel, slot_p1, Row.sort, Row.insert, pointsMax, rangeRowsMax]
 
-/-- The take resolves to its declared signature: argument `{keys, pair, theta}`, no calls, the one offer
+/-- The take resolves to its declared signature: argument `{pair, theta}`, no calls, the one offer
 point read under itself and under its peer, two edits. -/
 private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
     (h : resolveMethod (D := D) (offerPackageOf theta roles ol sl pt b) offerTakeIx = .ok x) :
@@ -802,6 +800,22 @@ private theorem noRef_take (theta roles : List Label) (rels : List (Label × Rel
     offerTakeDone, offerTakeEdits]
 
 /-! ## The deployed run of `take` -/
+
+theorem conforms_empty {d : Data} (h : Conforms d (.record [])) : d = .record [] := by
+  cases h with | record hr => cases hr; rfl
+
+/-- A value of an option type is `none` or `some` of a conforming value. -/
+theorem conforms_opt {d : Data} {T : Ty} (h : Conforms d (optTy T)) :
+    d = optD none ∨ ∃ z, d = optD (some z) ∧ Conforms z T := by
+  cases h with
+  | inj hf hc =>
+    rename_i ℓ A z
+    simp only [Row.find?] at hf
+    split at hf
+    · cases hf; subst_vars; exact .inl (by rw [conforms_empty hc]; rfl)
+    · split at hf
+      · cases hf; subst_vars; exact .inr ⟨z, rfl, hc⟩
+      · cases hf
 
 /-- A conforming take argument is `{keys, pair, theta}` (`Std.offer`'s and the escrow's). -/
 theorem offerTakeArg_cases {theta : List Label} {ad : Data} (h : Conforms ad (offerTakeArg theta)) :
@@ -1192,20 +1206,18 @@ theorem fuse_refused_disjoint :
 (`offerSessionGuard`, `activityWaiting` at patience `pt`) admits the retraction of a session row
 (always unanswered: nothing in the package answers it) iff the call's signed `notBefore` `m` is at
 least the row key's `notBefore` `n` plus `pt`, whoever retracts; before that it refuses `unanswered`.
-`waiting_retract_iff` (LANG-76) at the offer's guard, which declares no `withdraw` (LANG-97: a session
-row records a deal, and a party does not release its own). -/
+`waiting_retract_iff` (LANG-76) at the offer's guard. -/
 theorem offer_session_retract_iff (theta : List Label) (sd : RelDecl) (pt n m : Nat) (key captured req : Data)
-    {ka ra : ByteArray} (lib : List Term) (env : Env) (state : Val)
+    (lib : List Term) (env : Env) (state : Val)
     (hk : key.field "notBefore" = some (.nat n)) (hr : req.field "notBefore" = some (.nat m))
-    (hka : key.field "agent" = some (.digest ka)) (hra : req.field "agent" = some (.digest ra))
     (hlim : n + pt < Bounds.natLimit) :
     (∃ w, BigStep lib
       ((Data.record [("edit", .inj "retract" (.record [("key", key)])), ("old", .inj "some" (.record [
         ("answered", .inj "none" (.record [])), ("captured", captured)]))]).toVal :: req.toVal :: state :: env)
       (activityApply (offerSessionGuard theta sd pt) [.var 2, .var 1, .var 0]) (.ok (.inj "ok" w))) ↔
       n + pt ≤ m := by
-  have h := waiting_retract_iff offerStateTy [offerSettlePlan theta] sd offerResumer {} (some pt) false n m key captured
-    req none lib env state hk hr hka hra (fun P hP => by cases hP; exact hlim)
+  have h := waiting_retract_iff offerStateTy [offerSettlePlan theta] sd offerResumer {} (some pt) n m key captured
+    req none lib env state hk hr (fun P hP => by cases hP; exact hlim)
   simpa [offerSessionGuard] using h
 
 end Nanodregg.Lang.Std

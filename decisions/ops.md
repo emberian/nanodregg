@@ -39,14 +39,9 @@ be carried only by re-genesis from a checked export." Concretely:
   under the new build's codecs and a new Store key.
 - **check**: the imported World's canonical bytes equal the exported World's, up to the epoch's own
   header fields (origin, height, chain, the journal).
-- **not carried**: every signature over old bytes — calls, join consents, the journal's txIds,
+- **not carried**: every signature over old bytes — calls, possession proofs, the journal's txIds,
   receipts. History is never carried, only state. A member's old receipts do not verify against
   the new World; that is correct, not a loss to be patched.
-  (Corrected 2026-10-26, PROTOCOL-79: this line said "possession proofs". Possession of a key is a
-  fact of the key, shown by any signature it makes, so it is neither carried nor not; what is bound to
-  a World is a JOIN, the consent a new key signs over `domJoin ‖ origin ‖ sponsor ‖ next ‖ key`. A
-  carried World's join is a new join (the old consent is refused `otherWorld` there); members already
-  in the exported World are carried as members, with their state (KERNEL-40).)
 **Interaction with KERNEL-4's D3 (World-bound calls).** A carried World is under a new origin, so
 every call signed for the old World is `wrongWorld` in the new one. Without D3, a carried World
 whose founder ids survive is replay-open for every old call with `validUntil` ≥ the new height

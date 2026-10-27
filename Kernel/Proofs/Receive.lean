@@ -28,23 +28,9 @@ theorem receive_ok_with {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
       receiveWith X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c = .ok t := by
   unfold receive at h
   simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, hw, ⟨⟩, hs, ⟨⟩, -, ⟨⟩, hk, h⟩ := h
+  obtain ⟨⟨⟩, hw, h⟩ := h
   rw [req_ok, decide_eq_true_eq] at hw
-  refine ⟨hw, ?_⟩
-  unfold receiveWith
-  rw [hs, hk]
-  exact h
-
-/-- **The join is bound to the World** (PROTOCOL-79). A call `receive` admits is an enrolment only
-if its join names this World: a consent to join another World, a carried World's old one among
-them, is `otherWorld`. -/
-theorem receive_join_world {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
-    (h : receive X w c = .ok t) : c.unsigned.body.joinOrigin.all (· = w.origin) = true := by
-  unfold receive at h
-  simp only [except_bind_ok] at h
-  obtain ⟨⟨⟩, -, ⟨⟩, -, ⟨⟩, hj, -⟩ := h
-  rw [req_ok] at hj
-  exact hj
+  exact ⟨hw, h⟩
 
 /-- **Consent determinism.** A derivation depends only on the World's identity, the cells the
 caller pinned and the rows it observed: two Worlds that agree there derive the same Turn (or the
@@ -216,7 +202,7 @@ there is the one `deriveTurn` would give. -/
 theorem receive_signed (X : Ctx D) (w : World D) (c : Call D) :
     receive X w c = (do signedBy X w c false
                         deriveTurn X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c) := by
-  unfold receive signedBy checkSignatureBy
+  unfold receive receiveWith signedBy checkSignatureBy
   simp only [Bool.false_eq_true, if_false, bind_assoc, keyRule_deriveTurn]
 
 /-- A submission commits exactly `World.admit` of exactly what `receive` derived, for a call not

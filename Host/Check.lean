@@ -95,19 +95,19 @@ def turnsOf : Nat → List ByteArray → Except Nat (List (Turn D))
 
 /-- Each Turn's call (its `event` is the call's bytes); `.error K` names the first Turn (counted from
 `i`) whose event does not decode. -/
-def turnCalls : Nat → List (Turn D) → Except Nat (List (Receive.Call D))
+def callsOf : Nat → List (Turn D) → Except Nat (List (Receive.Call D))
   | _, [] => .ok []
   | i, t :: ts =>
     match X.decodeCall t.event with
     | none => .error i
-    | some c => (c :: ·) <$> turnCalls (i + 1) ts
+    | some c => (c :: ·) <$> callsOf (i + 1) ts
 
 /-- Every call the records committed, in log order; a refusal's name otherwise. -/
 def recordCalls (records : List ByteArray) : Except String (List (Receive.Call D)) :=
   match turnsOf 0 records with
   | .error k => .error s!"corrupt use-record {k}"
   | .ok ts =>
-    match turnCalls 0 ts with
+    match callsOf 0 ts with
     | .error k => .error s!"corrupt use-event {k}"
     | .ok cs => .ok cs
 

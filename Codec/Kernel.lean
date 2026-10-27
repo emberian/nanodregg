@@ -240,7 +240,7 @@ def acctRef (dc : Stream D) : Stream (AcctRef D) :=
     (fun | .well a => ⟨0, a⟩ | .of o a => ⟨1, (o, a)⟩)
 
 abbrev BodyF (D : Type) : Fin 13 → Type
-  | 0 => ByteArray × D × D × ByteArray × D
+  | 0 => ByteArray × D × ByteArray × D
   | 1 => ByteArray × D
   | 2 => ByteArray
   | 3 => Option D × List D × Slots
@@ -255,7 +255,7 @@ abbrev BodyF (D : Type) : Fin 13 → Type
   | 12 => D × AcctRef D × Nat × Option D
 
 def bodyWire (dc : Stream D) : (s : Fin 13) → Stream (BodyF D s)
-  | 0 => product (rawBytes callMax) (product dc (product dc (product (rawBytes callMax) dc)))
+  | 0 => product (rawBytes callMax) (product dc (product (rawBytes callMax) dc))
   | 1 => product (rawBytes callMax) dc
   | 2 => rawBytes callMax
   | 3 => product (option dc) (product (rawList callMax dc) slots)
@@ -273,7 +273,7 @@ def bodyWire (dc : Stream D) : (s : Fin 13) → Stream (BodyF D s)
 def body (dc : Stream D) : Stream (Body D) :=
   refine "kernel/body" (choice 13 (bodyWire dc))
     (fun
-      | ⟨0, (k, n, o, j, v)⟩ => some (.enroll k n o j v)
+      | ⟨0, (k, n, p, v)⟩ => some (.enroll k n p v)
       | ⟨1, (k, n)⟩ => some (.rotate k n)
       | ⟨2, p⟩ => some (.install p)
       | ⟨3, (p, ls, s)⟩ => some (.create p ls s)
@@ -287,7 +287,7 @@ def body (dc : Stream D) : Stream (Body D) :=
       | ⟨11, (s, d, n, v, o)⟩ => some (.transfer s d n v o)
       | ⟨12, (w, a, n, v)⟩ => some (.credit w a n v))
     (fun
-      | .enroll k n o j v => ⟨0, (k, n, o, j, v)⟩
+      | .enroll k n p v => ⟨0, (k, n, p, v)⟩
       | .rotate k n => ⟨1, (k, n)⟩
       | .install p => ⟨2, p⟩
       | .create p ls s => ⟨3, (p, ls, s)⟩

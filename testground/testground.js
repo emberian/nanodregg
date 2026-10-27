@@ -5,13 +5,14 @@ import factory from './kernel.mjs';
 import { loadKernel, client, genesis, hex } from './nd.js';
 import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
 import { demos, runDemo, lieScenes, memberLies, runScene, head0Of } from './demos.js';
+import { teach } from './teach.js';
 
 const $ = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
   }
-  for (const k of kids.flat()) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  for (const k of kids.flat(Infinity)) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
   return e;
 };
 const short = (h) => (h && h.length > 12 ? `${h.slice(0, 8)}…` : h);
@@ -77,6 +78,11 @@ const LIVE = deployment?.live === 'self' ? `${location.protocol === 'https:' ? '
 K = await loadKernel(factory, { wasmBinary: kernelBytes });
 const loadMs = performance.now() - t0;
 document.getElementById('boot').remove();
+// the teaching windows (teach.js): every member of every World in the tab
+const allMembers = () => [...(world?.members ?? []), ...Object.values(world?.extra ?? {}).flatMap((x) => x.members)];
+const T = teach({ $, K: () => K, nd: () => nd, openWindow, wins, runIn: (...a) => runIn(...a), members: allMembers, short,
+  prefill: (...a) => prefill(...a), splitArgv: (s) => splitArgv(s),
+  raceArm: (m, other, argv) => { raceArmed = { member: m.name, other, argv }; } });
 
 // ---------------------------------------------------------------- a membership this browser keeps
 // A hosted World's member is a record (hosted.mjs recordOf: the relay, the origin, the invitation and
@@ -368,6 +374,8 @@ function linkify(text, m) {
   // every 64-hex id becomes a link that opens the object as a window; a line `tx …` names a
   // transaction, which is not a cell, so it stays text
   return text.split(/(\n)/).flatMap((line) => {
+    // a `tx` line names a step of the log: it opens the Turn view
+    if (line.startsWith('tx ') && /^tx [0-9a-f]{64}$/.test(line)) return ['tx ', $('a', { class: 'hex', title: `Turn ${line.slice(3)}`, onclick: () => T.openTurn(m, line.slice(3)) }, short(line.slice(3)))];
     if (line.startsWith('tx ') || line.startsWith('join ') || line.startsWith('invite ')) return [line];
     return line.split(/([0-9a-f]{64})/).map((part) => {
       if (!/^[0-9a-f]{64}$/.test(part)) return part;
@@ -433,6 +441,7 @@ async function runOne(m, argv, why, { forge = false, quiet = false } = {}) {
   print(m, $('div', {}, ...linkify(r.stdout, m)), r.stderr ? $('div', { class: cls }, r.stderr) : '',
     $('div', { class: 'dim' }, `exit ${r.exit} · ${ms.toFixed(1)} ms · ${frames.length - n0} frames · ${meterOf(m)}`));
   for (const id of (r.stdout.match(/^id ([0-9a-f]{64})/gm) || []).map((l) => l.slice(3))) world.objects.set(id, argv[0]);
+  if (argv[0] === 'install' && r.exit === 'ok') { const id = (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1]; if (id) T.remember(id, argv[1]); }
   const hm = r.stdout.match(/^height (\d+)/m); if (hm) world.height = +hm[1];
   document.getElementById('tray-height').textContent = `${frames.length} frames · ${cmdNo} commands`;
   if (r.exit !== 'ok' && !quiet) refusal(m, argv, r, frames.slice(n0));
@@ -491,50 +500,13 @@ const glossary = {
 function explain(name) { const w = name.split(' ').find((x) => glossary[x]); return w ? glossary[w] : ''; }
 
 // ---------------------------------------------------------------- objects are windows
-// The window is `read OBJ ?` (the object's own description, PROTOCOL-44) and `read OBJ`, as the
-// viewing member's follow prints them; each line is laid out by its first word, never re-derived.
+// teach.js's inspector: `read OBJ ?` and `read OBJ` as the viewing member's follow prints them, the
+// package's text, the object's grants, each law runnable on a change.
 function prefill(m, text) {
   const w = wins.get(`term-${m.name}`); if (!w) return;
   focus(w); const input = w.el.querySelector('input'); input.value = text; input.focus();
 }
-function openObject(m, id) {
-  const w = openWindow({ id: `obj-${id}`, title: `Object ${short(id)}`, w: 560, body: $('div', {}, 'reading…') });
-  w.refresh = async () => {
-    const d = await (m.nd ?? nd).run(m, ['read', id, '?']);
-    const s = await (m.nd ?? nd).run(m, ['read', id]);
-    const props = [], methods = [], laws = [], rels = [], calls = [];
-    let core = null;
-    for (const l of (d.exit === 'ok' ? d.stdout : '').trim().split('\n').filter(Boolean)) {
-      const sp = l.indexOf(' '), k = sp < 0 ? l : l.slice(0, sp), v = sp < 0 ? '' : l.slice(sp + 1);
-      if (k === 'core') core = v;
-      else if (k === 'method') { const [i, label, ...ty] = v.split(' '); methods.push({ i, label, ty: ty.join(' ') }); }
-      else if (k === 'call') calls.push(v);
-      else if (k === 'law') laws.push(v);
-      else if (k === 'rel') rels.push(v);
-      else props.push([k, v]);
-    }
-    const row = (k, ...v) => $('tr', {}, $('td', {}, k), $('td', {}, ...v));
-    const table = $('table', { class: 'props sunken' },
-      props.map(([k, v]) => row(k, ...linkify(v, m))),
-      core ? row('core', $('details', {}, $('summary', {}, `${core.length / 2} bytes (the package code invoke runs)`), $('code', { style: 'word-break:break-all' }, core))) : '',
-      methods.map((x) => row(`method ${x.i}`, $('b', {}, x.label), ' ', $('code', {}, x.ty), ' ', $('a', { class: 'cmd', onclick: () => prefill(m, `invoke ${id} ${x.i} `) }, 'invoke…'))),
-      calls.map((c) => row('call', c)), laws.map((c) => row('law', c)), rels.map((c) => row('rel', $('code', {}, c))));
-    const state = $('table', { class: 'props sunken' }, (s.exit === 'ok' ? s.stdout : s.stderr).trim().split('\n').filter(Boolean).map((l) => {
-      const e = l.indexOf('='); return e < 0 ? row('', ...linkify(l, m)) : row(l.slice(0, e), ...linkify(l.slice(e + 1), m));
-    }));
-    w.setBody($('div', {},
-      kv([['source', `${m.name}'s follow: read ${short(id)} ?`], ['updated', 'after every command']]),
-      d.exit === 'ok' ? table : $('div', { class: 'bad' }, d.stderr),
-      $('h4', { style: 'margin:8px 0 4px' }, 'state'), state,
-      methods.length ? '' : $('p', {}, $('a', { class: 'cmd', onclick: () => prefill(m, `write ${id} 0 `) }, 'write a slot…')),
-      glossed([['owner', 'The member who may change the object without a grant.'], ['data', 'A cell with numbered slots and no code (create with no package).'],
-        ['package', 'The id of the code the object runs.'], ['method N', 'An entry point: name and argument type. Call it with invoke OBJ N ARGS.'],
-        ['call', 'A call a method may make to another object: method index, call index, type.'], ['law', 'A rule that judges every change: old state → new state.'],
-        ['rel', 'A relation: a table of keyed rows inside the object, with a row limit.'], ['state', 'The current value, from read OBJ.']])));
-  };
-  w.refresh();
-}
-
+function openObject(m, id) { return T.openInspector(m, id); }
 // ---------------------------------------------------------------- the wire, as a scrubbable timeline
 let logSel = -1;
 function openLog() {
@@ -591,7 +563,7 @@ function openTour() {
       LIVE ? $('p', { class: 'door sunken' }, 'This World runs only in this tab. Nothing you do here reaches anyone else. ',
         $('button', { class: 'btn', onclick: () => liveDoor() }, doorLabel()), ' to work with other visitors. Its writer runs on a public server. Your follow checks each of its replies.') : '',
       $('p', {}, 'One World, two members (alice, bob), all in this tab. Type into their terminals, or press Run on each step.'), $('ol', {}, items),
-      tourAt >= tour.length ? $('p', {}, 'More: the Writer menu in the World window turns on each lie the conformance rows test, and runs its scene. Or try: write as bob without --via; install a package twice; New World.') : '') });
+      tourAt >= tour.length ? $('p', {}, 'More: the Tutorial builds the language up step by step (cells, pins, packages, laws, grants, holes, offers). The Writer menu in the World window turns on each lie the conformance rows test. Or try: write as bob without --via; install a package twice; New World.') : '') });
 }
 
 // ---------------------------------------------------------------- demos: command sequences a member types
@@ -642,10 +614,13 @@ icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]));
 icon('≡', 'Frames', () => openLog());
 icon('?', 'Start here', () => openTour());
 icon('▶', 'Demos', () => openDemos());
+icon('1', 'Tutorial', () => T.openTutorial());
+icon('{', 'Editor', () => T.openEditor());
+icon('λ', 'Terms', () => T.openRepl());
 if (LIVE) { icon('◎', doorLabel(), () => liveDoor()); icons.lastChild.querySelector('.label').id = 'door-label'; }
 document.getElementById('start').addEventListener('click', () => openWorld());
 const q = new URLSearchParams(location.search);
 newWorld();
 if (q.has('live') && LIVE) liveDoor();
 else if (hostedDefault() && q.has('join')) joinHosted(hostedDefault());
-window.testground = { K, runIn, playDemo, world: () => world, frames: () => frames, hex, kernel: { sha256: kernelSha, built }, deployment, roster: () => (world.hosted ? rosterOf(K, world.members[0]) : null) };
+window.testground = { K, runIn, playDemo, world: () => world, frames: () => frames, hex, kernel: { sha256: kernelSha, built }, deployment, roster: () => (world.hosted ? rosterOf(K, world.members[0]) : null), T };

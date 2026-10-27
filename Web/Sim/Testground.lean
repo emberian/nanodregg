@@ -49,6 +49,7 @@ import Host.Cli
 import Protocol.Attempt
 import Protocol.Command.Exit
 import Lang.StdGen
+import Lang.StdOffer
 
 namespace Nanodregg.Web.Sim.Testground
 
@@ -106,6 +107,9 @@ def base : Thin.Base (World D) :=
 structure Member where
   self : Command.Self D
   follow : Command.Follow D
+  /-- the steps this follow absorbed, each batch with the World it absorbed them onto (the last
+  `seenMax` batches): what the page's Turn view re-derives a step from (`Web.Sim.Teach.tg_turn`) -/
+  seen : Array (World D × List (Kernel.Step D)) := #[]
 
 /-- The writer in the tab: its Store and its loop's state. -/
 structure Writer where
@@ -245,12 +249,20 @@ def hostOf (op : UInt8) (payload : ByteArray) : IO ByteArray := do
   let (g, r') := relayPost g op payload r
   ground.set (some { g with lied := r' != r }); return r'
 
+/-- How many absorbed batches a member keeps for the Turn view. -/
+def seenMax : Nat := 64
+
 def followOf (i : Nat) (op : UInt8) (payload : ByteArray) : IO ByteArray := do
   let some g ← ground.get | return refusedText "noWorld"
   let some m := g.members[i]? | return refusedText "noMember"
-  let (fs', _, status, p) :=
+  let (fs', persist, status, p) :=
     Follow.answer P.X P.R.dc base m.self m.follow ⟨UInt32.ofNat g.conn, op, payload⟩
-  ground.set (some { g with conn := g.conn + 1, members := g.members.set! i { m with follow := fs' } })
+  let seen := match persist with
+    | .steps ss@(_ :: _) =>
+      let s := m.seen.push (m.follow.world, ss.map (·.1))
+      if s.size > seenMax then s.extract (s.size - seenMax) s.size else s
+    | _ => m.seen
+  ground.set (some { g with conn := g.conn + 1, members := g.members.set! i { m with follow := fs', seen } })
   return reply status p
 
 @[export tg_genesis] def tgGenesis (argv : ByteArray) : IO ByteArray :=
@@ -420,12 +432,16 @@ end Spin
 /-- A row's own texts by name: the package a scene installs and the seed it creates with, and the
 journey's generators (§GN, `Lang.Std`): `boundedGenerator` (GN6–GN8: `generate {max}` installs a
 record bounded at `max`) and `ownerGenerator` (GN9–GN11: `generate {}` installs a record only its
-invoker may use). -/
+invoker may use); and the journey's offer (§LF), the tutorial's last step. -/
 def texts : List (String × String) :=
   [("slot", Protocol.slot), ("selfHeadSeed", Protocol.selfHeadSeed),
    ("boundedGenerator", packageText (Lang.Std.boundedGenerator [("n", .nat)] "n")),
    ("ownerGenerator", packageText (Lang.Std.ownerGenerator [("n", .nat)])),
-   ("spin", packageText spinPackage)]
+   ("spin", packageText spinPackage),
+   -- the journey's offer (§LF, `Lang.Journey.Offer`): one term `price`, roles buyer and seller
+   ("offer", match Lang.Std.offerPackage ["price"] ["buyer", "seller"] with
+     | .ok p => packageText p
+     | .error _ => "")]
 
 @[export tg_text] def tgText (name : ByteArray) : ByteArray :=
   match texts.lookup ((String.fromUTF8? name).getD "") with

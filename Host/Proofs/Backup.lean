@@ -4,10 +4,7 @@
 A backup of a LIVE Store copies `key`, then `base.world`, then the index file, then the segment
 (`Host.Store.backupOrder`). The base is replaced atomically, so the copy holds one base the writer
 installed; the index file and the segment are append-only, so each copy is the file as it stood when the
-base was copied, plus whatever the writer appended since (`I ++ x`, `S ++ y`). That holds for a Store
-without `--retain`. Under `--retain N` a seal writes a new index file (`index.<k0'>.log`) and unlinks the
-old one and the dropped segment files, so a copy racing it can find a file its copied base names gone: the
-open then refuses `missing index.<k0>.log` by name. The theorems below are over the Store without retention.
+base was copied, plus whatever the writer appended since (`I ++ x`, `S ++ y`).
 
 * `recover_append` — appending bytes after a segment never loses a frame it held: the records
   recovered from `log` are a prefix of those recovered from `log ++ y`;

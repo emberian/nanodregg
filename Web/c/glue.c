@@ -30,7 +30,13 @@ extern lean_object* tg_relay_pre(uint8_t);
 extern lean_object* tg_meter(uint32_t);
 extern lean_object* tg_members(uint32_t);
 extern lean_object* tg_relay_post(uint8_t, lean_object*, lean_object*);
-lean_object* initialize_nanodregg_Web_Sim_Testground(uint8_t builtin);
+/* Web.Sim.Teach: the teaching windows (the kernel root: it imports Web.Sim.Testground) */
+extern lean_object* tg_ob(lean_object*);
+extern lean_object* tg_grammar(lean_object*);
+extern lean_object* tg_source(uint32_t, lean_object*);
+extern lean_object* tg_grants(uint32_t, lean_object*);
+extern lean_object* tg_turn(uint32_t, lean_object*);
+lean_object* initialize_nanodregg_Web_Sim_Teach(uint8_t builtin);
 void lean_initialize_runtime_module(void);
 void lean_io_mark_end_initialization(void);
 
@@ -59,7 +65,7 @@ static int32_t io_take(lean_object* r) {
 EMSCRIPTEN_KEEPALIVE uint8_t* w_out(void) { return out_buf; }
 EMSCRIPTEN_KEEPALIVE int32_t w_init(void) {
   lean_initialize_runtime_module();
-  lean_object* r = initialize_nanodregg_Web_Sim_Testground(1);
+  lean_object* r = initialize_nanodregg_Web_Sim_Teach(1);
   if (lean_io_result_is_error(r)) return 1;
   lean_dec_ref(r);
   lean_io_mark_end_initialization();
@@ -103,3 +109,9 @@ static int32_t take_string(lean_object* s) {
 }
 EMSCRIPTEN_KEEPALIVE int32_t w_lies(void) { return take_string(tg_lies(lean_box(0))); }
 EMSCRIPTEN_KEEPALIVE int32_t w_table(void) { return take_string(tg_table(lean_box(0))); }
+/* Web.Sim.Teach */
+EMSCRIPTEN_KEEPALIVE int32_t w_ob(const uint8_t* p, size_t n) { return take(tg_ob(ba(p, n))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_grammar(const uint8_t* p, size_t n) { return take(tg_grammar(ba(p, n))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_source(uint32_t i, const uint8_t* p, size_t n) { return io_take(tg_source(i, ba(p, n))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_grants(uint32_t i, const uint8_t* p, size_t n) { return io_take(tg_grants(i, ba(p, n))); }
+EMSCRIPTEN_KEEPALIVE int32_t w_turn(uint32_t i, const uint8_t* p, size_t n) { return io_take(tg_turn(i, ba(p, n))); }
