@@ -11,8 +11,9 @@ The fields are the decisions, not their callers: the kernel's derivation of a si
 record of a refusal (`admit`, `refuse`), the writer's verdict on a submitted call (`submit`),
 one frame of the member's command machine (`follow`, run by `host follow`), the member's
 settlement of its own call (`settle`), the writer's answer to a frame (`handle`), the receipt check
-a law's foreign read runs (`rc`), the writer's reopen after a crash (`reopen`), the exchange package
-(`exchange`), the resident's bell check and its act on the rings (`bellAccept`, `ringAct`). What a field
+a law's foreign read runs (`rc`), the check of a receipt against a held head (`receiptCheck`), the writer's reopen after a crash (`reopen`), the exchange package
+(`exchange`), the resident's bell check and its act on the rings (`bellAccept`, `ringAct`), its keep of the
+kept answer (`keep`), the one-party escrow package (`escrow`). What a field
 does not vary (the call codec, the signature check, the Lang program, the hash) is `X`.
 -/
 import Kernel.Receive.Rederive
@@ -25,6 +26,7 @@ import Host.Open
 import Lang.StdOfferEscrow
 import Lang.Bell
 import Hosting.Resident.Run
+import Ledger.Escrow
 
 namespace Nanodregg.Spec
 
@@ -57,6 +59,9 @@ structure System (D : Type) [Ord D] [DecidableEq D] where
   /-- the check a Lang law's receipt read runs against a held head (`Protocol.Foreign.check`, the
   check `Host.Deployed.X`'s program is built over: `deployed_program_reads`) -/
   rc : Lang.ReceiptCheck
+  /-- the check of a receipt against a head a member holds of a World (`Protocol.Receipt.check`:
+  the head's height and roots, the call's id and `notBefore`, the receipt), to its answer -/
+  receiptCheck : Nat → D → D → Nat → Receipt.Receipt D → Except Receipt.Refusal (Receipt.Answer D)
   /-- the writer's open of its Store after a crash: keys, base file, header, index, segment
   (`Host.openWith` at the deployed instance) -/
   reopen : Host.Keys → ByteArray → ByteArray → ByteArray → ByteArray →
@@ -68,6 +73,11 @@ structure System (D : Type) [Ord D] [DecidableEq D] where
   /-- the resident's act on the rings a tick read (`Hosting.Resident.actOn`) -/
   ringAct : Hosting.Resident.Where → Hosting.Resident.Shape → Hosting.Resident.Mem →
     List Hosting.Resident.Ring → Hosting.Resident.Prog Hosting.Resident.Tick
+  /-- the resident's write of its kept answer, as volume operations (`Hosting.Resident.keepOps`;
+  the restart's resume is built from it) -/
+  keep : Hosting.Resident.Where → String → List Hosting.Resident.FsOp
+  /-- the one-party escrow package LEDGER installs (`Ledger.Escrow.escrow`) -/
+  escrow : Lang.Package
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
@@ -109,12 +119,15 @@ def deployed (worldDigest : ByteArray → ByteArray) : System Digest where
   settle := Command.settleOf Host.Deployed.X
   handle := Host.handle Host.Deployed.X
   rc := Protocol.Foreign.check Codec.Deployed.env Codec.Deployed.digestCodec
+  receiptCheck := Receipt.check Host.Deployed.X.env
   reopen := fun keys file H I seg => Id.run (Host.openWith keys Host.Deployed.c Host.Deployed.world
     Host.Deployed.recorder.mark Host.Deployed.originChain Host.Deployed.foldStep file H seg.size I.size
     (Host.segReader I) (Host.segReader seg))
   exchange := Lang.Std.offerEscrowPackageOf
   bellAccept := Lang.Bell.shapeOk
   ringAct := Hosting.Resident.actOn
+  keep := Hosting.Resident.keepOps
+  escrow := Ledger.Escrow.escrow
 
 /-- The digest a Store pins a World's bytes by: `Host.Keys.ofKey`'s `worldDigest`, which does not
 depend on the Store's key (an unkeyed digest under `domBaseDigest`, HOST-15). `deployed storeDigest`

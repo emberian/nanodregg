@@ -84,4 +84,62 @@ def forkedPostDone : Command.Reply → Bool
       decide (err = forkedPostErr)
   | _ => false
 
+/-! ## The `sync --to` arm -/
+
+/-- A continuation whose argv parses as `sync --to STEPS:CHAIN` read as a plain `sync`; every other
+continuation as it is. -/
+def dropAnchor (kb : ByteArray) : ByteArray :=
+  match Command.State.ofBytes kb with
+  | some st =>
+      match Command.parse Xd.digestOf st.argv with
+      | .ok (.sync (.to _ _)) => (Command.State.bytes { st with argv := ["sync".toUTF8] }).getD kb
+      | _ => kb
+  | none => kb
+
+/-- **The anchor-blind follower**: the deployed command machine, reading every `sync --to` as
+`sync` (it catches up to the writer's tip without walking the page against the stated head). -/
+def syncBlind (d : ByteArray → ByteArray) : System Digest :=
+  { deployed d with follow := fun me f kb res => (deployed d).follow me f (dropAnchor kb) res }
+
+/-- The anchor a parsed command states, if it is `sync --to`. -/
+def toAnchor : Except Command.ParseRefusal (Command.Cmd Digest) → Option (Nat × ByteArray)
+  | .ok (.sync (.to s c)) => some (s, c)
+  | _ => none
+
+/-- `sync --to STEPS:CHAIN` at its log phase (2), first page. -/
+def kToKbOf (w : World Digest) : ByteArray :=
+  (Command.State.bytes ⟨["sync".toUTF8, "--to".toUTF8,
+      s!"{w.steps}:{Text.toHex (Xd.env.bytes w.chain)}".toUTF8], 2,
+    [Text.u64 0, ByteArray.empty, Text.u64 0, Text.u64 10, Text.u64 0]⟩).getD .empty
+
+/-- Told fork B's head (the founder's rotate at step 1). -/
+def kToKb : ByteArray := kToKbOf kB
+
+/-- Fork A's first step (the install) and its World: fork A's own head at step 1. -/
+def kLogA : List (Step Digest) := (staged wGenesis kInstall).2
+def kToKbA : ByteArray := kToKbOf kW1
+
+/-- A `sync --to` frame from `⟨g⟩`: `lg` folds from `g` to `wg`; the continuation states `wg`'s head;
+the frame persists steps and moves follow from `g` to `wg`'s step count or past it, `wg` one step
+past `g`. -/
+def syncRunOk (S : System Digest) (me : Command.Self Digest) (g : World Digest) (kb res : ByteArray)
+    (lg : List (Step Digest)) : Bool :=
+  match World.fold Xd.env g lg with
+  | .ok wg =>
+      (match Command.State.ofBytes kb with
+       | some st => decide (toAnchor (Command.parse Xd.digestOf st.argv) = some (wg.steps, Xd.env.bytes wg.chain))
+       | none => false) &&
+        (match S.follow me ⟨g, none, none⟩ kb res with
+         | (f', p, _) => (stepsOf p).isSome && decide (wg.steps = g.steps + 1) && decide (wg.steps ≤ f'.world.steps))
+  | .error _ => false
+
+/-- The frame's first persisted step is not `lg`, and no input of the two one-step folds collides. -/
+def syncRunJoins (S : System Digest) (me : Command.Self Digest) (g : World Digest) (kb res : ByteArray)
+    (lg : List (Step Digest)) : Bool :=
+  match S.follow me ⟨g, none, none⟩ kb res with
+  | (_, p, _) =>
+      let ts := (stepsOf p).getD []
+      decide ((ts.take 1).map Prod.fst ≠ lg) &&
+        collisionFree Xd.env.hash (foldPres Xd.env g ((ts.take 1).map Prod.fst) ++ foldPres Xd.env g lg)
+
 end Nanodregg.Spec

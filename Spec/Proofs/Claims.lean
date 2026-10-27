@@ -185,9 +185,15 @@ def Consent.staleFinal (S : System D) : Prop :=
 /-- **G2. Nothing of the log is shown past a failed envelope.** The writer defers a frame (answers
 it with a page of the log or of a base) only when its payload is an envelope `Envelope.check`
 passes on the writer's World: this World, a window inside the bound, the member's current key,
-a verifying signature, a live follow grant chain, the height inside the window. -/
+a verifying signature, a live follow grant chain, the height inside the window. The conclusion
+names what a reader is: the envelope's follow grant chain is live to a founder's root in the
+writer's World (`mayFollow`: revoking any link revokes the page), its key is the member's current
+key there, and the member's signature under that key verifies over the envelope's message. -/
 def Shown.onlyFollowers (S : System D) : Prop :=
   ∀ (w : World D) (f : Host.Frame) (d : Host.Deferred), S.handle w f = .defer d →
-    ∃ e, Envelope.ofBytes S.X f.payload = some e ∧ Envelope.check S.X w e = .ok ()
+    ∃ e, Envelope.ofBytes S.X f.payload = some e ∧ Envelope.check S.X w e = .ok () ∧
+      mayFollow S.X w e.member e.grant = true ∧ currentKey S.X.env w e.member = some e.key ∧
+      S.X.verify e.key (Envelope.message S.X e.world e.member e.grant e.start e.notBefore e.validUntil)
+        e.signature = true
 
 end Nanodregg.Spec

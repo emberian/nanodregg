@@ -458,3 +458,98 @@ run of their own (a kernel letting a member rotate another's key, or revoke a gr
 The vacuity rule needs only the top claim refuted, and it is; the arms' floors are owed as teeth.
 
 **Status.** open; the AuthKernel lemma is KERNEL's to move.
+
+## SPEC-19 The apex is an observational contract, not ONE HISTORY ∧ INTEGRITY: CRIT-SPEC accepted, with what lands now and what is owed (2026-10-27)
+
+An outside statement review (redregg/work/critiques/CRIT-SPEC.md, Codex, read at 4bb86ea, before
+80791d0 landed B1 and A2′) found the apex's predicates admit countermodels to their own prose. Its
+three required statements, verbatim, are adopted as THE apex this directory is building toward:
+
+> For an honest writer and the declared platform assumptions, every observable execution of the
+> deployed member, Store, and resident processes refines the intent-indexed durable contract,
+> including the Bell's per-ring charge and answer limits across retries and crashes.
+
+> Every accepted step implements an independently defined transition relation that confines
+> authority, conserves value under the stated issuance rule, enforces delegation caps, and gives
+> contextual programs and applicable laws their reference meaning within the declared resource budget.
+
+> Every accepted member view or foreign receipt is justified by a history extending its explicitly
+> trusted start, with prefix consistency or checkable equivocation evidence under the declared
+> head-authority and comparison assumptions.
+
+**Decision.** (1) The landed claims are COMPONENTS of those three, not the apex; README says so and
+names, per statement, which components exist and which are owed. (2) `Shown.onlyFollowers` leaves the
+top-level contract (its theorem stays, as a handler lemma: it constrains the `defer` arm only; a handle
+that leaks through `reply`, or through `lookup` which no envelope guards, satisfies it). (3) Land now
+the restatements that are compositions of existing lemmas: A1 per step from the member's OWN start
+(each frame extends follow's World by an audited log, or adopts a pinned base of `me.world` from a World
+holding nothing; `Start.genesis` tied to `me.world`) — this refutes the review's reset-to-genesis
+follower; C(ii) over `f'.world` (the World follow keeps, so a destructive success is refused) and the
+cancel arm naming the recorded cancel; B3's ObjectHistory over the system's own `receive`/`admit`
+where the shape allows. (4) The review's B1 objection (endpoint form) does not apply to the landed
+B1, which is per step over every cell (SPEC-18); its "births are unclaimed" stands as owed.
+
+**Owed, with prices** (each a card, not a note):
+* The deployment wiring (SPEC-1's gap, the central weakness: the System's fields are semantically
+  independent; a binary wired to another function leaves every theorem intact). Remedy: the binaries'
+  entry points take the System they run (`host serve`/`host follow` read `(deployed d).handle`/
+  `.follow`, and `deployed`'s `follow` is built from `deployed`'s own `receive`/`admit`), so a field is
+  the function called, and an execution relation over Store/Port effects ties replies to records.
+  Price: one HOST+PROTOCOL change of the entry points (days) for the first half; §11.4's interpreter
+  (a month) for the second.
+* Statement 1's intent-indexed contract: the command's state inside follow with an explicit intent id
+  (§11.2/§11.3: deletes `keyFaithful`, ties `okCommitted`'s call to argv, makes C(v) a theorem); the
+  durable trace (acknowledgment after persistence, §11.4); the Bell end-to-end over one ring identity
+  (RingLife, §11.5: at most one charged ask per ring and one accepted answer across restarts; "once per
+  key" is false today, cv 01a17ab4-17b1). Price: §11's quarter.
+* Statement 2's independently defined transition relation: a relation over observations and authority
+  effects (NOT a second executable kernel; the review is right that SPEC-1's "a model is a twin"
+  conflated a specification with a competing implementation): births' authority, the issuance rule
+  behind B2's floor-sum exception, metering adequacy for the contextual language, the `NoRef` lift.
+  Price: weeks per clause; the authority and value clauses compose from B1/B2/grant-cap today.
+* Statement 3's trust cases: retained audited views with prefix consistency across unequal positions,
+  passed anchors and forgotten positions; for receipts, the source of validity chosen explicitly.
+
+**Found (the review's, recorded as ours).** TOPLEVEL-SPEC §9's proposed discharge of `HeadOf` ("A's
+writer signs at most one head per step count") is WRONG: a writer can sign exactly one fabricated head
+per step, satisfying it, and that head need belong to no lawful fold; a signature is attributable
+endorsement, not the endorsed proposition. The foreign-head contract must choose its validity source
+— re-execution, an authenticated checkpoint trusted for validity, or an authority assumed to certify
+only valid extensions — and the authority must be authenticated independently of the object checked
+(`certifiesWorld`'s reliance on prior trust in the pinned bytes is the right shape; `Foreign.check`
+reads roots from the head object and calls no certificate verifier).
+
+**CRITIQUE.** Adopting statements no theorem yet proves risks the reverse of the honest-label sin: a
+grand apex that every landing can claim to "contribute to". The guard is that README lists, per
+statement, the exact components proved and the exact gaps, and a gap leaves only by a theorem.
+
+**META-CRITIQUE.** I accept nearly all of it because nearly all of it is right; the part I resist is
+none, and that is itself worth noting: the floor method had become the thing being optimized (one
+refuted mutant per claim) while the claims' quantifiers went unread. The review read the quantifiers.
+
+**Status.** open; the compositions in (3) are in flight.
+
+## SPEC-20 Three more System fields — `receiptCheck`, `keep`, `escrow` — and the claims over them (2026-10-27)
+
+**Decision.** `receiptCheck` (deployed `Receipt.check Host.Deployed.X.env`) carries §7's `ReceiptTruth`:
+on a World folded from genesis, a receipt checked against that World's own head is its journal entry,
+its recorded refusal, or the absence of both, up to a premise-fixed collision list; floor: a check that
+believes the receipt's stated answer. `keep` (deployed `Hosting.Resident.keepOps`; the resume is built
+from it, as in the code) carries D3 `Durable.resident`; floor: the in-place keep. `escrow` (deployed
+`Ledger.Escrow.escrow`) carries the one-party `Integrity.escrow` (at most one payout along any history
+of one escrow object); floor: no law on its invokes and two once keys, a deployed run whose
+ObjectHistory is built from the computed steps (not an existential). D2 `Durable.follower` and A1′
+`Agree.pageAbsorbs` and A2′'s `sync --to` arm need no field.
+
+**Alternatives.** The components as claim parameters (refused by SPEC-9's reasoning: a parameter the
+system does not own cannot be refused by a trivial system).
+
+**CRITIQUE.** No member command runs `Receipt.check` on a receipt of its own World today (settle builds
+the receipt from its own World and reads it; the callers are `Foreign.check` and the rows harness), so
+`ReceiptTruth` is about the deployed function, not about a reply a member sees; a `verify RECEIPT`
+command would close it. A1′'s page is a PREMISE (the pager over durable records is IO, tied to
+`admitBatch` nowhere). D2's "appended before sent" is unstatable while the follow loop is IO.
+
+**META-CRITIQUE.** Each new field widens SPEC-19's wiring gap by one more function only reading checks.
+
+**Status.** open.

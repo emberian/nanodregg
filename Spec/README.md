@@ -26,19 +26,47 @@ tooling: checked, not read.
 | 4 C(ii) | `Consent.cancelOk` | a `cancel CALL` step that ends `done ok` leaves follow at a World that settles the call `refused cancelled` | `top_consent_cancelOk` | `floor_consent_cancelOk`: the follower that says ok on the writer's word |
 | 4 C(iii) | `Consent.staleFinal` | a planned call follow settles `refused stale` is admitted on no extension, up to a collision among its pin inputs | `top_consent_staleFinal` | `floor_consent_staleFinal`: the settlement that says stale on its own word |
 | 2 A2′ | `ForkConsistent` (`Proofs/Fork.lean`) | a frame that absorbs a page carrying another fold's self-head post at a step the page walks has one history with that fold up to there (up to a collision among a listed set), or ends `refused forkedPost` with a post its own fold passed at another chain | `top_forkConsistent` | `floor_forkConsistent`: the post-blind follower (the `forkedPost` verdict replaced by ok; at `storeDigest`) |
+| 2 A2′ | `ForkConsistent.sync` (`Proofs/Fork.lean`) | a `sync --to STEPS:CHAIN` frame that moves follow's World to the stated head or past it holds the other fold's log up to there, up to a collision among the two folds' listed link inputs | `top_forkConsistent_sync` | `floor_forkConsistent_sync`: the anchor-blind follower (every `sync --to` read as `sync`) |
+| 2 A1′ | `Agree.pageAbsorbs` (`Proofs/Agree.lean`) | the writer's page of what a batch staged, handed to follow at its log phase, moves follow to the World the writer keeps | `top_agree_pageAbsorbs` | `floor_agree_pageAbsorbs`: the deaf follower, which takes no page |
+| 3 B2 | `Integrity.escrow` (`Proofs/Escrow.lean`) | along any history of one escrow object the kernel admits, at most one returned call is a payout | `top_integrity_escrow` | `floor_integrity_escrow`: the escrow with no law on its invokes and two once keys (`esLazy`) |
 | 3 B2 | `Integrity.grantCap` (`Proofs/Cap.lean`) | along an audited log, the transfers (credit lines) sent through a live grant sum to at most what its transfer (credit) ledger had left | `top_integrity_grantCap` | `floor_integrity_grantCap` / `_credit`: the capless kernel, whose transfer and credit do not spend the grant's ledger |
 | 3 B2 | `Integrity.exchange` (`Proofs/Exchange.lean`) | a fuse the kernel admits pays each party what its offer wants: both legs moved with their rows retracted, the legs matching, value conserved | `top_integrity_exchange` | `floor_integrity_exchange`: the exchange whose judge ignores the legs (`lazyExchange`, P8j) |
 | 4 C(i) | `Consent.signs` (`Proofs/Sign.lean`) | every call-domain message follow offers custody is `callMessage u` for the `u` `plan` produced on follow's World from the continuation's command, the member's own call, admitted there | `top_consent_signs` | `floor_consent_signs`: the relay signer that has custody sign the Host's bytes |
 | 4 C(i) | `Consent.signShapes` (`Proofs/Sign.lean`) | every message follow offers custody is a planned call, an own-World envelope, a possession proof, an invitation, a head attestation or a cancel | `top_consent_signShapes` | `floor_consent_signShapes`: the relay signer |
 | 5 D1 | `Durable.reopen` (`Proofs/Durable.lean`) | an open that succeeds returns the fold, from the `Kept` base World, of exactly the records `Log.recover` verifies past the base (their encoding is the bytes up to the open's position), and that World is `Kept` | `top_durable_reopen` | `floor_durable_reopen`: the writer whose reopen returns the base's World at the base's position (`amnesiac`) |
+| 5 D2 | `Durable.follower` (`Proofs/Durable2.lean`) | every step of follow's machine that persists steps persists a rooted run of the system's kernel from follow's World to its next | `top_durable_follower` | `floor_durable_follower`: the follower that takes the World it is told |
+| 5 D3 | `Durable.resident` (`Proofs/Durable2.lean`) | a keep of the kept answer is atomic across a crash after any prefix of its steps, durable once complete, and the restart's resume reads back what the start read | `top_durable_resident` | `floor_durable_resident`: the resident that writes the kept name in place |
+| 7 | `ReceiptTruth` (`Proofs/Receipt.lean`) | a receipt the check answers against a folded World's own head is its journal entry, its recorded refusal, or the absence of both, up to a collision among the receipt's listed inputs | `top_receiptTruth` | `floor_receiptTruth`: the check that believes the receipt's stated answer |
 | 6 (1) | `Bell.ringer` (`Proofs/Bell.lean`) | for the package the resident accepts, every `rings` upsert of a returning run answers a row the caller pinned waiting, with the same capture, signed by the state's resident | `top_bell_ringer` | `floor_bell_ringer`: `laxBell`, which accepts the bell by layout not guards (its unguarded Bell admits a second answer) |
 | 6 (2) | `Bell.oneAsk` (`Proofs/Bell.lean`) | every path of the resident's act asks at most once, about the decided ring, right after the intent is kept; within one process two spent asks for one ring have a freeing effect between | `top_bell_oneAsk` | `floor_bell_oneAsk`: `askFirstResident`, which asks before keeping the intent |
-| 8 G2 | `Shown.onlyFollowers` | the writer defers a frame (answers with a page) only past an `Envelope.check` on its World | `top_shown` | `floor_shown`: the host that serves every frame |
 | 9 | `Foreign` (`Proofs/Foreign.lean`) | a receipt the system's check shows committed against a head holding a fold's roots names a call admitted in that fold, under `HeadOf`, up to a collision among the receipt's listed inputs | `top_foreign` | `floor_foreign`: the receipt check that accepts any head |
 
-**The apex** is `OneHistory.member ∧ Integrity.*`: the member's World is audited (A1) and audited
-means lawful (B2, B3). Neither half excludes the other's trivial system: a kernel that admits
-everything makes every log `Decided`, which A1 cannot see and B2/B3 refuse.
+**Handler lemma (not a top-level claim, SPEC-19):** `Shown.onlyFollowers` (G2): the writer defers a
+frame only past `Envelope.check` (a live follow grant chain, the member's current key, a verifying
+signature): `top_shown`, refused by `openHost`. It constrains the `defer` arm only; a `reply` or a
+`lookup` (which no envelope guards) is not covered, so it is no confidentiality theorem.
+
+**The apex (SPEC-19, adopted from the outside review CRIT-SPEC, verbatim)** is three statements; the
+claims above are their components, and what is owed is listed beside each:
+1. *For an honest writer and the declared platform assumptions, every observable execution of the
+   deployed member, Store, and resident processes refines the intent-indexed durable contract,
+   including the Bell's per-ring charge and answer limits across retries and crashes.* Components:
+   C(i)–C(iii), D1–D3, A1′, the Bell slices. Owed: the command state and an intent id inside follow
+   (§11.2/§11.3: deletes `keyFaithful`, ties `okCommitted`'s call to argv, C(v)); the durable trace
+   (acknowledgment after persistence, §11.4); the Bell over one ring identity (§11.5); the deployment
+   wiring (the binaries run the System's own fields; today the fields are independent).
+2. *Every accepted step implements an independently defined transition relation that confines
+   authority, conserves value under the stated issuance rule, enforces delegation caps, and gives
+   contextual programs and applicable laws their reference meaning within the declared resource
+   budget.* Components: B1 (every cell, per step), B2 value, grant cap, exchange, escrow, B3 (`NoRef`).
+   Owed: births' authority, the issuance rule, metering adequacy, the `NoRef` lift, B3's history bound
+   to the log and to the system's own `receive`.
+3. *Every accepted member view or foreign receipt is justified by a history extending its explicitly
+   trusted start, with prefix consistency or checkable equivocation evidence under the declared
+   head-authority and comparison assumptions.* Components: A1 (under `keyFaithful`), A2, A2′ (posts and
+   `sync --to`), receipts (§7), §9 under `HeadOf`. Owed: unequal positions, passed anchors and forgotten
+   positions; §9's validity source chosen explicitly (signed heads give accountability, not validity).
+
 
 ## Premises (each a parameter of the claim, named; deleting one is a strengthening)
 
@@ -91,9 +119,8 @@ genesis + one record reopens to height 1), `inhabited_bell_ringer`, `inhabited_b
 ## Not yet claims (TOPLEVEL-SPEC sections, and why)
 
 * B1's member, grant and account arms have no floor run of their own (the object arm's refutes the claim).
-* The one-party escrow's "at most one payout" (`escrow_invokes_one_payout`, cv 01a17ad6-7245).
-* A2′'s `sync --to STEPS:CHAIN` arm.
+* A1's continuity from the member's own start, C(ii) over the kept World, the cancel record: restatements in flight (SPEC-19).
 * C(v) at most once per intent (§4): Rust today; a theorem when the attempt is follow's state (§11.3).
-* DURABILITY D1 over `Crash` images with acknowledged replies, D2 the follower, D3 the resident volume
-  (§5, §11.4); THE BELL's composite (`RingLife`, §6, §11.5); "once per ring key" is false today
+* DURABILITY D1 over `Crash` images with acknowledged replies (§5, §11.4); D2's "appended before sent"
+  (the follow loop is IO, not an interpreter); THE BELL's composite (`RingLife`, §6, §11.5); "once per ring key" is false today
   (cv 01a17ab4-17b1).

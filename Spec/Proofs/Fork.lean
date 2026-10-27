@@ -26,7 +26,8 @@ The refusal disjunct carries its evidence (the post and the fold that passed it 
 chain) because the reply cannot: `Command.refused` drops the step and poster, and a writer
 refusal named `forkedPost` (`Refusal.host`) prints the same bytes (cv task 01a17ac1-5233).
 
-What is owed: the `sync --to STEPS:CHAIN` arm (`absorbSync`'s anchor walk) as a second conjunct.
+The other arm, `nd sync --to STEPS:CHAIN` (PROTOCOL-74: the member BEHIND catches up to another's
+stated head), is `ForkConsistent.sync` below, with its own floor (`syncBlind`) and inhabited run.
 -/
 import Spec.Proofs.Floor
 import Spec.Sim.Fork
@@ -78,20 +79,43 @@ theorem step_steps {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)}
     {me : Command.Self D} {f f' : Command.Follow D} {kb res : ByteArray} {p : Command.Persist D}
     {ts : List (Step D × D)} {r : Command.Reply}
     (h : Command.step X dc B me f kb res = (f', p, r)) (hp : p = .steps ts) :
-    ts = [] ∨ ∃ (cmd : Command.Cmd D) (evs : List ByteArray) (steps : Nat) (chain : ByteArray)
-      (base : Nat) (wb : Option (World D)) (r₀ : Command.Reply),
+    (ts = [] ∧ f'.world = f.world) ∨ ∃ (cmd : Command.Cmd D) (evs : List ByteArray) (steps : Nat)
+      (chain : ByteArray) (base : Nat) (wb : Option (World D)) (r₀ : Command.Reply),
       Command.absorbSync X me cmd f.world evs steps chain base = .ok (f'.world, ts, wb) ∧
-      r = Command.postOr X f.world ts f'.world r₀ := by
+      r = Command.postOr X f.world ts f'.world r₀ ∧
+      ∃ st, Command.State.ofBytes kb = some st ∧ Command.parse X.digestOf st.argv = .ok cmd := by
   unfold Command.step at h
-  repeat' split at h
-  all_goals (try simp only [Prod.mk.injEq] at h)
-  all_goals (repeat' split at h)
-  all_goals (try simp only [Prod.mk.injEq] at h)
-  all_goals (obtain ⟨rfl, rfl, rfl⟩ := h)
-  all_goals (try simp only [Command.Persist.steps.injEq, reduceCtorEq] at hp)
-  all_goals first
-    | exact .inl hp.symm
-    | (subst hp; exact .inr ⟨_, _, _, _, _, _, _, ‹_›, rfl⟩)
+  cases hst : Command.State.ofBytes kb with
+  | none =>
+    rw [hst] at h
+    dsimp only at h
+    simp only [Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl⟩ := h
+    simp only [Command.Persist.steps.injEq] at hp
+    exact .inl ⟨hp.symm, rfl⟩
+  | some st =>
+    rw [hst] at h
+    simp only [Option.map_some, Option.getD_some] at h
+    cases hpa : Command.parse X.digestOf st.argv with
+    | error r =>
+      rw [hpa] at h
+      dsimp only at h
+      simp only [Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      simp only [Command.Persist.steps.injEq] at hp
+      exact .inl ⟨hp.symm, rfl⟩
+    | ok cmd =>
+      rw [hpa] at h
+      dsimp only at h
+      repeat' split at h
+      all_goals (try simp only [Prod.mk.injEq] at h)
+      all_goals (repeat' split at h)
+      all_goals (try simp only [Prod.mk.injEq] at h)
+      all_goals (obtain ⟨rfl, rfl, rfl⟩ := h)
+      all_goals (try simp only [Command.Persist.steps.injEq, reduceCtorEq] at hp)
+      all_goals first
+        | exact .inl ⟨hp.symm, rfl⟩
+        | (subst hp; exact .inr ⟨_, _, _, _, _, _, _, ‹_›, rfl, st, rfl, hpa⟩)
 
 omit [Ord D] [DecidableEq D] in
 /-- The walk reaches every step count strictly after its start and no later than its end. -/
@@ -117,7 +141,7 @@ theorem top_forkConsistent (d : ByteArray → ByteArray) : ForkConsistent (deplo
   rw [fold_eq_world _ rfl rfl] at h₀ hg
   have h' : Command.step Host.Deployed.X Codec.Deployed.digestCodec (deployed d).B me f kb res =
       (f', .steps ts, r) := h
-  rcases step_steps h' rfl with rfl | ⟨cmd, evs, steps, chain, base, wb, r₀, ha, hr⟩
+  rcases step_steps h' rfl with ⟨rfl, -⟩ | ⟨cmd, evs, steps, chain, base, wb, r₀, ha, hr, -⟩
   · simp [Head.selfPosts] at hmem
   · have hrf := Command.absorbPage_admits (Command.absorbSync_ok ha)
     have hlen : f'.world.steps = f.world.steps + ts.length := by
@@ -271,5 +295,169 @@ theorem inhabited_forkConsistent :
     obtain ⟨⟨rfl, rfl⟩, rfl⟩ := hfp
     rfl
   | _ => simp [forkedPostDone] at hfp
+
+/-! ## A2′, the `sync --to` arm (PROTOCOL-74) -/
+
+/-- **A2′ (sync). A member that catches up TO another member's stated head holds that member's
+history up to it.** A frame of `sync --to STEPS:CHAIN` (the continuation's argv parses so) that
+persists the page steps `ts` and moves follow's World from below the anchor's step count to it or
+past it, where follow's World is a fold of `l₀` from `g` and the anchor is the head of a World `wg`
+folded by `lg` from the same `g`: follow's log up to the anchor (the page's prefix of
+`steps - f.world.steps` steps, fixed by the premises) is `lg`, or two of the listed inputs collide.
+A page that would carry follow past the anchor on another chain is refused (`forkedWorld`, nothing
+kept) or does not reach the position on this frame; either way the World stays below it, outside
+the premise. -/
+def ForkConsistent.sync (S : System D) : Prop :=
+  ∀ (me : Command.Self D) (f f' : Command.Follow D) (kb res : ByteArray)
+    (ts : List (Step D × D)) (r : Command.Reply) (st : Command.State) (steps : Nat) (chain : ByteArray),
+    Command.State.ofBytes kb = some st →
+    Command.parse S.X.digestOf st.argv = .ok (.sync (.to steps chain)) →
+    S.follow me f kb res = (f', .steps ts, r) →
+    ∀ {g wg : World D} {l₀ lg : List (Step D)},
+      S.fold g l₀ = .ok f.world → S.fold g lg = .ok wg →
+      wg.steps = steps → S.X.env.bytes wg.chain = chain →
+      f.world.steps < steps → steps ≤ f'.world.steps →
+      l₀ ++ (ts.take (steps - f.world.steps)).map Prod.fst = lg ∨
+        CollidesAmong S.X.env.hash
+          (foldPres S.X.env g (l₀ ++ (ts.take (steps - f.world.steps)).map Prod.fst) ++
+            foldPres S.X.env g lg)
+
+/-- What `absorbSync` accepted under `sync --to`: the walk did not find the anchor forked. -/
+theorem absorbSync_to {X : Ctx D} {me : Command.Self D} {w w' : World D} {evs : List ByteArray}
+    {s n b : Nat} {c ch : ByteArray} {ts : List (Step D × D)} {wb : Option (World D)}
+    (h : Command.absorbSync X me (.sync (.to s c)) w evs n ch b = .ok (w', ts, wb)) :
+    Head.anchorCheck X.env s c w.steps w.chain ts ≠ .forked := by
+  unfold Command.absorbSync at h
+  split at h
+  · cases h
+  · simp only [Command.syncAnchor] at h
+    split at h
+    · cases h
+    · rename_i hne
+      simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      obtain ⟨-, rfl, -⟩ := h
+      exact hne
+
+/-- **A2′ (sync) of the deployed system**: `step_steps` (the frame absorbed a page under the
+continuation's own command), `absorbSync_to` (the walk was not `forked`), `anchorCheck_reached`
+(nor `unreached`), so `shared`: `anchorCheck_shared`, then `anchor_binds`. -/
+theorem top_forkConsistent_sync (d : ByteArray → ByteArray) : ForkConsistent.sync (deployed d) := by
+  intro me f f' kb res ts r st steps chain hst hpa h g wg l₀ lg h₀ hg hws hwc hlo hhi
+  rw [fold_eq_world _ rfl rfl] at h₀ hg
+  have h' : Command.step Host.Deployed.X Codec.Deployed.digestCodec (deployed d).B me f kb res =
+      (f', .steps ts, r) := h
+  rcases step_steps h' rfl with ⟨-, hw⟩ | ⟨cmd, evs, n, ch, base, wb, r₀, ha, -, st', hst', hpa'⟩
+  · rw [hw] at hhi; omega
+  · rw [hst] at hst'
+    obtain rfl := Option.some.inj hst'
+    have hpa₀ : Command.parse Host.Deployed.X.digestOf st.argv = .ok (.sync (.to steps chain)) := hpa
+    rw [hpa₀] at hpa'
+    obtain rfl := (Except.ok.inj hpa').symm
+    have hrf := Command.absorbPage_admits (Command.absorbSync_ok ha)
+    have hlen : f'.world.steps = f.world.steps + ts.length := by
+      rw [fold_steps (RootedFold.fold hrf), List.length_map]
+    have hnf := absorbSync_to ha
+    have hnu := anchorCheck_reached (E := Host.Deployed.X.env) (chain := chain) (c := f.world.chain)
+      (ts := ts) hlo (by omega)
+    cases hk : Head.anchorCheck Host.Deployed.X.env steps chain f.world.steps f.world.chain ts with
+    | forked => exact absurd hk hnf
+    | unreached => exact absurd hk hnu
+    | shared =>
+      obtain ⟨pre, post, hts, hl, hc⟩ := Head.anchorCheck_shared hk
+      have hpre : pre = ts.take (steps - f.world.steps) := by
+        rw [hts, List.take_left' (by omega)]
+      rw [hts] at hrf
+      have hb := Head.anchor_binds deployed_lawful h₀ hrf (hl.trans hws.symm)
+        (hc.trans hwc.symm) hg
+      rw [← hpre]
+      exact hb
+
+theorem toAnchor_eq {e : Except Command.ParseRefusal (Command.Cmd Digest)} {s : Nat} {c : ByteArray}
+    (h : toAnchor e = some (s, c)) : e = .ok (.sync (.to s c)) := by
+  unfold toAnchor at h
+  split at h
+  · simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    rfl
+  · cases h
+
+/-- The sync runs' facts, read back (generic in the system and the inputs). -/
+theorem syncRunOk_sound {S : System Digest} {me : Command.Self Digest} {g : World Digest}
+    {kb res : ByteArray} {lg : List (Step Digest)} (h : syncRunOk S me g kb res lg = true) :
+    ∃ st wg f' ts r, Command.State.ofBytes kb = some st ∧
+      Command.parse Xd.digestOf st.argv = .ok (.sync (.to wg.steps (Xd.env.bytes wg.chain))) ∧
+      World.fold Xd.env g lg = .ok wg ∧ S.follow me ⟨g, none, none⟩ kb res = (f', .steps ts, r) ∧
+      wg.steps = g.steps + 1 ∧ wg.steps ≤ f'.world.steps := by
+  unfold syncRunOk at h
+  cases hgf : World.fold Xd.env g lg with
+  | error e => rw [hgf] at h; cases h
+  | ok wg =>
+    rw [hgf] at h
+    cases hs : Command.State.ofBytes kb with
+    | none => rw [hs] at h; simp at h
+    | some st =>
+      cases hR : S.follow me ⟨g, none, none⟩ kb res with
+      | mk f' rest =>
+        obtain ⟨p, r⟩ := rest
+        rw [hs, hR] at h
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+        obtain ⟨ha, ⟨hsome, hs1⟩, hs2⟩ := h
+        exact ⟨st, wg, f', _, r, rfl, toAnchor_eq ha, rfl, by rw [← stepsOf_eq hsome], hs1, hs2⟩
+
+theorem syncRunJoins_sound {S : System Digest} {me : Command.Self Digest} {g : World Digest}
+    {kb res : ByteArray} {lg : List (Step Digest)} {f' : Command.Follow Digest}
+    {ts : List (Step Digest × Digest)} {r : Command.Reply}
+    (h : syncRunJoins S me g kb res lg = true) (hR : S.follow me ⟨g, none, none⟩ kb res = (f', .steps ts, r)) :
+    (ts.take 1).map Prod.fst ≠ lg ∧
+      ¬ CollidesAmong Xd.env.hash (foldPres Xd.env g ((ts.take 1).map Prod.fst) ++ foldPres Xd.env g lg) := by
+  unfold syncRunJoins at h
+  rw [hR] at h
+  simp only [stepsOf, Option.getD_some, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact ⟨h.1, not_collides h.2⟩
+
+/-- **The sync runs**: the post-blind-to-anchors follower, told `sync --to` fork B's head at step 1,
+walks the joining page past it (its first step is not fork B's, no listed input collides); the
+deployed follower, told `sync --to` fork A's own head at step 1, walks the same page past it. -/
+theorem run_syncBlind :
+    (syncRunOk (syncBlind storeDigest) sMe wGenesis kToKb kPage wLog &&
+      syncRunJoins (syncBlind storeDigest) sMe wGenesis kToKb kPage wLog) = true := by
+  native_decide
+
+theorem run_syncShared : syncRunOk (deployed storeDigest) sMe wGenesis kToKbA kPage kLogA = true := by
+  native_decide
+
+/-- **FLOOR (A2′, sync).** The claim refuses the follower that reads `sync --to` as `sync`: on the
+joining page it walks past fork B's head with fork A's chain. -/
+theorem floor_forkConsistent_sync : ¬ ForkConsistent.sync (syncBlind storeDigest) := by
+  intro h
+  have hr := run_syncBlind
+  simp only [Bool.and_eq_true] at hr
+  obtain ⟨st, wg, f', ts, r, hst, hpa, hgf, hR, hs1, hs2⟩ := syncRunOk_sound hr.1
+  obtain ⟨hne, hcol⟩ := syncRunJoins_sound hr.2 hR
+  have hg : (syncBlind storeDigest).fold wGenesis wLog = .ok wg := by
+    rw [fold_eq_world _ rfl rfl]; exact hgf
+  rcases h sMe ⟨wGenesis, none, none⟩ f' kToKb kPage ts r st _ _ hst hpa hR (l₀ := []) rfl hg rfl rfl
+      (by simp only; omega) hs2 with heq | hc
+  · have hk : wg.steps - wGenesis.steps = 1 := by omega
+    simp only [hk, List.nil_append] at heq
+    exact hne heq
+  · have hk : wg.steps - wGenesis.steps = 1 := by omega
+    simp only [hk, List.nil_append] at hc
+    exact hcol hc
+
+/-- **INHABITED (A2′, sync).** The deployed follower, told to catch up to fork A's own head at step 1,
+moves past it on the joining page: the claim's premise holds of the deployed system. -/
+theorem inhabited_forkConsistent_sync :
+    ∃ (me : Command.Self Digest) (f f' : Command.Follow Digest) (kb res : ByteArray)
+      (ts : List (Step Digest × Digest)) (r : Command.Reply) (st : Command.State) (g wg : World Digest)
+      (l₀ lg : List (Step Digest)),
+      Command.State.ofBytes kb = some st ∧
+      Command.parse Xd.digestOf st.argv = .ok (.sync (.to wg.steps (Xd.env.bytes wg.chain))) ∧
+      (deployed storeDigest).follow me f kb res = (f', .steps ts, r) ∧
+      (deployed storeDigest).fold g l₀ = .ok f.world ∧ (deployed storeDigest).fold g lg = .ok wg ∧
+      f.world.steps < wg.steps ∧ wg.steps ≤ f'.world.steps := by
+  obtain ⟨st, wg, f', ts, r, hst, hpa, hgf, hR, hs1, hs2⟩ := syncRunOk_sound run_syncShared
+  exact ⟨sMe, ⟨wGenesis, none, none⟩, f', kToKbA, kPage, ts, r, st, wGenesis, wg, [], kLogA, hst, hpa,
+    hR, rfl, by rw [fold_eq_world _ rfl rfl]; exact hgf, by simp only; omega, hs2⟩
 
 end Nanodregg.Spec

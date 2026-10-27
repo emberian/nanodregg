@@ -13,6 +13,7 @@ import Codec.Proofs.Digest
 import Protocol.Proofs.Settle
 import Protocol.Proofs.Command
 import Protocol.Proofs.Behind
+import Protocol.Proofs.Envelope
 
 namespace Nanodregg.Spec
 
@@ -62,9 +63,15 @@ theorem top_consent_final (d : ByteArray → ByteArray) : Consent.final (deploye
   cases a <;> simp only [Settle.ofReceipt] at hv ⊢ <;> (repeat' split at hv) <;> (repeat' split) <;>
     simp_all
 
-/-- **G2 of the deployed system**: both of `handle`'s `defer` arms sit under `Envelope.check`. -/
+/-- **G2 of the deployed system**: both of `handle`'s `defer` arms sit under `Envelope.check`, whose
+acceptance is the live grant chain, the current key and the verifying signature (`Envelope.check_ok_iff`). -/
 theorem top_shown (d : ByteArray → ByteArray) : Shown.onlyFollowers (deployed d) := by
   intro w f dd h
+  suffices hs : ∃ e, Envelope.ofBytes Host.Deployed.X f.payload = some e ∧
+      Envelope.check Host.Deployed.X w e = .ok () by
+    obtain ⟨e, he, hc⟩ := hs
+    obtain ⟨-, -, hk, hv, hm, -, -⟩ := (Envelope.check_ok_iff Host.Deployed.X w e).mp hc
+    exact ⟨e, he, hc, hm, hk, hv⟩
   change Host.handle Host.Deployed.X w f = .defer dd at h
   unfold Host.handle at h
   repeat' split at h
