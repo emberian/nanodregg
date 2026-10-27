@@ -35,7 +35,7 @@ def esLazyMethods : List (Label × Ty × List Ty × Term) :=
 
 /-- **The lazy escrow**: no law on its invokes, and two once keys for its two payouts. Either guard
 alone keeps one payout (the law refuses `settled`; the shared key is the kernel's `spent`). -/
-def esLazy : Package := { Std.pkgOf stateTy [("escrow", esLazyLaw)] esLazyMethods with doc := escrowDoc.toUTF8 }
+def esLazy : Package := { Std.pkgOf stateTy [("escrow", esLazyLaw)] esLazyMethods with doc := escrowDoc.toUTF8, effects := escrow.effects }
 
 /-! ## The run -/
 
