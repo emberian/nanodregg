@@ -2929,18 +2929,18 @@ run with it must read `FAIL planted refusals never met: [harness-control]`, the 
 gates/runs.py runs before it reads kernel-sim's verdict. -/
 def controlArm : String := "harness-control"
 
-/-- One line that is a function of the seed's whole run (GATES-27): the Host World's chain (every
+/-- One line that is a function of a Sim run's whole trajectory (GATES-27), for any driver whose run is a
+`State` (kernel-sim's seeds, ledger-sim's and hosting-sim's journeys): the Host World's chain (every
 admitted Turn and recorded refusal, linked under the deployed hash), its four roots, its origin,
 height, steps and budget; every verdict name the run met, in order; its failures; and the stream of
 hash marks the counting env wrote. The counts `report` prints cannot see a hash, a signature or a
 codec that computes other bytes consistently on both sides of a check; this line can.
 `gates/interp.py` requires it byte-identical between the compiled exe and the interpreter. -/
-def traceLine (P : Params D) (seed : Nat) (st : State D) (marks : ByteArray) : String :=
-  let E := P.env
+def traceLine (E : Env D) (what : String) (st : State D) (marks : ByteArray) : String :=
   let w := st.host
   let world := [w.chain, w.root E, w.journalRoot E, w.refusalsRoot E, w.rowsRoot E, w.origin].foldl
     (fun b d => b ++ E.bytes d) ByteArray.empty
-  s!"TRACE seed {seed}: world {world.hash} height={w.height} steps={w.steps} allowance={w.allowance} \
+  s!"TRACE {what}: world {world.hash} height={w.height} steps={w.steps} allowance={w.allowance} \
     seen {st.seen.length}:{("\n".intercalate st.seen).hash} failures {st.failures.length}:\
     {("\n".intercalate st.failures).hash} marks {marks.size}:{marks.hash}"
 
@@ -3003,7 +3003,7 @@ def report (P : Params D) (seeds : List Nat) (control : Bool := false) : IO UInt
     let st ← IO.lazyPure fun _ => run P seed 120
     let _ ← IO.setStderr old
     let m := countMarks (String.fromUTF8! (← buf.get).data)
-    IO.println (traceLine P seed st (← buf.get).data)
+    IO.println (traceLine P.env s!"seed {seed}" st (← buf.get).data)
     -- the per-root plant must cost more than the shared roots whenever a World had two empty tries
     -- at once (the first turns, before any refusal is recorded), or the counter is blind
     let st := if m.plant > m.emptyRoot then

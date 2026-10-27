@@ -1401,3 +1401,12 @@ A different TMPDIR does not re-key cargo: the alone re-run of devtools took 1 s,
 - (d) Agreement is not correctness: both can be wrong against the intent; that is the theorems' job.
 
 **Meta-critique.** The pull was to approve the narrow gate as asked: compiled hash and signature against the interpreter on the KATs. That adds a scripted row of the kind VERDICT §8 says to stop adding, aimed at the bug already found. A differential over generated work aims at the next one, at the same cost. The second pull was to trust the exe's own `--harness-control` as this row's control because it is the house convention. Measured, it was a no-op at one seed. A convention is not evidence that the control fires; the control has to be shown to fail.
+
+**GATES-27 (b) · ledger-sim's and hosting-sim's journeys join the row (2026-10-26, QA; DESIGN-QA Q2; CROSS-LAYER: KERNEL, LEDGER, HOSTING).** `Gen.traceLine` now takes the run's `Env` and a label, not kernel-sim's `Params` and seed, so any driver whose run is a Sim `State` prints the same line: one printer (law 1). ledger-sim prints one `TRACE run i` per escrow journey (honest and its four plants), and hosting-sim one per grain or allowance journey (three). The row becomes `kernel-sim 1 ; kernel-sim 2 ; ledger-sim 1 ; hosting-sim 1`.
+- **What it adds.** LANG's metered evaluator running the escrow and grain packages, the controller's `Loop.step`, and the allowance, all at the Sim's toy parameters, interpreted. The toy hash and signatures are FNV over bytes, so this half measures the language and kernel code, not the crypto; kernel-sim's half is at the deployed parameters.
+- **Cost.** MEASURED ad hoc: 9.3 s and 4.6 s interpreted. The row's wall is still kernel-sim's.
+- **The journeys' `seen` and `marks` are empty.** They do not go through `Gen.submit` or the counting env. Their verdict names are in the lines they already print, and those lines are compared byte for byte too. The `world` digest commits to every step through the chain.
+- **Not in the row, and why.**
+  - lang-journey: it already prints ids, but it has no TRACE line. It takes 349 s interpreted, ~220 s of that module initialisation, and its sessions hold their Worlds in a registry. A TRACE line there is LANG's.
+  - host-sim: 515 s interpreted against runs.py's 600 s deadline. It needs a smaller run first.
+  - rows: 339 s compiled. It would run per row, by name.

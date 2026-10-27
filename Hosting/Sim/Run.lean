@@ -44,6 +44,8 @@ def runAll (args : List String) : IO UInt32 := do
     | true, r :: rest => note r "harness-control: GATES-15's known-red control, an expectation nothing meets (this run must read RED)" false :: rest
     | _, rs => rs
   for r in runs do for l in r.log do IO.println l
+  -- GATES-27: each run's trajectory, which gates/interp.py compares compiled against interpreted
+  for (r, i) in runs.zipIdx do IO.println (Kernel.Sim.Gen.traceLine Kernel.Sim.env s!"run {i}" r.st ByteArray.empty)
   let bad := runs.foldl (· + ·.bad) ((if ok0 then 0 else 1) + (if oka then 0 else 1) +
     (if oks then 0 else 1) + (if okas then 0 else 1))
   IO.println (if bad = 0 then "ALL PASS" else s!"hosting-sim: RED ({bad})")
