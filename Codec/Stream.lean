@@ -5,18 +5,19 @@ import Codec.Digest
 
 A `Stream α` writes a value by appending its bytes to a buffer and reads one
 value at an offset of a `ByteArray`, returning the offset after it. It never
-copies its input to decode, never forms a `List UInt8`, and never re-encodes to
-check itself: canonicity (`Codec.Stream.Lawful`, in `Codec.StreamLaws`) is a
+decodes through a `List UInt8` and does not re-encode to check itself. Byte-string
+readers extract their payload; scalar/composite readers advance an offset.
+Canonicity (`Codec.Stream.Lawful`, in `Codec.Proofs.Stream`) is a
 theorem about each combinator, proved once.
 
 Every codec carries its `Shape`. A tag is the hash of a label and a shape
 (`Codec.Tag`), so a codec whose structure changes gets a new tag without anyone
 editing a literal.
 
-Integers are fixed width, little-endian. Lengths and counts are `u32` and every
-variable-size value carries its bound in its type (`Bytes max`, `Bounded max α`):
-a value past its bound cannot be built, so it cannot be written, and a length
-past the bound is refused by name before anything is read. -/
+The family includes fixed-width little-endian integers, big-endian ordering encodings and
+canonical varints. Bounded combinators carry limits in their value types (`Bytes max`,
+`Bounded max α`); `Codec.Raw` supplies codecs lawful on explicit bounds for raw values.
+A reader refuses a declared length past its bound before reading that payload. -/
 
 namespace Nanodregg.Codec
 

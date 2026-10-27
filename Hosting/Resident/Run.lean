@@ -53,7 +53,7 @@ answer carries the ring's text and the `rings` guard refuses it unless that is t
 (`rung: text`, LANG-59); with the same text it is the same-text case above.
 `answerRefused` stops the whole queue, not one ring: a restart re-delivers the kept ring first and
 stops again until the operator acts. That is right for every refusal known to reach it (the
-resident is not the bell's, the grant lacks `invoke:0`, `answers` is full until the owner
+resident is not the bell's, the grant lacks `invoke:0`, `rings` is full until the owner
 retires), each of which refuses every ring alike; a refusal that singled out one ring would block
 the rest behind it, and would need a refused marker to skip it. A ring RETIRED between the read and the
 answer (LANG-76: anyone may abandon an unanswered ring past its patience) is not one: its answer is
@@ -64,10 +64,9 @@ truncated, so a missed ring would be a failed read (logged, retried), never a si
 forgotten ends `volume`, and the restart answers that ring `(unanswered restart)` without having
 asked: one wasted answer, no meter charge.
 
-What still stands between this process and a real model is the operator's, not code: the provider's
-leaf SPKI pin in the deployed PINS file (shipped empty, so every real call is refused `pinMismatch`
-before a request byte, HOSTING-28), and a provider key in keybroker's key file (Ember's act). Until
-both are in place, it answers every ring `(refused pinMismatch)` or `(refused keyMissing)`.
+Provider access uses the installed leaf-SPKI pins and keybroker's provider key file. The repository
+ships provider pins in `deploy/tls/pins`; the operator supplies credentials and maintains the
+installed policy. A pin or credential failure is answered by name before a successful provider call.
 -/
 import Hosting.Resident.Args
 import Hosting.Resident.Bell

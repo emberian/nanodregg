@@ -6,9 +6,9 @@ import Codec.Varint
 A recursive type (LANG's terms and types) is encoded as a `Tree`: a node is a tag byte, a payload
 written with the ordinary codecs, and its children. The recursion lives here, once, depth-bounded:
 a reader nests at most `depth` levels, and anything deeper is refused (`tooDeep`) before it is
-read. A type becomes a `Stream` with `Stream.viaTree`, a refinement of `tree`. Its author proves
-only that `toTree` and `ofTree` are inverse (`refine_lawful`); the byte-level canonicity is
-`tree_lawful`, proved here.
+read. Language wire modules map their values to and from these nodes and check their own
+representation bounds. The shared byte-level canonicity theorem is `tree_lawful` in
+`Codec.Proofs.Tree`; conversion round trips are proved by the consuming layer.
 
 Wire: `u8 tag ‖ varint |payload| ‖ payload ‖ varint |children| ‖ child*` (CODEC-13: LEB128, shortest form,
 so a small node's framing is three bytes).

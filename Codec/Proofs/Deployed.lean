@@ -3,7 +3,10 @@ import Codec.Proofs.Kernel
 import Codec.Proofs.World
 import Codec.Proofs.Digest
 
-/-! # The deployed instance satisfies what the kernel's theorems assume -/
+/-! # Codec laws and decoded-World invariants for the deployed instance
+
+These proofs discharge the codec and decoded-state premises they name. Cryptographic faithfulness
+and the other premises of the composed claims remain explicit in `Spec`. -/
 
 namespace Nanodregg.Codec.Deployed
 

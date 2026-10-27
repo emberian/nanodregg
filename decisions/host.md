@@ -26,7 +26,7 @@ Members who cannot follow the log (no read access to the segments, or too little
 no consent path in nanodregg today. That is recorded as an absence in the spec. `host follow` is the
 only consent code; if Ember rules thin members in, their path must be a client of `host follow` run
 somewhere they trust, not a second verifier.
-**Status.** open (product ruling: Ember).
+Status: SUPERSEDED by HOST-15 and PROTOCOL-18: thin adoption is implemented.
 
 ## HOST-8 · lookup answers `absent`; resubmitting the same bytes is idempotent (BUILD-HOST, answering proposals/client.md §3)
 **Decision.** Reply status byte: `0 ok · 1 refused · 2 uncertain · 3 absent`. `lookup txId` answers `ok`
@@ -53,7 +53,7 @@ refusals is state outside the World, unbounded unless it is capped, and not repl
 so it stays out. The cost is latency only on the rare lost-reply path.
 **Meta-critique.** "The World is the only state" is a rule I hold strongly. Here it decides a UX question
 I have not measured.
-**Status.** open.
+Status: SUPERSEDED in finality by recorded refusals and Protocol.Settle: lookup absence is not a final answer.
 
 ## HOST-9 · the step protocol between `host follow` and `nd` (with PROTOCOL; answering CLIENT-2)
 **Decision.** `nd` sends `command(argv)`. `host follow` answers one step:
@@ -110,7 +110,7 @@ already met on average. I may now be over-engineering to comply, building LSM ma
 at THE BAR's 1000 records fits a whole-World encode in milliseconds. The honest test: measure the encode
 of a BAR-sized World. If it is under one fsync, (a) is the simpler correct design, and K1 should be
 re-argued with that number.
-**Status.** open; HOST-14 (the measurement this meta-critique asked for) proposes withdrawing it.
+Status: SUPERSEDED by HOST-14: atomic whole bases and bounded tails replace delta checkpoints.
 
 ## HOST-11 · how the loop gates `log` and `read` on a follow grant, O(touched) (2026-10-16, answering PROTOCOL-3)
 **Decision.** A `log` or `read` request carries a signed envelope: `(key, op, fromHeight or view, validUntil,
@@ -140,7 +140,7 @@ should be short (Bounds). Re-reading served bytes from disk costs one `pread` pe
 practice).
 **Meta-critique.** I took the per-request signature because it needs no state, and I like stateless
 loops. I have not measured whether verification dominates a cold follow at THE BAR's scale.
-**Status.** open (KERNEL: `grantOf`'s name and shape; CODEC: the verifier and request domain tag).
+Status: BUILT: Protocol.Envelope.check gates deferred read/log replies.
 
 ## HOST-12 · torn vs corrupt is decided by a forward scan, not by size (2026-10-16; found by plant-flip-byte)
 **Decision.** Bad bytes after the last verifying frame count as the torn tail only if (a) there are at most
@@ -163,7 +163,7 @@ it, at the price of a second fsync per batch.
 **Meta-critique.** I wrote the first rule from the crash model ("at most one unsynced frame") and forgot
 that corruption does not follow the crash model. That is the familiar mistake of testing only the failure
 you designed for.
-**Status.** open.
+Status: BUILT: Host.Log recovery distinguishes torn tails from verified later frames; later physical-header checks also apply.
 
 ## HOST-13 · a def-module structure with a proof field proves its instances' witnesses privately (2026-10-16; accepted as cost by ROOT)
 **Decision.** `Log.Sealer` carries `tag_size : ∀ b, (tag b).size = tagBytes`, and an instance in a def-module
@@ -301,7 +301,7 @@ every Turn that nothing has today.
 one cell. For THE BAR that is nothing; past ~10^5 records an inclusion proof is far cheaper, and (B)
 becomes the right design. **Meta-critique.** (A) won because the base already exists and I built
 it; "one code path" is a law I can cite for the option I prefer anyway.
-**Status.** open (PROTOCOL-14 owns the page layout and the `baseMismatch` row; HOST serves it).
+Status: BUILT and extended by invitations, carried starts and PROTOCOL-77.1 certificates.
 
 ## HOST-16 · the Store key is an integrity-at-rest key (2026-10-16; ROOT ruled the custody)
 **Decision (ruled by ROOT).** `host genesis` writes `STORE/key`: 32 bytes from the OS random source
@@ -343,7 +343,7 @@ tiny batches pays it on every seal. An index that is itself a persistent structu
 written) would remove that, at the price of (a)'s second artifact.
 **Meta-critique.** I put it in the base because the base was already atomic and MAC'd, which is
 reusing what I just built. That is a convenience argument, not a design argument.
-**Status.** open; measured as a count and answered by HOST-30 (2026-10-17).
+Status: SUPERSEDED by HOST-30/33: append-only external index files replace the base-carried index.
 
 ## HOST-18 · a segment is bound to its base by the tag already on disk: `foreignSegment` (2026-10-17, BUILD-TRANSPORT; ASSEMBLY-transport-consent, with HOST-4)
 **The defect.** Open read the segment only from the base's offset and judged what it found with

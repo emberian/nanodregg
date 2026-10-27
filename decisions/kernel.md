@@ -11,7 +11,7 @@ LANG-5's package identity becomes the package cell's id: one identity, not "pack
 LANG's package encoding alone: a CODEC change to cell encoding moves every package id (a re-genesis, which
 is free). **Meta-critique.** Content addressing is fashionable; the test is that imports must resolve to a
 cell the caller pins, and only an id computable from content lets the caller pin it before install lands.
-Status: open (LANG to confirm LANG-5 identity = `romIdOf`).
+Status: CLOSED: Lang package installation uses romIdOf.
 
 ## KERNEL-4 · Receive: one derivation per kind over a pinned view, ending in a sealed Turn (2026-10-16)
 **Decision.** `Receive.receive X w c := receiveWith X (pinned w c.unsigned.pins) c`. A receiver sees state
@@ -35,7 +35,7 @@ is the same code). A grant chain of depth 8 means up to 9 pins per call. Authori
 temporary: members/keys/rotation (`enroll`, `rotate`, `unknownKey`, `notPrecommitted`) are the next commit.
 **Meta-critique.** "Reads only pinned cells" is the property that makes HOST-7's `host follow` consent exact;
 I may be designing for that elegance and underweighting the client cost of pinning.
-Status: open.
+Status: BUILT: Kernel.Receive derives through Pinned and the deployed rederive checks logged events.
 
 ## KERNEL-5 · Answers: LANG law refusals, PROTOCOL refusal names (2026-10-16)
 - LANG ruling "law results carry a refusal NAME": `Receive.Refusal.lawDenied (law : D) (reason : String)`,
@@ -45,7 +45,7 @@ Status: open.
   the grantee of the grant it acts through" (renamed from notGrantee); `stale`, `replayed`, `spent` are
   `Kernel.Reject`. `unknownKey` and `notPrecommitted` arrive with members/rotation (next commit): a
   constructor nothing produces would be a no-op shape (CLAUDE.md), so it lands with its producer.
-Status: open.
+Status: BUILT: named program/kernel refusals flow through Protocol.Command.
 
 ## KERNEL-6 · Members, keys, rotation, rights, data objects, follow grants, audit (2026-10-16)
 **Decision.** (a) Identity is a member cell (kind 4: current key, digest of the next key, sponsor). A call
@@ -72,7 +72,7 @@ permits it — a deny-all object is frozen forever (the row wants exactly that, 
 **Meta-critique.** Much of this is shaped by PROTOCOL's rows (unknownKey after rotation, deny-all repair):
 I am building to the tests. Check: each rule also falls out of "authority is a member's, keys are its
 current credential" independent of the rows.
-Status: open.
+Status: BUILT and amended by subsequent authority/grant decisions; see Kernel.Receive.
 
 ## KERNEL-7 · A retry is `replayed` by transaction id alone; `Receive.submit`; the Sim (2026-10-16)
 **Decision.** (a) `txConflict` is deleted. A transaction id is the digest of the signed call, so a journal
@@ -94,7 +94,7 @@ strong as that decoder until CODEC's Turn/Call codecs land and the Sim runs unde
 Host side is a stand-in (incremental admit + restart-by-fold), not HOST's loop. **Meta-critique.** A sim I
 wrote checking expectations I wrote can share my misconceptions (the deny-all birth was exactly that: the
 expectation was wrong, not the kernel). The plant shows the checks bite; it does not show they are complete.
-Status: open.
+Status: BUILT and amended by KERNEL-33/47: bounded journal, recorded refusals and follower settlement.
 
 ## KERNEL-8 · Answers to CODEC-7 and CODEC-0 (2026-10-16)
 - CODEC-7 accepted: `Env.hash : (domain : String) → ByteArray → D`, deployed as cSHAKE256's
@@ -105,7 +105,7 @@ Status: open.
   Lawful codecs against as of this commit. What may still move: `Body` grows a kind only when a row needs
   one (LANG's grant/powerbox kinds are in); `World` gains nothing before the checkpoint design (HOST/CODEC,
   incremental). The Sim switches to the deployed Env the day `Codec/Deployed.lean` lands.
-Status: open.
+Status: CLOSED: Env.hash takes the domain, and Codec.Kernel supplies canonical kernel encodings.
 
 ## KERNEL-9 · Frame, ROM-forever, nullifiers-once, reopen determinism; the kernel's waste rows (2026-10-16)
 **Decision.** Theorems (Kernel/Proofs/Frame, Equiv): `admit_frame`; `admit_rom` / `fold_rom` (a live ROM
@@ -122,7 +122,7 @@ O(store) step inside a lookup would not show; only `perf stat` at the BAR sees t
 says nothing about nullifiers spent before genesis (genesis has none). **Meta-critique.** `World.Equiv`
 is the theorem minidregg lacked (live vs reopened divergence); I may be over-crediting it — the risk it
 guards is the checkpoint codec, and that is CODEC's Lawful proof, not this one.
-Status: open.
+Status: BUILT: Kernel.Proofs.Frame, fold and journal/nullifier proofs; later budgets supersede old measures.
 
 ## KERNEL-10 · Answers to LANG's three asks (proposals/lang.md) (2026-10-16)
 1. *Law budget.* Kept: `judge` takes no budget; each law runs under LANG's fixed `lawTicks`. A law is a
@@ -137,7 +137,7 @@ Status: open.
    caller chooses (and the law can bound it).
 3. *Data-object extra laws decode at the law package's state type* (LANG-11): no conflict. The kernel
    treats state slots as bytes; the law that judges them owns their meaning.
-Status: open.
+Status: CLOSED by the deployed Receive.Program/Req interfaces in Kernel.Receive.Call and Lang.Program.
 
 ## KERNEL-11 · A Turn names each cell once: `touches` replace pins, legs and retires (KERNEL-2, 2026-10-16)
 **Decision.** `Turn.touches : List (Touch D)`, `Touch := {cell, seen, act}`, `Act := keep | write ops |
@@ -169,7 +169,7 @@ to make a number fall and found a shape change that makes it fall; the test is w
 right without the number: "a turn names each cell once, with what it saw and what it does" is the
 smaller spec, deletes four refusals and one cross-check (`legRetired` is now unrepresentable), and
 makes "writes only what it observed" structural instead of a property of today's receivers.
-Status: open.
+Status: BUILT: Turn.touches and checkShape enforce this shape.
 
 ## KERNEL-12 · A turn's charge is its storage; one aggregate bound, `weightMax` (KERNEL-2, 2026-10-16)
 **Decision.** `Turn.weight := logWeight + growth`: the bytes its log record holds (as before) PLUS the
@@ -194,7 +194,7 @@ be a theorem rather than an assumption. **Meta-critique.** Folding World growth 
 attractive because it turns HOST-14's ask into a theorem I can prove from the allowance; check that
 the allowance should be ONE budget at all (a member's storage vs the World's storage is the
 refill/credit question, KERNEL-13).
-Status: open.
+Status: BUILT and extended by KERNEL-55 and member meters; see World.checkWith and Proofs.Weight.
 
 ## KERNEL-13 · Answers: PROTOCOL-4 `rederive`, HOST-8 `absent_final`, HOST's `fold ↔ foldlM`, `mayFollow` (KERNEL-2, 2026-10-16)
 - **PROTOCOL-4.** `Receive.rederive X w t : Except (Refusal D) Unit`, with `rederive_ok : rederive X w t
@@ -219,7 +219,7 @@ Status: open.
   index is a second copy of state). Critique: a member must remember its grant's id; it is in the
   member's own log, which they follow. Meta-critique: I am refusing an index because indexes are a
   minidregg smell; the test is that every lookup on the gate is O(depth), and it is.
-Status: open.
+Status: BUILT and extended by Kernel.Receive.Rederive and Protocol.Settle; absence alone is not finality.
 
 ## KERNEL-14 · Answers: CODEC's counter widths, CLIENT-11's signature (KERNEL-2, 2026-10-16)
 - **CODEC (counters).** `Bound.counter`: notBefore, validUntil and charge are < 2^64, and a born cell's
@@ -241,7 +241,7 @@ Status: open.
   name), because the log is permanent and re-verified by every new follower. Critique: 3.4 KB per
   call; a two-friends World pays now for a hypothetical threat. Meta: "permanent log" is an argument
   I find persuasive in general, and I have not priced how many follower re-verifies THE BAR implies.
-Status: open (signature scheme: ROOT).
+Status: CLOSED: bounded codecs and deployed Ed25519 verification implement the selected scheme.
 
 ## KERNEL-15 · Storage is one World budget; no refill in v0, credit on retirement is the next step (KERNEL-2, 2026-10-16)
 **Decision.** The allowance only falls. Since KERNEL-12 it budgets the whole Store (log + World),
@@ -311,7 +311,7 @@ bound says. That is an over-approximation, not an error. **Meta-critique.** This
 because it falls out of KERNEL-12's charge change, so I may have shaped KERNEL-12 to get it. The
 independent test: the allowance already claimed to be "the storage budget", and only now is that a
 theorem about storage.
-Status: open.
+Status: SUPERSEDED by KERNEL-55 and Codec.WorldSize: worldBytesMax is derived from the admitted potential bound.
 
 ## ROOT rulings on KERNEL-14..17 (2026-10-16, recorded by KERNEL-2)
 - KERNEL-14: v0 is Ed25519 ONLY. The kernel stays scheme-agnostic and the signature stays opaque
@@ -2113,7 +2113,7 @@ def rowPin (E : Env D) : Option RowLeaf → D                -- the leaf digest,
 5. *Names.* `rejectNames` gains the 13 rows Rejects in constructor order and `refusalNames` LANG-14's 5 receive refusals: every recorded reject code shifts, so the vectors re-emit and old refusal records refuse by stamp.
 Not changed: rows_separate stays CODEC's (`rows_separateOn`, tooth `rows_kindByte_needed`); no Kernel twin.
 
-## KERNEL-49 PROPOSED · A row insert costs 564 hashes because the one trie is uncompressed, not because rows are in it: compress the one trie (K17-K49 for KERNEL-17, 2026-10-18; ROOT's ruling on WASTE `hashes-per-row-insert` 564.071). DESIGN ONLY until ROOT rules.
+## KERNEL-49 PROPOSED · A row insert costs 564 hashes because the one trie is uncompressed, not because rows are in it: compress the one trie (K17-K49 for KERNEL-17, 2026-10-18; ROOT's ruling on WASTE `hashes-per-row-insert` 564.071). Original design; superseded by the ruled implementation below.
 
 **The measurement (read at 42c261b).** `hashes-per-row-insert` 564.071 and `hashes-per-row-retract` 569.000, against `hashes-per-touched-cell` 8.900. `rowStep`'s insert is `setHead (r.insert … (.row key) …)`: two path rebuilds. Every key under one relation shares `parent ‖ rel ‖ 1 ‖ width` (280 bits), and its head shares the first 271 of them (tag byte 0 vs 1). An uncompressed trie hashes one node per shared bit, so ~282 per path, two paths.
 
@@ -2816,7 +2816,7 @@ Grepped with `kernel20-stmts.py` over `worldBytesMax, allowanceMax, baseRecordMa
 - **ROOT, Q5.** Recorded refusals' LOG bytes are uncharged and not allowance-bounded (≤ 16 × ~64 KiB per member per window). KERNEL-44's checkpoint rule bounds replay, not disk. File as a cv task for KERNEL-44/54's owner, or fold it into this decision?
 - **CODEC (FYI).** `world_size_eq`, an equality in entry counts, is the theorem KERNEL-18 has owed you since 10-16.
 
-Status: PROPOSED.
+Status: SUPERSEDED PROPOSAL: RULED and BUILT in the two KERNEL-55 parts immediately below; this section preserves the original alternatives.
 
 ## KERNEL-55 RULED (ROOT, 2026-10-19) and AS BUILT, part 1: the potential (KERNEL-21)
 **Rulings.** Q1 = B: `allowanceMax` = 2^27 stays primary (KERNEL-15's useful life); `worldBytesMax` is DERIVED from `allowance_bounds_world` and CODEC's size equality (HOST-14's commit); both prose ratios ("~900 BAR stores", "the other half is headroom") are deleted, no ratio replaces them. Q2 = R1: `membersMax` is not a Bounds constant (Lang's `membersMax` = 63 is a quorum mask; Receive's `enrollMax` = 256 is per grant; no membership theorem exists), so the refusals trie is bounded by a kernel-wide cap per window (part 2). Q3 = YES: import refuses a carried allowance above `allowanceMax` by name, with a tooth (HOST-14's two arms: `allowancePastBound`, and `potentialPastBound`, since an allowance check alone still lets a weight-heavy carried World through). Q4: HOST-14 co-signed B and rejected 2^28 as the reader ceiling on PERF-2's measurement (a base at 2^28 reopened in 120.7 s, 2× THE BAR's 60 s). Q5: the refusals trie's bytes fold into the bound via R1; framing and index.log are HOST's theorem.

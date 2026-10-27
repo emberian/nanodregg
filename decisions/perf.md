@@ -149,7 +149,7 @@ defects nothing else could have seen:
   Both are inside the limits (5000, 60000) by 37–570x. This is the baseline THE BAR v2 is measured against.
   Before cf79591, every 1000-record run was RED at 8–12 s.
 
-**Status.** open (GATES-6 agreed 2026-10-18: the `script:` row kind, conditions 1–3 met).
+Status: SUPERSEDED by GATES-20x: clock budgets are judged too; the full judge includes the 1000-record BAR.
 
 ## PERF-3 · PROPOSED to ROOT: deployed-parameter counts from THE BAR's own Store (swap 10, C4/C5) (2026-10-18)
 
@@ -254,7 +254,7 @@ base-plus-tail path, the one law 5 is about, never ran in it.
 **META-CRITIQUE.** I chose the midpoint because it halves the tail visibly, not because a midpoint is
 anyone's worst case.
 
-**Status.** open.
+Status: BUILT and superseded by later worst-cut measurements in PERF-10/12/13.
 
 ## PERF-5 · THE BAR's reopen at the true worst cut: a sized, standing-only bench row (2026-10-18)
 
@@ -309,7 +309,7 @@ a deployed restart pays at most.
 prove they are the most expensive per step for the fold. A tail of births grows the trie and may cost more
 hashes per step.
 
-**Status.** open.
+Status: BUILT and expanded: gates/runs.tsv has the four worst-cut shape rows.
 
 ## PERF-6 · The worst cut, measured in three tail shapes: the costliest is pinned, not assumed (2026-10-18)
 
@@ -371,7 +371,7 @@ hashes per step.
 (write, birth, retire), and that is a reason. It is not a proof that no fourth shape (a row insert, a value
 transfer touching two cells) costs more per step.
 
-**Status.** open.
+Status: BUILT and expanded to writes/births/retires/rows; the current waste table is authoritative.
 
 ## PERF-7 · bar.sh measures only binaries that are this tree's, by lake's and cargo's own reports (2026-10-18, ROOT)
 
@@ -475,7 +475,7 @@ byte flipped. A non-number argument gets the usage line and exit 2.
 **META-CRITIQUE.** I first measured honest Worlds, because I read "worst World" as "worst history". ROOT's
 reframing to the reader's bound came from my own numbers, but I did not draw it.
 
-**Status.** open (re-pin at KERNEL-55's bound).
+Status: BUILT: the synthetic standing row uses the derived World budget; this is not a maximal deployed-world measurement.
 
 ## PERF-9 · A fourth worst-cut shape: the deployed Bell queue's rows tail (2026-10-18, ROOT; LANG-58 96179fb)
 

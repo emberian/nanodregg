@@ -20,7 +20,7 @@ the command language is the part with real mass — it could equally be LANG's (
 HOST's (follow runs it). If it grows a second parser (one for argv, one for row specs), that is a twin.
 **Meta-critique.** I am the protocol owner arguing the protocol layer should exist; my evidence for it is
 one theorem.
-**Status.** open.
+Status: BUILT: Table/Command/Rows are the current interface; the original counts below are historical.
 
 ## PROTOCOL-1 · six operations on two sockets (2026-10-16)
 **Decision.** host.sock: `submit` (the one write), `lookup`, `read`, `log`; follow.sock: `command`,
@@ -47,7 +47,7 @@ cell to every follower (PROTOCOL-3), and `read` is the only confidential path. `
 the socket so follow needs no file access; that makes the writer serve O(log) bytes to a cold follower.
 **Meta-critique.** "Six" is attractive because it is small; I have not yet written the command language
 that must carry everything the deleted ops did, so the mass may have moved, not vanished.
-**Status.** open.
+Status: SUPERSEDED COUNT: Protocol.Table now has seven operations, including cancel.
 
 ## PROTOCOL-2 · "every op names exactly one receiver" is a vacuous statement; the table proves two that are not (2026-10-16)
 **Decision.** I did not state ROOT's "each op names exactly one receiver, as a theorem" literally: for a
@@ -120,7 +120,7 @@ by declaration). Refusal names are strings until KERNEL's `Refusal`/`Reject` and
 are committed; then a gate resolves each.
 **Meta-critique.** Data rows feel rigorous; the hard part — a runner that makes them executable — is not
 written, and I chose the part I could prove.
-**Status.** open.
+Status: BUILT: Protocol.Rows and its Run driver hold executable rows.
 
 ## PROTOCOL-6 · the client bounds live in the protocol table (2026-10-16)
 **Decision.** frameBytesMax 262144, argvBytesMax 65536, stepsPerCommandMax 64, sendsMax 8, in
@@ -131,7 +131,7 @@ not a Turn, and `submit`'s payload (a call, which becomes the Turn's `event`) mu
 `eventBytesMax + 1 ≤ frameBytesMax` is owed as soon as Kernel/Bounds is importable from a committed tree.
 262144 is minidregg's frame headroom, not a derivation. **Meta-critique.** Numbers copied from
 minidregg are exactly law 11's worry; each should be derived from the largest row payload.
-**Status.** open.
+Status: BUILT: Protocol.Bounds and emitted tables supply client bounds.
 
 ## PROTOCOL-7 · laws attacked (2026-10-16)
 - **Law 11 "no twins of minidregg"** vs rows: a conformance row MUST restate minidregg's journey; that
@@ -158,7 +158,7 @@ could hit 64 and see refused connects that look like an outage; a slow-loris pee
 supervisor needs a per-connection idle deadline, CLIENT's). 64 is a chosen number, not derived from a row.
 **Meta-critique.** The number was picked to make the 32 MiB theorem round; the bound that matters may be
 file descriptors or the Lean child's queue, not supervisor memory.
-**Status.** open.
+Status: BUILT: the supervisor uses the emitted connection bound; this does not imply cross-session principal fairness.
 
 ## PROTOCOL-9 · review of CODEC-8 (f81e093: the follow payloads as layout data), landed CROSS-LAYER in Protocol/ (2026-10-16)
 **Verdict.** ACCEPTED: Protocol/Table.lean's `Step.layout`/`commandLayout`/`resumeLayout`,
@@ -186,7 +186,7 @@ reader's byte-for-byte claim, trusts CODEC's scratch `cargo test`; the emitted r
 differential against the Lean codec in the tree. **Meta-critique.** I was at ceiling when it landed,
 so the review happened after the fact; "accept, with findings" is the cheap verdict to give a
 landed change, and finding 1 would have been a reason to hold it.
-**Status.** open (finding 1 asked of CODEC).
+Status: CLOSED by CODEC-10: argv aggregate bounds and codecs are implemented.
 
 ## PROTOCOL-10 · rows/run: the runner is Lean, judging is a pure function, and a row with no driver is PENDING, never PASS (2026-10-16)
 **Decision.** `rows/run` = `lake exe rows` (Protocol/Rows/Run.lean). A row is driven one of two ways
@@ -212,7 +212,7 @@ now judged twice, by the sim stage (seeds 1 2 3) and here (seed 1): two judges o
 they are rows only because ROOT ruled so, and the cost is 2 s. **Meta-critique.** I built the
 part that is green today (exe rows) first and left eleven member rows PENDING behind a driver I have
 not written; PENDING is honest only while the member driver is the very next commit.
-**Status.** open.
+Status: BUILT: Protocol.Rows.Run judges driven rows and retains non-verdict distinctions.
 **Ruled by ROOT 2026-10-16:** judge theorems accepted; the pushback WINS: kernel-sim and host-sim are
 not rows (standing's sim stage is their one judge); the "call kinds" metric counts `Receive.Body`
 (10) with ceiling 10. PROTOCOL-9 findings 1 (oneOf, CODEC told) and 2 (argv total in Command.parse)
@@ -246,7 +246,7 @@ which is exact for constructors but would silently change if someone hand-wrote 
 **Meta-critique.** I proved the consent property at `plan` and `step` because those proofs were
 reachable; the stronger statement (the Host derives the SAME Turn from the signed call) needs the
 signature-independence of `dispatch`, which I did not attempt.
-**Status.** open.
+Status: SUPERSEDED COUNT: Command.Verb has twenty verbs; Machine includes the later receipt, cancel and head paths.
 
 ## PROTOCOL-12 · the READ ENVELOPE (HOST-11's gate as data) and Bounds.idleMsMax (2026-10-16)
 **Decision.** `envelopeLayout` (member, grant, from, validUntil, key, signature; digests as
@@ -261,7 +261,7 @@ codec refuse a 7-byte height); a stranger and a revoked member are told apart (`
 `noFollowGrant`), which leaks membership to anyone who can reach host.sock; a reply larger than a
 frame is HOST's to split. **Meta-critique.** "Serve events, not Turns" is the cheaper wire and it
 makes the follower's CPU the audit; I chose it partly because there is no Turn codec yet.
-**Status.** open.
+Status: BUILT: Protocol.Envelope and the idle deadline are on the deployed path.
 
 ## PROTOCOL-13 · ROOT rulings: `read` is RESERVED; each owner names its refusals with `name_injective` (2026-10-16)
 **Decision.** (1) `Op.reserved` (Protocol/Table.lean) marks `read` as a declared absence tied to
@@ -355,7 +355,7 @@ plant here; kernel-sim owns that class. Timings are in-process: no socket, no ss
 rows and the driver in one pass, so they can share a misconception (they did twice: a plant line
 index off by one, and custody arming the wrong attempt); the kinds check found two rows declaring
 less than they drove.
-**Status.** open.
+Status: BUILT: Rows.Loopback/Writer drive the shared Host and command definitions.
 
 ## PROTOCOL-16 · KERNEL-20: the verb `follow` is DELETED; `grant world MEMBER observe --via G` says it (2026-10-16)
 **Decision.** With one grant kind and the World a grant target, "let MEMBER follow" is `grant` of
@@ -369,7 +369,7 @@ at all (its parent was hard-wired `none`, so attenuation was unreachable from th
 **Critique.** `--via @me.grant` is boilerplate on every follow grant; members must know their own
 World grant's id (they do: it was bound when they were granted). **Meta-critique.** Deleting a verb
 lowers a SIZE count, which I am rewarded for; the test is whether any row reads worse, and none does.
-**Status.** open.
+Status: CLOSED: grant world MEMBER observe is the command; no follow verb exists.
 
 **PROTOCOL-15 ruling (ROOT 2026-10-16).** PENDING-by-name (`blockedOn`) ACCEPTED: never PASS, never
 RED; standing stays INCOMPLETE while any row is blocked. pay/well/bounty: packages are LANG's, the
@@ -417,7 +417,7 @@ the BAR's 5 s (a correct writer mid-seal would read as dead).
 re-derived, LANG laws included) or hashes a 256 MiB base on its last adopt page may legitimately
 take seconds; 120 s covers it, but nothing measures it. A timeout that fires on a slow but alive
 writer only costs a lookup. **Meta-critique.** The number is the BAR's 60 s doubled, not measured.
-**Status.** open.
+Status: BUILT: the emitted per-request deadline is used by the client transport.
 
 ## PROTOCOL-21 · custody results are `status ‖ payload` with named refusals (2026-10-17, CLIENT-2's ask)
 **Decision.** Every step result is `u8 status ‖ payload`: the Host's for `host`/`submit`; custody's
@@ -433,7 +433,7 @@ answer (`Outcome::result`); CLIENT-2 maps its errors to the refused form once CO
 stderr. No row drives a custody refusal yet (the loopback's custody never refuses).
 **Meta-critique.** The set is CLIENT's enum read today; a custody refusal CLIENT adds later needs
 a table row here first, which is the point.
-**Status.** open.
+Status: BUILT: custody results use the emitted named result format.
 
 
 ## PROTOCOL-18 · thin consent BUILT (option A): `adopt HEIGHT DIGEST`, `Protocol.Thin.accept`, follow's state holds the download (2026-10-16)
@@ -464,7 +464,7 @@ A download costs one custody signature per page: `pagesPerCommandMax` 28 pages �
 command, so a large base takes several `adopt` runs (`incomplete`, kept in memory). The download is
 lost on a follow restart. **Meta-critique.** The attest act makes the row green by giving the thin
 member a pin from a process the row controls; the trust question (who countersigns) is untouched.
-**Status.** open.
+Status: BUILT, superseded syntax: adopt takes INVITE KEY, with pin/certificate checks in Command.Machine.
 
 ## PROTOCOL-19 · log paging; a defect found: `expired` makes a cold catch-up impossible (2026-10-16)
 **Decision.** `logReplyLayout` carries `tip`; follow pages from each page's height until it reaches

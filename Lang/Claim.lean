@@ -1,31 +1,15 @@
 /-
-# Lang.Claim — a claim a package makes of itself, and the checker of its certifying shape (LANG-83)
+# Lang.Claim — a certifying-shape checker for package laws
 
-A claim is a sentence in a small fixed language that a package carries in its identity and the
-kernel refuses to install unless the package's own term bears it: proof-carrying code (Necula 1997)
-in the one form nano's install check already has. The type check is such a checker (the claim is
-the interface type, the proof is the term, `checkE` decides it in one pass, `Lang.Proofs.Check` is
-its soundness); a claim extends the sentences that check the same way. The proof is the term's
-SHAPE, the checker is a one-pass function beside `checkE` (unmetered, O(|term|), bounded by the
-wire), and its soundness is one Lean theorem, `Lang.Proofs.Claim.guardedBy_sound`. No nano term
-ever checks a proof; the kernel does, once, at install, as it types the term.
+`Claim.keeps` names an invariant and a law. `Term.guardedBy` checks a restricted law
+shape: every literal successful leaf is guarded by the invariant applied to the new state,
+except a relaw arm over unchanged state. Adoption is not excepted.
+`Lang.Proofs.Claim.guardedBy_sound` states the checker's meaning; the LK journey exercises
+accepted and rejected shapes.
 
-`keeps inv law`: every state an object of the package holds satisfies the interface field
-`inv : fn S bool`, because the law `law` refuses every birth, adoption, write and invoke whose new
-state fails it. Its proof is the law's control structure: every `ok` leaf of the law's body is
-dominated by the true branch of `ite (app inv new) _ _` (`Term.guardedBy`), the `relaw` arm of a
-`case` on `req.occasion` excepted, because the kernel judges a law change over the unchanged state
-(`Kernel.Receive.law`; `Lang.Proofs.Chain.LawKeeps`). The `adopt` arm is NOT excepted: an adoption
-is a base case like a birth (the incoming law judges the state it is adopted over, KERNEL-27), so a
-law in shape refuses to be adopted over a state that fails its invariant.
-
-The checker is sound by construction and incomplete by design: the only former it lets MEAN
-`inj "ok" _` is a literal `inj` leaf, so a law that returns a verdict it read from its state, or
-through a helper lambda, is not in certifying shape, and its claim is refused by name; the author
-writes the law in shape (`Std.keeps` emits one), as a certifying compiler emits checkable code. The
-compared `inv` is the closed literal term of the interface field, so no index shifting is needed:
-`app inv (var k)` is syntactic equality with `k` the index of `new` at that depth.
-Design: `redregg/work/promo/DESIGN-PCC.md`.
+This module supplies the checker, not package admission: `Package` carries no claims field,
+and its wire/install path does not call this checker. A general helper-returned verdict or
+an equivalent inline test need not have the accepted syntax.
 -/
 import Lang.Subst
 

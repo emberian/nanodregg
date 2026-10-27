@@ -50,7 +50,9 @@ admitted) is its word, so follow catches up AGAIN and ends by its own settlement
 
 `k` holds only the argv, the phase and the results so far; every plan is RE-DERIVED from follow's
 World at each step and the bytes it signs are compared with the ones custody signed (`planMoved`),
-so `k` cannot steer what is signed (HOST-9's `resume_rederives`). A plan is offered for signature
+so a resumed call must match that re-derived plan (HOST-9's `resume_rederives`).
+This does not authenticate the argv itself: adoption still requires the trusted sponsor-key
+premise `Spec.keyFaithful`. A plan is offered for signature
 only if follow's own World admits the Turn it derives (consent: `Protocol.Proofs.Command`).
 -/
 import Kernel.Receive.Rederive

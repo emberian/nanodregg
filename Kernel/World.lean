@@ -18,8 +18,8 @@ KERNEL-33) → journal (an exact retry inside its window is `replayed`) → shap
 value cell's decoding and floor) → value (born value cells, then every denomination's balance and
 floor sums: LEDGER-2) → nullifiers → rows remain (a retired parent holds no row) → ranges (each range
 read's relation, width, length and listing pin (`stale`)) → rows (each row touch in order, a pinned
-row's pin (`stale`) among its checks, then a retired parent's heads) → charge → created ids → the
-step counter. On the Host's path `Receive.submit` has already compared every pin before deriving the
+row's pin (`stale`) among its checks, then a retired parent's heads) → charge → created ids →
+member ticks → the step counter. On the Host's path `Receive.submit` has already compared every pin before deriving the
 Turn (KERNEL-66, `checkPins`), so there a `stale` from admission is not reached; a log's Turn (the
 follower's fold) meets these three comparisons here.
 -/

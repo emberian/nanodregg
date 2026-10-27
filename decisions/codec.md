@@ -17,7 +17,7 @@ owners edit in lockstep. If KERNEL churns Turn, CODEC's file churns too.
 **Meta-critique.** minidregg had a "codecs layer" too. I may be keeping the row because it existed. The
 honest test is that the combinators and their proofs are 860 lines no other layer needs to read, and
 the coupling to Kernel is one module.
-Status: open.
+Status: BUILT: Codec.Kernel connects the codec library to kernel values; imports determine the boundary.
 
 ## CODEC-1 · One codec structure; its laws are a separate Prop (2026-10-16)
 **Decision.** `Stream α = {shape, put : α → ByteArray → ByteArray, get : ByteArray → Nat → Except
@@ -35,7 +35,7 @@ ships. Mitigation: `Codec.Tag` only registers a codec together with its `Lawful`
 persisted or framed codec is proved.
 **Meta-critique.** I chose the unbundled form partly because it made the proofs easy to write one combinator
 at a time. That is the author's convenience, not the reader's.
-Status: open.
+Status: BUILT: Stream and Codec.Proofs.Stream separate codecs from their laws.
 
 ## CODEC-2 · Canonicity is stated as "the consumed bytes ARE the encoding" (2026-10-16)
 **Decision.** `occurs_of_get : get b i = ok (v, j) → j = i + |bytes v| ∧ b.extract i j = bytes v`
@@ -50,7 +50,7 @@ needs no List. Together with `decode_eq_ok_iff` it means no caller ever re-encod
 (truncated where it should say pastBound) is still Lawful. The refusal NAME is unproved.
 **Meta-critique.** I proved what was cheap to state over ByteArray's extract lemmas. A refusal-kind
 theorem is the next obligation if a row depends on which refusal is reported.
-Status: open.
+Status: BUILT: Codec.Proofs.Stream states consumed-byte canonicity.
 
 ## CODEC-3 · Bounds live in the value types (2026-10-16)
 **Decision.** `Bytes max := {b // b.size ≤ max}`, `Bounded max α := {a : Array α // a.size ≤ max}`, with
@@ -65,7 +65,7 @@ KERNEL and HOST call sites. Some will reach for `⟨b, by sorry⟩`-shaped short
 `if h : … then … else panic`.
 **Meta-critique.** Types-carry-bounds is my preference from the TigerStyle law. Whether the friction pays
 for itself is measured by how many call sites need a runtime check anyway.
-Status: open.
+Status: BUILT with CODEC-12: bounded combinators coexist with LawfulOn codecs for raw kernel values.
 
 ## CODEC-4 · Integers are fixed width, little-endian; no variable-length naturals (2026-10-16)
 **Decision.** `u8`, `u32`, `u64`, all little-endian. No base-255 or varint naturals.
@@ -77,7 +77,7 @@ is no minimal-encoding rule to prove. Varints are where minidregg's non-canonica
 BE. Today nothing sorts integers by bytes (digests are compared as bytes, and they are not integers).
 **Meta-critique.** I first wrote BE out of habit and switched once I saw three layers already on LE.
 Following the majority is not a reason. The real reason is "nothing sorts by integer bytes".
-Status: open.
+Status: SUPERSEDED in part by CODEC-13 and ordered data codecs: fixed-width, varint and big-endian encodings coexist.
 
 ## CODEC-5 · Every codec carries its Shape; tags are content-addressed from it (2026-10-16)
 **Decision.** `Stream.shape : Shape` (unit | u8 | u32 | u64 | digest | bytes max | option | product | sum |
@@ -95,7 +95,7 @@ hand-maintained piece. Option: require refinements to be drawn from a closed enu
 (bool, enum-of-n) whose shape is structural.
 **Meta-critique.** Content addressing is fashionable here (KERNEL-3 too). The test is whether two lanes
 changing two codecs ever touch one shared line. They don't.
-Status: open.
+Status: BUILT: Stream.Shape and Tag.of derive structural tags; refinement meaning also needs CODEC-28.
 
 ## CODEC-6 · Hash and MAC: Keccak in Lean (SHA3-256 / cSHAKE256 / KMAC256), domain by customization (2026-10-16)
 **Decision (next commit).** `Codec.Hash`: Keccak-f[1600] over `UInt64` lanes; `cshake256 (domain : String)
@@ -119,8 +119,8 @@ the FIPS 202 ρ/π tables): **184 MB/s on a 1 MiB message (5.7 ms/MiB), 2.2 µs 
 against the 5 s budget. The base MAC of a 0.7 MB World is ~4 ms, about one fsync. The NIST
 vectors (SHA3-256 "" and "abc", cSHAKE256 Sample #4, KMAC256 Sample #4) are theorems closed by
 `decide +kernel` (7.6 s for all four), with no native_decide.
-Status: open. The speed critique is answered for THE BAR. BLAKE3 stays the alternative if a profile
-ever shows hashing on top.
+Status: BUILT: Codec.Hash supplies the deployed Keccak family.
+The historical BLAKE3 alternative remains conditional on a profile showing hashing on top.
 
 ## CODEC-7 · Ask of KERNEL: domains are a hash argument, not a byte prefix (2026-10-16)
 **Decision (proposed).** `Env.hash : (domain : String) → ByteArray → D`, deployed as cSHAKE256's
@@ -132,7 +132,7 @@ encoded with its length, so it separates by construction.
 the prefix and prove the tags prefix-free (a decidable fact about a closed list).
 **Meta-critique.** Prefix-freeness is a decidable property of seven literals. A theorem would be cheaper
 than an interface change. I prefer the interface because it cannot regress.
-Status: open (KERNEL to answer in decisions/kernel.md).
+Status: CLOSED by KERNEL-8: Env.hash takes a domain argument.
 
 ## CODEC-8 · The follow payloads are layouts as data; every field is self-delimiting (2026-10-16)
 **Decision.** The step frames (`Step.layout`), `commandLayout` and `resumeLayout` are `Codec.Layout`
@@ -155,7 +155,7 @@ self-delimiting, `Step.frame_lawful` follows from the combinator theorems with n
 a `host` step is caught by the Host, not by this codec.
 **Meta-critique.** I made the layout as simple as the client's existing reader. A typed layout
 (op ∈ Op) would let the codec refuse more, and I deferred it because nothing yet depends on it.
-Status: open.
+Status: BUILT: Protocol.Table and Codec.Layout define the framing layouts.
 
 ## CODEC-9 · The one recursive codec is a depth-bounded tree; LANG refines it (answers LANG-14) (2026-10-16)
 **Decision.** `Codec/Tree.lean`: `Tree = node (tag : UInt8) (payload : ByteArray) (children : List Tree)`,
@@ -182,7 +182,7 @@ weakness, in its largest instance. A per-node payload costs 4 length bytes even 
 **Meta-critique.** I picked the generic s-expression because it was the smallest thing I could prove once.
 A typed fixpoint would carry more of the structure into the Shape. I have not measured whether the
 simpler proof is worth the opaque tag.
-Status: open (LANG to adopt; LANG/Wire.lean's readers become `ofTree`).
+Status: CLOSED by LANG-17: Lang.Wire refines the tree codec.
 
 ## CODEC-10 · Every codec knows its size; `oneOf` and `within` bounds; the argv total is Lean's (2026-10-16)
 **Decision.** (1) `Stream` gains `size : α → Nat`, and `Lawful` gains `size_eq : c.size v = (c.bytes v).size`,
@@ -201,7 +201,7 @@ proves it agrees, but every new combinator now owes one more proof. `within` che
 fields, so an over-total argv is read (bounded by the frame) before it is refused.
 **Meta-critique.** I added `size` because two asks needed it at once. A single user would have
 justified a local helper instead of a field on the one structure.
-Status: open.
+Status: BUILT: Stream.size, oneOf, within and the protocol argv bound.
 
 ## CODEC-11 · Ed25519 verification in pure Lean (RFC 8032, cofactored), measured; no C (2026-10-16)
 **Decision.** `Codec/Ed25519.lean`: `Ed25519.verify (pk msg sig : ByteArray) : Bool`, RFC 8032 §5.1.7 with the
@@ -226,7 +226,7 @@ time, which does not matter for verification (no secrets).
 **Meta-critique.** "Pure Lean" was the default the charter wrote. I met the speed bar and stopped, and
 I did not price proving `Fe.mul` correct, which is the obligation that would make this better than the
 fallback rather than merely Lean.
-Status: open (owed: `Fe.mul`/`carry` correctness theorems against `Nat` mod p).
+Status: CLOSED by CODEC-18: Field proves carried-input arithmetic and carry correctness; CODEC-23 adds the curve results.
 
 ## CODEC-12 · KERNEL's values are encoded by codecs lawful ON their bounds (2026-10-16)
 **Decision.** KERNEL keeps plain `Nat`/`List`/`ByteArray` and checks bounds in `World.admit`
@@ -247,7 +247,7 @@ with another's. Every use is safe only after `checkBounds`. `Fits` restates KERN
 KERNEL changes a bound without CODEC, `checkBounds_fits` stops building, which is loud, not silent.
 **Meta-critique.** I took KERNEL's no-subtypes choice as given rather than arguing harder for
 types. The truncation hazard above is the price, and a typed Turn would not have it.
-Status: open.
+Status: BUILT: Codec.Proofs.Raw and Codec.Proofs.Kernel provide the bounded laws.
 
 ## CODEC-14 · The World codec: canonical bytes, read back up to `Equiv` (HOST-14's base) (2026-10-16)
 **Decision.** `Codec/World.lean`: `world dc : Stream (World D)` = `cells ‖ journal ‖ spent ‖ height ‖ chain ‖
@@ -266,7 +266,7 @@ input would be O(n), and HOST measures it at reopen. `worldMax = 2^32 − 1` ent
 bound, not a policy bound. HOST's `worldBytesMax` is the real one.
 **Meta-critique.** The sorted-list uniqueness lemma was proved here from Std's membership lemmas,
 so a Std upgrade that renames them breaks this module, not KERNEL's.
-Status: open.
+Status: BUILT, with the later canonical-trie decoder replacing the original Equiv-only account; see Codec.Proofs.World.
 
 ## CODEC-15 · One deployed Env/Ctx; the digest order is the byte arrays' (2026-10-16)
 **Decision.** `Codec/Deployed.lean`: `env : Env Digest` (hash = cSHAKE256 with the domain as customization,
@@ -280,7 +280,7 @@ the big-endian `Nat` (forms a bignum per comparison).
 **Critique.** `Array.compareLex` is generic code, possibly slower than a 32-byte unrolled compare on
 the TreeMap hot path. That has not been measured.
 **Meta-critique.** Reusing the library's lawful order was chosen because it made the proofs free.
-Status: open.
+Status: BUILT: Codec.Deployed supplies the deployed digest and environment.
 
 ## CODEC-13 · The tree's lengths and counts are canonical LEB128 varints (answers LANG-2's framing ask) (2026-10-16)
 **Decision.** `Codec/Varint.lean`: `varint : Stream Nat`, base-128 little-endian with a continuation bit,
@@ -302,7 +302,7 @@ not this framing: `Stream.tagged`/`choice` (one tag byte for n arms) is the fix 
 **Meta-critique.** I resisted varints in CODEC-4 for the frame layer and still do there. The tree is
 different because its nodes are tiny and numerous. I took the measurement as permission to make
 the exception.
-Status: open.
+Status: BUILT: Codec.Varint supplies canonical shortest-form encodings.
 
 ## CODEC-16 · Tags are content-addressed, with a proof that shapes never share bytes (2026-10-16)
 **Decision.** `Codec/Tag.lean`: `Shape.put` writes a shape canonically. Each constructor is a byte, and every number
@@ -321,7 +321,7 @@ tag yet; until one does, this is machinery without a consumer.
 **Meta-critique.** I proved prefix-freeness before anyone consumes tags because it was the honest
 precondition of "a tag collision is a hash collision". The consumer (HOST's Store header) is the
 part that makes it matter, and it is HOST-3's.
-Status: open (HOST to stamp `Tag.of` of `Deployed.world` and `batch` into base/segment headers).
+Status: CLOSED: Host.Base.shapeStamp pins deployed codec shapes; later physical headers refine the Store format.
 
 ### CODEC-14 addendum · World encode/decode measured (2026-10-16)
 Measured on HOST-3's BAR-shaped World (each record: a 2-slot cell with a 128-byte value, plus a
@@ -344,7 +344,7 @@ Custody signs in Rust, and nothing deployed calls `sign`.
 the Host, which is a custody question (pause list). It is not constant time. Its checks cost ~13 min
 of kernel reduction in one leaf proof module.
 **Meta-critique.** I built it because the Sim needed real signatures and a twin in Kernel would be worse.
-Status: open (custody ruling stays CLIENT's).
+Status: BUILT as a Lean signer used by tools and the browser; native client custody uses its Rust signing path. No constant-time claim is made here.
 
 ## CODEC-18 · The field arithmetic is proved, not sampled (CODEC-11's owed theorems; CODEC-2, 2026-10-17)
 **Decision.** `Codec/Proofs/Field.lean`. `Fe.Carried` (limbs 0, 1, 2, 4, 6, 8 below 2^26; 3, 5, 7, 9 below
@@ -386,7 +386,7 @@ of the DAG (each Fe expression duplicated wherever it is used), which the kernel
 in the def module: `decodePoint` is now a composition of small functions (`candidateFrom`, `rootCheck`,
 `sqrtRatio`, `recoverX`, `signed`), each taking computed values as ARGUMENTS, so sharing survives and each
 lemma is about variables (the module checks in 18 s / 1.25 GB). The computation is unchanged.
-Status: open (owed: the Edwards addition law and `mul2` correctness against a Nat-coordinate spec).
+Status: CLOSED by CODEC-23 parts 1–4: field, curve and ladder results are landed under their named premises.
 
 ## CODEC-19 · The trie World codec: entries in trie order, rebuilt by `build`, refused unless canonical (CODEC-2, 2026-10-17; built at KERNEL-23 part 2, 7c43273)
 **Decision.** When `World.cells` (cells + nullifiers, KERNEL-23) is a `Trie.T`, the World codec writes
@@ -447,7 +447,7 @@ limb representation changes; regenerating needs the scratch printer, which is no
 carry would make every literal wrong, and the proofs would go red (loud, never silently wrong).
 **Meta-critique.** I chased the memory number GATES asked for. The deeper fix is the CURVE proofs (CODEC-18's
 owed group law), after which a vector proves only the RFC's specific outputs, not the ladder's arithmetic.
-Status: open.
+Status: BUILT: staged RFC proof modules remain in Codec.Proofs.Ed25519. Generator reproducibility is a separate tooling obligation.
 
 ## CODEC-21 · Sandbox paths, u32 fields and tagged frames in the one Layout family (HOSTING's ask; CODEC-2, 2026-10-17)
 **Decision.** (1) `Codec/Path.lean`: `clean` (nonempty, ≤ `componentMax` = 64, not `.`/`..` (`reserved`), none
@@ -474,7 +474,7 @@ and is used only by the decoder.
 **Meta-critique.** I matched the names HOSTING's handoff already expected, which steered the value type to a
 component list (and so required `split` and its proofs) rather than the joined bytes, the simpler type.
 The wiring of `--hosting` waits on HOSTING-2's `Hosting/Wire.lean`.
-Status: open.
+Status: BUILT: Layout/Path and generated hosting frames carry these fields.
 
 ## CODEC-22 · The carried state's version is its tag, not a policy (OPS-P1; CODEC-2, 2026-10-17)
 **Decision.** `Codec.Kernel.carried E dc : Stream (Carried D)` reuses `cells E dc` (the trie listing, with its

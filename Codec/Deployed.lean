@@ -9,8 +9,9 @@ import Codec.Ed25519
 The kernel is generic in its digest and hash. This module fixes them for deployment: digests are
 `Codec.Digest` (32 bytes), the hash is cSHAKE256 with the domain as customization (`Hash.digest`),
 turns, cells and calls are encoded by `Codec.Kernel`, and signatures are checked by RFC 8032
-Ed25519 (`Ed25519.verify`). LANG supplies the `Program`. The facts the kernel's theorems take as
-premises are proved for this instance in `Codec.Proofs.Deployed`.
+Ed25519 (`Ed25519.verify`). LANG supplies the `Program`. `Codec.Proofs.Deployed` proves the
+codec laws and decoded-World invariants for this instance. Cryptographic faithfulness and the
+other premises of the composed claims remain explicit in `Spec`.
 -/
 
 namespace Nanodregg.Codec.Deployed

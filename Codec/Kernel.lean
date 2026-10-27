@@ -12,18 +12,10 @@ plain `Nat`, `List` and `ByteArray` with bounds checked in `World.admit`. So eac
 the values within those bounds (`Codec.Proofs.Kernel`): every admitted Turn has exactly one spelling,
 and every decoded value is within bounds.
 
-Layouts (all integers little-endian, every count a u32, every byte string `u32 len ‖ bytes`):
-* `Op`: tag 0 ‖ key u32 ‖ value, or tag 1 ‖ key u32.
-* `Cell`: kind u32 ‖ discipline u8 ‖ slots (count ‖ (key u32 ‖ value)*).
-* `Act`: tag 0 (keep), tag 1 ‖ ops, or tag 2 (retire). `Touch`: cell ‖ seen ‖ act.
-* `Turn`: txId ‖ notBefore u64 ‖ validUntil u64 ‖ touches ‖ creates (id ‖ cell each, D5) ‖ nullifiers ‖ charge u64 ‖
-  event ‖ rows ‖ ranges.
-* Rows (KERNEL-46/48): `RowSlot` as `rowKeyBytes` (parent ‖ rel u8 ‖ kind u8 [‖ u8 len ‖ key]); `RowLeaf` on
-  the World wire with its version and floor as u64 varints (`rowLeaf`, KERNEL-54), and as `rowLeafBytes`, the
-  row pin's preimage, with both as u64 (`rowLeafHashed`); `RowAct`: a tag ‖ its fields; `RowTouch`: slot ‖ option seen ‖ act; `RangeRead`: parent ‖ rel u8 ‖
-  u8 len ‖ prefix ‖ most u64 ‖ seen.
-* `Call`: unsigned ‖ signature. `Unsigned`: member ‖ key ‖ notBefore ‖ validUntil ‖ pins ‖ maxCharge ‖
-  body. `Body`: a tag (its constructor's index) ‖ its fields.
+The definitions below are the layout authority: `turn`, `unsigned` and `body` include
+all fields of their kernel types. Fixed-width fields and canonical varints coexist.
+Rows have distinct storage and pin encodings: `rowLeaf` uses compact counters, while
+`rowLeafHashed` spells the pin preimage. Their agreement is proved in `Codec.Proofs.Rows`.
 -/
 
 namespace Nanodregg.Codec.Kernel

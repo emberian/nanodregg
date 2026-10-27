@@ -14,7 +14,7 @@ proofs come out 3× longer than with Mathlib, this was wrong. **Meta-critique.**
 proof-system bloat and to disk pressure; both are real but the second is an estimate of a cost, and a cost
 estimate is never a reason (CLAUDE.md). The test: if a layer argues for Mathlib with a named theorem it cannot
 state without it, it goes in as a separate proof-only lib that no def-module may import.
-**Status.** open.
+Status: BUILT: lakefile and closure gate enforce the package/import boundary.
 
 ## GATES-2 · The def/proof split is structural: a `Proofs` path component (2026-10-16)
 
@@ -35,7 +35,7 @@ still rebuilds dependents on those edits. And a proof-module may now hide a `Pro
 really a premise bundle (the identity-carrier class) — the vacuity reader (law 6) must read those. **Meta-
 critique.** I tested the module system for ten minutes; a lake option I did not try (or a later Lean) may make
 (a) right, and I may be keeping file splits because they are visible and checkable by a 100-line script.
-**Status.** open.
+Status: BUILT: closure gate enforces the def/proof split.
 
 ## GATES-3 · Gates judge a private copy of the exact commit, both by the parent's gates and its own (2026-10-16)
 
@@ -58,7 +58,7 @@ one-line bypass anyone can type. Reverse-dependent builds grow with the tree; at
 blow the 2-minute target. **Meta-critique.** I built the strongest local gate because there is no remote to
 put it on; the honest enforcement is standing.sh at HEAD plus a reviewer reverting, and the hook is a
 convenience that makes red commits rare, not impossible.
-**Status.** open.
+Status: BUILT and refined by GATES-20: private candidate, parent-owned judge code and source gates.
 
 ## GATES-4 · One axiom census instead of per-theorem `#assert_axioms` (2026-10-16) — argues law 6
 
@@ -77,7 +77,7 @@ proposed exactly this replacement.
 tree's oleans. **Meta-critique.** I prefer one central check because I own the gates; a census is one more
 thing that can silently check nothing — so it prints the declaration count, and a planted `sorry` is its
 acceptance test.
-**Status.** open.
+Status: BUILT: Census.Axioms and gates/census.py provide the census.
 
 ## GATES-5 · The size ratchet's mechanics (2026-10-16)
 
@@ -93,7 +93,7 @@ will be typed without thought. The SIZE.md `now` column also conflicts between a
 (the second one re-runs size-sync). **Meta-critique.** Law 12 asks for exactly this, and I implemented it
 literally rather than asking whether lines are the right count; ceilings on the few counts that matter
 (Host closure, ops, partial, sorry) may be the whole value.
-**Status.** open.
+Status: BUILT: gates/size.py and ceilings.tsv enforce the ratchet.
 
 ## GATES-6 · Law 8's "No import hubs" is unmeasurable as stated (2026-10-16) — argues law 8
 
@@ -105,7 +105,7 @@ ceiling (none yet), and keep the 2-minute rebuild target as the bar. Minidregg's
 hurt was (1) proofs in the hub and (2) research below the hub. GATES-2 kills (1); C2 (imports must be tree or
 Init/Std) plus review kills (2). **Critique.** A count with no ceiling is a number nobody acts on. **Meta.** I am
 softening a law because I cannot gate it mechanically.
-**Status.** open.
+Status: CLOSED by the structural closure rules; the original critique is historical.
 
 ## GATES-7 · Commits stay inside their layer: gates/OWNERS (2026-10-16)
 
@@ -122,7 +122,7 @@ carry a ritual CROSS-LAYER line. **Critique.** SHARED is exactly where a stale i
 entry; the real defence is that pre-push judges `git write-tree` against current HEAD and `update-ref` refuses
 a moved HEAD. **Meta-critique.** Ownership by path is a proxy for "did you mean to change this": it catches the
 stale-index class, not a deliberate cross-layer edit with a reason typed in to pass.
-**Status.** open (the SHARED lakefile departs from ROOT's table).
+Status: BUILT: gates/OWNERS and owners.py enforce layer ownership, with named SHARED paths.
 
 ## GATES-8 · `scripts/commit` is the only sanctioned way to commit; a commit is refused only for reds it introduces (2026-10-16)
 
@@ -140,7 +140,7 @@ stops all six layers for one layer's defect (it happened: CODEC's `def manyBytes
 nothing here can tell; PRE-EXISTING lets a red sit as steady state ("red as steady state hides everything").
 **Meta-critique.** A wrapper script is the tool I can build fastest; the class is "a write without a
 read of the current version", and only the CAS addresses it, the rest is convenience.
-**Status.** open.
+Status: BUILT and refined by GATES-19/20/22: scripts/commit snapshots, merges and judges candidates.
 
 ## GATES-9 · The waste ratchet measures from the sims' own output: `WASTE <op> <metric> <ratio>` (2026-10-16)
 
@@ -161,7 +161,7 @@ drifts from it); and logical work misses constant factors (a `List UInt8` copy c
 The ratio is only as good as HOST's counter. **Meta-critique.** I chose the measurement I can gate without a
 perf box; wall time on the laptop is the measure THE BAR actually uses (write ≤ 5 s, reopen ≤ 60 s) and this
 does not see it.
-**Status.** open.
+Status: BUILT: gates/waste.py checks the emitted measurements and ratchet.
 
 ## GATES-9 · A commit is CURRENT main + its paths, and a path is taken only from a worktree whose base for it IS main's (2026-10-17)
 

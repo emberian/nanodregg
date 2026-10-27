@@ -2,7 +2,7 @@
 # Sha512 — SHA-512 (FIPS 180-4), for Ed25519 (RFC 8032)
 
 Eight unboxed `UInt64` working variables in a structure; the 80-word schedule of one block is a
-`Vector`; every loop is structural on a block or round count. Vectors: `Codec.Proofs.Sha512`.
+`Array UInt64`; every loop is structural on a block or round count. Vectors: `Codec.Proofs.Sha512`.
 -/
 
 namespace Nanodregg.Codec.Sha512

@@ -20,9 +20,9 @@ Tags (a type's and a term's tag spaces are read at different positions, so they 
     term  var 0 i · lam 1 [T b] · app 2 [f a] · fix 3 [t] · nat 4 n · bool 5 v · bytes 6 s
           prim 7 code [a b] · record 8 [field*] · get 9 ℓ [t] · extend 10 [t field*] · inj 11 ℓ [T t]
           case 12 [t field*] · ite 13 [c t e] · ref 14 i · field 15 ℓ [t] · digest 16 s
-          refuse 17 why [T]
+          refuse 17 why [T] · hole 18 i [substitution*]
     prim codes add 0 · sub 1 · mul 2 · div 3 · mod 4 · eq 5 · lt 6 · le 7 · beq 8 · cat 9 · deq 10
-          lenLe 11
+          lenLe 11 · u64be 12 · sized 13 · dsized 14
 -/
 import Codec.Tree
 import Lang.Term

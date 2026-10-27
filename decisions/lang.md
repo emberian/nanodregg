@@ -1425,7 +1425,7 @@ limit 768, retract false`, guard author = agent): two members' rains pinned at t
 in both orders to equal cells and rows roots; the same key twice `keyTaken`; the 769th `relationFull`; a rain with
 another's author refused by the guard; a retract refused by declaration; plant: pinning the head on insert makes the
 second rain `stale`.
-**Status.** PROPOSED. Sent to ROOT and KERNEL-13 before any code.
+Status: SUPERSEDED PROPOSAL: relations were built in LANG-49 and refined later; this section retains the proposed design.
 
 ## LANG-45 The deciding experiment: Mini's CappedTally ported by hand to nano's core; what it needs first is a capped commuting COUNTER, which LANG-44's rows give once the head carries a declared sum (2026-10-18; NANO-VS-MINI §5, ROOT's order on LANG-44; journey rows LT0–LT8)
 **What was ported.** Mini `tests/objective-native/CappedTally.obend` at 2c27b08b is the smallest Mini program with
@@ -1901,9 +1901,8 @@ regularities a hand-written package may not have (Lifecycle is 277 chars because
 tests are the two hand ports (the tally, CoAuthor), and the first resident package written in it, which I cannot
 measure. I also chose to keep the Lean builders, which keeps my layer's proofs where they are; the reason given (the
 meaning theorems are about the builders) is real, and the cost is a text and a builder that a row must keep equal.
-**Status.** PROPOSED (design only; ROOT rules on LANG-50 and LANG-51 separately). Build order if approved: LANG-51
-(core, its vacuity read) → `Lang/Surface.lean` + `Read.locate` + `ob` → the three `.ob` texts and rows → tally/
-CoAuthor re-cut → theorems 1–3 with teeth and the vacuity read.
+Status: SUPERSEDED PROPOSAL: Lang.Surface implements the authoring reader. Source-identity and executable-documentation follow-ons are separate obligations, not asserted complete.
+The original build order is historical; the following amendment records the core and surface implementation.
 
 **LANG-51 · Built (2026-10-18; LANG-15; ROOT APPROVED both, with conditions).** `Term.refuse (ty : Ty) (why : ByteArray)`
 (wire tag 17, `why` the payload, `ty` the one child), `Fault.refused why`, `Prim.lenLe` (code 11; `bytes, nat → bool`,

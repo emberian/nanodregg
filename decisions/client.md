@@ -148,8 +148,8 @@ the hybrid exists for.
 answer; the honest decider is whether anyone ever follows a log signed today after a CRQC exists. The
 option ordering (FFI to HACL* first) is chosen to avoid porting ML-DSA to Lean, the hard part; that
 puts unverified-by-us C (but machine-verified upstream) in the TCB.
-**Status.** open: KERNEL decides which signature a Turn carries (pure or hybrid, and the refusal names);
-ROOT assigns who owns the Lean verifier. CLIENT implements custody's half the day it is named.
+Status: CLOSED: pure Ed25519 is deployed; native custody uses its Rust signer and Codec.Ed25519 verifies. The hybrid alternative was not selected.
+The original assignment request is closed by the deployed verifier and custody implementation.
 
 ## CLIENT-12 friends over ssh: the remote host.sock (2026-10-16, DESIGN ONLY: waits for PROTOCOL's row)
 **The need (THE BAR).** Two friends and a hosted Hermes on one Store. Each friend runs `nd` and their
