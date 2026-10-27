@@ -48,7 +48,7 @@ a.hex, a.cmd { color: var(--link); cursor: pointer; text-decoration: underline; 
 .log .row { display: grid; grid-template-columns: 4em 6em 5.5em 5em 1fr; gap: 6px; padding: 1px 4px; cursor: pointer; }
 .log .row:hover, .log .row.sel { background: var(--title-a); color: #fff; }
 .scrub { width: 100%; }
-.dialog { z-index: 9000 !important; }
+
 .dialog .body > div { display: grid; grid-template-columns: 40px 1fr; gap: 10px; align-items: start; }
 .dialog .mark { width: 32px; height: 32px; border-radius: 50%; background: var(--bad); color: #fff; font: bold 22px/32px var(--ui); text-align: center; }
 .dialog .mark.warn { background: #c08000; }
@@ -70,7 +70,7 @@ fieldset.writer button.btn { padding: 1px 6px; margin: 1px; }
 .tour ol { margin: 0; padding-left: 18px; } .tour li { margin: 6px 0; } .tour li.done { opacity: .55; }
 .tour code { font: 11px var(--mono); }
 @media (max-width: 640px) {
-  .window { left: 8px !important; right: 8px; width: auto !important; }
+
   #icons { flex-direction: row; flex-wrap: wrap; }
   .log .row { grid-template-columns: 3em 5em 1fr; } .log .row .x { display: none; }
 }
@@ -104,3 +104,27 @@ textarea.code { font: 12px var(--mono); color: var(--text); width: 100%; box-siz
 .lesson .wide { grid-column: 1 / -1; } .lesson textarea { width: 100%; box-sizing: border-box; }
 .lesson .tasks li { margin: 3px 0; } .lesson .tasks li.done { color: var(--ok); }
 .lesson mark { background: #ffe680; color: #000; }
+
+/* The compositor owns geometry at every viewport size. */
+.window { min-width: 0; max-width: none; min-height: 0; }
+.window[hidden] { display: none; }
+.window.focused { outline: 2px solid var(--title-b); outline-offset: -2px; }
+.window .body { min-width: 0; min-height: 0; }
+.titlebar { flex: 0 0 auto; min-height: 32px; touch-action: none; }
+.titlebar button { width: 28px; height: 28px; flex: 0 0 28px; font-size: 16px; line-height: 1; }
+.titlebar:focus-visible { outline: 2px solid #fff; outline-offset: -3px; }
+.moving { will-change: transform; }
+.resize-handle { position: absolute; touch-action: none; z-index: 1; }
+.resize-handle.n, .resize-handle.s { left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+.resize-handle.n { top: -4px; } .resize-handle.s { bottom: -4px; }
+.resize-handle.e, .resize-handle.w { top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+.resize-handle.e { right: -4px; } .resize-handle.w { left: -4px; }
+.resize-handle.ne, .resize-handle.nw, .resize-handle.se, .resize-handle.sw { width: 16px; height: 16px; }
+.resize-handle.ne { top: -4px; right: -4px; cursor: nesw-resize; }
+.resize-handle.nw { top: -4px; left: -4px; cursor: nwse-resize; }
+.resize-handle.se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+.resize-handle.sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+#tasks { overflow-x: auto; min-width: 0; }
+#tasks button { min-width: 70px; flex-shrink: 0; }
+.term .out { flex: 1; min-height: 0; height: auto; }
+.term input { min-width: 0; }

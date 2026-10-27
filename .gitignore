@@ -3,3 +3,5 @@ target/
 *.olean
 *.ilean
 __pycache__/
+
+.ui-check/

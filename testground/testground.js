@@ -2,6 +2,7 @@
 // Every word a window shows is printed by the member's own follow (Lean) or is a name from the
 // kernel's table; this file lays it out and never decides what it means.
 import factory from './kernel.mjs';
+import { compositor } from './compositor.js';
 import { loadKernel, client, genesis, hex, quoteArg } from './nd.js';
 import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
 import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf } from './demos.js';
@@ -23,41 +24,7 @@ const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'Wh
 
 // ---------------------------------------------------------------- the window manager
 const desk = document.getElementById('desktop'), tasks = document.getElementById('tasks');
-let zTop = 10, cascade = 0;
-const wins = new Map();
-function focus(w) {
-  for (const o of wins.values()) { o.el.classList.remove('focused'); o.task.classList.remove('on'); }
-  w.el.classList.add('focused'); w.task.classList.add('on'); w.el.style.zIndex = ++zTop; w.el.hidden = false;
-}
-function openWindow({ id, title, x, y, w = 420, body, onClose, dialog = false }) {
-  if (wins.has(id)) { const o = wins.get(id); o.setBody(body); o.setTitle(title); focus(o); return o; }
-  const bodyBox = $('div', { class: 'body' }, body);
-  const titleEl = $('span', { class: 'title' }, title);
-  const close = $('button', { title: 'close', 'aria-label': 'close' }, '×');
-  const min = dialog ? '' : $('button', { title: 'minimise', 'aria-label': 'minimise' }, '_');
-  const bar = $('div', { class: 'titlebar' }, titleEl, min, close);
-  const el = $('div', { class: 'window' + (dialog ? ' dialog' : ''), role: dialog ? 'alertdialog' : 'dialog', 'aria-label': title }, bar, bodyBox);
-  const pos = cascade++ % 8;
-  el.style.left = `${x ?? 110 + pos * 26}px`; el.style.top = `${y ?? 16 + pos * 22}px`; el.style.width = `${w}px`;
-  desk.append(el);
-  const task = $('button', { title }, title);
-  if (!dialog) tasks.append(task);
-  const o = { id, el, task, setBody: (b) => bodyBox.replaceChildren(b), setTitle: (t) => { titleEl.textContent = t; task.textContent = t; } };
-  wins.set(id, o);
-  el.addEventListener('pointerdown', () => focus(o));
-  task.addEventListener('click', () => (el.hidden || !el.classList.contains('focused') ? focus(o) : (el.hidden = true)));
-  close.addEventListener('click', (e) => { e.stopPropagation(); el.remove(); task.remove(); wins.delete(id); onClose?.(); });
-  if (min) min.addEventListener('click', (e) => { e.stopPropagation(); el.hidden = true; task.classList.remove('on'); });
-  bar.addEventListener('pointerdown', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
-    const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
-    const move = (m) => { el.style.left = `${Math.max(0, m.clientX - sx)}px`; el.style.top = `${Math.max(0, m.clientY - sy)}px`; };
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
-    addEventListener('pointermove', move); addEventListener('pointerup', up);
-  });
-  focus(o);
-  return o;
-}
+const { wins, focus, openWindow, clear: clearWindows } = compositor({ desk, tasks, $ });
 
 // ---------------------------------------------------------------- the World in this tab
 const boot = document.getElementById('boot-line');
@@ -97,7 +64,7 @@ const kept = {
   forget(url) { try { localStorage.removeItem(this.key(url)); } catch { /* nothing kept */ } },
 };
 
-function clearDesk() { for (const o of [...wins.values()]) { o.el.remove(); o.task.remove(); wins.delete(o.id); } }
+function clearDesk() { clearWindows(); }
 function newWorld() {
   frames = []; cmdNo = 0; lie = 'honest'; setTray();
   clearDesk(); terms.clear(); tourAt = 0; T.reset();
@@ -686,4 +653,4 @@ const q = new URLSearchParams(location.search);
 newWorld();
 if (q.has('live') && LIVE) liveDoor();
 else if (hostedDefault() && q.has('join')) joinHosted(hostedDefault());
-window.testground = { K, runIn, playDemo, world: () => world, frames: () => frames, hex, kernel: { sha256: kernelSha, built }, deployment, roster: () => (world.hosted ? rosterOf(K, world.members[0]) : null), T };
+window.testground = { desktop: { wins, openWindow, focus }, K, runIn, playDemo, world: () => world, frames: () => frames, hex, kernel: { sha256: kernelSha, built }, deployment, roster: () => (world.hosted ? rosterOf(K, world.members[0]) : null), T };
