@@ -309,6 +309,18 @@ export function teach(ctx) {
     (case edit
       (insert x (if (deq x.key.who req.agent) ok (refuse "not yours")))
       (upsert x (refuse "final")))))`, seed: '(record (open true))' },
+    surfaceHole: { title: 'counter whose step is a hole (surface text)', text: `(package
+  (doc "A counter. Its step is a hole: a slot filled when bump runs, from the candidate the choice row selects.")
+  (state (rec (count nat)))
+  (rel choice (key (k nat)) (val nat) (limit 1))
+  (hole step (⊢ nat)
+    (select choice (record (k 0)))
+    (candidate 1)
+    (candidate 10))
+  (method bump
+    (done (with state (count (+ state.count (hole step))))))
+  (method choose (arg (rec (i nat))) (edits 1)
+    (done state (upsert choice (record (k 0)) arg.i))))`, seed: '(record (count 0))', view: '(select step 1)' },
     hole: { title: 'object with a hole (the document section, core text)', path: 'world/doc/Section', needs: ['world/doc/Section.lib0', 'world/doc/Section.lib1', 'world/doc/Section.lib2'],
       seed: '(record (accepted false) (acceptor #ALICE) (cap 2000) (chooser #ALICE) (closes 100000) (selected none))' },
   };
@@ -323,7 +335,8 @@ export function teach(ctx) {
     listen(area, 'input', syncGutter); listen(area, 'scroll', syncGutter);
     const out = $('div', {});
     const who = $('select', { 'aria-label': 'install as' }, members().map((m) => $('option', { value: m.name }, m.name)));
-    const pick = $('select', { 'aria-label': 'template', onchange: async () => { const t = templates[pick.value]; if (t) { area.value = await templateText(t); syncGutter(); state.seed = t.seed; state.needs = t.needs ?? []; } } },
+    const view = $('input', { class: 'sunken', size: 50, 'aria-label': 'stated view', placeholder: '(select HOLE I) (row REL KEY VER) (live #ID) (dead #ID)' });
+    const pick = $('select', { 'aria-label': 'template', onchange: async () => { const t = templates[pick.value]; if (t) { area.value = await templateText(t); syncGutter(); state.seed = t.seed; state.needs = t.needs ?? []; view.value = t.view ?? ''; } } },
       $('option', { value: '' }, 'start from…'), Object.entries(templates).map(([k, t]) => $('option', { value: k }, t.title)));
     const state = { seed: '(record)', needs: [] };
     const markLine = (n) => {
@@ -339,6 +352,13 @@ export function teach(ctx) {
         line ? ['line', $('a', { class: 'cmd', onclick: () => markLine(+line) }, `${line} (select it)`)] : null]));
       if (line) markLine(+line);
       return r;
+    };
+    // a package's holes resolved on facts the visitor states (ob `(check P (view F…))`, LANG-105): each
+    // hole's selected candidate, or the refusal a run that demands it gets
+    const resolve = () => {
+      const r = ob(`(check ${area.value} (view ${view.value}))`);
+      out.replaceChildren(kv([['holes', $('b', { class: r.ok ? 'ok' : 'bad' }, r.ok ? 'resolved' : 'refused')], ['answer', $('code', {}, r.text)]]),
+        $('p', { class: 'dim' }, 'A view states the facts a call would pin. Each hole takes its selected candidate if every fact the candidate cites holds; otherwise a run that uses the hole is refused with the text above.'));
     };
     const core = () => {
       const r = isCore(area.value) ? { ok: true, text: area.value } : ob(`(core ${area.value})`);
@@ -369,6 +389,7 @@ export function teach(ctx) {
       $('div', { class: 'edit' }, gutter, area),
       $('div', {}, $('button', { class: 'btn', onclick: check }, 'Check'), ' ', $('button', { class: 'btn', onclick: core }, 'Show core'), ' ',
         'install as ', who, ' ', $('button', { class: 'btn', onclick: install }, 'Install')),
+      $('div', {}, 'view ', view, ' ', $('button', { class: 'btn', onclick: resolve }, 'Resolve holes')),
       out,
       glossed([
         ['package', '(package decl…): a state type, methods, laws, relations and guards.'],
@@ -376,6 +397,8 @@ export function teach(ctx) {
         ['method', '(method name (arg type) body): the body ends in (done state item…), the new state and its row edits; (with state (field value)…) changes some fields.'],
         ['law', '(law name (on occasions body)… (else body)): judges old → new; old, new and req are in scope; ok or (refuse "why").'],
         ['check', 'Reads, lowers and type-checks the source as install will. A refusal names the line.'],
+        ['hole', '(hole NAME (⊢ TYPE) (select REL KEY) (candidate TERM FACT…)…): a value chosen when a run uses it, from candidates whose facts hold. (hole NAME) uses it in a body.'],
+        ['view', 'The facts a call would pin, stated by hand: (select HOLE I) names candidate I; (row …), (live #ID), (dead #ID) state a row or a cell.'],
         ['core', 'What the source lowers to. install takes this text; its hash is the package id.'],
         ['install', 'A call that stores the package. The same bytes twice: refused (idTaken).'],
       ]));

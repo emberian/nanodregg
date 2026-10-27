@@ -735,7 +735,7 @@ const residentLog = { m: null, bell: null, ticks: [] };
 function residentEvent(m, e) {
   if (e.start) { Object.assign(residentLog, { m, bell: e.start.split(' ').at(-1), ticks: [] }); }
   else { if (!residentLog.ticks.length || residentLog.ticks.at(-1).done) residentLog.ticks.push({ events: [] }); const t = residentLog.ticks.at(-1); t.events.push(e); if (e.end) t.done = true; }
-  openResident();
+  openResident(!!e.start || !wins.has('resident'));
 }
 const SUPPORT_WORDS = { pending: 'the ring is in this read of the queue', stands: 'its answer was not withdrawn', left: 'the ring is no longer in the queue', waits: 'the ring is still in the queue' };
 function supportText(f) { const [k, cell] = f.split(' '); return k === 'gone' ? ['cell ', cell ? T.idLink(residentLog.m, cell) : '', ' is gone'] : SUPPORT_WORDS[k] ?? f; }
@@ -752,7 +752,7 @@ function holeTable(m, h) {
       $('td', {}, c.supports.length ? c.supports.map((x) => $('div', { class: x.holds ? 'ok' : 'bad' }, supportText(x.fact), x.holds ? ': holds' : ': dead')) : $('span', { class: 'dim' }, 'none')),
       $('td', {}, c.usable ? 'yes' : 'no'), $('td', {}, c.chosen ? $('b', {}, 'chosen') : ''))))];
 }
-function openResident() {
+function openResident(activate = true) {
   const m = residentLog.m;
   if (!m) return;
   const tick = (t, i) => $('div', { class: 'tick' }, $('h4', {}, `Tick ${i + 1}`), t.events.map((e) => {
@@ -767,7 +767,7 @@ function openResident() {
       e.memory.length ? kv(e.memory.map((x) => (x.kept ? ['kept answer', `"${x.kept.text}"`] : ['withdrawn', `"${x.withdrawn.text}" `, 'because cell ', T.idLink(m, x.cell), ' is gone']))) : ''];
     return '';
   }));
-  openWindow({ id: 'resident', title: 'Resident', x: 560, y: 60, w: 600, body: $('div', { class: 'inspector' },
+  openWindow({ id: 'resident', title: 'Resident', x: 560, y: 60, w: 600, h: 640, activate, body: $('div', { class: 'inspector' },
     kv([['program', 'Hosting.Resident: the program a hosted World runs for a Bell, run here by the kernel in this tab'], ['member', `${m.name}`], ['Bell', T.idLink(m, residentLog.bell)], ['model', 'scripted: the demo gives the answer to each question']]),
     residentLog.ticks.map(tick),
     glossed([
