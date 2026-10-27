@@ -4,6 +4,7 @@
 // file lays answers out and never decides what they mean. Words follow testground/STYLE.md.
 
 import { quoteArg } from './nd.js';
+import { tabs, submitForm } from './toolkit.js';
 
 const dec = new TextDecoder();
 const OK = 0;
@@ -195,17 +196,10 @@ export function teach(ctx) {
   }
 
   function sourcePanel(m, pkg, src) {
-    const box = $('div', {});
-    const show = (which) => {
-      const t = which === 'surface' ? src?.surface : src?.core ?? src?.text;
-      box.replaceChildren(pre(t || '(no text)'));
-    };
-    const tabs = $('div', { class: 'tabs' },
-      src?.surface ? $('button', { onclick: () => show('surface') }, 'source (as installed)') : '',
-      $('button', { onclick: () => show('core') }, 'core (as the kernel reads it)'),
-      $('button', { onclick: () => openEditor(src?.surface ?? src?.core ?? '') }, 'edit a copy…'));
-    show(src?.surface ? 'surface' : 'core');
-    return $('div', {}, tabs, box);
+    const items = [];
+    if (src?.surface) items.push({ label: 'Source', body: () => pre(src.surface) });
+    items.push({ label: 'Core', body: () => pre(src?.core ?? src?.text ?? '(no text)') });
+    return $('div', {}, tabs(items), $('button', { class: 'btn', onclick: () => openEditor(src?.surface ?? src?.core ?? '') }, 'Edit a copy'));
   }
 
   // one law: its clause from the source, and a form that runs it on an old and a new state
@@ -339,12 +333,8 @@ export function teach(ctx) {
 
   // ---------------------------------------------------------------- the term REPL and the grammar
   function openGrammar(which = 'core') {
-    const box = $('div', {});
-    const show = (w) => { const r = answer(K().grammar(w)); box.replaceChildren(pre(r.text), $('p', { class: 'dim' }, w === 'core'
-      ? 'Core: what a term is. A package\'s methods and laws are core terms after lowering. Names: x a variable; (. e l) a field; (lam x T e) a function; (fix e) recursion; (refuse T "why") a refusal.'
-      : 'Surface: what a package source is. It lowers to the core (Show core in the package editor). ℓ a label, T a type, e a term, n a number.')); };
-    show(which);
-    openWindow({ id: 'grammar', title: 'Grammar', x: 220, y: 60, w: 760, body: $('div', {}, $('div', { class: 'tabs' }, $('button', { onclick: () => show('core') }, 'core (terms)'), $('button', { onclick: () => show('surface') }, 'surface (packages)')), box) });
+    const items = ['core', 'surface'].map(w => ({ label: w === 'core' ? 'Core (terms)' : 'Surface (packages)', body: () => $('div', {}, pre(answer(K().grammar(w)).text), $('p', { class: 'dim' }, w === 'core' ? 'Core is the language of terms. A package lowers its source to these terms.' : 'Surface is the package source language. Show core in the editor lowers it to terms.')) }));
+    openWindow({ id: 'grammar', title: 'Grammar', x: 220, y: 60, w: 760, body: tabs(items, which === 'surface' ? 1 : 0) });
   }
 
   const replExamples = [
@@ -371,7 +361,7 @@ export function teach(ctx) {
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run('eval'); } });
     const body = $('div', {},
       $('div', {}, input),
-      $('div', {}, $('button', { class: 'btn', onclick: () => run('eval') }, 'Evaluate'), ' ', $('button', { class: 'btn', onclick: () => run('type') }, 'Type'), ' ticks ', ticks, ' ',
+      submitForm(() => run('eval'), $('button', { class: 'btn', type: 'submit' }, 'Evaluate'), ' ', $('button', { class: 'btn', onclick: () => run('type') }, 'Type'), ' ticks ', ticks, ' ',
         $('button', { class: 'btn', onclick: () => openGrammar('core') }, 'grammar')),
       $('details', {}, $('summary', {}, 'Examples'), $('ul', {}, replExamples.map(([t, why]) => $('li', {}, $('a', { class: 'cmd', onclick: () => { input.value = t; } }, t), $('span', { class: 'dim' }, ` ${why}`))))),
       hist,

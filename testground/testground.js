@@ -3,19 +3,12 @@
 // kernel's table; this file lays it out and never decides what it means.
 import factory from './kernel.mjs';
 import { compositor } from './compositor.js';
+import { element as $, confirmAction, submitForm } from './toolkit.js';
 import { loadKernel, client, genesis, hex, quoteArg } from './nd.js';
 import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
 import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf } from './demos.js';
 import { teach } from './teach.js';
 
-const $ = (tag, attrs = {}, ...kids) => {
-  const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
-  }
-  for (const k of kids.flat(Infinity)) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
-  return e;
-};
 const short = (h) => (h && h.length > 12 ? `${h.slice(0, 8)}…` : h);
 // a two-column table of labelled values (STYLE.md: a labelled value instead of a sentence)
 const kv = (pairs) => $('table', { class: 'props sunken' }, pairs.filter(Boolean).map(([k, ...v]) => $('tr', {}, $('td', {}, k), $('td', {}, ...v))));
@@ -106,7 +99,7 @@ function openWorld() {
       ['authority', 'Certifiers of the World\'s head: count and threshold. 0 0 means none.'],
       ...kernelTerms,
     ]),
-    $('button', { class: 'btn', onclick: () => newWorld() }, 'New World (genesis)'), ' ',
+    confirmAction('New World (genesis)', 'Discard this local World and its commands?', () => newWorld()), ' ',
     LIVE ? [$('button', { class: 'btn', onclick: () => liveDoor() }, doorLabel()), ' '] : '',
     $('button', { class: 'btn', onclick: () => joinHosted() }, 'Join a hosted World…'),
     writerMenu());
@@ -145,11 +138,23 @@ function liveDoor() {
   history.replaceState(null, '', `${location.pathname}?live`);
   joinHosted(LIVE);
 }
+function openJoin(value = hostedDefault() || LIVE || 'ws://127.0.0.1:8787/ws', error = '') {
+  const url = $('input', { type: 'url', required: true, value, 'aria-label': 'Relay address' });
+  const status = $('p', { role: 'status', class: 'bad' }, error);
+  const go = async () => {
+    if (!/^wss?:\/\/[^/]+\/ws$/.test(url.value.trim())) { status.textContent = 'Enter ws://HOST/ws or wss://HOST/ws.'; return; }
+    await joinHosted(url.value.trim());
+  };
+  const body = submitForm(go, $('label', {}, 'Relay address ', url), $('button', { class: 'btn', type: 'submit' }, 'Join'), status);
+  const w = openWindow({ id: 'join', title: 'Hosted World', w: 480, h: 200, body, dialog: true });
+  url.focus();
+  return w;
+}
 async function joinHosted(url = null) {
-  url = url ?? prompt('Relay address (wss://…/ws):', hostedDefault() || LIVE || 'ws://127.0.0.1:8787/ws');
+  if (url == null) return openJoin();
   if (!url) return;
   let wj;
-  try { wj = await worldOf(url); } catch (e) { alert(`cannot read ${httpOf(url)}/world.json: ${e.message}`); return; }
+  try { wj = await worldOf(url); } catch (e) { openJoin(url, `Cannot read the World: ${e.message}`); return; }
   // a saved membership of a World this relay no longer serves (a new genesis: a new origin) is not resumed
   let rec = kept.get(url), stale = null;
   if (rec && rec.origin !== wj.origin) { stale = rec; rec = null; kept.forget(url); }
@@ -179,7 +184,7 @@ async function joinHosted(url = null) {
       print(m, $('div', { class: 'dim' }, `Joined by invitation. World origin ${short(m.origin)}. The invitation was checked against the sponsor key in world.json. Asking the guest-book (the member that enrols new members) to enrol you.`));
     } });
   } catch (e) {
-    if (world.members[0]) print(world.members[0], $('div', { class: 'bad' }, e.message), explain(e.message) ? $('div', { class: 'dim' }, explain(e.message)) : ''); else alert(e.message);
+    if (world.members[0]) print(world.members[0], $('div', { class: 'bad' }, e.message), explain(e.message) ? $('div', { class: 'dim' }, explain(e.message)) : ''); else openJoin(url, e.message);
     return;
   }
   const stored = kept.put(url, me.record);
@@ -210,7 +215,6 @@ function refreshIcons() {
 }
 function refreshDoor() { const l = document.getElementById('door-label'); if (l) l.textContent = doorLabel(); }
 function forgetMe() {
-  if (!confirm('Delete the keys and membership saved in this browser? You cannot become this member again. A new join makes a new member.')) return;
   kept.forget(world.url); refreshDoor();
   history.replaceState(null, '', location.pathname);
   newWorld();
@@ -229,7 +233,7 @@ function openHosted() {
       ['members', 'The member cells in your follow\'s copy of the World. The writer does not supply this list.'], ...kernelTerms]),
     relayMenu(me), forkCheck(me),
     $('button', { class: 'btn', onclick: () => { history.replaceState(null, '', location.pathname); newWorld(); } }, 'Local World'), ' ',
-    me.id && kept.get(world.url) ? $('button', { class: 'btn', title: 'delete the keys and membership saved in this browser', onclick: () => forgetMe() }, 'Forget me') : '');
+    me.id && kept.get(world.url) ? confirmAction('Forget me', 'Delete the saved membership? A new join makes a new member.', () => forgetMe()) : '');
   openWindow({ id: 'world', title: world.url === LIVE ? 'Live World' : 'Hosted World', x: 110, y: 16, w: 570, body });
   renderRoster();
 }
@@ -281,7 +285,7 @@ function forkCheck(me) {
     await runIn(me, ['sync', '--check', a.attest], 'attestation from another writer');
   };
   return $('fieldset', { class: 'writer' }, $('legend', {}, 'Compare histories (fork check)'),
-    $('div', {}, url, ' ', $('button', { class: 'btn', onclick: go }, 'Compare signed history')),
+    submitForm(go, url, ' ', $('button', { class: 'btn', type: 'submit' }, 'Compare signed history')),
     $('div', { class: 'dim' }, 'Two writers can serve the same genesis. A follow checks only its own writer. A signed head (attestation) from the other writer shows a fork: refused forkedWorld.'));
 }
 // A hosted tab's relay: the rows' relay lies, told by this tab's own relay around its socket
@@ -371,15 +375,17 @@ function openTerm(m, x, y) {
   const out = $('div', { class: 'out sunken', 'aria-live': 'polite' });
   const input = $('input', { class: 'sunken', 'aria-label': `${m.name}'s nd command`, placeholder: 'create   ·   write OBJ 0 hello   ·   read OBJ ?', autocomplete: 'off', spellcheck: 'false' });
   const hist = []; let hi = 0;
-  input.addEventListener('keydown', async (e) => {
+  input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowUp') { hi = Math.max(0, hi - 1); input.value = hist[hi] ?? ''; e.preventDefault(); }
     if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] ?? ''; e.preventDefault(); }
-    if (e.key !== 'Enter' || !input.value.trim()) return;
+  });
+  const submit = async () => {
+    if (!input.value.trim()) return;
     const line = input.value.trim(); hist.push(line); hi = hist.length; input.value = '';
     const argv = splitArgv(line.replace(/^nd\s+/, ''));
     await runIn(m, argv, '', { typed: line.replace(/^nd\s+/, '') });
-  });
-  const body = $('div', { class: 'term' }, out, $('div', { class: 'line' }, $('span', { class: 'prompt' }, `${m.name}$ nd`), input));
+  };
+  const body = $('div', { class: 'term' }, out, submitForm(submit, $('div', { class: 'line' }, $('span', { class: 'prompt' }, `${m.name}$ nd`), input, $('button', { class: 'btn', type: 'submit' }, 'Run'))));
   terms.set(m.name, { out, m });
   openWindow({ id: `term-${m.name}`, title: `${m.name}${m.world ? ` (World ${m.world})` : ''}`, x, y, w: 520, body });
   const commands = 'Commands: create · write OBJ SLOT "TEXT" · read OBJ [?] · grant OBJ MEMBER RIGHTS · invoke OBJ METHOD "ARGUMENT" · sync · help lists every command. Quote an argument that holds a space.';
@@ -596,7 +602,7 @@ function openDemos() {
   }
   const list = Object.entries(demos).map(([k, d]) => $('li', {}, $('b', {}, d.title), ' ',
     $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run here'), ' ',
-    $('button', { class: 'btn', onclick: () => { newWorld(); playDemo(k); } }, 'Run on a new World'), $('div', { class: 'dim' }, `${d.steps.length} commands`)));
+    confirmAction('Run on a new World', 'Discard this local World and its commands?', () => { newWorld(); return playDemo(k); }), $('div', { class: 'dim' }, `${d.steps.length} commands`)));
   openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' }, $('ol', {}, list), $('p', { class: 'dim' }, 'Run here types the commands into the terminals of the current World; a package it already installed is reused. Run on a new World starts from genesis.')) });
 }
 // a second World in this tab (the time-lock's clock): its own kernel instance, its own writer, its
@@ -635,7 +641,7 @@ async function playDemo(name) {
 // ---------------------------------------------------------------- desktop icons
 const icons = document.getElementById('icons');
 // one click opens (a double click is the same click twice: the window is focused, not rebuilt)
-const icon = (glyph, label, act, id = null) => icons.append($('button', { class: 'icon', ...(id ? { id } : {}), onclick: act, onkeydown: (e) => e.key === 'Enter' && act() }, $('span', { class: 'glyph' }, glyph), $('span', { class: 'label' }, label)));
+const icon = (glyph, label, act, id = null) => icons.append($('button', { class: 'icon', ...(id ? { id } : {}), onclick: act }, $('span', { class: 'glyph' }, glyph), $('span', { class: 'label' }, label)));
 icon('◆', 'World', () => openWorld());
 icon('a', 'alice', () => openTerm(world.members[0]), 'icon-m0');
 icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]), 'icon-m1');

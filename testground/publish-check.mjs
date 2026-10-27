@@ -6,10 +6,10 @@
 // visitor and the guest-book, the Frames window shows the visitor's frames); a reload returns the SAME member
 // from the browser's storage, re-derived; "Forget me" leaves nothing kept. SHOT is a path prefix for
 // the screenshots. Exit 0 only if every check holds; the JSON on stdout says which did not.
-import { chromium } from '/Users/ember/tools/playwright/node_modules/playwright/index.mjs';
+const { chromium } = await import(process.env.PLAYWRIGHT_PATH ?? '/Users/ember/tools/playwright/node_modules/playwright/index.mjs');
 const [url, shot] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const live = process.argv.includes('--live');
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 const page = await ctx.newPage();
 const logs = [];
@@ -19,7 +19,7 @@ page.on('dialog', (d) => d.accept());
 const res = { url, checks: {} };
 const check = (k, v, detail) => { res.checks[k] = v ? 'ok' : `FAILED${detail === undefined ? '' : `: ${detail}`}`; return v; };
 const exits = () => page.evaluate(() => [...document.querySelectorAll('div.dim')].map((d) => d.innerText).filter((t) => /^exit \w+ ·/.test(t)));
-const dbl = (label) => page.evaluate((l) => [...document.querySelectorAll('#icons .icon')].find((b) => b.innerText.includes(l)).dispatchEvent(new MouseEvent('dblclick', { bubbles: true })), label);
+const dbl = (label) => page.evaluate((l) => [...document.querySelectorAll('#icons .icon')].find((b) => b.innerText.includes(l)).click(), label);
 const termText = () => page.evaluate(() => document.querySelector('.term .out')?.innerText ?? '');
 try {
   const t0 = Date.now();
@@ -68,7 +68,8 @@ try {
     check('the returned member is in its own fold', back.roster?.members.includes(st.me));
     await page.waitForTimeout(300);
     await page.screenshot({ path: `${shot}-return.png` });
-    await page.getByRole('button', { name: 'Forget me' }).click();
+    await page.getByRole('button', { name: 'Forget me', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm Forget me', exact: true }).click();
     await page.waitForSelector('.tour li button.btn', { timeout: 10000 });
     const after = await page.evaluate(() => Object.keys(localStorage).filter((x) => x.startsWith('nd-testground/member ')).length);
     check('Forget me leaves nothing kept', after === 0, after);
