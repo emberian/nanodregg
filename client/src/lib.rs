@@ -9,7 +9,7 @@
 pub mod attempt;
 pub mod custody;
 pub mod frame;
-mod fsx;
+pub mod fsx;
 #[allow(missing_docs)] // emitted by Emit/Rust.lean; never edited by hand
 pub mod generated;
 pub mod join;

@@ -2646,3 +2646,90 @@ The whole file's peak is the largest declaration plus a little (12779 against 11
 **Critique.** The aim names a METHOD INDEX (`propose` is 3 in the generated section); a ringer that names the wrong index forwards to another method of the target, which refuses by its argument type, which refuses the answer: the ring stalls until its patience (2048 heights) unless the ringer can withdraw it, which it cannot yet (A1b). The candidate id is the ringer's choice (LI uses the grant's bytes), so a second summons for the same hole is a second candidate: the agent cannot revise (DESIGN-AGENT §7's second way); revision is the chooser's `select`. `by` is the resident's member (the signer), not the Bell: a reader of the section sees WHO answered, and learns which Bell only from the support's grant cell (its grantee is the Bell object). The refusal after a revoke is `missingCell`, the kernel's name for a tombstoned via, not the `noGrant` the memo predicted: right by name, not by the memo's name.
 
 **Meta-critique.** The memo's `targets` relation was designed from the kernel's authority rule and the activity's guard without pricing the package bytes or the read's pin discipline; both refutations were one build away and the design was written first. The bias to watch now is the mirror one: a capture that fits the guard is a good shape for an aim, and it will tempt every later obligation into the capture too (A3's typed response belongs there; a second target does not).
+
+## HOSTING-56 · THE SEED: the writer's certify key lives in keybroker, which signs with it only heads the Lean decider's own fold of the Store holds, never one below or beside the last it signed, across restarts (2026-10-26, TRUST-SEED-2; DESIGN-TRUST §4.4b, cv 01a17a5c-fa21; Ember's YES, cv 01a1769d-2f64; CROSS-LAYER: HOST owns the producer (HOST-80), CODEC the emitted file, CLIENT `fsx` and devtools, OPS the exit table)
+
+**The custody, in one paragraph a member can read.** The writer's signing seed is not in the writer.
+It sits in keybroker's key file, beside the provider keys, read once under the same custody checks
+(0600, the operator's), and keybroker signs with it only what Lean's decider approves: a head of
+THIS World that the decider's own fold of the Store reached at a record end, not below the last head
+the key signed and, at that step count, that head itself. The writer can ask, never read: a thief of
+the writer process (sandboxed by nd-supervise, the key file's directory outside its view) can obtain
+certificates only of heads on the one history the decider folded, and never two at one step count
+(`Hosting.Proofs.Certify.granted_one_head`: over ANY run of grants, any number of decider lives, each
+with whatever fold its Store's files gave it, two heads granted at one step are one head), so it
+cannot get the pair `Protocol.Proofs.Head.certified_equivocation` needs. The last certified head is
+made durable beside KEYS (`KEYS.certified`) by keybroker BEFORE it signs, and a restarted decider
+reads it back and ANCHORS it to the Store it opened: the opened World is that head, or the step pairs
+the Store keeps from it advance its chain to the opened World's (`Certify.anchoredBy`, the kernel's
+`chainOf`; where the pairs come from does not matter, a chain match binds the history,
+`fold_head_binds`); otherwise it certifies nothing (`unanchored`). A thief of the key file can sign
+any head, which is why the genesis lists the key (a stranger trusts the World's authority, never the
+host) and why the NEXT key is committed in advance (`certify.next`; its use is the pre-rotation's,
+the next KERNEL number). The seed signs heads ONLY: keybroker prepends `CERTIFY_DOMAIN` (emitted from
+`Protocol.Head.domCertify`) itself and has no path that signs raw bytes with the slot. Refusal
+receipts stay unsigned (KERNEL-44 stands).
+
+**What landed.**
+- Wire (`Hosting/BrokerWire.lean`): request `certify atMs` (tag 4; the writer's certified bytes follow
+  as one frame, unread by keybroker), verdict `sign certified` (tag 6), the writer's own answer
+  family `CertifyAnswer` = `signed key signature` | `refused` (so no resident can be handed a
+  signature), refusals `badCertify notOnFold notYet regressed unanchored certifyState` (codes 24–29).
+- The decision (`Hosting/Certify.lean`): `Certifier` (origin, the heads at the last `headsMax` = 4096
+  record ends, the last certified head, `anchored`), `decide` (byte-for-byte certified bytes of a head
+  of this World; anchored; `regressed` below the last or beside it; `notYet` past the tip; `notOnFold`
+  unless the window holds that exact head), `opened`, `absorb`, `pairsBetween`, `anchoredBy`. Proofs
+  (`Hosting/Proofs/Certify.lean`): `decide_ok`, `certify_on_fold`, `Granted`, `granted_one_head`,
+  `anchoredBy_chain`.
+- The decider (`Hosting/BrokerCli.lean`): `hosting-broker T0 SLOTS STORE OPERATOR [CERTIFIED]`; its
+  tail step also yields each record's head (`headStep`), catch-ups feed the window (refusal-only
+  records included), the open builds the certifier from CERTIFIED (empty = nothing certified; a file
+  that is not one head's certified bytes leaves it unanchored, one stderr line) with the kept pairs
+  (`Host.Check.openClean`) when the opened World is past the last head; `certify` is answered `sign`
+  or `refuse`. `hosting-residents` shares `catchUp` and refuses `certify` as `badRequest`.
+- keybroker (`launcher/src/bin/keybroker.rs`): KEYS lines `certify HEX` / `certify.next HEX` (both or
+  neither: `keyFileFormat`); `keybroker --certify-pub KEYS` prints `certify PUB` and `next PUB` for
+  `host genesis --certifier PUB --threshold 1`; with the slot, `KEYS.certified` is checked private or
+  made empty (`certifiedState`, exit 163), handed to the decider (read-only in its sandbox) and
+  `SOCKDIR/.writer/certify.sock` is bound (a 0700 directory, SOCKDIR's setgid bit cleared, holding
+  nothing else; the socket 0600; peer = keybroker's own uid, the writer running as the key holder);
+  one connection at a time (`busy`); a `sign` is persisted (`fsx::replace`, `certifyState` if not:
+  nothing signed) and only then signed (ring's Ed25519, already in the TCB under rustls).
+- Emitted (`Emit/Broker.lean` → `launcher/src/broker_generated.rs`): `wire::CertifyAnswer`,
+  `CERTIFY_DOMAIN`, `WRITER_DIR`, `CERTIFY_SOCK`, the new codes. `Emit/Rust.lean`'s struct-variant
+  layout now measures the fields between the braces, as rustfmt does (measured on `Signed`: 32 inside,
+  36 with them, one line under rustfmt); `generated.rs` and `launcher/src/generated.rs` re-emit
+  byte-identical.
+
+**Flag day (say what broke).** The decider's request and verdict families gained a tag each and
+keybroker's exit table a code (163): `broker_generated.rs` and `deploy/units` (EXITS.md, the
+keybroker unit's RestartPreventExitStatus) re-emitted. A keybroker of before cannot drive this
+decider's `sign` (it would close the connection: out of turn); nothing deployed holds either. KEYS
+files without certify lines read as before. No Store re-geneses for this landing (the Store format
+is unchanged; a World that wants its writer certified is made with `--certifier` at genesis).
+
+**Measured.** `launcher/tests/certify.rs` (hbox): a real World whose authority is the certify key;
+`host seal --certify` certifies the base (`KEYS.certified` = the certified bytes); a thin joiner's
+`nd adopt` takes the certified base and refuses one flipped signature byte `badCertifySignature`;
+over the writer's socket `badCertify`, `notYet`, `notOnFold`, `regressed` (below and beside); after a
+keybroker restart past the head, `regressed` (so: anchored from the kept pairs), `notOnFold` for the
+old head, and the next seal certified. CONTROL: the true head granted, its signature byte-identical
+to base.cert's.
+
+**Critique.** (1) `headsMax` record ends, not steps: a writer that seals while the decider is more
+than 4096 records behind gets `notOnFold`, a liveness name, never a wrong grant. (2) The anchor at a
+restart reads the WHOLE kept segment once (`openClean`), O(kept bytes) at the decider's start, only
+when the opened World is past the last head. (3) A last head older than the oldest kept file can
+never anchor: the operator's act is to empty `KEYS.certified`, which re-roots trust in the Store as
+it is, and the action text says not to do it while the World lives. (4) The writer's uid is the key
+holder's: the custody boundary is nd-supervise's view (KEYS' directory hidden), not a uid; the units
+do not yet render `--certify`, `--connect` and that hide (cv 01a17b00-67a4, OPS). (5) The peer check is the
+uid alone: any process of the key holder's uid may ask; what it can obtain is still only heads of
+the decider's fold.
+
+**Meta-critique.** The design said "a Host.Tail replay: enough to stop two certificates at one
+step". Building it showed the property is not the replay's at all: it is the persisted last head
+plus `regressed`, which holds whatever the fold is; the fold buys `certify_on_fold` (only heads that
+history reached), and the anchor buys extension across restarts. Three mechanisms, three theorems
+or checks, each named; the risk to watch is a later reader collapsing them back into "the decider
+follows the Store, so it is safe".

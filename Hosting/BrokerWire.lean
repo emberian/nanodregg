@@ -10,14 +10,18 @@ pipe and socket a frame is `u32le len ‖ payload`, `1 ≤ len ≤ Bounds.frameM
     request   decide   1  resident, atMs : u64          (followed by the resident's ask frame, unread)
               residents 2 atMs : u64                    (which sockets to serve: HOSTING-26)
               reply    3  status : u32, body            (the upstream's answer to a grant: HOSTING-29)
+              certify  4  atMs : u64                    (followed by the writer's certified bytes, unread: HOSTING-56)
     verdict   grant    1  keySlot : u32, charged : u64, host, target, headers, keyHeader, body
               refuse   2  brokerRefusal : Refusal
               residents 3 names : list                  (the answer to `residents`)
               reply    4  text                          (the reply text Lean read from a 200 body)
               status   5  status : u32                  (the upstream answered another status)
+              sign     6  certified                     (sign `domCertify ‖ certified` with the certify slot)
     answer    reply    1  text                          (the model's reply text, read by Lean)
               refused  2  brokerRefusal : Refusal
               status   3  status : u32                  (the upstream's status other than 200; its body withheld)
+    certifyAnswer signed 1 key, signature           (the writer's: the certify key and its signature)
+              refused  2  brokerRefusal : Refusal
 
 keybroker never decodes an ask: it puts a `decide` frame naming the socket's resident in front of
 the ask's bytes and hands both to Lean. So identity is the socket, and the only decoder of what a
@@ -30,6 +34,14 @@ request: Lean reads the reply text out of the provider's JSON (`Hosting.Reply`),
 receives text, never the provider's body (HOSTING-29). Which sockets keybroker serves is Lean's too: it asks
 `residents` and binds exactly the names the decider answers, the resident grains the World holds
 (HOSTING-26; no operator list).
+
+THE WRITER is one more principal (HOSTING-56, DESIGN-TRUST §4.4b): on its own socket
+(`SOCKDIR/.writer/certify.sock`) it sends one frame, the certified bytes of a head
+(`Protocol.Head.certifiedLayout`). keybroker puts `certify atMs` in front, unread, and hands both to
+Lean; a `sign` verdict names the bytes Lean approved (`Hosting.Certify.decide`: a head of the
+decider's own fold), keybroker signs `domCertify ‖ those bytes` with its `certify` slot and answers
+`signed` with the slot's public key. The writer's answers are their own family (`certifyAnswerCases`),
+so no resident can be handed a signature and the writer no reply text.
 This module imports no decision, so the emitter's closure is the Codec family and these lists.
 -/
 import Codec.Layout
@@ -121,6 +133,23 @@ inductive Refusal
   is not one the operator's PINS file names for the host Lean named (a host with no pin included);
   no request byte was written (HOSTING-28) -/
   | pinMismatch
+  /-- the writer's bytes are not the certified bytes of a head (`Protocol.Head.certifiedLayout`, read
+  back byte for byte) (HOSTING-56) -/
+  | badCertify
+  /-- the bytes name a head the decider's own fold does not hold: another World, a step count it
+  holds with another head, or one it has dropped (past `Certify.headsMax` records behind its tip) -/
+  | notOnFold
+  /-- the bytes name a step count past the decider's tip: the writer asks again after it catches up -/
+  | notYet
+  /-- the bytes name a head below the last certified one, or another head at its step count: a
+  second certificate at one step, or one behind, is never signed, across decider restarts -/
+  | regressed
+  /-- the decider has not tied the Store it opened to the last certified head (its chain does not
+  extend it, or the Store keeps no record back to it): nothing is certified until it does -/
+  | unanchored
+  /-- keybroker: the certified head could not be made durable beside KEYS before signing; nothing
+  was signed -/
+  | certifyState
   deriving DecidableEq, Repr
 
 namespace Refusal
@@ -129,7 +158,7 @@ def all : List Refusal :=
   [noAllowance, allowanceMalformed, clockRegressed, badAsk, modelNotAllowed, tokensZero, tokensOver,
    messagesMalformed, textNotUtf8, overSpend, requestTooLarge, keyMissing, keyEchoed, upstreamFailed, busy,
    allowanceAmbiguous, noProvider, tlsCertificate, tlsHostname, tlsProtocol, peerRefused, notResident,
-   replyMalformed, pinMismatch]
+   replyMalformed, pinMismatch, badCertify, notOnFold, notYet, regressed, unanchored, certifyState]
 
 def code : Refusal → UInt8
   | noAllowance => 0 | allowanceMalformed => 1 | clockRegressed => 2 | badAsk => 3
@@ -138,6 +167,8 @@ def code : Refusal → UInt8
   | upstreamFailed => 13 | busy => 14 | allowanceAmbiguous => 15 | noProvider => 16
   | tlsCertificate => 17 | tlsHostname => 18 | tlsProtocol => 19 | peerRefused => 20
   | notResident => 21 | replyMalformed => 22 | pinMismatch => 23
+  | badCertify => 24 | notOnFold => 25 | notYet => 26 | regressed => 27 | unanchored => 28
+  | certifyState => 29
 
 def name : Refusal → String
   | noAllowance => "noAllowance" | allowanceMalformed => "allowanceMalformed"
@@ -150,6 +181,8 @@ def name : Refusal → String
   | tlsCertificate => "tlsCertificate" | tlsHostname => "tlsHostname" | tlsProtocol => "tlsProtocol"
   | peerRefused => "peerRefused" | notResident => "notResident"
   | replyMalformed => "replyMalformed" | pinMismatch => "pinMismatch"
+  | badCertify => "badCertify" | notOnFold => "notOnFold" | notYet => "notYet"
+  | regressed => "regressed" | unanchored => "unanchored" | certifyState => "certifyState"
 
 def ofCode? (b : UInt8) : Option Refusal := all.find? (·.code == b)
 
@@ -176,6 +209,16 @@ inductive Verdict
   | reply (text : ByteArray)
   /-- the upstream answered a status other than 200; its body is withheld -/
   | status (code : UInt32)
+  /-- sign `domCertify ‖ certified` with the `certify` slot: the bytes are the certified bytes of a
+  head on the decider's fold, exactly as the writer sent them (HOSTING-56) -/
+  | sign (certified : ByteArray)
+  deriving DecidableEq
+
+/-- What the writer receives for one certify ask: the certify slot's public key and its signature
+over `domCertify ‖ certified`, or a refusal by name. -/
+inductive CertifyAnswer
+  | signed (key signature : ByteArray)
+  | refused (why : Refusal)
   deriving DecidableEq
 
 /-- What a resident receives for one ask. -/
@@ -191,6 +234,8 @@ inductive Request
   | decide (resident : ByteArray) (atMs : Nat)
   | residents (atMs : Nat)
   | reply (status : UInt32) (body : ByteArray)
+  /-- a certify ask on the writer's socket (its certified bytes follow) -/
+  | certify (atMs : Nat)
 
 namespace Wire
 
@@ -202,7 +247,8 @@ def askCases : Tagged :=
 def requestCases : Tagged :=
   [("decide", 1, [.bytes "resident", .u64 "atMs"]),
    ("residents", 2, [.u64 "atMs"]),
-   ("reply", 3, [.u32 "status", .bytes "body"])]
+   ("reply", 3, [.u32 "status", .bytes "body"]),
+   ("certify", 4, [.u64 "atMs"])]
 
 def verdictCases : Tagged :=
   [("grant", 1, [.u32 "keySlot", .u64 "charged", .bytes "host", .bytes "target", .bytes "headers",
@@ -210,22 +256,30 @@ def verdictCases : Tagged :=
    ("refuse", 2, [refusalField]),
    ("residents", 3, [.list "names"]),
    ("reply", 4, [.bytes "text"]),
-   ("status", 5, [.u32 "status"])]
+   ("status", 5, [.u32 "status"]),
+   ("sign", 6, [.bytes "certified"])]
 
 def answerCases : Tagged :=
   [("reply", 1, [.bytes "text"]),
    ("refused", 2, [refusalField]),
    ("status", 3, [.u32 "status"])]
 
+def certifyAnswerCases : Tagged :=
+  [("signed", 1, [.bytes "key", .bytes "signature"]),
+   ("refused", 2, [refusalField])]
+
 abbrev AskTy := Tagged.Ty Bounds.frameMax askCases
 abbrev RequestTy := Tagged.Ty Bounds.frameMax requestCases
 abbrev VerdictTy := Tagged.Ty Bounds.frameMax verdictCases
 abbrev AnswerTy := Tagged.Ty Bounds.frameMax answerCases
+abbrev CertifyAnswerTy := Tagged.Ty Bounds.frameMax certifyAnswerCases
 
 def askCodec : Stream AskTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits askCases
 def requestCodec : Stream RequestTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits requestCases
 def verdictCodec : Stream VerdictTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits verdictCases
 def answerCodec : Stream AnswerTy := Tagged.codec Bounds.frameMax Bounds.frameMax_fits answerCases
+def certifyAnswerCodec : Stream CertifyAnswerTy :=
+  Tagged.codec Bounds.frameMax Bounds.frameMax_fits certifyAnswerCases
 
 def bytes? (b : ByteArray) : Option (Bytes Bounds.frameMax) :=
   if h : b.size ≤ Bounds.frameMax then some ⟨b, h⟩ else none
@@ -249,13 +303,15 @@ def askOf : AskTy → Ask
 /-- The resident's ask from its frame payload; a refusal names the offset and the case. -/
 def decodeAsk (b : ByteArray) : Except Codec.Refusal Ask := (askCodec.decode b).map askOf
 
-/-- A request from keybroker: a `decide` header (the socket's resident and keybroker's clock), or a
-`residents` question (keybroker's clock). -/
+/-- A request from keybroker: a `decide` header (the socket's resident and keybroker's clock), a
+`residents` question (keybroker's clock), an upstream's `reply`, or a `certify` header (keybroker's
+clock; the writer's bytes follow). -/
 def decodeRequest (b : ByteArray) : Except Codec.Refusal Request :=
   (requestCodec.decode b).map fun
     | ⟨⟨0, _⟩, (r, t, ())⟩ => .decide r.val t.toNat
     | ⟨⟨1, _⟩, (t, ())⟩ => .residents t.toNat
     | ⟨⟨2, _⟩, (s, b, ())⟩ => .reply s b.val
+    | ⟨⟨3, _⟩, (t, ())⟩ => .certify t.toNat
 
 def verdictWire? : Verdict → Option VerdictTy
   | .grant k c hs t h kh b => do
@@ -271,6 +327,9 @@ def verdictWire? : Verdict → Option VerdictTy
     let t ← bytes? t
     pure ⟨⟨3, by decide⟩, (t, ())⟩
   | .status s => pure ⟨⟨4, by decide⟩, (s, ())⟩
+  | .sign c => do
+    let c ← bytes? c
+    pure ⟨⟨5, by decide⟩, (c, ())⟩
 
 def verdictOf : VerdictTy → Verdict
   | ⟨⟨0, _⟩, (k, c, hs, t, h, kh, b, ())⟩ => .grant k c.toNat hs.val t.val h.val kh.val b.val
@@ -278,6 +337,7 @@ def verdictOf : VerdictTy → Verdict
   | ⟨⟨2, _⟩, (ns, ())⟩ => .residents (ns.val.toList.map (·.val))
   | ⟨⟨3, _⟩, (t, ())⟩ => .reply t.val
   | ⟨⟨4, _⟩, (s, ())⟩ => .status s
+  | ⟨⟨5, _⟩, (c, ())⟩ => .sign c.val
 
 /-- A verdict's payload, when it fits one frame. -/
 def encodeVerdict (v : Verdict) : Option ByteArray := do
@@ -292,6 +352,14 @@ def answerOf : AnswerTy → Answer
 
 /-- A resident's reading of keybroker's answer frame. -/
 def decodeAnswer (b : ByteArray) : Except Codec.Refusal Answer := (answerCodec.decode b).map answerOf
+
+def certifyAnswerOf : CertifyAnswerTy → CertifyAnswer
+  | ⟨⟨0, _⟩, (k, s, ())⟩ => .signed k.val s.val
+  | ⟨⟨1, _⟩, (why, ())⟩ => .refused ((Refusal.ofCode? why.val).get (refusal_of_contains _ why.property))
+
+/-- The writer's reading of keybroker's answer on the certify socket. -/
+def decodeCertifyAnswer (b : ByteArray) : Except Codec.Refusal CertifyAnswer :=
+  (certifyAnswerCodec.decode b).map certifyAnswerOf
 
 def askWire? (a : Ask) : Option AskTy := do
   let m ← bytes? a.model

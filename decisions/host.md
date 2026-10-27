@@ -3472,3 +3472,30 @@ harness error. All source mutations have been restored.
 **Meta-critique.** The pull was to fold the oracle into `Command.step` through `Thin.Base` so the rows see it; `Base` reads a writer's base, not the follower's own history, and widening it for this would put Store IO behind a pure interface's name. The other pull was to skip step-0 seeds as "not posts"; a seed is the same claim with the same reader, and a forger can seed at any step, so exempting creates would exempt the forgery.
 
 **Flag day.** None: no wire, disk or codec byte moves; a member that absorbed a forged behind post before this commit answered `ok`, and now answers `refused forkedPost`.
+
+## HOST-80 · `host serve --certify SOCK` / `host seal --certify SOCK`: after a seal installs a base, the writer asks keybroker for the base head's certificate and replaces `base.cert` atomically; never on request (2026-10-26, TRUST-SEED-2; DESIGN-TRUST §4.4b item 6; HOSTING-56 holds the key and the decision)
+
+`Host/Certify.lean`: the producer. One ask per base on keybroker's writer socket (`Head.certifiedBytes
+(headOf base)`, one frame; `notYet` asked again 25 times 200 ms apart); the `signed` answer's key is
+looked up in the base World's authority (`notCertifier`), the certificate built
+(`Head.certificateBytes`) and CHECKED as a joiner checks it (`Head.certifiesWorld` on the base World:
+`selfCheck NAME` and nothing written otherwise), then `cert.tmp` → sync → rename over `base.cert` →
+sync the directory. `serve` queues each installed base (the seal hook `Certify.certifying` wraps the
+Store's checkpoint `write`) to ONE worker task over a bounded channel (16), which always takes the
+newest queued base, so a slow or absent keybroker never delays a seal or a commit; `seal` certifies
+inline after its one seal (or the base already at the World's position). Every outcome is one
+`STATUS certify steps=N chain=C certified|refused=NAME` line on stderr. A World whose authority names
+nobody has nothing to certify: no ask. At each SEAL, never on request: one signature per seal, of
+exactly the object a thin member adopts, and no signing oracle on the network path.
+
+**Critique.** A crash between the base's rename and the certificate's leaves `base.cert` naming the
+previous base (`otherHead` to a joiner) until the next seal; `host seal STORE --certify SOCK` on the
+stopped writer re-certifies the base in place. A committee World (threshold > 1) is refused
+`selfCheck belowThreshold`: one writer's signature is never a quorum, and gathering the others is not
+this producer's.
+
+**What the produced certificate proves (CRIT-SPEC, real 2026-10-27).** `base.cert` is the key holder's commitment to
+the base head, checkable by anyone who already trusts the World's authority, and evidence against it if it ever signs
+a second head at one step count. It is not a proof that the base is lawful: lawfulness rests on keybroker's decider
+having re-executed the Store from an honest base, so a member that adopts a certified base without auditing trusts
+the writer for lawfulness (PROTOCOL-78's paragraph).

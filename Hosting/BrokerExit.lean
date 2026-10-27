@@ -78,7 +78,8 @@ inductive KeybrokerExit where
   | keyFileLength
   | keyFileDir
   | keyFileIo
-  /-- the key file is not `SLOT KEY` lines, or holds a duplicate slot -/
+  /-- the key file is not `SLOT KEY` lines, or holds a duplicate slot, or one of the certify slot's
+  two lines (`certify HEX`, `certify.next HEX`) without the other or not 64 hex digits (HOSTING-56) -/
   | keyFileFormat
   | anchorsLink
   | anchorsNotRegular
@@ -123,6 +124,9 @@ inductive KeybrokerExit where
   /-- the parent-death link could not be set (`nanodregg_sandbox::die_with_parent`, CLIENT-38): a
   process of ours that would outlive the parent that spawned it does not start -/
   | parentDeath
+  /-- the certify slot's last-certified file (`KEYS.certified`, HOSTING-56) fails the custody checks
+  or could not be made empty when absent -/
+  | certifiedState
   deriving DecidableEq, Repr
 
 namespace KeybrokerExit
@@ -132,7 +136,7 @@ def all : List KeybrokerExit :=
    keyFileIo, keyFileFormat, anchorsLink, anchorsNotRegular, anchorsOwner, anchorsMode, anchorsLength,
    anchorsDir, anchorsMissing, anchorsIo, anchorsMalformed, pinsLink, pinsNotRegular, pinsOwner, pinsMode,
    pinsLength, pinsDir, pinsMissing, pinsIo, pinsMalformed, tlsConfig, socket, deciderRefused, pidFile,
-   deciderSignaled, deciderLost, sockDir, deciderMechanism, parentDeath]
+   deciderSignaled, deciderLost, sockDir, deciderMechanism, parentDeath, certifiedState]
 
 def code : KeybrokerExit → Nat
   | usage => 80 | keyFileLink => 81 | keyFileNotRegular => 82 | keyFileOwner => 83 | keyFileMode => 84
@@ -143,6 +147,7 @@ def code : KeybrokerExit → Nat
   | deciderSignaled => 102 | deciderLost => 104 | sockDir => 105 | deciderMechanism => 79
   | pinsLink => 140 | pinsNotRegular => 141 | pinsOwner => 142 | pinsMode => 143 | pinsLength => 144
   | pinsDir => 145 | pinsMissing => 146 | pinsIo => 147 | pinsMalformed => 148 | parentDeath => 149
+  | certifiedState => 163
 
 /-- Every own end but a signalled decider is fatal: each is a file, an argument or the build, and
 a restart reads the same one. -/

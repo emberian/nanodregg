@@ -2334,3 +2334,37 @@ Follow's own replies are bounded as a whole too: `Command.Reply.bytes` is `none`
 **Meta-critique.** The landing was planned (continuation item 2) as `Thin.accept` requiring the certificate when `(authorityOf w).certifiers ≠ []`; building it showed two things the plan did not: the check belongs after the World is decoded (the authority is a fact of the World, so the check is `certifiesWorld` in `adopt`'s `.done` arm, not a clause of the byte-level `accept`), and `certified` under `Authority.none` was a vacuous accept that every future consumer would have inherited — fixed at the one path, not at each caller. Whether "the writer's word beside the sponsor's" is worth a wire field before the producer exists: yes, because the shape of the consumer is what fixes the producer's obligations (what is signed: `headOf` of the BASE World; where it lives: beside the base, self-authenticating, no MAC; when: per seal), and the plant shows the check is live under both parameter sets.
 
 **What changed shape / re-emits / refuses.** `readReplyLayout` (+`certificate`): an old `nd`/follow decoding a new `read` reply is `badPage`; no persisted byte moves (`base.cert` is a new optional file; a Store without it serves empty). Rows' Worlds re-genesis under the certifier authority (their origins move). `protocol!`.
+
+## PROTOCOL-78 · The stranger's check: from a World's genesis input and a certificate alone, the head the certificate certifies under the authority the input commits (`Protocol.Certified.check`, `host certified INPUT_HEX CERT`) (2026-10-26, TRUST-SEED-2; DESIGN-TRUST T3e, cv 01a17a55-5ebc; the certificate's producer is HOST-80, its key HOSTING-56)
+
+A stranger holds no Store, no member key and no invitation. The genesis input (`host genesis`'s
+`input` line, `Invite.startOf`'s one start encoding) commits the authority in the origin (KERNEL-69),
+so the stranger trusts nobody's word for whom to trust: it decodes the input (`badInput`), makes its
+genesis (`Receive.genesis`, the inputs' own refusal by name), and verifies the certificate under that
+authority for that origin (`Head.certified`, its refusal by name). A carried start names an origin,
+not an authority: `carried`. `Proofs.Certified.stranger_ok`: a head taken is certified under the
+authority the input names for `originOf` of exactly those inputs. `host certified` prints `certified
+origin=O steps=S height=H roots=R chain=C` or exits `notCertified` (Host.Status 50, fatal; OPS's
+action line) with the reason's name. Measured (`launcher/tests/certify.rs`): the writer's base.cert is
+taken (the origin and the sealed step count), one flipped signature byte is `badCertifySignature`,
+another World's input is `otherWorld`.
+
+**Critique.** It checks a head, never a history: a stranger with two certificates at one step count
+learns the authority equivocated (`certified_equivocation`), but one certificate says nothing about
+the steps before it; that is a member's audit. A certificate of a World whose authority rotated
+(after the pre-rotation lands) needs the chain of carries from the genesis input; until then a
+rotated World's certificate is checked against its successor's carried start, which this refuses
+`carried`.
+
+**What a certificate proves, and what it does not (CRIT-SPEC, real 2026-10-27).** A certificate proves that the
+authority's key holder COMMITTED to this head: it is attributable endorsement, and two certificates at one step count
+with different chains are checkable equivocation evidence (`certified_equivocation`). It does NOT prove the head is
+the fold of a lawful log: a key holder can sign exactly one fabricated head per step count and never equivocate. With
+the seed (HOSTING-56) the signer is keybroker under the Lean decider, which signs only heads its own `Host.Tail` fold
+of the Store reaches, so lawfulness rests on that decider and the base it opened being honest, i.e. on the operator,
+not on the signature. A thin member or a stranger that adopts a certified head without re-executing TRUSTS THE
+WRITER FOR LAWFULNESS, and is told so by name. The authority checked against must come from a source the checker
+already trusts (the genesis input here; the pinned World's bytes in PROTOCOL-77.1), never from the object being
+checked. Pinless adoption (T3c, cv 01a17a55-5e88) inherits this: it trusts the writer for lawfulness and is sound only
+with an audited prefix or a member's attestation. The head's `roots` commit the World's CONTENTS (the four tries), not
+the log's lawfulness, and do not commit `allowance` at all (DESIGN-TRUST §T3c).

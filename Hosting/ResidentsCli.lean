@@ -34,15 +34,15 @@ def serve (input out : IO.FS.Stream) : Nat → Follow → IO Exit
     let .ok req := Wire.decodeRequest hdr | return .badRequest
     match req with
     | .residents _ =>
-      match ← catchUp f.keys f.seg drainMax f.tail [] with
+      match ← catchUp f.keys f.seg drainMax f.tail [] [] with
       | .error e => return e
-      | .ok (t, turns) =>
+      | .ok (t, turns, _) =>
         let f := if turns.isEmpty then { f with tail := t } else f.absorbTurns t turns
         let names := f.residents
         if Broker.Bounds.residentsMax < names.length then return .residentsPastBound names.length
         unless ← emit out (Broker.Verdict.residents names) do return .unencodable
         serve input out fuel f
-    | .decide .. | .reply .. => return .badRequest
+    | .decide .. | .reply .. | .certify .. => return .badRequest
 
 def run (store : System.FilePath) : IO Exit := do
   let some pid := Allow.allowanceId Host.Deployed.X.env | return .noPackage

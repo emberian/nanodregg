@@ -16,7 +16,7 @@ pub(crate) use nanodregg_sandbox::custody::PRIVATE;
 /// Create `dir/name` holding exactly `bytes`, or nothing: `AlreadyExists` if it is there, and a
 /// crash at any instant leaves it absent or complete (CLIENT-39, A18: written in place, a crash right
 /// after the create left an empty `rotation` that refused every later command).
-pub(crate) fn create_once(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+pub fn create_once(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     let tmp = staged(dir, name, bytes)?;
     let linked = fs::hard_link(&tmp, dir.join(name));
     fs::remove_file(&tmp)?;
@@ -26,7 +26,7 @@ pub(crate) fn create_once(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()
 
 /// Replace `dir/name` by a file holding exactly `bytes`, atomically: a reader (or a crash) sees
 /// the old file or the new one, never a mix.
-pub(crate) fn replace(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+pub fn replace(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     let tmp = staged(dir, name, bytes)?;
     fs::rename(&tmp, dir.join(name))?;
     sync_dir(dir)

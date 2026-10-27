@@ -232,6 +232,12 @@ pub mod wire {
         NotResident,
         ReplyMalformed,
         PinMismatch,
+        BadCertify,
+        NotOnFold,
+        NotYet,
+        Regressed,
+        Unanchored,
+        CertifyState,
     }
 
     impl BrokerRefusal {
@@ -261,6 +267,12 @@ pub mod wire {
                 BrokerRefusal::NotResident => 21,
                 BrokerRefusal::ReplyMalformed => 22,
                 BrokerRefusal::PinMismatch => 23,
+                BrokerRefusal::BadCertify => 24,
+                BrokerRefusal::NotOnFold => 25,
+                BrokerRefusal::NotYet => 26,
+                BrokerRefusal::Regressed => 27,
+                BrokerRefusal::Unanchored => 28,
+                BrokerRefusal::CertifyState => 29,
             }
         }
 
@@ -290,6 +302,12 @@ pub mod wire {
                 21 => Some(BrokerRefusal::NotResident),
                 22 => Some(BrokerRefusal::ReplyMalformed),
                 23 => Some(BrokerRefusal::PinMismatch),
+                24 => Some(BrokerRefusal::BadCertify),
+                25 => Some(BrokerRefusal::NotOnFold),
+                26 => Some(BrokerRefusal::NotYet),
+                27 => Some(BrokerRefusal::Regressed),
+                28 => Some(BrokerRefusal::Unanchored),
+                29 => Some(BrokerRefusal::CertifyState),
                 _ => None,
             }
         }
@@ -321,6 +339,12 @@ pub mod wire {
                 BrokerRefusal::NotResident => "notResident",
                 BrokerRefusal::ReplyMalformed => "replyMalformed",
                 BrokerRefusal::PinMismatch => "pinMismatch",
+                BrokerRefusal::BadCertify => "badCertify",
+                BrokerRefusal::NotOnFold => "notOnFold",
+                BrokerRefusal::NotYet => "notYet",
+                BrokerRefusal::Regressed => "regressed",
+                BrokerRefusal::Unanchored => "unanchored",
+                BrokerRefusal::CertifyState => "certifyState",
             }
         }
     }
@@ -388,6 +412,7 @@ pub mod wire {
         Decide { resident: Vec<u8>, at_ms: u64 },
         Residents { at_ms: u64 },
         Reply { status: u32, body: Vec<u8> },
+        Certify { at_ms: u64 },
     }
 
     impl Request {
@@ -408,6 +433,10 @@ pub mod wire {
                     let status = c.u32()? as u32;
                     let body = c.bytes(131072)?;
                     Request::Reply { status, body }
+                }
+                4 => {
+                    let at_ms = c.u64()?;
+                    Request::Certify { at_ms }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -431,6 +460,10 @@ pub mod wire {
                     out.push(3);
                     out.extend_from_slice(&status.to_le_bytes());
                     put_bytes(&mut out, body, 131072)?;
+                }
+                Request::Certify { at_ms } => {
+                    out.push(4);
+                    out.extend_from_slice(&at_ms.to_le_bytes());
                 }
             }
             Ok(out)
@@ -459,6 +492,9 @@ pub mod wire {
         },
         Status {
             status: u32,
+        },
+        Sign {
+            certified: Vec<u8>,
         },
     }
 
@@ -500,6 +536,10 @@ pub mod wire {
                 5 => {
                     let status = c.u32()? as u32;
                     Verdict::Status { status }
+                }
+                6 => {
+                    let certified = c.bytes(131072)?;
+                    Verdict::Sign { certified }
                 }
                 tag => return Err(Refusal::BadTag { offset: at, tag }),
             };
@@ -543,6 +583,10 @@ pub mod wire {
                 Verdict::Status { status } => {
                     out.push(5);
                     out.extend_from_slice(&status.to_le_bytes());
+                }
+                Verdict::Sign { certified } => {
+                    out.push(6);
+                    put_bytes(&mut out, certified, 131072)?;
                 }
             }
             Ok(out)
@@ -598,6 +642,49 @@ pub mod wire {
             Ok(out)
         }
     }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum CertifyAnswer {
+        Signed { key: Vec<u8>, signature: Vec<u8> },
+        Refused { broker_refusal: BrokerRefusal },
+    }
+
+    impl CertifyAnswer {
+        pub fn decode(b: &[u8]) -> Result<Self, Refusal> {
+            let mut c = Cursor { b, i: 0 };
+            let at = c.i;
+            let certifyanswer = match c.byte()? {
+                1 => {
+                    let key = c.bytes(131072)?;
+                    let signature = c.bytes(131072)?;
+                    CertifyAnswer::Signed { key, signature }
+                }
+                2 => {
+                    let broker_refusal = c.one_of(BrokerRefusal::from_code)?;
+                    CertifyAnswer::Refused { broker_refusal }
+                }
+                tag => return Err(Refusal::BadTag { offset: at, tag }),
+            };
+            c.end()?;
+            Ok(certifyanswer)
+        }
+
+        pub fn encode(&self) -> Result<Vec<u8>, Refusal> {
+            let mut out = Vec::new();
+            match self {
+                CertifyAnswer::Signed { key, signature } => {
+                    out.push(1);
+                    put_bytes(&mut out, key, 131072)?;
+                    put_bytes(&mut out, signature, 131072)?;
+                }
+                CertifyAnswer::Refused { broker_refusal } => {
+                    out.push(2);
+                    out.push(broker_refusal.code());
+                }
+            }
+            Ok(out)
+        }
+    }
 }
 
 pub mod keybroker_exit {
@@ -637,9 +724,10 @@ pub mod keybroker_exit {
     pub const SOCK_DIR: u8 = 105;
     pub const DECIDER_MECHANISM: u8 = 79;
     pub const PARENT_DEATH: u8 = 149;
+    pub const CERTIFIED_STATE: u8 = 163;
     pub const ALL: &[u8] = &[
         80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 140, 141, 142, 143,
-        144, 145, 146, 147, 148, 98, 99, 100, 103, 102, 104, 105, 79, 149,
+        144, 145, 146, 147, 148, 98, 99, 100, 103, 102, 104, 105, 79, 149, 163,
     ];
 }
 
@@ -676,3 +764,13 @@ pub mod members_exit {
         150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162,
     ];
 }
+
+/// The certificate signing domain (Protocol.Head.domCertify): keybroker prepends it to every
+/// message its certify slot signs, and signs nothing else with that slot (HOSTING-56).
+pub const CERTIFY_DOMAIN: &[u8] = &[
+    110, 97, 110, 111, 100, 114, 101, 103, 103, 47, 112, 114, 111, 116, 111, 99, 111, 108, 47, 99,
+    101, 114, 116, 105, 102, 121, 47, 118, 49,
+];
+/// The writer's socket directory under SOCKDIR and its socket's name (Hosting.Certify).
+pub const WRITER_DIR: &[u8] = &[46, 119, 114, 105, 116, 101, 114];
+pub const CERTIFY_SOCK: &[u8] = &[99, 101, 114, 116, 105, 102, 121, 46, 115, 111, 99, 107];

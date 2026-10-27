@@ -220,11 +220,26 @@ pub fn supervise_host(
     store: &Path,
     args: &[&str],
 ) -> Supervisor {
+    supervise_host_connecting(nd_supervise, sock, hide, store, &[], args)
+}
+
+/// `supervise_host`, the child also allowed to connect to each of `connect` (nd-supervise's
+/// `--connect`: the writer's certify socket, HOST-80).
+pub fn supervise_host_connecting(
+    nd_supervise: &Path,
+    sock: &Path,
+    hide: &Path,
+    store: &Path,
+    connect: &[&Path],
+    args: &[&str],
+) -> Supervisor {
     let host = lean_bin("host");
-    let child = Command::new(nd_supervise)
-        .arg(sock)
-        .arg("--hide")
-        .arg(hide)
+    let mut cmd = Command::new(nd_supervise);
+    cmd.arg(sock).arg("--hide").arg(hide);
+    for c in connect {
+        cmd.arg("--connect").arg(c);
+    }
+    let child = cmd
         .arg("--write")
         .arg(store)
         .arg("--exec")

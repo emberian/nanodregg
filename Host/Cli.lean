@@ -9,10 +9,15 @@
                                                    (N ≥ 2, `retainBelowFloor` below) each base
                                                    install keeps the N newest segment files and
                                                    drops the rest (HOST-64); without it nothing
-                                                   is ever dropped
+                                                   is ever dropped; with --certify SOCK each
+                                                   installed base is certified through
+                                                   keybroker's writer socket (Host.Certify)
     host follow STORE MEMBER_HEX GRANT_HEX         the follower loop on stdin/stdout (Host.Follow)
     host check STORE [--anchor STEPS:CHAIN_HEX]   open read-only, print one STATUS line, refuse a
                                                    Store behind or off the anchor (Host.Check)
+    host certified INPUT_HEX CERT                  the stranger's check (Protocol.Certified): the
+                                                   head CERT certifies under the authority the
+                                                   genesis input commits; no Store read
     host export STORE OUT                          write the carried file of a STOPPED Store's World
                                                    (Host.Carry), print `carried DIGEST`, `from
                                                    ORIGIN`, `anchor S:C`; writes nothing in STORE
@@ -58,6 +63,8 @@ import Host.Exit
 import Host.Check
 import Kernel.Receive.Follow
 import Host.Carry
+import Host.Certify
+import Protocol.Certified
 import Protocol.Invite
 
 namespace Nanodregg.Host.Cli
@@ -90,7 +97,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] | host seal STORE [--retain N] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
+  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] [--certify SOCK] | host seal STORE [--retain N] [--certify SOCK] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host certified INPUT_HEX CERT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -384,7 +391,9 @@ def runResident (verb : String) (r₀ : Resident (World D))
   status verb (("exit", exit.status.name) :: ("refused_queued", toString refused) :: residentFields r)
   return exitCode exit
 
-def serveVerb (store : String) (retain : Retain) : IO UInt32 := do
+/-- `host serve STORE [--retain N] [--certify SOCK]`: with `--certify`, every base a seal installs is
+certified through keybroker's writer socket SOCK and `base.cert` replaced (`Host.Certify`, HOST-80). -/
+def serveVerb (store : String) (retain : Retain) (certify : Option String := none) : IO UInt32 := do
   match ← (readKey store : IO (Except (StoreFault (Record.Fault (Reject D))) Digest)) with
   | .error f => refuseStore f
   | .ok key =>
@@ -394,8 +403,12 @@ def serveVerb (store : String) (retain : Retain) : IO UInt32 := do
     | .ok wr => serving do
       let files : PageFiles := ⟨store, keys, originChain wr.opening.opened.world, wr.kept,
         ← IO.mkRef #[wr.opening.sealed.offset], wr.generation⟩
+      let ck := fileCheckpoint store keys c world recorder.mark originChain wr
+      let ck ← match certify with
+        | some sock => pure (Certify.certifying ck (← Certify.start store sock lifetimeFrames))
+        | none => pure ck
       let code ← runResident "serve" wr.opening.resident fun port =>
-        restarts (serve (machine X) recorder keys.segment (fileCheckpoint store keys c world recorder.mark originChain wr) c
+        restarts (serve (machine X) recorder keys.segment ck c
             (fileStore wr) (pager keys files) port limits fuelBatches)
           (reopenAt store keys c world recorder.mark originChain foldStep) recorder.mark restartsMax
       return code
@@ -452,8 +465,10 @@ def sealWith {m : Type → Type} [Monad m] {R : Type} (fx : SealFx m R) : m UInt
 /-- `host seal STORE` (HOST-43): `sealWith` over the files. The open is the writer's
 (`openWriter`: the Store's lock, so a running writer refuses it `locked`); the seal is `sealNow`
 with the writer's own file checkpoint, inline (the process waits for its one base); the report is
-the base an invitation pins: `sealed steps=S chain=C digest=D`. -/
-def sealVerb (store : String) (retain : Retain) : IO UInt32 :=
+the base an invitation pins: `sealed steps=S chain=C digest=D`. With `--certify SOCK` (HOST-80) the
+base it leaves (the one it wrote, or the one already at the World's position) is then certified
+through keybroker's writer socket, as `host serve --certify` certifies each seal (`Host.Certify`). -/
+def sealVerb (store : String) (retain : Retain) (certify : Option String := none) : IO UInt32 :=
   sealWith (R := Keys × Writer (World D))
     { key := readKey store
       open_ := fun key => do
@@ -463,7 +478,10 @@ def sealVerb (store : String) (retain : Retain) : IO UInt32 :=
         | .ok wr => return .ok (keys, wr)
       write := fun (keys, wr) => do
         let ck := fileCheckpoint store keys c world recorder.mark originChain wr (async := false)
-        return (← sealNow ck recorder.mark wr.opening.resident).map (·.sealed)
+        let r ← sealNow ck recorder.mark wr.opening.resident
+        if let (.ok _, some sock) := (r, certify) then
+          Certify.certifyBase store sock wr.opening.resident.world
+        return r.map (·.sealed)
       refuse := fun s n => refuse s n
       report := fun s => IO.println s!"sealed steps={s.steps} chain={Protocol.Text.toHex s.chain} digest={Protocol.Text.toHex s.digest}" }
 
@@ -483,12 +501,30 @@ def genesisOpts (store name : String) : List String → Option String → List S
   | "--threshold" :: v :: rest, n, cs, _ => genesisOpts store name rest n cs (some v)
   | fs, n, cs, t => genesisVerb store name n cs t fs
 
+/-- `host certified INPUT_HEX CERT`: the stranger's check (PROTOCOL-78, DESIGN-TRUST T3e). From a
+World's genesis input (`host genesis`'s `input` line) and a certificate file alone, the head the
+certificate certifies under the authority the input commits (`Protocol.Certified.check`), printed
+`certified origin=O steps=S height=H roots=R chain=C`; refused `notCertified` with the reason's name.
+No Store is read and nothing is written. -/
+def certifiedVerb (inputHex certPath : String) : IO UInt32 := do
+  let some input := Protocol.Text.ofHex inputHex | refuse .usage "input"
+  let cert ← IO.FS.readBinFile certPath
+  match Protocol.Certified.check X input cert with
+  | .error r => refuse .notCertified s!"notCertified {r.name}"
+  | .ok h =>
+    IO.println s!"certified origin={h.origin.toHex} steps={h.steps} height={h.height} roots={h.roots.toHex} chain={h.chain.toHex}"
+    return 0
+
 def verb : List String → IO UInt32
   | "genesis" :: store :: name :: rest => genesisOpts store name rest none [] none
   | ["serve", store] => serveVerb store none
   | ["serve", store, "--retain", n] => withRetain n (serveVerb store)
+  | ["serve", store, "--certify", sock] => serveVerb store none (some sock)
+  | ["serve", store, "--retain", n, "--certify", sock] => withRetain n (fun r => serveVerb store r (some sock))
   | ["seal", store] => sealVerb store none
   | ["seal", store, "--retain", n] => withRetain n (sealVerb store)
+  | ["seal", store, "--certify", sock] => sealVerb store none (some sock)
+  | ["seal", store, "--retain", n, "--certify", sock] => withRetain n (fun r => sealVerb store r (some sock))
   | ["follow", store, member, grant] => followVerb store member grant
   | ["join", store, inv, key] => joinVerb store inv key none
   | ["join", store, inv, key, inp] => joinVerb store inv key (some inp)
@@ -497,6 +533,7 @@ def verb : List String → IO UInt32
     let some a := Check.Anchor.parse a | refuse .usage "anchor"
     Check.run store (some a)
   | ["export", store, out] => exportVerb store out
+  | ["certified", input, cert] => certifiedVerb input cert
   | ["import", store, name, inp, "--digest", d] => importVerb store name inp (.digest d) none
   | ["import", store, name, inp, "--digest", d, "--nonce", n] => importVerb store name inp (.digest d) (some n)
   | ["import", store, name, inp, "--nonce", n, "--digest", d] => importVerb store name inp (.digest d) (some n)

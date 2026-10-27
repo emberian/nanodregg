@@ -351,6 +351,10 @@ theorem verdictOf_wire {v : Verdict} {w : Wire.VerdictTy} (h : Wire.verdictWire?
     simp only [Wire.verdictWire?, pure, Option.some.injEq] at h
     subst h
     rfl
+  | sign c =>
+    simp only [Wire.verdictWire?, bind, Option.bind_eq_some_iff, pure, Option.some.injEq] at h
+    obtain ⟨c', hc, rfl⟩ := h
+    simp [Wire.verdictOf, bytes?_val hc]
 
 /-! ## The printed string is one JSON string whose contents are the text -/
 

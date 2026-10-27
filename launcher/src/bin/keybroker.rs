@@ -35,6 +35,23 @@
 //! failure is `tlsCertificate`, `tlsHostname` or `tlsProtocol`, never the upstream's text. It
 //! decides nothing: every verdict is the decider's, and every way it ends is a name on stderr. One
 //! ask at a time per resident (`busy`).
+//!
+//! THE WRITER'S CERTIFY KEY (HOSTING-56, DESIGN-TRUST §4.4b). KEYS may also hold the lines
+//! `certify HEX` and `certify.next HEX` (two Ed25519 seeds, 64 lowercase hex digits each, both or
+//! neither; `next` is fresh OS randomness the operator made, never derived, committed in advance
+//! for the key's rotation). With them, keybroker binds ONE more socket, `SOCKDIR/.writer/certify.sock`
+//! (0600 in a 0700 directory of its own: the writer, `host serve --certify`, runs as the key holder;
+//! a leading dot, so no grain name can take it), whose peer must be keybroker's own uid. The writer
+//! sends one frame, the certified bytes of a head; keybroker puts `certify atMs` in front, unread,
+//! and hands both to the decider, now started with a fifth argument, CERTIFIED (`KEYS.certified`, the
+//! last head this key signed, 0600 beside KEYS, made empty when absent). A `sign` verdict names the
+//! bytes the decider granted (`Hosting.Certify.decide`: a head of its own fold, never below or beside
+//! the last one); keybroker FIRST replaces CERTIFIED by them durably (`certifyState` if it cannot:
+//! nothing is signed), then signs `CERTIFY_DOMAIN ‖ bytes` with the certify seed and answers
+//! `signed` with the public key. The seed signs nothing else: no path signs raw bytes with it, and
+//! the domain is pairwise disjoint from every other a key signs under (`Protocol.Proofs.Domains`).
+//! `keybroker --certify-pub KEYS` prints the certify public key and the next one (`certify HEX`,
+//! `next HEX`), for `host genesis --certifier HEX --threshold 1`.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -50,9 +67,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nanodregg_client::generated::BROKER_SOCK;
-use nanodregg_launcher::broker_generated::wire::{Answer, BrokerRefusal, Request, Verdict};
+use nanodregg_launcher::broker_generated::wire::{
+    Answer, BrokerRefusal, CertifyAnswer, Request, Verdict,
+};
 use nanodregg_launcher::broker_generated::{
-    DECIDER_TICK_MS, FRAME_MAX, keybroker_exit, read_frame, write_frame,
+    CERTIFY_DOMAIN, CERTIFY_SOCK, DECIDER_TICK_MS, FRAME_MAX, WRITER_DIR, keybroker_exit,
+    read_frame, write_frame,
 };
 use nanodregg_launcher::grain_name_ok;
 use nanodregg_launcher::residents::{self, DeciderEnd};
@@ -106,6 +126,8 @@ enum End {
     Pid(String),
     /// the parent-death link could not be set (`die_with_parent`, CLIENT-38)
     ParentDeath(String),
+    /// `--certify-pub` printed the keys
+    Printed,
 }
 
 impl End {
@@ -126,11 +148,27 @@ impl End {
             End::DeciderLost(e) => format!("deciderLost {e}"),
             End::Pid(e) => format!("pidFile {e}"),
             End::ParentDeath(e) => format!("parentDeath {e}"),
+            End::Printed => "certifyPub".into(),
         }
     }
 }
 
 fn main() -> ExitCode {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if let [flag, keys] = args.as_slice()
+        && flag == "--certify-pub"
+    {
+        return match certify_pub(Path::new(keys)) {
+            End::Printed => ExitCode::SUCCESS,
+            end => {
+                nanodregg_launcher::say("keybroker", &end.describe());
+                ExitCode::from(match end {
+                    End::File(_, code) => code,
+                    _ => keybroker_exit::USAGE,
+                })
+            }
+        };
+    }
     let end = run();
     // One write (`nanodregg_launcher::say`): the decider shares this stderr.
     nanodregg_launcher::say("keybroker", &end.describe());
@@ -149,6 +187,7 @@ fn main() -> ExitCode {
         End::DeciderMechanism(_) => keybroker_exit::DECIDER_MECHANISM,
         End::DeciderLost(_) => keybroker_exit::DECIDER_LOST,
         End::ParentDeath(_) => keybroker_exit::PARENT_DEATH,
+        End::Printed => keybroker_exit::USAGE,
     })
 }
 
@@ -280,13 +319,48 @@ fn tls_config(roots: RootCertStore) -> Result<ClientConfig, rustls::Error> {
 
 type Keys = BTreeMap<u32, Zeroizing<Vec<u8>>>;
 
-/// `SLOT KEY` per line: a decimal slot, one space, the key's bytes (printable ASCII, no space).
-fn parse_keys(text: &[u8]) -> Option<Keys> {
+/// An Ed25519 seed.
+type Seed = Zeroizing<[u8; 32]>;
+
+/// The writer's certify slot: the current seed and the pre-committed next one (HOSTING-56).
+struct CertifySeeds {
+    current: Seed,
+    next: Seed,
+}
+
+/// 64 lowercase hexadecimal digits as a seed.
+fn parse_seed(hex: &[u8]) -> Option<Seed> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut seed = Zeroizing::new([0u8; 32]);
+    for (i, pair) in hex.chunks(2).enumerate() {
+        seed[i] = hex_val(pair[0])? * 16 + hex_val(pair[1])?;
+    }
+    Some(seed)
+}
+
+/// `SLOT KEY` per line: a decimal slot, one space, the key's bytes (printable ASCII, no space); and
+/// the certify slot's two lines, `certify HEX` and `certify.next HEX`, both or neither, each once.
+/// At least one provider key.
+fn parse_keys(text: &[u8]) -> Option<(Keys, Option<CertifySeeds>)> {
     let mut keys = Keys::new();
+    let (mut current, mut next) = (None, None);
     for line in text.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
         let sp = line.iter().position(|b| *b == b' ')?;
-        let slot: u32 = std::str::from_utf8(&line[..sp]).ok()?.parse().ok()?;
-        let key = &line[sp + 1..];
+        let (word, key) = (&line[..sp], &line[sp + 1..]);
+        let seat = match word {
+            b"certify" => Some(&mut current),
+            b"certify.next" => Some(&mut next),
+            _ => None,
+        };
+        if let Some(seat) = seat {
+            if seat.replace(parse_seed(key)?).is_some() {
+                return None;
+            }
+            continue;
+        }
+        let slot: u32 = std::str::from_utf8(word).ok()?.parse().ok()?;
         if key.is_empty() || !key.iter().all(|b| b.is_ascii_graphic()) {
             return None;
         }
@@ -294,7 +368,56 @@ fn parse_keys(text: &[u8]) -> Option<Keys> {
             return None;
         }
     }
-    if keys.is_empty() { None } else { Some(keys) }
+    let certify = match (current, next) {
+        (Some(current), Some(next)) => Some(CertifySeeds { current, next }),
+        (None, None) => None,
+        _ => return None,
+    };
+    if keys.is_empty() {
+        None
+    } else {
+        Some((keys, certify))
+    }
+}
+
+/// The certify slot's signer: the seed's key pair (ring's Ed25519, already in the TCB under rustls).
+struct Certifier {
+    pair: ring::signature::Ed25519KeyPair,
+    /// where the last certified head is kept (`KEYS.certified`)
+    state: PathBuf,
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn key_pair(seed: &Seed) -> Option<ring::signature::Ed25519KeyPair> {
+    ring::signature::Ed25519KeyPair::from_seed_unchecked(seed.as_slice()).ok()
+}
+
+/// `KEYS.certified`: beside KEYS, so the writer's sandbox hides it with KEYS' directory.
+fn state_path(keys: &Path) -> Option<PathBuf> {
+    let mut name = keys.file_name()?.to_os_string();
+    name.push(".certified");
+    Some(keys.with_file_name(name))
+}
+
+/// `keybroker --certify-pub KEYS`: the certify slot's public key and the next one's, one line each.
+fn certify_pub(keys_path: &Path) -> End {
+    use ring::signature::KeyPair as _;
+    let text = match custody::read_private(keys_path, 1..=KEYFILE_MAX) {
+        Ok(t) => t,
+        Err(e) => return key_file_end(&e),
+    };
+    let Some((_, Some(seeds))) = parse_keys(&text) else {
+        return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
+    };
+    let (Some(cur), Some(next)) = (key_pair(&seeds.current), key_pair(&seeds.next)) else {
+        return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
+    };
+    println!("certify {}", hex(cur.public_key().as_ref()));
+    println!("next {}", hex(next.public_key().as_ref()));
+    End::Printed
 }
 
 fn now_ms() -> u64 {
@@ -314,6 +437,8 @@ struct Shared {
     peer: u32,
     /// the only gid served: SOCKDIR's group
     group: u32,
+    /// the writer's certify slot, when KEYS holds one
+    certify: Option<Certifier>,
 }
 
 fn run() -> End {
@@ -342,8 +467,22 @@ fn run() -> End {
         Ok(t) => t,
         Err(e) => return key_file_end(&e),
     };
-    let Some(keys) = parse_keys(&text) else {
+    let Some((keys, seeds)) = parse_keys(&text) else {
         return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
+    };
+    // the certify slot: its key pair, and the last certified head's file, made empty when absent
+    let certify = match seeds {
+        None => None,
+        Some(seeds) => {
+            let (Some(pair), Some(state)) = (key_pair(&seeds.current), state_path(&keys_path))
+            else {
+                return End::File("keyFileFormat", keybroker_exit::KEY_FILE_FORMAT);
+            };
+            if let Err(e) = certified_state(&state) {
+                return End::File(e, keybroker_exit::CERTIFIED_STATE);
+            }
+            Some(Certifier { pair, state })
+        }
     };
     let anchors = match custody::read_public(&PathBuf::from(anchors_path), 1..=ANCHORS_MAX) {
         Ok(a) => a,
@@ -381,8 +520,12 @@ fn run() -> End {
 
     // The decider sees its own program and reads the Store; the key file is hidden as a second barrier.
     let store = PathBuf::from(store);
+    let mut read = vec![store.clone()];
+    if let Some(c) = &certify {
+        read.push(c.state.clone());
+    }
     let policy = Policy {
-        read: vec![store.clone()],
+        read,
         write: vec![],
         exec: vec![decider.clone()],
         hidden: vec![keys_path.clone()],
@@ -396,12 +539,15 @@ fn run() -> End {
             .collect::<Vec<_>>()
             .join(","),
     );
-    let dargs: Vec<&std::ffi::OsStr> = vec![
+    let mut dargs: Vec<&std::ffi::OsStr> = vec![
         t0.as_os_str(),
         slots.as_os_str(),
         store.as_os_str(),
         operator.as_os_str(),
     ];
+    if let Some(c) = &certify {
+        dargs.push(c.state.as_os_str());
+    }
     let mut cmd = match command(&policy, decider.as_os_str(), &dargs) {
         Ok(c) => c,
         Err(e) => return End::DeciderRefused(format!("{e:?}")),
@@ -429,7 +575,23 @@ fn run() -> End {
         tls,
         peer,
         group,
+        certify,
     });
+    // the writer's socket, before any resident's: it lives as long as keybroker
+    if shared.certify.is_some() {
+        match writer_socket(&sockdir, own) {
+            Ok(l) => {
+                let sh = Arc::clone(&shared);
+                std::thread::spawn(move || serve_writer(l, own, sh));
+            }
+            Err(end) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&pid_file);
+                return end;
+            }
+        }
+    }
 
     // Which sockets to serve is the World's: asked at start and every tick, until the decider ends
     // (its end is keybroker's: an ask could no longer be decided).
@@ -709,8 +871,8 @@ fn ask_once(sh: &Shared, resident: &[u8], ask: &[u8]) -> Option<Answer> {
                 },
             }
         }
-        // a reply or status verdict to a decide is the decider out of turn: the connection closes
-        Verdict::Reply { .. } | Verdict::Status { .. } => return None,
+        // a reply, status or sign verdict to a decide is the decider out of turn: the connection closes
+        Verdict::Reply { .. } | Verdict::Status { .. } | Verdict::Sign { .. } => return None,
     })
 }
 
@@ -730,7 +892,7 @@ fn reply(sh: &Shared, status: u32, body: &[u8], key: &[u8]) -> Option<Answer> {
         Verdict::Reply { text } => Answer::Reply { text },
         Verdict::Status { status } => Answer::Status { status },
         Verdict::Refuse { broker_refusal } => refused(broker_refusal),
-        Verdict::Grant { .. } | Verdict::Residents { .. } => return None,
+        Verdict::Grant { .. } | Verdict::Residents { .. } | Verdict::Sign { .. } => return None,
     })
 }
 
@@ -839,4 +1001,155 @@ fn split_response(resp: &[u8]) -> Option<(u32, &[u8])> {
     }
     let code: u32 = std::str::from_utf8(parts.next()?).ok()?.parse().ok()?;
     Some((code, &resp[end + 4..]))
+}
+
+/// The last certified head's file: there and private (the custody checks, 0600), or made empty
+/// (durably, 0600) when absent. A file that fails the checks ends keybroker by name.
+fn certified_state(state: &Path) -> Result<(), &'static str> {
+    match custody::read_private(state, 0..=FRAME_MAX as usize) {
+        Ok(_) => Ok(()),
+        Err(Refused::Io(e)) if e.kind() == ErrorKind::NotFound => {
+            let (Some(dir), Some(name)) =
+                (state.parent(), state.file_name().and_then(|n| n.to_str()))
+            else {
+                return Err("certifiedState");
+            };
+            nanodregg_client::fsx::create_once(dir, name, &[]).map_err(|_| "certifiedState")
+        }
+        Err(_) => Err("certifiedState"),
+    }
+}
+
+/// `SOCKDIR/.writer/certify.sock`: the directory made 0700 (SOCKDIR's setgid bit cleared) when absent
+/// and then required private
+/// (`custody::check_private_dir`) and holding nothing but the socket; a socket of this uid already
+/// there (the last life's) is unlinked; the socket bound 0600.
+fn writer_socket(sockdir: &Path, own: u32) -> Result<UnixListener, End> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let at = |p: &Path, e: &dyn std::fmt::Debug| End::SockDir(format!("{} {e:?}", p.display()));
+    let d = sockdir.join(std::ffi::OsStr::from_bytes(WRITER_DIR));
+    let name = std::ffi::OsStr::from_bytes(CERTIFY_SOCK);
+    match std::fs::symlink_metadata(&d) {
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            nanodregg_launcher::make_dir(&d, 0o700).map_err(|e| at(&d, &e))?;
+            // SOCKDIR's setgid bit is inherited by what is made in it: the writer's directory is
+            // this uid's alone, so it is cleared (0700, `check_private_dir`)
+            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| at(&d, &e))?;
+        }
+        Err(e) => return Err(at(&d, &e)),
+        Ok(_) => {}
+    }
+    custody::check_private_dir(&d).map_err(|e| at(&d, &e))?;
+    for entry in std::fs::read_dir(&d).map_err(|e| at(&d, &e))? {
+        let n = entry.map_err(|e| at(&d, &e))?.file_name();
+        if n != name {
+            return Err(End::SockDir(format!("{} holds {n:?}", d.display())));
+        }
+    }
+    let sock = d.join(name);
+    match std::fs::symlink_metadata(&sock) {
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Ok(m) if m.file_type().is_socket() && m.uid() == own => {
+            std::fs::remove_file(&sock).map_err(|e| at(&sock, &e))?
+        }
+        Ok(_) => {
+            return Err(End::SockDir(format!(
+                "{} is not this broker's socket",
+                sock.display()
+            )));
+        }
+        Err(e) => return Err(at(&sock, &e)),
+    }
+    let socket = |e: std::io::Error| End::Socket(format!("{} {e}", sock.display()));
+    let l = UnixListener::bind(&sock).map_err(socket)?;
+    std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600)).map_err(socket)?;
+    Ok(l)
+}
+
+/// The writer's socket: one connection at a time (`busy`), a peer of keybroker's own uid only
+/// (`peerRefused`, nothing it sent read).
+fn serve_writer(listener: UnixListener, own: u32, sh: Arc<Shared>) {
+    let open = Arc::new(AtomicBool::new(false));
+    for conn in listener.incoming().take(LIFETIME as usize) {
+        let Ok(mut s) = conn else { continue };
+        match custody::peer_cred(&s) {
+            Ok((uid, _)) if uid == own => {}
+            _ => {
+                let _ = certify_answer(&mut s, &certify_refused(BrokerRefusal::PeerRefused));
+                continue;
+            }
+        }
+        if open.swap(true, Ordering::SeqCst) {
+            let _ = certify_answer(&mut s, &certify_refused(BrokerRefusal::Busy));
+            continue;
+        }
+        let (open, sh) = (Arc::clone(&open), Arc::clone(&sh));
+        std::thread::spawn(move || {
+            serve_writer_conn(s, &sh);
+            open.store(false, Ordering::SeqCst);
+        });
+    }
+}
+
+fn certify_refused(r: BrokerRefusal) -> CertifyAnswer {
+    CertifyAnswer::Refused { broker_refusal: r }
+}
+
+fn certify_answer(s: &mut UnixStream, a: &CertifyAnswer) -> Option<()> {
+    let bytes = a.encode().ok()?;
+    write_frame(s, &bytes).ok()?;
+    s.flush().ok()
+}
+
+fn serve_writer_conn(mut s: UnixStream, sh: &Shared) {
+    if s.set_read_timeout(Some(RESIDENT_IDLE)).is_err() {
+        return;
+    }
+    for _ in 0..LIFETIME {
+        let Ok(bytes) = read_frame(&mut s) else {
+            return;
+        };
+        let Some(a) = certify_once(sh, &bytes) else {
+            return;
+        };
+        if certify_answer(&mut s, &a).is_none() {
+            return;
+        }
+    }
+}
+
+/// One certify ask: the decider's verdict; for a `sign`, the head made durable in CERTIFIED and
+/// only then signed. `None` when the decider cannot be reached or answers out of turn.
+fn certify_once(sh: &Shared, certified: &[u8]) -> Option<CertifyAnswer> {
+    use ring::signature::KeyPair as _;
+    let c = sh.certify.as_ref()?;
+    let req = Request::Certify { at_ms: now_ms() }.encode().ok()?;
+    let verdict = sh.decider.lock().ok()?.exchange(&[&req, certified])?;
+    Some(match verdict {
+        Verdict::Refuse { broker_refusal } => certify_refused(broker_refusal),
+        Verdict::Sign { certified } => {
+            let (Some(dir), Some(name)) = (
+                c.state.parent(),
+                c.state.file_name().and_then(|n| n.to_str()),
+            ) else {
+                return Some(certify_refused(BrokerRefusal::CertifyState));
+            };
+            if nanodregg_client::fsx::replace(dir, name, &certified).is_err() {
+                return Some(certify_refused(BrokerRefusal::CertifyState));
+            }
+            let mut msg = Vec::with_capacity(CERTIFY_DOMAIN.len() + certified.len());
+            msg.extend_from_slice(CERTIFY_DOMAIN);
+            msg.extend_from_slice(&certified);
+            CertifyAnswer::Signed {
+                key: c.pair.public_key().as_ref().to_vec(),
+                signature: c.pair.sign(&msg).as_ref().to_vec(),
+            }
+        }
+        // any other verdict to a certify is the decider out of turn: the connection closes
+        Verdict::Grant { .. }
+        | Verdict::Residents { .. }
+        | Verdict::Reply { .. }
+        | Verdict::Status { .. } => return None,
+    })
 }

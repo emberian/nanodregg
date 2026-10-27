@@ -376,6 +376,7 @@ def hostAction : Status → String
   | .positionUnfit => "a defect: a seal at a segment position past u64, which a base cannot spell (HOST-46); nothing was written; keep the Store untouched, report to HOST"
   | .carryMismatch => "the carried file is not the one exported (digest), does not decode, or the imported Store reopened to other bytes (stderr names which): re-export from the STOPPED old Store and copy the printed digest exactly; remove a Store left by `carryMismatch reopen` and report it to HOST"
   | .inviteRefused => "the invitation does not verify against the key you trust (stderr names why): obtain a fresh invitation from your sponsor and check the sponsor key you were given; nothing was written"
+  | .notCertified => "`host certified`: the certificate does not certify a head of the World the genesis input makes, under the authority it commits (stderr names why: a forged or stale certificate, another World's input, a carried start); nothing was read or written"
   | .indexMoved => "automatic; the index file (`index.<k0>.log`) changed size under the writer (another process wrote or truncated it): the restart's open truncates orphan entries or refuses indexShort; if it repeats, find the other writer"
   | .io => "the STORE path or the IN file is absent, a Store file is unreadable (EACCES, EIO), or a file was removed between the open's check and its open: check the path and permissions (the call and errno are on stderr)"
   | .ioServing => "automatic; an IO error after the open: check the disk"
@@ -455,7 +456,7 @@ def keybrokerAction : KeybrokerExit → String
   | .keyFileLink | .keyFileNotRegular | .keyFileOwner | .keyFileMode | .keyFileLength | .keyFileIo =>
     "the provider key file fails custody: a regular file owned by `nd`, mode 0600 (RUNBOOK §2a)"
   | .keyFileDir => "a directory above the provider key file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
-  | .keyFileFormat => "the provider key file is not `SLOT KEY` lines, or repeats a slot: rewrite it"
+  | .keyFileFormat => "the provider key file is not `SLOT KEY` lines, or repeats a slot, or holds one of `certify HEX` / `certify.next HEX` without the other (64 hex digits each, HOSTING-56): rewrite it"
   | .anchorsLink | .anchorsNotRegular | .anchorsOwner | .anchorsMode | .anchorsLength | .anchorsIo | .anchorsMissing =>
     "the anchors file fails custody or is missing: reinstall deploy/tls/anchors.pem owned by `nd`, mode 0644 (RUNBOOK §2a)"
   | .anchorsDir => "a directory above the anchors file is writable by another or owned by another user: fix the chain (RUNBOOK §2a, Dir)"
@@ -475,6 +476,7 @@ def keybrokerAction : KeybrokerExit → String
   | .deciderLost => "keybroker could not read its decider's end, or the decider gave no answer within ANSWER_MS_MAX (120 s) and did not end: nothing says a restart is safe; read the journal, then start the unit"
   | .deciderMechanism => "the decider's sandbox or program failed before the decider ran (stderr names the raw code: the confinement step, a missing program or library): fix the mechanism (deploy/live/README.md), then start the unit"
   | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
+  | .certifiedState => "the certify slot's last-certified file (provider.key.certified, beside the key) fails custody or could not be made: a regular file owned by `nd`, mode 0600; empty means nothing certified yet. Never delete or truncate it while the World lives: it is what stops a second certificate at one step (HOSTING-56)"
 
 /-- The codes the keybroker unit must not restart: both broker tables' fatal classes. -/
 def brokerPreventCodes : List Nat := DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal

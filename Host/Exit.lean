@@ -127,6 +127,9 @@ inductive Status where
   trusts, or its signature does not verify over its bytes (`Protocol.Invite.accept`, PROTOCOL-42);
   stderr names which. Nothing was written -/
   | inviteRefused
+  /-- `host certified`: the stranger's check took no head (`Protocol.Certified.check`, PROTOCOL-78);
+  stderr names why. Nothing is written by that verb -/
+  | notCertified
   /-- a seal at a segment position past u64: the base cannot spell where the log after it begins,
   so the base would not read back; refused before anything is written, a defect (HOST-46) -/
   | positionUnfit
@@ -156,7 +159,7 @@ def all : List Status :=
    segmentShort, tailTooLong, foreignSegment, corrupt, record, tagWidth, behindAnchor, chainMismatch,
    badIndex, pageTooLarge, pastEnd, shortBase, reopenFailed, reopenDiverged, lifetime, stream, noThreads,
    shapeMismatch, foreignOrigin, indexShort, indexCorrupt, entryUnfit, indexMoved, carryMismatch,
-   inviteRefused, positionUnfit, allowancePastBound, potentialPastBound, beforeLog, checkpointed,
+   inviteRefused, notCertified, positionUnfit, allowancePastBound, potentialPastBound, beforeLog, checkpointed,
    checkpointCorrupt]
 
 def code : Status → Nat
@@ -204,6 +207,7 @@ def code : Status → Nat
   | indexMoved => 48
   | carryMismatch => 49
   | inviteRefused => 44
+  | notCertified => 50
   | positionUnfit => 56
   | allowancePastBound => 58
   | potentialPastBound => 59
@@ -218,7 +222,7 @@ def cls : Status → ExitClass
   | locked | .exists | badKey | shortRead | missing | baseTooLarge | baseCorrupt | baseUndecodable
   | segmentShort | tailTooLong | foreignSegment | corrupt | record | tagWidth | behindAnchor | chainMismatch
   | badIndex | pageTooLarge | pastEnd | shortBase | reopenFailed | reopenDiverged | noThreads
-  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused | positionUnfit
+  | shapeMismatch | foreignOrigin | indexShort | indexCorrupt | entryUnfit | carryMismatch | inviteRefused | notCertified | positionUnfit
   | allowancePastBound | potentialPastBound | beforeLog | checkpointed | checkpointCorrupt => .fatal
 
 /-- The name printed beside the code (`refused NAME` / `exit NAME` on stderr). -/
