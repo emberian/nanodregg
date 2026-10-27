@@ -30,13 +30,16 @@ position), and one whose writer's tip is below the anchor answers `unreached`.
 A SELF-HEAD POST (PROTOCOL-75; DESIGN-TRUST T2) is the comparison made automatic, through the
 writer: a member posts its own head into a `Std.head` object of THIS World (`nd sync --post OBJ`:
 `headText` of follow's own World, planned as `invoke OBJ post` at the tip, `Command.body`), and
-every follow that absorbs the page carrying that post reads the object (`selfPosts`: a head object
-whose `world` is this World's origin, touched by a step of the page) and walks the page against the
-posted `(steps, chain)` exactly as `sync --to` walks (`forkedSelfPost`). A post at a position the
-page reaches with ANOTHER chain is `forkedPost`, the page kept (it is lawful on follow's fold) and
-the command ended by name: the poster's signed call is the witness. A post at a position follow was
-already past is not compared here: its chain is in follow's own Store (cv task T2b', the follow loop
-through its index), as `host check --anchor` reads it.
+every follow that
+absorbs the page carrying that post reads it FROM THE STEP that made it (`selfPosts`, PROTOCOL-83:
+the head a signed `post` call carries, or a head object of this World a turn bears, attributed to
+the call's signer, at the step's own log position), never from the World after the page (a later
+post on the same page would hide an earlier one, and an earlier toucher would be named for a later
+head). A post naming a step its own position had not reached is `postBeyondPage`; one at a position
+the page reaches with ANOTHER chain is `forkedPost`; either way the page is kept (it is lawful on
+follow's fold) and the command ends by name, the step and the signer printed: the signed call is the
+witness. A post at a position follow was already past is compared against follow's own Store
+(`behindPosts`, `Host.Follow.behindOr`). No other post exists: a post's position is inside its page.
 -/
 import Protocol.Envelope
 import Protocol.Command.Text
@@ -186,54 +189,105 @@ def postMethod : Nat := 1
 def headText (X : Ctx D) (w : World D) : String :=
   s!"(record (chain #{Text.toHex (X.env.bytes w.chain)}) (height {w.height}) (roots #{Text.toHex (X.env.bytes (w.roots X.env))}) (steps {w.steps}))"
 
-/-- The cells a step wrote or made: where a head object can have changed. -/
-def stepCells : Kernel.Step D → List D
-  | .turn t => t.touches.map (·.cell) ++ createdIds t
-  | .refusal _ => []
+/-- A self-head post (PROTOCOL-83): what one admitted step says about its signer's head. The posted
+head's step count and chain bytes, the member who signed the call, and the post's own log position
+(`pos`: the World's step count when the step was admitted, so the step is the `pos + 1`-th). -/
+structure Post (D : Type) where
+  steps : Nat
+  chain : ByteArray
+  member : D
+  pos : Nat
 
-/-- A self-head post: on `w'` (the World after the page), cell `c`, touched by step `s` of the page,
-is a head object of THIS World (`Lang.headView` at `Foreign.headPackageId`, its `world` the World's
-origin) holding an `at` head: its `(steps, chain)`, and the member whose call the step was. -/
-def selfPost (X : Ctx D) (w' : World D) (s : Kernel.Step D) (c : D) : Option (Nat × ByteArray × Option D) := do
-  let cell ← w'.live X.env c
+/-- The head of THIS World a cell holds, as `(steps, chain)`: the cell is a head object
+(`Lang.headView` at `Foreign.headPackageId`) whose `world` is `origin`, holding an `at` head. -/
+def selfHeadOf (X : Ctx D) (origin : D) (cell : Cell) : Option (Nat × ByteArray) :=
   match Lang.headView X.digestOf (X.env.bytes (Foreign.headPackageId X.env)) cell with
-  | some (.at world chain _ _ steps) =>
-      if world = X.env.bytes w'.origin then
-        some (steps, chain, match s with
-          | .turn t => (X.decodeCall t.event).map (·.unsigned.member)
-          | .refusal _ => none)
-      else none
+  | some (.at world chain _ _ steps) => if world = X.env.bytes origin then some (steps, chain) else none
   | _ => none
 
-/-- Every self-head post a page carries, in log order. -/
-def selfPosts (X : Ctx D) (w' : World D) (ts : List (Kernel.Step D × D)) : List (Nat × ByteArray × Option D) :=
-  ts.flatMap fun p => (stepCells p.1).filterMap (selfPost X w' p.1)
+/-- `o` is a head object of THIS World: live on `w'` (after the page), else on `w` (before it), with
+`world` the World's origin. A head object's package never changes (`Integrity.law`) and its `world`
+is fixed by the head law, so either World answers. -/
+def selfHeadObj (X : Ctx D) (w w' : World D) (o : D) : Bool :=
+  match (w'.live X.env o).orElse fun _ => w.live X.env o with
+  | some cell =>
+    match Lang.headView X.digestOf (X.env.bytes (Foreign.headPackageId X.env)) cell with
+    | some (.at world ..) | some (.forked world) => world = X.env.bytes w'.origin
+    | none => false
+  | none => false
 
-/-- The first self-head post whose position follow's fold reached ON THIS PAGE with another chain
-(`anchorCheck` from follow's position before the page, as `sync --to` walks): its step count and
-the poster. A post at a position follow was already past, or past the page, is `unreached` from here
-and not compared. -/
-@[irreducible] def forkedSelfPost (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D) :
-    Option (Nat × Option D) :=
-  (selfPosts X w' ts).findSome? fun p =>
-    if anchorCheck X.env p.1 p.2.1 w.steps w.chain ts = .forked then some (p.1, p.2.2) else none
+/-- The head a `post` call's arguments carry: its step count and chain bytes. -/
+def postedHead (args : ByteArray) : Option (Nat × ByteArray) :=
+  match (Lang.Wire.decodeData Lang.Std.headAtTy args).toOption with
+  | some (.record [("chain", .digest c), ("height", .nat _), ("roots", .digest _), ("steps", .nat s)]) =>
+      some (s, c)
+  | _ => none
 
-/-- The self-head posts a page carries at a position follow was already AT or past before the page
-(`steps ≤ w.steps`): exactly the ones `anchorCheck` cannot reach from follow's position (it compares
-the step counts `w.steps + 1 …` the page walks), so `forkedSelfPost` leaves them `unreached`. Follow's
-own Store answers them (`forkedBehindPost`, `Host.Follow.loop`: T2b'). -/
-def behindPosts (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D) :
-    List (Nat × ByteArray × Option D) :=
-  (selfPosts X w' ts).filter fun p => decide (p.1 ≤ w.steps)
+/-- The self-head posts of one step at log position `pos`, read from the STEP, never from a later
+World: each head object of this World the turn bears (a seed is a claim at its step, PROTOCOL-75),
+then the head a signed `invoke OBJ post HEAD` carries when OBJ is a head object of this World. Each
+is attributed to the member whose signed call the step is. A head object's state changed any other
+way (a raw `write`, a nested call of a program) is no member's signed statement of its own head, and
+is not a post. -/
+def stepPosts (X : Ctx D) (w w' : World D) (pos : Nat) : Kernel.Step D → List (Post D)
+  | .refusal _ => []
+  | .turn t =>
+    match X.decodeCall t.event with
+    | none => []
+    | some c =>
+      let m := c.unsigned.member
+      (t.creates.filterMap fun p => (selfHeadOf X w'.origin p.2).map fun h => ⟨h.1, h.2, m, pos⟩) ++
+      match c.unsigned.body with
+      | .invoke o meth args _ _ =>
+          if meth = postMethod ∧ selfHeadObj X w w' o = true then
+            match postedHead args with
+            | some h => [⟨h.1, h.2, m, pos⟩]
+            | none => []
+          else []
+      | _ => []
+
+/-- Every self-head post a page carries, in log order, each at its own position (`w` the World
+before the page, `w'` after it, `ts` the page's steps). -/
+def selfPosts (X : Ctx D) (w w' : World D) (ts : List (Kernel.Step D × D)) : List (Post D) :=
+  (ts.zipIdx w.steps).flatMap fun q => stepPosts X w w' q.2 q.1.1
+
+/-- What is wrong with a post, if anything. -/
+inductive PostFault
+  /-- follow's fold reached the posted step count ON THIS PAGE with another chain -/
+  | forked
+  /-- the post names a step count its own position had not reached: no member of THIS history
+  can have held that head when the post was admitted -/
+  | beyond
+  deriving DecidableEq, Repr
+
+/-- A post's fault: `beyond` when it names a step past its own position (`pos < steps`), else
+`forked` when the walk from follow's position before the page reaches its step count with another
+chain. A post at or behind follow's position is the Store's to compare (`behindPosts`). -/
+def postFault (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (p : Post D) : Option PostFault :=
+  if p.pos < p.steps then some .beyond
+  else if anchorCheck X.env p.steps p.chain w.steps w.chain ts = .forked then some .forked else none
+
+/-- The first post of the page, in log order, with a fault. Since every post's position is inside
+the page, a post at no fault is behind follow's position or reached by the walk with its own chain
+(`Proofs.Head.pagePostFault_none`): no post escapes comparison. -/
+@[irreducible] def pagePostFault (X : Ctx D) (w w' : World D) (ts : List (Kernel.Step D × D)) :
+    Option (PostFault × Post D) :=
+  (selfPosts X w w' ts).findSome? fun p => (postFault X w ts p).map (·, p)
+
+/-- The self-head posts a page carries at a step count follow was already AT or past before the
+page (`steps ≤ w.steps`): exactly the ones `anchorCheck` cannot reach from follow's position (it
+compares the step counts `w.steps + 1 …` the page walks). Follow's own Store answers them
+(`forkedBehindPost`, `Host.Follow.loop`: T2b'). -/
+def behindPosts (X : Ctx D) (w w' : World D) (ts : List (Kernel.Step D × D)) : List (Post D) :=
+  (selfPosts X w w' ts).filter fun p => decide (p.steps ≤ w.steps)
 
 /-- The first behind post whose chain is not the chain follow's own history holds at its step count
-(`chainAt s`, read from follow's Store: `Host.Deployed.chainKept`), and its poster. A step the Store no
-longer keeps (`chainAt s = none`: below its oldest kept file) is not compared: the Store cannot say. -/
-def forkedBehindPost (posts : List (Nat × ByteArray × Option D)) (chainAt : Nat → Option ByteArray) :
-    Option (Nat × Option D) :=
-  posts.findSome? fun p => match chainAt p.1 with
-    | some c => if c = p.2.1 then none else some (p.1, p.2.2)
-    | none => none
+(`chainAt s`, read from follow's Store: `Host.Deployed.chainKept`). A step the Store no longer keeps
+(`chainAt s = none`) is not compared: the Store cannot say. -/
+def forkedBehindPost (posts : List (Post D)) (chainAt : Nat → Option ByteArray) : Option (Post D) :=
+  posts.find? fun p => match chainAt p.steps with
+    | some c => c ≠ p.chain
+    | none => false
 
 /-! ## Certified heads (PROTOCOL-76; DESIGN-TRUST §1.2, §4.3: T3's unsigned half)
 
@@ -427,7 +481,7 @@ def pageCertified (X : Ctx D) (w : World D) (b : ByteArray) : Option (Nat × Byt
     | .error _ => none
 
 /-- The certified head's step count when follow's fold reached it ON THIS PAGE with another chain
-(`anchorCheck` from follow's position `w` before the page, as `forkedSelfPost` walks). A head at a
+(`anchorCheck` from follow's position `w` before the page, as `pagePostFault` walks). A head at a
 position follow was already past is `behindCertified`'s (its own Store answers it); one past the
 page is not compared here. -/
 @[irreducible] def forkedCertified (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (b : ByteArray) :

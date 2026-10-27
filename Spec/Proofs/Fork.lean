@@ -1,33 +1,31 @@
 /-
-# Spec.Proofs.Fork — A2′ FORK CONSISTENCY over the member's follower step
+# Spec.Proofs.Fork — A2′: members who compare heads hold one history up to the compared step
 
-SUNDR's fork consistency at the deployed act (PROTOCOL-75: self-heads through the writer). A member
-posts its own head `(steps, chain)` into a `Std.head` object of its World (`nd sync --post`); every
-follow that absorbs a page carrying such a post walks the page against it (`Head.forkedSelfPost`).
-The claim: whenever one frame of follow absorbs a page carrying a post of the head of ANOTHER fold
-of the same start, at a position the page walks, either follow's log up to that position IS the
-other fold's log (or two of the inputs the two folds' chains compare collide, an explicit list), or
-the frame ends `refused forkedPost` and the page names a post whose position follow's own fold
-passed with another chain. A writer that forks two members cannot show either a page that joins
-the forks without the member saying so by name.
+What the member's follower proves when it compares another member's stated head with its own fold
+(PROTOCOL-82: prefix agreement on comparison). It is NOT SUNDR's fork consistency, which no claim
+here states: a signed call names no prefix of the history its signer saw, so a writer can admit one
+member's call on two branches (CRIT-TRUST). The claims were named `ForkConsistent` until PROTOCOL-83.
+
+`HeadsCompared`: a member posts its own head `(steps, chain)` into a `Std.head` object of its World
+(`nd sync --post`); every follow that absorbs a page carrying such a post reads it from the step that
+made it (`Head.selfPosts`) and compares it (`Head.pagePostFault`). Whenever one frame of follow
+absorbs a page carrying a post of the head of ANOTHER fold of the same start, past follow's position
+before the page, either follow's log up to that position IS the other fold's log (or two of the
+inputs the two folds' chains compare collide, an explicit list), or the frame ends `refused
+forkedPost` with a post whose position follow's own fold passed with another chain, or `refused
+postBeyondPage` with a post naming a step past its own position. Every refusal carries its evidence
+in the disjunct (the post and the fold) and on stdout (`Command.forkRefused`).
 
 Premises (each a hypothesis of the claim, named):
 * the two folds from one start `g` (`l₀` to follow's World, `lg` to the poster's): what makes the
   conclusion a statement about TWO members' histories (`fold_head_binds`);
 * `f.world.steps < wg.steps`: a post at or behind follow's position is compared by the follow LOOP
-  against its own Store (`Host.Follow.behindOr`, HOST-79), which is not a `System` field;
-* `wg.steps ≤ f'.world.steps`: a post naming a step past the page's end is compared by NOBODY today
-  (not the walk, not `behindOr`, and never again, since `selfPosts` reads only the cells a page
-  touched), although an honest post always sits at an index past its own step count, so such a
-  post is itself evidence of a fork or a forgery: cv task 01a17ac1-5204. Deleting this premise is
-  that task's strengthening.
-
-The refusal disjunct carries its evidence (the post and the fold that passed it with another
-chain) because the reply cannot: `Command.refused` drops the step and poster, and a writer
-refusal named `forkedPost` (`Refusal.host`) prints the same bytes (cv task 01a17ac1-5233).
+  against its own Store (`Host.Follow.behindOr`, HOST-79), which is not a `System` field.
+The premise `wg.steps ≤ f'.world.steps` is deleted (PROTOCOL-83, cv 01a17ac1-5204): a post's
+position is inside its page (`Head.selfPosts_pos`), so a post past the page's end is `postBeyondPage`.
 
 The other arm, `nd sync --to STEPS:CHAIN` (PROTOCOL-74: the member BEHIND catches up to another's
-stated head), is `ForkConsistent.sync` below, with its own floor (`syncBlind`) and inhabited run.
+stated head), is `HeadsCompared.sync` below, with its own floor (`syncBlind`) and inhabited run.
 -/
 import Spec.Proofs.Floor
 import Spec.Sim.Fork
@@ -44,30 +42,32 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 /-! ## The claim -/
 
-/-- **A2′. Fork consistency of the member's follower.** One frame of follow that persists the
-steps `ts` of a page, from a World `f.world` that is a fold of `l₀` from a start `g`: for every
-self-head post the page carries (`Head.selfPosts`) that names the head of a World `wg`, a fold of
-`lg` from the same `g`, at a step count the page walks (`f.world.steps < wg.steps ≤ f'.world.steps`):
-follow's log up to that step count (the page's prefix of `wg.steps - f.world.steps` steps, fixed by
-the premises) is `lg`, or two of the inputs the two folds' chains compare
-collide; or the frame ends `refused forkedPost` and the page carries a post at a position follow's
-own fold passed with another chain (the refusal is never free). -/
-def ForkConsistent (S : System D) : Prop :=
+/-- **A2′. Members who compare heads.** One frame of follow that persists the steps `ts` of a page,
+from a World `f.world` that is a fold of `l₀` from a start `g`: for every self-head post `p` the page
+carries (`Head.selfPosts`) that names the head of a World `wg`, a fold of `lg` from the same `g`,
+past follow's position (`f.world.steps < wg.steps`): follow's log up to that step count (the page's
+prefix of `wg.steps - f.world.steps` steps) is `lg`, or two of the inputs the two folds' chains
+compare collide; or the frame ends `refused forkedPost` and the page carries a post at a position
+follow's own fold passed with another chain; or it ends `refused postBeyondPage` and the page carries
+a post naming a step past its own position. -/
+def HeadsCompared (S : System D) : Prop :=
   ∀ (me : Command.Self D) (f f' : Command.Follow D) (kb res : ByteArray)
     (ts : List (Step D × D)) (r : Command.Reply),
     S.follow me f kb res = (f', .steps ts, r) →
-    ∀ {g wg : World D} {l₀ lg : List (Step D)} {m : Option D},
+    ∀ {g wg : World D} {l₀ lg : List (Step D)} {p : Head.Post D},
       S.fold g l₀ = .ok f.world → S.fold g lg = .ok wg →
-      (wg.steps, S.X.env.bytes wg.chain, m) ∈ Head.selfPosts S.X f'.world ts →
-      f.world.steps < wg.steps → wg.steps ≤ f'.world.steps →
+      p ∈ Head.selfPosts S.X f.world f'.world ts → p.steps = wg.steps → p.chain = S.X.env.bytes wg.chain →
+      f.world.steps < wg.steps →
       (l₀ ++ (ts.take (wg.steps - f.world.steps)).map Prod.fst = lg ∨
           CollidesAmong S.X.env.hash
             (foldPres S.X.env g (l₀ ++ (ts.take (wg.steps - f.world.steps)).map Prod.fst) ++
               foldPres S.X.env g lg)) ∨
-      (∃ s c m', (s, c, m') ∈ Head.selfPosts S.X f'.world ts ∧
+      (∃ q ∈ Head.selfPosts S.X f.world f'.world ts, q.steps ≤ q.pos ∧
           (∃ pre post v, ts = pre ++ post ∧ S.fold f.world (pre.map Prod.fst) = .ok v ∧
-            v.steps = s ∧ S.X.env.bytes v.chain ≠ c) ∧
-          r = Command.refused (D := D) (.forkedPost s m'))
+            v.steps = q.steps ∧ S.X.env.bytes v.chain ≠ q.chain) ∧
+          r = Command.forkRefused (D := D) (.forkedPost q.steps (S.X.env.bytes q.member))) ∨
+      (∃ q ∈ Head.selfPosts S.X f.world f'.world ts, q.pos < q.steps ∧
+          r = Command.forkRefused (D := D) (.postBeyondPage q.steps q.pos (S.X.env.bytes q.member)))
 
 /-! ## The step lemma -/
 
@@ -117,73 +117,57 @@ theorem step_steps {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)}
         | exact .inl ⟨hp.symm, rfl⟩
         | (subst hp; exact .inr ⟨_, _, _, _, _, _, _, _, ‹_›, rfl, st, rfl, hpa⟩)
 
-omit [Ord D] [DecidableEq D] in
-/-- The walk reaches every step count strictly after its start and no later than its end. -/
-theorem anchorCheck_reached {E : Env D} {steps : Nat} {chain : ByteArray} :
-    ∀ {s : Nat} {c : D} {ts : List (Step D × D)}, s < steps → steps ≤ s + ts.length →
-      Head.anchorCheck E steps chain s c ts ≠ .unreached
-  | _, _, [], h₁, h₂ => by simp only [List.length_nil] at h₂; omega
-  | s, c, (t, r) :: rest, h₁, h₂ => by
-      simp only [Head.anchorCheck]
-      split
-      · split <;> simp
-      · rename_i hs
-        simp only [List.length_cons] at h₂
-        exact anchorCheck_reached (by omega) (by omega)
-
 /-! ## The top theorem -/
 
-/-- **A2′ of the deployed system**: `step_steps`, then `forkedSelfPost_none` (every post the page
-walks is on follow's fold: `fold_head_binds` binds it to the other fold) or `forkedSelfPost_forked`
-(the refusal names a post follow's own fold passed with another chain). -/
-theorem top_forkConsistent (d : ByteArray → ByteArray) : ForkConsistent (deployed d) := by
-  intro me f f' kb res ts r h g wg l₀ lg m h₀ hg hmem hlo hhi
+/-- **A2′ of the deployed system**: `step_steps`, then `pagePostFault_none` (every post past follow's
+position is on follow's fold: `fold_head_binds` binds it to the other fold), `pagePostFault_forked`
+or `pagePostFault_beyond` (the refusal names its post). -/
+theorem top_headsCompared (d : ByteArray → ByteArray) : HeadsCompared (deployed d) := by
+  intro me f f' kb res ts r h g wg l₀ lg p h₀ hg hmem hps hpc hlo
   rw [fold_eq_world _ rfl rfl] at h₀ hg
   have h' : Command.step Host.Deployed.X Codec.Deployed.digestCodec (deployed d).B me f kb res =
       (f', .steps ts, r) := h
   rcases step_steps h' rfl with ⟨rfl, -⟩ | ⟨cmd, evs, steps, chain, base, wb, cert, r₀, ha, hr, -⟩
   · simp [Head.selfPosts] at hmem
   · have hrf := Command.absorbPage_admits (Command.absorbSync_ok ha)
-    have hlen : f'.world.steps = f.world.steps + ts.length := by
-      rw [fold_steps (RootedFold.fold hrf), List.length_map]
-    cases hfs : Head.forkedSelfPost Host.Deployed.X f.world ts f'.world with
+    cases hfs : Head.pagePostFault Host.Deployed.X f.world f'.world ts with
     | none =>
-      rcases Head.forkedSelfPost_none hrf hfs _ _ _ hmem with hu | ⟨pre, post, v, hts, hv, hvs, hvc⟩
-      · exact absurd hu (anchorCheck_reached hlo (by omega))
+      rcases Head.pagePostFault_none hrf hfs p hmem with hle | ⟨pre, post, v, hts, hv, hvs, hvc⟩
+      · omega
       · have hfull : World.fold Host.Deployed.X.env g (l₀ ++ pre.map Prod.fst) = .ok v :=
           fold_append.mpr ⟨_, h₀, hv⟩
         have hpl : f.world.steps + pre.length = wg.steps := by
-          rw [← hvs, fold_steps hv, List.length_map]
+          rw [← hps, ← hvs, fold_steps hv, List.length_map]
         have hpre : pre = ts.take (wg.steps - f.world.steps) := by
           rw [hts, List.take_left' (by omega)]
         subst hpre
-        exact .inl (fold_head_binds deployed_lawful hfull hg hvs (deployed_lawful.bytes_inj hvc))
-    | some sm =>
-      obtain ⟨s, m'⟩ := sm
-      obtain ⟨c, hc, pre, post, v, hts, hv, hvs, hvc⟩ := Head.forkedSelfPost_forked hrf hfs
-      refine .inr ⟨s, c, m', hc, ⟨pre, post, v, hts, ?_, hvs, hvc⟩, ?_⟩
-      · rw [fold_eq_world _ rfl rfl]; exact hv
-      · rw [hr]; unfold Command.postOr; rw [hfs]
+        exact .inl (fold_head_binds deployed_lawful hfull hg (hvs.trans hps)
+          (deployed_lawful.bytes_inj (hvc.trans hpc)))
+    | some fq =>
+      obtain ⟨k, q⟩ := fq
+      cases k with
+      | forked =>
+        obtain ⟨hq, hqs, pre, post, v, hts, hv, hvs, hvc⟩ := Head.pagePostFault_forked hrf hfs
+        refine .inr (.inl ⟨q, hq, hqs, ⟨pre, post, v, hts, ?_, hvs, hvc⟩, ?_⟩)
+        · rw [fold_eq_world _ rfl rfl]; exact hv
+        · rw [hr]; unfold Command.postOr; rw [hfs]; rfl
+      | beyond =>
+        obtain ⟨hq, hqb⟩ := Head.pagePostFault_beyond hfs
+        refine .inr (.inr ⟨q, hq, hqb, ?_⟩)
+        rw [hr]; unfold Command.postOr; rw [hfs]; rfl
 
 /-! ## The floor and the inhabited case (the trivial system and the run: `Spec.Sim.Fork`) -/
 
-theorem refused_forkedPost (s : Nat) (m : Option Digest) :
-    Command.refused (D := Digest) (.forkedPost s m) =
-      .done CommandExit.refused.code.toUInt8 .empty forkedPostErr := rfl
-
-theorem unforked_ne (r : Command.Reply) (s : Nat) (m : Option Digest) :
-    unforked r ≠ Command.refused (D := Digest) (.forkedPost s m) := by
-  rw [refused_forkedPost]
+/-- The post-blind follower's reply on a frame whose deployed reply is a `forkedPost` end is an `ok`
+end: never a refused one. -/
+theorem unforked_ne (r : Command.Reply) (hf : forkedPostDone r = true) (o e : ByteArray) :
+    unforked r ≠ .done CommandExit.refused.code.toUInt8 o e := by
   cases r with
-  | done e o err =>
-    simp only [unforked]
-    split
-    · simp only [ne_eq, Command.Reply.done.injEq, not_and]
-      intro h; exact absurd h (by decide)
-    · rename_i hne
-      simp only [ne_eq, Command.Reply.done.injEq, not_and]
-      intro _ _ h; exact hne h
-  | _ => simp [unforked]
+  | done e₀ o₀ err =>
+    simp only [forkedPostDone, Bool.and_eq_true, decide_eq_true_eq] at hf
+    simp only [unforked, hf.2, if_true, ne_eq, Command.Reply.done.injEq, not_and]
+    intro h; exact absurd h (by decide)
+  | _ => simp [forkedPostDone] at hf
 
 theorem stepsOf_eq {p : Command.Persist Digest} (h : (stepsOf p).isSome = true) :
     p = .steps ((stepsOf p).getD []) := by
@@ -192,18 +176,18 @@ theorem stepsOf_eq {p : Command.Persist Digest} (h : (stepsOf p).isSome = true) 
   | adopt _ => simp [stepsOf] at h
 
 /-- **The joining run**: follow, at genesis, absorbs fork A's page: it persists the page's steps,
-which carry a post of fork B's head at step 1, a step the page walks; fork A's first step is not
-fork B's, no two of the two prefixes' link inputs collide; and the deployed follower ends the
-frame `refused forkedPost`. Fork B folds. -/
+which carry a post of fork B's head at step 1 (a seed, read from the step that bore it), past
+follow's position; fork A's first step is not fork B's, no two of the two prefixes' link inputs
+collide; and the deployed follower ends the frame `refused forkedPost`. Fork B folds. -/
 theorem run_forkedPost :
     (match World.fold Xd.env wGenesis wLog with
      | .ok wB =>
         match (deployed storeDigest).follow sMe ⟨wGenesis, none, none⟩ kKb kPage with
         | (f', p, r) =>
             (stepsOf p).isSome &&
-              (Head.selfPosts Xd f'.world ((stepsOf p).getD [])).any
-                (fun q => decide (q = (wB.steps, Xd.env.bytes wB.chain, some wMember))) &&
-              decide (wB.steps = wGenesis.steps + 1) && decide (wB.steps ≤ f'.world.steps) &&
+              (Head.selfPosts Xd wGenesis f'.world ((stepsOf p).getD [])).any
+                (fun q => decide (q.steps = wB.steps) && decide (q.chain = Xd.env.bytes wB.chain)) &&
+              decide (wB.steps = wGenesis.steps + 1) &&
               decide ((((stepsOf p).getD []).take 1).map Prod.fst ≠ wLog) &&
               collisionFree Xd.env.hash
                 (foldPres Xd.env wGenesis ((((stepsOf p).getD []).take 1).map Prod.fst) ++
@@ -215,13 +199,13 @@ theorem run_forkedPost :
 /-- The run, unpacked: a frame of the deployed follower from a World `g`, a fold of `g` to `w`,
 and the facts the floor and the inhabited case read. -/
 theorem run_unpacked :
-    ∃ (g : World Digest) (lg : List (Step Digest)) (mm : Digest) (me : Command.Self Digest)
+    ∃ (g : World Digest) (lg : List (Step Digest)) (me : Command.Self Digest)
       (kb res : ByteArray) (f' : Command.Follow Digest) (p : Command.Persist Digest)
-      (ts : List (Step Digest × Digest)) (r : Command.Reply) (w : World Digest),
+      (ts : List (Step Digest × Digest)) (r : Command.Reply) (w : World Digest) (q : Head.Post Digest),
       (deployed storeDigest).follow me ⟨g, none, none⟩ kb res = (f', p, r) ∧ p = .steps ts ∧
       World.fold Xd.env g lg = .ok w ∧
-      (w.steps, Xd.env.bytes w.chain, some mm) ∈ Head.selfPosts Xd f'.world ts ∧
-      w.steps = g.steps + 1 ∧ w.steps ≤ f'.world.steps ∧
+      q ∈ Head.selfPosts Xd g f'.world ts ∧ q.steps = w.steps ∧ q.chain = Xd.env.bytes w.chain ∧
+      w.steps = g.steps + 1 ∧
       (ts.take 1).map Prod.fst ≠ lg ∧
       ¬ CollidesAmong Xd.env.hash (foldPres Xd.env g ((ts.take 1).map Prod.fst) ++ foldPres Xd.env g lg) ∧
       forkedPostDone r = true := by
@@ -229,7 +213,6 @@ theorem run_unpacked :
   revert hr
   generalize wGenesis = g
   generalize wLog = lg
-  generalize wMember = mm
   generalize sMe = me
   generalize kKb = kb
   generalize kPage = res
@@ -244,19 +227,19 @@ theorem run_unpacked :
       rw [hR] at hr
       dsimp only at hr
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hr
-      obtain ⟨⟨⟨⟨⟨⟨hsome, hmem⟩, hs1⟩, hs2⟩, hne⟩, hcf⟩, hfp⟩ := hr
-      obtain ⟨x, hx, hxe⟩ := List.any_eq_true.mp hmem
-      simp only [decide_eq_true_eq] at hxe
-      subst hxe
-      exact ⟨g, lg, mm, me, kb, res, f', p, _, r, w, hR, stepsOf_eq hsome, hgf, hx, hs1, hs2, hne,
+      obtain ⟨⟨⟨⟨⟨hsome, hmem⟩, hs1⟩, hne⟩, hcf⟩, hfp⟩ := hr
+      obtain ⟨q, hq, hqe⟩ := List.any_eq_true.mp hmem
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hqe
+      exact ⟨g, lg, me, kb, res, f', p, _, r, w, q, hR, stepsOf_eq hsome, hgf, hq, hqe.1, hqe.2, hs1, hne,
         not_collides hcf, hfp⟩
 
 /-- **FLOOR (A2′).** The claim refuses the post-blind follower: on the joining run it persists a
-page carrying fork B's head at a step it walks, follow's log up to there is not fork B's and no
-listed input collides, and it does not end `refused forkedPost`. -/
-theorem floor_forkConsistent : ¬ ForkConsistent (postBlind storeDigest) := by
+page carrying fork B's head past its position, follow's log up to there is not fork B's and no
+listed input collides, and it does not end refused. -/
+theorem floor_headsCompared : ¬ HeadsCompared (postBlind storeDigest) := by
   intro h
-  obtain ⟨g, lg, mm, me, kb, res, f', p, ts, r, w, hR, rfl, hgf, hmem, hs1, hs2, hne, hcol, -⟩ := run_unpacked
+  obtain ⟨g, lg, me, kb, res, f', p, ts, r, w, q, hR, rfl, hgf, hmem, hqs, hqc, hs1, hne, hcol, hfp⟩ :=
+    run_unpacked
   have ht : (postBlind storeDigest).follow me ⟨g, none, none⟩ kb res = (f', .steps ts, unforked r) := by
     show (((deployed storeDigest).follow me ⟨g, none, none⟩ kb res).1,
       ((deployed storeDigest).follow me ⟨g, none, none⟩ kb res).2.1,
@@ -264,36 +247,35 @@ theorem floor_forkConsistent : ¬ ForkConsistent (postBlind storeDigest) := by
     rw [hR]
   have hg : (postBlind storeDigest).fold g lg = .ok w := by
     rw [fold_eq_world _ rfl rfl]; exact hgf
-  rcases h me ⟨g, none, none⟩ f' kb res ts (unforked r) ht (l₀ := []) rfl hg hmem (by simp only; omega) hs2 with
-    (heq | hc) | ⟨s, c, m', -, -, hrr⟩
-  · have hk : w.steps - g.steps = 1 := by omega
-    simp only [hk, List.nil_append] at heq
+  have hk : w.steps - g.steps = 1 := by omega
+  rcases h me ⟨g, none, none⟩ f' kb res ts (unforked r) ht (l₀ := []) rfl hg hmem hqs hqc
+      (by simp only; omega) with (heq | hc) | ⟨_, -, -, -, hrr⟩ | ⟨_, -, -, hrr⟩
+  · simp only [hk, List.nil_append] at heq
     exact hne heq
-  · have hk : w.steps - g.steps = 1 := by omega
-    simp only [hk, List.nil_append] at hc
+  · simp only [hk, List.nil_append] at hc
     exact hcol hc
-  · exact unforked_ne r s m' hrr
+  · exact unforked_ne r hfp _ _ hrr
+  · exact unforked_ne r hfp _ _ hrr
 
 /-- **INHABITED (A2′).** The deployed follower reaches the claim's refusal: at genesis it absorbs a
-page carrying another fold's head at a step the page walks, and ends `refused forkedPost`. -/
-theorem inhabited_forkConsistent :
+page carrying another fold's head past its position, and ends `refused forkedPost`. -/
+theorem inhabited_headsCompared :
     ∃ (me : Command.Self Digest) (f f' : Command.Follow Digest) (kb res : ByteArray)
       (ts : List (Step Digest × Digest)) (r : Command.Reply) (g wg : World Digest)
-      (l₀ lg : List (Step Digest)) (m : Option Digest),
+      (l₀ lg : List (Step Digest)) (p : Head.Post Digest),
       (deployed storeDigest).follow me f kb res = (f', .steps ts, r) ∧
       (deployed storeDigest).fold g l₀ = .ok f.world ∧ (deployed storeDigest).fold g lg = .ok wg ∧
-      (wg.steps, Xd.env.bytes wg.chain, m) ∈ Head.selfPosts Xd f'.world ts ∧
-      f.world.steps < wg.steps ∧ wg.steps ≤ f'.world.steps ∧
-      ∃ s m', r = Command.refused (D := Digest) (.forkedPost s m') := by
-  obtain ⟨g, lg, mm, me, kb, res, f', p, ts, r, w, hR, rfl, hgf, hmem, hs1, hs2, -, -, hfp⟩ := run_unpacked
-  refine ⟨me, ⟨g, none, none⟩, f', kb, res, ts, r, g, w, [], lg, some mm, hR, rfl,
-    by rw [fold_eq_world _ rfl rfl]; exact hgf, hmem, by simp only; omega, hs2, 0, none, ?_⟩
-  rw [refused_forkedPost]
+      p ∈ Head.selfPosts Xd f.world f'.world ts ∧ p.steps = wg.steps ∧ p.chain = Xd.env.bytes wg.chain ∧
+      f.world.steps < wg.steps ∧
+      ∃ o, r = .done CommandExit.refused.code.toUInt8 o forkedPostErr := by
+  obtain ⟨g, lg, me, kb, res, f', p, ts, r, w, q, hR, rfl, hgf, hmem, hqs, hqc, hs1, -, -, hfp⟩ := run_unpacked
+  refine ⟨me, ⟨g, none, none⟩, f', kb, res, ts, r, g, w, [], lg, q, hR, rfl,
+    by rw [fold_eq_world _ rfl rfl]; exact hgf, hmem, hqs, hqc, by simp only; omega, ?_⟩
   cases r with
   | done e o err =>
     simp only [forkedPostDone, Bool.and_eq_true, decide_eq_true_eq] at hfp
-    obtain ⟨⟨rfl, rfl⟩, rfl⟩ := hfp
-    rfl
+    obtain ⟨rfl, rfl⟩ := hfp
+    exact ⟨o, rfl⟩
   | _ => simp [forkedPostDone] at hfp
 
 /-! ## A2′, the `sync --to` arm (PROTOCOL-74) -/
@@ -307,7 +289,7 @@ folded by `lg` from the same `g`: follow's log up to the anchor (the page's pref
 A page that would carry follow past the anchor on another chain is refused (`forkedWorld`, nothing
 kept) or does not reach the position on this frame; either way the World stays below it, outside
 the premise. -/
-def ForkConsistent.sync (S : System D) : Prop :=
+def HeadsCompared.sync (S : System D) : Prop :=
   ∀ (me : Command.Self D) (f f' : Command.Follow D) (kb res : ByteArray)
     (ts : List (Step D × D)) (r : Command.Reply) (st : Command.State) (steps : Nat) (chain : ByteArray),
     Command.State.ofBytes kb = some st →
@@ -341,7 +323,7 @@ theorem absorbSync_to {X : Ctx D} {me : Command.Self D} {w w' : World D} {evs : 
 /-- **A2′ (sync) of the deployed system**: `step_steps` (the frame absorbed a page under the
 continuation's own command), `absorbSync_to` (the walk was not `forked`), `anchorCheck_reached`
 (nor `unreached`), so `shared`: `anchorCheck_shared`, then `anchor_binds`. -/
-theorem top_forkConsistent_sync (d : ByteArray → ByteArray) : ForkConsistent.sync (deployed d) := by
+theorem top_headsCompared_sync (d : ByteArray → ByteArray) : HeadsCompared.sync (deployed d) := by
   intro me f f' kb res ts r st steps chain hst hpa h g wg l₀ lg h₀ hg hws hwc hlo hhi
   rw [fold_eq_world _ rfl rfl] at h₀ hg
   have h' : Command.step Host.Deployed.X Codec.Deployed.digestCodec (deployed d).B me f kb res =
@@ -357,7 +339,7 @@ theorem top_forkConsistent_sync (d : ByteArray → ByteArray) : ForkConsistent.s
     have hlen : f'.world.steps = f.world.steps + ts.length := by
       rw [fold_steps (RootedFold.fold hrf), List.length_map]
     have hnf := absorbSync_to ha
-    have hnu := anchorCheck_reached (E := Host.Deployed.X.env) (chain := chain) (c := f.world.chain)
+    have hnu := Head.anchorCheck_reached (E := Host.Deployed.X.env) (chain := chain) (c := f.world.chain)
       (ts := ts) hlo (by omega)
     cases hk : Head.anchorCheck Host.Deployed.X.env steps chain f.world.steps f.world.chain ts with
     | forked => exact absurd hk hnf
@@ -428,7 +410,7 @@ theorem run_syncShared : syncRunOk (deployed storeDigest) sMe wGenesis kToKbA kP
 
 /-- **FLOOR (A2′, sync).** The claim refuses the follower that reads `sync --to` as `sync`: on the
 joining page it walks past fork B's head with fork A's chain. -/
-theorem floor_forkConsistent_sync : ¬ ForkConsistent.sync (syncBlind storeDigest) := by
+theorem floor_headsCompared_sync : ¬ HeadsCompared.sync (syncBlind storeDigest) := by
   intro h
   have hr := run_syncBlind
   simp only [Bool.and_eq_true] at hr
@@ -447,7 +429,7 @@ theorem floor_forkConsistent_sync : ¬ ForkConsistent.sync (syncBlind storeDiges
 
 /-- **INHABITED (A2′, sync).** The deployed follower, told to catch up to fork A's own head at step 1,
 moves past it on the joining page: the claim's premise holds of the deployed system. -/
-theorem inhabited_forkConsistent_sync :
+theorem inhabited_headsCompared_sync :
     ∃ (me : Command.Self Digest) (f f' : Command.Follow Digest) (kb res : ByteArray)
       (ts : List (Step Digest × Digest)) (r : Command.Reply) (st : Command.State) (g wg : World Digest)
       (l₀ lg : List (Step Digest)),

@@ -162,10 +162,9 @@ theorem not_asks_refused {r : Command.Refusal D} {msg : ByteArray} : ¬ Asks (re
 
 theorem asks_postOr {X : Ctx D} {w : World D} {ts : List (Kernel.Step D × D)} {w' : World D}
     {b : ByteArray} {r : Reply} {msg : ByteArray} (h : Asks (postOr X w ts w' b r) msg) : Asks r msg := by
-  rcases postOr_cases X w ts w' b r with hp | ⟨s, m, -, hp⟩ | ⟨s, -, -, hp⟩
+  rcases postOr_cases X w ts w' b r with hp | ⟨_, -, hp⟩ | ⟨_, -, hp⟩ | ⟨_, -, -, hp⟩
   · rw [hp] at h; exact h
-  · rw [hp] at h; exact absurd h not_asks_refused
-  · rw [hp] at h; exact absurd h not_asks_refused
+  all_goals (rw [hp] at h; exact absurd h (not_asks_of_cont (by simp [forkRefused, Reply.cont])))
 
 omit [Ord D] [DecidableEq D] in
 theorem envelopeSign_asks {t : Nat} {m k msg : ByteArray} (h : Asks (envelopeSign t m k) msg) :

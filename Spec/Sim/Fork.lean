@@ -15,7 +15,7 @@ open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Protocol Nanodregg.Code
 
 /-! ## The trivial system: the follower blind to posts -/
 
-/-- What `Command.refused (.forkedPost s m)` prints, for every `s` and `m` (the name drops them). -/
+/-- What a `forkedPost` end prints on stderr, for every post (its evidence is on stdout, `Command.forkRefused`). -/
 def forkedPostErr : ByteArray := "refused forkedPost\n".toUTF8
 
 /-- A reply with a `forkedPost` end replaced by an `ok` end; every other reply as it is. -/
@@ -78,10 +78,9 @@ def stepsOf : Command.Persist Digest → Option (List (Step Digest × Digest))
   | .steps ts => some ts
   | .adopt _ => none
 
-/-- `Command.refused (.forkedPost _ _)`'s bytes, as a computation. -/
+/-- A `forkedPost` end (`Command.forkRefused (.forkedPost _ _)`), as a computation. -/
 def forkedPostDone : Command.Reply → Bool
-  | .done e o err => decide (e = CommandExit.refused.code.toUInt8) && decide (o = .empty) &&
-      decide (err = forkedPostErr)
+  | .done e _ err => decide (e = CommandExit.refused.code.toUInt8) && decide (err = forkedPostErr)
   | _ => false
 
 /-! ## The `sync --to` arm -/

@@ -94,19 +94,19 @@ step count follow was already at or past before the page (`Head.behindPosts`: th
 as `postOr` keeps it. A step below the kept files, or a file the read cannot find, is not compared:
 the Store cannot say. The writer's certified head the page carries (`Head.behindCertified`, PROTOCOL-81)
 is compared the same way: another chain there is `refused forkedCertified`. -/
-def behindOr (keys : Keys) (files : PageFiles) (r : Resident (World D)) (posts : List (Nat × ByteArray × Option D))
+def behindOr (keys : Keys) (files : PageFiles) (r : Resident (World D)) (posts : List (Head.Post D))
     (cert : Option (Nat × ByteArray)) (out : UInt8 × ByteArray) : IO (UInt8 × ByteArray) := do
   if posts.isEmpty && cert.isNone then return out
   let (k0, read, readIndex) ← files.readers
   let chainAt (s : Nat) : IO (Option ByteArray) := do
     try (·.toOption) <$> chainKept keys k0 read readIndex r s catch _ => pure none
-  let chains ← posts.mapM fun p => do pure (p.1, ← chainAt p.1)
+  let chains ← posts.mapM fun p => do pure (p.steps, ← chainAt p.steps)
   let refuse (e : Command.Refusal D) : IO (UInt8 × ByteArray) :=
-    match (Command.refused (D := D) e).bytes with
+    match (Command.forkRefused (D := D) e).bytes with
     | some b => return (Status.ok.code, b)
     | none => return named Refusal.stepTooLarge.name
   match Head.forkedBehindPost posts (fun s => (chains.lookup s).join) with
-  | some (s, m) => refuse (.forkedPost s m)
+  | some p => refuse (.forkedPost p.steps (X.env.bytes p.member))
   | none =>
   -- the writer's certified head behind follow's position (PROTOCOL-81): its own Store's chain there
   match cert with
@@ -147,7 +147,7 @@ def loop (keys : Keys) (me : Command.Self D) (store : Store) (ck : Checkpoint (W
       port.send ⟨f.conn, status, payload⟩
       loop keys me store ck files port dl fuel { r with world := fs'.world }
     | .steps ts =>
-      let (status, payload) ← behindOr keys files r (Head.behindPosts X r.world ts fs'.world) cert (status, payload)
+      let (status, payload) ← behindOr keys files r (Head.behindPosts X r.world fs'.world ts) cert (status, payload)
       match ← append recorder keys.segment ck c store r fs'.world ts.toArray with
       | .error e =>
         port.send ⟨f.conn, Status.uncertain.code, ByteArray.empty⟩

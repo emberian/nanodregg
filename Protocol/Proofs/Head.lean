@@ -17,9 +17,11 @@
 * `attestTip_sign`: the message follow offers custody under `sync --attest` is `Head.message` of
   follow's OWN World's head (consent, in the shape of `step_submit_planned`);
 * `verified_ok`, `signer_ok`: what the two checks on an attestation establish;
-* `forkedSelfPost_forked` / `forkedSelfPost_none` (PROTOCOL-75): a `forkedPost` names a post the page
-  carries whose position follow's own fold reached with another chain (never free); no `forkedPost`
-  means every post the page reaches is reached with the posted chain;
+* `pagePostFault_forked` / `pagePostFault_beyond` / `pagePostFault_none` (PROTOCOL-75, PROTOCOL-83): a
+  `forkedPost` names a post the page carries, read from its own step, whose position follow's own
+  fold reached with another chain; a `postBeyondPage` one that names a step past its own position;
+  with neither, every post is behind follow's position or on its fold (no post escapes);
+* `hostName_not_own`: a writer's refusal never prints one of follow's own fork verdicts;
 * `body_post`: the body follow plans for `sync --post OBJ` is `invoke OBJ post` of `headText` of the
   World it plans on: follow's OWN head (consent, the shape of `attestTip_sign`).
 -/
@@ -206,81 +208,141 @@ theorem attestTip_sign {X : Ctx D} {me : Command.Self D} {w : World D} {argv : L
 
 /-! ## Self-heads through the writer (PROTOCOL-75) -/
 
-/-- **A `forkedPost` is never free**: the post it names is one the page carries (`selfPosts`), and
-follow's own fold holds, at the post's step count, a prefix of the page whose chain is NOT the posted
-one (`forked_on_fold`). -/
-theorem forkedSelfPost_forked {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)} {s : Nat}
-    {m : Option D} (hr : World.RootedFold X.env w ts w') (h : forkedSelfPost X w ts w' = some (s, m)) :
-    ∃ c, (s, c, m) ∈ selfPosts X w' ts ∧
-      ∃ pre post v, ts = pre ++ post ∧ World.fold X.env w (pre.map Prod.fst) = .ok v ∧ v.steps = s ∧
-        X.env.bytes v.chain ≠ c := by
-  unfold forkedSelfPost at h
-  obtain ⟨p, hp, hf⟩ := List.exists_of_findSome?_eq_some h
-  obtain ⟨s', c, m'⟩ := p
-  simp only at hf
-  split at hf
-  · rename_i hk
-    simp only [Option.some.injEq, Prod.mk.injEq] at hf
-    obtain ⟨rfl, rfl⟩ := hf
-    exact ⟨c, hp, forked_on_fold hr hk⟩
-  · cases hf
+omit [Ord D] [DecidableEq D] in
+/-- The walk reaches every step count strictly after its start and no later than its end. -/
+theorem anchorCheck_reached {E : Env D} {steps : Nat} {chain : ByteArray} :
+    ∀ {s : Nat} {c : D} {ts : List (Kernel.Step D × D)}, s < steps → steps ≤ s + ts.length →
+      anchorCheck E steps chain s c ts ≠ .unreached
+  | _, _, [], h₁, h₂ => by simp only [List.length_nil] at h₂; omega
+  | s, c, (t, r) :: rest, h₁, h₂ => by
+      simp only [anchorCheck]
+      split
+      · split <;> simp
+      · rename_i hs
+        simp only [List.length_cons] at h₂
+        exact anchorCheck_reached (by omega) (by omega)
 
-/-- **No `forkedPost`: every post on the fold.** When the walk refuses nothing, every self-head post
-the page carries is at a position the page does not reach from follow's position (`unreached`: before
-it, compared through follow's Store, or past it), or is reached with the posted chain
-(`shared_on_fold`). -/
-theorem forkedSelfPost_none {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
-    (hr : World.RootedFold X.env w ts w') (h : forkedSelfPost X w ts w' = none) :
-    ∀ s c m, (s, c, m) ∈ selfPosts X w' ts →
-      anchorCheck X.env s c w.steps w.chain ts = .unreached ∨
-      ∃ pre post v, ts = pre ++ post ∧ World.fold X.env w (pre.map Prod.fst) = .ok v ∧ v.steps = s ∧
-        X.env.bytes v.chain = c := by
-  intro s c m hm
-  unfold forkedSelfPost at h
-  have hz := List.findSome?_eq_none_iff.mp h _ hm
-  simp only at hz
-  cases hk : anchorCheck X.env s c w.steps w.chain ts with
-  | shared => exact .inr (shared_on_fold hr hk)
-  | unreached => exact .inl rfl
-  | forked => simp [hk] at hz
+/-- **Every post sits inside its page**: its position is one of the page's step indices. -/
+theorem selfPosts_pos {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)} {p : Post D}
+    (h : p ∈ selfPosts X w w' ts) : w.steps ≤ p.pos ∧ p.pos < w.steps + ts.length := by
+  unfold selfPosts at h
+  obtain ⟨⟨q, i⟩, hq, hp⟩ := List.mem_flatMap.mp h
+  have hz := List.mem_zipIdx hq
+  have hi : p.pos = i := by
+    simp only at hp
+    unfold stepPosts at hp
+    split at hp
+    · cases hp
+    · split at hp
+      · cases hp
+      · rcases List.mem_append.mp hp with hp | hp
+        · obtain ⟨⟨c, b⟩, -, hc⟩ := List.mem_filterMap.mp hp
+          simp only at hc
+          cases hs : selfHeadOf X w'.origin b with
+          | none => rw [hs] at hc; cases hc
+          | some hh => rw [hs] at hc; simp only [Option.map_some, Option.some.injEq] at hc; rw [← hc]
+        · split at hp
+          · split at hp
+            · split at hp
+              · simp only [List.mem_singleton] at hp; rw [hp]
+              · cases hp
+            · cases hp
+          · cases hp
+  rw [hi]
+  exact ⟨hz.1, hz.2.1⟩
+
+/-- **A `forkedPost` is never free** (PROTOCOL-83): the post it names is one the page carries, read
+from the step that made it (`selfPosts`), at or below its own position, and follow's own fold holds,
+at the post's step count, a prefix of the page whose chain is NOT the posted one (`forked_on_fold`). -/
+theorem pagePostFault_forked {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)} {p : Post D}
+    (hr : World.RootedFold X.env w ts w') (h : pagePostFault X w w' ts = some (.forked, p)) :
+    p ∈ selfPosts X w w' ts ∧ p.steps ≤ p.pos ∧
+      ∃ pre post v, ts = pre ++ post ∧ World.fold X.env w (pre.map Prod.fst) = .ok v ∧ v.steps = p.steps ∧
+        X.env.bytes v.chain ≠ p.chain := by
+  unfold pagePostFault at h
+  obtain ⟨q, hq, hf⟩ := List.exists_of_findSome?_eq_some h
+  unfold postFault at hf
+  split at hf
+  · cases hf
+  · rename_i hb
+    split at hf
+    · rename_i hk
+      simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hf
+      obtain ⟨-, rfl⟩ := hf
+      exact ⟨hq, by omega, forked_on_fold hr hk⟩
+    · cases hf
+
+/-- **A `postBeyondPage` is never free** (PROTOCOL-83): the post it names is one the page carries,
+and it names a step count past its own log position. -/
+theorem pagePostFault_beyond {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)} {p : Post D}
+    (h : pagePostFault X w w' ts = some (.beyond, p)) : p ∈ selfPosts X w w' ts ∧ p.pos < p.steps := by
+  unfold pagePostFault at h
+  obtain ⟨q, hq, hf⟩ := List.exists_of_findSome?_eq_some h
+  unfold postFault at hf
+  split at hf
+  · rename_i hb
+    simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨-, rfl⟩ := hf
+    exact ⟨hq, hb⟩
+  · split at hf
+    · simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hf
+      cases hf.1
+    · cases hf
+
+/-- **No post escapes** (PROTOCOL-83; deletes the premise cv 01a17ac1-5204 put on `HeadsCompared`):
+when no post of the page has a fault, every post the page carries is at or behind follow's position
+before the page (the Store's to compare: `behindPosts`), or the page's prefix up to its step count
+folds, from follow's World, to a World with the posted chain. -/
+theorem pagePostFault_none {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
+    (hr : World.RootedFold X.env w ts w') (h : pagePostFault X w w' ts = none) :
+    ∀ p ∈ selfPosts X w w' ts, p.steps ≤ w.steps ∨
+      ∃ pre post v, ts = pre ++ post ∧ World.fold X.env w (pre.map Prod.fst) = .ok v ∧ v.steps = p.steps ∧
+        X.env.bytes v.chain = p.chain := by
+  intro p hp
+  unfold pagePostFault at h
+  have hz := List.findSome?_eq_none_iff.mp h p hp
+  have hpos := selfPosts_pos hp
+  unfold postFault at hz
+  split at hz
+  · cases hz
+  · rename_i hb
+    by_cases hle : p.steps ≤ w.steps
+    · exact .inl hle
+    · refine .inr ?_
+      cases hk : anchorCheck X.env p.steps p.chain w.steps w.chain ts with
+      | shared => exact shared_on_fold hr hk
+      | unreached => exact absurd hk (anchorCheck_reached (by omega) (by omega))
+      | forked => simp [hk] at hz
 
 /-- **A behind `forkedPost` is never free** (T2b'): the post it names is one the page carries, at a
 position follow was already at or past before the page, and follow's own history holds ANOTHER
 chain at that step count. -/
 theorem forkedBehindPost_forked {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
-    {chainAt : Nat → Option ByteArray} {s : Nat} {m : Option D}
-    (h : forkedBehindPost (behindPosts X w ts w') chainAt = some (s, m)) :
-    ∃ c, (s, c, m) ∈ selfPosts X w' ts ∧ s ≤ w.steps ∧ ∃ c', chainAt s = some c' ∧ c' ≠ c := by
+    {chainAt : Nat → Option ByteArray} {p : Post D}
+    (h : forkedBehindPost (behindPosts X w w' ts) chainAt = some p) :
+    p ∈ selfPosts X w w' ts ∧ p.steps ≤ w.steps ∧ ∃ c', chainAt p.steps = some c' ∧ c' ≠ p.chain := by
   unfold forkedBehindPost at h
-  obtain ⟨⟨s', c, m'⟩, hp, hf⟩ := List.exists_of_findSome?_eq_some h
-  unfold behindPosts at hp
-  obtain ⟨hp, hle⟩ := List.mem_filter.mp hp
+  have hm := List.mem_of_find?_eq_some h
+  have hf := List.find?_some h
+  unfold behindPosts at hm
+  obtain ⟨hm, hle⟩ := List.mem_filter.mp hm
   simp only [decide_eq_true_eq] at hle
-  simp only at hf
-  split at hf
-  · rename_i c' hc
-    split at hf
-    · cases hf
-    · rename_i hne
-      simp only [Option.some.injEq, Prod.mk.injEq] at hf
-      obtain ⟨rfl, rfl⟩ := hf
-      exact ⟨c, hp, hle, c', hc, hne⟩
-  · cases hf
+  refine ⟨hm, hle, ?_⟩
+  revert hf
+  cases hc : chainAt p.steps with
+  | none => simp
+  | some c' => intro hf; exact ⟨c', rfl, by simpa using hf⟩
 
 /-- **No behind `forkedPost`: every behind post agrees with follow's history** wherever the Store
-still keeps that step: each self-head post the page carries at a step count follow was already at or
-past names the chain follow's own Store holds there. -/
+still keeps that step. -/
 theorem forkedBehindPost_none {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
-    {chainAt : Nat → Option ByteArray} (h : forkedBehindPost (behindPosts X w ts w') chainAt = none) :
-    ∀ s c m, (s, c, m) ∈ selfPosts X w' ts → s ≤ w.steps → ∀ c', chainAt s = some c' → c' = c := by
-  intro s c m hm hle c' hc
+    {chainAt : Nat → Option ByteArray} (h : forkedBehindPost (behindPosts X w w' ts) chainAt = none) :
+    ∀ p ∈ selfPosts X w w' ts, p.steps ≤ w.steps → ∀ c', chainAt p.steps = some c' → c' = p.chain := by
+  intro p hm hle c' hc
   unfold forkedBehindPost at h
-  have hz := List.findSome?_eq_none_iff.mp h (s, c, m)
-    (List.mem_filter.mpr ⟨hm, by simpa using hle⟩)
+  have hz := List.find?_eq_none.mp h p (List.mem_filter.mpr ⟨hm, by simpa using hle⟩)
   simp only [hc] at hz
-  split at hz
-  · assumption
-  · cases hz
+  simpa using hz
 
 /-- **Consent: `sync --post` posts follow's OWN head.** The body follow plans for `sync --post OBJ` is
 `invoke OBJ post` with the arguments read, at the head package's argument type, from `headText` of
@@ -527,5 +589,17 @@ theorem forkedCertified_forked {X : Ctx D} {w w' : World D} {ts : List (Kernel.S
             obtain ⟨rfl, rfl⟩ := hpc
             exact ⟨auth, c, rfl, hc, rfl, forked_on_fold hr hk⟩
     · cases h
+
+/-! ## A writer's refusal is never follow's own fork verdict (PROTOCOL-83) -/
+
+/-- **The writer cannot print follow's fork verdict**: whatever bytes a writer refuses with, the name
+follow prints for them is none of follow's own fork verdicts (cv 01a17ac1-5233). -/
+theorem hostName_not_own (b : ByteArray) : Command.hostName b ∉ Command.ownVerdictNames := by
+  unfold Command.hostName
+  split
+  · split
+    · rename_i h; exact h.2.2.2
+    · decide
+  · decide
 
 end Nanodregg.Protocol.Head

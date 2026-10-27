@@ -1838,7 +1838,7 @@ no fold has (a hostile client; its own follow posts only its own head, `Proofs.H
 writer admits it (the head law judges the head's monotony only). The operator, cold again, reaches
 step 2 with another chain on the same page and is refused `forkedPost` by name; the page is kept
 and its next `sync` proceeds. The plant is measured (no cheap mutation reaches follow's walk: the
-harness's plants are a client's or the writer's): with `Head.forkedSelfPost` answering `none`, line
+harness's plants are a client's or the writer's): with `Head.forkedSelfPost` (now `Head.pagePostFault`) answering `none`, line
 12 ends `ok`. -/
 def selfHeadRow : Row where
   name := "selfHead"
@@ -1856,6 +1856,34 @@ def selfHeadRow : Row where
     { actor := "operator", act := .cmd ["sync"], expect := .refused "forkedPost", fault := .cold },
     ok "operator" ["sync"]])
   plant := .measured "Head.forkedSelfPost := none: line 12 ends ok (MEASURED on hbox, PROTOCOL-75)"
+
+/-- PROTOCOL-83: every post is read from the step that made it, and none escapes. The sponsor forges
+a post into its head object naming step 2 with a chain no fold has, then posts its honest head INTO
+THE SAME OBJECT (`sync --post`; its own follow is already past step 2, a behind post the Store
+compares in `Host.Follow.loop`, which this harness does not run). The operator, cold, absorbs both
+posts on one page: the forged one is compared at its own step (`forkedPost`), not hidden by the
+honest head that replaced it. Then the sponsor forges a post naming step 999, a step its own position
+has not reached: the operator's next page refuses it `postBeyondPage`. Each refusal keeps the page;
+the next `sync` proceeds. MEASURED: with the pre-PROTOCOL-83 scanner (each touched head object read
+from the World after the page, no position check), lines 10 and 13 end `ok`. -/
+def selfHeadPageRow : Row where
+  name := "selfHeadPage"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "invoke"]
+  drive := .members (welcome ++ [
+    okBind "sponsor" ["install", "<world/head/Head"] "head",
+    okBind "sponsor" ["create", "--pkg", "@head", selfHeadSeed] "hs",
+    { actor := "sponsor", act := .forge ["invoke", "@hs", "1",
+        "(record (chain #{@sponsor}) (height 1) (roots #{@sponsor}) (steps 2))"], expect := .ok },
+    ok "sponsor" ["sync", "--post", "@hs"],
+    { actor := "operator", act := .cmd ["sync"], expect := .refused "forkedPost", fault := .cold },
+    ok "operator" ["sync"],
+    { actor := "sponsor", act := .forge ["invoke", "@hs", "1",
+        "(record (chain #{@sponsor}) (height 999) (roots #{@sponsor}) (steps 999))"], expect := .ok },
+    { actor := "operator", act := .cmd ["sync"], expect := .refused "postBeyondPage" },
+    ok "operator" ["sync"]])
+  plant := .measured "the pre-PROTOCOL-83 scanner (touched head objects read from the World after the page; no position check): lines 10 and 13 end ok (MEASURED on hbox, PROTOCOL-83)"
 
 /-- PROTOCOL-77.1 (DESIGN-TRUST T3b, the consumers): the rows' World names the writer's certify key as
 its one certifier (threshold 1, `Writer.authority`), so a thin member adopts a base only when the
@@ -1903,6 +1931,6 @@ def rows : List Row :=
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow, forkRow, selfHeadRow, certifiedRow, certifiedPageRow, rerunRow]
+   forgedRefusalRow, forkRow, selfHeadRow, selfHeadPageRow, certifiedRow, certifiedPageRow, rerunRow]
 
 end Nanodregg.Protocol

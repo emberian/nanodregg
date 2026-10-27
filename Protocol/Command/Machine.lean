@@ -148,12 +148,19 @@ inductive Refusal (D : Type)
   World holds only the current chain, so the comparison on the way cannot be made: the member
   BEHIND does it, or `host check STORE --anchor` on this member's own Store (PROTOCOL-74) -/
   | ahead (steps : Nat)
-  /-- a page carried a member's post of ITS head of this World (`Std.head` with `world` this World's
-  origin, `Head.selfPosts`) at a position follow's own fold reached on this page with ANOTHER chain
-  (PROTOCOL-75; `Proofs.Head.forkedSelfPost_forked`). The page is KEPT (it is lawful on follow's
-  fold), the command ends by name, and the post is the witness: its poster signed that head
-  (`Proofs.Head.body_post`) -/
-  | forkedPost (steps : Nat) (member : Option D)
+  /-- a page carried a member's post of ITS head of this World (`Head.selfPosts`: read from the step
+  that made it, PROTOCOL-83) at a position follow's own fold reached with ANOTHER chain, on this page
+  (PROTOCOL-75; `Proofs.Head.pagePostFault_forked`) or behind it against follow's Store
+  (`Host.Follow.behindOr`). The page is KEPT (it is lawful on follow's fold), the command ends by
+  name with the posted step count and the signer's id on stdout (`forkRefused`): the signed call at
+  that step is the witness -/
+  | forkedPost (steps : Nat) (member : ByteArray)
+  /-- a page carried a member's post of a head at step count `steps` from its own log position
+  `pos < steps`: no member of THIS history held such a head when the post was admitted (an honest
+  post names a head its own World had reached), so the signer holds a longer history of this World
+  or forged it (PROTOCOL-83; `Proofs.Head.pagePostFault_beyond`). Page kept, command ended by name,
+  the evidence on stdout -/
+  | postBeyondPage (steps pos : Nat) (member : ByteArray)
   /-- a page carried the writer's CERTIFICATE of a head (`Head.pageCertified`: it verifies under
   follow's own World's authority) at a position follow's own fold holds with ANOTHER chain
   (PROTOCOL-81; `Proofs.Head.forkedCertified_forked` on the page, `Host.Follow.behindOr` behind it).
@@ -216,12 +223,23 @@ def Refusal.name : Refusal D → String
   | .forkedWorld _ => "forkedWorld"
   | .ahead _ => "ahead"
   | .forkedPost .. => "forkedPost"
+  | .postBeyondPage .. => "postBeyondPage"
   | .forkedCertified _ => "forkedCertified"
   | .attest r => r.name
   | .certified r => r.name
 
 def refused (r : Refusal D) : Reply :=
   .done CommandExit.refused.code.toUInt8 ByteArray.empty s!"refused {r.name}\n".toUTF8
+/-- The evidence line a fork verdict prints on stdout: the step count, and the poster's id or the
+post's position where there is one (PROTOCOL-83, cv 01a17ac1-5233). -/
+def Refusal.evidence : Refusal D → String
+  | .forkedPost s m => s!"forkedPost {s} {Text.toHex m}\n"
+  | .postBeyondPage s p m => s!"postBeyondPage {s} {p} {Text.toHex m}\n"
+  | .forkedCertified s => s!"forkedCertified {s}\n"
+  | _ => ""
+/-- A fork verdict: `refused NAME` on stderr as every refusal, its evidence on stdout. -/
+def forkRefused (r : Refusal D) : Reply :=
+  .done CommandExit.refused.code.toUInt8 r.evidence.toUTF8 s!"refused {r.name}\n".toUTF8
 def printed (out : String) : Reply := .done CommandExit.ok.code.toUInt8 out.toUTF8 ByteArray.empty
 /-- The catch-up read `Bounds.pagesPerCommandMax` pages and follow is still at log position
 `steps`, the writer at `tip` steps: what was absorbed is kept, and the member runs the command
@@ -583,7 +601,21 @@ def pinOf (verified : Option (Nat × ByteArray)) (baseSteps : Nat) (baseDigest :
       else .ok ⟨s, d⟩
   | none => .error .noBase
 
-def hostName (p : ByteArray) : String := (String.fromUTF8? p).getD "unnamed"
+/-- The names follow's own verdicts on a fork print. No writer refusal prints one (`hostName`). -/
+def ownVerdictNames : List String :=
+  ["forkedWorld", "forkedPost", "postBeyondPage", "forkedCertified", "chainMismatch", "ahead"]
+
+/-- A writer's refusal name as follow prints it (`refused NAME`): the bytes the writer sent when they
+are one word of 1 to 64 ASCII letters and digits that is not one of follow's own fork verdicts, else
+`unnamed`. The writer is untrusted: without this a writer refusal named `forkedPost` printed exactly
+follow's own fork verdict, and one holding a newline printed a second line (PROTOCOL-83, cv
+01a17ac1-5233; `Proofs.Head.hostName_not_own`). -/
+def hostName (p : ByteArray) : String :=
+  match String.fromUTF8? p with
+  | some n =>
+      if 0 < n.length ∧ n.length ≤ 64 ∧ n.all Char.isAlphanum = true ∧ n ∉ ownVerdictNames then n
+      else "unnamed"
+  | none => "unnamed"
 
 def whoami : ByteArray := "nanodregg/protocol/whoami/v1".toUTF8
 
@@ -1104,23 +1136,24 @@ def absorbSync (X : Ctx D) (me : Self D) (cmd : Cmd D) (w : World D) (evs : List
         else .ok (w', ts, wb)
     | none => .ok (w', ts, wb)
 
-/-- The reply a page's self-head posts force, else `r` (PROTOCOL-75): `forkedPost` when a member's
-post of its head of this World sits at a position follow's fold reached on this page with another
-chain (`Head.forkedSelfPost`), else `forkedCertified` when the writer's certificate the page carries
-(`cert`, PROTOCOL-81) certifies a head follow's fold reached on this page with another chain
-(`Head.forkedCertified`). The page itself is kept by the caller (`moved`: it is lawful on
-follow's fold; the fork is the poster's or the writer's), the command ends by name, and the next
+/-- The reply a page's self-head posts force, else `r` (PROTOCOL-75, PROTOCOL-83): the first post of
+the page, in log order, with a fault (`Head.pagePostFault`): `forkedPost` when follow's fold reached
+its step count on this page with another chain, `postBeyondPage` when it names a step past its own
+position; else `forkedCertified` when the writer's certificate the page carries (`cert`, PROTOCOL-81)
+certifies a head follow's fold reached on this page with another chain (`Head.forkedCertified`). Each
+is a `forkRefused`: the name on stderr, the evidence on stdout. The page itself is kept by the caller
+(`moved`: it is lawful on follow's fold; the fork is the poster's or the writer's), and the next
 command proceeds past the post. A top-level function, not a match in `step`: `step_world`'s blanket
 split pays per match of `step`'s body; irreducible, so no reply-shape proof over `step` unifies
-through it (two stuck matchers cost what a constructor mismatch does not): they read it by
-`postOr_cases` and the elims beside it. -/
+through it: they read it by `postOr_cases` and the elims beside it. -/
 @[irreducible] def postOr (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D)
     (cert : ByteArray) (r : Reply) : Reply :=
-  match Head.forkedSelfPost X w ts w' with
-  | some (s, m) => refused (D := D) (.forkedPost s m)
+  match Head.pagePostFault X w w' ts with
+  | some (.forked, p) => forkRefused (D := D) (.forkedPost p.steps (X.env.bytes p.member))
+  | some (.beyond, p) => forkRefused (D := D) (.postBeyondPage p.steps p.pos (X.env.bytes p.member))
   | none =>
     match Head.forkedCertified X w ts cert with
-    | some s => refused (D := D) (.forkedCertified s)
+    | some s => forkRefused (D := D) (.forkedCertified s)
     | none => r
 
 /-- `shared` or `unreached` at the tip: the anchor's step count against follow's. `start` refused to
@@ -1178,8 +1211,8 @@ instead (`hintNames`). Arguments are placeholders; a name drops them. -/
 def hintReps : List (Refusal Nat) :=
   [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
    .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
-   .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0, .forkedPost 0 none,
-   .forkedCertified 0] ++
+   .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0, .forkedPost 0 .empty,
+   .postBeyondPage 0 0 .empty, .forkedCertified 0] ++
   Head.Refusal.all.map Refusal.attest ++ Head.CertRefusal.all.map Refusal.certified ++
   ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
     .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :

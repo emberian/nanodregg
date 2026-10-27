@@ -25,8 +25,8 @@ tooling: checked, not read.
 | 4 C(iii) | `Consent.final` | a settlement `expired`, or `refused` other than `stale`, is never contradicted on any extension | `top_consent_final` | `floor_consent_final`: the settlement that is always final |
 | 4 C(ii) | `Consent.cancelOk` | a `cancel CALL` step that ends `done ok` leaves follow at a World that settles the call `refused cancelled` AND holds its record (no journal entry; a recorded refusal with the cancel's code) | `top_consent_cancelOk` | `floor_consent_cancelOk`: the follower that says ok on the writer's word; `floor_consent_cancelOk_record`: that follower paired with a settle that always says cancelled |
 | 4 C(iii) | `Consent.staleFinal` | a planned call follow settles `refused stale` is admitted on no extension, up to a collision among its pin inputs | `top_consent_staleFinal` | `floor_consent_staleFinal`: the settlement that says stale on its own word |
-| 2 A2′ | `ForkConsistent` (`Proofs/Fork.lean`) | a frame that absorbs a page carrying another fold's self-head post at a step the page walks has one history with that fold up to there (up to a collision among a listed set), or ends `refused forkedPost` with a post its own fold passed at another chain | `top_forkConsistent` | `floor_forkConsistent`: the post-blind follower (the `forkedPost` verdict replaced by ok; at `storeDigest`) |
-| 2 A2′ | `ForkConsistent.sync` (`Proofs/Fork.lean`) | a `sync --to STEPS:CHAIN` frame that moves follow's World to the stated head or past it holds the other fold's log up to there, up to a collision among the two folds' listed link inputs | `top_forkConsistent_sync` | `floor_forkConsistent_sync`: the anchor-blind follower (every `sync --to` read as `sync`) |
+| 2 A2′ | `HeadsCompared` (`Proofs/Fork.lean`) | a frame that absorbs a page carrying another fold's self-head post (read from the step that made it) past follow's position has one history with that fold up to there (up to a collision among a listed set), or ends `refused forkedPost` with a post its own fold passed at another chain, or `refused postBeyondPage` with a post naming a step past its own position. Prefix agreement on comparison, not fork consistency (PROTOCOL-82) | `top_headsCompared` | `floor_headsCompared`: the post-blind follower (the `forkedPost` verdict replaced by ok; at `storeDigest`) |
+| 2 A2′ | `HeadsCompared.sync` (`Proofs/Fork.lean`) | a `sync --to STEPS:CHAIN` frame that moves follow's World to the stated head or past it holds the other fold's log up to there, up to a collision among the two folds' listed link inputs | `top_headsCompared_sync` | `floor_headsCompared_sync`: the anchor-blind follower (every `sync --to` read as `sync`) |
 | 2 A1′ | `Agree.pageAbsorbs` (`Proofs/Agree.lean`) | the writer's page of what a batch staged, handed to follow at its log phase, moves follow to the World the writer keeps | `top_agree_pageAbsorbs` | `floor_agree_pageAbsorbs`: the deaf follower, which takes no page |
 | 3 B2 | `Integrity.escrow` (`Proofs/Escrow.lean`) | along any history of one escrow object the kernel admits, at most one returned call is a payout | `top_integrity_escrow` | `floor_integrity_escrow`: the escrow with no law on its invokes and two once keys (`esLazy`) |
 | 3 B2 | `Integrity.grantCap` (`Proofs/Cap.lean`) | along an audited log, the transfers (credit lines) sent through a live grant sum to at most what its transfer (credit) ledger had left | `top_integrity_grantCap` | `floor_integrity_grantCap` / `_credit`: the capless kernel, whose transfer and credit do not spend the grant's ledger |
@@ -84,9 +84,10 @@ claims above are their components, and what is owed is listed beside each:
 * **`HeadOf`** (§9): the held head's roots are those of a fold of A from A's genesis. Undischargeable
   today (PROTOCOL E-3: heads are posted by grantees, unsigned by A's writer). Deleted by writer-signed
   step-indexed heads (TOPLEVEL-SPEC §9).
-* **The post's step inside the walk** (A2′): `f.world.steps < wg.steps ≤ f'.world.steps`. Below: behind
-  posts are compared by the Host loop (`behindOr`), not a System field. Above: a post past the page's
-  end is compared by nobody today (cv 01a17ac1-5204).
+* **The post past follow's position** (A2′): `f.world.steps < wg.steps`. Behind it, posts are compared
+  by the Host loop (`behindOr`), not a System field. The old upper premise (`wg.steps ≤ f'.world.steps`)
+  is deleted: a post's position is inside its page, and a post past its position is `postBeyondPage`
+  (PROTOCOL-83).
 * **The continuation's argv** (C(i)): the claim says "planned from the continuation's command"; that it
   is the MEMBER's command is §11.2 (as `keyFaithful`).
 * **`LedgerContiguous`** (grant cap): true of every World a follower reaches (`honest_ledgerContiguous`).
@@ -115,7 +116,7 @@ with a Turn); it does not move value or run a law, so the non-trivial cases of B
 reached by a deployed run here: B2's is by `inhabited_value`, B3's (a law judging a step) by
 `inhabited_law`, a cancel that ends `ok` by `inhabited_cancelOk` (`Proofs/Law.lean`).
 
-Since SPEC-9 each new claim is inhabited in its own module: `inhabited_forkConsistent` (the deployed
+Since SPEC-9 each new claim is inhabited in its own module: `inhabited_headsCompared` (the deployed
 follower refuses a forked post, every premise met), `inhabited_integrity_grantCap` (a deployed move of
 10 through a cap-10 grant), `inhabited_exchange` (a fair fuse under the deployed package),
 `inhabited_signs` (the rotate's `signNext` of its planned call), `inhabited_durable_reopen` (a Store of

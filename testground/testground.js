@@ -511,6 +511,7 @@ const glossary = {
   chainMismatch: 'chainMismatch: replaying the page does not produce the chain hash the writer reports. An event is missing, or the writer logged something other than what it served.',
   cancelForged: 'cancelForged: the page has a cancel whose signature is not its member\'s.',
   forkedPost: 'forkedPost: a member posted a head for a step of this World whose chain hash differs from your follow\'s at that step. Two histories claim one World. The page is kept; the post is refused.',
+  postBeyondPage: 'postBeyondPage: a member posted a head for a step this World had not reached when the post was admitted. No member of this history held that head: the poster has a longer history of this World, or forged it. The page is kept.',
   hostContradicted: 'hostContradicted: the writer reports one outcome for your call and your follow finds another. The attempt stays open. The writer\'s reply is shown and not acted on.',
   relationFull: 'relationFull: the relation (a table of rows inside the object) is at its row limit; here, the one slot is taken.',
   forkedWorld: 'forkedWorld: the signed head names a chain hash your follow does not have at that step of your writer\'s log. The two writers serve different histories of one genesis.',
