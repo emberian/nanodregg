@@ -29,7 +29,8 @@
 # build.sh, nd.js, transport.js, guestbook.mjs), PORT (8787); for the resident ND_KEYDIR (default
 # STATE/keys: anchors, pins, the decider's PID file) and ND_KEYS (the key file, default
 # KEYDIR/provider.key), ND_UPSTREAM (keybroker's dial address, default api.anthropic.com:443), ND_TLS (the
-# anchors.pem and pins to install, default the tree's deploy/tls), and the allowance's ND_MODEL,
+# anchors.pem and pins to install, default the tree's deploy/tls), ND_LANDLOCK_ABI (the Landlock ABI
+# every nd-supervise here refuses to launch below: the demo box's units set 6), and the allowance's ND_MODEL,
 # ND_CAP, ND_WINDOW_MS, ND_PRICE (README "The resident"). The relay listens on 127.0.0.1 only: putting it on the internet (TLS, a proxy, a
 # tunnel) is the operator's act. STATE holds the Store, the guest-book's seeds (0600) and sockets.
 set -euo pipefail
@@ -43,6 +44,7 @@ KEYDIR=${ND_KEYDIR:-$st/keys}; KEYS=${ND_KEYS:-$KEYDIR/provider.key}; TLS=${ND_T
 # the resident's places: its own state, the hosted tree its plan names (label `testground`, the
 # genesis label), keybroker's socket directory and the member socket root
 R=$st/resident; HROOT=$st/hosted; KBDIR=$st/kb; MROOT=$st/rm
+ABI=(); [ -z "${ND_LANDLOCK_ABI:-}" ] || ABI=(--landlock-abi "$ND_LANDLOCK_ABI")
 jsonget() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); [v:=v[k] for k in sys.argv[2:]]; print(v)' "$@"; }
 mkdir -p "$st/gb" "$st/run"; chmod 700 "$st/gb"
 
@@ -51,7 +53,7 @@ launch() {
   # hidden from the writer: the guest-book's seeds and every home (CLIENT-8 refuses a child with nothing
   # hidden). nd-supervise links itself to its parent's death (CLIENT-38), so its parent is a shell
   # that waits for it (the PID file's): stopping that shell stops the supervisor, which stops host.
-  nohup bash -c '"$0" "$@"; exit $?' "$SUP" "$st/run/host.sock" --hide "$st/gb" --hide /home --write "$st/store" \
+  nohup bash -c '"$0" "$@"; exit $?' "$SUP" "$st/run/host.sock" "${ABI[@]}" --hide "$st/gb" --hide /home --write "$st/store" \
     --exec "$HOST" -- "$HOST" serve "$st/store" > "$st/run/host.log" 2>&1 < /dev/null & echo $! > "$st/run/host.pid"
   for _ in $(seq 50); do [ -S "$st/run/host.sock" ] && break; sleep 0.1; done
   nohup node "$TG/guestbook.mjs" serve "$st/gb" "$st/run/host.sock" > "$st/run/guestbook.log" 2>&1 < /dev/null &
@@ -121,7 +123,10 @@ print(s.makefile("rb").readline().decode().strip())' "$st/gb/guestbook.sock")
   python3 -c 'import json,sys; j=json.loads(sys.argv[1]); sys.exit(0 if "bell" in j else 1)' "$ans" || { echo "resident: refused $ans" >&2; exit 1; }
   printf '%s %s\n' "$(jsonget "$st/gb/resident.json" member)" "$(jsonget "$st/gb/resident.json" grant)" > "$R/follow"
   g=$(jsonget "$st/gb/resident.json" grain); P=$HROOT/worlds/testground/grains/$g
-  mkdir -p "$P/pkg" "$P/vol" "$HROOT/worlds/testground/store"
+  mkdir -p "$P/pkg" "$P/vol" "$HROOT/worlds/testground/store" "$MROOT"
+  # keybroker's socket directory (02710, its own uid's): made here, so a unit that may write only
+  # inside it never needs to make it
+  mkdir -p "$KBDIR"; chmod 2710 "$KBDIR"
   printf '(record (bell #%s) (grant #%s) (maxTokens 300) (model "%s") (system "%s"))\n' \
     "$(jsonget "$st/gb/resident.json" bell)" "$(jsonget "$st/gb/resident.json" bellGrant)" "${ND_MODEL:-claude-haiku-5-5}" \
     "${ND_SYSTEM:-Answer in one or two plain sentences. The question comes from a visitor of a public demo page.}" > "$P/pkg/resident.conf"
@@ -148,17 +153,17 @@ resident-serve)
   pids=()
   stop_r() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; }
   trap 'stop_r; exit 0' TERM INT
-  "$SUP" "$R/run/follow.sock" --hide "$st/gb" --hide "$KEYDIR" --write "$R/store" --exec "$HOST" -- \
+  "$SUP" "$R/run/follow.sock" "${ABI[@]}" --hide "$st/gb" --hide "$KEYDIR" --write "$R/store" --exec "$HOST" -- \
     "$HOST" follow "$R/store" "$member" "$grant" < /dev/null & pids+=($!)
   for _ in $(seq 300); do [ -S "$R/run/follow.sock" ] && break; sleep 0.1; done
-  "$SUP" "$MROOT/$g/nd.sock" --hide "$st/gb" --hide "$KEYDIR" --write "$R/ws" --exec "$ND" \
+  "$SUP" "$MROOT/$g/nd.sock" "${ABI[@]}" --hide "$st/gb" --hide "$KEYDIR" --write "$R/ws" --exec "$ND" \
     --connect "$st/run/host.sock" --connect "$R/run/follow.sock" -- "$ND" --stdio "$R/ws" "$R/run/follow.sock" "$st/run/host.sock" < /dev/null & pids+=($!)
   # keybroker binds the resident's socket within a tick of seeing its grain
   for _ in $(seq 600); do [ -S "$KBDIR/$g/broker.sock" ] && [ -S "$MROOT/$g/nd.sock" ] && break; sleep 0.1; done
   [ -S "$KBDIR/$g/broker.sock" ] || { echo "resident-serve: no broker socket $KBDIR/$g/broker.sock (is keybroker up?)" >&2; stop_r; exit 1; }
   # the resident, its argv exactly its plan joined onto the three roots (Hosting.Resident.place):
   # after argv[0], the program again, then each field's count and paths (launcher::plan_argv)
-  "$SUP" "$R/run/resident.sock" --hide "$st/gb" --hide "$KEYDIR" --hide "$HROOT/worlds/testground/store" \
+  "$SUP" "$R/run/resident.sock" "${ABI[@]}" --hide "$st/gb" --hide "$KEYDIR" --hide "$HROOT/worlds/testground/store" \
     --read "$P/pkg" --write "$P/vol" --exec "$P/pkg/resident" \
     --connect "$KBDIR/$g/broker.sock" --connect "$MROOT/$g/nd.sock" -- \
     "$P/pkg/resident" "$P/pkg/resident" 1 "$P/pkg" 1 "$P/vol" 0 1 "$KBDIR/$g/broker.sock" 1 "$MROOT/$g/nd.sock" < /dev/null & pids+=($!)
