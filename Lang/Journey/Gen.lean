@@ -68,6 +68,9 @@ kernel's `Program` (the deployed receipt check at the Sim's parameters, as `Lang
   `done` returns `(createOf (pkg #bytes) (state (record (n 5))))`. B installs it, creates C, and makes: the
   ONE Turn bears B's object of the package id (owned by B) and then the package. The same text with an
   `install` slot is refused `callKind createOf` when it is read.
+* GN26 the same promise in the authoring text (LANG-103's surface clause): a generator whose `generate`
+  declares `(effect (moves 0) (produces …))` with `reset` in the interface is written in surface text,
+  lowered and installed, and generate is refused `produces generate: lacks reset`, nothing born.
 -/
 import Lang.Journey.Head
 import Lang.StdGen
@@ -367,6 +370,21 @@ def genRows (r0 : Run) (b a : Sim.Member) : Run := Id.run do
   let some O6 := bornOf t50 | return note r50 s!"GN25 B makes: {v50}" false
   r := note r50 s!"GN25 a creator written as surface text (a slot `(createOf (rec (n nat)))`, an item `(createOf (pkg #bytes) (state (record (n 5))))`) is installed and created ({v49}); B makes: {v50}; the ONE Turn bears {born50.length} cells, B's object of the package id owned by B, then the package: {ownedBy r50 O6 b eid250 && born50.getLast? == some eid250}; the same text with an `install` slot is refused callKind createOf: {creatorRefused}"
     (v50 == "admitted" && born50.length == 2 && ownedBy r50 O6 b eid250 && born50.getLast? == some eid250 && creatorRefused)
+  -- GN26 the same promise written in surface text (the surface's produces clause)
+  let text26? : Option String :=
+    match I' with
+    | .record row => (row.mapM fun ((ℓ, T) : Label × Ty) => (Print.ty T).map fun t => s!"({ℓ} {t})").map fun fs =>
+      "(package (doc \"claims in surface text to install a package with reset\") (state (rec))\n" ++
+      s!"  (method generate (calls (install)) (effect (moves 0) (produces (rec {" ".intercalate fs})))\n" ++
+      s!"    (done state (install (pkg #{hexOf bytes500})))))"
+    | _ => none
+  let some text26 := text26? | return note r "GN26 the declared interface has no text" false
+  let .ok p26 := Surface.readPackage text26 | return note r "GN26 the surface generator reads" false
+  let (r51, v51, g51?) := generator r "GN26" p26
+  let some (gpkg51, G51) := g51? | return note r51 s!"GN26 {v51}" false
+  let (r52, v52, t52) := generate r51 gpkg51 G51
+  r := note r52 s!"GN26 the same generator written in surface text, its effect clause saying (produces (rec … reset …)) ({v51}); generate: {v52}; nothing born: {t52.isNone}"
+    (programRefused v52 "produces generate: lacks reset" && t52.isNone)
   return r
 
 /-- A fresh session for the GN rows. -/

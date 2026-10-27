@@ -42,9 +42,10 @@ def grammar : String :=
   "package ::= (package decl…)\n" ++
   "decl    ::= (type N T) | (state T) | (import N \"hex\") | (layer N) | (doc \"text\")\n" ++
   "          | (rel ℓ (key (f T)…) (val T) (limit n) [(sum f) (cap n)] [(retract)] [(guard g)] [(holds f)])\n" ++
-  "          | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] [(effect (moves n))] body)\n" ++
+  "          | (method ℓ [(reads (rel (points n) | (range m k))…)] [(arg A)] [(calls (kind…)…)] [(edits n)] [(effect (moves n) [(produces I)])] body)\n" ++
   "          kind    ::= account | credit | grant | install | transfer | (invoke T) | (createOf T)\n" ++
   "                      T of an invoke the argument it sends (LANG-77); T of a createOf the state of the object it births (LANG-96)\n" ++
+  "          I       ::= (rec (ℓ T)…), the interface of the packages it produces: method and law names and types (LANG-103)\n" ++
   "          item    ::= (kind (f e)…), in `done`: (install (pkg e)) | (createOf (pkg e) (state e)) | (transfer …) | …\n" ++
   "          | (law ℓ (on occ|(occ…) [x] body)… [(else body)]) | (law ℓ (bounded f max))\n" ++
   "          | (law ℓ (allowlist #hex…)) | (law ℓ (quorum f k #hex…)) | (law ℓ (windowed f W limit))\n" ++
@@ -617,10 +618,12 @@ structure MethodHead where
   type of its `(createOf T)` kind if it has one (LANG-96) -/
   calls : List (List Label × Option SExp × Option SExp) := []
   edits : Nat := 0
-  /-- `(effect (moves N))`: the method's grades (LANG-89) -/
+  /-- `(effect (moves N) [(produces I)])`: the method's grades (LANG-89), `I` the interface of the
+  packages it produces (LANG-103), written as the surface writes a package's interface: a record of
+  method and law names and types -/
   effect : Option Effect := none
 
-def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
+def methodHead (c : Ctx) (h : MethodHead) : List SExp → P (MethodHead × SExp)
   | [b] => .ok (h, b)
   | .list _ (.atom _ "reads" :: rs) :: rest => do
     -- `(live)` last: the points carry their key's cell liveness (E1; a cell-keyed relation only)
@@ -649,8 +652,8 @@ def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
           | _, _, _ => .error (.badClause q)
         | _ => .error (.badClause p)
       | x => .error (.badClause x.pos)
-    methodHead { h with reads := Row.sort reads } rest
-  | .list _ [.atom _ "arg", a] :: rest => methodHead { h with arg := a } rest
+    methodHead c { h with reads := Row.sort reads } rest
+  | .list _ [.atom _ "arg", a] :: rest => methodHead c { h with arg := a } rest
   | .list _ (.atom _ "calls" :: ks) :: rest => do
     -- a slot `(kind…)`: atoms name kinds; `(invoke T)` is the invoke kind with its argument type
     -- (LANG-77). A bare `invoke` atom names no arm: the slot is then empty and install refuses it.
@@ -672,15 +675,22 @@ def methodHead (h : MethodHead) : List SExp → P (MethodHead × SExp)
         if labels.isEmpty && inv.isNone && cre.isNone then throw (.badClause p)
         pure (labels, inv, cre)
       | x => .error (.badClause x.pos)
-    methodHead { h with calls } rest
+    methodHead c { h with calls } rest
   | .list _ [.atom _ "edits", .atom q n] :: rest =>
     match n.toNat? with
-    | some n => methodHead { h with edits := n } rest
+    | some n => methodHead c { h with edits := n } rest
     | none => .error (.badClause q)
   | .list q [.atom _ "effect", .list _ [.atom _ "moves", .atom r n]] :: rest =>
     if h.effect.isSome then .error (.duplicate q "effect") else
     match n.toNat? with
-    | some n => methodHead { h with effect := some { moves := n } } rest
+    | some n => methodHead c { h with effect := some { moves := n } } rest
+    | none => .error (.badClause r)
+  | .list q [.atom _ "effect", .list _ [.atom _ "moves", .atom r n], .list _ [.atom _ "produces", i]] :: rest =>
+    if h.effect.isSome then .error (.duplicate q "effect") else
+    match n.toNat? with
+    | some n => do
+      let I ← ty c Read.depthMax i
+      methodHead c { h with effect := some { moves := n, produces := some I } } rest
     | none => .error (.badClause r)
   | x :: _ => .error (.badClause x.pos)
   | [] => .error (.badClause 0)
@@ -718,7 +728,7 @@ def wrapMethod (p : Nat) (res : Ty) (bs : List Bound) : Term → P Term
 /-- One method, lowered: its type, its core s-expression (the body unchecked), its result type
 and its bounds. -/
 def methodSx (c : Ctx) (p : Nat) (xs : List SExp) : P (Ty × SExp × Ty × List Bound × Option Effect) := do
-  let (h, body) ← methodHead {} xs
+  let (h, body) ← methodHead c {} xs
   for (rel, _) in h.reads do
     unless (Row.find? rel c.rels).isSome do throw (.noRel p rel)
   let (A', bounds) ← argTy c Read.depthMax [] h.arg

@@ -246,12 +246,16 @@ The core text is `(ℓ (key (ℓ τ)…) (val τ) (limit n) (sum [ℓ]) (cap n) 
 A *grade* bounds a method's effect (LANG-89).
 
 ```
-grade ::= { moves n }
+grade ::= { moves n } | { moves n, produces I }
 ```
 
 `moves` bounds the sum of `amount` over the `transfer` and `credit` calls one run returns.
 A method with no grade has the grade `{ moves 0 }`.
-Lean: `Lang/Package.lean` `structure Effect`, `Package.effectOf`.
+`produces I` names the interface every package the run installs or makes must have: a record of
+method and law names and types, the same shape a package's interface has (LANG-103).
+The core text writes the grade as `(ℓ n)` or `(ℓ n I)`; the surface writes the clause
+`(effect (moves n) [(produces I)])`, `I` that record written as a type.
+Lean: `Lang/Package.lean` `structure Effect`, `Package.effectOf`, `producesOk`.
 
 A *claim* is a sentence a package makes of itself (LANG-93).
 
@@ -290,7 +294,7 @@ The core text is
 ```
 (package (imports "hex"…) (doc ["text"]) (state S) (iface I)
          (methods ℓ…) (laws ℓ…) (rels reldecl…) (body t)
-         [(effects (ℓ n)…)] [(claims (keeps ℓ ℓ)…)] [(holes holerom…)])
+         [(effects (ℓ n [I])…)] [(claims (keeps ℓ ℓ)…)] [(holes holerom…)])
 ```
 
 with the last three sections present exactly when nonempty, in this order.
