@@ -63,7 +63,9 @@ claims above are their components, and what is owed is listed beside each:
    to the log and to the system's own `receive`.
 3. *Every accepted member view or foreign receipt is justified by a history extending its explicitly
    trusted start, with prefix consistency or checkable equivocation evidence under the declared
-   head-authority and comparison assumptions.* Components: A1 (under `keyFaithful`), A2, A2′ (posts and
+   head-authority and comparison assumptions.* (A2′ is prefix agreement for members who compare stated
+   heads; it is not SUNDR's fork consistency, which no claim here states: a call names no prefix, so a
+   writer can admit one call on two branches; PROTOCOL-82.) Components: A1 (under `keyFaithful`), A2, A2′ (posts and
    `sync --to`), receipts (§7), §9 under `HeadOf`. Owed: unequal positions, passed anchors and forgotten
    positions; §9's validity source chosen explicitly (signed heads give accountability, not validity).
 
