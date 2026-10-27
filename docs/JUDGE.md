@@ -10,6 +10,6 @@ Nothing else judges a landing: there are no judge slots, no queue, no message-fo
 
 Keep design decisions in the layer's decision ledger, with critique and meta-critique. Write an entry for a real design choice rather than for every commit.
 
-Use the designated build host and swarm-build resource budget. Keep tests filtered to the affected behavior. Stop only a process identified by its own PID file; never kill by a name pattern. Do not stash shared work or delete another lane's files or caches.
+Build with `scripts/nd-build lake build …` (or `cargo …`): it takes one of the six box-wide build slots that landings share, runs at idle priority under swarm-build at SWARM_MEM_MAX (6G a module, 24G a tree). Keep tests filtered to the affected behavior. Stop only a process identified by its own PID file; never kill by a name pattern. Do not stash shared work or delete another lane's files or caches.
 
 [Spec](../Spec/README.md) defines the composed assurance claims and their premises. A passing build or convergence report does not establish a theorem's meaning or non-vacuity.

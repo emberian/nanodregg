@@ -1435,3 +1435,14 @@ A different TMPDIR does not re-key cargo: the alone re-run of devtools took 1 s,
 
 **Critique.** Six is a guess for 16 cores at 2–4 Lean threads a build. The door gives arrival order only as far as flock's wake-up order does. The self-check reads the file the shell is running: a lander whose outer loop is a pre-GATES-28 script runs main's materialized copy each attempt and is not stopped by it.
 **Meta-critique.** A semaphore is the first gate-like thing back in scripts/commit, an hour after deleting the judge. It is only a cap on concurrent work, not a verdict, and that difference is what keeps it from becoming one.
+
+## GATES-28 (c) · Every build takes a slot (scripts/nd-build); GATES-28's before/after (2026-10-27, FIX-QUEUE; ROOT's measurement 06:5xZ)
+
+**Why.** With landings under six slots, hbox still read load 113 with 78 lean/lake processes: about fifteen lanes ran their own development `lake build`s outside any slot.
+
+**Decision.** `scripts/nd-build CMD…` runs a build in one of the same six box-wide slots the landings take (`~/nd-land/.locks/build-K.flock`, through `door.flock`), at `ionice -c3 nice -n 15`, under swarm-build at SWARM_MEM_MAX (default 6G; 24G for a tree). The build process itself holds the slot, so it is released however it ends. Every build on the box goes through it; CHARTER's box-safety line and docs/JUDGE.md say so. Plant (hbox, 06:5xZ): with two slots held by landers, `nd-build sh -c …` printed `slot 3 of 6`, and the child held one `build-` descriptor.
+
+**Before and after GATES-28, MEASURED on origin/main (first-parent).** Before: 13 landings in the 6 h to 03:02Z (2.2 an hour) and 1 in the last 2 of those hours (0.5 an hour), while five judges ran, 24 landers waited and a flag day had been judged green five times without landing. After: 16 landings in the 2 h from 05:07Z to 07:07Z (8 an hour), by rule 1 and by plain pushes under the same rule, at a box load of 72–113 that the slots above now bound.
+
+**Critique.** A slot only binds the builds that use it: a lane that types `lake build` bypasses it, and nothing refuses that. The throughput number counts landings, not their size; the 05:07–07:07Z window also held the backlog's release.
+**Meta-critique.** Six slots for builds is the same shape as the four judge slots this day deleted. The difference is what waits: a build for CPU, never a landing for a verdict.

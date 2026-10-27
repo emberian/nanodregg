@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# scripts/nd-build CMD... — run a build (`lake build …`, `cargo …`, `lake exe …`) the way every build on the box runs:
+# in one of ND_BUILD_SLOTS (default 6) box-wide build slots, ~/nd-land/.locks/build-K.flock (the slots scripts/commit's
+# landings take), entered through ~/nd-land/.locks/door.flock in arrival order; at idle I/O and low CPU priority
+# (ionice -c3, nice 15); under the clone's build wrapper (hbox: swarm-build) at SWARM_MEM_MAX (default 6G, a module's
+# budget; 24G for a tree).
+#
+#   scripts/nd-build lake build Kernel
+#   SWARM_MEM_MAX=24G scripts/nd-build lake build
+#   scripts/nd-build cargo test --locked -p nanodregg-client --test frame
+#
+# The slot is held by the build itself (its file descriptor), so it is released however the build ends. A box
+# without flock(1) (the Mac) runs the build without a slot.
+set -uo pipefail
+[ $# -gt 0 ] || { echo "usage: scripts/nd-build CMD..." >&2; exit 2; }
+export PATH=$HOME/.elan/bin:$PATH
+export SWARM_MEM_MAX=${SWARM_MEM_MAX:-6G}
+read -r -a wrap <<< "$(git config nanodregg.buildwrap 2>/dev/null || true)"
+p=(nice -n 15)
+command -v ionice > /dev/null && p=(ionice -c3 "${p[@]}")
+if command -v flock > /dev/null; then
+  L=$HOME/nd-land/.locks; n=${ND_BUILD_SLOTS:-6}; said=""
+  mkdir -p "$L" || exit 2
+  exec 7> "$L/door.flock"; flock 7
+  while :; do
+    for k in $(seq 1 "$n"); do
+      exec 8> "$L/build-$k.flock"
+      if flock -n 8; then exec 7>&-; echo "nd-build: slot $k of $n" >&2; exec "${p[@]}" "${wrap[@]}" "$@"; fi
+    done
+    exec 8>&-
+    [ -n "$said" ] || { echo "nd-build: all $n build slots are busy; waiting for one" >&2; said=1; }
+    sleep 5
+  done
+fi
+exec "${p[@]}" "${wrap[@]}" "$@"

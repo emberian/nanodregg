@@ -169,7 +169,8 @@ reads the proposals before committing signatures and answers each in `DECISIONS.
   fixed forward. No unfiltered test suites.
 - Decisions: `decisions/<layer>.md`, append-only, one critiqued entry per real design choice (law 10).
 - Box safety: PID file or nothing for kills (never by pattern); every loop sleeps and has a deadline;
-  builds under swarm-build at a lane budget (6G a module, 24G a tree), at `ionice -c3 nice -n 15`;
+  every build runs through `scripts/nd-build` (one of six box-wide build slots, `ionice -c3 nice -n 15`,
+  swarm-build at a lane budget: 6G a module, 24G a tree);
   disk pressure is Ember's (stop and report, delete nothing outside your own scratch).
 - When a process constraint appears, the first question is "do we need this at all?". When a lane
   spends more time landing than building, the gate is the defect.
