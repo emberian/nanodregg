@@ -87,7 +87,7 @@ private theorem escrow_party {bytesOf : D → ByteArray} {digestOf : ByteArray �
   obtain rfl := invokeRun_pkg hir hP hidK
   have hrun' := hrun
   rw [hX] at hrun'
-  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset, payTo, kb, sb, vb, hdec, hm, hn, hj, hl, hg, hpb,
+  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset, payTo, kb, sb, vb, hdec, hm, hn, -, hj, hl, hg, hpb,
     h1, h2, h3, hcalls, hkb, -, -, hrows⟩ := escrow_take_run_sound bytesOf digestOf hR hid hp hrun'
   obtain ⟨hself, -, -⟩ := invokeRun_req hir
   rw [hself] at hm hn h1 hrows

@@ -392,8 +392,9 @@ theorem fuse_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteArray) (d
     fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_fuse _ _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, offerFuseDone theta (offerRels theta roles ol sl) (offerDecl theta roles ol)
       (offerSessionDecl theta sl) budget = .record fs := ⟨_, rfl⟩
-  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, -, rfl⟩ :=
-    offerTakeTree_inv offer_fields hR rfl hth hself hkeys hpair hX hY hfs (fun (f : Term) (e : (none : Option Term) = some f) => nomatch e) fwd hbig
+  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, -, hok, -, rfl⟩ :=
+    offerTakeTree_inv offer_fields hR rfl hth hself hkeys hpair hX hY hfs (fun (e : false = true) => nomatch e)
+      (fun (f : Term) (e : (none : Option Term) = some f) => nomatch e) fwd hbig
   obtain ⟨a, b, rfl⟩ := pair_shape hpair
   have hM := extract_means _ _ hx
   -- the edits
@@ -556,7 +557,7 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
   subst hpy
   obtain rfl := invokeRun_pkg hiry hy hidK
   rw [hX] at hruny
-  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, -, rfl, -⟩ := take_run_sound bytesOf digestOf hR hid hp hruny
+  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, -, -, rfl, -⟩ := take_run_sound bytesOf digestOf hR hid hp hruny
   simp only [deriveCalls, List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at hdcy
   subst hdcy
   refine ⟨fun e => hyv (by simp [e]), db, vg, hdb,
@@ -588,7 +589,7 @@ private theorem party {bytesOf : D → ByteArray} {digestOf : ByteArray → Opti
           ("captured", .inj "settle" (.record [("pair", pair), ("theta", th)]))]) = some vb ∧
       (∃ τ ∈ t.rows, τ.slot = .row ⟨P, 0, kb⟩ ∧ τ.act = .retract) ∧
       (∃ τ ∈ t.rows, τ.slot = .row ⟨P, 1, sb⟩ ∧ τ.act = .insert 0 vb) := by
-  obtain ⟨keys, pair, th, k, o, kq, q, kb, sb, vb, hdec, hreads, hnk, hj, -, hkb, -, hvb, rfl⟩ :=
+  obtain ⟨keys, pair, th, k, o, kq, q, kb, sb, vb, hdec, hreads, hnk, -, hj, -, hkb, -, hvb, rfl⟩ :=
     take_run_sound bytesOf digestOf hR hid hp hrun
   subst hself
   obtain ⟨τ₁, h₁, hs₁, ha₁⟩ := hcov (.row ⟨rq.self, 0, kb⟩, .retract) (by simp)

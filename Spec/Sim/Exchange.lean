@@ -33,7 +33,7 @@ def escrowPackageWith (fair : Term) (theta roles : List Label) (offerLimit sessi
   let fields : List (Label × Ty × Term) := [
     ("fuse", methodTy S (offerFuseArg theta) [T, offerCallTy theta] (offerTakeRows rels) E 2,
       activityMethod S (offerFuseArg theta) (offerTakeRows rels)
-        (offerTakeTree theta roles (escrowValTy theta roles) (some fair) (escrowFuseDone theta rels od sd budget))),
+        (offerTakeTree theta roles (escrowValTy theta roles) (some fair) false (escrowFuseDone theta rels od sd budget))),
     ("offer_guard", guardTy S od, offerGuard theta od),
     ("post", methodTy S (escrowPostArg theta roles) [T] (.record []) E 1,
       activityMethod S (escrowPostArg theta roles) (.record []) (escrowPostBody rels od)),
@@ -41,7 +41,7 @@ def escrowPackageWith (fair : Term) (theta roles : List Label) (offerLimit sessi
     ("session_waiting", guardTy S sd, offerSessionGuard theta sd sessionPatience),
     ("take", methodTy S (offerTakeArg theta) [T] (offerTakeRows rels) E 2,
       activityMethod S (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeTree theta roles (escrowValTy theta roles) (some fair) (escrowTakeDone theta rels od sd))),
+        (offerTakeTree theta roles (escrowValTy theta roles) (some fair) true (escrowTakeDone theta rels od sd))),
     ("withdraw", methodTy S (.record []) [T] (escrowWithdrawRows rels) E 1,
       activityMethod S (.record []) (escrowWithdrawRows rels) (escrowWithdrawBody rels od))]
   { imports := [], state := S,

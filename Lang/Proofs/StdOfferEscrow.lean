@@ -185,7 +185,7 @@ private theorem post_peerReads (theta roles : List Label) (ol sl pt b : Nat) :
 
 private theorem noRef_take (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) :
     NoRef (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels) (escrowTakeBody theta roles rels od sd)) := by
-  simp [activityMethod, escrowTakeBody, offerTakeTree, offerUnwrap, offerGate, escrowTakeDone, escrowResult, escrowPay, escrowTransfer,
+  simp [activityMethod, escrowTakeBody, offerTakeTree, offerUnwrap, offerGate, offerCallerIsPeerT, offerPeerT, eqData, noRef_eqDataBody, escrowTakeDone, escrowResult, escrowPay, escrowTransfer,
     escrowAcct, escrowNoVia, offerTakeEdits, NoRef, NoRefRow, resultT, callsT, someCallT, activityEdit,
     activityKeyTerm, noCallT, slot_e2, slot_c1, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT, escrowFairT, escrowLegMeetsT, andT]
 
@@ -321,26 +321,28 @@ theorem escrow_fair_true {theta roles : List Label} {lib : List Term} {env : Env
 `apply4 g "take"` over `[req, arg, state, rows]`, at a `lib[g]` whose `take` is the generated method;
 the escrow twin of `take_iff_compliant`): with both offer slots pinned and present, the take returns iff
 its own pinned offer is the one the deal names for `self` (`NamedKey`), the two are `JointOk` at θ,
-and their legs match (`LegsMatch`, LANG-82). Mutation P8j (the judge ignores the legs) makes it false
+their legs match (`LegsMatch`, LANG-82), and it was called by its peer (`CalledByPeer`, LANG-100: a root
+take is refused `notFuser`). Mutation P8j (the judge ignores the legs) makes it false
 at LE7's unfair deal. -/
 theorem escrow_take_iff_compliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
     {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
-    {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
+    {state : Val} {rq keys pair th k o kq q c : Data} {sb : ByteArray}
     (hlib : lib[g]? = some ((Term.record fs).relocate f))
     (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
       (escrowTakeBody theta roles rels od sd)))
     (hR : (offerRoleTy roles).wf = true)
     (ho : Conforms o (escrowValTy theta roles)) (hq : Conforms q (escrowValTy theta roles))
     (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hcf : rq.field "caller" = some c) (hcc : Conforms c (optTy .digest))
     (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
     (∃ v, BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal, state,
         (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
       (apply4 g "take") (.ok v)) ↔
-    NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q := by
-  obtain ⟨r, hr, hiff⟩ := offerTakeTree_decides_fair (done := escrowTakeDone theta rels od sd) (tail := [])
+    CalledByPeer sb pair c ∧ NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q := by
+  obtain ⟨r, hr, hiff⟩ := offerTakeTree_decides_fair_peer (done := escrowTakeDone theta rels od sd) (tail := [])
     (lib := lib) (state := state) (kq := kq) rfl escrow_fields (fun _ h1 h3 => escrowFair_eval ho hq h1 h3)
-    hR ho hq hth hself hkeys hpair hk
+    hR ho hq hth hself hcf hcc hkeys hpair hk
   have hap := apply4_method_iff hlib rfl hf (noRef_take _ _ _ _ _) hr
   rw [← hiff]
   exact ⟨fun ⟨v, hv⟩ => ⟨v, ((hap _).mp hv).symm⟩, fun ⟨v, e⟩ => ⟨v, (hap _).mpr e.symm⟩⟩
@@ -453,7 +455,9 @@ private theorem take_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray)
         (.record [("keys", keys), ("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
-      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
+      NamedKey (bytesOf r.self) keys pair k ∧
+      CalledByPeer (bytesOf r.self) pair (optData (fun c => .digest (bytesOf c)) r.caller) ∧
+      JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
       o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) ∧
       q.field "payTo" = some (.digest pb) ∧
       ((∀ fs, escrowTakeDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol) (offerSessionDecl theta sl) =
@@ -478,7 +482,7 @@ private theorem take_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray)
   simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl, rfl, rfl⟩ := h
   obtain ⟨S, v, used, c, e, ds, left, es, hS, hrun, hx, hc, hes, hrows⟩ := runMeasured_inv hm
-  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, hpg, hres, -, had, -, hwd, rfl⟩ := runSetup_spec hS
+  obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, hro, hl, hpg, hres, -, had, -, hwd, rfl⟩ := runSetup_spec hS
   obtain ⟨hpg', f, hlib⟩ := load_top bytesOf digestOf (fuel := closureDepthMax - 1) hid hp hl
   rw [hpg'] at hpg
   cases hpg
@@ -501,8 +505,10 @@ private theorem take_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray)
     fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_take _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowTakeDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol)
       (offerSessionDecl theta sl) = .record fs := ⟨_, rfl⟩
-  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, hfair, rfl⟩ :=
+  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hcp, hok, hfair, rfl⟩ :=
     offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs
+      (fun (_ : true = true) => Exists.intro (optData (fun c => .digest (bytesOf c)) r.caller)
+        (And.intro (reqData_caller bytesOf r) (reqData_caller_conforms hro)))
       (fun f e k o kq q ho hq => by cases e; exact Exists.imp (fun _ h => h.1) (escrowFair_eval ho hq rfl rfl))
       fwd hbig
   have hlm := escrow_fair_true ho hq rfl rfl (hfair _ rfl)
@@ -531,7 +537,10 @@ private theorem take_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray)
   have he := means_deterministic hmA hED
   subst he
   obtain ⟨kb, sb, vb, hkb, hsb, hvb, hmap⟩ := offerTake_editsOf (od := escrowDecl theta roles ol) rfl hes
-  refine ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, had, hwd, hnk, hok, hlm, hog, hqp, ?_, hkb, hsb, hvb,
+  obtain ⟨c, hcf, hcp⟩ := hcp rfl
+  rw [reqData_caller] at hcf
+  cases hcf
+  refine ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, had, hwd, hnk, hcp, hok, hlm, hog, hqp, ?_, hkb, hsb, hvb,
     hrows.trans hmap⟩
   -- the call, under the premise that the generator's `calls` field is the leg paid to the peer
   intro hcalls
@@ -556,7 +565,8 @@ private theorem take_core {D : Type} [DecidableEq D] (bytesOf : D → ByteArray)
 /-- **The deployed escrow take is sound** (`Lang.program`'s `run` of `take` of an object of the
 generated escrow package): a run that RETURNED decoded the deal `{keys, pair, theta := th}`, read
 (by the declared peer read) its own pinned offer `o` and its peer's `q`, its own the one the deal
-names for `self` (`NamedKey`), found them `JointOk` at θ, makes exactly ONE call, `transfer (of self
+names for `self` (`NamedKey`), was called by its peer (`CalledByPeer`: the request's `caller` is `some` of the
+other party, LANG-100), found them `JointOk` at θ, makes exactly ONE call, `transfer (of self
 asset) (of payTo asset) amount` with no grant and no once key, where `{amount, asset}` is its OWN
 offer's leg and `payTo` the PEER's offer's, and its row acts are exactly the retract of its own offer
 and the insert of its session row. Mutation P8d (the take pays nothing: its call slot `none`) makes
@@ -576,7 +586,9 @@ theorem escrow_take_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteAr
         (.record [("keys", keys), ("pair", pair), ("theta", th)]) offerRead offerRead =
         .ok (.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
           ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]) ∧
-      NamedKey (bytesOf r.self) keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
+      NamedKey (bytesOf r.self) keys pair k ∧
+      CalledByPeer (bytesOf r.self) pair (optData (fun c => .digest (bytesOf c)) r.caller) ∧
+      JointOk (offerLabels theta) o q th ∧ LegsMatch o q ∧
       o.field "give" = some (.record [("amount", .nat amt), ("asset", .digest ab)]) ∧
       q.field "payTo" = some (.digest pb) ∧
       digestOf (bytesOf r.self) = some self' ∧ digestOf ab = some asset' ∧ digestOf pb = some payTo' ∧
@@ -588,12 +600,12 @@ theorem escrow_take_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteAr
         (.record [("answered", .inj "none" (.record [])),
           ("captured", .inj "settle" (.record [("pair", pair), ("theta", th)]))]) = some vb ∧
       rows = [(.row ⟨r.self, 0, kb⟩, .retract), (.row ⟨r.self, 1, sb⟩, .insert 0 vb)] := by
-  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, hd, hm, hn, hj, hl, hg, hpb, hcall, hkb, hsb, hvb, hrows⟩ :=
+  obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb, sb, vb, hd, hm, hn, hcp, hj, hl, hg, hpb, hcall, hkb, hsb, hvb, hrows⟩ :=
     take_core bytesOf digestOf hR hid hp h
   obtain ⟨self', asset', payTo', h1, h2, h3, hc⟩ := hcall (fun fs hfs => by
     simp only [escrowTakeDone, escrowResult, resultT, Term.record.injEq] at hfs
     subst hfs; rfl)
-  exact ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset', payTo', kb, sb, vb, hd, hm, hn, hj, hl, hg, hpb,
+  exact ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, self', asset', payTo', kb, sb, vb, hd, hm, hn, hcp, hj, hl, hg, hpb,
     h1, h2, h3, hc, hkb, hsb, hvb, hrows⟩
 
 /-! ## The escrow fuse: its leg paid, the peer's take invoked on the judged deal (LANG-77) -/
@@ -744,8 +756,8 @@ theorem escrow_fuse_run_sound {D : Type} [DecidableEq D] (bytesOf : D → ByteAr
     fun hb => apply4_method hlib rfl (by simp [Row.find?, activityMethod]) (noRef_escrow_fuse _ _ _ _ _ _) hb
   obtain ⟨fs, hfs⟩ : ∃ fs, escrowFuseDone theta (escrowRels theta roles ol sl) (escrowDecl theta roles ol)
       (offerSessionDecl theta sl) budget = .record fs := ⟨_, rfl⟩
-  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, hok, hfair, rfl⟩ :=
-    offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs
+  obtain ⟨k, o, kq, q, rfl, rfl, hk, ho, hq, hnk, -, hok, hfair, rfl⟩ :=
+    offerTakeTree_inv escrow_fields hR rfl hth hself hkeys hpair hX hY hfs (fun (e : false = true) => nomatch e)
       (fun f e k o kq q ho hq => by cases e; exact Exists.imp (fun _ h => h.1) (escrowFair_eval ho hq rfl rfl))
       fwd hbig
   have hlm := escrow_fair_true ho hq rfl rfl (hfair _ rfl)
@@ -1335,7 +1347,7 @@ theorem escrow_retract_moves_leg {D : Type} [DecidableEq D] (bytesOf : D → Byt
     obtain ⟨kb', rfl⟩ := retire_core bytesOf digestOf hid hp h
     simp at hmem
   | 3, h =>
-    obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb', sb, vb, hd, hm, -, -, -, hg, hpb, hcall, hkb, -, -, rfl⟩ :=
+    obtain ⟨keys, pair, th, k, o, kq, q, amt, ab, pb, kb', sb, vb, hd, hm, -, -, -, -, hg, hpb, hcall, hkb, -, -, rfl⟩ :=
       take_core bytesOf digestOf hR hid hp h
     obtain ⟨self', asset', payTo', h1, h2, h3, rfl⟩ := hcall (fun fs hfs => by
       simp only [escrowTakeDone, escrowResult, resultT, Term.record.injEq] at hfs

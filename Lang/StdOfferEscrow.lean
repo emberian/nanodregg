@@ -121,7 +121,7 @@ def escrowTakeDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd 
 `peerRowUnpinned`, `noPeerOffer`, `offerNotNamed`, `sameRole`, `notCompliant`), the judge typed at
 the escrow's value (it reads its `role` and `terms`), the leg paid to the peer on `ok`. -/
 def escrowTakeBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) : Term :=
-  offerTakeTree theta roles (escrowValTy theta roles) (some escrowFairT) (escrowTakeDone theta rels od sd)
+  offerTakeTree theta roles (escrowValTy theta roles) (some escrowFairT) true (escrowTakeDone theta rels od sd)
 
 /-- The fuse's success (inside the verdict's `ok` arm: payload 0, peerVal 1, ownVal 3, req 5, arg 6,
 state 7): the take's leg payment and edits, and the invoke of the peer's `take` on the judged deal
@@ -134,7 +134,7 @@ def escrowFuseDone (theta : List Label) (rels : List (Label × RelDecl)) (od sd 
 
 /-- **The fuse**: the take's tree over the escrow's values, paying its leg and invoking the peer. -/
 def escrowFuseBody (theta roles : List Label) (rels : List (Label × RelDecl)) (od sd : RelDecl) (budget : Nat) : Term :=
-  offerTakeTree theta roles (escrowValTy theta roles) (some escrowFairT) (escrowFuseDone theta rels od sd budget)
+  offerTakeTree theta roles (escrowValTy theta roles) (some escrowFairT) false (escrowFuseDone theta rels od sd budget)
 
 /-- The withdraw's success (inside the inner `some`: ownVal 0, ownPoint 1, req 2, state 4): pay the
 pinned offer's leg back to its `payTo`; retract the offer. -/

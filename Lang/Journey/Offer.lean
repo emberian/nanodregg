@@ -35,6 +35,14 @@ def lfFuseArg (a b : D) (price ka kb : Nat) (via : Option D) : Option ByteArray 
       ("pair", .record [("a", .digest (Sim.dc.bytes a)), ("b", .digest (Sim.dc.bytes b))]),
       ("theta", .record [("price", .nat price)]), ("via", lfOpt via)])
 
+/-- `take {keys {a ka, b kb}, pair {a, b}, theta {price}}`: the deal as the take's own argument (LANG-100: signed
+at the root, `caller = none`, it is refused `notFuser`; only a peer's `fuse` takes). -/
+def lfTakeArg (a b : D) (price ka kb : Nat) : Option ByteArray :=
+  Wire.encodeData (Std.offerTakeArg ["price"])
+    (.record [("keys", .record [("a", .nat ka), ("b", .nat kb)]),
+      ("pair", .record [("a", .digest (Sim.dc.bytes a)), ("b", .digest (Sim.dc.bytes b))]),
+      ("theta", .record [("price", .nat price)])])
+
 /-- `post {n, role, terms}` with the one term `price` in `[lo, hi]`. -/
 def lfPostArg (n : Nat) (role : Label) (lo hi : Nat) : Option ByteArray :=
   Wire.encodeData (Std.offerPostArg ["price"] ["buyer", "seller"])
@@ -161,6 +169,19 @@ def lfRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r s!"LF8 the deal names Y's offer 1 and the call pins Y's offer 0 (compliant with X's at price 9): {vf8}; read back on the unchanged World: X's offer 0 and Y's offers 0 and 1 stand {present w0.st.host X 0 && present w0.st.host Y 0 && present w0.st.host Y 1}"
     (refusedBy vf8 "take" "offerNotNamed" && present w0.st.host X 0 && present w0.st.host Y 0 &&
       present w0.st.host Y 1)
+  -- LF10 (LANG-100) a take at the ROOT: A, X's owner, invokes X.take itself on LF1's deal; the request's
+  -- `caller` is `none` (a member signed it), not Y, so the take refuses `notFuser` before the name check:
+  -- a session row is inserted only by a take the peer's own judged `fuse` made
+  let take (r : Run) (cells : List D) (rows : List (RowSlot D × D)) (arg : Option ByteArray) : Run × String :=
+    match arg with
+    | none => (r, "no bytes")
+    | some x =>
+      let (r', v, _) := go prog r (signedRows r.st a (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ cells)) rows []
+        (.invoke X Std.offerTakeIx x 1000000 none))
+      (r', v)
+  let (_, vf9) := take w0 allCells (rowsAt w0.st.host 0) (lfTakeArg X Y 9 0 0)
+  r := note r s!"LF10 A invokes X.take at the root on LF1's deal \{keys \{a 0, b 0}, pair \{a X, b Y}, theta \{price 9}} pinning X, Y and both offer rows (the request's caller is none): {vf9}; read back on the unchanged World: X's offer 0 and Y's offer 0 stand {present w0.st.host X 0 && present w0.st.host Y 0}"
+    (refusedBy vf9 "take" "notFuser" && present w0.st.host X 0 && present w0.st.host Y 0)
   -- LF3 / LF3r the peer read: the peer's CELL unpinned is the kernel's `unpinned`; its ROW unpinned is the fuse's
   let (_, vf3) := fuse w0 [X, gY] (rowsAt w0.st.host 0) arg1
   r := note r s!"LF3 LF1's call without pinning Y's cell: {vf3}"

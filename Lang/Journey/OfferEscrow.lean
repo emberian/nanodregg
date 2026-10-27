@@ -123,6 +123,19 @@ def lvRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   r := note r s!"LE2 the same fuse naming and pinning Y's offer 1 (seller [11,12], price 9 outside it): {vf2}; X still holds {bal rf2.st.host ox α} α, Y {bal rf2.st.host oy β} β"
     (refusedBy vf2 "fuse" "notCompliant" && bal rf2.st.host ox α == 5 && bal rf2.st.host oy β == 8 &&
       present rf2.st.host ox 0 && present rf2.st.host oy 1)
+  -- LE9 (LANG-100) a take at the ROOT: A invokes X.take itself on LE1's deal; `caller` is `none`: refused
+  -- `notFuser`, no leg moves, both offers stand
+  let take (r : Run) (cells : List D) (rows : List (RowSlot D × D)) (arg : Option ByteArray) : Run × String :=
+    match arg with
+    | none => (r, "no bytes")
+    | some x =>
+      let (r', v, _) := go prog r (signedRows r.st a (Sim.S.pinsFor r.st.host ([a.id, pkg] ++ cells)) rows []
+        (.invoke ox Std.offerTakeIx x 1000000 none))
+      (r', v)
+  let (rf9, vf9) := take r0' cells (pinOffer w0 ox 0 ++ pinOffer w0 oy 0) (lfTakeArg ox oy 9 0 0)
+  r := note r s!"LE9 A invokes X.take at the root on LE1's deal pinning both offers 0 (the request's caller is none): {vf9}; X still holds {bal rf9.st.host ox α} α, Y {bal rf9.st.host oy β} β; both offers stand {present rf9.st.host ox 0 && present rf9.st.host oy 0}"
+    (refusedBy vf9 "take" "notFuser" && bal rf9.st.host ox α == 5 && bal rf9.st.host oy β == 8 &&
+      present rf9.st.host ox 0 && present rf9.st.host oy 0)
   -- LE3 withdraw credits the leg back to payTo
   let wd (r : Run) (rows : List (RowSlot D × D)) : Run × String :=
     match Wire.encodeData (.record []) (.record []) with
