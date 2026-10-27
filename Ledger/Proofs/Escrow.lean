@@ -219,15 +219,15 @@ escrow's own account to the depositor and to the beneficiary, through no grant, 
 `refunded`, `released`), so the amount a payout moves is the amount the deposit moved and the
 parties the law checks are the parties the creator set. -/
 theorem escrow_method_results (amount : Nat) (arb asset ben dep nk self g : ByteArray) (p : Label)
-    (agent nb occ pr vu arg rows : Data) :
+    (agent ca nb occ pr vu arg rows : Data) :
     methodResult "deposit" (stateOf amount arb asset ben dep nk p) (.record [("grant", .digest g)])
-        (reqAt agent nb occ pr self vu) rows =
+        (reqAt agent ca nb occ pr self vu) rows =
       some (resultD (transferD (ofD dep asset) (ofD self asset) amount (optSome (.digest g)) (optSome (.bytes nk)))
         (stateOf amount arb asset ben dep nk "held")) ∧
-    methodResult "refund" (stateOf amount arb asset ben dep nk p) arg (reqAt agent nb occ pr self vu) rows =
+    methodResult "refund" (stateOf amount arb asset ben dep nk p) arg (reqAt agent ca nb occ pr self vu) rows =
       some (resultD (transferD (ofD self asset) (ofD dep asset) amount optNone (optSome (.bytes payoutKey)))
         (stateOf amount arb asset ben dep nk "refunded")) ∧
-    methodResult "release" (stateOf amount arb asset ben dep nk p) arg (reqAt agent nb occ pr self vu) rows =
+    methodResult "release" (stateOf amount arb asset ben dep nk p) arg (reqAt agent ca nb occ pr self vu) rows =
       some (resultD (transferD (ofD self asset) (ofD ben asset) amount optNone (optSome (.bytes payoutKey)))
         (stateOf amount arb asset ben dep nk "released")) := by
   refine ⟨?_, ?_, ?_⟩ <;> rfl

@@ -59,9 +59,9 @@ def caplessSeal (w : World Digest) (c : Call Digest) (dr : Pinned Digest → Exc
 def caplessReceive (w : World Digest) (c : Call Digest) : Except (Refusal Digest) (Turn Digest) :=
   match c.unsigned.body with
   | .transfer src dst amount via once =>
-      caplessSeal w c fun look => caplessTransfer Xd look ⟨c.unsigned.member, 0⟩ src dst amount via once
+      caplessSeal w c fun look => caplessTransfer Xd look ⟨c.unsigned.member, 0, none⟩ src dst amount via once
   | .credit well acct amount via =>
-      caplessSeal w c fun look => caplessCredit Xd look ⟨c.unsigned.member, 0⟩ well acct amount via
+      caplessSeal w c fun look => caplessCredit Xd look ⟨c.unsigned.member, 0, none⟩ well acct amount via
   | _ => receive Xd w c
 
 /-- **The capless kernel**: a transfer or a credit line through a grant never spends the grant's cap. -/

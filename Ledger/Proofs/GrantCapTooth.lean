@@ -168,7 +168,7 @@ theorem grant_cap_needs_contiguous :
     simp only [steps, List.map_cons, List.map_nil, List.zip_cons_cons, List.zip_nil_right, List.mem_cons,
       List.mem_nil_iff, or_false] at hx
     rcases hx with rfl | rfl
-    · exact ⟨t1, c1, _, _, _, .of own asset, .of mem asset, none, rfl, by decide +kernel, Dispatched.root⟩
-    · exact ⟨t2, c2, _, _, _, .of own asset, .of mem asset, none, rfl, by decide +kernel, Dispatched.root⟩
+    · exact ⟨t1, c1, _, _, _, _, .of own asset, .of mem asset, none, rfl, by decide +kernel, Dispatched.root⟩
+    · exact ⟨t2, c2, _, _, _, _, .of own asset, .of mem asset, none, rfl, by decide +kernel, Dispatched.root⟩
 
 end Nanodregg.Ledger.Proofs

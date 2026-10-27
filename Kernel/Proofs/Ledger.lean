@@ -424,7 +424,7 @@ theorem effect_transfer_authorized {X : Ctx D} {look : Pinned D} {rv : RowView D
             (g, Act.write [.set (transferBase + i) (countBytes (left - amount))]) ∈ r.1.effects) := by
   obtain ⟨_, _, _, hd⟩ := effect_as_signed h
   simp only [dispatch] at hd
-  exact transfer_authorized (a := ⟨obj, wk.born⟩) (stepped_draft hd)
+  exact transfer_authorized (a := ⟨obj, wk.born, some obj⟩) (stepped_draft hd)
 
 omit [Ord D] in
 /-- Every step a derived credit line passed, and the Draft it is. -/
@@ -521,7 +521,7 @@ theorem tree_zeroBorn {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D
     · exact ha p hp
     · exact hb p hp
   · intro _ _ _ _ p hp; simp at hp
-  · intro sub wk actor b r hc hi h
+  · intro sub wk actor caller b r hc hi h
     cases b with
     | invoke => simp [Body.isInvoke] at hi
     | account asset owner =>

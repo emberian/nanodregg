@@ -246,14 +246,14 @@ private theorem receive_root {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     (hc : receive X w c = .ok t) :
     ∃ r, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-        ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok r ∧
+        ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok r ∧
       sealTurn X c r.1.creates r.1.effects r.1.nullifiers r.1.rows (poolOf c.unsigned.body - r.2.pool) = .ok t := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
   obtain ⟨-, d, k, hd, hs⟩ := receiveWith_sealed hw
   unfold deriveWithTicks at hd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd; cases hd
   | ok r =>
       rw [hR] at hd
@@ -303,7 +303,7 @@ theorem write_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} 
       ownerAuthority X (pinned X.env w c.unsigned.pins) c.unsigned.member obj cell .mutate via = .ok principal ∧
       lawsOf X obj cell = .ok laws ∧
       X.program.judge (pinned X.env w c.unsigned.pins) none laws (stateOf cell) (applyEdits (stateOf cell) edits)
-        (reqOf c.unsigned obj principal .write) = .ok () ∧
+        (reqOf c.unsigned obj principal .write none) = .ok () ∧
       ∃ cell', w'.live X.env obj = some cell' ∧ Slots.ascending cell'.slots = true ∧
         ∀ k, (stateOf cell').get k = (applyEdits (stateOf cell) edits).get k := by
   obtain ⟨r, hr, hs⟩ := receive_root hc
@@ -388,9 +388,9 @@ theorem law_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {o
       ownerAuthority X (pinned X.env w c.unsigned.pins) c.unsigned.member obj cell .mutate via = .ok principal ∧
       lawsOf X obj cell = .ok laws ∧
       X.program.judge (pinned X.env w c.unsigned.pins) none laws (stateOf cell) (stateOf cell)
-        (reqOf c.unsigned obj principal (.relaw laws')) = .ok () ∧
+        (reqOf c.unsigned obj principal (.relaw laws') none) = .ok () ∧
       X.program.judge (pinned X.env w c.unsigned.pins) none (laws'.filter fun l => decide (l ∉ laws))
-        (stateOf cell) (stateOf cell) (reqOf c.unsigned obj principal (.adopt laws')) = .ok () ∧
+        (stateOf cell) (stateOf cell) (reqOf c.unsigned obj principal (.adopt laws') none) = .ok () ∧
       ∃ cell', w'.live X.env obj = some cell' ∧ ∀ k, (stateOf cell').get k = (stateOf cell).get k := by
   obtain ⟨r, hr, hs⟩ := receive_root hc
   rw [hb] at hr
@@ -426,7 +426,7 @@ theorem law_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {o
 with the act `retire`, and its receiver's check passed at the pinned view. -/
 private theorem retire_derived {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {obj : D}
     (hc : receive X w c = .ok t) (hb : c.unsigned.body = .retire obj) :
-    (∃ a : At D, a.actor = c.unsigned.member ∧ retireCheck X (pinned X.env w c.unsigned.pins) c a obj = .ok ()) ∧
+    (∃ a : At D, a.actor = c.unsigned.member ∧ a.caller = none ∧ retireCheck X (pinned X.env w c.unsigned.pins) c a obj = .ok ()) ∧
       (∃ q ∈ c.unsigned.pins, q.1 = obj) ∧ ∃ x ∈ t.touches, x.cell = obj ∧ x.act = .retire := by
   obtain ⟨r, hr, hs⟩ := receive_root hc
   rw [hb] at hr
@@ -438,7 +438,7 @@ private theorem retire_derived {X : Ctx D} {w : World D} {c : Call D} {t : Turn 
   rw [← hd] at hs
   obtain ⟨-, -, htouch, -, -, -, -, -, -, hpins⟩ := sealTurn_ok hs
   obtain ⟨q, hq, hqe⟩ := hpins (obj, .retire) (List.mem_singleton_self _)
-  refine ⟨⟨_, rfl, hchk⟩, ⟨q, hq, hqe⟩, { cell := q.1, seen := q.2, act := actFor [(obj, Act.retire)] q.1 }, ?_, hqe, ?_⟩
+  refine ⟨⟨_, rfl, rfl, hchk⟩, ⟨q, hq, hqe⟩, { cell := q.1, seen := q.2, act := actFor [(obj, Act.retire)] q.1 }, ?_, hqe, ?_⟩
   · rw [htouch]; exact List.mem_map.mpr ⟨q, hq, rfl⟩
   · simp only; rw [hqe]; exact actFor_single
 
@@ -453,8 +453,8 @@ theorem retire_next {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {obj : D
       slotDigest X obj cell slotOwner = .ok c.unsigned.member ∧
       packageOf X obj cell = .ok pkg ∧ lawsOf X obj cell = .ok laws ∧
       X.program.judge (pinned X.env w c.unsigned.pins) pkg laws (stateOf cell) (stateOf cell)
-        (reqOf c.unsigned obj c.unsigned.member .retire) = .ok () := by
-  obtain ⟨⟨a, ha, hchk⟩, ⟨q, hq, hxc⟩, -⟩ := retire_derived hc hb
+        (reqOf c.unsigned obj c.unsigned.member .retire none) = .ok () := by
+  obtain ⟨⟨a, ha, hca, hchk⟩, ⟨q, hq, hxc⟩, -⟩ := retire_derived hc hb
   have hlook : pinned X.env w c.unsigned.pins obj = .ok (some cell) := by
     have hany : (c.unsigned.pins.any fun p => decide (p.1 = obj)) = true :=
       List.any_eq_true.mpr ⟨q, hq, by simpa using hxc⟩
@@ -470,6 +470,7 @@ theorem retire_next {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {obj : D
   rw [req_ok, decide_eq_true_eq] at hreq
   subst hreq
   rw [ha] at hown hj
+  rw [hca] at hj
   exact ⟨pkg, laws, hown, hpkg, hlaws, hj⟩
 
 /-- **An admitted retirement leaves a tombstone** (KERNEL-70), under a lawful `Ord`: a signed

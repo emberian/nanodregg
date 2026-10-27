@@ -36,14 +36,18 @@ def stateOf (amount : Nat) (arbiter asset beneficiary depositor nonce : ByteArra
     ("beneficiary", .digest beneficiary), ("depositor", .digest depositor), ("nonce", .bytes nonce),
     ("phase", .inj p (.record []))]
 
-/-- A request on object `self` with every other field arbitrary (the shape of `Lang.reqData`). -/
-def reqAt (agent notBefore occ principal : Data) (self : ByteArray) (validUntil : Data) : Data :=
-  .record [("agent", agent), ("notBefore", notBefore), ("occasion", occ), ("principal", principal),
-    ("self", .digest self), ("validUntil", validUntil)]
+/-- A request on object `self` with every other field arbitrary (the shape of `Lang.reqData`; `caller`
+is the option of the calling object's digest, `none` for a member's own call). -/
+def reqAt (agent caller notBefore occ principal : Data) (self : ByteArray) (validUntil : Data) : Data :=
+  .record [("agent", agent), ("caller", caller), ("notBefore", notBefore), ("occasion", occ),
+    ("principal", principal), ("self", .digest self), ("validUntil", validUntil)]
+
+/-- No caller: a member's own call (`Lang.optData` of `none`). -/
+def noCaller : Data := .inj "none" (.record [])
 
 /-- A request signed by `agent` on object `self` for occasion `occ`. -/
 def reqWith (agent self : ByteArray) (occ : Data) : Data :=
-  reqAt (.digest agent) (.nat 0) occ (.digest agent) self (.nat 0)
+  reqAt (.digest agent) noCaller (.nat 0) occ (.digest agent) self (.nat 0)
 
 /-- The type every method's result is extracted at: its one transfer slot, no row edits, the
 state (each method's `resultTy` in its signature, `escrow_run_calls` reads it there). -/

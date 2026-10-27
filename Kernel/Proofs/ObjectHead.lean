@@ -154,7 +154,7 @@ theorem turn_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' 
   rw [derive_eq] at hd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd; cases hd
   | ok R =>
   rw [hR] at hd
@@ -189,7 +189,7 @@ theorem turn_object_head [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' 
           (cell.slots.get slotPackage ≠ none → ∀ o ∈ ops, stateBase ≤ o.key) := by
       have hsl : lawBase ≤ stateBase := by simp [lawBase, stateBase]
       rcases effect_at_object hR he hrk with ⟨edits, via, hb⟩ | ⟨laws', via, hb⟩ | ⟨-, hr⟩ |
-          ⟨n, wk, a, method, args, budget, via, hd⟩
+          ⟨n, wk, a, _, method, args, budget, via, hd⟩
       · rw [hb] at hR
         obtain ⟨cell₀, -, -, hko, -, -, -, -, hdeq⟩ := write_judged (stepped_draft hR)
         rw [hrk] at hko; cases hko

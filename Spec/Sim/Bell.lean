@@ -77,7 +77,7 @@ def bellRv (old : ByteArray) : RowView Digest :=
 def bellArgs : ByteArray :=
   (Lang.Wire.encodeData Lang.Bell.answerArg
     (Lang.Bell.answerData 5 "ring".toUTF8 bellRinger.bytes "second".toUTF8 none)).getD .empty
-def bellReq : Req Digest := ⟨bellResident, bellResident, bellDg 2, 5, 10, .invoke 0⟩
+def bellReq : Req Digest := ⟨bellResident, bellResident, bellDg 2, 5, 10, .invoke 0, none⟩
 
 /-- Whether the deployed program's run of `answer` (method 0) at `p` over the `rings` row `old`
 returns, upserting `rings` at the ring's key. -/

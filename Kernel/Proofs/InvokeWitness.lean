@@ -76,18 +76,18 @@ omit [Ord D] in
 /-- `invoke` from its steps: the cell read, the run, its ticks, the state's form, the laws, the
 judgement, the count of the calls it returned, and their derivation (`rfl` when it returned none). -/
 theorem invoke_of {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
-    {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    {wk : Walk D} {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
     {cell : Cell} {p : D} {r : Req D} {new : Slots} {calls : List (Body D)} {used : Nat} {laws : List D}
     {out : Draft D × Walk D}
     (hv : obj ∉ wk.visited)
-    (hr : invokeRun X look c actor obj method via = .ok (cell, p, r))
+    (hr : invokeRun X look c actor caller obj method via = .ok (cell, p, r))
     (hp : X.program.run look rv p (stateOf cell) method args r (min budget wk.pool) = .ok (new, calls, [], used))
     (hu : used ≤ min budget wk.pool) (hs : checkState (D := D) new = .ok ())
     (hl : lawsOf X obj cell = .ok laws) (hj : X.program.judge look (some p) laws (stateOf cell) new r = .ok ())
     (hcl : calls.length ≤ Bounds.callsMax)
     (hd : deriveCalls sub obj ⟨[], writeOf obj (diffOps (stateOf cell) new), [], []⟩
       { wk with visited := obj :: wk.visited, pool := wk.pool - used } calls = .ok out) :
-    invoke X look rv c sub wk actor obj method args budget via = .ok out := by
+    invoke X look rv c sub wk actor caller obj method args budget via = .ok out := by
   unfold invoke
   have h0 : req (!wk.visited.contains obj) (Refusal.revisited obj) = (Except.ok () : Except (Refusal D) Unit) := by
     simp [req, hv]
@@ -104,7 +104,7 @@ theorem receive_of {X : Ctx D} {w : World D} {c : Call D} {obj : D} {method : Na
     (hb : c.unsigned.body = .invoke obj method args budget via)
     (hi : invoke X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member obj method args budget via = .ok (d, wk)) :
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none obj method args budget via = .ok (d, wk)) :
     receive X w c = sealTurn X c d.creates d.effects d.nullifiers d.rows (poolOf c.unsigned.body - wk.pool) := by
   have h0 : req (decide (c.unsigned.world = w.origin)) Refusal.wrongWorld =
       (Except.ok () : Except (Refusal D) Unit) := by simp [req, hw]
@@ -217,7 +217,7 @@ private theorem load_counter {look : Pinned UInt8} (h : readKind look 9 kindPack
 /-! ## The first call, on `w0` -/
 
 private def c1 : Call UInt8 := wCall w0 5 4
-private def req1 : Req UInt8 := reqOf c1.unsigned 5 7 (.invoke 0)
+private def req1 : Req UInt8 := reqOf c1.unsigned 5 7 (.invoke 0) none
 /-- What `bump 4` returns on `n = 3`. -/
 private def s1 : Slots := [(stateBase, natBytes 7)]
 
@@ -234,7 +234,7 @@ private theorem c1_pkg : readKind (pinned wCtx.env w0 c1.unsigned.pins) 9 kindPa
   rfl
 
 private theorem c1_invokeRun :
-    invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 c1.unsigned.member 5 0 none = .ok (objCell, 9, req1) :=
+    invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 c1.unsigned.member none 5 0 none = .ok (objCell, 9, req1) :=
   of_isOkAs (by decide +kernel)
 
 private theorem c1_run :
@@ -281,7 +281,7 @@ private theorem c1_admit : World.admit wCtx.env w0 t1 = .ok w1 := by
 private def c2 : Call UInt8 := wCall w1 6 2
 /-- Object 5 as `w1` holds it. -/
 private def cell2 : Cell := (w1.live wEnv 5).getD objCell
-private def req2 : Req UInt8 := reqOf c2.unsigned 5 7 (.invoke 0)
+private def req2 : Req UInt8 := reqOf c2.unsigned 5 7 (.invoke 0) none
 /-- What `bump 2` returns on `n = 7`. -/
 private def s2 : Slots := [(stateBase, natBytes 9)]
 
@@ -294,7 +294,7 @@ private theorem c2_pkg : readKind (pinned wCtx.env w1 c2.unsigned.pins) 9 kindPa
   rfl
 
 private theorem c2_invokeRun :
-    invokeRun wCtx (pinned wCtx.env w1 c2.unsigned.pins) c2 c2.unsigned.member 5 0 none = .ok (cell2, 9, req2) :=
+    invokeRun wCtx (pinned wCtx.env w1 c2.unsigned.pins) c2 c2.unsigned.member none 5 0 none = .ok (cell2, 9, req2) :=
   of_isOkAs (by decide +kernel)
 
 private theorem c2_run :
@@ -350,7 +350,7 @@ theorem invoke_next_slots_witnessed :
       X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       c.unsigned.body = .invoke obj method args budget via ∧
-      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) ∧
+      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, r) ∧
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used) ∧
       s ≠ stateOf cell :=
@@ -366,17 +366,18 @@ theorem invoke_next_run_witnessed :
     ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (obj : UInt8) (method : Nat)
       (args : ByteArray) (budget : Nat) (via : Option UInt8) (cell : Cell) (p : UInt8) (r : Req UInt8)
       (s : Slots) (calls : List (Body UInt8)) (rows : List (RowSlot UInt8 × RowAct)) (used : Nat)
-      (pins' : List (UInt8 × UInt8)) (c' : Call UInt8) (actor' : UInt8) (method' : Nat) (via' : Option UInt8)
+      (pins' : List (UInt8 × UInt8)) (c' : Call UInt8) (actor' : UInt8) (caller' : Option UInt8) (method' : Nat)
+      (via' : Option UInt8)
       (cell' : Cell) (p' : UInt8) (r' : Req UInt8)
       (args' : ByteArray) (budget' : Nat) (t' : Turn UInt8) (w'' : World UInt8)
       (s' : Slots) (calls' : List (Body UInt8)) (rows' : List (RowSlot UInt8 × RowAct)) (used' : Nat),
       X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       c.unsigned.body = .invoke obj method args budget via ∧
-      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) ∧
+      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, r) ∧
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used) ∧
-      invokeRun X (pinned X.env w' pins') c' actor' obj method' via' = .ok (cell', p', r') ∧
+      invokeRun X (pinned X.env w' pins') c' actor' caller' obj method' via' = .ok (cell', p', r') ∧
       c'.unsigned.pins = pins' ∧ c'.unsigned.member = actor' ∧
       c'.unsigned.body = .invoke obj method' args' budget' via' ∧
       receive X w' c' = .ok t' ∧ World.admit X.env w' t' = .ok w'' ∧
@@ -384,7 +385,7 @@ theorem invoke_next_run_witnessed :
         method' args' r' (min budget' (poolOf c'.unsigned.body)) = .ok (s', calls', rows', used') ∧
       s ≠ stateOf cell ∧ s' ≠ s :=
   ⟨wCtx, w0, w1, c1, t1, 5, 0, natBytes 4, 1000, none, objCell, 9, req1, s1, [], [], 41,
-    c2.unsigned.pins, c2, 7, 0, none, cell2, 9, req2, natBytes 2, 1000, t2, w2, s2, [], [], 41,
+    c2.unsigned.pins, c2, 7, none, 0, none, cell2, 9, req2, natBytes 2, 1000, t2, w2, s2, [], [], 41,
     rfl, c1_receive, c1_admit, rfl, c1_invokeRun, c1_run, c2_invokeRun, rfl, rfl, rfl, c2_receive, c2_admit,
     c2_run, by decide +kernel, by decide +kernel⟩
 
@@ -401,7 +402,7 @@ theorem invoke_lift_witnessed :
       X.Lawful ∧ X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
       c.unsigned.body = .invoke obj method args budget via ∧
-      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) ∧
+      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, r) ∧
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used) ∧
       s ≠ stateOf cell ∧

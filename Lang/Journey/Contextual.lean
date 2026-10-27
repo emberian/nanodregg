@@ -75,7 +75,7 @@ def view (selected : Option Nat) (hypVersion : Option Nat)
   ranges _ _ := .ok []
 
 def request (agent : Sim.D := 1) : Req Sim.D :=
-  ⟨agent, agent, 3, 0, 10, .invoke 0⟩
+  ⟨agent, agent, 3, 0, 10, .invoke 0, none⟩
 
 def seed (accepted : Bool := false) : Slots :=
   (stateSlots (recordRow Std.holeState)

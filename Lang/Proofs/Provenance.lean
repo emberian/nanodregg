@@ -759,10 +759,13 @@ theorem readState_digests {row : List (Label × Ty)} {st : Kernel.Slots} {d : Da
 theorem occasionData_digests (o : Occasion D) : (occasionData bytesOf o).digests = [] := by
   cases o <;> simp [occasionData, Data.digests, Data.rowDigests]
 
-/-- A request's digests are its member and object ids, and nothing of the occasion. -/
+/-- A request's digests are its member, its caller (an object id, when an object's run made the call)
+and its object ids, and nothing of the occasion. -/
 theorem reqData_digests (r : Req D) :
-    (reqData bytesOf r).digests = [bytesOf r.agent, bytesOf r.principal, bytesOf r.self] := by
-  simp [reqData, Data.digests, Data.rowDigests, occasionData_digests]
+    (reqData bytesOf r).digests =
+      [bytesOf r.agent] ++ r.caller.toList.map bytesOf ++ [bytesOf r.principal, bytesOf r.self] := by
+  obtain ⟨a, p, s, nb, vu, o, c⟩ := r
+  cases c <;> simp [reqData, Data.digests, Data.rowDigests, occasionData_digests, optData]
 
 /-! ### The rows a run reads: every digest in them passed `checked` (LANG-49)
 
@@ -1022,11 +1025,12 @@ theorem methodReads_digests {bytesOf : D → ByteArray} {rc : Lang.ReceiptCheck}
               · cases h; exact readsData_digests hown
           · simp [hc] at h
 
-/-- Where a digest of a method run may come from: a member or object id of the request, a digest
-of the arguments, a digest of the state the World held, a digest of the rows `rows` the caller's
-view gave (LANG-49), or an id literal of the loaded closure. -/
+/-- Where a digest of a method run may come from: a member or object id of the request (its signer,
+its caller when an object's run made the call, its principal, its object), a digest of the arguments,
+a digest of the state the World held, a digest of the rows `rows` the caller's view gave (LANG-49), or
+an id literal of the loaded closure. -/
 def RunSource (bytesOf : D → ByteArray) (r : Req D) (S : RunSetup) (rows : Data) (b : ByteArray) : Prop :=
-  b = bytesOf r.agent ∨ b = bytesOf r.principal ∨ b = bytesOf r.self ∨
+  b = bytesOf r.agent ∨ (∃ c, r.caller = some c ∧ b = bytesOf c) ∨ b = bytesOf r.principal ∨ b = bytesOf r.self ∨
     b ∈ S.args.digests ∨ b ∈ S.state.digests ∨ b ∈ rows.digests ∨ ∃ t ∈ S.lib, b ∈ t.digestLits
 
 theorem apply4_lits (P : ByteArray → Prop) (g : Nat) (ℓ : Label) : TermLits P (apply4 g ℓ) := by
@@ -1055,16 +1059,17 @@ theorem runSetup_sources {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : RowVie
     ∀ b ∈ d.digests, RunSource bytesOf r S S.reads b := by
   obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, -, -, -, -, -, -, hrows, rfl⟩ := runSetup_spec hS
   refine run_extract_lits (RunSource bytesOf r _ wd) (fun t ht b hb => ?_) (apply4_lits _ g ℓ) ?_ hr hx
-  · exact .inr (.inr (.inr (.inr (.inr (.inr ⟨t, ht, hb⟩)))))
-  · refine env4_lits _ (fun b hb => ?_) (fun b hb => .inr (.inr (.inr (.inl hb))))
-      (fun b hb => .inr (.inr (.inr (.inr (.inl hb)))))
+  · exact .inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨t, ht, hb⟩))))))
+  · refine env4_lits _ (fun b hb => ?_) (fun b hb => .inr (.inr (.inr (.inr (.inl hb)))))
       (fun b hb => .inr (.inr (.inr (.inr (.inr (.inl hb))))))
+      (fun b hb => .inr (.inr (.inr (.inr (.inr (.inr (.inl hb)))))))
     rw [reqData_digests] at hb
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
-    rcases hb with rfl | rfl | rfl
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map, Option.mem_toList] at hb
+    rcases hb with (rfl | ⟨c, hc, rfl⟩) | (rfl | rfl)
     · exact .inl rfl
-    · exact .inr (.inl rfl)
+    · exact .inr (.inl ⟨c, hc, rfl⟩)
     · exact .inr (.inr (.inl rfl))
+    · exact .inr (.inr (.inr (.inl rfl)))
 
 /-- Every source is accepted where it entered: the arguments and the state by `runSetup`'s digest
 checks, the rows by `readsData`'s `checked` (`readsData_digests`), the closure's literals by
@@ -1082,7 +1087,8 @@ theorem runSetup_accepted_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digestOf (
   obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, -, -, hst, -, hda, hrows, rfl⟩ := runSetup_spec hS
   have hlits := load_lits digestOf look _ _ _ (fun t ht => by simp at ht) hl
   intro b hb
-  rcases hsrc b hb with rfl | rfl | rfl | h | h | h | ⟨t, ht, h⟩
+  rcases hsrc b hb with rfl | ⟨c, -, rfl⟩ | rfl | rfl | h | h | h | ⟨t, ht, h⟩
+  · exact hdig _
   · exact hdig _
   · exact hdig _
   · exact hdig _
@@ -1099,16 +1105,17 @@ theorem runSetupLive_sources {rc : Lang.ReceiptCheck} {look : Pinned D} {rv : Ro
     ∀ b ∈ d.digests, RunSource bytesOf r S S.reads b := by
   obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, -, -, -, -, -, -, hrows, rfl⟩ := runSetupWith_spec hS
   refine run_extract_lits (RunSource bytesOf r _ wd) (fun t ht b hb => ?_) (apply4_lits _ g ℓ) ?_ hr hx
-  · exact .inr (.inr (.inr (.inr (.inr (.inr ⟨t, ht, hb⟩)))))
-  · refine env4_lits _ (fun b hb => ?_) (fun b hb => .inr (.inr (.inr (.inl hb))))
-      (fun b hb => .inr (.inr (.inr (.inr (.inl hb)))))
+  · exact .inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨t, ht, hb⟩))))))
+  · refine env4_lits _ (fun b hb => ?_) (fun b hb => .inr (.inr (.inr (.inr (.inl hb)))))
       (fun b hb => .inr (.inr (.inr (.inr (.inr (.inl hb))))))
+      (fun b hb => .inr (.inr (.inr (.inr (.inr (.inr (.inl hb)))))))
     rw [reqData_digests] at hb
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
-    rcases hb with rfl | rfl | rfl
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map, Option.mem_toList] at hb
+    rcases hb with (rfl | ⟨c, hc, rfl⟩) | (rfl | rfl)
     · exact .inl rfl
-    · exact .inr (.inl rfl)
+    · exact .inr (.inl ⟨c, hc, rfl⟩)
     · exact .inr (.inr (.inl rfl))
+    · exact .inr (.inr (.inr (.inl rfl)))
 
 /-- Every source is accepted where it entered: the arguments and the state by `runSetup`'s digest
 checks, the rows by `readsData`'s `checked` (`readsData_digests`), the closure's literals by
@@ -1126,7 +1133,8 @@ theorem runSetupLive_accepted_of {rc : Lang.ReceiptCheck} (hdig : ∀ x, (digest
   obtain ⟨L, g, p, ℓ, sg, sd, ad, wd, -, hl, -, -, hst, -, hda, hrows, rfl⟩ := runSetupWith_spec hS
   have hlits := loadUsing_lits digestOf look _ (fun ha hr => admitContextual_lits ha hr) _ _ _ (fun t ht => by simp at ht) hl
   intro b hb
-  rcases hsrc b hb with rfl | rfl | rfl | h | h | h | ⟨t, ht, h⟩
+  rcases hsrc b hb with rfl | ⟨c, -, rfl⟩ | rfl | rfl | h | h | h | ⟨t, ht, h⟩
+  · exact hdig _
   · exact hdig _
   · exact hdig _
   · exact hdig _

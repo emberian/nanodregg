@@ -363,7 +363,7 @@ theorem derive_born {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} 
     · exact ha p hp
     · exact hb p hp
   · intro _ _ _ _ p hp; simp at hp
-  · intro sub wk actor b r hb h
+  · intro sub wk actor caller b r hb h
     cases b with
     | invoke => simp [Body.isInvoke] at hb
     | enroll key next origin join via =>

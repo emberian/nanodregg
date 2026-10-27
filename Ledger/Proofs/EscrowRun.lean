@@ -192,8 +192,9 @@ variable {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option
 
 /-- The receiver's environment holds the request as `reqAt` of its fields. -/
 private theorem reqData_eq (r : Req D) :
-    reqData bytesOf r = reqAt (.digest (bytesOf r.agent)) (.nat r.notBefore) (occasionData bytesOf r.occasion)
-      (.digest (bytesOf r.principal)) (bytesOf r.self) (.nat r.validUntil) := rfl
+    reqData bytesOf r = reqAt (.digest (bytesOf r.agent)) (Lang.optData (fun c => .digest (bytesOf c)) r.caller)
+      (.nat r.notBefore) (occasionData bytesOf r.occasion) (.digest (bytesOf r.principal)) (bytesOf r.self)
+      (.nat r.validUntil) := rfl
 
 /-- **What a run of the escrow returned**, read off its inputs: the state slots read as seven terms
 (`stateOf`), the asset is a digest of the World, the slots the run wrote read back as the same
@@ -247,7 +248,7 @@ theorem escrow_run_calls [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x,
   rcases hx with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
   · obtain ⟨gb, rfl⟩ := deposit_arg_shape (decodeData_conforms had)
     have hd := run_result hlib hb hm (escrow_method_results amount arb asset ben dep nk (bytesOf r.self) gb ph
-      _ _ _ _ _ (.record []) wd).1
+      _ _ _ _ _ _ (.record []) wd).1
     simp only [resultD, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, and_true, true_and] at hd
     obtain ⟨rfl, -, hds⟩ := hd
     cases ha : digestOf asset <;> cases hg : digestOf gb <;> cases hdp : digestOf dep <;>
@@ -255,7 +256,7 @@ theorem escrow_run_calls [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x,
         transferD, ofD, optSome, bind, Except.bind, pure, Except.pure, Except.map] at hc
     exact ⟨_, hsd, rfl, .inl ⟨rfl, hds ▸ hrb, gb, _, _, had, hg, rfl, hc.symm⟩⟩
   · have hd := run_result hlib hb hm (escrow_method_results amount arb asset ben dep nk (bytesOf r.self) .empty ph
-      _ _ _ _ _ ad wd).2.1
+      _ _ _ _ _ _ ad wd).2.1
     simp only [resultD, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, and_true, true_and] at hd
     obtain ⟨rfl, -, hds⟩ := hd
     cases ha : digestOf asset <;> cases hdp : digestOf dep <;>
@@ -263,7 +264,7 @@ theorem escrow_run_calls [DecidableEq D] {rc : Lang.ReceiptCheck} (hdig : ∀ x,
         transferD, ofD, optSome, optNone, bind, Except.bind, pure, Except.pure, Except.map] at hc
     exact ⟨_, hsd, rfl, .inr (.inl ⟨rfl, hds ▸ hrb, _, rfl, hc.symm⟩)⟩
   · have hd := run_result hlib hb hm (escrow_method_results amount arb asset ben dep nk (bytesOf r.self) .empty ph
-      _ _ _ _ _ ad wd).2.2
+      _ _ _ _ _ _ ad wd).2.2
     simp only [resultD, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, and_true, true_and] at hd
     obtain ⟨rfl, -, hds⟩ := hd
     cases ha : digestOf asset <;> cases hbn : digestOf ben <;>
@@ -562,7 +563,7 @@ private def swapped : Term :=
   .record [("deposit", mth 0), ("escrow", law), ("refund", mth 1), ("release", mth 1)]
 
 private def stT : Data := stateOf 5 "a".toUTF8 "x".toUTF8 "b".toUTF8 "d".toUTF8 "n".toUTF8 "held"
-private def rqT : Data := reqAt (.digest "s".toUTF8) (.nat 0) (.inj "invoke" (.nat 2)) (.digest "s".toUTF8) "e".toUTF8 (.nat 0)
+private def rqT : Data := reqAt (.digest "s".toUTF8) noCaller (.nat 0) (.inj "invoke" (.nat 2)) (.digest "s".toUTF8) "e".toUTF8 (.nat 0)
 private def envT : Env := [rqT.toVal, (Data.record []).toVal, stT.toVal, (Data.record []).toVal]
 
 private theorem swapped_run : ∃ v u, eval [swapped] 1000 (apply4 0 "release") envT = .value v u ∧
@@ -581,7 +582,7 @@ theorem run_result_needs_body : ∃ v d dE,
   obtain ⟨v, u, he, f, hx⟩ := swapped_run
   refine ⟨v, _, _, run_bigStep he, extract_means _ _ hx,
     (escrow_method_results 5 "a".toUTF8 "x".toUTF8 "b".toUTF8 "d".toUTF8 "n".toUTF8 "e".toUTF8 .empty "held"
-      _ _ _ _ _ _ _).2.2, ?_⟩
+      _ _ _ _ _ _ _ _).2.2, ?_⟩
   intro hd
   simp only [resultD, transferD, ofD, optSome, Data.record.injEq, List.cons.injEq, Prod.mk.injEq, Data.inj.injEq,
     Data.digest.injEq, true_and, and_true] at hd
@@ -613,12 +614,12 @@ receiver's term still returns a payout (the method does not read its phase), and
 act out of that state: a sequence of runs without the judge (release, then release again) would
 return two payouts, so the bound is the judge's, not the method's. -/
 theorem escrow_judge_bites {lib : List Term} (amount : Nat) (arb asset ben dep nk self : ByteArray)
-    (agent nb occ pr vu arg rows : Data) :
-    methodResult "release" (stateOf amount arb asset ben dep nk "released") arg (reqAt agent nb occ pr self vu) rows =
+    (agent ca nb occ pr vu arg rows : Data) :
+    methodResult "release" (stateOf amount arb asset ben dep nk "released") arg (reqAt agent ca nb occ pr self vu) rows =
       some (resultD (transferD (ofD self asset) (ofD ben asset) amount optNone (optSome (.bytes payoutKey)))
         (stateOf amount arb asset ben dep nk "released")) ∧
     ∀ rq n, ¬ Std.Admits lib law rq n (stateOf amount arb asset ben dep nk "released") :=
-  ⟨(escrow_method_results amount arb asset ben dep nk self .empty "released" agent nb occ pr vu arg rows).2.2,
+  ⟨(escrow_method_results amount arb asset ben dep nk self .empty "released" agent ca nb occ pr vu arg rows).2.2,
     fun _ _ => escrow_absorbing (.inl ⟨_, rfl⟩)⟩
 
 /-- **Tooth for the count**: `isPayoutCall` tells a payout's call from a deposit's (which names its

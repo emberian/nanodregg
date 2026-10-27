@@ -52,14 +52,14 @@ def GrantStep (X : Ctx D) (g : D) (s : Step D) (n o : World D) : Prop :=
 /-- Step `s` from `o` dispatched a transfer of `a` through grant `g`: the turn's call (the one its
 event decodes to) has, somewhere in its tree, `transfer src dst a (some g) once`. -/
 def MovesThrough (X : Ctx D) (g : D) (o : World D) (s : Step D) (a : Nat) : Prop :=
-  ∃ t c n wk actor src dst once, s = .turn t ∧ X.decodeCall t.event = some c ∧
-    Dispatched X o c n wk actor (.transfer src dst a (some g) once)
+  ∃ t c n wk actor caller src dst once, s = .turn t ∧ X.decodeCall t.event = some c ∧
+    Dispatched X o c n wk actor caller (.transfer src dst a (some g) once)
 
 /-- Step `s` from `o` extended a credit line of `a` through grant `g` (the credit twin of
 `MovesThrough`): the turn's call has `credit well acct a (some g)` anywhere in its tree. -/
 def CreditsThrough (X : Ctx D) (g : D) (o : World D) (s : Step D) (a : Nat) : Prop :=
-  ∃ t c n wk actor well acct, s = .turn t ∧ X.decodeCall t.event = some c ∧
-    Dispatched X o c n wk actor (.credit well acct a (some g))
+  ∃ t c n wk actor caller well acct, s = .turn t ∧ X.decodeCall t.event = some c ∧
+    Dispatched X o c n wk actor caller (.credit well acct a (some g))
 
 /-- What `g`'s ledger at `base` has left at `w` (0 when `g` is not live or has no such ledger). -/
 private def leftAt (base : Nat) (E : Env D) (g : D) (w : World D) : Nat :=
@@ -189,7 +189,7 @@ private theorem move_weight {X : Ctx D} {g : D} {s : Step D} {o n : World D} {a 
     (h : GrantStep X g s n o) (hm : MovesThrough X g o s a) :
     a = leftAt transferBase X.env g o - leftAt transferBase X.env g n := by
   obtain ⟨hs, hcan, hlc, -⟩ := h
-  obtain ⟨t, c, k, wk, actor, src, dst, once, rfl, hdec, hd⟩ := hm
+  obtain ⟨t, c, k, wk, actor, _, src, dst, once, rfl, hdec, hd⟩ := hm
   obtain ⟨hst, c', hdec', hr, -⟩ := hs
   have ha : World.admit X.env o t = .ok n := hst
   rw [hdec] at hdec'
@@ -203,7 +203,7 @@ private theorem credit_weight {X : Ctx D} {g : D} {s : Step D} {o n : World D} {
     (h : GrantStep X g s n o) (hm : CreditsThrough X g o s a) :
     a = leftAt creditBase X.env g o - leftAt creditBase X.env g n := by
   obtain ⟨hs, hcan, hlc, -⟩ := h
-  obtain ⟨t, c, k, wk, actor, well, acct, rfl, hdec, hd⟩ := hm
+  obtain ⟨t, c, k, wk, actor, _, well, acct, rfl, hdec, hd⟩ := hm
   obtain ⟨hst, c', hdec', hr, -⟩ := hs
   have ha : World.admit X.env o t = .ok n := hst
   rw [hdec] at hdec'

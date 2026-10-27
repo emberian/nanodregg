@@ -396,9 +396,9 @@ private theorem foldCalls_effects {sub : Sub D} {obj : D} :
       exact ⟨q.1.effects ++ l, by rw [hl]; simp [Draft.append]⟩
 
 omit [Ord D] in
-private theorem invokeRun_cell {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
+private theorem invokeRun_cell {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {caller : Option D} {method : Nat}
     {via : Option D} {cell : Cell} {p : D} {r : Req D}
-    (h : invokeRun X look c actor obj method via = .ok (cell, p, r)) :
+    (h : invokeRun X look c actor caller obj method via = .ok (cell, p, r)) :
     readKind look obj kindObject = .ok cell := by
   unfold invokeRun at h
   simp only [except_bind_ok] at h
@@ -430,8 +430,8 @@ theorem readKind_pinned {E : Env D} {w : World D} {pins : List (D × D)} {c : D}
 that succeeded handed the run the cell `obj` holds live in `w`. No premise: `pinned` answers only
 for a pinned id, and with `w.live` itself. -/
 theorem invokeRun_live {X : Ctx D} {w : World D} {pins : List (D × D)} {c : Call D} {actor obj : D}
-    {method : Nat} {via : Option D} {cell : Cell} {p : D} {r : Req D}
-    (h : invokeRun X (pinned X.env w pins) c actor obj method via = .ok (cell, p, r)) :
+    {caller : Option D} {method : Nat} {via : Option D} {cell : Cell} {p : D} {r : Req D}
+    (h : invokeRun X (pinned X.env w pins) c actor caller obj method via = .ok (cell, p, r)) :
     w.live X.env obj = some cell :=
   (readKind_pinned (invokeRun_cell h)).1
 
@@ -449,7 +449,7 @@ theorem invoke_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {rows : List (RowSlot D × RowAct)} {used : Nat}
     (hc : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
     (hb : c.unsigned.body = .invoke obj method args budget via)
-    (hr : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r))
+    (hr : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, r))
     (hp : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
       method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used)) :
     ∃ cell', w'.live X.env obj = some cell' ∧ ∀ k, (stateOf cell').get k = s.get k := by
@@ -460,7 +460,7 @@ theorem invoke_next_slots {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
   rw [derive_eq, hb] at hd
   cases hdisp : invoke X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf (Body.invoke obj method args budget via), 0⟩ c.unsigned.member obj method args budget via with
+      ⟨[], poolOf (Body.invoke obj method args budget via), 0⟩ c.unsigned.member none obj method args budget via with
   | error e => simp only [dispatch, hdisp] at hd; cases hd
   | ok q =>
     simp only [dispatch, hdisp, Except.map, Except.ok.injEq] at hd
@@ -511,12 +511,12 @@ theorem invoke_next_run {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     {rows : List (RowSlot D × RowAct)} {used : Nat}
     (hc : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
     (hb : c.unsigned.body = .invoke obj method args budget via)
-    (hr : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r))
+    (hr : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, r))
     (hp : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
       method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used))
-    {pins' : List (D × D)} {c' : Call D} {actor' : D} {method' : Nat} {via' : Option D}
+    {pins' : List (D × D)} {c' : Call D} {actor' : D} {caller' : Option D} {method' : Nat} {via' : Option D}
     {cell' : Cell} {p' : D} {r' : Req D}
-    (hr' : invokeRun X (pinned X.env w' pins') c' actor' obj method' via' = .ok (cell', p', r')) :
+    (hr' : invokeRun X (pinned X.env w' pins') c' actor' caller' obj method' via' = .ok (cell', p', r')) :
     ∀ k, (stateOf cell').get k = s.get k := by
   obtain ⟨cell'', hl, hk⟩ := invoke_next_slots hc ha hb hr hp
   have hl' := invokeRun_live hr'
@@ -533,7 +533,7 @@ theorem invoke_next_judged {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D
     {rows : List (RowSlot D × RowAct)} {used : Nat}
     (hc : receive X w c = .ok t) (_ha : World.admit X.env w t = .ok w')
     (hb : c.unsigned.body = .invoke obj method args budget via)
-    (hr : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r))
+    (hr : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, r))
     (hp : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
       method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used)) :
     ∃ laws, lawsOf X obj cell = .ok laws ∧
@@ -544,7 +544,7 @@ theorem invoke_next_judged {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D
   rw [derive_eq, hb] at hd
   cases hdisp : invoke X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf (Body.invoke obj method args budget via), 0⟩ c.unsigned.member obj method args budget via with
+      ⟨[], poolOf (Body.invoke obj method args budget via), 0⟩ c.unsigned.member none obj method args budget via with
   | error e => simp only [dispatch, hdisp] at hd; cases hd
   | ok q =>
     obtain ⟨-, cell₀, p₀, r₀, new, calls₀, rows₀, used₀, hr₀, hp₀, -, -, -, -, ⟨laws, hlw, hj⟩, -⟩ := invoke_ok hdisp

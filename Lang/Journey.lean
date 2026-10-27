@@ -728,7 +728,7 @@ def measure (w : World D) (c : Call D) : Except String (Nat × Nat) :=
     let rv := rowView X.env w c.unsigned
     let text : Receive.Refusal D → String := fun | .program s => s | e => e.name
     (do
-      let (cell, p, r) ← invokeRun X look c c.unsigned.member obj method via
+      let (cell, p, r) ← invokeRun X look c c.unsigned.member none obj method via
       let (_, _, _, ticks, _) ← Lang.runMeasuredLive X.env.bytes X.digestOf noReceipts look rv p (stateOf cell) method args r budget
       let req ← Lang.Need.requiredOfLive X.env.bytes X.digestOf noReceipts look rv p (stateOf cell) method args r budget
       pure (req, ticks)).mapError text
@@ -2574,7 +2574,7 @@ def p8Rows (r0 : Run) (a b : Sim.Member) (src : String := p8Text) : Run := Id.ru
   -- Isolate the kernel counted-right check using the object as the authorized actor.
   let spent := Receive.transfer X (pinned Sim.env r.st.host
     (Sim.S.pinsFor r.st.host [asset, accountId X a.id asset, cap]))
-    ⟨obj, 0⟩ (.well asset) (.of a.id asset) 1 (some cap) none
+    ⟨obj, 0, none⟩ (.well asset) (.of a.id asset) 1 (some cap) none
   r := note r s!"P8.4 competing use of the same counted right: {match spent with | .error e => e.name | .ok _ => "admitted"}"
     (match spent with | .error (.transferSpent g) => g == cap | _ => false)
   match tc with

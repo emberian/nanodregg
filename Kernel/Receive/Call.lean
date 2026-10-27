@@ -353,6 +353,11 @@ structure Req (D : Type) where
   validUntil : Nat
   /-- the act being judged -/
   occasion : Occasion D
+  /-- the object whose run returned this call (`tree`: each call AS the calling object, KERNEL-28 (b)),
+  `none` when a member signed it. A law or method reads it to admit only its peer's call (`Std.offer`'s
+  `take`: `notFuser` unless `caller = some peer`, so one session row IS a fuse) or to tell a member's act
+  from an object's (DESIGN-CTX §2.5b, K1). -/
+  caller : Option D
   deriving DecidableEq
 
 /-- What KERNEL's receivers need from LANG. Every function reads state only through the pinned
@@ -476,8 +481,8 @@ def rowView [DecidableEq D] (E : Env D) (w : World D) (u : Unsigned D) : RowView
       | some (_, none) => .error (.rangeTooLong parent)
       | some (_, some l) => .ok (q.pre, q.most, l)
 
-def reqOf (u : Unsigned D) (self principal : D) (occasion : Occasion D) : Req D :=
-  { agent := u.member, principal, self, notBefore := u.notBefore, validUntil := u.validUntil, occasion }
+def reqOf (u : Unsigned D) (self principal : D) (occasion : Occasion D) (caller : Option D) : Req D :=
+  { agent := u.member, principal, self, notBefore := u.notBefore, validUntil := u.validUntil, occasion, caller }
 
 /-- The transaction id: the digest of the call's canonical bytes. -/
 def txIdOf (X : Ctx D) (c : Call D) : D := X.env.hash domTx (X.callBytes c)
@@ -557,10 +562,12 @@ def Draft.append (a b : Draft D) : Draft D :=
 
 /-- Where in a call's tree a receiver runs (LEDGER-8 (b)): `actor` is whose authority it spends
 (the signer at the top, the calling object for an effect, KERNEL-28 (b)); `base` is the fresh
-births before it in the tree. -/
+births before it in the tree; `caller` is the calling object for an effect and `none` at the top
+(`Req.caller`: what the judged program is told). -/
 structure At (D : Type) where
   actor : D
   base : Nat
+  caller : Option D
 
 /-- The kinds an object may exercise as a call (KERNEL-28 (a)): the five that spend the calling
 object's authority or none (`invoke`, `transfer`, `account`, `credit`, `grant`), `install`

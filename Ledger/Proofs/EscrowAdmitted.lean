@@ -201,7 +201,7 @@ private theorem load_esc {look : Pinned UInt8} (h : readKind look pkg kindPackag
 
 private def a1 : ByteArray := (depositArgs (tEnv.bytes gr)).getD .empty
 private def c1 : Call UInt8 := callAt w0 5 deposit a1
-private def req1 : Req UInt8 := reqOf c1.unsigned obj dep (.invoke deposit)
+private def req1 : Req UInt8 := reqOf c1.unsigned obj dep (.invoke deposit) none
 /-- The deposit's one call: `amount` from the depositor's account to the escrow's, through grant
 `gr`, once under the nonce. -/
 private def calls1 : List (Body UInt8) :=
@@ -218,7 +218,7 @@ private def w1 : World UInt8 := ((World.admit tEnv w0 t1).toOption).getD w0
 
 private theorem c1_pkg : readKind look1 pkg kindPackage = .ok pkgCell := by rfl
 
-private theorem c1_invokeRun : invokeRun tX look1 c1 dep obj deposit none = .ok (objCell, pkg, req1) :=
+private theorem c1_invokeRun : invokeRun tX look1 c1 dep none obj deposit none = .ok (objCell, pkg, req1) :=
   of_isOkAs (by decide +kernel)
 
 private theorem c1_run :
@@ -263,7 +263,7 @@ private theorem c1_admit : World.admit tX.env w0 t1 = .ok w1 := of_isOk (by deci
 private def a2 : ByteArray := noArgs.getD .empty
 private def c2 : Call UInt8 := callAt w1 6 release a2
 private def cell2 : Cell := (w1.live tEnv obj).getD objCell
-private def req2 : Req UInt8 := reqOf c2.unsigned obj dep (.invoke release)
+private def req2 : Req UInt8 := reqOf c2.unsigned obj dep (.invoke release) none
 /-- The release's one call: the payout, `amount` from the escrow's account to the beneficiary's. -/
 private def calls2 : List (Body UInt8) :=
   [.transfer (.of obj asset) (.of ben asset) terms.amount none (some payoutKey)]
@@ -279,7 +279,7 @@ private def w2 : World UInt8 := ((World.admit tEnv w1 t2).toOption).getD w1
 
 private theorem c2_pkg : readKind look2 pkg kindPackage = .ok pkgCell := by rfl
 
-private theorem c2_invokeRun : invokeRun tX look2 c2 dep obj release none = .ok (cell2, pkg, req2) :=
+private theorem c2_invokeRun : invokeRun tX look2 c2 dep none obj release none = .ok (cell2, pkg, req2) :=
   of_isOkAs (by decide +kernel)
 
 private theorem c2_state : stateOf cell2 = slotsAt "held" := by decide +kernel
@@ -370,7 +370,7 @@ theorem escrow_deposit_spends_cap :
       w'.live X.env g = some gc' ∧ ledgerLeft transferBase g gc' = .ok (2, 0) ∧
       ((w.live X.env (src.resolve X)).bind Value.ofCell).map Value.balance = some 100 ∧
       ((w'.live X.env (src.resolve X)).bind Value.ofCell).map Value.balance = some (100 - amt) ∧
-      transfer X (pinned X.env w' ps) ⟨o, 0⟩ src dst amt (some g) (some nk) = .error (.transferSpent g) :=
+      transfer X (pinned X.env w' ps) ⟨o, 0, none⟩ src dst amt (some g) (some nk) = .error (.transferSpent g) :=
   ⟨tX, obj, pkg, gr, w0, w1, e1, _, _, _, _, grantCell, (w1.live tEnv gr).getD grantCell, c2.unsigned.pins,
     ⟨fun _ => rfl⟩, rfl, .invoke c1_receive c1_admit rfl c1_invokeRun c1_run c1_laws, rfl,
     readPackage_esc c1_pkg, rfl, by decide +kernel, by decide +kernel,
@@ -389,7 +389,7 @@ theorem escrow_short_cap_refused :
       ObjectStep X o w w' (some e) ∧ e.2.2.2.2.2.2 = [.transfer src dst amt (some g) (some nk)] ∧
       amountOf e.2.2.2.2.1 = some amt ∧ 0 < amt ∧ (∀ i, i ≠ g → look i = e.1 i) ∧
       look g = .ok (some gc) ∧ ledgerLeft transferBase g gc = .ok (1, amt - 1) ∧
-      transfer X look ⟨o, 0⟩ src dst amt (some g) (some nk) = .error (.transferSpent g) := by
+      transfer X look ⟨o, 0, none⟩ src dst amt (some g) (some nk) = .error (.transferSpent g) := by
   let short : Cell := { grantCell with slots := grantCell.slots.set transferBase (countBytes (terms.amount - 1)) }
   exact ⟨tX, obj, gr, w0, w1, e1, _, _, _, _, fun i => if i = gr then .ok (some short) else look1 i, short,
     .invoke c1_receive c1_admit rfl c1_invokeRun c1_run c1_laws, rfl, by decide +kernel, by decide,

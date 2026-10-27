@@ -78,13 +78,16 @@ def occasionTy : Ty :=
   .sum [("adopt", .bytes), ("birth", .record []), ("invoke", .nat), ("relaw", .bytes),
     ("retire", .record []), ("write", .record [])]
 
+/-- An optional `T`. -/
+def optTy (T : Ty) : Ty := .sum [("none", .record []), ("some", T)]
+
 /-- What a law and a method see of the call: the signing member, whose authority it uses, the
 object judged or run on (`self`: a method names its own accounts by it, LANG-25), the call's
 signed window (the Turn lands at a height in `[notBefore, validUntil]`, KERNEL-10), and the act
 being judged. -/
 def reqTy : Ty :=
-  .record [("agent", .digest), ("notBefore", .nat), ("occasion", occasionTy), ("principal", .digest),
-    ("self", .digest), ("validUntil", .nat)]
+  .record [("agent", .digest), ("caller", optTy .digest), ("notBefore", .nat), ("occasion", occasionTy),
+    ("principal", .digest), ("self", .digest), ("validUntil", .nat)]
 
 /-- A law's verdict: `ok`, or `refused` with the author's reason. -/
 def verdictTy : Ty := .sum [("ok", .record []), ("refused", .bytes)]
@@ -102,8 +105,6 @@ the `Body` constructor's: a digest is `digest`, an `Option` is `optTy`, an `Acct
 it may make and of which kinds, and costs bytes only for those: a method that makes none has
 `calls : rec {}`. `Lang.Call` reads the kernel's `Body` back out of such data. -/
 
-/-- An optional `T`. -/
-def optTy (T : Ty) : Ty := .sum [("none", .record []), ("some", T)]
 
 /-- How a call names a value account (KERNEL's `AcctRef`): a well by its denomination, any other
 account by its owner and denomination. -/

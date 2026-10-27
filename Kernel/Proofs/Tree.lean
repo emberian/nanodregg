@@ -25,11 +25,11 @@ variable {D : Type} [DecidableEq D]
 
 /-- **An invoke, unfolded.** -/
 theorem invoke_ok {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D} {wk : Walk D}
-    {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
     {r : Draft D × Walk D}
-    (h : invoke X look rv c sub wk actor obj method args budget via = .ok r) :
+    (h : invoke X look rv c sub wk actor caller obj method args budget via = .ok r) :
     obj ∉ wk.visited ∧ ∃ cell p rq new calls rows used,
-      invokeRun X look c actor obj method via = .ok (cell, p, rq) ∧
+      invokeRun X look c actor caller obj method via = .ok (cell, p, rq) ∧
       X.program.run look rv p (stateOf cell) method args rq (min budget wk.pool) =
         .ok (new, calls, rows, used) ∧
       used ≤ min budget wk.pool ∧ (∀ e ∈ rows, e.1.under.1 = obj) ∧ calls.length ≤ Bounds.callsMax ∧
@@ -104,11 +104,11 @@ index on. -/
 theorem createOf_draft {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {pkg : ByteArray}
     {laws : List D} {state : Slots} {d : Draft D} (h : createOf X look c a pkg laws state = .ok d) :
     (∃ cell, look (romIdOf X.env (packageCell pkg)) = .ok (some cell) ∧
-      create X look c ⟨c.unsigned.member, a.base⟩ (some (romIdOf X.env (packageCell pkg))) laws state = .ok d) ∨
+      create X look c ⟨c.unsigned.member, a.base, a.caller⟩ (some (romIdOf X.env (packageCell pkg))) laws state = .ok d) ∨
     (∃ o i,
-      install X look c ⟨a.actor, a.base + 1⟩ pkg = .ok i ∧
+      install X look c ⟨a.actor, a.base + 1, a.caller⟩ pkg = .ok i ∧
       create X (withBorn look (romIdOf X.env (packageCell pkg)) (packageCell pkg)) c
-        ⟨c.unsigned.member, a.base⟩ (some (romIdOf X.env (packageCell pkg))) laws state = .ok o ∧
+        ⟨c.unsigned.member, a.base, a.caller⟩ (some (romIdOf X.env (packageCell pkg))) laws state = .ok o ∧
       d = o.append i) := by
   unfold createOf at h
   dsimp only at h
@@ -169,7 +169,7 @@ Body goes through `dispatch`, and any other is `notCallable`. -/
 theorem tree_succ {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {n : Nat} {wk : Walk D} {obj : D}
     {b : Body D} :
     tree X look rv c (n + 1) wk obj b =
-      if b.callable then dispatch X look rv c (tree X look rv c n) wk obj b
+      if b.callable then dispatch X look rv c (tree X look rv c n) wk obj (some obj) b
       else .error (.notCallable b.kindName) := rfl
 
 /-- **Effects are derived as signed** (KERNEL-28 (b)). A call that the tree derives is a callable
@@ -179,7 +179,7 @@ spends exactly the authority the object holds (`ownerAuthority` at the object), 
 signer's. -/
 theorem effect_as_signed {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {n : Nat} {wk : Walk D}
     {obj : D} {b : Body D} {r : Draft D × Walk D} (h : tree X look rv c n wk obj b = .ok r) :
-    ∃ m, n = m + 1 ∧ b.callable = true ∧ dispatch X look rv c (tree X look rv c m) wk obj b = .ok r := by
+    ∃ m, n = m + 1 ∧ b.callable = true ∧ dispatch X look rv c (tree X look rv c m) wk obj (some obj) b = .ok r := by
   cases n with
   | zero => simp [tree] at h
   | succ m =>
@@ -213,16 +213,16 @@ theorem dispatch_all {P : Draft D → Prop} (hP : ∀ a b, P a → P b → P (a.
     (hown : ∀ obj ops (rows : List (RowSlot D × RowAct)), (∀ e ∈ rows, e.1.under.1 = obj) →
       P ⟨[], writeOf obj ops, [], rows⟩)
     {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {Q : Body D → Prop}
-    (hbase : ∀ (sub : Sub D) wk actor (b : Body D) r, Q b → b.isInvoke = false →
-      dispatch X look rv c sub wk actor b = .ok r → P r.1)
+    (hbase : ∀ (sub : Sub D) wk actor caller (b : Body D) r, Q b → b.isInvoke = false →
+      dispatch X look rv c sub wk actor caller b = .ok r → P r.1)
     {sub : Sub D} (hs : ∀ wk a b r, sub wk a b = .ok r → P r.1)
-    {wk : Walk D} {actor : D} {b : Body D} {r : Draft D × Walk D} (hq : Q b)
-    (h : dispatch X look rv c sub wk actor b = .ok r) : P r.1 := by
+    {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} {r : Draft D × Walk D} (hq : Q b)
+    (h : dispatch X look rv c sub wk actor caller b = .ok r) : P r.1 := by
   cases b with
   | invoke obj method args budget via =>
       obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hrp, _, _, _, hd⟩ := invoke_ok h
       exact foldCalls_all hP hs _ _ (hown _ _ _ hrp) hd
-  | _ => exact hbase sub wk actor _ r hq rfl h
+  | _ => exact hbase sub wk actor caller _ r hq rfl h
 
 /-- Every level of the tree below the signed call: only CALLABLE receivers occur there, so a
 property needs proving only of those (`hbase`). -/
@@ -230,8 +230,8 @@ theorem tree_all {P : Draft D → Prop} (hP : ∀ a b, P a → P b → P (a.appe
     (hown : ∀ obj ops (rows : List (RowSlot D × RowAct)), (∀ e ∈ rows, e.1.under.1 = obj) →
       P ⟨[], writeOf obj ops, [], rows⟩)
     {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D}
-    (hbase : ∀ (sub : Sub D) wk actor (b : Body D) r, b.callable = true → b.isInvoke = false →
-      dispatch X look rv c sub wk actor b = .ok r → P r.1) :
+    (hbase : ∀ (sub : Sub D) wk actor caller (b : Body D) r, b.callable = true → b.isInvoke = false →
+      dispatch X look rv c sub wk actor caller b = .ok r → P r.1) :
     ∀ n wk a b r, tree X look rv c n wk a b = .ok r → P r.1
   | 0, _, _, _, _, h => by simp [tree] at h
   | n + 1, wk, a, b, r, h => by
@@ -246,19 +246,19 @@ theorem derive_all {P : Draft D → Prop} (hP : ∀ a b, P a → P b → P (a.ap
     (hown : ∀ obj ops (rows : List (RowSlot D × RowAct)), (∀ e ∈ rows, e.1.under.1 = obj) →
       P ⟨[], writeOf obj ops, [], rows⟩)
     {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D}
-    (hbase : ∀ (sub : Sub D) wk actor (b : Body D) r, b.isInvoke = false →
-      dispatch X look rv c sub wk actor b = .ok r → P r.1)
+    (hbase : ∀ (sub : Sub D) wk actor caller (b : Body D) r, b.isInvoke = false →
+      dispatch X look rv c sub wk actor caller b = .ok r → P r.1)
     {d : Draft D} (h : derive X look rv c = .ok d) : P d := by
   unfold derive deriveWithTicks at h
   cases hd : dispatch X look rv c (tree X look rv c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hd] at h; cases h
   | ok r =>
       rw [hd] at h
       simp only [Except.map, Except.ok.injEq] at h
       subst h
-      exact dispatch_all (Q := fun _ => True) hP hown (fun sub wk actor b r _ hi h => hbase sub wk actor b r hi h)
-        (tree_all hP hown (fun sub wk actor b r _ hi h => hbase sub wk actor b r hi h) _) trivial hd
+      exact dispatch_all (Q := fun _ => True) hP hown (fun sub wk actor caller b r _ hi h => hbase sub wk actor caller b r hi h)
+        (tree_all hP hown (fun sub wk actor caller b r _ hi h => hbase sub wk actor caller b r hi h) _) trivial hd
 
 omit [DecidableEq D] in
 theorem stepped_map {wk : Walk D} {d : Except (Refusal D) (Draft D)} :
@@ -269,10 +269,10 @@ theorem stepped_map {wk : Walk D} {d : Except (Refusal D) (Draft D)} :
 `⟨[], poolOf body, 0⟩`. -/
 theorem derive_eq {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} :
     derive X look rv c = (dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
-      c.unsigned.member c.unsigned.body).map (·.1) := by
+      c.unsigned.member none c.unsigned.body).map (·.1) := by
   unfold derive deriveWithTicks
   cases dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
-      c.unsigned.member c.unsigned.body <;> rfl
+      c.unsigned.member none c.unsigned.body <;> rfl
 
 /-! ## Each object once -/
 
@@ -310,9 +310,9 @@ theorem stepped_walk {wk : Walk D} {d : Except (Refusal D) (Draft D)} {r : Draft
 
 /-- An invoke records its object in the walk, and the calls it makes start from there. -/
 theorem invoke_records {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
-    (hs : ∀ wk a b r, sub wk a b = .ok r → Grows wk r) {wk : Walk D} {actor obj : D} {method : Nat}
+    (hs : ∀ wk a b r, sub wk a b = .ok r → Grows wk r) {wk : Walk D} {actor obj : D} {caller : Option D} {method : Nat}
     {args : ByteArray} {budget : Nat} {via : Option D} {r : Draft D × Walk D}
-    (h : invoke X look rv c sub wk actor obj method args budget via = .ok r) :
+    (h : invoke X look rv c sub wk actor caller obj method args budget via = .ok r) :
     obj ∉ wk.visited ∧ obj ∈ r.2.visited ∧ Grows wk r := by
   obtain ⟨hfresh, _, _, _, _, _, _, used, _, _, _, _, _, _, _, hd⟩ := invoke_ok h
   obtain ⟨⟨l, hl⟩, hn, hp⟩ := foldCalls_grows hs _ _ hd
@@ -321,8 +321,8 @@ theorem invoke_records {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call 
     fun hw => hn (List.nodup_cons.mpr ⟨hfresh, hw⟩), by omega⟩⟩
 
 theorem dispatch_grows {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
-    (hs : ∀ wk a b r, sub wk a b = .ok r → Grows wk r) {wk : Walk D} {actor : D} {b : Body D}
-    {r : Draft D × Walk D} (h : dispatch X look rv c sub wk actor b = .ok r) : Grows wk r := by
+    (hs : ∀ wk a b r, sub wk a b = .ok r → Grows wk r) {wk : Walk D} {actor : D} {caller : Option D} {b : Body D}
+    {r : Draft D × Walk D} (h : dispatch X look rv c sub wk actor caller b = .ok r) : Grows wk r := by
   cases b with
   | invoke obj method args budget via => exact (invoke_records hs h).2.2
   | _ =>
@@ -344,7 +344,7 @@ order the walk visited them, are pairwise distinct: an invoke of an object alrea
 `revisited`, and every invoke records its object (the signed one among them). -/
 theorem visit_distinct {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {r : Draft D × Walk D}
     (h : dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
-      c.unsigned.member c.unsigned.body = .ok r) :
+      c.unsigned.member none c.unsigned.body = .ok r) :
     r.2.visited.Nodup ∧
       ∀ obj method args budget via, c.unsigned.body = .invoke obj method args budget via → obj ∈ r.2.visited := by
   refine ⟨(dispatch_grows (tree_grows _) h).2.1 List.nodup_nil, fun obj method args budget via hb => ?_⟩
@@ -357,7 +357,7 @@ grows, and it starts at the signed budget capped at `treeTicksMax`: the ticks of
 together are at most that. -/
 theorem tree_pool {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {r : Draft D × Walk D}
     (h : dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
-      c.unsigned.member c.unsigned.body = .ok r) :
+      c.unsigned.member none c.unsigned.body = .ok r) :
     r.2.pool ≤ poolOf c.unsigned.body ∧ poolOf c.unsigned.body ≤ Bounds.treeTicksMax := by
   refine ⟨(dispatch_grows (tree_grows _) h).2.2, ?_⟩
   unfold poolOf

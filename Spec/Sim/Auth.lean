@@ -26,7 +26,7 @@ def openWrite (X : Ctx Digest) (w : World Digest) (c : Call Digest) (obj : Diges
   let old := stateOf cell
   let new := applyEdits old edits
   let laws ← lawsOf X obj cell
-  X.program.judge look none laws old new (reqOf c.unsigned obj c.unsigned.member .write)
+  X.program.judge look none laws old new (reqOf c.unsigned obj c.unsigned.member .write none)
   sealTurn X c [] (writeOf obj (diffOps old new)) []
 
 /-- The kernel's receivers, except that a signed `write` is `openWrite`. -/

@@ -82,8 +82,8 @@ theorem esStep_sound {P : Package} {r : EsRun} {w : World Digest} {i method : Na
   have hw : s.w = w := by rw [← hs]; rfl
   have ht : s.t = esGet (receive Xd s.w s.c) tMint := by rw [← hs]; rfl
   have hw' : s.w' = esGet (World.admit Xd.env s.w s.t) s.w := by rw [← hs]; rfl
-  have hir : s.ir = esGet (invokeRun Xd (pinned Xd.env s.w s.c.unsigned.pins) s.c s.c.unsigned.member r.obj method none)
-      (mintCell, r.pkg, reqOf s.c.unsigned r.obj r.obj .birth) := by rw [← hs]; rfl
+  have hir : s.ir = esGet (invokeRun Xd (pinned Xd.env s.w s.c.unsigned.pins) s.c s.c.unsigned.member none r.obj method none)
+      (mintCell, r.pkg, reqOf s.c.unsigned r.obj r.obj .birth none) := by rw [← hs]; rfl
   have hrun : s.run = esGet (Xd.program.run (pinned Xd.env s.w s.c.unsigned.pins) (rowView Xd.env s.w s.c.unsigned) s.ir.2.1
       (stateOf s.ir.1) method (noArgs.getD .empty) s.ir.2.2 (min 100000 (poolOf s.c.unsigned.body))) ([], [], [], 0) := by
     rw [← hs]; rfl
@@ -96,7 +96,7 @@ theorem esStep_sound {P : Package} {r : EsRun} {w : World Digest} {i method : Na
   obtain ⟨⟨⟨⟨⟨⟨⟨⟨hc, ha⟩, hb⟩, hi⟩, hr⟩, hlw⟩, hp⟩, hpk⟩, hpk'⟩ := h
   have hc' : receive Xd s.w s.c = .ok s.t := by rw [ht]; exact esOk_eq tMint hc
   have ha' : World.admit Xd.env s.w s.t = .ok s.w' := by rw [hw']; exact esOk_eq s.w ha
-  have hi' : invokeRun Xd (pinned Xd.env s.w s.c.unsigned.pins) s.c s.c.unsigned.member r.obj method none =
+  have hi' : invokeRun Xd (pinned Xd.env s.w s.c.unsigned.pins) s.c s.c.unsigned.member none r.obj method none =
       .ok (s.ir.1, s.ir.2.1, s.ir.2.2) := by rw [hir]; exact esOk_eq _ hi
   have hr' : Xd.program.run (pinned Xd.env s.w s.c.unsigned.pins) (rowView Xd.env s.w s.c.unsigned) s.ir.2.1
       (stateOf s.ir.1) method (noArgs.getD .empty) s.ir.2.2 (min 100000 (poolOf s.c.unsigned.body)) =

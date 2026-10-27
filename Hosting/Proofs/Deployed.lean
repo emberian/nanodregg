@@ -37,7 +37,7 @@ private def owner : D := 7
 private def noRows : RowView D := ⟨fun _ _ => [], fun _ _ => .ok []⟩
 
 private def reqFor (e : Event) : Req D :=
-  { agent := owner, principal := owner, self := owner, notBefore := 0, validUntil := 0, occasion := .invoke e.index }
+  { agent := owner, principal := owner, self := owner, notBefore := 0, validUntil := 0, occasion := .invoke e.index, caller := none }
 
 private def slotsAt (k : Kind) (p : Phase) : Option Slots := do
   let s ← seed k "app.bin".toUTF8

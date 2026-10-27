@@ -203,9 +203,9 @@ private theorem relay_decodes : Wire.decodePackage rBytes = .ok relay :=
 
 private def c1 : Call UInt8 := wCall w0 5
 /-- A's request: self 6, principal 7 (the signer owns A). -/
-private def reqA : Req UInt8 := reqOf c1.unsigned 6 7 (.invoke 0)
+private def reqA : Req UInt8 := reqOf c1.unsigned 6 7 (.invoke 0) none
 /-- B's request: self 5, principal 6 (A owns B; the call is derived as A). -/
-private def reqB : Req UInt8 := reqOf c1.unsigned 5 6 (.invoke 0)
+private def reqB : Req UInt8 := reqOf c1.unsigned 5 6 (.invoke 0) (some 6)
 /-- What `go` returns on `m = 0`, and the one call it makes. -/
 private def sA : Slots := [(stateBase, natBytes 1)]
 private def bodyB : Body UInt8 := .invoke 5 0 (natBytes 4) 1000 none
@@ -241,7 +241,7 @@ private theorem c1_readR : readPackage (pinned wCtx.env w0 c1.unsigned.pins) 10 
   readPackage_installed c1_pkgR (by rfl) relay_encodes rfl
 
 private theorem c1_invokeRunA :
-    invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 7 6 0 none = .ok (aCell, 10, reqA) :=
+    invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 7 none 6 0 none = .ok (aCell, 10, reqA) :=
   of_isOkAs (by decide +kernel)
 
 private theorem c1_runA :
@@ -269,7 +269,7 @@ private theorem c1_judgeA :
   rfl
 
 private theorem c1_invokeRunB :
-    invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 6 5 0 none = .ok (bCell, 9, reqB) :=
+    invokeRun wCtx (pinned wCtx.env w0 c1.unsigned.pins) c1 6 (some 6) 5 0 none = .ok (bCell, 9, reqB) :=
   of_isOkAs (by decide +kernel)
 
 private theorem c1_runB :
@@ -300,7 +300,7 @@ private theorem c1_judgeB :
 private theorem c1_invokeB :
     invoke wCtx (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) c1
       (tree wCtx (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) c1 3)
-      wkA 6 5 0 (natBytes 4) 1000 none = .ok (ownB, wkB) :=
+      wkA 6 (some 6) 5 0 (natBytes 4) 1000 none = .ok (ownB, wkB) :=
   invoke_of (by decide) c1_invokeRunB c1_runB (by decide) (of_isOkAs (by decide +kernel))
     (of_isOkAs (by decide +kernel)) c1_judgeB (by decide) rfl
 
@@ -321,7 +321,7 @@ private theorem c1_callsA :
 private theorem c1_invokeA :
     invoke wCtx (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) c1
       (tree wCtx (pinned wCtx.env w0 c1.unsigned.pins) (rowView wCtx.env w0 c1.unsigned) c1 Bounds.callDepthMax)
-      wk0 7 6 0 (natBytes 0) 1000 none = .ok (ownA.append ownB, wkB) :=
+      wk0 7 none 6 0 (natBytes 0) 1000 none = .ok (ownA.append ownB, wkB) :=
   invoke_of (by decide) c1_invokeRunA c1_runA (by decide) (of_isOkAs (by decide +kernel))
     (of_isOkAs (by decide +kernel)) c1_judgeA (by decide) c1_callsA
 
@@ -337,7 +337,7 @@ private theorem c1_admit : World.admit wCtx.env w0 t1 = .ok w1 := by
   | ok w' => rfl
 
 /-- B's invoke is dispatched: the one call A's run returned, the first, at the walk past A, as A. -/
-private theorem c1_dispatchedB : Dispatched wCtx w0 c1 3 wkA 6 bodyB :=
+private theorem c1_dispatchedB : Dispatched wCtx w0 c1 3 wkA 6 (some 6) bodyB :=
   Dispatched.call (m := 3) (acc := (ownA, wkA)) (calls := [bodyB]) 0 (by decide)
     (Dispatched.root (X := wCtx) (w := w0) (c := c1)) c1_invokeA c1_invokeRunA c1_runA rfl
 
@@ -383,10 +383,10 @@ private theorem w1_liveB : w1.live wEnv 5 = some cellB1 := by
 /-! ## The second invoke of B, on `w1` -/
 
 private def c2 : Call UInt8 := wCall w1 6
-private def req2 : Req UInt8 := reqOf c2.unsigned 5 6 (.invoke 0)
+private def req2 : Req UInt8 := reqOf c2.unsigned 5 6 (.invoke 0) none
 
 private theorem c2_invokeRunB :
-    invokeRun wCtx (pinned wCtx.env w1 c2.unsigned.pins) c2 6 5 0 none = .ok (cellB1, 9, req2) :=
+    invokeRun wCtx (pinned wCtx.env w1 c2.unsigned.pins) c2 6 none 5 0 none = .ok (cellB1, 9, req2) :=
   of_isOkAs (by decide +kernel)
 
 /-! ## The premises, witnessed -/
@@ -398,19 +398,19 @@ invoke of B, not the signed body's object, as A (A's run returned it); that invo
 state other than the one it ran on, and B is live in the admitted World with exactly that state. -/
 theorem invoke_tree_slots_witnessed :
     ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (n : Nat) (wk : Walk UInt8)
-      (actor obj : UInt8) (budget : Nat),
+      (actor obj : UInt8) (caller : Option UInt8) (budget : Nat),
       X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
-      Dispatched X w c n wk actor (.invoke obj 0 (natBytes 4) budget none) ∧
+      Dispatched X w c n wk actor caller (.invoke obj 0 (natBytes 4) budget none) ∧
       (∀ o method args budget via, c.unsigned.body = .invoke o method args budget via → o ≠ obj) ∧
       actor ≠ c.unsigned.member ∧
       ∃ (cell : Cell) (p : UInt8) (r : Req UInt8) (s : Slots) (used : Nat),
-        invokeRun X (pinned X.env w c.unsigned.pins) c actor obj 0 none = .ok (cell, p, r) ∧
+        invokeRun X (pinned X.env w c.unsigned.pins) c actor caller obj 0 none = .ok (cell, p, r) ∧
         X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
           0 (natBytes 4) r (min budget wk.pool) = .ok (s, [], [], used) ∧
         s ≠ stateOf cell ∧
         ∃ cell', w'.live X.env obj = some cell' ∧ stateOf cell' = s :=
-  ⟨wCtx, w0, w1, c1, t1, 3, wkA, 6, 5, 1000, rfl, c1_receive, c1_admit, c1_dispatchedB,
+  ⟨wCtx, w0, w1, c1, t1, 3, wkA, 6, 5, some 6, 1000, rfl, c1_receive, c1_admit, c1_dispatchedB,
     fun o _ _ _ _ h => by
       rw [show c1.unsigned.body = Body.invoke 6 0 (natBytes 0) 1000 none from rfl] at h
       cases h
@@ -423,16 +423,16 @@ on the admitted World (as A, through fresh pins) reads the cell whose state is w
 invoke's run of B returned. -/
 theorem invoke_tree_run_witnessed :
     ∃ (X : Ctx UInt8) (w w' : World UInt8) (c : Call UInt8) (t : Turn UInt8) (n : Nat) (wk : Walk UInt8)
-      (actor obj : UInt8) (budget : Nat)
-      (pins' : List (UInt8 × UInt8)) (c' : Call UInt8) (actor' : UInt8) (method' : Nat) (via' : Option UInt8)
-      (cell' : Cell) (p' : UInt8) (r' : Req UInt8),
+      (actor obj : UInt8) (caller : Option UInt8) (budget : Nat)
+      (pins' : List (UInt8 × UInt8)) (c' : Call UInt8) (actor' : UInt8) (caller' : Option UInt8) (method' : Nat)
+      (via' : Option UInt8) (cell' : Cell) (p' : UInt8) (r' : Req UInt8),
       X.program = Lang.program X.env.bytes X.digestOf Lang.noReceipts ∧
       receive X w c = .ok t ∧ World.admit X.env w t = .ok w' ∧
-      Dispatched X w c n wk actor (.invoke obj 0 (natBytes 4) budget none) ∧
+      Dispatched X w c n wk actor caller (.invoke obj 0 (natBytes 4) budget none) ∧
       (∀ o method args budget via, c.unsigned.body = .invoke o method args budget via → o ≠ obj) ∧
-      invokeRun X (pinned X.env w' pins') c' actor' obj method' via' = .ok (cell', p', r') ∧
+      invokeRun X (pinned X.env w' pins') c' actor' caller' obj method' via' = .ok (cell', p', r') ∧
       stateOf cell' = [(stateBase, natBytes 7)] :=
-  ⟨wCtx, w0, w1, c1, t1, 3, wkA, 6, 5, 1000, c2.unsigned.pins, c2, 6, 0, none, cellB1, 9, req2, rfl,
+  ⟨wCtx, w0, w1, c1, t1, 3, wkA, 6, 5, some 6, 1000, c2.unsigned.pins, c2, 6, none, 0, none, cellB1, 9, req2, rfl,
     c1_receive, c1_admit, c1_dispatchedB,
     fun o _ _ _ _ h => by
       rw [show c1.unsigned.body = Body.invoke 6 0 (natBytes 0) 1000 none from rfl] at h
@@ -446,7 +446,7 @@ NOT dispatched: through `invoke_tree_slots` its run (which returns `n = 8`) woul
 `w1`, and B holds `n = 7`. The existential form `invoke_tree_slots` had before cv 01a15554-cffd named
 no arguments and could not refuse it. -/
 theorem dispatched_pins_args :
-    ¬ Dispatched wCtx w0 c1 3 wkA 6 (.invoke 5 0 (natBytes 5) 1000 none) := by
+    ¬ Dispatched wCtx w0 c1 3 wkA 6 (some 6) (.invoke 5 0 (natBytes 5) 1000 none) := by
   intro hd
   obtain ⟨cell, p, r, s, calls, rows, used, laws, hir, hrun, -, -, cell', hl, hk⟩ :=
     invoke_tree_slots c1_receive c1_admit hd

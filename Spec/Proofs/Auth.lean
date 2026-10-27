@@ -76,9 +76,9 @@ inductive Authorized (X : Ctx D) (w : World D) (c : Call D) (id : D) (cell : Cel
       slotDigest X id cell slotOwner = .ok owner →
       Exercises X (pinned X.env w c.unsigned.pins) id .mutate via c.unsigned.member owner →
       Authorized X w c id cell after
-  | objectInvoke {after : Option Cell} {n : Nat} {wk : Walk D} {actor : D} {method : Nat} {args : ByteArray}
+  | objectInvoke {after : Option Cell} {n : Nat} {wk : Walk D} {actor : D} {caller : Option D} {method : Nat} {args : ByteArray}
       {budget : Nat} {via : Option D} {owner : D} :
-      cell.kind = kindObject → Dispatched X w c n wk actor (.invoke id method args budget via) →
+      cell.kind = kindObject → Dispatched X w c n wk actor caller (.invoke id method args budget via) →
       slotDigest X id cell slotOwner = .ok owner →
       Exercises X (pinned X.env w c.unsigned.pins) id (.invoke method) via actor owner →
       Authorized X w c id cell after
@@ -87,24 +87,24 @@ inductive Authorized (X : Ctx D) (w : World D) (c : Call D) (id : D) (cell : Cel
       c.unsigned.key = key → slotDigest X id cell slotNext = .ok (nextKeyDigest X key) →
       X.verify key (X.callMessage c.unsigned) c.signature = true →
       Authorized X w c id cell after
-  | grantRetired {n : Nat} {wk : Walk D} {actor : D} {b : Body D} :
-      cell.kind = kindGrant → Dispatched X w c n wk actor b →
+  | grantRetired {n : Nat} {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} :
+      cell.kind = kindGrant → Dispatched X w c n wk actor caller b →
       slotDigest X id cell grantIssuer = .ok actor → Authorized X w c id cell none
-  | grantSpent {n : Nat} {wk : Walk D} {actor : D} {b : Body D} {base i left u : Nat} :
-      cell.kind = kindGrant → Dispatched X w c n wk actor b →
+  | grantSpent {n : Nat} {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} {base i left u : Nat} :
+      cell.kind = kindGrant → Dispatched X w c n wk actor caller b →
       granteeHolds X (pinned X.env w c.unsigned.pins) id cell actor true = .ok () →
       LedgerBase base → ledgerLeft base id cell = .ok (i, left) → 0 < u → u ≤ left → i ≤ ledgerSpendsMax →
       Authorized X w c id cell (some { cell with slots := cell.slots.set (base + i) (countBytes (left - u)) })
-  | account {after : Option Cell} {n : Nat} {wk : Walk D} {actor : D} {b : Body D} :
-      cell.kind = kindAccount → Dispatched X w c n wk actor b →
+  | account {after : Option Cell} {n : Nat} {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} :
+      cell.kind = kindAccount → Dispatched X w c n wk actor caller b →
       AccountMove X (pinned X.env w c.unsigned.pins) actor b id → Authorized X w c id cell after
   /-- KERNEL-70: the object's owner signed its retirement (every law in force judged it); it ends -/
   | objectRetired :
       cell.kind = kindObject → c.unsigned.body = .retire id →
       slotDigest X id cell slotOwner = .ok c.unsigned.member → Authorized X w c id cell none
   /-- KERNEL-70: the account's owner retired it (it held nothing); it ends -/
-  | accountRetired {n : Nat} {wk : Walk D} {actor : D} {b : Body D} :
-      cell.kind = kindAccount → Dispatched X w c n wk actor b →
+  | accountRetired {n : Nat} {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} :
+      cell.kind = kindAccount → Dispatched X w c n wk actor caller b →
       slotDigest X id cell slotOwner = .ok actor → Authorized X w c id cell none
 
 /-- **B1. Authority confinement.** Along an audited log from a World whose cells are canonical,
@@ -133,7 +133,7 @@ theorem step_authorized [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' :
   · exact absurd (admit_rom ha hl hrom) hne
   by_cases hk : cell.kind = kindObject
   · rcases object_turn_cases hc ha hl hk with ⟨hkeep, hnc, hnw, hnl, -, hni⟩ | ⟨edits, via, hb⟩ |
-        ⟨laws', via, hb⟩ | hb | ⟨n, wk, a, method, args, budget, via, hd⟩
+        ⟨laws', via, hb⟩ | hb | ⟨n, wk, a, ca, method, args, budget, via, hd⟩
     · exact absurd ((object_step_none (.keep hc ha hkeep hnc hnw hnl hni)).trans hl) hne
     · obtain ⟨principal, laws, -, hau, -⟩ := write_next_slots hc ha hb hl (hcan _ _ hl)
       obtain ⟨owner, ho, hx⟩ := ownerAuthority_exercises hau
@@ -153,7 +153,7 @@ theorem step_authorized [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' :
       obtain ⟨owner, ho, hx⟩ := ownerAuthority_exercises hau
       exact .objectInvoke hk hd ho hx
   obtain ⟨R, e, hR, he, heid, x, hx, hxc, hxa⟩ := changed_effect hc ha hl hne
-  obtain ⟨n, wk, a, b, hd, hroot, hprov⟩ := effect_prov hR he
+  obtain ⟨n, wk, a, ca, b, hd, hroot, hprov⟩ := effect_prov hR he
   have hnode : NodeEffect X (pinned X.env w c.unsigned.pins) c a b e := by
     rcases hprov with ⟨r, hi, hr, her⟩ | ⟨obj, method, args, budget, via, cl, p, rq, -, he1, hir⟩
     · exact node_effect hi hr e her
@@ -240,8 +240,8 @@ theorem top_integrity_authority (d : ByteArray → ByteArray) : Integrity.author
 /-! ## The floor: the kernel whose `write` checks no owner -/
 
 /-- A dispatched invoke is the signed body or below a signed invoke. -/
-theorem dispatched_signed {X : Ctx D} {w : World D} {c : Call D} {n : Nat} {wk : Walk D} {a : D} {b : Body D}
-    (h : Dispatched X w c n wk a b) :
+theorem dispatched_signed {X : Ctx D} {w : World D} {c : Call D} {n : Nat} {wk : Walk D} {a : D} {ca : Option D} {b : Body D}
+    (h : Dispatched X w c n wk a ca b) :
     b = c.unsigned.body ∨ ∃ o m args budget via, c.unsigned.body = .invoke o m args budget via := by
   induction h with
   | root => exact .inl rfl

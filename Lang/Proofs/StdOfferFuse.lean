@@ -514,7 +514,7 @@ private theorem fuse_tree {bytesOf : D → ByteArray} {digestOf : ByteArray → 
   rw [derive_eq] at hd'
   cases hRt : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hRt] at hd'; cases hd'
   | ok R =>
   rw [hRt] at hd'

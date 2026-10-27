@@ -75,8 +75,8 @@ private theorem escrow_party {bytesOf : D → ByteArray} {digestOf : ByteArray �
     (hid : digestOf (bytesOf pkg) = some pkg) (hidK : X.digestOf (X.env.bytes pkg) = some pkg)
     (hp : readPackage (pinned X.env w c.unsigned.pins) pkg = .ok (offerEscrowPackageOf theta roles ol sl pt budget))
     (hR : (offerRoleTy roles).wf = true)
-    {n : Nat} {wk : Walk D} {actor P : D} {deal : ByteArray} {b : Nat} {vP : Option D}
-    (hd : Dispatched X w c (n + 1) wk actor (.invoke P offerTakeIx deal b vP))
+    {n : Nat} {wk : Walk D} {actor P : D} {caller : Option D} {deal : ByteArray} {b : Nat} {vP : Option D}
+    (hd : Dispatched X w c (n + 1) wk actor caller (.invoke P offerTakeIx deal b vP))
     (hP : ∃ cl, w.live X.env P = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hrP : digestOf (bytesOf P) = some P) :
     ∃ keys pair th o q, Wire.decodeData (offerTakeArg theta) deal =

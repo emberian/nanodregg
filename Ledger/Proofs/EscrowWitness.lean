@@ -124,7 +124,7 @@ private def slotsAt (p : Label) : Slots :=
 private def noRows : RowView DD := ⟨fun _ _ => [], fun _ _ => .ok []⟩
 private def gr : DD := dg 5
 private def a1 : ByteArray := (depositArgs (bo gr)).getD .empty
-private def r1 : Req DD := { agent := dg 4, principal := dg 4, self := dg 9, notBefore := 0, validUntil := 0, occasion := .invoke 0 }
+private def r1 : Req DD := { agent := dg 4, principal := dg 4, self := dg 9, notBefore := 0, validUntil := 0, occasion := .invoke 0, caller := none }
 
 private theorem hq1 : reqOk bo r1 = true := by decide +kernel
 private theorem hs0 : readState dO (recordRow escrow.state) s0 = .ok (stateD terms "open") := by rfl
@@ -140,7 +140,7 @@ private theorem run1 {rc : Lang.ReceiptCheck} : (match runMeasured bo dO rc look
 
 
 private def a2 : ByteArray := noArgs.getD .empty
-private def r2 : Req DD := { agent := dg 4, principal := dg 4, self := dg 9, notBefore := 0, validUntil := 0, occasion := .invoke 2 }
+private def r2 : Req DD := { agent := dg 4, principal := dg 4, self := dg 9, notBefore := 0, validUntil := 0, occasion := .invoke 2, caller := none }
 private theorem hq2 : reqOk bo r2 = true := by decide +kernel
 private theorem hs1 : readState dO (recordRow escrow.state) (slotsAt "held") = .ok (stateD terms "held") := by rfl
 private theorem hs2 : readState dO (recordRow escrow.state) (slotsAt "released") = .ok (stateD terms "released") := by rfl

@@ -226,7 +226,7 @@ ticks its run used. -/
 def callLines (look : Pinned D) (rv : RowView D) (c : Call D) : Nat → Nat → D → D → Nat → ByteArray → Nat → Option D → List String
   | 0, _, _, _, _, _, _, _ => []
   | d + 1, depth, actor, obj, m, args, fuel, via =>
-    match invokeRun P.X look c actor obj m via with
+    match invokeRun P.X look c actor (if depth = 0 then none else some actor) obj m via with
     | .error r => [s!"call {depth} refused {r.name}"]
     | .ok (cell, p, r) =>
       match P.X.program.run look rv p (stateOf cell) m args r fuel with

@@ -117,7 +117,7 @@ private def toothLook (demand : Bool) : Pinned UInt8 := fun _ => .ok (some (toot
 private def toothDecode (_ : ByteArray) : Option UInt8 := some 7
 private def toothEncode (d : UInt8) : ByteArray := ⟨#[d]⟩
 private def toothReq : Req UInt8 :=
-  { agent := 7, principal := 7, self := 7, notBefore := 0, validUntil := 0, occasion := .write }
+  { agent := 7, principal := 7, self := 7, notBefore := 0, validUntil := 0, occasion := .write, caller := none }
 private def toothAdmission (demand : Bool) : Except (Refusal UInt8) (Loaded × Nat) :=
   admitContextual toothDecode (fun _ => unresolvedBody) (toothEncode 7) (toothPackage demand) ⟨[],[],[]⟩ []
 private def toothLoaded (demand : Bool) : Loaded × Nat :=

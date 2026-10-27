@@ -60,31 +60,31 @@ with nothing visited, the pool `poolOf` of the signed Body and no births, at `Bo
 succeeded, the `i`-th call its run returned, as the invoked object, one level down, at the walk the
 calls before it left (`deriveCalls`' fold over the first `i`, from the object's own Draft and the
 walk past it). -/
-inductive Dispatched (X : Ctx D) (w : World D) (c : Call D) : Nat → Walk D → D → Body D → Prop
-  | root : Dispatched X w c Bounds.callDepthMax ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member
+inductive Dispatched (X : Ctx D) (w : World D) (c : Call D) : Nat → Walk D → D → Option D → Body D → Prop
+  | root : Dispatched X w c Bounds.callDepthMax ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none
       c.unsigned.body
-  | call {m : Nat} {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat}
+  | call {m : Nat} {wk : Walk D} {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat}
       {via : Option D} {r : Draft D × Walk D} {cell : Cell} {p : D} {rq : Req D} {new : Slots}
       {calls : List (Body D)} {rows : List (RowSlot D × RowAct)} {used : Nat} {acc : Draft D × Walk D}
       (i : Nat) (hi : i < calls.length) :
-      Dispatched X w c (m + 1) wk actor (.invoke obj method args budget via) →
+      Dispatched X w c (m + 1) wk actor caller (.invoke obj method args budget via) →
       invoke X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
           (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c (m + 1))
-          wk actor obj method args budget via = .ok r →
-      invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, rq) →
+          wk actor caller obj method args budget via = .ok r →
+      invokeRun X (pinned X.env w c.unsigned.pins) c actor caller obj method via = .ok (cell, p, rq) →
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell) method
           args rq (min budget wk.pool) = .ok (new, calls, rows, used) →
       (calls.take i).foldlM
           (callStep (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c (m + 1)) obj)
           (⟨[], writeOf obj (diffOps (stateOf cell) new), [], rows⟩,
             { wk with visited := obj :: wk.visited, pool := wk.pool - used }) = .ok acc →
-      Dispatched X w c m acc.2 obj calls[i]
+      Dispatched X w c m acc.2 obj (some obj) calls[i]
 
 /-- **`obj` is invoked in `c`'s tree on `w`**: the walk `derive` runs visits it. -/
 def Invoked (X : Ctx D) (w : World D) (c : Call D) (obj : D) : Prop :=
   ∃ r, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok r ∧ obj ∈ r.2.visited
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok r ∧ obj ∈ r.2.visited
 
 /-! ## The calls a run returned, one at a time -/
 
@@ -148,14 +148,14 @@ private theorem foldCalls_split {sub : Sub D} {obj : D} {calls : List (Body D)} 
 theorem dispatched_ok {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
     (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R)
-    {n : Nat} {wk : Walk D} {a : D} {b : Body D} (hd : Dispatched X w c n wk a b) :
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok R)
+    {n : Nat} {wk : Walk D} {a : D} {ca : Option D} {b : Body D} (hd : Dispatched X w c n wk a ca b) :
     ∃ r, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r ∧
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r ∧
       ∃ l₁ l₂, R.1.effects = l₁ ++ r.1.effects ++ l₂ := by
   induction hd with
   | root => exact ⟨R, hR, [], [], by simp⟩
-  | @call m wk actor obj method args budget via r cell p rq new calls rows used acc i hi _ hok hir hrun hpre ih =>
+  | @call m wk actor caller obj method args budget via r cell p rq new calls rows used acc i hi _ hok hir hrun hpre ih =>
       obtain ⟨rp, hp, l₁, l₂, hl⟩ := ih
       have hp' := hp
       simp only [dispatch] at hp'
@@ -181,18 +181,18 @@ theorem dispatched_ok {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Wal
 /-- What the walk visited from a dispatched receiver on: visited before, or a dispatched invoke's. -/
 private def VisitsFrom (X : Ctx D) (w : World D) (c : Call D) (wk : Walk D) (r : Draft D × Walk D) : Prop :=
   ∀ o ∈ r.2.visited, o ∈ wk.visited ∨
-    ∃ n wk' a method args budget via, Dispatched X w c n wk' a (.invoke o method args budget via)
+    ∃ n wk' a ca method args budget via, Dispatched X w c n wk' a ca (.invoke o method args budget via)
 
 /-- One level of `dispatched_visits`: given it one level down, at this level. -/
 private theorem dispatched_visits_step {X : Ctx D} {w : World D} {c : Call D} (n : Nat)
-    (ihP : ∀ m, n = m + 1 → ∀ {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D},
-      Dispatched X w c m wk a b →
+    (ihP : ∀ m, n = m + 1 → ∀ {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D},
+      Dispatched X w c m wk a ca b →
       dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c m) wk a b = .ok r →
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c m) wk a ca b = .ok r →
       VisitsFrom X w c wk r)
-    {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D} (hd : Dispatched X w c n wk a b)
+    {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D} (hd : Dispatched X w c n wk a ca b)
     (h : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r) :
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r) :
     VisitsFrom X w c wk r := by
   cases b with
   | invoke obj method args budget via =>
@@ -235,7 +235,7 @@ private theorem dispatched_visits_step {X : Ctx D} {w : World D} {c : Call D} (n
             have ih2 := ihs (i + 1) _ r' hrest hpre' hf
             intro o ho
             rcases ih2 o ho with ho' | hdisp
-            · have hchild : Dispatched X w c m' acc.2 obj b := by
+            · have hchild : Dispatched X w c m' acc.2 obj (some obj) b := by
                 subst hm
                 rw [← hb]
                 exact Dispatched.call i hi hd hok hir hrun hpre
@@ -245,7 +245,7 @@ private theorem dispatched_visits_step {X : Ctx D} {w : World D} {c : Call D} (n
       rcases key calls 0 _ r rfl rfl hdc o ho with ho' | hdisp
       · simp only [List.mem_cons] at ho'
         rcases ho' with rfl | ho'
-        · exact .inr ⟨n, wk, a, method, args, budget, via, hd⟩
+        · exact .inr ⟨n, wk, a, _, method, args, budget, via, hd⟩
         · exact .inl ho'
       · exact .inr hdisp
   | _ =>
@@ -256,9 +256,9 @@ private theorem dispatched_visits_step {X : Ctx D} {w : World D} {c : Call D} (n
       exact .inl ho
 
 private theorem dispatched_visits {X : Ctx D} {w : World D} {c : Call D} :
-    ∀ n {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D}, Dispatched X w c n wk a b →
+    ∀ n {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D}, Dispatched X w c n wk a ca b →
       dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r →
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r →
       VisitsFrom X w c wk r := by
   intro n
   induction n with
@@ -270,7 +270,7 @@ private theorem dispatched_visits {X : Ctx D} {w : World D} {c : Call D} :
 
 /-- **A visited object was run by an invoke the walk dispatched.** -/
 theorem dispatched_of_invoked {X : Ctx D} {w : World D} {c : Call D} {obj : D} (hi : Invoked X w c obj) :
-    ∃ n wk actor method args budget via, Dispatched X w c n wk actor (.invoke obj method args budget via) := by
+    ∃ n wk actor caller method args budget via, Dispatched X w c n wk actor caller (.invoke obj method args budget via) := by
   obtain ⟨r, hr, hmem⟩ := hi
   rcases dispatched_visits _ .root hr obj hmem with h | h
   · simp at h
@@ -279,7 +279,7 @@ theorem dispatched_of_invoked {X : Ctx D} {w : World D} {c : Call D} {obj : D} (
 /-- **The signed invoke is the walk's root.** -/
 theorem dispatched_of_signed {X : Ctx D} {w : World D} {c : Call D} {obj : D} {method : Nat}
     {args : ByteArray} {budget : Nat} {via : Option D} (hb : c.unsigned.body = .invoke obj method args budget via) :
-    Dispatched X w c Bounds.callDepthMax ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member
+    Dispatched X w c Bounds.callDepthMax ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none
       (.invoke obj method args budget via) := by
   have h := Dispatched.root (X := X) (w := w) (c := c)
   rw [hb] at h
@@ -330,13 +330,13 @@ state reads its result: `obj` is live in `w'`, and its state holds at every key 
 returned. The run is a function, so the calls it returned are the calls the walk derived. The order
 laws are the price of the proof's route through `sealTurn`'s `duplicateEffect` check. -/
 theorem invoke_tree_slots [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D} {c : Call D}
-    {t : Turn D} {n : Nat} {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat}
+    {t : Turn D} {n : Nat} {wk : Walk D} {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat}
     {via : Option D}
     (hc : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
-    (hd : Dispatched X w c n wk actor (.invoke obj method args budget via)) :
+    (hd : Dispatched X w c n wk actor caller (.invoke obj method args budget via)) :
     ∃ (cell : Cell) (p : D) (r : Req D) (s : Slots) (calls : List (Body D)) (rows : List (RowSlot D × RowAct))
       (used : Nat) (laws : List D),
-      invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, r) ∧
+      invokeRun X (pinned X.env w c.unsigned.pins) c actor caller obj method via = .ok (cell, p, r) ∧
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args r (min budget wk.pool) = .ok (s, calls, rows, used) ∧
       lawsOf X obj cell = .ok laws ∧
@@ -348,7 +348,7 @@ theorem invoke_tree_slots [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w'
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd'; cases hd'
   | ok R =>
   rw [hR] at hd'
@@ -398,16 +398,16 @@ another object calls, LEDGER-14): after the admission of `invoke_tree_slots`, ev
 derived on `w'` (any call, signer, method and pins) runs on a state that holds, at every key, what
 the dispatched invoke's run returned. -/
 theorem invoke_tree_run [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D} {w w' : World D} {c : Call D}
-    {t : Turn D} {n : Nat} {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat}
+    {t : Turn D} {n : Nat} {wk : Walk D} {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat}
     {via : Option D}
     (hc : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
-    (hd : Dispatched X w c n wk actor (.invoke obj method args budget via))
-    {pins' : List (D × D)} {c' : Call D} {actor' : D} {method' : Nat} {via' : Option D}
+    (hd : Dispatched X w c n wk actor caller (.invoke obj method args budget via))
+    {pins' : List (D × D)} {c' : Call D} {actor' : D} {caller' : Option D} {method' : Nat} {via' : Option D}
     {cell' : Cell} {p' : D} {r' : Req D}
-    (hr' : invokeRun X (pinned X.env w' pins') c' actor' obj method' via' = .ok (cell', p', r')) :
+    (hr' : invokeRun X (pinned X.env w' pins') c' actor' caller' obj method' via' = .ok (cell', p', r')) :
     ∃ (cell : Cell) (p : D) (r : Req D) (s : Slots) (calls : List (Body D)) (rows : List (RowSlot D × RowAct))
       (used : Nat) (laws : List D),
-      invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, r) ∧
+      invokeRun X (pinned X.env w c.unsigned.pins) c actor caller obj method via = .ok (cell, p, r) ∧
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args r (min budget wk.pool) = .ok (s, calls, rows, used) ∧
       lawsOf X obj cell = .ok laws ∧
@@ -430,7 +430,7 @@ theorem invoked_of_signed {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {o
   rw [derive_eq] at hd
   cases hr : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hr] at hd; cases hd
   | ok r => exact ⟨r, hr, (visit_distinct hr).2 obj method args budget via hb⟩
 
@@ -439,7 +439,7 @@ the signed call is dispatched as an object the walk has already recorded: the in
 returned it (`invoke` puts its object in the walk before deriving its calls, and the calls' fold
 only extends the walk). -/
 theorem dispatched_actor_visited {X : Ctx D} {w : World D} {c : Call D} {n : Nat} {wk : Walk D} {a : D}
-    {b : Body D} (hd : Dispatched X w c n wk a b) : n = Bounds.callDepthMax ∨ a ∈ wk.visited := by
+    {ca : Option D} {b : Body D} (hd : Dispatched X w c n wk a ca b) : n = Bounds.callDepthMax ∨ a ∈ wk.visited := by
   cases hd with
   | root => exact .inl rfl
   | call i hi _ _ _ _ hpre =>
@@ -449,8 +449,8 @@ theorem dispatched_actor_visited {X : Ctx D} {w : World D} {c : Call D} {n : Nat
 /-- **A dispatched invoke is of an object not yet visited** (`revisited` otherwise), in a call
 `receive` turned into a Turn. -/
 theorem dispatched_invoke_fresh {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {n : Nat} {wk : Walk D}
-    {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
-    (hc : receive X w c = .ok t) (hd : Dispatched X w c n wk actor (.invoke obj method args budget via)) :
+    {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    (hc : receive X w c = .ok t) (hd : Dispatched X w c n wk actor caller (.invoke obj method args budget via)) :
     obj ∉ wk.visited := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
   obtain ⟨-, d, _k, hd', -⟩ := receiveWith_sealed hw
@@ -458,7 +458,7 @@ theorem dispatched_invoke_fresh {X : Ctx D} {w : World D} {c : Call D} {t : Turn
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd'; cases hd'
   | ok R =>
       obtain ⟨r, hr, -⟩ := dispatched_ok hR hd
@@ -535,8 +535,8 @@ private theorem spendAt_other {look : Pinned D} {base : Nat} {g : D} {cell : Cel
 
 omit [Ord D] in
 /-- An invoke reads its object as an object. -/
-private theorem invokeRun_kind {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
-    {via : Option D} {r : Cell × D × Req D} (h : invokeRun X look c actor obj method via = .ok r) :
+private theorem invokeRun_kind {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {caller : Option D} {method : Nat}
+    {via : Option D} {r : Cell × D × Req D} (h : invokeRun X look c actor caller obj method via = .ok r) :
     readKind look obj kindObject = .ok r.1 := by
   unfold invokeRun at h
   simp only [except_bind_ok] at h
@@ -617,10 +617,10 @@ omit [Ord D] in
 grant (an enrolment spend, a carve, a revocation), a member (a rotation) or an account (a transfer,
 a credit line); births are not effects. -/
 private theorem dispatch_other {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
-    {wk : Walk D} {actor : D} {b : Body D} {r : Draft D × Walk D}
+    {wk : Walk D} {actor : D} {caller : Option D} {b : Body D} {r : Draft D × Walk D}
     (hi : b.isInvoke = false) (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v)
     (hr : ∀ x, b ≠ .retire x)
-    (h : dispatch X look rv c sub wk actor b = .ok r) : ∀ e ∈ r.1.effects, OtherEffect look e := by
+    (h : dispatch X look rv c sub wk actor caller b = .ok r) : ∀ e ∈ r.1.effects, OtherEffect look e := by
   cases b with
   | invoke => simp [Body.isInvoke] at hi
   | write o e v => exact absurd rfl (hw o e v)
@@ -728,19 +728,19 @@ object (read as one) an invoke the walk dispatched ran. -/
 private def EffectsAt (X : Ctx D) (w : World D) (c : Call D) (efs : List (D × Act)) : Prop :=
   ∀ e ∈ efs, OtherEffect (pinned X.env w c.unsigned.pins) e ∨
     (∃ cl, readKind (pinned X.env w c.unsigned.pins) e.1 kindObject = .ok cl) ∧
-      ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke e.1 method args budget via)
+      ∃ n wk a ca method args budget via, Dispatched X w c n wk a ca (.invoke e.1 method args budget via)
 
 /-- One level of `dispatched_effects`: given it one level down, at this level. -/
 private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (n : Nat)
-    (ihP : ∀ m, n = m + 1 → ∀ {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D},
-      Dispatched X w c m wk a b → b.callable = true →
+    (ihP : ∀ m, n = m + 1 → ∀ {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D},
+      Dispatched X w c m wk a ca b → b.callable = true →
       dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c m) wk a b = .ok r →
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c m) wk a ca b = .ok r →
       EffectsAt X w c r.1.effects)
-    {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D} (hd : Dispatched X w c n wk a b)
+    {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D} (hd : Dispatched X w c n wk a ca b)
     (hw : ∀ o e v, b ≠ .write o e v) (hl : ∀ o ls v, b ≠ .law o ls v) (hrt : ∀ x, b ≠ .retire x)
     (h : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r) :
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r) :
     EffectsAt X w c r.1.effects := by
   cases hb : b.isInvoke with
   | false => exact fun e he => .inl (dispatch_other hb hw hl hrt h e he)
@@ -783,7 +783,7 @@ private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (
             have hpre' := foldCalls_succ hi hpre (by rw [hb]; exact hq')
             obtain ⟨q, hq, rfl⟩ := callStep_ok hq'
             obtain ⟨m', hm, hcall, hq2⟩ := effect_as_signed hq
-            have hchild : Dispatched X w c m' acc.2 obj b := by
+            have hchild : Dispatched X w c m' acc.2 obj (some obj) b := by
               subst hm
               rw [← hb]
               exact Dispatched.call i hi hd hok hir hrun hpre
@@ -796,14 +796,14 @@ private theorem dispatched_effects_step {X : Ctx D} {w : World D} {c : Call D} (
       refine key calls 0 _ r rfl rfl hdc (fun e he => ?_)
       simp only [writeOf, List.mem_singleton] at he
       subst he
-      exact .inr ⟨⟨_, invokeRun_kind hir⟩, n, wk, a, method, args, budget, via, hd⟩
+      exact .inr ⟨⟨_, invokeRun_kind hir⟩, n, wk, a, _, method, args, budget, via, hd⟩
   | _ => simp [Body.isInvoke] at hb
 
 private theorem dispatched_effects {X : Ctx D} {w : World D} {c : Call D} :
-    ∀ n {wk : Walk D} {a : D} {b : Body D} {r : Draft D × Walk D}, Dispatched X w c n wk a b →
+    ∀ n {wk : Walk D} {a : D} {ca : Option D} {b : Body D} {r : Draft D × Walk D}, Dispatched X w c n wk a ca b →
       (∀ o e v, b ≠ .write o e v) → (∀ o ls v, b ≠ .law o ls v) → (∀ x, b ≠ .retire x) →
       dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r →
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r →
       EffectsAt X w c r.1.effects := by
   intro n
   induction n with
@@ -811,7 +811,7 @@ private theorem dispatched_effects {X : Ctx D} {w : World D} {c : Call D} :
   | succ m ih =>
       exact fun hd hw hl hrt h => dispatched_effects_step (m + 1) (fun m' hm => by
         obtain rfl : m' = m := by omega
-        intro wk' a' b' r' hd' hc h'
+        intro wk' a' ca' b' r' hd' hc h'
         exact ih hd' (fun o e v he => by subst he; simp [Body.callable] at hc)
           (fun o ls v he => by subst he; simp [Body.callable] at hc)
           (fun x he => by subst he; simp [Body.callable] at hc) h') hd hw hl hrt h
@@ -825,13 +825,13 @@ member or an account, and a cell has one kind. -/
 theorem effect_at_object {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
     (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok R)
     {e : D × Act} (he : e ∈ R.1.effects) {cell : Cell}
     (hk : readKind (pinned X.env w c.unsigned.pins) e.1 kindObject = .ok cell) :
     (∃ edits via, c.unsigned.body = .write e.1 edits via) ∨
       (∃ laws via, c.unsigned.body = .law e.1 laws via) ∨
       (c.unsigned.body = .retire e.1 ∧ e.2 = .retire) ∨
-      ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke e.1 method args budget via) := by
+      ∃ n wk a ca method args budget via, Dispatched X w c n wk a ca (.invoke e.1 method args budget via) := by
   have hother : ¬ ReadOther (pinned X.env w c.unsigned.pins) e.1 := by
     rintro ⟨k, cl, hne, hcl⟩
     obtain ⟨h1, h1k⟩ := readKind_look hcl
@@ -884,7 +884,7 @@ they read as objects, and the rest at cells they read by their own kind. -/
 theorem effect_at_grant {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
     (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R)
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok R)
     {e : D × Act} (he : e ∈ R.1.effects) {cell : Cell}
     (hk : readKind (pinned X.env w c.unsigned.pins) e.1 kindGrant = .ok cell) :
     e.2 = .retire ∨ LedgerSpend e.1 cell e.2 := by
@@ -940,18 +940,18 @@ theorem object_turn_cases {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     ((∀ x ∈ t.touches, x.cell = obj → x.act = .keep) ∧ obj ∉ createdIds t ∧
         (∀ edits via, c.unsigned.body ≠ .write obj edits via) ∧ (∀ laws via, c.unsigned.body ≠ .law obj laws via) ∧
         c.unsigned.body ≠ .retire obj ∧
-        ∀ n wk a method args budget via, ¬ Dispatched X w c n wk a (.invoke obj method args budget via)) ∨
+        ∀ n wk a ca method args budget via, ¬ Dispatched X w c n wk a ca (.invoke obj method args budget via)) ∨
       (∃ edits via, c.unsigned.body = .write obj edits via) ∨
       (∃ laws via, c.unsigned.body = .law obj laws via) ∨
       c.unsigned.body = .retire obj ∨
-      ∃ n wk a method args budget via, Dispatched X w c n wk a (.invoke obj method args budget via) := by
+      ∃ n wk a ca method args budget via, Dispatched X w c n wk a ca (.invoke obj method args budget via) := by
   obtain ⟨-, hw⟩ := receive_ok_with hc
   obtain ⟨-, d, _k, hd, hs⟩ := receiveWith_sealed hw
   replace hd := derive_of_withTicks hd
   rw [derive_eq] at hd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd; cases hd
   | ok R =>
   rw [hR] at hd
@@ -971,7 +971,7 @@ theorem object_turn_cases {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D}
     · exact .inr (.inr (.inr (.inl h)))
     · exact .inr (.inr (.inr (.inr h)))
   · refine .inl ⟨fun x hx hxc => ?_, ?_, fun edits via hb => ?_, fun laws via hb => ?_, fun hb => ?_,
-      fun n wk a method args budget via hd => ?_⟩
+      fun n wk a _ method args budget via hd => ?_⟩
     · rw [htouch] at hx
       obtain ⟨q', -, rfl⟩ := List.mem_map.mp hx
       simp only at hxc ⊢

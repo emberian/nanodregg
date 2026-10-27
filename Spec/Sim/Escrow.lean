@@ -117,8 +117,8 @@ structure EsStep where
 def esStep (r : EsRun) (w : World Digest) (i method : Nat) : EsStep :=
   let c := esPayout r w i method
   let t := esGet (receive Xd w c) tMint
-  let ir := esGet (invokeRun Xd (pinned Xd.env w c.unsigned.pins) c c.unsigned.member r.obj method none)
-    (mintCell, r.pkg, reqOf c.unsigned r.obj r.obj .birth)
+  let ir := esGet (invokeRun Xd (pinned Xd.env w c.unsigned.pins) c c.unsigned.member none r.obj method none)
+    (mintCell, r.pkg, reqOf c.unsigned r.obj r.obj .birth none)
   { w, c, t, w' := esGet (World.admit Xd.env w t) w, ir,
     run := esGet (Xd.program.run (pinned Xd.env w c.unsigned.pins) (rowView Xd.env w c.unsigned) ir.2.1
       (stateOf ir.1) method (noArgs.getD .empty) ir.2.2 (min 100000 (poolOf c.unsigned.body))) ([], [], [], 0),
@@ -129,7 +129,7 @@ def esStep (r : EsRun) (w : World Digest) (i method : Nat) : EsStep :=
 def esStepOk (P : Package) (r : EsRun) (method : Nat) (s : EsStep) : Bool :=
   esOk (receive Xd s.w s.c) && esOk (World.admit Xd.env s.w s.t) &&
     decide (s.c.unsigned.body = .invoke r.obj method (noArgs.getD .empty) 100000 none) &&
-    esOk (invokeRun Xd (pinned Xd.env s.w s.c.unsigned.pins) s.c s.c.unsigned.member r.obj method none) &&
+    esOk (invokeRun Xd (pinned Xd.env s.w s.c.unsigned.pins) s.c s.c.unsigned.member none r.obj method none) &&
     esOk (Xd.program.run (pinned Xd.env s.w s.c.unsigned.pins) (rowView Xd.env s.w s.c.unsigned) s.ir.2.1
       (stateOf s.ir.1) method (noArgs.getD .empty) s.ir.2.2 (min 100000 (poolOf s.c.unsigned.body))) &&
     esOk (lawsOf Xd r.obj s.ir.1) &&

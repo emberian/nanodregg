@@ -37,7 +37,7 @@ theorem tree_package_checked {X : Ctx D} {look : Pinned D} {rv : RowView D} {c :
     · exact ha p hp hk
     · exact hb p hp hk
   · intro _ _ _ _ p hp; simp at hp
-  · intro sub wk actor b r hc hi h
+  · intro sub wk actor caller b r hc hi h
     cases b with
     | invoke => simp [Body.isInvoke] at hi
     | install pkg =>

@@ -73,7 +73,7 @@ inductive ObjectStep (X : Ctx D) (obj : D) :
       receive X w c = .ok t → World.admit X.env w t = .ok w' →
       (∀ x ∈ t.touches, x.cell = obj → x.act = .keep) → obj ∉ createdIds t →
       (∀ edits via, c.unsigned.body ≠ .write obj edits via) → (∀ laws via, c.unsigned.body ≠ .law obj laws via) →
-      (∀ n wk actor method args budget via, ¬ Dispatched X w c n wk actor (.invoke obj method args budget via)) →
+      (∀ n wk actor caller method args budget via, ¬ Dispatched X w c n wk actor caller (.invoke obj method args budget via)) →
       ObjectStep X obj w w' none
   | frame {w w' : World D} {c : Call D} {t : Turn D} :
       receive X w c = .ok t → World.admit X.env w t = .ok w' → ¬ CallFoot X c w (.cell obj) →
@@ -85,7 +85,7 @@ inductive ObjectStep (X : Ctx D) (obj : D) :
       ownerAuthority X (pinned X.env w c.unsigned.pins) c.unsigned.member obj cell .mutate via = .ok principal →
       lawsOf X obj cell = .ok laws →
       ObjectStep X obj w w' (some (pinned X.env w c.unsigned.pins, none, laws,
-        reqOf c.unsigned obj principal .write, stateOf cell, applyEdits (stateOf cell) edits, []))
+        reqOf c.unsigned obj principal .write none, stateOf cell, applyEdits (stateOf cell) edits, []))
   | law {w w' : World D} {c : Call D} {t : Turn D} {laws' : List D} {via : Option D}
       {cell : Cell} {principal : D} {laws : List D} :
       receive X w c = .ok t → World.admit X.env w t = .ok w' → c.unsigned.body = .law obj laws' via →
@@ -93,24 +93,24 @@ inductive ObjectStep (X : Ctx D) (obj : D) :
       ownerAuthority X (pinned X.env w c.unsigned.pins) c.unsigned.member obj cell .mutate via = .ok principal →
       lawsOf X obj cell = .ok laws →
       ObjectStep X obj w w' (some (pinned X.env w c.unsigned.pins, none, laws,
-        reqOf c.unsigned obj principal (.relaw laws'), stateOf cell, stateOf cell, []))
+        reqOf c.unsigned obj principal (.relaw laws') none, stateOf cell, stateOf cell, []))
   | invoke {w w' : World D} {c : Call D} {t : Turn D} {method : Nat} {args : ByteArray} {budget : Nat}
       {via : Option D} {cell : Cell} {p : D} {r : Req D} {s : Slots} {calls : List (Body D)}
       {rows : List (RowSlot D × RowAct)} {used : Nat} {laws : List D} :
       receive X w c = .ok t → World.admit X.env w t = .ok w' →
       c.unsigned.body = .invoke obj method args budget via →
-      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, r) →
+      invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, r) →
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args r (min budget (poolOf c.unsigned.body)) = .ok (s, calls, rows, used) →
       lawsOf X obj cell = .ok laws →
       ObjectStep X obj w w' (some (pinned X.env w c.unsigned.pins, some p, laws, r, stateOf cell, s, calls))
   | nested [Std.TransOrd D] [Std.LawfulEqOrd D] {w w' : World D} {c : Call D} {t : Turn D} {n : Nat}
-      {wk : Walk D} {actor : D} {method : Nat} {args : ByteArray} {budget : Nat}
+      {wk : Walk D} {actor : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat}
       {via : Option D} {cell : Cell} {p : D} {r : Req D} {s : Slots} {calls : List (Body D)}
       {rows : List (RowSlot D × RowAct)} {used : Nat} {laws : List D} :
       receive X w c = .ok t → World.admit X.env w t = .ok w' →
-      Dispatched X w c n wk actor (.invoke obj method args budget via) →
-      invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, r) →
+      Dispatched X w c n wk actor caller (.invoke obj method args budget via) →
+      invokeRun X (pinned X.env w c.unsigned.pins) c actor caller obj method via = .ok (cell, p, r) →
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args r (min budget wk.pool) = .ok (s, calls, rows, used) →
       lawsOf X obj cell = .ok laws →
@@ -123,7 +123,7 @@ inductive ObjectStep (X : Ctx D) (obj : D) :
       packageOf X obj cell = .ok pkg → lawsOf X obj cell = .ok laws →
       w'.entry X.env obj = some .tomb →
       ObjectStep X obj w w' (some (pinned X.env w c.unsigned.pins, pkg, laws,
-        reqOf c.unsigned obj c.unsigned.member .retire, stateOf cell, stateOf cell, []))
+        reqOf c.unsigned obj c.unsigned.member .retire none, stateOf cell, stateOf cell, []))
   /-- any admitted turn at a World where `obj` is retired: the tombstone stays (`fold_tomb_stays`) -/
   | dead {w w' : World D} {t : Turn D} :
       World.admit X.env w t = .ok w' → w.entry X.env obj = some .tomb → ObjectStep X obj w w' none
@@ -159,9 +159,9 @@ theorem object_step_none {X : Ctx D} {obj : D} {w w' : World D} (h : ObjectStep 
       unfold World.live; rw [fold_tomb_stays hf ht, ht]
 
 omit [Ord D] in
-private theorem invokeRun_occasion {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
+private theorem invokeRun_occasion {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {caller : Option D} {method : Nat}
     {via : Option D} {cell : Cell} {p : D} {r : Req D}
-    (h : invokeRun X look c actor obj method via = .ok (cell, p, r)) : r.occasion = .invoke method := by
+    (h : invokeRun X look c actor caller obj method via = .ok (cell, p, r)) : r.occasion = .invoke method := by
   unfold invokeRun at h
   simp only [except_bind_ok] at h
   obtain ⟨cell', -, pkg, -, p', -, pr, -, h⟩ := h
@@ -320,7 +320,7 @@ theorem object_history_of_honest [Std.TransOrd D] [Std.LawfulEqOrd D] {X : Ctx D
       have hadm : World.admit X.env w t = .ok w₁ := hadm
       have hcan₁ := admit_cellsCanon hcan hadm
       rcases object_turn_cases hc hadm hl hk with ⟨hkeep, hnc, hnw, hnl, -, hni⟩ | ⟨edits, via, hb⟩ |
-          ⟨laws', via, hb⟩ | hb | ⟨n, wk, a, method, args, budget, via, hd⟩
+          ⟨laws', via, hb⟩ | hb | ⟨n, wk, a, _, method, args, budget, via, hd⟩
       · have hstep : ObjectStep X obj w w₁ none := .keep hc hadm hkeep hnc hnw hnl hni
         obtain ⟨tr, htr⟩ := object_history_of_honest hfr hhr hcan₁ ((object_step_none hstep).trans hl) hk
         exact ⟨tr, .cons hstep htr⟩

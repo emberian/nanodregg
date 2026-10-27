@@ -386,7 +386,7 @@ def measureInvoke (rc : Lang.ReceiptCheck) (X : Ctx D) (w : World D) (c : Call D
   | .invoke obj method args budget via =>
     let look := pinned X.env w c.unsigned.pins
     let rv := rowView X.env w c.unsigned
-    match invokeRun X look c c.unsigned.member obj method via with
+    match invokeRun X look c c.unsigned.member none obj method via with
     | .ok (cell, p, r) =>
       match Lang.runMeasured X.env.bytes X.digestOf rc look rv p (stateOf cell) method args r budget with
       | .ok (_, _, _, ticks, pkgs) =>

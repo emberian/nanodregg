@@ -7383,6 +7383,21 @@ landing (the refusal names occur only in `checkLegs`).
 **Critique.** A contract by law says "L was consulted on every move of g" (B3's promise), not "g behaves as L's name says" — the stdlib-law meaning is the generator-spec tier (TOPLEVEL §10.3). `cellLaw` on a PROGRAMMED object is permanent (its laws never change), and `cellPackage` is permanent until the package is a slot (DESIGN-CTX §2.5c, S4); only a data object makes the contract defeasible today. The law is matched by package id (bytes equal), so two packages with the same law text and different docs are different contracts. Nothing deployed cites a contract yet: the document's sections (LANG-83) cite grants; the market (S3) is the first consumer whose candidates are strangers' objects.
 
 **Meta-critique.** The pull was to make the contract a TERM (a predicate the hole author writes over the cited cell), which is the general thing and would have needed a cell view in the method environment (ACT-D §9 correction 1: a method sees no pins). Two constructors over what the kernel already reads through `look` cost one arm each in six functions and no new Term former, and they are exactly the two contracts a kernel without a proof system can keep.
+## LANG-85 The request type names the caller: `reqTy` gains `caller : opt digest`, `reqData` and `reqOk` carry it (2026-10-26; FABLE-CTX-2; with KERNEL-76; DESIGN-CTX §2.5b K1; DESIGN-TYPES §7's shape)
+
+**Decision.** `reqTy = record [agent digest, caller (opt digest), notBefore nat, occasion …, principal digest,
+self digest, validUntil nat]`; `reqData` puts `optData` of the kernel's `Req.caller` in it; `reqOk` bounds the
+caller's digest like the other three. `optTy` moves above `reqTy` (it is used there now).
+
+**What a program can do now that it could not.** A law or method reads `req.caller`: `none` when a member signed
+the call, `some obj` when object `obj`'s run returned it. Nothing deployed reads it in this landing: the first
+reader is `Std.offer`'s `take` (the next landing: `notFuser` unless `caller = some peer`), then the market
+(DESIGN-CTX §4). This landing is the request's shape and its proofs (`reqOk_conforms`, `reqData_digests`,
+`RunSource` with the caller's digest as a source), so that the reader lands as `lang:` on a settled type.
+
+**Flag day.** Every package's bytes move (the type is in every method and law type); see KERNEL-76 for what
+re-emits. The package wire version does not move: no tag is new; an old package is refused at install by name.
+
 ## LANG-92 A claim is a sentence the kernel refuses to let be false: `keeps inv law`, its certifying shape, and the checker proved sound (L1, 2026-10-26; FABLE-PCC; design `redregg/work/promo/DESIGN-PCC.md`; method R-0069)
 
 **Premise price.** Landed theorems gaining a hypothesis: none. Landed theorems restated: none. Three new modules, one new `Std` generator, one journey session.

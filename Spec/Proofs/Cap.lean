@@ -235,11 +235,11 @@ theorem floor_integrity_grantCap (d : ByteArray → ByteArray) : ¬ Integrity.gr
   have hm₁ : MovesThrough Xd g w₃ (.turn t₁) 10 := by
     have hroot := Dispatched.root (X := Xd) (w := w₃) (c := c₁)
     rw [hb₁] at hroot
-    exact ⟨t₁, c₁, _, _, _, _, _, _, rfl, hd₁, hroot⟩
+    exact ⟨t₁, c₁, _, _, _, _, _, _, _, rfl, hd₁, hroot⟩
   have hm₂ : MovesThrough Xd g w₄ (.turn t₂) 10 := by
     have hroot := Dispatched.root (X := Xd) (w := w₄) (c := c₂)
     rw [hb₂] at hroot
-    exact ⟨t₂, c₂, _, _, _, _, _, _, rfl, hd₂, hroot⟩
+    exact ⟨t₂, c₂, _, _, _, _, _, _, _, rfl, hd₂, hroot⟩
   have hb := (h hau hcan hlc hl hk (steps := [(.turn t₁, w₄), (.turn t₂, w₅)]) rfl hc).1 hlf
     (fun _ => 10) fun x hx => by
       rcases mem_two hx with rfl | rfl
@@ -267,11 +267,11 @@ theorem floor_integrity_grantCap_credit (d : ByteArray → ByteArray) : ¬ Integ
   have hm₁ : CreditsThrough Xd g w₃ (.turn t₁) 10 := by
     have hroot := Dispatched.root (X := Xd) (w := w₃) (c := c₁)
     rw [hb₁] at hroot
-    exact ⟨t₁, c₁, _, _, _, _, _, rfl, hd₁, hroot⟩
+    exact ⟨t₁, c₁, _, _, _, _, _, _, rfl, hd₁, hroot⟩
   have hm₂ : CreditsThrough Xd g w₄ (.turn t₂) 10 := by
     have hroot := Dispatched.root (X := Xd) (w := w₄) (c := c₂)
     rw [hb₂] at hroot
-    exact ⟨t₂, c₂, _, _, _, _, _, rfl, hd₂, hroot⟩
+    exact ⟨t₂, c₂, _, _, _, _, _, _, rfl, hd₂, hroot⟩
   have hb := (h hau hcan hlc hl hk (steps := [(.turn t₁, w₄), (.turn t₂, w₅)]) rfl hc).2 hlf
     (fun _ => 10) fun x hx => by
       rcases mem_two hx with rfl | rfl
@@ -352,6 +352,6 @@ theorem inhabited_integrity_grantCap (d : ByteArray → ByteArray) :
   have hroot := Dispatched.root (X := Xd) (w := w₃) (c := c₁)
   rw [hb₁] at hroot
   exact ⟨g, w₃, w₄, [.turn t₁], cell, i, [(.turn t₁, w₄)], hau, hcan, hlc, hl, hk, hlf, rfl, hc,
-    (w₃, .turn t₁, w₄), by simp, ⟨t₁, c₁, _, _, _, _, _, _, rfl, hd₁, hroot⟩⟩
+    (w₃, .turn t₁, w₄), by simp, ⟨t₁, c₁, _, _, _, _, _, _, _, rfl, hd₁, hroot⟩⟩
 
 end Nanodregg.Spec

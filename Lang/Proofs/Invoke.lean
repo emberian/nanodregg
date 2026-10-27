@@ -57,9 +57,17 @@ theorem readState_get {D : Type} {digestOf : ByteArray → Option D} {row : List
 theorem reqOk_conforms {D : Type} {bytesOf : D → ByteArray} {r : Req D} (h : reqOk bytesOf r = true) :
     Conforms (reqData bytesOf r) reqTy := by
   simp only [reqOk, Bool.and_eq_true, decide_eq_true_eq] at h
-  obtain ⟨⟨⟨⟨⟨ha, hp⟩, hs⟩, hnb⟩, hvu⟩, ho⟩ := h
-  refine .record (.cons (.digest ha) (.cons (.nat hnb) (.cons ?_ (.cons (.digest hp) (.cons (.digest hs)
-    (.cons (.nat hvu) .nil))))))
+  obtain ⟨⟨⟨⟨⟨⟨ha, hp⟩, hs⟩, hc⟩, hnb⟩, hvu⟩, ho⟩ := h
+  have hcall : Conforms (optData (fun c => .digest (bytesOf c)) r.caller) (optTy .digest) := by
+    revert hc
+    cases r.caller with
+    | none => intro _; exact .inj rfl (.record .nil)
+    | some c =>
+      intro hc
+      simp only [Option.all, decide_eq_true_eq] at hc
+      exact .inj rfl (.digest hc)
+  refine .record (.cons (.digest ha) (.cons hcall (.cons (.nat hnb) (.cons ?_ (.cons (.digest hp) (.cons (.digest hs)
+    (.cons (.nat hvu) .nil)))))))
   cases hr : r.occasion with
   | birth => exact .inj rfl (.record .nil)
   | write => exact .inj rfl (.record .nil)

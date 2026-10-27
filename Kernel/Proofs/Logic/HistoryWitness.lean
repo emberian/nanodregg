@@ -113,7 +113,7 @@ private theorem h_live : hW.live hCtx.env 5 = some hObj := by decide +kernel
 
 private theorem h_history :
     ObjectHistory hCtx 5 hW hAfter [(pinned hCtx.env hW hCall.unsigned.pins, none, [],
-      reqOf hCall.unsigned 5 7 .write, stateOf hObj, applyEdits (stateOf hObj) [(0, some ⟨#[4]⟩)], [])] :=
+      reqOf hCall.unsigned 5 7 .write none, stateOf hObj, applyEdits (stateOf hObj) [(0, some ⟨#[4]⟩)], [])] :=
   .cons (.write h_receive h_admit rfl h_live (by decide) rfl rfl) (.nil hAfter)
 
 /-- **A write step is inhabited**: a member's write of a data object, derived and admitted through

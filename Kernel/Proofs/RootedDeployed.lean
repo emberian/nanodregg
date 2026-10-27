@@ -71,7 +71,7 @@ theorem deployed_enroll_founder (program : Program Digest) (name nonce : ByteArr
     (hh : Honest (ctx program) (genesisWorld (ctx program) name nonce allowance founders auth) l)
     {c : Call Digest} {key : ByteArray} {next origin : Digest} {join : ByteArray} {via : Digest}
     {base : Nat} {d : Draft Digest}
-    (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) ⟨c.unsigned.member, base⟩ key next origin join via
+    (h : enroll (ctx program) (pinned (ctx program).env w c.unsigned.pins) ⟨c.unsigned.member, base, none⟩ key next origin join via
       = .ok d) :
     ∃ p r cell, GenesisRoot (ctx program) (originOf (ctx program) name nonce allowance founders auth) r ∧ w.live (ctx program).env r = some cell ∧
       slotDigest (ctx program) r cell grantIssuer = .ok p ∧

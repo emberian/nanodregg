@@ -268,7 +268,7 @@ theorem derive_born_grant {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Ca
     · exact ha p hp
     · exact hb p hp
   · intro _ _ _ _ p hp; simp at hp
-  · intro sub wk actor b r hb h
+  · intro sub wk actor caller b r hb h
     cases b with
     | invoke => simp [Body.isInvoke] at hb
     | enroll key next origin join via =>
@@ -464,7 +464,7 @@ theorem grant_turn_cell {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {
   rw [derive_eq] at hd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd; cases hd
   | ok R =>
   rw [hR] at hd
@@ -619,14 +619,14 @@ private theorem receive_top {X : Ctx D} {w : World D} {c : Call D} {t : Turn D}
     (hr : receive X w c = .ok t) :
     ∃ R, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
         (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-        ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R ∧
+        ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok R ∧
       sealTurn X c R.1.creates R.1.effects R.1.nullifiers R.1.rows (poolOf c.unsigned.body - R.2.pool) = .ok t := by
   obtain ⟨-, hw⟩ := receive_ok_with hr
   obtain ⟨-, d, k, hdd, hs⟩ := receiveWith_sealed hw
   unfold deriveWithTicks at hdd
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hdd; cases hdd
   | ok R =>
       rw [hR] at hdd
@@ -639,10 +639,10 @@ call derived from `w` and admitted to `w'`, over canonical cells and contiguous 
 dispatched a transfer through `g` (the signed one, or one an object's run called): `g`'s transfer
 ledger read `(i, left)` with `amount ≤ left`, and now reads `(i + 1, left - amount)`. -/
 theorem spend_reads_back_dispatched {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {n : Nat}
-    {wk : Walk D} {actor : D} {srcR dstR : AcctRef D} {amount : Nat} {g : D} {once : Option ByteArray}
+    {wk : Walk D} {actor : D} {caller : Option D} {srcR dstR : AcctRef D} {amount : Nat} {g : D} {once : Option ByteArray}
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
     (hcan : CellsCanon X.env w) (hlc : LedgerContiguous X.env w)
-    (hd : Dispatched X w c n wk actor (.transfer srcR dstR amount (some g) once)) :
+    (hd : Dispatched X w c n wk actor caller (.transfer srcR dstR amount (some g) once)) :
     ∃ gc gc' i left, w.live X.env g = some gc ∧ ledgerLeft transferBase g gc = .ok (i, left) ∧
       amount ≤ left ∧ w'.live X.env g = some gc' ∧ ledgerLeft transferBase g gc' = .ok (i + 1, left - amount) := by
   obtain ⟨R, hR, hs⟩ := receive_top hr
@@ -678,10 +678,10 @@ theorem spend_reads_back {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} 
 /-- **A credit line through a grant reads back its amount, at any depth**: the credit ledger's twin
 of `spend_reads_back_dispatched`. -/
 theorem credit_reads_back_dispatched {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {n : Nat}
-    {wk : Walk D} {actor : D} {well : D} {acctR : AcctRef D} {amount : Nat} {g : D}
+    {wk : Walk D} {actor : D} {caller : Option D} {well : D} {acctR : AcctRef D} {amount : Nat} {g : D}
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
     (hcan : CellsCanon X.env w) (hlc : LedgerContiguous X.env w)
-    (hd : Dispatched X w c n wk actor (.credit well acctR amount (some g))) :
+    (hd : Dispatched X w c n wk actor caller (.credit well acctR amount (some g))) :
     ∃ gc gc' i left, w.live X.env g = some gc ∧ ledgerLeft creditBase g gc = .ok (i, left) ∧
       amount ≤ left ∧ w'.live X.env g = some gc' ∧ ledgerLeft creditBase g gc' = .ok (i + 1, left - amount) := by
   obtain ⟨R, hR, hs⟩ := receive_top hr
@@ -707,9 +707,9 @@ from `w` and admitted to `w'`: the source account's value falls by `amount` and 
 rises by it, each keeping its denomination and floor. Each write is THE act at its cell
 (`duplicateEffect`), so no other receiver of the same tree moved either balance in this turn. -/
 theorem transfer_reads_back_dispatched {X : Ctx D} {w w' : World D} {c : Call D} {t : Turn D} {n : Nat}
-    {wk : Walk D} {actor : D} {srcR dstR : AcctRef D} {amount : Nat} {via : Option D} {once : Option ByteArray}
+    {wk : Walk D} {actor : D} {caller : Option D} {srcR dstR : AcctRef D} {amount : Nat} {via : Option D} {once : Option ByteArray}
     (hr : receive X w c = .ok t) (ha : World.admit X.env w t = .ok w')
-    (hd : Dispatched X w c n wk actor (.transfer srcR dstR amount via once)) :
+    (hd : Dispatched X w c n wk actor caller (.transfer srcR dstR amount via once)) :
     ∃ sv dv, (w.live X.env (srcR.resolve X)).bind Value.ofCell = some sv ∧
       (w.live X.env (dstR.resolve X)).bind Value.ofCell = some dv ∧
       (w'.live X.env (srcR.resolve X)).bind Value.ofCell = some { sv with balance := sv.balance - amount } ∧

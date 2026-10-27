@@ -84,14 +84,14 @@ Draft's rows sit inside the signed call's Draft's rows. -/
 theorem dispatched_ok_rows {X : Ctx D} {w : World D} {c : Call D} {R : Draft D × Walk D}
     (hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body = .ok R)
-    {n : Nat} {wk : Walk D} {a : D} {b : Body D} (hd : Dispatched X w c n wk a b) :
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body = .ok R)
+    {n : Nat} {wk : Walk D} {a : D} {ca : Option D} {b : Body D} (hd : Dispatched X w c n wk a ca b) :
     ∃ r, dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
-        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a b = .ok r ∧
+        (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c n) wk a ca b = .ok r ∧
       ∃ l₁ l₂, R.1.rows = l₁ ++ r.1.rows ++ l₂ := by
   induction hd with
   | root => exact ⟨R, hR, [], [], by simp⟩
-  | @call m wk actor obj method args budget via r cell p rq new calls rows used acc i hi _ hok hir hrun hpre ih =>
+  | @call m wk actor caller obj method args budget via r cell p rq new calls rows used acc i hi _ hok hir hrun hpre ih =>
       obtain ⟨rp, hp, l₁, l₂, hl⟩ := ih
       have hp' := hp
       simp only [dispatch] at hp'
@@ -194,11 +194,11 @@ turned into `t`, and an invoke of `obj` its walk dispatched (at any level; the s
 is `dispatched_of_signed`): that invoke's `invokeRun`, its run at the fuel the walk gave it, every
 row effect the run returned is a touch of `t.rows` with the same slot and act, and is under `obj`. -/
 theorem dispatched_invoke_rows {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {n : Nat}
-    {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
-    (hc : receive X w c = .ok t) (hd : Dispatched X w c n wk actor (.invoke obj method args budget via)) :
+    {wk : Walk D} {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    (hc : receive X w c = .ok t) (hd : Dispatched X w c n wk actor caller (.invoke obj method args budget via)) :
     ∃ (cell : Cell) (p : D) (rq : Req D) (new : Slots) (calls : List (Body D))
       (rows : List (RowSlot D × RowAct)) (used : Nat),
-      invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, rq) ∧
+      invokeRun X (pinned X.env w c.unsigned.pins) c actor caller obj method via = .ok (cell, p, rq) ∧
       X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args rq (min budget wk.pool) = .ok (new, calls, rows, used) ∧
       (∀ e ∈ rows, e.1.under.1 = obj) ∧
@@ -209,7 +209,7 @@ theorem dispatched_invoke_rows {X : Ctx D} {w : World D} {c : Call D} {t : Turn 
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd'; cases hd'
   | ok R =>
   rw [hR] at hd'
@@ -229,15 +229,15 @@ theorem dispatched_invoke_rows {X : Ctx D} {w : World D} {c : Call D} {t : Turn 
 /-- **Each call a dispatched invoke's run returned was dispatched**, as the invoked object, one
 level down. The invoke at level `m + 1` (at level 0 its deriver refuses every call, `callTooDeep`). -/
 theorem dispatched_invoke_children {X : Ctx D} {w : World D} {c : Call D} {t : Turn D} {m : Nat}
-    {wk : Walk D} {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    {wk : Walk D} {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
     (hc : receive X w c = .ok t)
-    (hd : Dispatched X w c (m + 1) wk actor (.invoke obj method args budget via))
+    (hd : Dispatched X w c (m + 1) wk actor caller (.invoke obj method args budget via))
     {cell : Cell} {p : D} {rq : Req D} {new : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {used : Nat}
-    (hir : invokeRun X (pinned X.env w c.unsigned.pins) c actor obj method via = .ok (cell, p, rq))
+    (hir : invokeRun X (pinned X.env w c.unsigned.pins) c actor caller obj method via = .ok (cell, p, rq))
     (hrun : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args rq (min budget wk.pool) = .ok (new, calls, rows, used)) :
-    ∀ i (hi : i < calls.length), ∃ wk', Dispatched X w c m wk' obj calls[i] := by
+    ∀ i (hi : i < calls.length), ∃ wk', Dispatched X w c m wk' obj (some obj) calls[i] := by
   intro i hi
   obtain ⟨-, hw⟩ := receive_ok_with hc
   obtain ⟨-, d, _k, hd', -⟩ := receiveWith_sealed hw
@@ -245,7 +245,7 @@ theorem dispatched_invoke_children {X : Ctx D} {w : World D} {c : Call D} {t : T
   rw [derive_eq] at hd'
   cases hR : dispatch X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c
       (tree X (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) c Bounds.callDepthMax)
-      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member c.unsigned.body with
+      ⟨[], poolOf c.unsigned.body, 0⟩ c.unsigned.member none c.unsigned.body with
   | error e => rw [hR] at hd'; cases hd'
   | ok R =>
   obtain ⟨r, hr, -⟩ := dispatched_ok_rows hR hd
@@ -268,22 +268,22 @@ theorem dispatched_signed_children {X : Ctx D} {w : World D} {c : Call D} {t : T
     (hc : receive X w c = .ok t) (hb : c.unsigned.body = .invoke obj method args budget via)
     {cell : Cell} {p : D} {rq : Req D} {new : Slots} {calls : List (Body D)}
     {rows : List (RowSlot D × RowAct)} {used : Nat}
-    (hir : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member obj method via = .ok (cell, p, rq))
+    (hir : invokeRun X (pinned X.env w c.unsigned.pins) c c.unsigned.member none obj method via = .ok (cell, p, rq))
     (hrun : X.program.run (pinned X.env w c.unsigned.pins) (rowView X.env w c.unsigned) p (stateOf cell)
         method args rq (min budget (poolOf c.unsigned.body)) = .ok (new, calls, rows, used)) :
-    ∀ i (hi : i < calls.length), ∃ wk', Dispatched X w c (Bounds.callDepthMax - 1) wk' obj calls[i] :=
+    ∀ i (hi : i < calls.length), ∃ wk', Dispatched X w c (Bounds.callDepthMax - 1) wk' obj (some obj) calls[i] :=
   dispatched_invoke_children (m := Bounds.callDepthMax - 1) hc (dispatched_of_signed hb) hir hrun
 
 omit [Ord D] in
 /-- **What `invokeRun` hands the run**: the cell it read as an object, the package its package
 slot names, and the request of the owner authority's principal, with the invoked object as `self`
 and the invoke of `method` as its occasion. -/
-theorem invokeRun_ok {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
+theorem invokeRun_ok {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {caller : Option D} {method : Nat}
     {via : Option D} {cell : Cell} {p : D} {rq : Req D}
-    (h : invokeRun X look c actor obj method via = .ok (cell, p, rq)) :
+    (h : invokeRun X look c actor caller obj method via = .ok (cell, p, rq)) :
     readKind look obj kindObject = .ok cell ∧ packageOf X obj cell = .ok (some p) ∧
       ∃ principal, ownerAuthority X look actor obj cell (.invoke method) via = .ok principal ∧
-        rq = reqOf c.unsigned obj principal (.invoke method) := by
+        rq = reqOf c.unsigned obj principal (.invoke method) caller := by
   unfold invokeRun at h
   simp only [except_bind_ok] at h
   obtain ⟨cell', hk, pkg, hpk, p', hp, pr, hpr, h⟩ := h
@@ -299,17 +299,17 @@ theorem invokeRun_ok {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} 
 omit [Ord D] in
 /-- **The run's `self` is the invoked object**, its occasion the invoke of `method`, its agent the
 signer. -/
-theorem invokeRun_req {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {method : Nat}
+theorem invokeRun_req {X : Ctx D} {look : Pinned D} {c : Call D} {actor obj : D} {caller : Option D} {method : Nat}
     {via : Option D} {cell : Cell} {p : D} {rq : Req D}
-    (h : invokeRun X look c actor obj method via = .ok (cell, p, rq)) :
+    (h : invokeRun X look c actor caller obj method via = .ok (cell, p, rq)) :
     rq.self = obj ∧ rq.occasion = .invoke method ∧ rq.agent = c.unsigned.member := by
   obtain ⟨-, -, pr, -, rfl⟩ := invokeRun_ok h
   exact ⟨rfl, rfl, rfl⟩
 
 /-- **An invoke of an object whose live cell names package `pkg` runs `pkg`.** -/
 theorem invokeRun_pkg {X : Ctx D} {w : World D} {pins : List (D × D)} {c : Call D} {actor obj : D}
-    {method : Nat} {via : Option D} {cell : Cell} {p : D} {rq : Req D} {pkg : D}
-    (h : invokeRun X (pinned X.env w pins) c actor obj method via = .ok (cell, p, rq))
+    {caller : Option D} {method : Nat} {via : Option D} {cell : Cell} {p : D} {rq : Req D} {pkg : D}
+    (h : invokeRun X (pinned X.env w pins) c actor caller obj method via = .ok (cell, p, rq))
     (ho : ∃ cl, w.live X.env obj = some cl ∧ cl.slots.get slotPackage = some (X.env.bytes pkg))
     (hk : X.digestOf (X.env.bytes pkg) = some pkg) : p = pkg := by
   obtain ⟨hrk, hpk, -⟩ := invokeRun_ok h

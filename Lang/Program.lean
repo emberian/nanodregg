@@ -292,11 +292,13 @@ def reqOk (r : Req D) : Bool :=
   decide ((bytesOf r.agent).size ≤ Bounds.digestBytesMax) &&
     decide ((bytesOf r.principal).size ≤ Bounds.digestBytesMax) &&
     decide ((bytesOf r.self).size ≤ Bounds.digestBytesMax) &&
+    (r.caller.all fun c => decide ((bytesOf c).size ≤ Bounds.digestBytesMax)) &&
     decide (r.notBefore < Bounds.natLimit) && decide (r.validUntil < Bounds.natLimit) &&
     occasionOk bytesOf r.occasion
 
 def reqData (r : Req D) : Data :=
-  .record [("agent", .digest (bytesOf r.agent)), ("notBefore", .nat r.notBefore),
+  .record [("agent", .digest (bytesOf r.agent)), ("caller", optData (fun c => .digest (bytesOf c)) r.caller),
+    ("notBefore", .nat r.notBefore),
     ("occasion", occasionData bytesOf r.occasion),
     ("principal", .digest (bytesOf r.principal)), ("self", .digest (bytesOf r.self)),
     ("validUntil", .nat r.validUntil)]

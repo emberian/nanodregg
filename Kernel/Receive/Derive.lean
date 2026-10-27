@@ -133,7 +133,7 @@ def create (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (pkg : Option D
   checkLaws look laws
   checkState state
   let self := cellIdOf X.env (txIdOf X c) a.base
-  X.program.judge look pkg laws state state (reqOf u self a.actor .birth)
+  X.program.judge look pkg laws state state (reqOf u self a.actor .birth a.caller)
   -- LANG-49: the heads of the package's relations are born with the object, in relation order
   let decls ← match pkg with
     | some p => X.program.rels look p self
@@ -168,11 +168,11 @@ its owner. -/
 def createOf (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (pkg : ByteArray) (laws : List D)
     (state : Slots) : Except (Refusal D) (Draft D) := do
   let p := romIdOf X.env (packageCell pkg)
-  let me : At D := ⟨c.unsigned.member, a.base⟩
+  let me : At D := ⟨c.unsigned.member, a.base, a.caller⟩
   match look p with
   | .ok (some _) => create X look c me (some p) laws state
   | .error (.unpinned _) | .ok none => do
-      let i ← install X look c ⟨a.actor, a.base + 1⟩ pkg
+      let i ← install X look c ⟨a.actor, a.base + 1, a.caller⟩ pkg
       let o ← create X (withBorn look p (packageCell pkg)) c me (some p) laws state
       pure (o.append i)
   | .error e => .error e
@@ -193,7 +193,7 @@ def write (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (obj : D)
   let old := stateOf cell
   let new := applyEdits old edits
   let laws ← lawsOf X obj cell
-  X.program.judge look none laws old new (reqOf u obj principal .write)
+  X.program.judge look none laws old new (reqOf u obj principal .write a.caller)
   pure ⟨[], writeOf obj (diffOps old new), [], []⟩
 
 /-- Replace a data object's extra laws; the laws in force judge the change. -/
@@ -206,12 +206,12 @@ def law (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (obj : D) (laws' :
   let principal ← ownerAuthority X look a.actor obj cell .mutate via
   checkLaws look laws'
   let laws ← lawsOf X obj cell
-  X.program.judge look none laws (stateOf cell) (stateOf cell) (reqOf u obj principal (.relaw laws'))
+  X.program.judge look none laws (stateOf cell) (stateOf cell) (reqOf u obj principal (.relaw laws') a.caller)
   -- LANG-19 (KERNEL-27): the ADDED laws judge the state they are adopted over, as `.adopt`, so a
   -- law that would deny it cannot be installed; a kept law already judged the change as `relaw`
   -- (LANG-4: re-judging it on `adopt` refused every relaw that keeps a quorum)
   X.program.judge look none (laws'.filter fun l => decide (l ∉ laws)) (stateOf cell) (stateOf cell)
-    (reqOf u obj principal (.adopt laws'))
+    (reqOf u obj principal (.adopt laws') a.caller)
   pure ⟨[], writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws')), [], []⟩
 
 def requireMethods (obj : D) : Option D → Except (Refusal D) D
@@ -221,14 +221,14 @@ def requireMethods (obj : D) : Option D → Except (Refusal D) D
 /-- What an invoke hands the program to run: the object's cell, its package, and the request,
 after the owner authority (KERNEL-25). `invoke` is this, then the run; a measurement of the run
 (THE BAR's WASTE lines, LANG's `runMeasured`) starts from the same inputs, never a restatement. -/
-def invokeRun (X : Ctx D) (look : Pinned D) (c : Call D) (actor : D) (obj : D) (method : Nat)
+def invokeRun (X : Ctx D) (look : Pinned D) (c : Call D) (actor : D) (caller : Option D) (obj : D) (method : Nat)
     (via : Option D) : Except (Refusal D) (Cell × D × Req D) := do
   let u := c.unsigned
   let cell ← readKind look obj kindObject
   let pkg ← packageOf X obj cell
   let p ← requireMethods obj pkg
   let principal ← ownerAuthority X look actor obj cell (.invoke method) via
-  pure (cell, p, reqOf u obj principal (.invoke method))
+  pure (cell, p, reqOf u obj principal (.invoke method) caller)
 
 /-- How far a call's tree has got (LEDGER-8): the objects invoked so far (re-entry is
 `revisited`), the ticks left of the tree's one pool, the fresh births so far. -/
@@ -255,10 +255,10 @@ def deriveCalls (sub : Sub D) (obj : D) (own : Draft D) (wk : Walk D) (calls : L
 ticks asserted, `overTicks`), the laws over old and new, then the calls the run returned, as the
 object. An object already invoked in the tree is `revisited`. -/
 def invoke (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D)
-    (obj : D) (method : Nat) (args : ByteArray) (budget : Nat) (via : Option D) :
+    (caller : Option D) (obj : D) (method : Nat) (args : ByteArray) (budget : Nat) (via : Option D) :
     Except (Refusal D) (Draft D × Walk D) := do
   req (!wk.visited.contains obj) (.revisited obj)
-  let (cell, p, r) ← invokeRun X look c actor obj method via
+  let (cell, p, r) ← invokeRun X look c actor caller obj method via
   let old := stateOf cell
   let fuel := min budget wk.pool
   let (new, calls, rows, used) ← X.program.run look rv p old method args r fuel
@@ -383,7 +383,7 @@ def retireCheck (X : Ctx D) (look : Pinned D) (c : Call D) (a : At D) (x : D) :
     req (owner = a.actor) (.notOwner x)
     let pkg ← packageOf X x cell
     let laws ← lawsOf X x cell
-    X.program.judge look pkg laws (stateOf cell) (stateOf cell) (reqOf c.unsigned x a.actor .retire)
+    X.program.judge look pkg laws (stateOf cell) (stateOf cell) (reqOf c.unsigned x a.actor .retire a.caller)
   else if cell.kind = kindAccount then
     let owner ← slotDigest X x cell slotOwner
     req (owner = a.actor) (.notOwner x)
@@ -404,31 +404,32 @@ def stepped (wk : Walk D) (d : Except (Refusal D) (Draft D)) : Except (Refusal D
   d.map fun d => (d, { wk with born := wk.born + d.creates.length })
 
 /-- One receiver of a call's tree, as `actor`; `sub` derives an invoke's calls one level down. -/
-def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D) :
+def dispatch (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) (sub : Sub D) (wk : Walk D) (actor : D)
+    (caller : Option D) :
     Body D → Except (Refusal D) (Draft D × Walk D)
-  | .enroll key next origin join via => stepped wk (enroll X look ⟨actor, wk.born⟩ key next origin join via)
+  | .enroll key next origin join via => stepped wk (enroll X look ⟨actor, wk.born, caller⟩ key next origin join via)
   | .rotate key next => stepped wk (rotate X look c key next)
-  | .install pkg => stepped wk (install X look c ⟨actor, wk.born⟩ pkg)
-  | .create pkg laws state => stepped wk (create X look c ⟨actor, wk.born⟩ pkg laws state)
-  | .createOf pkg laws state => stepped wk (createOf X look c ⟨actor, wk.born⟩ pkg laws state)
-  | .write obj edits via => stepped wk (write X look c ⟨actor, wk.born⟩ obj edits via)
-  | .law obj laws via => stepped wk (law X look c ⟨actor, wk.born⟩ obj laws via)
-  | .invoke obj method args budget via => invoke X look rv c sub wk actor obj method args budget via
+  | .install pkg => stepped wk (install X look c ⟨actor, wk.born, caller⟩ pkg)
+  | .create pkg laws state => stepped wk (create X look c ⟨actor, wk.born, caller⟩ pkg laws state)
+  | .createOf pkg laws state => stepped wk (createOf X look c ⟨actor, wk.born, caller⟩ pkg laws state)
+  | .write obj edits via => stepped wk (write X look c ⟨actor, wk.born, caller⟩ obj edits via)
+  | .law obj laws via => stepped wk (law X look c ⟨actor, wk.born, caller⟩ obj laws via)
+  | .invoke obj method args budget via => invoke X look rv c sub wk actor caller obj method args budget via
   | .grant target grantee rights parent =>
-      stepped wk (grant X look c ⟨actor, wk.born⟩ target grantee rights parent)
-  | .retire x => stepped wk (retire X look c ⟨actor, wk.born⟩ x)
-  | .issue cap => stepped wk (issue X c ⟨actor, wk.born⟩ cap)
+      stepped wk (grant X look c ⟨actor, wk.born, caller⟩ target grantee rights parent)
+  | .retire x => stepped wk (retire X look c ⟨actor, wk.born, caller⟩ x)
+  | .issue cap => stepped wk (issue X c ⟨actor, wk.born, caller⟩ cap)
   | .account asset owner => stepped wk (account X asset owner)
-  | .transfer src dst amount via once => stepped wk (transfer X look ⟨actor, wk.born⟩ src dst amount via once)
-  | .credit well acct amount via => stepped wk (credit X look ⟨actor, wk.born⟩ well acct amount via)
+  | .transfer src dst amount via once => stepped wk (transfer X look ⟨actor, wk.born, caller⟩ src dst amount via once)
+  | .credit well acct amount via => stepped wk (credit X look ⟨actor, wk.born, caller⟩ well acct amount via)
 
 /-- The deriver of a call made `n` levels above the depth bound: a call of a kind an object may
 not exercise is `notCallable`, a call past the bound `callTooDeep`; otherwise THE SAME `dispatch`
-the signed call goes through, with the calling object as actor (`effect_as_signed`). -/
+the signed call goes through, with the calling object as actor and as caller (`effect_as_signed`). -/
 def tree (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Nat → Sub D
   | 0 => fun _ _ _ => .error .callTooDeep
   | n + 1 => fun wk obj b =>
-      if b.callable then dispatch X look rv c (tree X look rv c n) wk obj b
+      if b.callable then dispatch X look rv c (tree X look rv c n) wk obj (some obj) b
       else .error (.notCallable b.kindName)
 
 /-- The pool a signed call's tree runs on: an invoke's signed budget, capped at
@@ -443,7 +444,7 @@ invoke), which the Turn carries for the kernel's meter (DESIGN-OBS §1.3). -/
 def deriveWithTicks (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) :
     Except (Refusal D) (Draft D × Nat) :=
   (dispatch X look rv c (tree X look rv c Bounds.callDepthMax) ⟨[], poolOf c.unsigned.body, 0⟩
-    c.unsigned.member c.unsigned.body).map fun r => (r.1, poolOf c.unsigned.body - r.2.pool)
+    c.unsigned.member none c.unsigned.body).map fun r => (r.1, poolOf c.unsigned.body - r.2.pool)
 
 /-- The signed call's Draft: its Body at the signer, its calls down to `callDepthMax`. -/
 def derive (X : Ctx D) (look : Pinned D) (rv : RowView D) (c : Call D) : Except (Refusal D) (Draft D) :=

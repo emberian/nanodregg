@@ -38,7 +38,7 @@ theorem lLaw_noRef : Lang.NoRef lLaw := Lang.noRef_bounded _ _ _
 
 /-- A write's request names its occasion `write`, a change. -/
 theorem reqOf_write_occasion {X : Ctx Digest} {u : Unsigned Digest} {obj principal : Digest} :
-    (Lang.reqData X.env.bytes (reqOf u obj principal .write)).field "occasion" =
+    (Lang.reqData X.env.bytes (reqOf u obj principal .write none)).field "occasion" =
       some (.inj "write" (.record [])) := by
   simp [Lang.reqData, Lang.Data.field, Lang.Row.find?, reqOf, Lang.occasionData]
 
@@ -149,7 +149,7 @@ theorem inhabited_law (d : ByteArray → ByteArray) (trusted : ByteArray) :
   refine ⟨me, g, w, w₂, l₀, [.turn tw], obj, lid, lPkg, lFields, "bounded", lLaw, cell, o, _, hst,
     audited_deployed.mpr hfh, lPkg_body, lPkg_laws, lFields_find, lLaw_isLaw, lLaw_noRef, haud, hcan, hl,
     hk, hs, htr, by simp, ?_, ⟨(pinned Xd.env w c.unsigned.pins, none, ls,
-      reqOf c.unsigned obj principal .write, stateOf cell, applyEdits (stateOf cell) [(0, some v)], []), by simp, hne⟩⟩
+      reqOf c.unsigned obj principal .write none, stateOf cell, applyEdits (stateOf cell) [(0, some v)], []), by simp, hne⟩⟩
   intro e he
   simp only [Option.toList_some, List.append_nil, List.mem_singleton] at he
   subst he
@@ -263,7 +263,7 @@ theorem floor_integrity_lawChain (d : ByteArray → ByteArray) : ¬ Integrity.la
   obtain ⟨-, -, hall⟩ := h (obj := obj) (law := lid) (p := lPkg) (fs := lFields) (ℓ := "bounded") (t := lLaw)
     lPkg_body lPkg_laws lFields_find lLaw_isLaw lLaw_noRef haud hcan hl' hk
   have hin : ∀ e ∈ [(pinned Xu.env w c.unsigned.pins, (none : Option Digest), ls,
-      reqOf c.unsigned obj principal .write, stateOf cell, applyEdits (stateOf cell) [(0, some v)],
+      reqOf c.unsigned obj principal .write none, stateOf cell, applyEdits (stateOf cell) [(0, some v)],
       ([] : List (Body Digest)))], lid ∈ e.2.1.toList ++ e.2.2.1 ∧ Lang.readPackage e.1 lid = .ok lPkg := by
     intro e he
     simp only [List.mem_singleton] at he

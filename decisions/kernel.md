@@ -3264,6 +3264,43 @@ Item 3's trigger fired. The trigger was "the first row whose invariant spans two
 
 **Critique.** `tree_package_checked` is about the TREE below the signed call; the signed `install` itself is checked by the same receiver, and the composition over `derive` (thirteen cases) is not written: the new power is the nested one, and the theorem is about the new power. A generator cannot learn the id it bore (a nested call returns nothing), so "generate then create" is two Turns; DESIGN-META §6.3 names the `createOf` arm and its authority question rather than adding it.
 
+## KERNEL-76 A request names its caller: `Req.caller : Option D` is the object whose run returned the call, `none` for a call a member signed (2026-10-26; FABLE-CTX-2; DESIGN-CTX §2.5b K1, by report line in TRUST's column; TYPES §7 priced the same shape; AGENT's "which object called")
+
+**Decision.** `Req` gains `caller : Option D`; `At` gains `caller : Option D` ("where a receiver runs":
+its actor, its base, and now the calling object, `none` at the top); `reqOf u self principal occasion caller`;
+`create`, `write` and `law` (relaw and adopt) pass `a.caller` to the program they judge; `invokeRun`, `invoke`
+and `dispatch` take `(caller : Option D)` after `actor`; `tree` dispatches every returned call with `some obj`
+(the object whose run returned it, the actor one level down: KERNEL-28 (b)); `derive` dispatches the signed
+Body with `none`. The judged program is told who called: a member (`none`) or an object (`some obj`).
+
+**Why.** `dispatch`'s `actor` one level down IS the calling object, and `reqOf` dropped it, so no law and no
+method could tell a member's own call from a call another object's run made. The first consumer is `Std.offer`'s
+`take` (LANG-85's successor, S3): refused `notFuser` unless `caller = some peer`, so that one session row IS a
+fuse (LANG-77 L2's critique). The second is a root law of a federated World (DESIGN-TYPES §6): which member
+World's object acts.
+
+**What changed meaning.** `Dispatched X w c n wk actor caller b` (Kernel/Proofs/InvokeTree) carries the caller as
+an index (`root` at `none`, `call` at `some obj`); `effect_as_signed` says the nested dispatch is the signed one's
+with the calling object as actor AND as caller; `Ledger.MovesThrough`/`CreditsThrough` quantify the caller;
+`Lang.RunSource` (digest provenance) gains the disjunct "the caller's id"; `reqData_digests` lists it;
+`Ledger.reqAt` takes the caller's `Data`. Every statement naming `dispatch`, `invoke`, `invokeRun` or `reqOf` gains
+the binder; no landed theorem gains a hypothesis (the caller is an input the receivers thread, not a premise).
+
+**Witness (the tooth).** `Kernel/Proofs/InvokeTreeWitness`: B's request, derived as A one level down, is
+`reqOf c1.unsigned 5 6 (.invoke 0) (some 6)` and `c1_invokeRunB` proves `invokeRun … 6 (some 6) 5 …` returns it
+by `decide +kernel`; A's root request is at `none`. Had `tree` passed `none`, the witness would not close.
+
+**Flag day.** No wire FORMAT moves (no new tag); but `reqTy` is in every method and law type (LANG-85), so every
+package's bytes and id move: every shipped text re-emits by its writer (`world/resident/Bell`, `world/escrow/Escrow`,
+`client/tests/fixtures/foreign/{Accept,Timelock}` lowered from their `.ob`; `world/head/Head` printed from
+`Std.headPackage`; `world/hosting/Allowance` and `world/grain/Lifecycle` by `hosting-sim --write-text`;
+`world/doc/*` by `lang-journey --write`; `client/tests/fixtures/pin/Live`, which has no generator in the tree,
+brought to the printer's form of the request type by hand and checked by `ob`); `gates/codec-vectors.tsv`
+re-drawn; `rows`' `rowbarStated` re-pins `reopen-bytes-per-byte-past-base` 5.260 → 5.292 (the base World the
+stale reopen re-reads grew); the worstcut-rows waste rows re-pin (the Bell's id moves its cell in the trie).
+Every Store re-geneses (none deployed). A package written at the old request type is refused at install by the
+method-type check, by name; it is never read as the new one.
+
 ## KERNEL-67 · The kernel memo's documentation debt: comments and decision entries that said the opposite of the code (FIX-KERNEL, 2026-10-24; READ-KERNEL B2, B3, B4, B7; method R-0069)
 
 **Fixed (text only; no definition, statement or bytes change).**

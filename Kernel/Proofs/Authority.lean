@@ -115,9 +115,9 @@ omit [Ord D] in
 the object's owner, or from an agent holding a grant chain for `invoke method` whose root issuer is
 the owner; a stranger to the object without a grant is refused `noGrant`. The laws only refine. -/
 theorem invoke_authorized {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D} {wk : Walk D}
-    {actor obj : D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
+    {actor obj : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat} {via : Option D}
     {r : Draft D × Walk D}
-    (h : invoke X look rv c sub wk actor obj method args budget via = .ok r) :
+    (h : invoke X look rv c sub wk actor caller obj method args budget via = .ok r) :
     ∃ cell owner, readKind look obj kindObject = .ok cell ∧
       slotDigest X obj cell slotOwner = .ok owner ∧
       (via = none ∧ actor = owner ∨
@@ -143,11 +143,11 @@ omit [Ord D] in
 object's owner and invokes it with no grant is refused `noGrant obj`, whatever the laws say: the
 refusal comes before any method runs or any law judges. -/
 theorem invoke_stranger_noGrant {X : Ctx D} {look : Pinned D} {rv : RowView D} {c : Call D} {sub : Sub D}
-    {wk : Walk D} {actor obj p owner : D} {method : Nat} {args : ByteArray} {budget : Nat}
+    {wk : Walk D} {actor obj p owner : D} {caller : Option D} {method : Nat} {args : ByteArray} {budget : Nat}
     {cell : Cell} (hv : obj ∉ wk.visited)
     (hc : readKind look obj kindObject = .ok cell) (hp : packageOf X obj cell = .ok (some p))
     (ho : slotDigest X obj cell slotOwner = .ok owner) (hne : actor ≠ owner) :
-    invoke X look rv c sub wk actor obj method args budget none = .error (.noGrant obj) := by
+    invoke X look rv c sub wk actor caller obj method args budget none = .error (.noGrant obj) := by
   simp [invoke, invokeRun, hv, hc, hp, requireMethods, ownerAuthority, ho, principalOf, req, hne, bind,
     Except.bind]
 
@@ -197,9 +197,9 @@ theorem law_judged {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {obj : 
       ownerAuthority X look a.actor obj cell .mutate via = .ok principal ∧
       checkLaws look laws' = .ok () ∧ lawsOf X obj cell = .ok laws ∧
       X.program.judge look none laws (stateOf cell) (stateOf cell)
-        (reqOf c.unsigned obj principal (.relaw laws')) = .ok () ∧
+        (reqOf c.unsigned obj principal (.relaw laws') a.caller) = .ok () ∧
       X.program.judge look none (laws'.filter fun l => decide (l ∉ laws)) (stateOf cell) (stateOf cell)
-        (reqOf c.unsigned obj principal (.adopt laws')) = .ok () ∧
+        (reqOf c.unsigned obj principal (.adopt laws') a.caller) = .ok () ∧
       d.effects = writeOf obj (diffOps (lawSlotsOf cell) (lawSlots X laws')) := by
   unfold law at h
   simp only [except_bind_ok] at h
@@ -224,9 +224,9 @@ theorem law_adopt_refused {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} 
     (ha : ownerAuthority X look a.actor obj cell .mutate via = .ok principal)
     (hcl : checkLaws look laws' = .ok ()) (hl : lawsOf X obj cell = .ok laws)
     (hrel : X.program.judge look none laws (stateOf cell) (stateOf cell)
-      (reqOf c.unsigned obj principal (.relaw laws')) = .ok ())
+      (reqOf c.unsigned obj principal (.relaw laws') a.caller) = .ok ())
     (had : X.program.judge look none (laws'.filter fun l => decide (l ∉ laws)) (stateOf cell)
-      (stateOf cell) (reqOf c.unsigned obj principal (.adopt laws')) = .error e) :
+      (stateOf cell) (reqOf c.unsigned obj principal (.adopt laws') a.caller) = .error e) :
     law X look c a obj laws' via = .error e := by
   simp only [law, hc, hp, ha, hcl, hl, hrel, had, req, bind, Except.bind, Option.isNone_none, if_true]
 
@@ -245,7 +245,7 @@ theorem write_judged {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} {obj 
       ownerAuthority X look a.actor obj cell .mutate via = .ok principal ∧
       lawsOf X obj cell = .ok laws ∧
       X.program.judge look none laws (stateOf cell) (applyEdits (stateOf cell) edits)
-        (reqOf c.unsigned obj principal .write) = .ok () ∧
+        (reqOf c.unsigned obj principal .write a.caller) = .ok () ∧
       d = ⟨[], writeOf obj (diffOps (stateOf cell) (applyEdits (stateOf cell) edits)), [], []⟩ := by
   unfold write at h
   simp only [except_bind_ok] at h
@@ -268,7 +268,7 @@ theorem write_law_refused {X : Ctx D} {look : Pinned D} {c : Call D} {a : At D} 
     (ha : ownerAuthority X look a.actor obj cell .mutate via = .ok principal)
     (hk : ∀ e ∈ edits, stateBase + e.1 < Bounds.slotKeyLimit) (hl : lawsOf X obj cell = .ok laws)
     (hj : X.program.judge look none laws (stateOf cell) (applyEdits (stateOf cell) edits)
-      (reqOf c.unsigned obj principal .write) = .error e) :
+      (reqOf c.unsigned obj principal .write a.caller) = .error e) :
     write X look c a obj edits via = .error e := by
   unfold write
   rw [forEx_ok.mpr (fun x hx => req_ok.mpr (decide_eq_true (hk x hx)))]
