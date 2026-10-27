@@ -129,10 +129,12 @@ def supersOf (src : String) : List SExp → Except Answer (List (ByteArray × Pa
     pure ((id.bytes, l.pkg) :: sup)
 
 /-- The line of the text a hole's refusal is about: the guard of a hole that is not `bool`, the candidate
-whose type is not the hole's. -/
+whose type is not the hole's, and the field a body ill-typed at the hole signature is written in
+(`locateField` follows the type error's path, as for a closed package). -/
 def holeSite (l : Surface.Lowered) : HoleRefusal → Option Nat
   | .guardType n => (l.sites.find? fun s => s.1 = n ∧ s.2.1 = none).map (·.2.2)
   | .candidateType n i => (l.sites.find? fun s => s.1 = n ∧ s.2.1 = some i).map (·.2.2)
+  | .bodyType e => Surface.locateField l e.path
   | _ => none
 
 /-- Check a lowered package; an `illTyped` refusal names the line of the text its path points to, and a

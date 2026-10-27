@@ -453,7 +453,7 @@ theorem package_fitsB {is : List ByteArray} {ms ls : List Label} {xs xi xb xd : 
     (hs : need xs ≤ Wire.depthMax) (hsw : width xs ≤ listMax) (hf : need xi ≤ Wire.depthMax) (hfw : width xi ≤ listMax)
     (hb : need xb ≤ Wire.depthMax) (hbw : width xb ≤ listMax)
     {xR : List Read.SExp} (hr : needs xR ≤ Wire.depthMax) (hrw : widths xR ≤ listMax) (hrl : xR.length ≤ relsMax)
-    {tail : List Read.SExp} (htn : needs tail ≤ Wire.depthMax + 1) (htw : widths tail ≤ listMax) (htl : tail.length ≤ 2) :
+    {tail : List Read.SExp} (htn : needs tail ≤ Wire.depthMax + 1) (htw : widths tail ≤ listMax) (htl : tail.length ≤ 3) :
     fitsB (list (atom "package" ::
       ([list (atom "imports" :: is.map fun i => .str 0 (hex i)), xd, list [atom "state", xs],
        list [atom "iface", xi], list (atom "methods" :: ms.map atom),
@@ -510,7 +510,7 @@ theorem package_prints {ifaces : List Ty} {p : Package} (hw : Wire.packageWire p
     have hCn := claims_needs p.claims
     have hCw := claims_widths p.claims
     have fit := fun (tail : List Read.SExp) (htn : needs tail ≤ Wire.depthMax + 1) (htw : widths tail ≤ listMax)
-        (htl : tail.length ≤ 2) =>
+        (htl : tail.length ≤ 3) =>
       package_fitsB (is := p.imports) (ms := p.methods) (ls := p.laws) hnd hwxd hni hnm hnl hns hwxs hni' hwxi hnb hwxb
         (xR := xR) (by simp only [Wire.depthMax] at hnR ⊢; omega) hwR (by omega) (tail := tail) htn htw htl
     by_cases hee : p.effects.isEmpty <;> by_cases hcc : p.claims.isEmpty
@@ -772,5 +772,299 @@ theorem readPackage_checkedContextual {Δ : List Ty} {p : Package} {s : String} 
   have hpw := checkFields_produces_wf hfi
   rw [package_eq_packageText hS hI (checkFields_rels hfi) hcanon hh hpw] at h
   exact readPackage_packageText hS hI (checkFields_rels hfi) hcanon hh hpw h
+
+/-! ## A package with holes prints within the wire's bounds (LANG-109)
+
+`package_prints` is stated for packages without holes. A hole's text adds a list level per tree level
+in two places and a list width the wire does not bound:
+
+* the hole's context, each candidate's supports and the hole substitution of a term are child lists the
+  wire bounds only by `nodeMax`, while the printer's lists hold at most `listMax`;
+* a hole term `(hole n (subst …))` is one tree node over its substitution but two text lists, so a
+  term with holes prints one level deeper than its tree for each hole nested in it.
+
+The hole declarations (guard, candidates, facts) are checked at `Ω = []`, so they carry neither: only
+the two list widths are premises (`holeROM_prints`). A body typed at the hole signature may nest holes;
+its text bound is the one premise `package_prints_contextual` takes for it. -/
+
+theorem needs_append_le {N : Nat} : ∀ {a b : List Read.SExp}, needs a ≤ N → needs b ≤ N → needs (a ++ b) ≤ N
+  | [], b, _, hb => by simpa using hb
+  | x :: a, b, ha, hb => by
+    simp only [List.cons_append, needs] at ha ⊢
+    have := needs_append_le (a := a) (b := b) (by omega) hb
+    omega
+
+theorem widths_append_le {N : Nat} : ∀ {a b : List Read.SExp}, widths a ≤ N → widths b ≤ N → widths (a ++ b) ≤ N
+  | [], b, _, hb => by simpa using hb
+  | x :: a, b, ha, hb => by
+    simp only [List.cons_append, widths] at ha ⊢
+    have := widths_append_le (a := a) (b := b) (by omega) hb
+    omega
+
+theorem supportPinSx_fits (s : SupportPin) : need (supportPinSx s) ≤ 2 ∧ width (supportPinSx s) ≤ 4 := by
+  cases s <;> simp [supportPinSx, digestSx, need, needs, width, widths, list, atom]
+
+theorem supportOptPinSx_fits (o : Option SupportPin) :
+    need (supportOptPinSx o) ≤ 2 ∧ width (supportOptPinSx o) ≤ 4 := by
+  cases o with
+  | none => simp [supportOptPinSx, need, needs, width, widths, list, atom]
+  | some s => simpa [supportOptPinSx] using supportPinSx_fits s
+
+theorem supportPins_fits : ∀ (l : List SupportPin),
+    needs (l.map supportPinSx) ≤ 2 ∧ widths (l.map supportPinSx) ≤ 4
+  | [] => by simp [needs, widths]
+  | s :: l => by
+    have h1 := supportPinSx_fits s
+    have h2 := supportPins_fits l
+    simp only [List.map_cons, needs, widths]; omega
+
+theorem supportOptPins_fits : ∀ (l : List (Option SupportPin)),
+    needs (l.map supportOptPinSx) ≤ 2 ∧ widths (l.map supportOptPinSx) ≤ 4
+  | [] => by simp [needs, widths]
+  | s :: l => by
+    have h1 := supportOptPinSx_fits s
+    have h2 := supportOptPins_fits l
+    simp only [List.map_cons, needs, widths]; omega
+
+theorem tys_prints {m E : Nat} : ∀ (l : List Ty), l.all Wire.tyWire = true →
+    (∀ c ∈ l.map Wire.tyTree, c.fits m E = true) →
+    ∃ xs, l.mapM tySx = some xs ∧ needs xs ≤ E + 1 ∧ widths xs ≤ listMax ∧ xs.length = l.length
+  | [], _, _ => ⟨[], rfl, by simp [needs], by simp [widths], rfl⟩
+  | t :: l, hw, hc => by
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    obtain ⟨x, hx, hn, hwx⟩ := tyWire_prints t hw.1 (hc _ (by simp))
+    obtain ⟨xs, hxs, hns, hws, hl⟩ := tys_prints l hw.2 (fun c hc' => hc c (by rw [List.map_cons]; exact List.mem_cons_of_mem _ hc'))
+    refine ⟨x :: xs, by simp [List.mapM_cons, hx, hxs], ?_, ?_, by simp [hl]⟩
+    · simp only [needs]; omega
+    · simp only [widths]; omega
+
+theorem holeCodes_prints {Δ ctx : List Ty} {m E : Nat} : ∀ (cs : List HoleCode),
+    cs.all Wire.holeCodeWire = true → (∀ c ∈ cs.map Wire.holeCodeTree, c.fits m E = true) →
+    (∀ c ∈ cs, c.supports.length + 1 ≤ listMax) → (∀ c ∈ cs, ∃ T, HasType Δ ctx c.body T) →
+    ∃ xs, cs.mapM (holeCodeSx ctx) = some xs ∧ needs xs ≤ max (E + 1) 4 ∧ widths xs ≤ listMax ∧ xs.length = cs.length
+  | [], _, _, _, _ => ⟨[], rfl, by simp [needs], by simp [widths], rfl⟩
+  | c :: cs, hw, hf, hs, ht => by
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    have hfc := hf (Wire.holeCodeTree c) (by simp)
+    simp only [Wire.holeCodeTree] at hfc
+    obtain ⟨E', rfl, hcs⟩ := fits_node hfc
+    simp only [Wire.holeCodeWire, Bool.and_eq_true] at hw
+    obtain ⟨T, hT⟩ := ht c (by simp)
+    obtain ⟨x, hx, hn, hwx⟩ := hasType_prints hT hw.1.1 (hcs _ (by simp))
+    obtain ⟨xs, hxs, hns, hws, hl⟩ := holeCodes_prints (Δ := Δ) (ctx := ctx) cs hw.2
+      (fun d hd => hf d (by rw [List.map_cons]; exact List.mem_cons_of_mem _ hd))
+      (fun d hd => hs d (List.mem_cons_of_mem _ hd)) (fun d hd => ht d (List.mem_cons_of_mem _ hd))
+    have hsl := hs c (by simp)
+    have hp := supportPins_fits c.supports
+    refine ⟨list [atom "candidate", x, list (atom "supports" :: c.supports.map supportPinSx)] :: xs, ?_, ?_, ?_, by simp [hl]⟩
+    · simp [List.mapM_cons, holeCodeSx, hx, hxs]
+    · simp only [needs, need, list, atom] at hns hp ⊢; omega
+    · simp only [widths, width, list, atom, List.length_cons, List.length_map, List.length_nil, listMax_eq] at hws hp hwx hsl ⊢
+      omega
+
+theorem checkContextual_holes {Δ : List Ty} {p : Package} (hc : p.checkContextual Δ = .ok ()) :
+    p.holes.length ≤ Bounds.holeSignatureMax ∧ ∀ h ∈ p.holes, h.check Δ = .ok () := by
+  unfold Package.checkContextual at hc
+  simp only [bind, Except.bind, pure, Except.pure] at hc
+  repeat' split at hc
+  all_goals first | (simp at hc; done) | skip
+  rename_i _ hsh _ hfi _ _ _ _ hfe _ hbody
+  refine ⟨by assumption, ?_⟩
+  refine forIn_yield_ok (fun h : HoleROM => h.check Δ = .ok ()) _ _ ?_ hfe
+  intro h u st hst
+  split at hst
+  · cases hst
+  · rename_i v hv
+    cases hst
+    exact ⟨rfl, by simpa [Except.map] using hv⟩
+
+theorem holeCheck_facts {Δ : List Ty} {h : HoleROM} (hc : h.check Δ = .ok ()) :
+    h.hypotheses.length = h.ctx.length ∧ h.code.length ≤ Bounds.holeCandidatesMax ∧
+      inferE [] [.bool] h.guard (Ω := []) = .ok .bool ∧
+      ∀ c ∈ h.code, inferE Δ h.ctx c.body (Ω := []) = .ok h.ty := by
+  unfold HoleROM.check at hc
+  simp only [bind, Except.bind, pure, Except.pure] at hc
+  repeat' split at hc
+  all_goals first | (simp at hc; done) | skip
+  rename_i hty hhyp hcode hg _ _ hfor
+  refine ⟨by assumption, by assumption, ?_, ?_⟩
+  · assumption
+  · intro c hcm
+    obtain ⟨i, hi⟩ := exists_zipIdx h.code 0 c hcm
+    refine forIn_yield_ok (fun x : HoleCode × Nat => inferE Δ h.ctx x.1.body (Ω := []) = .ok h.ty) _ _ ?_ hfor (c, i) hi
+    intro x u st hst
+    split at hst
+    · rename_i T hT
+      split at hst
+      · cases hst
+        rename_i hTy
+        exact ⟨rfl, by show inferE Δ h.ctx x.fst.body (Ω := []) = .ok h.ty; rw [hT, hTy]⟩
+      · cases hst
+    · cases hst
+
+/-- **A hole declaration the install check accepts prints within the wire's bounds** (LANG-109): a
+hole whose tree fits depth `D` has a text nested at most `max (D + 2) 6` deep (the `6` is the fixed
+shape of a candidate with one support pin), no list past `listMax`. The wire bounds a hole's context
+and each candidate's supports only by `nodeMax`, so their lengths are the two premises. -/
+theorem holeROM_prints {Δ : List Ty} {h : HoleROM} {m D : Nat} (hc : h.check Δ = .ok ())
+    (hw : Wire.holeROMWire h = true) (hf : (Wire.holeROMTree h).fits m D = true)
+    (hctx : h.ctx.length + 1 ≤ listMax) (hsup : ∀ c ∈ h.code, c.supports.length + 1 ≤ listMax) :
+    ∃ x, holeROMSx h = some x ∧ need x ≤ max (D + 2) 6 ∧ width x ≤ listMax := by
+  obtain ⟨hhyp, hcl, hg, hcs⟩ := holeCheck_facts hc
+  simp only [Wire.holeROMWire, Bool.and_eq_true, decide_eq_true_eq] at hw
+  obtain ⟨⟨⟨⟨⟨⟨⟨hwn, hwctx⟩, hwty⟩, hwcode⟩, hwrel⟩, hwhyp⟩, hwgp⟩, hwg⟩ := hw
+  unfold Wire.holeROMTree at hf
+  obtain ⟨D1, rfl, hc1⟩ := fits_node hf
+  have hctxn := hc1 (.node 0 .empty (h.ctx.map Wire.tyTree)) (by simp)
+  have htyn := hc1 (Wire.tyTree h.ty) (by simp)
+  have hcoden := hc1 (.node 0 .empty (h.code.map Wire.holeCodeTree)) (by simp)
+  have hgn := hc1 (Wire.termTree h.guard) (by simp)
+  obtain ⟨D2, hD2, hc2⟩ := fits_node hctxn
+  obtain ⟨D3, hD3, hc3⟩ := fits_node hcoden
+  obtain rfl : D3 = D2 := by omega
+  obtain ⟨xc, hxc, hnc, hwc, hlc⟩ := tys_prints h.ctx hwctx hc2
+  obtain ⟨xt, hxt, hnt, hwt⟩ := tyWire_prints h.ty hwty htyn
+  obtain ⟨xg, hxg, hng, hwxg⟩ := hasType_prints (inferE_sound hg) hwg hgn
+  obtain ⟨xs, hxs, hns, hws, hls⟩ := holeCodes_prints (Δ := Δ) (ctx := h.ctx) h.code hwcode hc3 hsup
+    (fun c hcm => ⟨h.ty, inferE_sound (hcs c hcm)⟩)
+  have hp := supportOptPins_fits h.hypotheses
+  have hgp := supportOptPinSx_fits h.guardPin
+  refine ⟨list [atom "hole", atom (Nat.repr h.name), list (atom "context" :: xc), list [atom "result", xt],
+    list [atom "selection", atom (Nat.repr h.selectionRel), digestSx h.selectionKey],
+    list (atom "hypotheses" :: h.hypotheses.map supportOptPinSx),
+    list [atom "guard", supportOptPinSx h.guardPin, xg], list (atom "code" :: xs)], ?_, ?_, ?_⟩
+  · have hxg' : termSx 1 h.guard = some xg := hxg
+    simp [holeROMSx, hxc, hxt, hxg', hxs]
+  · have hL : listMax = 258 := rfl
+    obtain ⟨hp1, hp2⟩ := hp
+    obtain ⟨hg1, hg2⟩ := hgp
+    simp only [need, needs, list, atom, digestSx, Nat.add_one_le_iff, Nat.max_lt]
+    and_intros <;> omega
+  · have hL : listMax = 258 := rfl
+    obtain ⟨hp1, hp2⟩ := hp
+    obtain ⟨hg1, hg2⟩ := hgp
+    simp only [Bounds.holeCandidatesMax] at hcl
+    simp only [width, widths, list, atom, digestSx, List.length_cons, List.length_map, List.length_nil, Nat.max_le]
+    and_intros <;> omega
+
+theorem holes_prints {Δ : List Ty} {m D : Nat} : ∀ (hs : List HoleROM), (∀ h ∈ hs, h.check Δ = .ok ()) →
+    hs.all Wire.holeROMWire = true → (∀ c ∈ hs.map Wire.holeROMTree, c.fits m D = true) →
+    (∀ h ∈ hs, h.ctx.length + 1 ≤ listMax ∧ ∀ c ∈ h.code, c.supports.length + 1 ≤ listMax) →
+    ∃ xs, hs.mapM holeROMSx = some xs ∧ needs xs ≤ max (D + 2) 6 ∧ widths xs ≤ listMax ∧ xs.length = hs.length
+  | [], _, _, _, _ => ⟨[], rfl, by simp [needs], by simp [widths], rfl⟩
+  | h :: hs, hc, hw, hf, hb => by
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    obtain ⟨x, hx, hn, hwx⟩ := holeROM_prints (hc h (by simp)) hw.1 (hf _ (by simp)) (hb h (by simp)).1 (hb h (by simp)).2
+    obtain ⟨xs, hxs, hns, hws, hl⟩ := holes_prints (Δ := Δ) hs (fun g hg => hc g (List.mem_cons_of_mem _ hg)) hw.2
+      (fun c hcm => hf c (by rw [List.map_cons]; exact List.mem_cons_of_mem _ hcm))
+      (fun g hg => hb g (List.mem_cons_of_mem _ hg))
+    refine ⟨x :: xs, by simp [List.mapM_cons, hx, hxs], ?_, ?_, by simp [hl]⟩
+    · simp only [needs]; omega
+    · simp only [widths]; omega
+
+theorem optSection_bounds {α : Type} {kw : String} {f : α → Option Read.SExp} {l : List α} {xs : List Read.SExp}
+    (hl : l.mapM f = some xs) {N : Nat} (hn : needs xs + 1 ≤ N) (hN : 2 ≤ N) (hw : xs.length + 1 ≤ listMax)
+    (hww : widths xs ≤ listMax) :
+    ∃ R, optSection kw f l = some R ∧ needs R ≤ N ∧ widths R ≤ listMax ∧ R.length ≤ 1 := by
+  by_cases he : l.isEmpty = true
+  · exact ⟨[], by simp [optSection, he], by simp [needs], by simp [widths], by simp⟩
+  · refine ⟨[list (atom kw :: xs)], by simp [optSection, he, hl], ?_, ?_, by simp⟩
+    · simp only [needs, need, list, atom]; omega
+    · simp only [widths, width, list, atom, List.length_cons]; omega
+
+/-- **A package the contextual install check accepts, whose tree fits the wire's bounds, has a text**
+(LANG-109): the hole declarations print within `max (D + 2) 6`, so the `(holes …)` section fits one
+level under the reader's bound. Three things the wire does not bound are premises: a hole's context
+and each candidate's supports (child lists bounded by `nodeMax`, printed lists by `listMax`), and the
+body's text. A body that nests holes prints one level deeper per nested hole, since `(hole n (subst …))`
+is one tree node but two text lists; without holes `hasType_prints` gives the body's bound from its tree. -/
+theorem package_prints_contextual {Δ : List Ty} {p : Package} (hΔ : ∀ A ∈ Δ, A.wf = true)
+    (hw : Wire.packageWire p = true) (hf : (Wire.packageTree p).fits Wire.nodeMax Wire.depthMax = true)
+    (hc : p.checkContextual Δ = .ok ())
+    (hctx : ∀ h ∈ p.holes, h.ctx.length + 1 ≤ listMax ∧ ∀ c ∈ h.code, c.supports.length + 1 ≤ listMax)
+    (hbody : ∃ xb, termSx 0 p.body = some xb ∧ need xb ≤ Wire.depthMax ∧ width xb ≤ listMax) :
+    (package p).isSome = true := by
+  obtain ⟨hsh, hfi, hh, hbodychk⟩ := checkContextual_facts hΔ hc
+  obtain ⟨hHn, hHc⟩ := checkContextual_holes hc
+  obtain ⟨hni, hnm, hnl⟩ := checkShape_bounds hsh
+  simp only [Wire.packageWire, Bool.and_eq_true] at hw
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hwd, -⟩, hws⟩, hwi⟩, hwb⟩, hwm⟩, hwl⟩, hwr⟩, hwh⟩, hwe⟩, hwc⟩ := hw
+  obtain ⟨xd, hxd, hnd, hwxd⟩ := docSx_prints hwd
+  obtain ⟨D, hD, hcs⟩ := fits_node hf
+  simp only [Wire.depthMax] at hD
+  have hD' : D = 1023 := by omega
+  subst hD'
+  obtain ⟨xs, hxs, hns, hwxs⟩ := tyWire_prints p.state hws (hcs _ (by simp))
+  obtain ⟨xi, hxi, hni', hwxi⟩ := tyWire_prints p.iface hwi (hcs _ (by simp))
+  obtain ⟨xb, hxb, hnb, hwb'⟩ := hbody
+  have hrels := checkFields_checkRels hfi
+  obtain ⟨row, hcr⟩ := hrels
+  obtain ⟨hrl, hkl⟩ := checkRels_bounds hcr
+  obtain ⟨D2, hD2, hc2⟩ := fits_node (hcs (.node 2 .empty (p.rels.map Wire.relTree)) (by simp))
+  obtain ⟨xR, hxR, hnR, hwR, hlR⟩ := rels_prints p.rels (fun r hr =>
+    ⟨List.all_eq_true.mp hwr r hr, hc2 _ (List.mem_map.mpr ⟨r, hr, rfl⟩), hkl r hr⟩)
+  have hcl := checkShape_claims hsh
+  have hC := claims_mapM_atoms p.claims hwc
+  obtain ⟨rowE, hce⟩ := checkFields_checkEffects hfi
+  obtain ⟨D4, hD4, hc4⟩ := fits_node (hcs (.node 4 .empty (p.effects.map Wire.effectTree)) (by simp))
+  obtain ⟨xE, hxE, hlE, hEn, hEw⟩ := effects_prints p.effects (D := D4 - 1) hwe (fun e he => by
+    have := hc4 _ (List.mem_map.mpr ⟨e, he, rfl⟩)
+    obtain ⟨D5, hD5, -⟩ := fits_node this
+    rwa [show D4 - 1 + 1 = D4 by omega])
+  obtain ⟨D6, hD6, hc6⟩ := fits_node (hcs (.node 3 .empty (p.holes.map Wire.holeROMTree)) (by simp))
+  obtain ⟨xH, hxH, hHn', hHw, hHl⟩ := holes_prints (Δ := Δ) (m := Wire.nodeMax) (D := D6) p.holes hHc hwh hc6 hctx
+  have hEl : xE.length ≤ methodsMax := by
+    rw [hlE]; exact Nat.le_trans (checkEffects_length hce) hnm
+  have hCn := claims_needs p.claims
+  have hCw := claims_widths p.claims
+  obtain ⟨R1, hR1, hR1n, hR1w, hR1l⟩ := optSection_bounds (kw := "effects") (f := effectSx) (l := p.effects) hxE
+    (N := Wire.depthMax + 1) (by simp only [Wire.depthMax] at hEn ⊢; omega) (by simp [Wire.depthMax])
+    (by simp only [listMax_eq, methodsMax] at hEl ⊢; omega) hEw
+  obtain ⟨R2, hR2, hR2n, hR2w, hR2l⟩ := optSection_bounds (kw := "claims") (f := claimSx) (l := p.claims) hC
+    (N := Wire.depthMax + 1) (by simp only [Wire.depthMax] at hCn ⊢; omega)
+    (by simp [Wire.depthMax])
+    (by simp only [listMax_eq, claimsMax, List.length_map] at hcl ⊢; omega)
+    (by simp only [listMax_eq] at hCw ⊢; omega)
+  obtain ⟨R3, hR3def⟩ : ∃ R3 : List Read.SExp, R3 = if p.holes = [] then [] else [list (atom "holes" :: xH)] := ⟨_, rfl⟩
+  have hR3b : needs R3 ≤ Wire.depthMax + 1 ∧ widths R3 ≤ listMax ∧ R3.length ≤ 1 := by
+    by_cases he : p.holes = []
+    · rw [if_pos he] at hR3def; subst hR3def; simp [needs, widths]
+    · rw [if_neg he] at hR3def; subst hR3def
+      have hL : listMax = 258 := rfl
+      simp only [Bounds.holeSignatureMax] at hHn
+      simp only [needs, need, list, atom, widths, width, List.length_cons, List.length_nil, Wire.depthMax] at hHn' hHw ⊢
+      omega
+  obtain ⟨hR3n, hR3w, hR3l⟩ := hR3b
+  have hfit := package_fitsB (is := p.imports) (ms := p.methods) (ls := p.laws) hnd hwxd hni hnm hnl hns hwxs hni' hwxi
+    (by omega) hwb' (xb := xb) (xR := xR) (by simp only [Wire.depthMax] at hnR ⊢; omega) hwR (by omega)
+    (tail := R1 ++ R2 ++ R3) (needs_append_le (needs_append_le hR1n hR2n) hR3n)
+    (widths_append_le (widths_append_le hR1w hR2w) hR3w) (by simp only [List.length_append]; omega)
+  have hS := (checkShape_wf hsh).1
+  have hI := (checkShape_wf hsh).2
+  have hcanon : Canon p.body := by
+    have hΩ : ∀ d ∈ holeSignature p.holes, d.ty.wf = true := by
+      intro d hd
+      simp only [holeSignature, List.mem_map] at hd
+      obtain ⟨hr, hm, rfl⟩ := hd
+      exact (hh hr hm).2.1
+    unfold checkE at hbodychk
+    split at hbodychk
+    · rename_i T hT
+      exact hasType_canon hΔ hΩ (by simp) (inferE_sound_live hT)
+    · cases hbodychk
+  have hsec : sectionsSx p = some [list (atom "imports" :: p.imports.map fun i => .str 0 (hex i)), xd, list [atom "state", xs],
+      list [atom "iface", xi], list (atom "methods" :: p.methods.map atom),
+      list (atom "laws" :: p.laws.map atom), list (atom "rels" :: xR), list [atom "body", xb]] := by
+    simp [sectionsSx, hxd, hxs, hxi, hxb, labels_mapM_atoms _ hwm, labels_mapM_atoms _ hwl, hxR]
+  have htext : (packageText p).isSome = true := by
+    by_cases he : p.holes = []
+    · rw [if_pos he] at hR3def; subst hR3def
+      simp only [List.cons_append, List.nil_append, List.append_nil] at hfit
+      simp [packageText, hsec, hR1, hR2, he, hfit]
+    · rw [if_neg he] at hR3def; subst hR3def
+      simp only [List.append_assoc, List.cons_append, List.nil_append] at hfit
+      simp [packageText, hsec, hR1, hR2, he, hxH, hfit]
+  rw [package_eq_packageText hS hI (checkFields_rels hfi) hcanon hh (checkFields_produces_wf hfi)]
+  exact htext
 
 end Nanodregg.Lang.Print

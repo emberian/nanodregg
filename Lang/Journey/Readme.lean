@@ -162,6 +162,12 @@ def readmeRows (text : String) (r0 : Run) (b a : Sim.Member) : Run := Id.run do
   let l18 := lineOfFirst badGuard "(guard 3)"
   r := note r s!"RM18 ob (check P) with a guard written `3`: {a18}"
     (a18 == s!"refused holeGuardType 0 line {l18}" && l18 > 1)
+  -- RM19: a body ill-typed at the hole signature names the line of the method it is written in
+  let badBody := P.replace "(+ state.count (hole step))" "(+ state.count true)"
+  let a19 := (Lang.Resident.run s!"(check {badBody})").line
+  let l19 := lineOfFirst badBody "(+ state.count true)"
+  r := note r s!"RM19 ob (check P) with the body of bump adding `true`: {a19}"
+    (badBody != P && has a19 "refused holeBodyType" && l19 > 1 && a19.endsWith s!" line {l19}")
   return r
 
 /-- A fresh session for the RM rows, over the README's program `text`. -/
