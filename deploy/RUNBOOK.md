@@ -560,39 +560,101 @@ sponsor's signed invitation and the manual flag is for the operator's own checks
 (store-plants `carry-import-origin-without-nonce`, `-malformed`, `-other-world-refused`, with
 `-pinned-accepted-control`; a binary that sent `--origin` to the digest check turns three of them red).
 
-## 6. Re-genesis with state carried (flag day) — RAN (store-plants `carry-*`, HOST-28 6b89d6f, KERNEL-29)
+## 6. Re-genesis with state carried (flag day) — RAN (store-plants `carry-*`, HOST-28 6b89d6f, KERNEL-29; the authority: KERNEL-79, HOST-82)
 
 State crosses a flag day only by re-genesis from a checked export (law 1, OPS-1). History never
-crosses: every old call and receipt is for the old World.
+crosses: every old call, receipt and certificate is for the old World.
+
+What crosses, and what does not:
+
+| | after the import |
+|---|---|
+| cells, tombstones, spent nullifiers | the same, at the same ids: members keep their ids, keys and grants; a retired id stays retired |
+| rows, journal, allowance, height | the same; a call committed before the export answers `lookup` committed |
+| each member's meter (ticks this window) | the same: a carry grants nobody a second budget |
+| refusal records and counts | not carried: they belong to the old log |
+| authority (who certifies a head) | the one the import STATES; the old one is only in the new origin's input |
+| origin, chain, certificates | new: no certificate of the old World certifies the new one (`otherWorld`) |
 
 1. Stop the writer unit and every member's follow unit, by unit name. Export only from a STOPPED
    writer (HOST-28): the carried state is its last durable World.
 2. With the OLD binary: `host export STORE OUT`. It reads STORE only (`carry-export-reads-only`),
    refuses an existing OUT (`refused out`, 17), and prints `carried HEX` (the file's digest),
-   `from HEX` (the old origin) and `anchor H:C`. Record all three beside the backup.
+   `from HEX` (the old origin), `anchor H:C`, then the World's authority: `authority T N` and one
+   `certifier I HEX` per key (`carry-export-prints-authority`). Record all of it beside the backup.
+   (An export by a binary from before KERNEL-79 prints no authority lines and its file has the old
+   carried shape: the new binary refuses it `refused carried`, step 4.)
 3. The operator moves the old Store aside BY HAND (`mv STORE STORE.old-<date>`); nothing deletes it.
-4. With the NEW binary: `host import STORE NAME OUT --digest HEX` (the `carried` digest; a fresh
-   nonce is drawn unless `--nonce`). Refused by name, before any Store file is written:
-   no `--digest` → `refused digest` (8); a wrong digest or a byte changed in transit →
-   `refused carryMismatch digest` (49); a carried World whose allowance, or whose weight and allowance
-   together, are past what this binary's budget admits → `refused allowancePastBound` (58) /
-   `refused potentialPastBound` (59) (HOST-56: exported by a binary of another budget; do not import it);
-   a file written under another carried shape →
+4. With the NEW binary, STATE the authority:
+
+       host import STORE NAME OUT --digest HEX --certifier PUB --threshold 1     # one certifier
+       host import STORE NAME OUT --digest HEX --uncertified                     # nobody certifies
+
+   Repeat `--certifier` for a committee (in order; the threshold counts distinct keys). The import
+   states the authority; it never inherits it. Stating nothing is accepted only when the exported
+   World's authority is `authority 0 0`; under a World whose authority certifies it is refused
+   `refused authorityUnstated` (2), and nothing is written (`carry-import-authority-unstated`). A
+   quorum nobody meets is refused by genesis's own name (`badThreshold`, `repeatedCertifier`, …);
+   `--uncertified` beside a key is `refused uncertified`. A fresh nonce is drawn unless `--nonce`.
+   Refused by name, before any Store file is written: no `--digest` → `refused digest` (8); a wrong
+   digest or a byte changed in transit → `refused carryMismatch digest` (49); a carried World whose
+   allowance, or whose weight and allowance together, are past what this binary's budget admits →
+   `refused allowancePastBound` (58) / `refused potentialPastBound` (59) (HOST-56: exported by a binary
+   of another budget; do not import it); a file written under another carried shape →
    `refused carried` (43, shapeMismatch): that flag day changed the carried shape and cannot
    carry, so it is a plain re-genesis (§1) and the old Store stays aside; `carryMismatch decode`,
    `anchor`, `tooLarge`, `carry NAME`. A `carryMismatch reopen` may leave a Store: move it aside.
+   The import prints `origin`, `nonce`, `from`, `height`, `chain`, `start HEX` (the carried start: the
+   input the new origin is the digest of, which a sponsor invites from and a stranger checks
+   certificates against), `authority T N` (the stated one) and `from-authority T N` (the old one).
 5. `host check STORE`: the height is the old anchor's (the carry keeps it), the chain is the new
    World's own, `origin` (printed by import) is new.
-6. Publish the new origin to members. Every call signed for the old origin does not land
-   (`carry-old-origin-call-not-admitted`); members sign the new origin as their SAME member ids
-   (`carry-new-origin-call-admitted`); a call committed before the export still answers `lookup`
+6. Certify, if the stated authority certifies: start the writer with `host serve STORE --certify SOCK`
+   (§2a; HOST-80). The certify key is held by keybroker, never by the writer: `keybroker --certify-pub
+   KEYS` prints `certify PUB`, and PUB is the `--certifier` of step 4. The new World's first certificate
+   is the one keybroker signs over its first base; until then a thin joiner of an authority that
+   certifies cannot adopt (`uncertifiedPage`, PROTOCOL-84). Check it as a stranger would:
+   `host certified START_HEX STORE/base.cert` prints `certified origin=…` for the NEW origin
+   (`carry-certified-new-authority`); a certificate by the old certifier is refused
+   `notCertified badCertifySignature`, and one of the old World `notCertified otherWorld`.
+7. Publish the new origin and the `start` line to members. Every call signed for the old origin does
+   not land (`carry-old-origin-call-not-admitted`); members sign the new origin as their SAME member
+   ids (`carry-new-origin-call-admitted`); a call committed before the export still answers `lookup`
    committed (`carry-lookup-committed-after-import`: the journal is carried, PROTOCOL-29).
-7. Members re-create their follow Stores from the new World by reproducing the import (the same
-   carried file, `--digest` and the import's printed `--nonce`). This is trust on first use BY DESIGN
-   (cv 01a14de7-224a): a carried World has no genesis inputs a sponsor could sign, so there is no
-   invitation to join from. Mitigation: each member compares the `origin` its own import printed with
-   the operator's, out of band. Two imports of one export are two Worlds
-   (`carry-two-imports-two-worlds`): the operator imports once, members reproduce that one.
+8. Members re-create their follow Stores. A sponsor invites from the `start` line (`invite INPUT`):
+   the invitation signs the carry start, and `host join STORE INVITE KEY OUT` imports the same file under
+   the start's name, nonce and authority, pinned to the origin the start is the digest of (PROTOCOL-85;
+   another file is `carryMismatch wrongWorld`). Without an invitation a member reproduces the import
+   (the same file, `--digest`, the import's printed `--nonce` and the SAME authority options) and
+   compares the printed `origin` with the operator's out of band. Two imports of one export are two
+   Worlds (`carry-two-imports-two-worlds`): the operator imports once, members reproduce that one.
+
+### 6a. The testground box (deploy/testground) at the next flag day
+
+The box serves a World made by `run.sh genesis` (no certifier: `authority 0 0`). Its guest-book
+(`testground/guestbook.mjs`) and every visitor's page follow the World from its GENESIS input
+(`tg_found`, `tg_join`: `Invite.accept`, genesis only). Neither can follow a carried World yet: the
+page would need the carried base (cv task "testground: follow and join a carried World"). Until that
+lands, the box's flag day is a plain re-genesis (§1), and visitors see this: the page compares the
+origin it kept with `world.json`'s, finds it new, drops the kept keys itself (`testground.js`, the
+same as pressing "Forget me") and joins again as a new member. No visitor membership crosses.
+
+Once the guest-book and the page follow a carried World, the carry is, on the box, with the unit
+stopped (`systemctl stop nd-testground`), `STATE` the unit's state directory:
+
+    host export STATE/store /var/backups/nd/testground-<date>.carried        # OLD binary; record every line
+    mv STATE/store STATE/store.old-<date>
+    host import STATE/store testground /var/backups/nd/testground-<date>.carried \
+      --digest HEX --uncertified | tee STATE/import.txt                       # NEW binary
+    sed -n 's/^start /input /p' STATE/import.txt > STATE/gb/input             # the guest-book invites from the start
+    systemctl start nd-testground
+
+(To certify the box's heads instead, give `--certifier PUB --threshold 1` with PUB from `keybroker
+--certify-pub`, and render the unit with `host serve --certify`, card 01a17b00-67a4.) The member
+cells cross, so a visitor's kept keys still sign as its member in the new World, but only if the page
+keeps them: today it drops kept keys whenever `world.json` names another origin. The same card makes
+the page keep them when `world.json` names the old origin as the new World's `from`. Until then,
+"Forget me" and a carry look the same to a visitor: a fresh join.
 
 ## 7. Refusals and what the operator does
 

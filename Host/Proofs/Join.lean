@@ -15,12 +15,12 @@ open Nanodregg.Kernel Nanodregg.Codec Nanodregg.Host.Deployed
 theorem join_carried_trusted (inviteHex keyHex path : String)
     (inR : Except (StoreFault (Record.Fault (Reject D))) ByteArray) (keyR : Option Digest)
     (k : Digest) (w : World D)
-    {inv trusted : ByteArray} {i : Protocol.Invite.Invitation D} {accepted o fromO chain : D}
-    {name nonce : ByteArray} {height : Nat}
+    {inv trusted : ByteArray} {i : Protocol.Invite.Invitation D} {accepted chain : D}
+    {s : Receive.CarryStart D}
     (hi : Protocol.Text.ofHex inviteHex = some inv)
     (hk : Protocol.Text.ofHex keyHex = some trusted)
     (ha : Protocol.Invite.acceptStart X trusted inv = .ok (i, accepted))
-    (hs : i.start = .carried o name nonce fromO height chain)
+    (hs : i.start = .carried s chain)
     (hw : joinWith (m := Except (Option (Digest × World D)))
         { nonce := pure (.ok ByteArray.empty), readIn := pure inR, reopen := fun _ => throw none,
           key := pure keyR, genesis := fun k₀ w₀ => throw (some (k₀, w₀)),
@@ -28,7 +28,7 @@ theorem join_carried_trusted (inviteHex keyHex path : String)
         .error (some (k, w))) : CheckpointTrusted accepted w := by
   obtain ⟨bytes, r, _, himp, _, _, _, hb, _⟩ :=
     (join_carried_iff inviteHex keyHex path inR keyR k w hi hk ha hs).mp hw
-  have ho := Protocol.Invite.acceptStart_carried_origin ha hs
+  have ho := (Protocol.Invite.acceptStart_carried_origin ha hs).1
   rw [ho]
   exact import_trusted_pinned himp hb
 

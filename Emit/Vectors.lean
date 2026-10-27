@@ -287,11 +287,15 @@ def refused : G (Refused Sim.D) := do
 def step (k : Nat) : G (Step Sim.D) := do
   if k = 0 then return .turn (← turn) else return .refusal (← refused)
 
+/-- A carried window listing (KERNEL-79): one or two members' meter leaves of the current window. -/
+def meters (h : Nat) : G (List (WindowSlot Sim.D × RefusalLeaf Sim.D)) :=
+  list1 2 (do return (WindowSlot.meter (.ticks (← dig) (refusalWindow h)), RefusalLeaf.count ((← below 1000) + 1)))
+
 def carried : G (Carried Sim.D) := do
   let h := (← below 1000) + 3
   let t ← trie
   return { trie := t, allowance := ← nat64, height := h, journal := journalOf (← journal h),
-           rows := rowsOf (← rows (liveIds t)) }
+           rows := rowsOf (← rows (liveIds t)), refusals := refusalsOf (← meters h) }
 
 /-! ## The one printer -/
 
@@ -308,7 +312,7 @@ def printWire (x : WorldWire Sim.D) : String := printWorld (ofWire x)
 
 def printCarried (c : Carried Sim.D) : String :=
   s!"\{trie := {text c.trie.toList}, allowance := {c.allowance}, height := {c.height}, " ++
-    s!"journal := {text c.journal.toList}, rows := {text c.rows.toList}}"
+    s!"journal := {text c.journal.toList}, rows := {text c.rows.toList}, refusals := {text c.refusals.toList}}"
 
 def printCarriedWire (x : CarriedWire Sim.D) : String := printCarried (carriedOfWire x)
 
@@ -547,6 +551,18 @@ def parentedVecs : G (List (WorldWire Sim.D)) := do
   let k ← bytesN 3
   let r := rowsOf (w.rows.toList ++ [(.head p 9, .head 1 5 4 40 3 true 0), (.row ⟨p, 9, k⟩, .row 5 ByteArray.empty 0)])
   return drawn ++ [toWire { w with trie := withLive w.trie p, rows := r }, toWire { w with rows := r }]
+
+/-- `kernel/carried-window`'s vectors (KERNEL-79): two drawn carried states, then the boundary pair at
+height 3: four meter leaves of the window (`height % windowMax + 1`, read back) and five (refused
+`kernel/carried-window` by name: more meter leaves than heights elapsed). -/
+def carriedWindowVecs : G (List (CarriedWire Sim.D)) := do
+  let drawn ← each 2 fun _ => carriedToWire <$> Vectors.carried
+  let c ← Vectors.carried
+  let ms ← each 5 fun _ => dig
+  let at_ (n : Nat) : Carried Sim.D :=
+    let r := refusalsOf ((ms.take n).map fun m => (.meter (.ticks m (refusalWindow 3)), .count 1))
+    { c with height := 3, journal := .empty, refusals := r }
+  return drawn ++ [carriedToWire (at_ 4), carriedToWire (at_ 5)]
 
 /-- `kernel/carried-rows-parented`'s vectors: the same pair over a carried state. -/
 def carriedParentedVecs : G (List (CarriedWire Sim.D)) := do
@@ -871,6 +887,7 @@ def sites : List Site :=
     site "kernel/carried-rows" (carriedRowsWire Sim.env Sim.dc) (carriedRowsVecs true) printCarriedWire,
     site "kernel/carried-rows-headed" (carriedHeadedWire Sim.env Sim.dc) (carriedRowsVecs false) printCarriedWire,
     site "kernel/carried-rows-parented" (carriedParentedWire Sim.env Sim.dc) carriedParentedVecs printCarriedWire,
+    site "kernel/carried-window" (carriedWindowWire Sim.env Sim.dc) carriedWindowVecs printCarriedWire,
     site "kernel/carried" (Codec.Kernel.carried Sim.env Sim.dc) (each 2 fun _ => Vectors.carried) printCarried,
     site "path/badComponent" (Field.pathCodec pathMax (by decide)) pathVecs (fun p => text p.val),
     site "host/base/retained" (Host.Base.codec (Codec.Kernel.world Sim.env Sim.dc)) baseVecs printBase,

@@ -37,6 +37,7 @@ import Protocol.Command.Frames
 import Kernel.Proofs.ObjectHead
 import Kernel.Proofs.Frame
 import Kernel.Proofs.Rooted
+import Kernel.Proofs.Carry
 
 namespace Nanodregg.Protocol.Command
 
@@ -116,29 +117,39 @@ theorem genesisWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance :
   obtain ⟨p, -, ⟨-, he⟩ | ⟨-, he⟩⟩ := Receive.mem_founderEntries hq <;> subst he <;>
     simp [genesisLeaf, Receive.founderMember, Receive.founderRoot]
 
-omit [DecidableEq D] in
 /-- **A World carried at height 0 is one adopt may replace too** (PROTOCOL-67's amendment, readers
 A21): `carryWorld` sets `steps := c.height`, so the carry of a height-0 World of members and grants
 (its trie a genesis's: a height-0 World has folded only refusals, which change no cell) is at step 0
 with the same cells. A member re-invited to such a carried World (`acceptCarry`) holds it, and no
 genesis of this joiner built it: `atGenesis` is "a step-0 World of members and grants", not "a World
 a genesis builds". It still holds no object (`atGenesis_object`). -/
-theorem carryWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) {w : World D}
+theorem carryWorld_atGenesis (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (auth : Authority)
+    {w : World D} (hc : w.Canon X.env)
     (hh : w.height = 0) (hg : w.trie.toList.all (fun p => genesisLeaf p.2) = true) :
-    atGenesis (carryWorld X name nonce fromOrigin w.carried) = true := by
+    atGenesis (carryWorld X name nonce fromOrigin w.carried auth) = true := by
   simp only [atGenesis, carryWorld, World.carried, hh, beq_self_eq_true, Bool.true_and]
-  exact hg
+  rw [List.all_eq_true]
+  rintro ⟨s, l⟩ hp
+  have hg' := (Trie.mem_toList (trieSpec X.env) 0 _ (reauthor_canon hc auth).1 s l).mp hp
+  change (reauthor X w.trie auth).get (trieSpec X.env) s = some l at hg'
+  rw [reauthor_get hc] at hg'
+  split at hg'
+  · cases hg'
+    simp [genesisLeaf, authorityCell]
+  · exact List.all_eq_true.mp hg (s, l)
+      ((Trie.mem_toList (trieSpec X.env) 0 _ hc.1 s l).mpr (Option.filter_eq_some_iff.mp hg').1)
 
 /-- The carried-at-0 instance: the carry of any genesis World (a lineage exported before its first
-step) under any new name and nonce. -/
+step) under any new name, nonce and stated authority. -/
 theorem carry_genesis_atGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat)
-    (founders : List (ByteArray × D)) (auth : Authority) (name' nonce' : ByteArray) :
+    (founders : List (ByteArray × D)) (auth : Authority) (name' nonce' : ByteArray) (auth' : Authority) :
     let g := Receive.genesisWorld X name nonce allowance founders auth
-    atGenesis (carryWorld X name' nonce' g.origin g.carried) = true := by
+    atGenesis (carryWorld X name' nonce' g.origin g.carried auth') = true := by
   intro g
   have h := genesisWorld_atGenesis X name nonce allowance founders auth
   simp only [atGenesis, Bool.and_eq_true] at h
-  exact carryWorld_atGenesis X name' nonce' g.origin rfl h.2
+  exact carryWorld_atGenesis X name' nonce' g.origin auth' (receive_genesis_canon X name nonce allowance founders auth)
+    rfl h.2
 
 /-- **One re-derived event keeps a live object's package, or retires it** (KERNEL-64 at follow's
 step; KERNEL-70: its owner's signed `retire` leaves a tombstone). -/

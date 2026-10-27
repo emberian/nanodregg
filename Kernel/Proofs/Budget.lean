@@ -43,12 +43,13 @@ theorem genesis_budget {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {f
   obtain ⟨hf, rfl⟩ := genesis_ok.mp hg
   exact hf.2.2.2.2.2
 
-omit [DecidableEq D] [Std.TransOrd D] [Std.LawfulEqOrd D] in
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A checked carry starts below 2^64 (`CarryFits`'s budget clause: the carried cells are the World's). -/
-theorem carry_budget {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D} {w : World D}
-    (h : carry X name nonce f c = .ok w) : w.weight + w.allowance < 2 ^ 64 := by
+theorem carry_budget {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D}
+    {auth : Authority} {w : World D}
+    (h : carry X name nonce f c auth = .ok w) : w.weight + w.allowance < 2 ^ 64 := by
   obtain ⟨hf, rfl⟩ := carry_ok.mp h
-  exact hf.2.2.1
+  exact hf.2.2.2.2.2.1
 
 /-- **Every World a checked genesis reaches is below the budget**, no premise. -/
 theorem genesis_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {allowance : Nat}
@@ -62,24 +63,32 @@ theorem genesis_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {allowance :
     (receive_genesis_rowsCanon X name nonce allowance founders auth) hb hl
 
 omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
-/-- A carried World's slots hold the leaves of their kinds when the exported one's did (the trie is the same). -/
-theorem carry_slotted {X : Ctx D} {name nonce : ByteArray} {w w' : World D} (hs : w.Slotted X.env)
-    (h : carry X name nonce w.origin w.carried = .ok w') : w'.Slotted X.env := by
+/-- A carried World's slots hold the leaves of their kinds when the exported one's did (the trie is
+the same but for the authority cell, a cell at a cell slot). -/
+theorem carry_slotted {X : Ctx D} {name nonce : ByteArray} {auth : Authority} {w w' : World D}
+    (hc : w.Canon X.env) (hs : w.Slotted X.env)
+    (h : carry X name nonce w.origin w.carried auth = .ok w') : w'.Slotted X.env := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
-  exact hs
+  intro s l hg
+  change (reauthor X w.trie auth).get (trieSpec X.env) s = some l at hg
+  rw [reauthor_get hc] at hg
+  split at hg
+  · rename_i he; subst he; cases hg; rfl
+  · exact hs s l (Option.filter_eq_some_iff.mp hg).1
 
-omit [Std.TransOrd D] [Std.LawfulEqOrd D] [DecidableEq D] in
+omit [Std.TransOrd D] [Std.LawfulEqOrd D] in
 /-- A carried World's rows are canonical when the exported one's were (the rows are the same). -/
-theorem carry_rowsCanon {X : Ctx D} {name nonce : ByteArray} {w w' : World D} (hr : w.RowsCanon X.env)
-    (h : carry X name nonce w.origin w.carried = .ok w') : w'.RowsCanon X.env := by
+theorem carry_rowsCanon {X : Ctx D} {name nonce : ByteArray} {auth : Authority} {w w' : World D}
+    (hr : w.RowsCanon X.env)
+    (h : carry X name nonce w.origin w.carried auth = .ok w') : w'.RowsCanon X.env := by
   obtain ⟨_, rfl⟩ := carry_ok.mp h
   exact hr
 
 /-- **Every World a checked carry reaches is below the budget**, given what the carried codec gives
 of the carried tries on import (canonical, every slot holding the leaf of its kind; the rows
 canonical). -/
-theorem carry_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D} {w w' : World D}
-    {l : List (Step D)} (h : carry X name nonce f c = .ok w) (hc : w.Canon X.env) (hs : w.Slotted X.env)
+theorem carry_fold_budget_lt {X : Ctx D} {name nonce : ByteArray} {f : D} {c : Carried D} {auth : Authority}
+    {w w' : World D} {l : List (Step D)} (h : carry X name nonce f c auth = .ok w) (hc : w.Canon X.env) (hs : w.Slotted X.env)
     (hr : w.RowsCanon X.env) (hl : World.fold X.env w l = .ok w') : w'.weight + w'.allowance < 2 ^ 64 :=
   fold_budget_lt hc hs hr (carry_budget h) hl
 
@@ -92,10 +101,10 @@ theorem deployed_budget_lt (program : Program Digest) {name nonce : ByteArray} {
     {founders : List (ByteArray × Digest)} {auth : Authority} {g w : World Digest} {l : List (Step Digest)}
     (hg : genesis (ctx program) name nonce allowance founders auth = .ok g) (hl : World.fold env g l = .ok w) :
     (w.weight + w.allowance < 2 ^ 64) ∧
-      ∀ {name' nonce' : ByteArray} {w₁ w₂ : World Digest} {l' : List (Step Digest)},
-        carry (ctx program) name' nonce' w.origin w.carried = .ok w₁ → World.fold env w₁ l' = .ok w₂ →
+      ∀ {name' nonce' : ByteArray} {auth' : Authority} {w₁ w₂ : World Digest} {l' : List (Step Digest)},
+        carry (ctx program) name' nonce' w.origin w.carried auth' = .ok w₁ → World.fold env w₁ l' = .ok w₂ →
           w₂.weight + w₂.allowance < 2 ^ 64 := by
-  refine ⟨genesis_fold_budget_lt (X := ctx program) hg hl, fun {_ _ w₁ _ _} hc hl' => ?_⟩
+  refine ⟨genesis_fold_budget_lt (X := ctx program) hg hl, fun {_ _ _ w₁ _ _} hc hl' => ?_⟩
   obtain ⟨_, rfl⟩ := genesis_ok.mp hg
   have hcan : w.Canon (ctx program).env :=
     fold_canon (receive_genesis_canon (ctx program) name nonce allowance founders auth) hl
@@ -103,7 +112,7 @@ theorem deployed_budget_lt (program : Program Digest) {name nonce : ByteArray} {
     fold_slotted (receive_genesis_slotted (ctx program) name nonce allowance founders auth) hl
   have hrc : w.RowsCanon (ctx program).env :=
     fold_rowsCanon (receive_genesis_rowsCanon (ctx program) name nonce allowance founders auth) hl
-  exact carry_fold_budget_lt (X := ctx program) hc (carry_canon hcan hc) (carry_slotted hsl hc)
+  exact carry_fold_budget_lt (X := ctx program) hc (carry_canon hcan hc) (carry_slotted hcan hsl hc)
     (carry_rowsCanon hrc hc) hl'
 
 end Nanodregg.Kernel.Receive

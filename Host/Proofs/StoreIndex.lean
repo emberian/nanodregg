@@ -16,6 +16,7 @@ entry's step count must equal the oldest kept header's `steps` (`indexClean`).
 -/
 import Host.Proofs.Coherence
 import Host.Proofs.Seal
+import Host.Proofs.Size
 
 namespace Nanodregg.Host
 
@@ -834,11 +835,13 @@ World's step count, its carried height (`importWorld_steps`): a page before it i
 `beforeLog` (`Page.build_beforeLog_none`), and `page_beforeLog_origin` says from exactly where. -/
 theorem import_indexes (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
     {r : Carry.Read D} {w₀ : World D}
-    (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) {img : Image}
+    {stated : Option Receive.Authority}
+    (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r))
+    (hb : Cli.budgetFault w₀ = none) {img : Image}
     (h : genesisImage keys c world recorder.mark w₀ = .ok img) :
     Coherent keys img.base img.index img.segment w₀.steps := by
-  obtain ⟨o, ho, -⟩ := import_reopens keys hkeys hi h
-  obtain ⟨n, d, hrd⟩ := genesisImage_base_read keys (importWorld_codecFits hi) h
+  obtain ⟨o, ho, -⟩ := Size.import_reopens keys hkeys hi hb h
+  obtain ⟨n, d, hrd⟩ := genesisImage_base_read keys (Size.importWorld_codecFits hi hb) h
   obtain ⟨file, -, rfl⟩ := genesisImage_ok h
   have hs := StoreIndexes.of_open_empty keys c world recorder.mark originChain foldStep
     Codec.Deployed.digestCodec _ _ _ ho

@@ -12,6 +12,8 @@ import Codec.Proofs.World
   `carried_decode_journalCanon`: a decoded journal trie is canonical.
 * `carried_decode_rows`: a decoded carried state's rows fit and every head counts its rows
   (`kernel/carried-rows`, `kernel/carried-rows-headed`; KERNEL-48 carries the rows).
+* `carried_decode_window`: a decoded carried window trie is canonical and every leaf fits the carried
+  height (`kernel/carried-window`; KERNEL-79 carries the meter);
 * `carried_fits`: the carried state of a fitting World is in the codec's domain.
 -/
 
@@ -23,7 +25,8 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 /-- The wire's domain, as the product of its parts. -/
 def CarriedWireFits (E : Env D) (PD : D → Prop) (x : CarriedWire D) : Prop :=
-  CellsFits E PD x.1 ∧ x.2.1 < 2 ^ 64 ∧ x.2.2.1 < 2 ^ 64 ∧ JournalTrieFits E PD x.2.2.2.1 ∧ RowsTrieFits E PD x.2.2.2.2
+  CellsFits E PD x.1 ∧ x.2.1 < 2 ^ 64 ∧ x.2.2.1 < 2 ^ 64 ∧ JournalTrieFits E PD x.2.2.2.1 ∧
+    RowsTrieFits E PD x.2.2.2.2.1 ∧ RefusalsTrieFits E PD x.2.2.2.2.2
 
 /-- A carried state in the codec's domain: a canonical cells trie whose slots hold the leaves of their
 kinds, counters below 2^64, a canonical journal trie of at most `Bounds.journalMax` entries, every
@@ -40,13 +43,18 @@ structure Carried.CodecFits (E : Env D) (PD : D → Prop) (c : Carried D) : Prop
   journalFits : journalFits c.height c.journal.toList = true
   /-- kernel/row-order, kernel/carried-rows, kernel/carried-rows-headed, kernel/carried-rows-parented -/
   rows : RowsCodecFits E PD c.trie c.rows
+  /-- kernel/refusal-order (KERNEL-79: the window trie, its meter carried) -/
+  window : RefusalsTrieFits E PD c.refusals
+  /-- kernel/carried-window -/
+  windowFits : carriedWindowFits c.height c.refusals.toList = true
 
 omit [Ord D] in
 theorem carriedWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (CarriedWireFits E PD) (carriedWire E dc) :=
   (product_lawfulOn (cells_lawfulOn E hd)
     (product_lawfulOn nat64_lawfulOn (product_lawfulOn nat64_lawfulOn
-      (product_lawfulOn (journalTrie_lawfulOn E hd) (rowsTrie_lawfulOn E hd))))).mono
+      (product_lawfulOn (journalTrie_lawfulOn E hd)
+        (product_lawfulOn (rowsTrie_lawfulOn E hd) (refusalsTrie_lawfulOn E hd)))))).mono
     (fun _ h => h) (fun _ h => h)
 
 /-- **`kernel/carried-journal` is lawful on exactly the journals `journalFits` admits at the carried
@@ -84,18 +92,30 @@ theorem carriedParentedWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream 
   refineIf_lawfulOn (carriedHeadedWire_lawfulOn E hd) "kernel/carried-rows-parented"
     (fun x => rowsParented E (carriedOfWire x).trie (carriedOfWire x).rows = true)
 
+/-- **`kernel/carried-window` is lawful on exactly the carried window tries `refusalsFits` admits at the
+carried height.** -/
+theorem carriedWindowWire_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
+    LawfulOn (fun x => ((((CarriedWireFits E PD x ∧
+      journalFits (carriedOfWire x).height (carriedOfWire x).journal.toList = true) ∧
+      rowsFits E (carriedOfWire x).rows.toList = true) ∧ rowsHeaded (carriedOfWire x).rows.toList = true) ∧
+      rowsParented E (carriedOfWire x).trie (carriedOfWire x).rows = true) ∧
+      carriedWindowFits (carriedOfWire x).height (carriedOfWire x).refusals.toList = true)
+      (carriedWindowWire E dc) :=
+  refineIf_lawfulOn (carriedParentedWire_lawfulOn E hd) "kernel/carried-window"
+    (fun x => carriedWindowFits (carriedOfWire x).height (carriedOfWire x).refusals.toList = true)
+
 /-- **The carried codec is lawful on `Carried.CodecFits`.** -/
 theorem carried_lawfulOn (E : Env D) {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc) :
     LawfulOn (Carried.CodecFits E PD) (carried E dc) := by
   unfold carried
-  refine (refine_lawfulOn (carriedParentedWire_lawfulOn E hd) "kernel/carried" ?_ ?_).mono ?_ ?_
+  refine (refine_lawfulOn (carriedWindowWire_lawfulOn E hd) "kernel/carried" ?_ ?_).mono ?_ ?_
   · intro y _; rfl
   · intro x y h; cases h; rfl
-  · intro c ⟨⟨⟨⟨⟨hc, ha, hh, hj, hr⟩, hjf⟩, hrf⟩, hrh⟩, hrp⟩
-    exact ⟨hc, ha, hh, hj, hjf, ⟨hr, hrf, hrh, hrp⟩⟩
+  · intro c ⟨⟨⟨⟨⟨⟨hc, ha, hh, hj, hr, hw⟩, hjf⟩, hrf⟩, hrh⟩, hrp⟩, hwf⟩
+    exact ⟨hc, ha, hh, hj, hjf, ⟨hr, hrf, hrh, hrp⟩, hw, hwf⟩
   · intro c h
-    exact ⟨⟨⟨⟨⟨h.cells, h.allowance, h.height, h.journal, h.rows.listing⟩, h.journalFits⟩, h.rows.fits⟩,
-      h.rows.headed⟩, h.rows.parented⟩
+    exact ⟨⟨⟨⟨⟨⟨h.cells, h.allowance, h.height, h.journal, h.rows.listing, h.window⟩, h.journalFits⟩,
+      h.rows.fits⟩, h.rows.headed⟩, h.rows.parented⟩, h.windowFits⟩
 
 theorem carried_bytes (E : Env D) (dc : Stream D) (c : Carried D) :
     (carried E dc).bytes c = (carriedWire E dc).bytes (carriedToWire c) := rfl
@@ -148,7 +168,7 @@ theorem carried_decode_wire_refused {E : Env D} {PD : D → Prop} {dc : Stream D
     (hj : journalFits (carriedOfWire x).height (carriedOfWire x).journal.toList = false) :
     (carried E dc).decode ((carriedWire E dc).bytes x) = .error (.rejected 0 "kernel/carried-journal") := by
   have hg := carried_decode_wire hd hx
-  simp only [carried, decode, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg, hj]
+  simp only [carried, decode, carriedWindowWire, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg, hj]
   rfl
 
 /-- **The rows refusal**: a carried wire value whose journal is the window's but whose rows do not fit
@@ -159,7 +179,7 @@ theorem carried_decode_wire_rowsRefused {E : Env D} {PD : D → Prop} {dc : Stre
     (hr : rowsFits E (carriedOfWire x).rows.toList = false) :
     (carried E dc).decode ((carriedWire E dc).bytes x) = .error (.rejected 0 "kernel/carried-rows") := by
   have hg := carried_decode_wire hd hx
-  simp only [carried, decode, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg, hj, hr, ite_true]
+  simp only [carried, decode, carriedWindowWire, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg, hj, hr, ite_true]
   rfl
 
 /-- **The heads refusal**: a carried wire value whose rows fit but a head does not count its rows is
@@ -170,7 +190,7 @@ theorem carried_decode_wire_headedRefused {E : Env D} {PD : D → Prop} {dc : St
     (hr : rowsFits E (carriedOfWire x).rows.toList = true) (hh : rowsHeaded (carriedOfWire x).rows.toList = false) :
     (carried E dc).decode ((carriedWire E dc).bytes x) = .error (.rejected 0 "kernel/carried-rows-headed") := by
   have hg := carried_decode_wire hd hx
-  simp only [carried, decode, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg, hj, hr, hh,
+  simp only [carried, decode, carriedWindowWire, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg, hj, hr, hh,
     ite_true]
   rfl
 
@@ -183,7 +203,7 @@ theorem carried_decode_wire_parentedRefused {E : Env D} {PD : D → Prop} {dc : 
     (hp : rowsParented E (carriedOfWire x).trie (carriedOfWire x).rows = false) :
     (carried E dc).decode ((carriedWire E dc).bytes x) = .error (.rejected 0 "kernel/carried-rows-parented") := by
   have hg := carried_decode_wire hd hx
-  simp only [carried, decode, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg,
+  simp only [carried, decode, carriedWindowWire, carriedParentedWire, carriedHeadedWire, carriedRowsWire, carriedJournalWire, refine, hg,
     hj, hr, hh, hp, ite_true]
   rfl
 
@@ -194,6 +214,13 @@ theorem carried_decode_canon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd :
   let hf := carried_decode_fits hd h
   ⟨hf.cells.2, hf.cells.1.2⟩
 
+/-- **A decoded carried window trie is canonical, every leaf fitting the carried height** (KERNEL-79:
+the meter the carry keeps is the current window's and bounded). -/
+theorem carried_decode_window {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
+    {b : ByteArray} {c : Carried D} (h : (carried E dc).decode b = .ok c) :
+    Trie.Canon (refusalSpec E) 0 c.refusals ∧ carriedWindowFits c.height c.refusals.toList = true :=
+  ⟨(carried_decode_fits hd h).window.2, (carried_decode_fits hd h).windowFits⟩
+
 /-- A decoded journal trie is canonical. -/
 theorem carried_decode_journalCanon {E : Env D} {PD : D → Prop} {dc : Stream D} (hd : LawfulOn PD dc)
     {b : ByteArray} {c : Carried D} (h : (carried E dc).decode b = .ok c) :
@@ -203,6 +230,12 @@ theorem carried_decode_journalCanon {E : Env D} {PD : D → Prop} {dc : Stream D
 /-- The carried state of a fitting World is in the codec's domain (the rows as the World holds them). -/
 theorem carried_fits {E : Env D} {PD : D → Prop} {w : World D} (hw : World.CodecFits E PD w) :
     Carried.CodecFits E PD w.carried :=
-  ⟨hw.cells, Nat.lt_of_le_of_lt (Nat.le_add_left _ _) hw.budget, hw.height, hw.journal, hw.journalFits, hw.rows⟩
+  ⟨hw.cells, Nat.lt_of_le_of_lt (Nat.le_add_left _ _) hw.budget, hw.height, hw.journal, hw.journalFits, hw.rows,
+    hw.refusals, by
+      have hc := hw.refusalsCounted
+      unfold refusalsCounted at hc
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+      simp only [carriedWindowFits, World.carried, hw.refusalsFits, Bool.true_and, decide_eq_true_eq]
+      exact hc.2⟩
 
 end Nanodregg.Codec.Kernel

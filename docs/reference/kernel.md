@@ -1101,16 +1101,17 @@ A World starts at a genesis or a carry, not at a step; their refusals are not re
 | `nameTooLong`, `nonceTooLong` | the name or the Host's nonce is longer than 65536 bytes | `GenesisRefusal`, `CarryRefusal` |
 | `tooManyFounders` | more than 65536 founders | `GenesisRefusal` |
 | `founderKeyTooLong i`, `founderNextTooLong i` | founder `i`'s key or next-key digest bytes are longer than 65536 | `GenesisRefusal` |
-| `tooManyCertifiers` | the certifiers and two counts do not fit one cell | `GenesisRefusal` |
-| `certifierTooLong i`, `repeatedCertifier i` | certifier `i`'s key is too long, or repeats an earlier one | `GenesisRefusal` |
-| `badThreshold` | the threshold is past the certifier count, or zero with certifiers listed | `GenesisRefusal` |
+| `tooManyCertifiers` | the certifiers and two counts do not fit one cell | `GenesisRefusal`; a carry's `CarryRefusal.authority` |
+| `certifierTooLong i`, `repeatedCertifier i` | certifier `i`'s key is too long, or repeats an earlier one | `GenesisRefusal`; a carry's `CarryRefusal.authority` |
+| `badThreshold` | the threshold is past the certifier count, or zero with certifiers listed | `GenesisRefusal`; a carry's `CarryRefusal.authority` |
+| `authorityTaken` | the stated authority cell's id holds a carried entry of another kind | `CarryRefusal` |
+| `rowsOrphaned` | a carried relation's parent is not a live cell once the authority is re-stated | `CarryRefusal` |
 | `allowanceTooLarge` | the allowance plus the World's storage is not below 2^64 | `GenesisRefusal`, `CarryRefusal` |
 | `heightTooLarge` | the carried height is not below 2^64 | `CarryRefusal` |
-| `journalTooLong` | the carried journal has more than `Bounds.journalMax` entries | `CarryRefusal` |
-| `entryTooLarge` | a carried digest is longer than 65536 bytes, or an entry's height not below 2^64 | `CarryRefusal` |
+| `entryTooLarge` | the exported origin or a carried root is longer than 65536 bytes | `CarryRefusal` |
 
 `Receive.genesis` checks these (`checkGenesis`) and builds `genesisWorld`: each founder's member cell and root World grant, and the authority cell, under the origin `originOf` (`Kernel/Receive/Follow.lean`).
-`Receive.carry` builds a new World from a `Carried` state (cells, allowance, height, journal, rows) under a new origin; the refusals, chain and origin are not carried.
+`Receive.carry` builds a new World from a `Carried` state (cells, allowance, height, journal, rows, window trie) under an authority the operator states (KERNEL-79). The authority is judged by `checkAuthority`, the clause `checkGenesis` runs. The carried trie's authority cell is dropped and the stated one written (`reauthor`). The window trie keeps its meter leaves (`meterOnly`); its refusal records are not carried. The new origin is the digest of the carry start (`carryOriginOfStart`: name, nonce, exported origin, the four carried roots, allowance, height, stated authority). The chain starts at that origin. `Kernel/Proofs/CarrySound.lean` states what the carried World is (`carry_sound`, `carry_meter`).
 
 ## 8 Theorems
 

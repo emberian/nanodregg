@@ -85,7 +85,7 @@ theorem accept_genesis {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} 
     cases he : genesis X name nonce allowance fs auth with
     | error r => simp [hs, startGenesis, he, Except.mapError] at hg
     | ok g => simpa [hs, startGenesis, he, Except.mapError] using hg
-  | carried o name nonce fromO height chain => simp [hs, startGenesis] at hg
+  | carried s chain => simp [hs, startGenesis] at hg
 
 theorem accept_origin {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} {w : World D}
     (h : accept X trusted b = .ok (inv, w)) :
@@ -111,13 +111,20 @@ theorem acceptStart_ok {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D} 
       cases h
       exact ⟨(verified_ok hv).1, (verified_ok hv).2.1, (verified_ok hv).2.2, hg⟩
 
-/-- The accepted origin is exactly the carried origin inside the signed start. -/
+/-- **The accepted origin of a carried start is the digest of its carry start** (PROTOCOL-85), and
+the start's authority passed genesis's own check: never an origin the start merely states. -/
 theorem acceptStart_carried_origin {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
-    {o signed fromO chain : D} {name nonce : ByteArray} {height : Nat}
+    {o chain : D} {s : CarryStart D}
     (ha : acceptStart X trusted b = .ok (inv, o))
-    (hs : inv.start = .carried signed name nonce fromO height chain) : o = signed := by
+    (hs : inv.start = .carried s chain) : o = carryOriginOfStart X s ∧ checkAuthority s.auth = .ok () := by
   have h := (acceptStart_ok ha).2.2.2
-  simpa [hs, startOrigin] using h.symm
+  rw [hs] at h
+  unfold startOrigin at h
+  cases hc : checkAuthority s.auth with
+  | error r => simp [hc, Except.mapError, bind, Except.bind] at h
+  | ok u =>
+    simp only [hc, Except.mapError, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+    exact ⟨h.symm, rfl⟩
 
 theorem accept_unverified {X : Ctx D} {trusted b : ByteArray} {inv : Invitation D}
     (hb : ofBytes X b = some inv) (hk : inv.key = trusted)

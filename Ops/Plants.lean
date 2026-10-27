@@ -39,6 +39,7 @@ import Host.Exit
 import Host.Carry
 import Host.Check
 import Host.Sim.Files
+import Protocol.Head
 
 namespace Nanodregg.Ops.Plants
 
@@ -600,7 +601,7 @@ def carryPlants (exe : String) (dir : System.FilePath) : IO Nat := do
     failed := failed + 1
   -- the good import, under a fixed nonce so KERNEL's carry is rebuilt here
   let nonce2 := Founder.nonce.set! 2 (Founder.nonce.get! 2 ^^^ 1)
-  let wC ← match Receive.carry X "plants-carry".toUTF8 nonce2 wL.origin wL.carried with
+  let wC ← match Receive.carry X "plants-carry".toUTF8 nonce2 wL.origin wL.carried Authority.none with
     | .ok w => pure w
     | .error r => do IO.eprintln s!"the in-process carry refused {r.name}"; return failed + 1
   let c := dir / "C"
@@ -673,6 +674,96 @@ def carryPlants (exe : String) (dir : System.FilePath) : IO Nat := do
   let o2 := lineField i2.out "origin"
   let ok4 := i2.code = 0 && o2.isSome && o2 ≠ some wC.origin.toHex && o2 ≠ some wL.origin.toHex
   unless ← say "carry-two-imports-two-worlds" ok4 s!"exit={i2.code} origin {o2.getD "?"}" do failed := failed + 1
+  return failed
+
+/-- KERNEL-79 / HOST-82: a carry RE-STATES the authority, through the real exe. A World made by
+`host genesis --certifier OLD --threshold 1` (in process, the same `Receive.genesis`) is exported:
+export prints its authority and key. The import:
+
+* stating nothing is refused `usage authorityUnstated`, no Store file (`carry-import-authority-unstated`);
+* stating `--uncertified` beside a certifier is refused `usage uncertified` (`carry-import-uncertified-with-key`);
+* stating `--certifier NEW --threshold 1` makes KERNEL's carry under NEW (in process), prints
+  `authority 1 1` and `from-authority 1 1` (`carry-import-authority-restated`); its `start` line is a
+  carried start the stranger's check reads;
+* a certificate NEW signs over the imported World's head is taken by `host certified START CERT` for
+  the new origin (`carry-certified-new-authority`); OLD's signature over the same head is refused
+  `notCertified badCertifySignature` (`carry-certified-old-certifier-refused`); OLD's certificate of the
+  OLD World's head is refused `notCertified otherWorld` (`carry-certified-old-world-refused`): the old
+  writer's certificates do not cross a carry. Certifier keys are RFC 8032 §7.1 TEST 3 and the
+  `SHA(abc)` test's secret: published vectors, not key material. -/
+def carryAuthorityPlants (exe : String) (dir : System.FilePath) : IO Nat := do
+  let oldSeed := Founder.hex "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"
+  let newSeed := Founder.hex "833fe62409237b9d62ec77587520911e9a759cec1d19755b7da901b96dca3d42"
+  let oldKey := Codec.Ed25519.publicKey oldSeed
+  let newKey := Codec.Ed25519.publicKey newSeed
+  let old : Authority := ⟨[oldKey], 1⟩
+  let new : Authority := ⟨[newKey], 1⟩
+  let name := "plants-authority"
+  let mut failed := 0
+  let say (label : String) (ok : Bool) (detail : String) : IO Bool := do
+    IO.println s!"PLANT {label} {if ok then "PASS" else "FAIL"} :: {detail}"
+    return ok
+  let hasLine (out l : String) : Bool := (out.splitOn "\n").any (· == l)
+  let empty (d : System.FilePath) : IO Bool := do
+    if !(← d.pathExists) then return true
+    return (← d.readDir).isEmpty
+  let wA ← match Receive.genesis X name.toUTF8 Founder.nonce allowanceMax
+      [(Founder.key, nextKeyDigest X Founder.next)] old with
+    | .ok w => pure w
+    | .error r => do IO.println s!"PLANT carry-authority-setup FAIL :: in-process genesis refused {r.name}"; return 1
+  let a := dir / "auth"
+  let g ← host exe (["genesis", a.toString, name, "--nonce", Protocol.Text.toHex Founder.nonce,
+    "--certifier", Protocol.Text.toHex oldKey, "--threshold", "1", Protocol.Text.toHex Founder.key,
+    Protocol.Text.toHex Founder.next])
+  if g.code ≠ 0 || lineField g.out "origin" ≠ some wA.origin.toHex then
+    IO.println s!"PLANT carry-authority-setup FAIL :: host genesis exit={g.code} :: {g.out.replace "\n" " "}"; return 1
+  let out := dir / "auth.carried"
+  let e ← host exe ["export", a.toString, out.toString]
+  let digest := (lineField e.out "carried").getD ""
+  unless ← say "carry-export-prints-authority"
+      (e.code = 0 && hasLine e.out "authority 1 1" && hasLine e.out s!"certifier 0 {Protocol.Text.toHex oldKey}")
+      s!"exit={e.code} :: {e.out.replace "\n" " "}" do
+    failed := failed + 1
+  let nonce2 := Founder.nonce.set! 3 (Founder.nonce.get! 3 ^^^ 1)
+  let base := ["import", "", name, out.toString, "--digest", digest, "--nonce", Protocol.Text.toHex nonce2]
+  let at_ (d : System.FilePath) (extra : List String) := base.set 1 d.toString ++ extra
+  let u := dir / "auth-unstated"
+  let r1 ← host exe (at_ u [])
+  unless ← say "carry-import-authority-unstated"
+      (r1.code = Status.usage.code.toUInt32 && mentions r1.out "refused authorityUnstated" && (← empty u))
+      s!"exit={r1.code} want=usage({Status.usage.code}) no Store file={← empty u} :: {r1.out.replace "\n" " "}" do
+    failed := failed + 1
+  let r2 ← host exe (at_ u ["--uncertified", "--certifier", Protocol.Text.toHex newKey])
+  unless ← say "carry-import-uncertified-with-key"
+      (r2.code = Status.usage.code.toUInt32 && mentions r2.out "refused uncertified" && (← empty u))
+      s!"exit={r2.code} :: {r2.out.replace "\n" " "}" do
+    failed := failed + 1
+  let wC ← match Receive.carry X name.toUTF8 nonce2 wA.origin wA.carried new with
+    | .ok w => pure w
+    | .error r => do IO.println s!"PLANT carry-authority-setup FAIL :: in-process carry refused {r.name}"; return failed + 1
+  let c := dir / "auth-carried"
+  let r3 ← host exe (at_ c ["--certifier", Protocol.Text.toHex newKey, "--threshold", "1"])
+  unless ← say "carry-import-authority-restated"
+      (r3.code = 0 && lineField r3.out "origin" = some wC.origin.toHex && wC.origin ≠ wA.origin &&
+        hasLine r3.out "authority 1 1" && hasLine r3.out "from-authority 1 1" &&
+        authorityOf wC = some new && authorityOf wA = some old)
+      s!"exit={r3.code} :: {r3.out.replace "\n" " "}" do
+    failed := failed + 1
+  let start := (lineField r3.out "start").getD ""
+  let certOf (seed : ByteArray) (h : Protocol.Head.Head D) : Option ByteArray := do
+    let u ← Protocol.Head.certifiedBytes X.env h
+    Protocol.Head.certificateBytes u [(0, Codec.Ed25519.sign seed (Protocol.Head.certifyMessage u))]
+  let check (label want : String) (seed : ByteArray) (w : World D) : IO Bool := do
+    let some cert := certOf seed (Protocol.Head.headOf X.env w) | say label false "the certificate does not fit"
+    let f := dir / s!"{label}.cert"
+    IO.FS.writeBinFile f cert
+    let r ← host exe ["certified", start, f.toString]
+    let ok := if want == "certified" then r.code = 0 && mentions r.out s!"certified origin={wC.origin.toHex}"
+      else r.code = Status.notCertified.code.toUInt32 && mentions r.out s!"notCertified {want}"
+    say label ok s!"exit={r.code} want={want} :: {r.out.replace "\n" " "}"
+  unless ← check "carry-certified-new-authority" "certified" newSeed wC do failed := failed + 1
+  unless ← check "carry-certified-old-certifier-refused" "badCertifySignature" oldSeed wC do failed := failed + 1
+  unless ← check "carry-certified-old-world-refused" "otherWorld" oldSeed wA do failed := failed + 1
   return failed
 
 /-- PROTOCOL-42's `host join` through the real exe, as RUNBOOK §2b's install line runs it (the
@@ -1015,6 +1106,7 @@ def run (exe : String) (dir : System.FilePath) (control : Bool := false) : IO UI
   failed := failed + (← middleEntryPlant exe dir)
   failed := failed + (← indexMovedPlant exe dir)
   failed := failed + (← carryPlants exe dir)
+  failed := failed + (← carryAuthorityPlants exe dir)
   failed := failed + (← missingPlants exe intact dir)
   failed := failed + (← joinPlants exe g.out dir)
   failed := failed + (← sealPlants exe intact dir w4)

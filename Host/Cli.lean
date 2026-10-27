@@ -20,7 +20,9 @@
                                                    genesis input commits; no Store read
     host export STORE OUT                          write the carried file of a STOPPED Store's World
                                                    (Host.Carry), print `carried DIGEST`, `from
-                                                   ORIGIN`, `anchor S:C`; writes nothing in STORE
+                                                   ORIGIN`, `anchor S:C`, then its authority
+                                                   (`authority T N`, `certifier I HEX` each);
+                                                   writes nothing in STORE
     host join STORE INVITE_HEX KEY_HEX              a member's own Store, from an invitation its
                                                    sponsor signed (PROTOCOL-42): `Invite.accept`
                                                    under KEY_HEX, the sponsor's member PUBLIC key
@@ -36,16 +38,20 @@
                                                    digest=D`, the base a thin member adopts; at a
                                                    sealed position the seal writes nothing (the open may repair a torn tail, HOST-77). No socket op
                                                    seals: a forced seal writes the whole World
-    host import STORE NAME IN --digest HEX [--nonce HEX32]
-    host import STORE NAME IN --origin HEX --nonce HEX32
+    host import STORE NAME IN --digest HEX [--nonce HEX32] AUTH
+    host import STORE NAME IN --origin HEX --nonce HEX32 AUTH
                                                    a new Store from a carried file, PINNED: by the
                                                    file's digest (the operator's own carry), or by
                                                    the origin of the World it makes (a sponsor's
-                                                   invitation names it with the name and nonce:
-                                                   another is `carryMismatch wrongWorld`); every
-                                                   check runs before any Store file exists; KERNEL's
-                                                   one carry, the one genesis, then a reopen whose
-                                                   carried bytes must be the file's (HOST-28)
+                                                   invitation names it: another is `carryMismatch
+                                                   wrongWorld`), under the authority AUTH STATES
+                                                   (KERNEL-79, HOST-82): `--certifier HEX32`...
+                                                   `--threshold N`, or `--uncertified`; none
+                                                   stated under a certifying World is refused
+                                                   `authorityUnstated`; every check runs before
+                                                   any Store file exists; KERNEL's one carry, the
+                                                   one genesis, then a reopen whose carried bytes
+                                                   must be the World's it wrote (HOST-28)
 
 STORE is the only path any verb touches. Frames are `Host.Wire`'s (the supervisor's mux is the
 other end). The exit code is `Host.Status.code` of how the process ended (`Host.Exit`): one code
@@ -97,7 +103,7 @@ def refuse (status : Status) (name : String := status.name) : IO UInt32 := do
 def refuseStore {F : Type} (f : StoreFault F) : IO UInt32 := refuse f.status f.text
 
 def usage : String :=
-  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] [--certify SOCK] | host seal STORE [--retain N] [--certify SOCK] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host certified INPUT_HEX CERT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)"
+  "usage: host genesis STORE NAME [--nonce HEX32] [--certifier HEX32]... [--threshold N] [KEY_HEX NEXT_HEX]... | host serve STORE [--retain N] [--certify SOCK] | host seal STORE [--retain N] [--certify SOCK] | host join STORE INVITE_HEX KEY_HEX [IN (carried only)] | host follow STORE MEMBER_HEX GRANT_HEX | host check STORE [--anchor STEPS:CHAIN_HEX] | host export STORE OUT | host certified INPUT_HEX CERT | host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32) ([--certifier HEX32]... --threshold N | --uncertified)"
 
 def hexDigest (s : String) : Option Digest := Protocol.Text.ofHex s >>= Digest.ofBytes?
 
@@ -174,9 +180,18 @@ def genesisVerb (store name : String) (nonceArg : Option String) (certifierArgs 
     IO.println s!"input {Protocol.Text.toHex (Protocol.Invite.inputBytes X name.toUTF8 nonce allowanceMax fs auth)}"
     return 0
 
+/-- What an authority prints (export: the carried World's, which an import re-states or replaces;
+import: the stated one and the carried one, `from-authority`): `PREFIX THRESHOLD COUNT`, then
+`certifier I HEX` per key when `keys`. -/
+def authorityLines (prefix_ : String) (keys : Bool) : Option Receive.Authority → List String
+  | none => [s!"{prefix_} unreadable"]
+  | some a => [s!"{prefix_} {a.threshold} {a.certifiers.length}"] ++
+      (if keys then a.certifiers.zipIdx.map fun p => s!"certifier {p.2} {Protocol.Text.toHex p.1}" else [])
+
 /-- `host export STORE OUT`: the read-only open `check` makes (`openClean`), the carried file of
 its World, checked to read back (`Carry.exportFile`), written to OUT only (never over an existing
-file), and its digest, origin and anchor on stdout. Take it from a STOPPED writer (RUNBOOK §6): it
+file), and its digest, origin and anchor on stdout, then the World's authority with its keys (what
+the import must state again, or replace: KERNEL-79). Take it from a STOPPED writer (RUNBOOK §6): it
 reads a consistent base and the tail that verifies, as `check` does. -/
 def exportVerb (store out : String) : IO UInt32 := do
   match ← Check.openClean store with
@@ -191,6 +206,7 @@ def exportVerb (store out : String) : IO UInt32 := do
       IO.println s!"carried {(Carry.digestOf bytes).toHex}"
       IO.println s!"from {w.origin.toHex}"
       IO.println s!"anchor {w.steps}:{w.chain.toHex}"
+      (authorityLines "authority" true (Receive.authorityOf w)).forM IO.println
       return 0
 
 /-- The most bytes a carried file may have: its stamp and head, and a World's worth. -/
@@ -225,14 +241,15 @@ structure ImportFx (m : Type → Type) where
 
 /-- `host import`'s decision over its effects. The pin parses (`usage digest` / `usage origin`), the
 nonce, IN is at most `carriedMax`, and `Carry.importWorld` checks the digest pin, the stamp
-(`shapeMismatch`), the decode, the anchor, KERNEL's carry (a name or nonce past its bound is `usage`,
-any other refusal `carryMismatch`) and the origin pin (`carryMismatch wrongWorld`), and the key is 32
-bytes; only then `genesis` writes the World, and the reopen's
-carried bytes must be the file's (`carryMismatch reopen`). The deployed verb is
-this function at `IO` (`importVerb`); `Host.Proofs.Cli.import_genesis_iff` states, over the same
-function, that `genesis` runs exactly when every check before it passed. -/
+(`shapeMismatch`), the decode, the anchor, the stated authority (`usage authorityUnstated`, or
+genesis's own name for one genesis would refuse), KERNEL's carry (a name or nonce past its bound is
+`usage`, any other refusal `carryMismatch`) and the origin pin (`carryMismatch wrongWorld`), and the
+key is 32 bytes; only then `genesis` writes the World, and the reopen's carried bytes must be the
+World's it wrote (`carryMismatch reopen`). The deployed verb is this function at `IO`
+(`importVerb`); `Host.Proofs.Cli.import_genesis_iff` states, over the same function, that `genesis`
+runs exactly when every check before it passed. -/
 def importWithPin {m : Type → Type} [Monad m] (fx : ImportFx m) (name : ByteArray)
-    (pin : Carry.Pin D) (anchor : Option (Carry.Head D) := none) :
+    (pin : Carry.Pin D) (stated : Option Receive.Authority) (anchor : Option (Carry.Head D) := none) :
     m UInt32 := do
   let nonce ← match ← fx.nonce with
     | .ok b => pure b
@@ -242,7 +259,7 @@ def importWithPin {m : Type → Type} [Monad m] (fx : ImportFx m) (name : ByteAr
     | .error (.base (.baseTooLarge _)) => return ← fx.refuse .carryMismatch "carryMismatch tooLarge"
     | .error f => return ← fx.refuse f.status f.text
   let dc := Codec.Deployed.digestCodec
-  let (w₀, r) ← match Carry.importWorld X dc name nonce pin bytes with
+  let (w₀, r) ← match Carry.importWorld X dc name nonce pin stated bytes with
     | .ok p => pure p
     | .error (s, n) => return ← fx.refuse s n
   if let some h := anchor then
@@ -258,18 +275,22 @@ def importWithPin {m : Type → Type} [Monad m] (fx : ImportFx m) (name : ByteAr
     match ← fx.reopen key with
     | .error f => fx.refuse f.status f.text
     | .ok back =>
-      unless (Codec.Kernel.carried X.env dc).bytes back.carried = bytes.extract r.carriedAt bytes.size do
+      unless (Codec.Kernel.carried X.env dc).bytes back.carried = (Codec.Kernel.carried X.env dc).bytes w₀.carried do
         return ← fx.refuse .carryMismatch "carryMismatch reopen"
-      fx.report [s!"origin {back.origin.toHex}", s!"nonce {Protocol.Text.toHex nonce}",
+      let auth := (Receive.authorityOf back).getD Receive.Authority.none
+      fx.report ([s!"origin {back.origin.toHex}", s!"nonce {Protocol.Text.toHex nonce}",
         s!"from {r.head.fromOrigin.toHex}", s!"height {back.height}", s!"chain {back.chain.toHex}",
-        s!"start {Protocol.Text.toHex (Protocol.Invite.startBytes X (.carried back.origin name nonce r.head.fromOrigin r.head.height r.head.chain))}"]
+        s!"start {Protocol.Text.toHex (Protocol.Invite.startBytes X
+          (.carried (Receive.carryStartOf X name nonce r.head.fromOrigin r.carried auth) r.head.chain))}"] ++
+        authorityLines "authority" false (Receive.authorityOf back) ++
+        authorityLines "from-authority" false (Receive.authorityIn r.carried.trie))
       return 0
 
-/-- Parse the operator's pin, then use the same importer as a carried join. -/
-def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name : String) (pinHex : PinArg) :
-    m UInt32 := do
+/-- Parse the operator's pin and stated authority, then use the same importer as a carried join. -/
+def importWith {m : Type → Type} [Monad m] (fx : ImportFx m) (name : String) (pinHex : PinArg)
+    (stated : Option Receive.Authority) : m UInt32 := do
   let some pin := pinHex.parse | fx.refuse .usage pinHex.name
-  importWithPin fx name.toUTF8 pin
+  importWithPin fx name.toUTF8 pin stated
 
 /-- Join uses import's effects; its nonce comes only from the signed start. -/
 abbrev JoinFx := ImportFx
@@ -284,12 +305,12 @@ def joinWith {m : Type → Type} [Monad m] (fx : JoinFx m) (inviteHex keyHex : S
     | .error (.inputs r) => return ← fx.refuse .usage r.name
     | .error r => return ← fx.refuse .inviteRefused s!"inviteRefused {r.name}"
   match i.start with
-  | .carried o name nonce fromO height chain =>
+  | .carried s chain =>
     if inPath.isNone then return ← fx.refuse .usage "in"
-    importWithPin { fx with nonce := pure (.ok nonce), report := (fun ls =>
+    importWithPin { fx with nonce := pure (.ok s.nonce), report := (fun ls =>
         fx.report ([s!"sponsor {i.sponsor.toHex}"] ++ ls ++
         [s!"input {Protocol.Text.toHex (Protocol.Invite.startBytes X i.start)}"])) }
-      name (.origin o) (some ⟨fromO, height, chain⟩)
+      s.name (.origin (Receive.carryOriginOfStart X s)) (some s.auth) (some ⟨s.fromOrigin, s.height, chain⟩)
   | .genesis _ nonce _ fs auth =>
     if inPath.isSome then return ← fx.refuse .usage "in"
     let w₀ ← match Protocol.Invite.startGenesis X i.start with
@@ -322,13 +343,14 @@ def joinVerb (store inviteHex keyHex : String) (inPath : Option String) : IO UIn
       refuse := fun s n => refuse s n
       report := fun ls => ls.forM IO.println }
 
-/-- `host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32)`:
+/-- `host import STORE NAME IN (--digest HEX [--nonce HEX32] | --origin HEX --nonce HEX32) AUTH`:
 `importWith` over the files.
 `genesis` is `Host.genesis` into STORE (the one writer of a Store path); every refusal before it
 leaves nothing (`import_genesis_iff`); a refusal from it on (genesis itself, `openWriter`, the
 reopen compare, an IO error mid-write) can leave a Store directory behind. -/
-def importVerb (store name inPath : String) (pinHex : PinArg) (nonceArg : Option String) : IO UInt32 :=
-  importWith (name := name) (pinHex := pinHex)
+def importVerb (store name inPath : String) (pinHex : PinArg) (nonceArg : Option String)
+    (stated : Option Receive.Authority) : IO UInt32 :=
+  importWith (name := name) (pinHex := pinHex) (stated := stated)
     { nonce := genesisNonce nonceArg
       readIn := readBounded inPath carriedMax (fun n => .base (.baseTooLarge n))
       key := return Digest.ofBytes? (← IO.getRandomBytes 32)
@@ -510,6 +532,50 @@ def genesisOpts (store name : String) : List String → Option String → List S
   | "--threshold" :: v :: rest, n, cs, _ => genesisOpts store name rest n cs (some v)
   | fs, n, cs, t => genesisVerb store name n cs t fs
 
+/-- `host import`'s options, in any order after IN. -/
+structure ImportOpts where
+  digest : Option String := none
+  origin : Option String := none
+  nonce : Option String := none
+  certs : List String := []
+  threshold : Option String := none
+  uncertified : Bool := false
+
+/-- The authority `host import` states (KERNEL-79): `--certifier HEX32`... with `--threshold N`
+(the threshold defaults to 0, which genesis's own check refuses `badThreshold` beside a certifier),
+or `--uncertified` (`Authority.none`), or nothing (`none`: `Carry.statedAuthority` takes
+`Authority.none` only under a carried World that certifies nobody). `--uncertified` beside a
+certifier or a threshold is `usage uncertified`. -/
+def ImportOpts.stated (o : ImportOpts) : Except String (Option Receive.Authority) :=
+  if o.uncertified then
+    if o.certs.isEmpty ∧ o.threshold.isNone then .ok (some Receive.Authority.none) else .error "uncertified"
+  else if o.certs.isEmpty ∧ o.threshold.isNone then .ok none
+  else
+    match certifiers o.certs, (match o.threshold with | none => some 0 | some v => v.toNat?) with
+    | none, _ => .error "certifier"
+    | _, none => .error "threshold"
+    | some cs, some t => .ok (some ⟨cs, t⟩)
+
+/-- Parse `host import`'s options, then the pin (`--digest`, or `--origin` with the invitation's
+`--nonce`: a fresh nonce can never make the named origin) and the stated authority. -/
+def importOpts (store name inp : String) : List String → ImportOpts → IO UInt32
+  | "--digest" :: d :: rest, o => importOpts store name inp rest { o with digest := some d }
+  | "--origin" :: v :: rest, o => importOpts store name inp rest { o with origin := some v }
+  | "--nonce" :: n :: rest, o => importOpts store name inp rest { o with nonce := some n }
+  | "--certifier" :: k :: rest, o => importOpts store name inp rest { o with certs := o.certs ++ [k] }
+  | "--threshold" :: t :: rest, o => importOpts store name inp rest { o with threshold := some t }
+  | "--uncertified" :: rest, o => importOpts store name inp rest { o with uncertified := true }
+  | [], o => do
+    let stated ← match o.stated with
+      | .ok a => pure a
+      | .error n => return ← refuse .usage n
+    match o.digest, o.origin, o.nonce with
+    | some d, none, n => importVerb store name inp (.digest d) n stated
+    | none, some v, some n => importVerb store name inp (.origin v) (some n) stated
+    | none, some _, none => refuse .usage "nonce"
+    | _, _, _ => refuse .usage "digest"
+  | _ :: _, _ => refuse .usage "import"
+
 /-- `host certified INPUT_HEX CERT`: the stranger's check (PROTOCOL-78, DESIGN-TRUST T3e). From a
 World's genesis input (`host genesis`'s `input` line) and a certificate file alone, the head the
 certificate certifies under the authority the input commits (`Protocol.Certified.check`), printed
@@ -543,14 +609,7 @@ def verb : List String → IO UInt32
     Check.run store (some a)
   | ["export", store, out] => exportVerb store out
   | ["certified", input, cert] => certifiedVerb input cert
-  | ["import", store, name, inp, "--digest", d] => importVerb store name inp (.digest d) none
-  | ["import", store, name, inp, "--digest", d, "--nonce", n] => importVerb store name inp (.digest d) (some n)
-  | ["import", store, name, inp, "--nonce", n, "--digest", d] => importVerb store name inp (.digest d) (some n)
-  -- an origin pin needs the invitation's nonce: a fresh one can never make the named origin
-  | ["import", store, name, inp, "--origin", o, "--nonce", n] => importVerb store name inp (.origin o) (some n)
-  | ["import", store, name, inp, "--nonce", n, "--origin", o] => importVerb store name inp (.origin o) (some n)
-  | ["import", _, _, _, "--origin", _] => refuse .usage "nonce"
-  | "import" :: _ => refuse .usage "digest"
+  | "import" :: store :: name :: inp :: rest => importOpts store name inp rest {}
   | _ => do IO.eprintln usage; return Status.usage.code.toUInt32
 
 /-- Every other IO error ends as `io` with its text, never as the runtime's uncaught-exception

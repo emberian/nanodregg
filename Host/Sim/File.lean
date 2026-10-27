@@ -487,7 +487,7 @@ def budgetPlants (failures : IO.Ref Nat) : IO Unit := do
     | .ok bytes =>
       let first ← IO.mkRef "none"
       let mark (e : String) : IO Unit := do if (← first.get) == "none" then first.set e
-      let _ ← Cli.importWith (m := IO) (name := "imported") (pinHex := .digest (Carry.digestOf bytes).toHex)
+      let _ ← Cli.importWith (m := IO) (name := "imported") (pinHex := .digest (Carry.digestOf bytes).toHex) (stated := none)
         { nonce := pure (.ok nonce), readIn := pure (.ok bytes), key := pure (some Digest.zero),
           genesis := fun _ _ => do mark "genesis"; pure (.error .locked),
           reopen := fun _ => do mark "reopen"; pure (.error .locked),

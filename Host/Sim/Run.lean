@@ -575,17 +575,20 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
   | .error f => check s!"plant-carry: export of a World with a journal entry ({f.name})" false failures
   | .ok f =>
     let want := Carry.digestOf f
-    let imported (n : UInt8) := match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 n)) (.digest want) f with
+    let none' : Option Receive.Authority := some Receive.Authority.none
+    let imported (n : UInt8) := match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 n)) (.digest want) none' f with
       | .ok (w, _) => some w
       | .error _ => none
+    let restated : World Kernel.Sim.D :=
+      { kw with trie := Receive.reauthor kx kw.trie Receive.Authority.none, refusals := Receive.meterOnly kx.env kw.refusals }
     match imported 1, imported 2 with
     | some a, some b =>
-      check "plant-carry: export then import keeps the carried bytes and the height, under a new origin"
-        (cbytes a == cbytes kw && a.height == kw.height && a.origin != kw.origin && (a.journalAt kx.env 42).isSome) failures
+      check "plant-carry: export then import keeps the carried bytes (the authority re-stated) and the height, under a new origin"
+        (cbytes a == cbytes restated && a.height == kw.height && a.origin != kw.origin && (a.journalAt kx.env 42).isSome) failures
       check "plant-carry: two imports under two nonces are two Worlds" (a.origin != b.origin) failures
     | _, _ => check "plant-carry: the exported file imports" false failures
     let refusedAs (want' : Codec.Digest) (g : ByteArray) : String :=
-      match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 1)) (.digest want') g with
+      match Carry.importWorld kx kdc "carried".toUTF8 (ByteArray.mk (Array.replicate 32 1)) (.digest want') none' g with
       | .ok _ => "read"
       | .error (s, n) => if s == .shapeMismatch then "shapeMismatch" else (n.splitOn " ").getLast!
     let flipped := flipByte f (f.size - 1)
@@ -606,7 +609,7 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
     -- the import refuses `carryMismatch wrongWorld` before anything is written
     let nonceOf (n : UInt8) := ByteArray.mk (Array.replicate 32 n)
     let pinned (n : UInt8) (o : Kernel.Sim.D) (g : ByteArray) : String :=
-      match Carry.importWorld kx kdc "carried".toUTF8 (nonceOf n) (.origin o) g with
+      match Carry.importWorld kx kdc "carried".toUTF8 (nonceOf n) (.origin o) none' g with
       | .ok (w, _) => if w.origin == o then "imported" else "other"
       | .error (_, m) => m
     match imported 1 with
@@ -616,6 +619,29 @@ def carryPlants (failures : IO.Ref Nat) : IO Unit := do
       check s!"plant-import-origin: pinned at the invited origin it imports ({pinned 1 a.origin f}); another nonce ({pinned 2 a.origin f}) or the head's exported origin flipped ({pinned 1 a.origin flippedCarried}) is refused `carryMismatch wrongWorld`"
         (pinned 1 a.origin f == "imported" && pinned 2 a.origin f == "carryMismatch wrongWorld" &&
           pinned 1 a.origin flippedCarried == "carryMismatch wrongWorld") failures
+  -- plant-carry-authority (KERNEL-79, HOST-82): a World whose authority certifies (one key at
+  -- threshold 1), exported; imported stating NOTHING it is refused `authorityUnstated` by name;
+  -- stating another key it bears that key's authority and no other, and the old one is gone;
+  -- stating a quorum nobody meets it is refused `badThreshold`, genesis's own name
+  let old : Receive.Authority := ⟨[ByteArray.mk (Array.replicate 32 0xa1)], 1⟩
+  let new : Receive.Authority := ⟨[ByteArray.mk (Array.replicate 32 0xb2)], 1⟩
+  let kc : World Kernel.Sim.D := { kw with trie := Receive.reauthor kx kw.trie old }
+  match Carry.exportFile kx.env kdc kc with
+  | .error e => check s!"plant-carry-authority: export of a certifying World ({e.name})" false failures
+  | .ok g =>
+    let imp (st : Option Receive.Authority) := Carry.importWorld kx kdc "carried".toUTF8
+      (ByteArray.mk (Array.replicate 32 5)) (.digest (Carry.digestOf g)) st g
+    let said (st : Option Receive.Authority) : String := match imp st with
+      | .ok (w, _) => match Receive.authorityOf w with
+        | some a => if a == new then "new" else if a == old then "old" else "other"
+        | none => "none"
+      | .error (_, n) => n
+    check s!"plant-carry-authority-unstated: an import stating no authority under a certifying World is refused ({said none})"
+      (said none == "authorityUnstated") failures
+    check s!"plant-carry-authority-stated: an import stating a new certifier bears it, not the old ({said (some new)})"
+      (said (some new) == "new") failures
+    check s!"plant-carry-authority-quorum: a stated quorum nobody meets is refused by genesis's name ({said (some { new with threshold := 2 })})"
+      (said (some { new with threshold := 2 }) == "badThreshold") failures
 
 /-- HOST-31's plants: a seal refuses an `index.log` that is not the size of the base's prefix
 (`indexMoved`), and a page refuses an entry its codec cannot spell (`entryUnfit`). -/
@@ -824,11 +850,15 @@ def rowsPlants (seed : Nat) (failures : IO.Ref Nat) : IO Unit := do
     match Carry.exportFile kx.env kdc kw with
     | .error f => check s!"plant-rows-carry: export of a World with rows ({f.name})" false failures
     | .ok f =>
-      match Carry.importWorld kx kdc "rows".toUTF8 (ByteArray.mk (Array.replicate 32 3)) (.digest (Carry.digestOf f)) f with
+      match Carry.importWorld kx kdc "rows".toUTF8 (ByteArray.mk (Array.replicate 32 3)) (.digest (Carry.digestOf f))
+          (some Receive.Authority.none) f with
       | .error _ => check "plant-rows-carry: the exported file imports" false failures
       | .ok (a, _) =>
+        -- the carried bytes are the exported World's under the stated authority (KERNEL-79)
+        let restated : World Kernel.Sim.D :=
+          { kw with trie := Receive.reauthor kx kw.trie Receive.Authority.none, refusals := Receive.meterOnly kx.env kw.refusals }
         check "plant-rows-carry: export then import keeps the rows (listing and root) under a new origin"
-          (a.rows.toList == kw.rows.toList && a.rowsRoot kx.env == kw.rowsRoot kx.env && cbytes a == cbytes kw &&
+          (a.rows.toList == kw.rows.toList && a.rowsRoot kx.env == kw.rowsRoot kx.env && cbytes a == cbytes restated &&
             a.origin != kw.origin) failures
 
 /-- HOST-43's plants: the operator's seal (`Loop.sealNow`, the act `host seal STORE` runs over the

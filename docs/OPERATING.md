@@ -10,7 +10,7 @@ The [RUNBOOK](../deploy/RUNBOOK.md) contains installation/recovery detail. [Host
 | Join | host join STORE INVITE_HEX KEY_HEX [IN] authenticates the invitation under the trusted sponsor key. IN is for a carried invitation. |
 | Inspect | host check STORE [--anchor STEPS:CHAIN_HEX] checks history against a held position. The anchor counts steps, not heights. |
 | Seal | host seal STORE [--retain N] seals a stopped Store. |
-| Carry | host export STORE OUT exports a stopped Store. Host import takes STORE NAME IN with either --digest HEX and optional --nonce HEX32, or --origin HEX with --nonce HEX32. Preserve the checked export pin. |
+| Carry | host export STORE OUT exports a stopped Store and prints its authority. Host import takes STORE NAME IN with either --digest HEX and optional --nonce HEX32, or --origin HEX with --nonce HEX32, and states the authority: --certifier HEX32... --threshold N, or --uncertified. Stating none under a certifying World is refused authorityUnstated. Preserve the checked export pin. RUNBOOK §6. |
 
 nd-supervise confines the child and multiplexes bounded socket connections onto framed stdio. Policy grants Store writes and executable access while hiding custody roots. Linux needs the fixed sandbox mechanism and its installation permissions; absence has no permissive fallback.
 

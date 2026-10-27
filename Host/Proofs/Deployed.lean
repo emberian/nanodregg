@@ -103,16 +103,21 @@ theorem mark_chain_width (key : Codec.Digest) (w : World D) :
     (recorder.mark w).2.size = (Keys.ofKey key shapes).chainBytes := by
   rw [recorder_mark]; simp only [Keys.ofKey, Codec.Digest.size_eq]
 
-/-- `Carry.world_carried` at the deployed codec (HOST-28): a file `host import` accepts meets its pin
-(hashes to the operator's digest, or makes a World of the pinned origin), and the World it makes holds
-exactly the file's carried bytes at its anchor height. The codec premise is CODEC's `digestCodec_lawful`. -/
-theorem import_carried {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D}
-    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) :
+/-- `Carry.world_carried` at the deployed codec (HOST-28, KERNEL-79): a file `host import` accepts meets
+its pin (hashes to the operator's digest, or makes a World of the pinned origin), its carried bytes
+are exactly the file's tail, and the World it makes holds that carried state, its trie re-authored and
+its window trie cut to the meter, at its anchor height. The codec premise is CODEC's `digestCodec_lawful`. -/
+theorem import_carried {name nonce : ByteArray} {pin : Carry.Pin D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D} {w₀ : World D}
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r)) :
     pin.Holds f w₀ ∧
-      (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes w₀.carried = f.extract r.carriedAt f.size ∧
-      w₀.height = r.head.height :=
-  have ⟨hr, hw, hp⟩ := Carry.importWorld_ok h
-  ⟨hp, Carry.world_carried Codec.Deployed.digestCodec_lawful.on hr hw⟩
+      (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes r.carried = f.extract r.carriedAt f.size ∧
+      ∃ auth, w₀.carried =
+        { r.carried with trie := Receive.reauthor X r.carried.trie auth, refusals := Receive.meterOnly X.env r.carried.refusals } ∧
+        w₀.height = r.head.height :=
+  have ⟨hr, ⟨auth, _, hw⟩, hp⟩ := Carry.importWorld_ok h
+  have hc := Carry.world_carried Codec.Deployed.digestCodec_lawful.on hr hw
+  ⟨hp, hc.1, auth, hc.2⟩
 
 /-- `Carry.exportFile_reads` at the deployed codec: what `host export` writes, `host import`
 reads back (its digest pin is the printed digest itself), to the exported World's carried bytes and height. -/
@@ -183,11 +188,11 @@ theorem genesis_chain_eq (name nonce : ByteArray) (allowance : Nat) (founders : 
 
 /-- A World `host import` makes starts at the genesis chain of its NEW origin (KERNEL's
 `carryWorld`), not at the exported World's chain. -/
-theorem importWorld_chain_eq {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
-    {r : Carry.Read D} {w₀ : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) :
+theorem importWorld_chain_eq {name nonce : ByteArray} {pin : Carry.Pin D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D} {w₀ : World D}
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r)) :
     w₀.chain = World.genesisChain X.env w₀.origin := by
-  obtain ⟨_, hw, -⟩ := Carry.importWorld_ok h
+  obtain ⟨_, ⟨_, _, hw⟩, -⟩ := Carry.importWorld_ok h
   obtain ⟨_, rfl⟩ := Receive.carry_ok.mp hw
   rfl
 
@@ -329,46 +334,6 @@ theorem read_carried_fits {f : ByteArray} {r : Carry.Read D}
   cases h
   exact ((Codec.Kernel.carried_lawfulOn X.env Codec.Deployed.digestCodec_lawful.on).eq_bytes_of_decode hcr).1
 
-/-- **The World `host import` makes is in the deployed World codec's domain**: its trie, journal
-(canonical, and the window of its carried height: CODEC-31's `kernel/carried-journal`, which
-HOST-39's proof found missing), height and allowance are the carried state's (`read_carried_fits`),
-the chain and origin are digests. -/
-theorem importWorld_codecFits {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
-    {r : Carry.Read D} {w₀ : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) :
-    Codec.Kernel.World.CodecFits X.env (fun _ => True) w₀ := by
-  obtain ⟨hr, hw, -⟩ := Carry.importWorld_ok h
-  obtain ⟨hcf, rfl⟩ := Receive.carry_ok.mp hw
-  have hfit := read_carried_fits hr
-  exact { cells := hfit.cells, journal := hfit.journal,
-          refusals := ⟨⟨by simp [carryWorld, Trie.T.toList], by simp [carryWorld, Trie.T.toList]⟩, Trie.canon_empty _ 0⟩,
-          height := hfit.height, stepsLt := hfit.height, chain := trivial, budget := hcf.2.2.1, origin := trivial,
-          journalFits := hfit.journalFits, rows := hfit.rows,
-          refusalsFits := by simp [carryWorld, Trie.T.toList, refusalsFits],
-          refusalsDisjoint := by simp [carryWorld, Trie.T.toList, refusalsDisjoint],
-          refusalsCounted := (refusalsCounted_iff (refusalsOk_of_empty rfl)).mpr
-            (countedOk_of_empty rfl (Nat.le_refl _)),
-          steps := Nat.le_refl _ }
-
-/-- **`host import`'s Store reopens to the World the import made, holding exactly the file's
-carried bytes**: so `importWith`'s `carryMismatch reopen` compare passes whenever genesis writes
-the image. No premise beyond the two successes and the deployed chain width (`ofKey_chainBytes`). -/
-theorem import_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray}
-    {r : Carry.Read D} {w₀ : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r)) {img : Image}
-    (hg : genesisImage keys c world recorder.mark w₀ = .ok img) :
-    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.header img.segment.size
-        img.index.size (segReader img.index) (segReader img.segment)) = .ok o ∧
-      o.opened.world = w₀ ∧ o.opened.records = 0 ∧ o.opened.torn = 0 ∧
-        o.pos.offset = img.segment.size ∧
-      (Codec.Kernel.carried X.env Codec.Deployed.digestCodec).bytes o.opened.world.carried =
-        f.extract r.carriedAt f.size := by
-  obtain ⟨o, ho, hw, hn, ht, hp⟩ :=
-    genesisImage_opens_deployed keys hkeys (importWorld_codecFits h) (importWorld_chain_eq h) hg
-  refine ⟨o, ho, hw, hn, ht, hp, ?_⟩
-  rw [hw]
-  exact (import_carried h).2.1
-
 /-! ## What admission keeps of the World codec's domain (HOST-28) -/
 
 /-- The parts of `World.CodecFits` every step keeps: a canonical cells trie whose slots hold the
@@ -494,6 +459,52 @@ theorem codecFits_of_kept {w : World D} (hk : Kept w) (hcount : w.trie.toList.le
     omega
   · obtain ⟨k, _⟩ := p
     rcases k with k | k <;> cases k <;> trivial
+
+/-- **The World `host import` makes is `Kept`** (KERNEL-79): canonical and slotted with every cell
+fitting (the carried trie's, which the carried codec admitted, and the stated authority's cell,
+`authority_cellFit`), the journal the carried window's, the budget and every relation's parent live
+in the re-authored trie (`carry`'s own checks), and the window trie the carried meter (canonical, its
+leaves fitting the height, no record, no count: `carry_refusalsOk_of`, `carry_countedOk`). -/
+theorem kept_import {name nonce : ByteArray} {pin : Carry.Pin D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D} {w₀ : World D}
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r)) : Kept w₀ := by
+  obtain ⟨hr, ⟨auth, -, hw⟩, -⟩ := Carry.importWorld_ok h
+  have hfit := read_carried_fits hr
+  have hcn := hfit.cells.2
+  have hmem : ∀ s l, r.carried.trie.get (trieSpec X.env) s = some l → (s, l) ∈ r.carried.trie.toList :=
+    fun s l hg => (Trie.mem_toList (trieSpec X.env) 0 _ hcn.1 s l).mpr hg
+  have hsl : ∀ s l, r.carried.trie.get (trieSpec X.env) s = some l → Leaf.fits s l = true :=
+    fun s l hg => hfit.cells.1.2 (s, l) (hmem s l hg)
+  obtain ⟨hca, -, -, -, hcanon, hslot, -, -, -, -, -, -, -, -⟩ := Receive.carry_sound hcn hsl hw
+  have hrc := hfit.window.2
+  have hwf := hfit.windowFits
+  simp only [Codec.Kernel.carriedWindowFits, Bool.and_eq_true, decide_eq_true_eq] at hwf
+  have hrfit : ∀ k l, r.carried.refusals.get (refusalSpec X.env) k = some l →
+      refusalFits r.carried.height k l = true := fun k l hg =>
+    List.all_eq_true.mp hwf.1 (k, l) ((Trie.mem_toList (refusalSpec X.env) 0 _ hrc.1 k l).mpr hg)
+  have hok := Receive.carry_refusalsOk_of hrc hrfit hw
+  have hcnt := Receive.carry_countedOk hrc hwf.2 hw
+  have hdis := Receive.carry_refusalsDisjoint hrc hw
+  obtain ⟨hcf, rfl⟩ := Receive.carry_ok.mp hw
+  refine ⟨hcanon, hslot, fun s l hg => ?_, journalOk_of_fits (w := Receive.carryWorld X name nonce r.head.fromOrigin r.carried auth)
+      hfit.journal.2 hfit.journalFits, hfit.height, hcf.2.2.2.2.2.1, hfit.rows.listing.2,
+    ⟨fun p hp => by
+      have := hfit.rows.fits
+      simp only [rowsFits, Bool.and_eq_true, List.all_eq_true] at this
+      exact this.2 p hp, hfit.rows.headed, hcf.2.2.2.2.1⟩,
+    hok, hdis, hcnt, Nat.le_refl _, hfit.height⟩
+  change (Receive.reauthor X r.carried.trie auth).get (trieSpec X.env) s = some l at hg
+  rw [Receive.reauthor_get hcn] at hg
+  split at hg
+  · cases hg
+    exact authority_cellFit (Receive.checkAuthority_ok.mp hca)
+  · have hl := (hfit.cells.1.1.2 (s, l) (hmem s l (Option.filter_eq_some_iff.mp hg).1)).2
+    cases l with
+    | entry e =>
+      cases e with
+      | live c => exact hl
+      | tomb => trivial
+    | spent => trivial
 
 /-- The base World of a deployed open is `Kept`, and so is the World it opens to. -/
 theorem openWith_kept {keys : Keys} {file H I S : ByteArray} {o : Opening (World D)}

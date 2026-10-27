@@ -1,10 +1,12 @@
 /-
 # Protocol.Proofs.Certified — what a stranger learns from a genesis input and a certificate
 
-`stranger_ok`: a head the stranger's check takes is certified, under the authority the genesis input
-names, for the World that input makes, whose origin is `originOf` of exactly those inputs (the
-authority included, KERNEL-69): so the certificate verifies (`Head.certified`) for the origin the
-input commits, with that authority's `threshold` distinct listed signers (`Proofs.Head.certified_ok`).
+`stranger_ok`: a head the stranger's check takes is certified, under the authority the input names,
+for the World that input makes: a genesis input's origin is `originOf` of exactly those inputs (the
+authority included, KERNEL-69); a carried start's is `carryOriginOfStart` of exactly that start (the
+stated authority included, KERNEL-79, PROTOCOL-85), its authority passing genesis's own check. So the
+certificate verifies (`Head.certified`) for the origin the input commits, with that authority's
+`threshold` distinct listed signers (`Proofs.Head.certified_ok`).
 -/
 import Protocol.Certified
 import Kernel.Proofs.Origin
@@ -17,13 +19,23 @@ variable {D : Type} [Ord D] [DecidableEq D]
 
 theorem stranger_ok {X : Ctx D} {input cert : ByteArray} {h : Head D}
     (hc : Certified.check X input cert = .ok h) :
-    ∃ name nonce allowance fs auth c,
+    (∃ name nonce allowance fs auth c,
       Invite.startOf X input = some (.genesis name nonce allowance fs auth) ∧
-      certified X auth (originOf X name nonce allowance fs auth) cert = .ok c ∧ c.head = h := by
+      certified X auth (originOf X name nonce allowance fs auth) cert = .ok c ∧ c.head = h) ∨
+    (∃ s chain c, Invite.startOf X input = some (.carried s chain) ∧ checkAuthority s.auth = .ok () ∧
+      certified X s.auth (carryOriginOfStart X s) cert = .ok c ∧ c.head = h) := by
   unfold Certified.check at hc
   split at hc
   · cases hc
-  · cases hc
+  · rename_i s chain hs
+    split at hc
+    · cases hc
+    · rename_i ha
+      split at hc
+      · cases hc
+      · rename_i c hcert
+        cases hc
+        exact .inr ⟨s, chain, c, hs, ha, hcert, rfl⟩
   · rename_i name nonce allowance fs auth hs
     split at hc
     · cases hc
@@ -38,7 +50,7 @@ theorem stranger_ok {X : Ctx D} {input cert : ByteArray} {h : Head D}
           split at hg
           · cases hg
           · cases hg; rfl
-        refine ⟨name, nonce, allowance, fs, auth, c, hs, ?_, rfl⟩
+        refine .inl ⟨name, nonce, allowance, fs, auth, c, hs, ?_, rfl⟩
         rw [← genesis_origin, ← hw]
         exact hcert
 

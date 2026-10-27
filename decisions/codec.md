@@ -1639,3 +1639,11 @@ carries these tags, and the five emits check unchanged.
   under the old tag refuses, as does a Store or carried file stamped with the old tags. Re-genesis.
 - Bytes are identical below 128. Every rows key with relation or key length ≥ 128, and every range pin with relation,
   width or prefix length ≥ 128, changes bytes, and with them its trie path or pin.
+
+## CODEC-41 · The carried codec carries the window trie, checked `kernel/carried-window` (2026-10-27, CARRY; with KERNEL-79)
+
+**Decision.** `carried` is `trie ‖ allowance ‖ height ‖ journal ‖ rows ‖ window`: the window trie as the World's `kernel/refusal-order` listing, then `kernel/carried-window` refuses a listing unless `carriedWindowFits`: every leaf fits the carried height (`refusalsFits`, as the World's `kernel/refusals`) and there are at most `height % windowMax + 1` meter leaves (the bound `refusalsCounted` puts on a World's). The second clause is what lets the World the carry makes pass the World codec's `kernel/refusals-counted` (`Host.Deployed.kept_import`, `carry_countedOk`): without it a forged file could carry more meter leaves than the World the import writes may hold, and the import would write a Store its own reopen refuses. Theorems: `carriedWindowWire_lawfulOn`, `carried_decode_window`, `carried_fits` (a fitting World's carried state fits: its `refusalsCounted` gives the meter bound). Vectors: site `kernel/carried-window` (two drawn, then four meter leaves at height 3 read back and five refused).
+
+**Critique.** The refusal records ride in the file only to be dropped by the import; carrying the meter alone would need the export to filter, which needs the Env in `World.carried`. The cost is bytes, bounded by the window, and the gain is that the file is the old World's state as it was, which the new origin commits to by its root.
+
+**Flag day.** The carried tag moves (with KERNEL-79's): an older carried file refuses `shapeMismatch`. Re-emit the codec vectors.

@@ -958,7 +958,8 @@ def adoptPin (X : Ctx D) (me : Self D) (inv key : ByteArray) : Except (Refusal D
   | .ok (i, o) => if o = me.world then .ok i else .error (.invite .otherWorld)
 
 /-- `invite`'s check of its INPUT: the inputs decode and commit to the member's own World's origin. A genesis
-input's origin is recomputed (`Invite.startOrigin`); a carried input's is the one it states. -/
+input's origin is recomputed (`Invite.startOrigin`), and so is a carried input's, from its carry start
+(PROTOCOL-85). -/
 def inviteInput (X : Ctx D) (me : Self D) (input : ByteArray) : Except (Refusal D) Unit :=
   match Invite.startOf X input with
   | none => .error (.invite .badInvitation)

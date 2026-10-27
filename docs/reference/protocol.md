@@ -1146,9 +1146,9 @@ Three consumers check certificates.
 |---|---|---|
 | thin adoption, `adopt` (T-Adopt) | `Head.certifiesWorld(W', pg.certificate)` on the World the pin binds | `refused` by the `CertRefusal` name; nothing adopted |
 | a follower's page (C-Page, §3.17) | `Head.pageCertified(W, b)` under follow's own World's authority, then the certified chain against follow's fold | `refused forkedCertified`; an unverified certificate is evidence of nothing and is ignored |
-| a stranger (`host certified INPUT_HEX CERT`) | `Certified.check(input, cert)`: decode the genesis input, make its genesis, `Head.certified` under its authority for its origin | `badInput`, `carried`, the genesis refusal, or the `CertRefusal` name |
+| a stranger (`host certified INPUT_HEX CERT`) | `Certified.check(input, cert)`: decode the input; a genesis input makes its genesis, a carried start has its authority checked and its origin recomputed (`carryOriginOfStart`, PROTOCOL-85); then `Head.certified` under that authority for that origin | `badInput`, the genesis refusal, or the `CertRefusal` name |
 
-`Protocol/Proofs/Certified.lean` `stranger_ok` states what the stranger learns: the head is certified by the threshold of distinct certifiers the genesis input lists, for the World that input makes.
+`Protocol/Proofs/Certified.lean` `stranger_ok` states what the stranger learns: the head is certified by the threshold of distinct certifiers the input lists, for the World that input makes (a genesis's, or a carry's).
 
 The writer produces a certificate only when started with `host serve --certify SOCK` or `host seal --certify SOCK`, through keybroker (`Host/Cli.lean`); `docs/TRUST.md` states that the deployed units do not pass that option.
 A writer with no certificate serves an empty field.
@@ -1169,7 +1169,7 @@ Invite.message(u)  = "nanodregg/protocol/invitation/v2" · u
 Pin ::= { steps : nat, digest : bytes }
 ```
 
-`input` is one start encoding: a genesis input, or a carried start that names its new origin (`startInput`, `Start`).
+`input` is one start encoding: a genesis input, or a carried start: the carry input its origin is the digest of, then the anchor's chain (`startInput`, `Start`, PROTOCOL-85).
 
 ```
 ofBytes(b) = inv    inv.key = trusted    verify(inv.key, Invite.message(inv.unsigned), inv.signature)

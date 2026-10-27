@@ -100,6 +100,19 @@ theorem checkCertifiers_ok : ∀ {i : Nat} {seen ks : List ByteArray},
         · exact hk hk'
         · exact hseen k' hk' h
 
+omit [Ord D] [DecidableEq D] in
+/-- **The authority check is `Authority.Fits`**, clause by clause: the one check a genesis and a
+carry (KERNEL-79) both run. -/
+theorem checkAuthority_ok {auth : Authority} : checkAuthority auth = .ok () ↔ auth.Fits := by
+  simp only [checkAuthority, req_bind_ok, decide_eq_true_eq]
+  unfold Authority.Fits
+  constructor
+  · rintro ⟨h6, h8, h7⟩
+    obtain ⟨h7a, h7b, -⟩ := checkCertifiers_ok.mp h7
+    exact ⟨h6, h7a, h7b, h8⟩
+  · rintro ⟨h6, h7a, h7b, h8⟩
+    exact ⟨h6, h8, checkCertifiers_ok.mpr ⟨h7a, h7b, by simp⟩⟩
+
 /-- **The genesis check is `GenesisFits`**, clause by clause. -/
 theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {founders : List (ByteArray × D)}
     {auth : Authority} :
@@ -107,13 +120,12 @@ theorem checkGenesis_ok {X : Ctx D} {name nonce : ByteArray} {allowance : Nat} {
   have hc : Bounds.counterLimit = 2 ^ 64 := by decide
   simp only [checkGenesis, req_bind_ok, decide_eq_true_eq, hc]
   simp only [except_bind_ok, req_ok, decide_eq_true_eq]
-  unfold GenesisFits Authority.Fits
+  unfold GenesisFits
   constructor
-  · rintro ⟨h1, h2, h3, h6, h8, ⟨⟩, h4, ⟨⟩, h7, h5⟩
-    obtain ⟨h7a, h7b, -⟩ := checkCertifiers_ok.mp h7
-    exact ⟨h1, h2, h3, checkFounders_ok.mp h4, ⟨h6, h7a, h7b, h8⟩, h5⟩
-  · rintro ⟨h1, h2, h3, h4, ⟨h6, h7a, h7b, h8⟩, h5⟩
-    exact ⟨h1, h2, h3, h6, h8, (), checkFounders_ok.mpr h4, (), checkCertifiers_ok.mpr ⟨h7a, h7b, by simp⟩, h5⟩
+  · rintro ⟨h1, h2, h3, ⟨⟩, ha, ⟨⟩, h4, h5⟩
+    exact ⟨h1, h2, h3, checkFounders_ok.mp h4, checkAuthority_ok.mp ha, h5⟩
+  · rintro ⟨h1, h2, h3, h4, ha, h5⟩
+    exact ⟨h1, h2, h3, (), checkAuthority_ok.mpr ha, (), checkFounders_ok.mpr h4, h5⟩
 
 /-- **Genesis is checked** (KERNEL-31): it returns a World exactly on a `GenesisFits` input, and
 that World is `genesisWorld`. Every theorem about `genesisWorld` is a theorem about what `genesis`

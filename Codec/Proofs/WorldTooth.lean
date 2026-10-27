@@ -103,22 +103,23 @@ theorem world_refuses_shared_height :
 
 /-- A carried state whose journal is the window's at its height decodes, exactly (KERNEL-41). -/
 theorem carried_reads_windowed_journal :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty)) =
-      .ok ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty⟩ := by
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty, .empty)) =
+      .ok ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty, .empty⟩ := by
   have hw := jt_wireFits _ (by decide) (by decide) jt_window (by decide)
-  show (carried Sim.env Sim.dc).decode ((carried Sim.env Sim.dc).bytes ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty⟩) = _
-  exact carried_decode_bytes (c := ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty⟩) u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
+  show (carried Sim.env Sim.dc).decode ((carried Sim.env Sim.dc).bytes ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty, .empty⟩) = _
+  exact carried_decode_bytes (c := ⟨.empty, 5, 7, jt [(1, (6, 3)), (2, (7, 4))], .empty, .empty⟩) u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
     by rw [jt_window]; simp [journalFits, List.mergeSort, ascendingNat, Bounds.windowMax],
-    ⟨⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩, rowsFits_empty, rowsHeaded_empty, rowsParented_empty _⟩⟩
+    ⟨⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩, rowsFits_empty, rowsHeaded_empty, rowsParented_empty _⟩,
+    ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩, by simp [carriedWindowFits, refusalsFits, Trie.T.toList]⟩
 
 /-- **The plant (HOST-11's find)**: a carried state with an entry above its height is refused
 `kernel/carried-journal` by name, before any import could genesis-write a Store from it. -/
 theorem carried_refuses_future_entry :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (8, 3))], .empty)) =
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, jt [(1, (8, 3))], .empty, .empty)) =
       .error (.rejected 0 "kernel/carried-journal") := by
   have hw := jt_wireFits _ (by decide) (by decide) (jt_one 1 3 8) (by decide)
   exact carried_decode_wire_refused u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
-    ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩⟩
+    ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩⟩
     (by show journalFits 7 (jt [(1, (8, 3))]).toList = false
         rw [jt_one]; exact journalFits_future 7 1 3)
 
@@ -811,22 +812,22 @@ theorem rows_kindByte_needed :
 
 /-- The carried twin: a carried state whose head counts its one row reads back, exactly. -/
 theorem carried_reads_counted_row :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (headed 1))) =
-      .ok ⟨pc true, 5, 7, .empty, wr (headed 1)⟩ := by
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (headed 1), .empty)) =
+      .ok ⟨pc true, 5, 7, .empty, wr (headed 1), .empty⟩ := by
   have hw := headed_wireFits 1 (by decide) wr_headed1
-  show (carried Sim.env Sim.dc).decode ((carried Sim.env Sim.dc).bytes ⟨pc true, 5, 7, .empty, wr (headed 1)⟩) = _
+  show (carried Sim.env Sim.dc).decode ((carried Sim.env Sim.dc).bytes ⟨pc true, 5, 7, .empty, wr (headed 1), .empty⟩) = _
   exact carried_decode_bytes u64_lawful.on ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1,
     by simp [journalFits, Trie.T.toList, ascendingNat],
     ⟨hw.2.2.2.1, by show rowsFits Sim.env (wr (headed 1)).toList = true
                     rw [wr_headed1]; decide +kernel,
      by show rowsHeaded (wr (headed 1)).toList = true
         rw [wr_headed1]; decide +kernel,
-     by decide +kernel⟩⟩
+     by decide +kernel⟩, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩, by simp [carriedWindowFits, refusalsFits, Trie.T.toList]⟩
 
 /-- **The plant**: the same carried state without its parent cell is refused
 `kernel/carried-rows-parented` by name. -/
 theorem carried_refuses_orphan_relation :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, .empty, wr (headed 1))) =
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (.empty, 5, 7, .empty, wr (headed 1), .empty)) =
       .error (.rejected 0 "kernel/carried-rows-parented") := by
   have hw := wxp_wireFits false (headed 1) (by simp [worldMax]) (by simp [headed]) wr_headed1 (by
       intro p hp; simp only [headed, List.mem_cons, List.mem_nil_iff, or_false] at hp
@@ -834,7 +835,7 @@ theorem carried_refuses_orphan_relation :
       · exact ⟨⟨trivial, by decide⟩, by decide, by decide, by decide, by decide, by decide⟩
       · exact ⟨⟨trivial, by decide, by decide⟩, by decide, by decide⟩)
   exact carried_decode_wire_parentedRefused u64_lawful.on
-    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1⟩
+    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩⟩
     (by simp [journalFits, carriedOfWire, Trie.T.toList, ascendingNat])
     (by show rowsFits Sim.env (wr (headed 1)).toList = true
         rw [wr_headed1]; decide +kernel)
@@ -844,11 +845,11 @@ theorem carried_refuses_orphan_relation :
 
 /-- **The plant**: a carried state whose relation sums past its cap is refused `kernel/carried-rows`. -/
 theorem carried_refuses_sum_past_cap :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (capped 41))) =
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (capped 41), .empty)) =
       .error (.rejected 0 "kernel/carried-rows") := by
   have hw := capped_wireFits 41 (by decide) wr_capped41
   exact carried_decode_wire_rowsRefused u64_lawful.on
-    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1⟩
+    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩⟩
     (by simp [journalFits, carriedOfWire, Trie.T.toList, ascendingNat])
     (by show rowsFits Sim.env (wr (capped 41)).toList = false
         rw [wr_capped41]; decide +kernel)
@@ -856,11 +857,11 @@ theorem carried_refuses_sum_past_cap :
 /-- **The plant**: a carried state whose rows hold a head counting a row it does not hold is refused
 `kernel/carried-rows-headed`, before any import could genesis-write a Store from it. -/
 theorem carried_refuses_uncounted_row :
-    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (headed 2))) =
+    (carried Sim.env Sim.dc).decode ((carriedWire Sim.env Sim.dc).bytes (pc true, 5, 7, .empty, wr (headed 2), .empty)) =
       .error (.rejected 0 "kernel/carried-rows-headed") := by
   have hw := headed_wireFits 2 (by decide) wr_headed2
   exact carried_decode_wire_headedRefused u64_lawful.on
-    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1⟩
+    ⟨hw.1, show 5 < 2 ^ 64 by decide, show 7 < 2 ^ 64 by decide, hw.2.1, hw.2.2.2.1, ⟨⟨by simp [Trie.T.toList, worldMax], by simp [Trie.T.toList]⟩, Trie.canon_empty _ 0⟩⟩
     (by simp [journalFits, carriedOfWire, Trie.T.toList, ascendingNat])
     (by show rowsFits Sim.env (wr (headed 2)).toList = true
         rw [wr_headed2]; decide +kernel)

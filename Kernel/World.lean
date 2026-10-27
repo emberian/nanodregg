@@ -321,13 +321,17 @@ structure World (D : Type) [Ord D] where
   origin : D
 
 /-- What a carry (KERNEL-29, law 1: state crosses a flag day by re-genesis) moves from one World
-into a new one, and what the new World's origin commits to: the trie (every cell and every spent
-nullifier: a spent nullifier is state, or a carried value cell could be spent again), the budget
-left, the height and the journal. The journal is bounded by the window (KERNEL-33) and carried
-whole, so a call committed just before the carry is answered `replayed` after it, never re-run;
-the height is carried because journal entries expire by it; the rows (KERNEL-48) are state like
-the cells, carried whole. Not carried: the chain, the origin (the new World's own) and the
-refusals (they answer only within a window of the old World's log). -/
+into a new one, and what the new World's origin commits to: the trie (every cell, every tombstone
+and every spent nullifier: a spent nullifier is state, or a carried value cell could be spent
+again; a tombstone keeps a retired id retired), the budget left, the height, the journal, the rows
+and the window trie. The journal is bounded by the window (KERNEL-33) and carried whole, so a call
+committed just before the carry is answered `replayed` after it, never re-run; the height is
+carried because journal entries and the meter's windows are counted in it; the rows (KERNEL-48)
+are state like the cells, carried whole. The window trie is carried as exported and the new World
+keeps its METER leaves (KERNEL-79: a member's ticks this window are the admitted Turns', like the
+journal's entries) and drops its refusal records and counts (they are the old log's, keyed by its
+origin). Not carried: the chain and the origin (the new World's own), and the authority (re-stated
+at the carry, KERNEL-79). -/
 structure Carried (D : Type) [Ord D] where
   trie : Cells D
   allowance : Nat
@@ -335,6 +339,8 @@ structure Carried (D : Type) [Ord D] where
   journal : Journal D
   /-- the relations' heads and rows (KERNEL-48): state, carried whole -/
   rows : Rows D
+  /-- the window trie as exported (KERNEL-79): the new World keeps its meter leaves -/
+  refusals : Refusals D
 
 /-- The kernel's hash domains. -/
 def domGenesis : String := "nanodregg/kernel/genesis/v1"
@@ -793,7 +799,7 @@ def rootsPre (E : Env D) (w : World D) : String × ByteArray :=
   Nanodregg.Kernel.rootsPre E (w.root E) (w.journalRoot E) (w.refusalsRoot E) (w.rowsRoot E)
 
 /-- What a carry takes from this World (KERNEL-29). -/
-def carried (w : World D) : Carried D := ⟨w.trie, w.allowance, w.height, w.journal, w.rows⟩
+def carried (w : World D) : Carried D := ⟨w.trie, w.allowance, w.height, w.journal, w.rows, w.refusals⟩
 
 section
 variable [DecidableEq D]

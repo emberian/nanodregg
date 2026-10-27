@@ -458,23 +458,26 @@ def acceptAs (s : Sys D) (key bytes : ByteArray) : Except Invite.Refusal (Invite
 def flipLast (b : ByteArray) : ByteArray :=
   if h : 0 < b.size then b.set (b.size - 1) (b[b.size - 1] ^^^ 1) (by omega) else b
 
-/-- A sponsor-signed invitation to the imported origin, using the retained export as IN. -/
+/-- A sponsor-signed invitation to the imported World (its carry start under the authority the
+carried World bears, PROTOCOL-85), using the retained export as IN. `wrongOrigin`: the start names a
+trie root that is not the file's, so it names another World. -/
 def acceptCarried (st : St D) (wrongOrigin : Bool := false) : Except String (World D) := do
   let some file := st.carriedFile | throw "noCarry"
   let X := st.sys.follow
   let R := st.sys.writer.R
   let r ← (Host.Carry.read X.env R.dc file).mapError (·.name)
-  let origin := if wrongOrigin then st.first.origin else st.genesis.origin
-  let start := Invite.Start.carried origin Rows.Params.worldName (flipLast Rows.Params.nonce)
-    r.head.fromOrigin r.head.height r.head.chain
+  let auth := (authorityOf st.genesis).getD Authority.none
+  let s := carryStartOf X Rows.Params.worldName (flipLast Rows.Params.nonce) r.head.fromOrigin r.carried auth
+  let start := Invite.Start.carried (if wrongOrigin then { s with trieRoot := r.head.fromOrigin } else s) r.head.chain
   let some u := Invite.unsignedBytes X (Invite.startBytes X start)
       ⟨st.genesis.steps, R.keys.worldDigest (R.world.bytes st.genesis)⟩
       (founderId X st.lineage 0) (keyOf R "sponsor" 0) | throw "invitationTooLarge"
   let some b := Invite.bytes u (R.sign (secretOf "sponsor" 0) (Invite.message u)) | throw "invitationTooLarge"
   let (i, _) ← (Invite.acceptStart X (keyOf R "sponsor" 0) b).mapError (·.name)
-  let .carried o name nonce _ _ _ := i.start | throw "notCarried"
-  let pin := if st.sys.importTrustsFile then Host.Carry.Pin.digest (Host.Carry.digestOf file) else .origin o
-  let (w, _) ← (Host.Carry.importWorld X R.dc name nonce pin file).mapError (·.2)
+  let .carried s _ := i.start | throw "notCarried"
+  let pin := if st.sys.importTrustsFile then Host.Carry.Pin.digest (Host.Carry.digestOf file)
+    else .origin (carryOriginOfStart X s)
+  let (w, _) ← (Host.Carry.importWorld X R.dc s.name s.nonce pin (some s.auth) file).mapError (·.2)
   pure w
 
 def freshActor (name : String) : M D (Actor D) := do
@@ -1334,7 +1337,7 @@ def forgeInvite (R : Rows.Params D) (X : Ctx D) (resign : Bool) (b : ByteArray) 
   | some i =>
     let start := match i.start with
       | .genesis name nonce allowance fs auth => .genesis name (flipLast nonce) allowance fs auth
-      | .carried o name nonce fromO height chain => .carried o name (flipLast nonce) fromO height chain
+      | .carried s chain => .carried { s with nonce := flipLast s.nonce } chain
     let input := Invite.startBytes X start
     let key := if resign then keyOf R "relay" 0 else i.key
     match Invite.unsignedBytes X input i.pin i.sponsor key with
@@ -1490,7 +1493,9 @@ def runAct (l : Line) : M D (Expect × String) := do
             else match Codec.Digest.ofBytes? (flipLast d.bytes) with
               | some d' => d'
               | none => d
-          match Host.Carry.importWorld X R.dc Rows.Params.worldName (flipLast Rows.Params.nonce) (.digest want) f with
+          -- the operator re-states the World's own authority (KERNEL-79)
+          let stated := some ((authorityOf r0.world).getD Authority.none)
+          match Host.Carry.importWorld X R.dc Rows.Params.worldName (flipLast Rows.Params.nonce) (.digest want) stated f with
           | .error (s, _) => do
               -- refused before anything is written: the old writer serves on
               set { st with host := ← Writer.start st.sys.writer st.mem r0 }

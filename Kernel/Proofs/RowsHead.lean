@@ -1190,11 +1190,13 @@ theorem fold_rowsOk {E : Env D} {n : Nat} (hE : E.Lawful n) {w w' : World D} {l 
     (fun ⟨hc, ho⟩ ha => ⟨admit_rowsCanon hc ha, admit_rowsOk hE hc ho ha⟩)
     (fun ⟨hc, ho⟩ hf => ⟨refuse_rowsCanon hc hf, refuse_rowsOk ho hf⟩) ⟨hr, hok⟩ h).2
 
-/-- **A carry keeps the rows invariant**: the carried World holds the exported one's trie and rows. -/
-theorem carry_rowsOk {X : Receive.Ctx D} {name nonce : ByteArray} {w w' : World D} (hok : w.RowsOk X.env)
-    (h : Receive.carry X name nonce w.origin w.carried = .ok w') : w'.RowsOk X.env := by
-  obtain ⟨_, rfl⟩ := Receive.carry_ok.mp h
-  exact hok
+/-- **A carry keeps the rows invariant**: the carried World holds the exported one's rows, and the
+carry checked every relation's parent live in the re-authored trie (`rowsOrphaned`). -/
+theorem carry_rowsOk {X : Receive.Ctx D} {name nonce : ByteArray} {auth : Receive.Authority} {w w' : World D}
+    (hok : w.RowsOk X.env)
+    (h : Receive.carry X name nonce w.origin w.carried auth = .ok w') : w'.RowsOk X.env := by
+  obtain ⟨hf, rfl⟩ := Receive.carry_ok.mp h
+  exact ⟨hok.1, hok.2.1, hf.2.2.2.2.1⟩
 
 omit [Ord D] [DecidableEq D] in
 private theorem filterMap_amts [DecidableEq D] {p : D} {rel : Nat} {F : RowSlot D × RowLeaf → Option Nat}

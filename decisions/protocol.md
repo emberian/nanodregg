@@ -2480,3 +2480,11 @@ way. `Bounds.logReplyFramingBytes` grows by 1428, so `Host.Page.budget` (`pageBy
 **Meta-critique.** The first reading of the question was "should we refuse, given the cost of a live producer everywhere?" The cost was smaller than it looked: the writer already has the producer (HOST-80), and the only honest state without a certificate was the first start, which the start can cover.
 
 **What changed shape.** New `Command.Refusal.uncertifiedPage`; `host serve --certify` writes `base.cert` at start when it is absent. No wire or disk format moves. `protocol!`.
+
+## PROTOCOL-85 · A carried start is the carry start: the invitation signs what the carried origin is the digest of, and the stranger's check takes a carried World's certificate (2026-10-27, CARRY; KERNEL-79)
+
+**Decision.** `Invite.Start.carried (s : CarryStart D) (chain : D)`: the start encodes `carryInput` (name, nonce, exported origin, the four carried roots, allowance, height, the stated authority) and the anchor's chain. Before, it stated the new origin beside name, nonce, exported origin, height and chain, and nothing tied the stated origin to an authority. `startOrigin` of a carried start checks the authority (`checkAuthority`, refused `inputs NAME`) and RECOMPUTES the origin (`carryOriginOfStart`): `acceptStart_carried_origin` now concludes `o = carryOriginOfStart X s`. `Certified.check` takes a carried start like a genesis input: authority checked, origin recomputed, certificate verified under the stated authority for that origin; the `carried` refusal is deleted. `stranger_ok` gains the carried disjunct. `Command.inviteInput` needs no change: it calls `startOrigin`.
+
+**Critique.** The invitation grows by the four roots and the authority (about 200 bytes): within the frame bound. A stranger holding a carried start learns which certifiers certify the World and that the origin commits to them; it does not learn that the carried roots are a lawful history's (as for a genesis, lawfulness is a member's re-execution).
+
+**Flag day.** The carried start's encoding and every carried invitation. Any `start` line printed before this commit refuses `badInvitation` / `badInput`.

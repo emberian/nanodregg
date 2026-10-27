@@ -145,6 +145,32 @@ theorem reached_codecFits {w w' : World D} {l : List (Step D)} (hb : budgetFault
   exact codecFits_of_kept hk' (by unfold Codec.Kernel.worldMax; omega) (by unfold Codec.Kernel.worldMax; omega)
     (by unfold Codec.Kernel.worldMax; omega)
 
+/-- **The World `host import` makes is in the deployed World codec's domain** (it passed the budget
+check, as `importWith` checks before anything is written): `kept_import`, and `reached_codecFits`
+with no step. -/
+theorem importWorld_codecFits {name nonce : ByteArray} {pin : Carry.Pin D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D} {w₀ : World D}
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r))
+    (hb : budgetFault w₀ = none) :
+    Codec.Kernel.World.CodecFits X.env (fun _ => True) w₀ :=
+  reached_codecFits (l := []) hb (kept_import h) (by simp [World.fold])
+
+/-- **`host import`'s Store reopens to the World the import made**, whose carried bytes the reopen
+compares (`importWith`'s `carryMismatch reopen` passes whenever genesis writes the image). No premise
+beyond the two successes, the budget check and the deployed chain width (`ofKey_chainBytes`). -/
+theorem import_reopens (keys : Keys) (hkeys : keys.chainBytes = Digest.width) {name nonce : ByteArray}
+    {pin : Carry.Pin D} {stated : Option Receive.Authority} {f : ByteArray} {r : Carry.Read D} {w₀ : World D}
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r))
+    (hb : budgetFault w₀ = none) {img : Image}
+    (hg : genesisImage keys c world recorder.mark w₀ = .ok img) :
+    ∃ o, Id.run (openWith keys c world recorder.mark originChain foldStep img.base img.header img.segment.size
+        img.index.size (segReader img.index) (segReader img.segment)) = .ok o ∧
+      o.opened.world = w₀ ∧ o.opened.records = 0 ∧ o.opened.torn = 0 ∧
+        o.pos.offset = img.segment.size := by
+  obtain ⟨o, ho, hw, hn, ht, hp⟩ :=
+    genesisImage_opens_deployed keys hkeys (importWorld_codecFits h hb) (importWorld_chain_eq h) hg
+  exact ⟨o, ho, hw, hn, ht, hp⟩
+
 /-- **Every World the deployed writer reaches encodes within `worldBytesMax`** (HOST-57, KERNEL-55):
 from a World `budgetFault` admits (genesis, join or import; their `Kept` from KERNEL's genesis and
 carry theorems and HOST-59's lemmas), every admitted fold reaches a World whose World-codec bytes are

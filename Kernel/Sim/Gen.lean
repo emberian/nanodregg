@@ -1918,30 +1918,53 @@ def probeRetire (P : Params D) (st : State D) : State D :=
           let st := { st with refusedAsExpected := st.refusedAsExpected + 1, seen := "retire-account:ok" :: "ok" :: st.seen }
           carryExpect P st wr (on wr f [] (.account well f.id)) "account-reborn" "idTaken"
 
-/-- The carry probe (KERNEL-29), at the end of every seed: the Host's World is carried under a new
-nonce. The carried World holds the same trie, allowance, height and journal (`carry_carried`)
-under a new origin; the last logged call is answered `replayed` at its height (`carry_replayed`:
-answered, never re-run); a fresh call signed for the OLD World is `wrongWorld`; the same call
-signed for the NEW World is admitted (`carry-new`); and a carry whose name is past the raw
-codec's bound is refused `nameTooLong` (`carry_ok`). -/
+/-- The carry probe (KERNEL-29, KERNEL-79), at the end of every seed: the Host's World is carried
+under a new nonce and a NEW stated authority (one certifier at threshold 1). The carried World bears
+that authority and no other (`carry-authority:stated`, `carry_sound`); every entry of the old trie
+but its authority cell is in it, and nothing else but the new authority cell; the allowance,
+height and journal are the old ones; every member's meter reads as before (`carry-meter:kept`,
+`carry_ticksUsed`) and no refusal record is carried; the last logged call is answered `replayed`
+at its height (`carry_replayed`: answered, never re-run); a fresh call signed for the OLD World is
+`wrongWorld`; the same call signed for the NEW World is admitted (`carry-new`); a carry whose name
+is past the raw codec's bound is refused `nameTooLong`, and one stating a quorum nobody meets
+`badThreshold` (`carry_ok`: genesis's own `checkAuthority`). -/
 def probeCarry (P : Params D) (st : State D) : State D :=
   let X := P.ctx
   let w := st.host
+  let stated : Authority := ⟨[⟨Array.replicate 32 0xc7⟩], 1⟩
   let long : ByteArray := ⟨Array.replicate (Bounds.eventBytesMax + 1) 7⟩
-  let st := match carry X long (nonceOf 7) w.origin w.carried with
+  let st := match carry X long (nonceOf 7) w.origin w.carried stated with
     | .error .nameTooLong =>
         { st with refusedAsExpected := st.refusedAsExpected + 1,
                   seen := "carry-name:nameTooLong" :: "nameTooLong" :: st.seen }
     | .error r => failWith st s!"probe carry name: expected nameTooLong, got {r.name}"
     | .ok _ => failWith st "probe carry name: a name past eventBytesMax was carried"
-  match carry X worldName (nonceOf 7) w.origin w.carried with
+  let st := match carry X worldName (nonceOf 7) w.origin w.carried { stated with threshold := 2 } with
+    | .error (.authority .badThreshold) =>
+        { st with refusedAsExpected := st.refusedAsExpected + 1,
+                  seen := "carry-authority:badThreshold" :: "badThreshold" :: st.seen }
+    | .error r => failWith st s!"probe carry authority: expected badThreshold, got {r.name}"
+    | .ok _ => failWith st "probe carry authority: a threshold past the certifier count was carried"
+  let kept (t : Cells D) := t.toList.filter fun p => !liveAuthority p.1 p.2
+  match carry X worldName (nonceOf 7) w.origin w.carried stated with
   | .error r => failWith st s!"probe carry: refused {r.name}"
   | .ok w' =>
-    if !(w'.root P.env == w.root P.env && w'.allowance == w.allowance && w'.height == w.height &&
+    let members := (w.trie.toList.filterMap fun p => match p with
+      | (.cell id, .entry (.live c _)) => if c.kind = kindMember then some id else none
+      | _ => none)
+    if !(kept w'.trie == kept w.trie && w'.allowance == w.allowance && w'.height == w.height &&
         w'.journal.toList == w.journal.toList && w'.journalRoot P.env == w.journalRoot P.env) then
       failWith st "probe carry: the carried World differs"
     else if w'.origin == w.origin then failWith st "probe carry: the carried World kept the old origin"
+    else if authorityOf w' != some stated then failWith st "probe carry: the carried World does not bear the stated authority"
+    else if (w'.trie.toList.length != (kept w.trie).length + 1) then
+      failWith st "probe carry: the carried trie holds more than the old entries and the stated authority"
+    else if !(members.all fun m => ticksUsed P.env w' m == ticksUsed P.env w m) then
+      failWith st "probe carry: a member's meter moved across the carry"
+    else if !(w'.refusals.toList.all fun p => isMeter p.1 p.2) then
+      failWith st "probe carry: a refusal record was carried"
     else
+      let st := { st with seen := "carry-authority:stated" :: "carry-meter:kept" :: st.seen }
       let st := match (Step.turns st.log).getLast? with
         | none => st
         | some t => match X.decodeCall t.event with
@@ -2225,14 +2248,15 @@ def probeCarryBudget (P : Params D) (st : State D) : State D :=
   let live := (w.trie.toList.filterMap fun p => match p with
     | (.cell id, .entry (.live c _)) => some (id, c)
     | _ => none).mergeSort (fun a b => b.2.weight ≤ a.2.weight)
+  let auth := (authorityOf w).getD Authority.none
   let crafted : Carried D := { w.carried with allowance := top - 1 }
-  let st := match carry X worldName (nonceOf 9) w.origin crafted with
+  let st := match carry X worldName (nonceOf 9) w.origin crafted auth with
     | .error .allowanceTooLarge =>
         { st with refusedAsExpected := st.refusedAsExpected + 1,
                   seen := "carry-budget:allowanceTooLarge" :: "allowanceTooLarge" :: st.seen }
     | .error r => failWith st s!"probe carry-budget: expected allowanceTooLarge, got {r.name}"
     | .ok _ => failWith st "probe carry-budget: an allowance of 2^64 - 1 beside live cells was carried"
-  let st := match carry X worldName (nonceOf 9) w.origin { w.carried with allowance := top - 1 - w.weight } with
+  let st := match carry X worldName (nonceOf 9) w.origin { w.carried with allowance := top - 1 - w.weight } auth with
     | .error r => failWith st s!"probe carry-budget-edge: refused {r.name} at weight + allowance = 2^64 - 1"
     | .ok we =>
         let after := live.filterMap fun (id, _) => match World.admit P.env we (retireTurn P we id) with
@@ -2245,7 +2269,7 @@ def probeCarryBudget (P : Params D) (st : State D) : State D :=
   let heavyId := P.env.hash "nanodregg/sim/forge" ("carry-budget-heavy".toUTF8 ++ P.env.bytes w.chain)
   let heavy : Cell := ⟨0, .ram, [(0, ⟨Array.replicate 1024 0⟩)]⟩
   let unchecked := carryWorld X worldName (nonceOf 9) w.origin
-    { crafted with trie := crafted.trie.insert (trieSpec P.env) (.cell heavyId) (.entry (.live heavy 0)) }
+    { crafted with trie := crafted.trie.insert (trieSpec P.env) (.cell heavyId) (.entry (.live heavy 0)) } auth
   let reached := ((heavyId, heavy) :: live).findSome? fun (id, _) =>
     match World.admit P.env unchecked (retireTurn P unchecked id) with
     | .ok w' => if top ≤ w'.allowance then some w'.allowance else none
@@ -2992,7 +3016,8 @@ def plantedArms : List String :=
    "journal-kept:replayed", "journal-reuse:ok", "journal-shadow:filtered", "journal-fits:misfit",
    "journal-shadow-kept:replayed", "journal-shadow-reuse:replayed",
    "journal-proof-height:refused", "journal-proof-admitted:refused", "journal-proof-stale:refused",
-   "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-old-call:replayed",
+   "journal-proof-cells-root:refused", "carry-name:nameTooLong", "carry-authority:badThreshold",
+   "carry-authority:stated", "carry-meter:kept", "carry-old-call:replayed",
    "carry-old-world:wrongWorld", "carry-new:ok", "join-carried:possession", "join-carried:otherWorld",
    "join-new:ok", "join-again:idTaken", "retire-member:notRetirable", "retire-object:notOwner",
    "retire-object:ok", "retire-read:stale", "retire-frozen:lawDenied", "retire-well:valueRemains",

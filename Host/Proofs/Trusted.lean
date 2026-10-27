@@ -13,8 +13,8 @@ bound only if its base is such a World.
 `CheckpointTrusted o w` names it, over the Store's RECORDED ORIGIN `o`: `w` is reached by admitted
 steps from a World a start of this binary admits (a genesis or an import) whose origin is `o`. The
 origin is the start's commitment (KERNEL's `originOf`: the hash of the genesis inputs;
-`carryOriginOf`: the hash of the carried roots, allowance, height, journal, the exported origin, name
-and nonce), every segment file's checkpoint header states it under the Store key (HOST-64), and it is
+`carryOriginOf`: the hash of the exported origin, the four carried roots, allowance, height, name,
+nonce and the stated authority, KERNEL-79), every segment file's checkpoint header states it under the Store key (HOST-64), and it is
 what an outside party checks: the founder compares it out of band (`host genesis` prints it), a
 sponsor's invitation pins it (card 7a). The start it names is unique up to a collision among explicit
 preimages (`start_genesis_unique`, `start_carry_commits`, `start_kinds_disjoint`), so trusting `o` is
@@ -77,8 +77,8 @@ structure CheckpointTrusted (o : D) (w : World D) : Prop where
   reached : ∃ (w₀ : World D) (l : List (Step D)), w₀.origin = o ∧
     ((∃ (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D)) (auth : Receive.Authority),
         Receive.genesis X name nonce allowance founders auth = .ok w₀) ∨
-      (∃ (name nonce : ByteArray) (f : ByteArray) (r : Carry.Read D),
-        Carry.read X.env Codec.Deployed.digestCodec f = .ok r ∧ Carry.world X name nonce r = .ok w₀)) ∧
+      (∃ (name nonce : ByteArray) (f : ByteArray) (r : Carry.Read D) (auth : Receive.Authority),
+        Carry.read X.env Codec.Deployed.digestCodec f = .ok r ∧ Carry.world X name nonce auth r = .ok w₀)) ∧
     budgetFault w₀ = none ∧ Kept w₀ ∧ World.fold X.env w₀ l = .ok w
 
 /-- **A genesis that passed the budget check is trusted** (`host genesis`, `host join`: the budget
@@ -91,12 +91,12 @@ theorem genesis_trusted {name nonce : ByteArray} {allowance : Nat} {founders : L
     kept_of_fits (genesisWorld_codecFits hf), by simp [World.fold]⟩⟩
 
 /-- **An import that passed the budget check is trusted** (`host import`, HOST-59). -/
-theorem import_trusted {name nonce : ByteArray} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D}
-    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r))
+theorem import_trusted {name nonce : ByteArray} {pin : Carry.Pin D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r))
     (hb : budgetFault w₀ = none) : CheckpointTrusted w₀.origin w₀ :=
-  ⟨⟨w₀, [], rfl, Or.inr ⟨name, nonce, f, r, (Carry.importWorld_ok h).1, (Carry.importWorld_ok h).2.1⟩, hb,
-    kept_of_fits (importWorld_codecFits h),
-    by simp [World.fold]⟩⟩
+  have ⟨hr, ⟨auth, _, hw⟩, _⟩ := Carry.importWorld_ok h
+  ⟨⟨w₀, [], rfl, Or.inr ⟨name, nonce, f, r, auth, hr, hw⟩, hb, kept_import h, by simp [World.fold]⟩⟩
 
 /-- **An import pinned at `o` is trusted at `o`** (`host import --origin`, card 7a): whatever `o` the
 operator passed, an import that succeeds made a World of that origin (the import refuses any other,
@@ -105,8 +105,9 @@ operator passed, an import that succeeds made a World of that origin (the import
 takes from a sponsor-signed invitation (PROTOCOL-61, PROTOCOL's to state: no invitation appears
 here), rather than at the origin its own import computed. Two imports pinned at one `o` carried one
 state up to an explicit collision (`start_carry_commits`). -/
-theorem import_trusted_pinned {name nonce : ByteArray} {o : D} {f : ByteArray} {r : Carry.Read D}
-    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce (.origin o) f = .ok (w₀, r))
+theorem import_trusted_pinned {name nonce : ByteArray} {o : D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce (.origin o) stated f = .ok (w₀, r))
     (hb : budgetFault w₀ = none) : CheckpointTrusted o w₀ := by
   have ho : w₀.origin = o := (Carry.importWorld_ok h).2.2
   exact ho ▸ import_trusted h hb
@@ -298,8 +299,9 @@ theorem genesis_life_trusted {keys : Keys} {name nonce : ByteArray} {allowance :
 
 /-- **A writer's life from `host import --origin O` holds bases trusted at `O` throughout**
 (`import_trusted_pinned`: the pinned origin, the one an invitation names). -/
-theorem import_life_trusted {keys : Keys} {name nonce : ByteArray} {o : D} {f : ByteArray} {r : Carry.Read D}
-    {w₀ : World D} (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce (.origin o) f = .ok (w₀, r))
+theorem import_life_trusted {keys : Keys} {name nonce : ByteArray} {o : D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D}
+    {w₀ : World D} (hi : Carry.importWorld X Codec.Deployed.digestCodec name nonce (.origin o) stated f = .ok (w₀, r))
     (hb : budgetFault w₀ = none) {img : Image} (h : genesisImage keys c world recorder.mark w₀ = .ok img)
     {fileN : ByteArray} (life : WriterLife keys img.base fileN) :
     ∀ (b : Base (World D)) (n : Nat) (d : ByteArray),
@@ -345,49 +347,43 @@ theorem start_genesis_unique {name nonce name' nonce' : ByteArray} {allowance al
   · exact .inl rfl
   · exact .inr hc
 
-/-- **Two imports with one origin carried one state**: the same name, nonce and exported origin, the
-same trie and rows ROOTS, allowance and height, and the same journal (canonical, so its listing
-is the trie), or their two carry inputs collide (KERNEL's `carry_inj_canon` over the explicit pair).
-What is NOT proved here: that equal roots are equal tries (the trie's own binding, a KERNEL theorem
-over its node preimages); the Worlds agree on everything the origin hashes. -/
+/-- **Two imports with one origin carried one start**: the same name, nonce and exported origin, the
+same four carried ROOTS, allowance and height, and the same stated authority (`carryStartOf`,
+KERNEL-79), or their two carry inputs collide (KERNEL's `carry_inj` over the explicit pair). What is
+NOT proved here: that equal roots are equal tries (the trie's own binding, KERNEL's
+`TrieBinding`); the Worlds agree on everything the origin hashes. -/
 theorem start_carry_commits {name nonce name' nonce' : ByteArray} {pin pin' : Carry.Pin D}
+    {stated stated' : Option Receive.Authority}
     {f f' : ByteArray} {r r' : Carry.Read D} {w₀ w₀' : World D}
-    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin f = .ok (w₀, r))
-    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' pin' f' = .ok (w₀', r'))
-    (hj : Trie.Canon (journalSpec X.env) 0 r.carried.journal)
-    (hj' : Trie.Canon (journalSpec X.env) 0 r'.carried.journal)
+    (h : Carry.importWorld X Codec.Deployed.digestCodec name nonce pin stated f = .ok (w₀, r))
+    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' pin' stated' f' = .ok (w₀', r'))
     (ho : w₀.origin = w₀'.origin) :
-    (w₀.trie.hashOf (trieSpec X.env) = w₀'.trie.hashOf (trieSpec X.env) ∧
-      w₀.rows.hashOf (rowSpec X.env) = w₀'.rows.hashOf (rowSpec X.env) ∧
-      w₀.allowance = w₀'.allowance ∧ w₀.height = w₀'.height ∧ w₀.steps = w₀'.steps ∧
-      w₀.journal = w₀'.journal ∧ w₀.refusals = w₀'.refusals ∧ w₀.chain = w₀'.chain) ∨
+    ∃ auth auth', Carry.statedAuthority r.carried stated = .ok auth ∧ Carry.statedAuthority r'.carried stated' = .ok auth' ∧
+      (Receive.carryStartOf X name nonce r.head.fromOrigin r.carried auth =
+        Receive.carryStartOf X name' nonce' r'.head.fromOrigin r'.carried auth' ∨
       CollidesAmong X.env.hash
-        [Receive.carryOriginPre X name nonce r.head.fromOrigin r.carried,
-         Receive.carryOriginPre X name' nonce' r'.head.fromOrigin r'.carried] := by
-  obtain ⟨-, hw, -⟩ := Carry.importWorld_ok h
-  obtain ⟨-, hw', -⟩ := Carry.importWorld_ok h'
+        [Receive.carryOriginPre X name nonce r.head.fromOrigin r.carried auth,
+         Receive.carryOriginPre X name' nonce' r'.head.fromOrigin r'.carried auth']) := by
+  obtain ⟨-, ⟨auth, ha, hw⟩, -⟩ := Carry.importWorld_ok h
+  obtain ⟨-, ⟨auth', ha', hw'⟩, -⟩ := Carry.importWorld_ok h'
   obtain ⟨hf, rfl⟩ := Receive.carry_ok.mp hw
   obtain ⟨hf', rfl⟩ := Receive.carry_ok.mp hw'
-  rcases Receive.carry_inj_canon Receive.deployed_lawful hj hj' hf hf' ho with
-    ⟨_, _, _, ht, hr, ha, hh, hjl⟩ | hc
-  · refine .inl ⟨ht, hr, ha, hh, hh, hjl, rfl, ?_⟩
-    simp only [Receive.carryWorld] at ho ⊢
-    rw [ho]
-  · exact .inr hc
+  exact ⟨auth, auth', ha, ha', Receive.carry_inj Receive.deployed_lawful hf hf' ho⟩
 
 /-- **A genesis and an import never share an origin**, but by a collision between their two origin
 inputs (KERNEL's `carry_origin_ne_genesis`: the two cases of one tagged codec). -/
 theorem start_kinds_disjoint {name nonce name' nonce' : ByteArray} {allowance : Nat}
-    {founders : List (ByteArray × D)} {auth : Receive.Authority} {pin : Carry.Pin D} {f : ByteArray} {r : Carry.Read D} {w₀ w₀' : World D}
+    {founders : List (ByteArray × D)} {auth : Receive.Authority} {pin : Carry.Pin D} {stated : Option Receive.Authority}
+    {f : ByteArray} {r : Carry.Read D} {w₀ w₀' : World D}
     (hg : Receive.genesis X name nonce allowance founders auth = .ok w₀)
-    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' pin f = .ok (w₀', r))
+    (h' : Carry.importWorld X Codec.Deployed.digestCodec name' nonce' pin stated f = .ok (w₀', r))
     (ho : w₀.origin = w₀'.origin) :
-    CollidesAmong X.env.hash
-      [Receive.carryOriginPre X name' nonce' r.head.fromOrigin r.carried,
+    ∃ auth', CollidesAmong X.env.hash
+      [Receive.carryOriginPre X name' nonce' r.head.fromOrigin r.carried auth',
        Receive.originPre X name nonce allowance founders auth] := by
   obtain ⟨_, rfl⟩ := Receive.genesis_ok.mp hg
-  obtain ⟨-, hw', -⟩ := Carry.importWorld_ok h'
+  obtain ⟨-, ⟨auth', -, hw'⟩, -⟩ := Carry.importWorld_ok h'
   obtain ⟨_, rfl⟩ := Receive.carry_ok.mp hw'
-  exact Receive.carry_origin_ne_genesis ho.symm
+  exact ⟨auth', Receive.carry_origin_ne_genesis ho.symm⟩
 
 end Nanodregg.Host.Deployed

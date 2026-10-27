@@ -24,6 +24,9 @@ cells pin is the pre-day bytes with the live entry's version (300, the two-byte 
 after the entry's kind byte, and the rows pin with the head's floor (2: `02`) after its retract byte and
 each row's version after its amt (0: `00`; 128: `80 01`, the first two-byte value; 300: `ac 02`). The
 World's and the carried state's pins hold no live entry and no row, so their bytes are unchanged.
+
+KERNEL-79 appended the window trie to the carried state (CODEC-41): the carried pin is the bytes above with
+an empty window listing's four count bytes (`00 00 00 00`) appended, and nothing else moved.
 -/
 
 namespace Nanodregg.Codec.Kernel
@@ -83,6 +86,7 @@ private def carriedPin : ByteArray := ⟨#[
   0x1e, 0x2e, 0x0e, 0xa5, 0x48, 0x6d, 0x41, 0xfd, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x91, 0xb2, 0x1a, 0x7a, 0xdf, 0xc0, 0xa5, 0xa3, 0xba, 0x71, 0x57, 0xee, 0x37, 0x1b, 0x63, 0xc7,
   0x23, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x67, 0xab, 0xdc, 0x74, 0x17, 0xa2, 0xe6, 0xae,
+  0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00]⟩
 
 /-- The cells' listing (three slots: a live cell at version 300, two nullifiers), inserted last-first. -/
@@ -132,7 +136,7 @@ theorem world_listing_unmoved :
         origin := 872858553491821609 } = worldPin := by
   decide +kernel
 
-/-- A carried state's wire (cells, numbers, journal, rows), each trie inserted last-first. -/
+/-- A carried state's wire (cells, numbers, journal, rows, window), each trie inserted last-first. -/
 theorem carried_listing_unmoved :
     (carried Sim.env Sim.dc).bytes
       { trie := Trie.insertAll (trieSpec Sim.env) .empty
@@ -143,7 +147,8 @@ theorem carried_listing_unmoved :
         journal := Trie.insertAll (journalSpec Sim.env) .empty
           [(14367357163277873594, (35, 12602938828871478119)), (18248987323856203294, (33, 11792043265398321809)),
            (16327107726860481540, (34, 6373874951555487068))]
-        rows := .empty } = carriedPin := by
+        rows := .empty
+        refusals := .empty } = carriedPin := by
   decide +kernel
 
 end Nanodregg.Codec.Kernel

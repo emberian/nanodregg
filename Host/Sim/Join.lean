@@ -42,7 +42,8 @@ def checks : IO (List (String × Bool)) := do
     throw (IO.userError "join plant genesis")
   let .ok file := Carry.exportFile X.env Codec.Deployed.digestCodec g |
     throw (IO.userError "join plant export")
-  let .ok (w, r) := Carry.importWorld X Codec.Deployed.digestCodec name nonce (.digest (Carry.digestOf file)) file |
+  let auth : Receive.Authority := ⟨[ByteArray.mk (Array.replicate 32 0xc3)], 1⟩
+  let .ok (w, r) := Carry.importWorld X Codec.Deployed.digestCodec name nonce (.digest (Carry.digestOf file)) (some auth) file |
     throw (IO.userError "join plant import")
   let invitation (start : Invite.Start D) : IO ByteArray := do
     let some u := Invite.unsignedBytes X (Invite.startBytes X start)
@@ -51,20 +52,25 @@ def checks : IO (List (String × Bool)) := do
     let some b := Invite.bytes u (R.sign secret (Invite.message u)) |
       throw (IO.userError "join plant invitation")
     return b
-  let good := Invite.Start.carried w.origin name nonce r.head.fromOrigin r.head.height r.head.chain
+  let start (a : Receive.Authority) (height : Nat) : Receive.CarryStart D :=
+    { Receive.carryStartOf X name nonce r.head.fromOrigin r.carried a with height }
+  let good := Invite.Start.carried (start auth r.head.height) r.head.chain
   let inv ← invitation good
   let (ok, _, writes, made) ← trial inv key (some "in") file
   let (_, missing, mw, _) ← trial inv key none file
-  let (_, wrong, ww, _) ← trial (← invitation (.carried g.origin name nonce r.head.fromOrigin r.head.height r.head.chain))
+  -- a start whose trie root is not the file's names another origin: the import is another World
+  let (_, wrong, ww, _) ← trial (← invitation (.carried { start auth r.head.height with trieRoot := r.head.fromOrigin } r.head.chain))
     key (some "in") file
-  let (_, anchor, aw, _) ← trial (← invitation (.carried w.origin name nonce r.head.fromOrigin (r.head.height + 1) r.head.chain))
+  -- the anchor's chain in the start is not the file's
+  let (_, anchor, aw, _) ← trial (← invitation (.carried (start auth r.head.height) r.head.fromOrigin))
     key (some "in") file
   let (_, arity, gw, _) ← trial (← invitation (.genesis name "first".toUTF8 10000 fs Receive.Authority.none)) key (some "in") file
   return [
     ("join-carried: signed nonce/origin reaches genesis and reopens", ok == 0 && writes == 1 &&
       (made.map fun m => R.world.bytes m == R.world.bytes w).getD false),
     ("join-carried-missing-input: usage in before writes", missing == "in" && mw == 0),
-    ("join-carried-wrong-origin: carryMismatch wrongWorld before writes", wrong == "carryMismatch wrongWorld" && ww == 0),
+    ("join-carried-wrong-root: a start naming another trie root names another origin: carryMismatch wrongWorld before writes",
+      wrong == "carryMismatch wrongWorld" && ww == 0),
     ("join-carried-anchor: carryMismatch anchor before writes", anchor == "carryMismatch anchor" && aw == 0),
     ("join-genesis-extra-input: usage in before writes", arity == "in" && gw == 0)]
 

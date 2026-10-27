@@ -58,20 +58,23 @@ def inputOf (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : L
     (auth : Authority) : GenesisInput :=
   (name, nonce, allowance, founders.map (fun f => (f.1, X.env.bytes f.2)), auth.certifiers, auth.threshold)
 
-/-- What a carry is made from (KERNEL-29), as CODEC's raw combinators write it: the name, HOST's
-nonce, the exported World's origin bytes, the carried trie's root bytes, the carried rows' root
-bytes (KERNEL-48), the allowance, the height, and the journal listing (each entry's id bytes,
-height, turn-digest bytes, in trie order). -/
+/-- What a carry is made from (KERNEL-29, KERNEL-79), as CODEC's raw combinators write it: the name,
+HOST's nonce, the exported World's origin bytes, the root bytes of the four carried tries as exported
+(cells, rows, journal, window), the allowance, the height, then the STATED authority's certifier keys,
+in order, and its threshold. Fixed-size but for the authority, like a genesis input: a carried
+World's start (`CarryStart`) is this record, so a stranger holding it recomputes the origin and
+checks a certificate under the authority it states (PROTOCOL-85). -/
 abbrev CarryInput :=
-  ByteArray × ByteArray × ByteArray × ByteArray × ByteArray × Nat × Nat × List (ByteArray × Nat × ByteArray)
+  ByteArray × ByteArray × ByteArray × ByteArray × ByteArray × ByteArray × ByteArray × Nat × Nat ×
+    List ByteArray × Nat
 
 open Nanodregg.Codec Nanodregg.Codec.Stream in
 def carryInput : Stream CarryInput :=
   product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax)
     (product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax)
-      (product (rawBytes Bounds.eventBytesMax) (product nat64
-        (product nat64 (rawList Bounds.journalMax
-          (product (rawBytes Bounds.eventBytesMax) (product nat64 (rawBytes Bounds.eventBytesMax))))))))))
+      (product (rawBytes Bounds.eventBytesMax) (product (rawBytes Bounds.eventBytesMax)
+        (product (rawBytes Bounds.eventBytesMax) (product nat64 (product nat64
+          (product (rawList Bounds.eventBytesMax (rawBytes Bounds.eventBytesMax)) nat64)))))))))
 
 open Nanodregg.Codec Nanodregg.Codec.Stream in
 /-- A World's identity input: a genesis's or a carry's, under one domain, the case tagged by one
@@ -134,15 +137,18 @@ def authorityOfCell (c : Cell) : Option Authority := do
   let ks ← (List.range n).mapM fun i => c.slots.get (certifierBase + i)
   pure ⟨ks, t⟩
 
-/-- The authority a World carries: its one live `kindAuthority` cell, read back. Two or none is
+/-- The authority a trie carries: its one live `kindAuthority` cell, read back. Two or none is
 `none`: a verifier handed such a World refuses rather than choose (`authorityOf_genesis` is the
 one every genesis World answers; `fold_rom` keeps that cell). -/
-def authorityOf (w : World D) : Option Authority :=
-  match w.trie.toList.filterMap (fun p => match p.2 with
+def authorityIn (t : Cells D) : Option Authority :=
+  match t.toList.filterMap (fun p => match p.2 with
       | .entry (.live c _) => if c.kind = kindAuthority then some c else none
       | _ => none) with
   | [c] => authorityOfCell c
   | _ => none
+
+/-- `authorityIn` of the World's trie (`authorityIn` reads a carried trie the same way, KERNEL-79). -/
+def authorityOf (w : World D) : Option Authority := authorityIn w.trie
 
 /-- The World a genesis builds, UNCHECKED: founders `(key, digest of next key)` as members, each
 with a root World grant, and the authority cell; its origin commits to the name, HOST's `nonce`,
@@ -209,18 +215,24 @@ def checkCertifiers : Nat → List ByteArray → List ByteArray → Except Genes
       req (seen.all fun s => decide (k ≠ s)) (.repeatedCertifier i)
       checkCertifiers (i + 1) (k :: seen) rest
 
+/-- The authority is a quorum somebody can meet, within one cell (`Authority.Fits`,
+`checkAuthority_ok`): the certifier count, the threshold, then each certifier. The ONE authority
+check: a genesis (`checkGenesis`) and a carry (`checkCarry`, KERNEL-79) both run it. -/
+def checkAuthority (auth : Authority) : Except GenesisRefusal Unit := do
+  req (auth.certifiers.length + 2 ≤ Bounds.slotsPerCellMax) .tooManyCertifiers
+  req (auth.threshold ≤ auth.certifiers.length ∧ (auth.threshold = 0 → auth.certifiers = [])) .badThreshold
+  checkCertifiers 0 [] auth.certifiers
+
 /-- The genesis input is within the raw codec's bounds and the authority is a quorum somebody can
-meet (`GenesisFits`, `checkGenesis_ok`): the lengths and the threshold first, then each founder and
-each certifier, and the World weighed last, once every one of them is within bounds. -/
+meet (`GenesisFits`, `checkGenesis_ok`): the lengths first, then the authority (`checkAuthority`),
+then each founder, and the World weighed last, once every one of them is within bounds. -/
 def checkGenesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : List (ByteArray × D))
     (auth : Authority) : Except GenesisRefusal Unit := do
   req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
   req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
   req (founders.length ≤ Bounds.eventBytesMax) .tooManyFounders
-  req (auth.certifiers.length + 2 ≤ Bounds.slotsPerCellMax) .tooManyCertifiers
-  req (auth.threshold ≤ auth.certifiers.length ∧ (auth.threshold = 0 → auth.certifiers = [])) .badThreshold
+  checkAuthority auth
   checkFounders X 0 founders
-  checkCertifiers 0 [] auth.certifiers
   req ((genesisWorld X name nonce allowance founders auth).weight + allowance < Bounds.counterLimit) .allowanceTooLarge
 
 /-- THE genesis: refused by name outside `GenesisFits`, else `genesisWorld` (`genesis_ok`). -/
@@ -229,28 +241,92 @@ def genesis (X : Ctx D) (name nonce : ByteArray) (allowance : Nat) (founders : L
   checkGenesis X name nonce allowance founders auth
   pure (genesisWorld X name nonce allowance founders auth)
 
-/-! ## Carry (KERNEL-29): a new World from a carried state -/
+/-! ## Carry (KERNEL-29, KERNEL-79): a new World from a carried state, under a stated authority -/
 
-def carryInputOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : CarryInput :=
-  (name, nonce, X.env.bytes fromOrigin, X.env.bytes (c.trie.hashOf (trieSpec X.env)),
-    X.env.bytes (c.rows.hashOf (rowSpec X.env)), c.allowance, c.height, c.journal.toList.map fun p => (X.env.bytes p.1, p.2.1, X.env.bytes p.2.2))
+/-- What a carried World is made from, by roots (KERNEL-79): the name, HOST's nonce, the exported
+World's origin, the roots of the four carried tries as exported (the cells with the OLD authority
+cell in them: the carried World's provenance), the allowance and the height, and the authority the
+operator STATES at the carry. The carried World's origin is the digest of exactly this
+(`carryOriginOfStart`); a carried invitation signs it whole (PROTOCOL-85), so a joiner and a
+stranger recompute the origin from it and read the authority off it. -/
+structure CarryStart (D : Type) where
+  name : ByteArray
+  nonce : ByteArray
+  fromOrigin : D
+  trieRoot : D
+  rowsRoot : D
+  journalRoot : D
+  windowRoot : D
+  allowance : Nat
+  height : Nat
+  auth : Authority
 
-/-- A carried World's identity: everything the carry is made from, the trie and the rows by their
-roots. -/
-def carryOriginOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : D :=
-  X.env.hash domOrigin (originInput.bytes (.inr (carryInputOf X name nonce fromOrigin c)))
+/-- The carry start of a carried state `c`, from `fromOrigin`, under the stated authority `auth`. -/
+def carryStartOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) (auth : Authority) :
+    CarryStart D :=
+  { name, nonce, fromOrigin, trieRoot := c.trie.hashOf (trieSpec X.env), rowsRoot := c.rows.hashOf (rowSpec X.env),
+    journalRoot := c.journal.hashOf (journalSpec X.env), windowRoot := c.refusals.hashOf (refusalSpec X.env),
+    allowance := c.allowance, height := c.height, auth }
+
+def carryInputOfStart (X : Ctx D) (s : CarryStart D) : CarryInput :=
+  (s.name, s.nonce, X.env.bytes s.fromOrigin, X.env.bytes s.trieRoot, X.env.bytes s.rowsRoot,
+    X.env.bytes s.journalRoot, X.env.bytes s.windowRoot, s.allowance, s.height, s.auth.certifiers, s.auth.threshold)
+
+/-- A carried World's identity from its start: everything the carry is made from. -/
+def carryOriginOfStart (X : Ctx D) (s : CarryStart D) : D :=
+  X.env.hash domOrigin (originInput.bytes (.inr (carryInputOfStart X s)))
+
+def carryInputOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) (auth : Authority) :
+    CarryInput :=
+  carryInputOfStart X (carryStartOf X name nonce fromOrigin c auth)
+
+/-- A carried World's identity: everything the carry is made from, the tries by their roots, the
+stated authority whole. -/
+def carryOriginOf (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) (auth : Authority) : D :=
+  carryOriginOfStart X (carryStartOf X name nonce fromOrigin c auth)
 
 /-- What `carryOriginOf` hashes. -/
-def carryOriginPre (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : String × ByteArray :=
-  (domOrigin, originInput.bytes (.inr (carryInputOf X name nonce fromOrigin c)))
+def carryOriginPre (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) (auth : Authority) :
+    String × ByteArray :=
+  (domOrigin, originInput.bytes (.inr (carryInputOf X name nonce fromOrigin c auth)))
+
+/-- A live authority cell (KERNEL-69) at a cell slot: what a carry drops from the carried trie. -/
+def liveAuthority : Slot D → Leaf → Bool
+  | .cell _, .entry (.live c _) => c.kind == kindAuthority
+  | _, _ => false
+
+/-- The carried trie under the stated authority (KERNEL-79): every live authority cell dropped (the
+old authority is the carried World's provenance, in its origin, never its authority), every other
+entry kept as it is (cells, tombstones, spent nullifiers), and the stated authority's cell written
+at its content id, as a genesis writes it. -/
+def reauthor (X : Ctx D) (t : Cells D) (auth : Authority) : Cells D :=
+  (Trie.retainAt (trieSpec X.env) (fun s l => !liveAuthority s l) [] t).insert (trieSpec X.env)
+    (.cell (authorityId X auth)) (.entry (.live (authorityCell auth) 0))
+
+/-- The stated authority's content id holds nothing in the carried trie but an authority cell: no
+entry of another kind is overwritten by `reauthor` (such an entry is a collision of the ROM id). -/
+def authorityFree (X : Ctx D) (t : Cells D) (auth : Authority) : Bool :=
+  match t.get (trieSpec X.env) (.cell (authorityId X auth)) with
+  | none => true
+  | some l => liveAuthority (.cell (authorityId X auth)) l
+
+/-- A meter key (KERNEL-68) of the window trie. -/
+def isMeter : WindowSlot D → RefusalLeaf D → Bool
+  | .meter _, _ => true
+  | .refusal _, _ => false
+
+/-- The carried window trie's meter (KERNEL-79): its meter leaves, nothing else. -/
+def meterOnly (E : Env D) (r : Refusals D) : Refusals D :=
+  Trie.retainAt (refusalSpec E) isMeter [] r
 
 /-- The World a carry builds, UNCHECKED: the carried state under a new origin, its chain at
-`genesisChain` of that origin. No founders: the members are the carried member cells, and their
-keys sign the new World's calls (`Unsigned.world` = the new origin). -/
-def carryWorld (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : World D :=
-  let o := carryOriginOf X name nonce fromOrigin c
-  { trie := c.trie, journal := c.journal, refusals := .empty, rows := c.rows, height := c.height,
-    steps := c.height,
+`genesisChain` of that origin, its authority the stated one (`reauthor`), its window trie the
+carried meter (`meterOnly`). No founders: the members are the carried member cells, and their keys
+sign the new World's calls (`Unsigned.world` = the new origin). -/
+def carryWorld (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) (auth : Authority) : World D :=
+  let o := carryOriginOf X name nonce fromOrigin c auth
+  { trie := reauthor X c.trie auth, journal := c.journal, refusals := meterOnly X.env c.refusals, rows := c.rows,
+    height := c.height, steps := c.height,
     chain := World.genesisChain X.env o, allowance := c.allowance, origin := o }
 
 /-- Why a carry is refused (law 7): one constructor per clause of `CarryFits`, in its order. Past
@@ -258,42 +334,61 @@ these bounds `carryInput`'s raw codec truncates, so two different carries would 
 inductive CarryRefusal
   | nameTooLong
   | nonceTooLong
-  /-- the carried allowance plus the carried cells' and rows' storage is not below 2^64 (`fold_conserves` keeps
-  that sum, so no later retirement can overflow the allowance; cv 01a14ba9-cbf4) -/
+  /-- the stated authority is not a quorum somebody can meet within one cell: genesis's own refusal
+  (`checkAuthority`), by its name -/
+  | authority (r : GenesisRefusal)
+  /-- the stated authority's content id holds an entry of another kind in the carried trie -/
+  | authorityTaken
+  /-- a carried relation's parent is not a live cell of the re-authored trie (it was the old
+  authority cell: no receiver writes one, so only a forged file reaches this) -/
+  | rowsOrphaned
+  /-- the carried allowance plus the carried World's cells' and rows' storage is not below 2^64
+  (`fold_conserves` keeps that sum, so no later retirement can overflow the allowance; cv 01a14ba9-cbf4) -/
   | allowanceTooLarge
   | heightTooLarge
-  | journalTooLong
-  /-- a digest's bytes (the exported origin, the two roots, a journal entry's) are longer than
-  `Bounds.eventBytesMax`, or an entry's height is past the counter limit -/
+  /-- a digest's bytes (the exported origin, the four roots) are longer than `Bounds.eventBytesMax` -/
   | entryTooLarge
   deriving DecidableEq, Repr
 
 def CarryRefusal.name : CarryRefusal → String
   | .nameTooLong => "nameTooLong"
   | .nonceTooLong => "nonceTooLong"
+  | .authority r => r.name
+  | .authorityTaken => "authorityTaken"
+  | .rowsOrphaned => "rowsOrphaned"
   | .allowanceTooLarge => "allowanceTooLarge"
   | .heightTooLarge => "heightTooLarge"
-  | .journalTooLong => "journalTooLong"
   | .entryTooLarge => "entryTooLarge"
 
-/-- The carry input is within the raw codec's bounds (`checkCarry_ok`). -/
-def checkCarry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) : Except CarryRefusal Unit := do
+/-- The authority check under a carry's refusal. -/
+def checkCarryAuthority (auth : Authority) : Except CarryRefusal Unit :=
+  match checkAuthority auth with
+  | .ok () => .ok ()
+  | .error r => .error (.authority r)
+
+/-- The carry input is within the raw codec's bounds, the stated authority passes genesis's own
+check, and the World it makes is within the counters (`checkCarry_ok`). -/
+def checkCarry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) (auth : Authority) :
+    Except CarryRefusal Unit := do
   req (name.size ≤ Bounds.eventBytesMax) .nameTooLong
   req (nonce.size ≤ Bounds.eventBytesMax) .nonceTooLong
-  req (cellsWeight c.trie + rowsWeight c.rows + c.allowance < Bounds.counterLimit) .allowanceTooLarge
+  checkCarryAuthority auth
+  req (authorityFree X c.trie auth) .authorityTaken
+  req (rowsParented X.env (reauthor X c.trie auth) c.rows) .rowsOrphaned
+  req (cellsWeight (reauthor X c.trie auth) + rowsWeight c.rows + c.allowance < Bounds.counterLimit) .allowanceTooLarge
   req (c.height < Bounds.counterLimit) .heightTooLarge
-  req (c.journal.toList.length ≤ Bounds.journalMax) .journalTooLong
   req ((X.env.bytes fromOrigin).size ≤ Bounds.eventBytesMax &&
       (X.env.bytes (c.trie.hashOf (trieSpec X.env))).size ≤ Bounds.eventBytesMax &&
       (X.env.bytes (c.rows.hashOf (rowSpec X.env))).size ≤ Bounds.eventBytesMax &&
-      c.journal.toList.all fun p => (X.env.bytes p.1).size ≤ Bounds.eventBytesMax &&
-        p.2.1 < Bounds.counterLimit && (X.env.bytes p.2.2).size ≤ Bounds.eventBytesMax) .entryTooLarge
+      (X.env.bytes (c.journal.hashOf (journalSpec X.env))).size ≤ Bounds.eventBytesMax &&
+      (X.env.bytes (c.refusals.hashOf (refusalSpec X.env))).size ≤ Bounds.eventBytesMax) .entryTooLarge
 
 /-- THE carry: refused by name outside `CarryFits`, else `carryWorld` (`carry_ok`). `fromOrigin`
-is the exported World's origin (its lineage, committed in the new origin). -/
-def carry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) :
+is the exported World's origin (its lineage, committed in the new origin); `auth` is the authority
+the carried World bears, stated by the operator (KERNEL-79), never inherited. -/
+def carry (X : Ctx D) (name nonce : ByteArray) (fromOrigin : D) (c : Carried D) (auth : Authority) :
     Except CarryRefusal (World D) := do
-  checkCarry X name nonce fromOrigin c
-  pure (carryWorld X name nonce fromOrigin c)
+  checkCarry X name nonce fromOrigin c auth
+  pure (carryWorld X name nonce fromOrigin c auth)
 
 end Nanodregg.Kernel.Receive

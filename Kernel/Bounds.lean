@@ -43,8 +43,7 @@ def kindLimit : Nat := 4294967296
 def windowMax : Nat := 1024
 /-- The most journal entries a World holds: every World a genesis reaches holds fewer
 (`Kernel.reach_journal_bounded`, KERNEL-33), and so does every World folded from a carry of one
-(`Receive.carry_fold_journal_bounded`), so a carry's `journalTooLong` never fires on a reached
-World (`Receive.carry_journal_fits`) and its journal listing is bounded (KERNEL-29). -/
+(`Receive.carry_fold_journal_bounded`), so every exported journal is within the wire's listing bound. -/
 def journalMax : Nat := 3 * windowMax
 /-- The most one turn may weigh (its charge: log record plus World growth). The per-field bounds
 alone allow a turn of ~8.6 GB (64 born cells of 1024 slots of 64 KiB, and as much again in

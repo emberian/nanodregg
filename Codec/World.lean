@@ -336,22 +336,27 @@ def batch (max : Nat) (dc : Stream D) : Stream (List (Step D × D)) :=
 
 /-! ## The carried state (CODEC-22, KERNEL-29, KERNEL-48)
 
-`trie ‖ allowance u64 ‖ height u64 ‖ journal ‖ rows`: the three tries as their listings (the cells'
-`kernel/leaf-fit` and `kernel/trie-order` refusals, the journal's `kernel/journal-order`, the rows'
-`kernel/row-order`), refused `kernel/carried-journal` unless the journal is the window's at the carried
-height, `kernel/carried-rows` unless every rows entry fits, `kernel/carried-rows-headed` unless every
-head counts its rows, and `kernel/carried-rows-parented` unless every relation's parent is a live cell. An export stamps the shape's tag; the import compares it before decoding. -/
+`trie ‖ allowance u64 ‖ height u64 ‖ journal ‖ rows ‖ window`: the four tries as their listings (the
+cells' `kernel/leaf-fit` and `kernel/trie-order` refusals, the journal's `kernel/journal-order`, the rows'
+`kernel/row-order`, the window trie's `kernel/refusal-order`), refused `kernel/carried-journal` unless
+the journal is the window's at the carried height, `kernel/carried-rows` unless every rows entry fits,
+`kernel/carried-rows-headed` unless every head counts its rows, `kernel/carried-rows-parented` unless
+every relation's parent is a live cell, and `kernel/carried-window` unless every window leaf fits the
+carried height (KERNEL-79: the meter is carried). An export stamps the shape's tag; the import
+compares it before decoding. -/
 
 /-- The carried state's contents, in canonical order. -/
-abbrev CarriedWire (D : Type) := Cells D × Nat × Nat × Journal D × Rows D
+abbrev CarriedWire (D : Type) := Cells D × Nat × Nat × Journal D × Rows D × Refusals D
 
 def carriedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
-  product (cells E dc) (product nat64 (product nat64 (product (journalTrie E dc) (rowsTrie E dc))))
+  product (cells E dc) (product nat64 (product nat64 (product (journalTrie E dc)
+    (product (rowsTrie E dc) (refusalsTrie E dc)))))
 
-def carriedToWire (c : Carried D) : CarriedWire D := (c.trie, c.allowance, c.height, c.journal, c.rows)
+def carriedToWire (c : Carried D) : CarriedWire D := (c.trie, c.allowance, c.height, c.journal, c.rows, c.refusals)
 
 def carriedOfWire (x : CarriedWire D) : Carried D :=
-  { trie := x.1, allowance := x.2.1, height := x.2.2.1, journal := x.2.2.2.1, rows := x.2.2.2.2 }
+  { trie := x.1, allowance := x.2.1, height := x.2.2.1, journal := x.2.2.2.1, rows := x.2.2.2.2.1,
+    refusals := x.2.2.2.2.2 }
 
 /-- The carried state's contents, refused by name unless the journal is the window's at the carried
 height (KERNEL-39's `journalFits`, as the World's `kernel/journal`; HOST-11's find): a carried file with
@@ -378,9 +383,22 @@ def carriedParentedWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Ca
   refine "kernel/carried-rows-parented" (carriedHeadedWire E dc)
     (fun x => if rowsParented E (carriedOfWire x).trie (carriedOfWire x).rows then some x else none) id
 
-/-- The carried state (KERNEL-48: it carries the rows, so its shape and tag moved; an export of the
-old shape refuses by its stamp). -/
+/-- Does a carried window listing fit the carried height (KERNEL-79)? Every leaf as the World's
+`kernel/refusals` admits it (`refusalsFits`), and at most one meter leaf per height elapsed in the
+window, as `kernel/refusals-counted` bounds the World's: the meter the carry keeps is bounded, of the
+current window, and no more than the World it makes may hold. -/
+def carriedWindowFits (height : Nat) (l : List (WindowSlot D × RefusalLeaf D)) : Bool :=
+  refusalsFits height l && decide ((l.map meterKeyOne).sum ≤ height % Kernel.Bounds.windowMax + 1)
+
+/-- The carried state's contents, refused by name unless the window listing fits the carried height
+(`carriedWindowFits`). -/
+def carriedWindowWire [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (CarriedWire D) :=
+  refine "kernel/carried-window" (carriedParentedWire E dc)
+    (fun x => if carriedWindowFits (carriedOfWire x).height (carriedOfWire x).refusals.toList then some x else none) id
+
+/-- The carried state (KERNEL-48 carries the rows, KERNEL-79 the window trie, so its shape and tag
+moved; an export of an old shape refuses by its stamp). -/
 def carried [DecidableEq D] (E : Env D) (dc : Stream D) : Stream (Carried D) :=
-  refine "kernel/carried" (carriedParentedWire E dc) (fun x => some (carriedOfWire x)) carriedToWire
+  refine "kernel/carried" (carriedWindowWire E dc) (fun x => some (carriedOfWire x)) carriedToWire
 
 end Nanodregg.Codec.Kernel
