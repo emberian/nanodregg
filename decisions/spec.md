@@ -1,6 +1,7 @@
 # decisions/spec.md — the top-level spec (`Spec/`)
 
-Owner: SPEC (a ROOT lane; `Spec/` has no OWNERS row, so it is ROOT's and lands as `root:`). Design:
+Owner: SPEC (its own layer since SPEC-3: gates/OWNERS rows `Spec/` and `decisions/spec.md`, prefix `spec:`;
+the first four landings went in as `root:`). Design:
 `redregg/work/promo/TOPLEVEL-SPEC.md`. Format per decisions/README.md.
 
 ## SPEC-1 Claims are predicates on a record of the deployed entry points (2026-10-26)
@@ -242,3 +243,218 @@ founder's root grant, `run_shown`) and `inhabited_value` (B2's non-trivial case:
 transfer 10, re-derived, the account holds 10, `run_value`).
 
 **Status.** open; the cancel run and B3's law-judged run owed.
+
+## SPEC-9 One claim, one proof module and one Sim module; five components become System fields (2026-10-26)
+
+**Decision.** A claim stated after SPEC-8 lives in `Spec/Proofs/<Name>.lean` (the claim, its Prop
+vocabulary, top theorem, floor, inhabited fact, lemmas) beside `Spec/Sim/<Name>.lean` (every non-Prop
+def: its trivial system(s) and the inputs of its runs). Floor.lean's run inputs moved to
+`Spec/Sim/Run.lean`, shared by every floor. `System` gains `rc` (the receipt check a law's foreign read
+runs), `reopen` (the writer's open after a crash), `exchange` (the stdlib exchange package),
+`bellAccept` and `ringAct` (the resident's bell check and its act on the rings); `deployed` fills each
+with the definition the binaries run.
+
+**Alternatives.** (a) Every claim in Claims.lean and every floor in Floor.lean (SPEC-2's layout): one
+reading, but a 3000-line Floor and every lane editing two shared files. (b) The new components as claim
+parameters (the drafts' shape): a parameter the system does not own cannot be refused by a trivial
+system, and a reader may instantiate it with anything. (c) Trivial systems in `Spec/Trivial.lean`: they
+read run inputs (a check that answers the run's call), which are tooling; C9 forbids a deployed
+def-module importing a Sim module.
+
+**Why.** Closure C3/C9 decide the split (non-Prop defs out of `Proofs`, run inputs are tooling); one
+module per claim lets claims be drafted in parallel and read one at a time.
+
+**CRITIQUE.** The trusted reading now spans a file per claim, and new trivial systems sit in `Sim`
+modules beside run data, not in `Trivial.lean` with the first ones. `deployed` grew five more wirings
+that only reading checks (SPEC-1's drift risk, five times).
+
+**META-CRITIQUE.** The layout was chosen to let nine drafting lanes work without touching one file;
+that is a property of this session's method, not of the spec. If the claims stop growing, fold the
+claim statements back into one `Claims` reading.
+
+**Status.** open.
+
+## SPEC-10 §9 is `Foreign` over the `rc` field, under the named premise `HeadOf` (2026-10-26)
+
+**Decision.** `foreign_receipt_sound` over `S.fold`/`S.admit`/`S.rc`; `HeadOf S cell wA` (the held
+head's roots are those of the fold) is a named premise, undischargeable today (PROTOCOL E-3).
+`deployed_program_reads` ties `(deployed d).rc` by `rfl` to the check `Host.Deployed.X`'s program
+reads. Floor: `acceptingHead` (a check that shows the run's call committed for any cell and bytes) at
+the genesis World and the empty log. Inhabited: the deployed check shows a committed receipt against
+a head cell holding the roots of THE re-deriver's fold.
+
+**Alternatives.** `rc` as a claim parameter; make `X`'s program read the field (the trivial system
+would change what laws read; §9 does not need it).
+
+**CRITIQUE.** The floor's cell is no head, so `HeadOf` holds vacuously there: the floor refutes the
+lazy CHECK, not a lazy head. The inhabited head cell is synthetic, not one a head object's `post` made.
+
+**META-CRITIQUE.** Deleting `HeadOf` (writer-signed step-indexed heads, §9) is the strengthening the
+checker sees; until then the claim is a consequence under trust.
+
+**Status.** open.
+
+## SPEC-11 DURABILITY's writer half needs a completeness clause: `host_reopen_folds` alone admits the amnesiac open (2026-10-26)
+
+**Decision.** `Durable.reopen (S : System Digest)`: an open that succeeds returns `S.fold`, from the
+`Kept` base World, of EXACTLY the records `Log.recover` verifies past the base (completeness), whose
+encoding is the bytes up to the open's position; the opened World is `Kept`. Floor: `amnesiac` (the
+base's World at the base's position). Inhabited: a computed Store (genesis + one rotate record)
+reopens to height 1.
+
+**Found.** `host_reopen_folds`'s statement verbatim is met by the amnesiac open on every Store
+(`amnesiac_reopenSound`, kept as the reason): zero records, an empty prefix. TOPLEVEL-SPEC §5.FLOOR's
+"`o.records = rs.length` fails on a one-record segment" is false of that open.
+
+**Alternatives.** The verbatim statement (refuted above); a crash-image form (Log-level premises on
+the top claim); generic in `D` (`Kept` and `foldStep` are the deployed instance's).
+
+**CRITIQUE.** "On disk" is defined by `Log.recover`, which the open itself runs: a recover that
+stopped early would pass with its open. Fold, not audit: `Honest` is not carried across the crash and
+nothing ties a record to what `admitBatch` staged; the acknowledged-reply half needs §11.4.
+
+**META-CRITIQUE.** The floor refutes exactly the open the design's own form admitted; that is the
+test of the added clause, not of D1.
+
+**Status.** open; D1 over `Crash` images owed (§11.4).
+
+## SPEC-12 C(i) signing is stated per signing DOMAIN, with a companion over every shape (2026-10-26)
+
+**Decision.** `Consent.signs`: every message follow offers custody (`sign`/`signNext`/`signIncoming`)
+that is `callMessage v` for some `v` is `callMessage u` for the `u` `plan` produced on follow's World
+after the step (`f'.world`) from the command the continuation's argv parses to, the member's own
+call, its Turn admitted there. `Consent.signShapes`: every offered message is a planned call, an
+own-World envelope, a possession proof, an invitation, a head attestation or a cancel. Floor:
+`relaySigner` (signs the Host's bytes once the continuation decodes and parses), refuted on a decoding
+`sync` continuation with no `native_decide`.
+
+**Alternatives.** By reply constructor (`sign` carries seven kinds of message); `signShapes` alone;
+a floor on an undecodable continuation (escaped by a signer that checks decoding).
+
+**CRITIQUE.** The argv and custody's key are continuation bytes: "planned from the continuation's
+argv", not "the member's" (§11.2, named, not assumed). `start`'s `whoami` arm is outside `System`.
+
+**META-CRITIQUE.** No floor exhibits a signer that plans on a World other than its own.
+
+**Status.** open.
+
+## SPEC-13 The grant cap is stated over the system's own step chain, both ledgers (2026-10-26)
+
+**Decision.** `Integrity.grantCap`: from a canonical World whose grant ledgers are contiguous, along an
+audited log and ANY chain of the system's own steps over it (`System.Steps`), the transfers (credit
+lines) dispatched through a live grant sum to at most what its transfer (credit) ledger had left.
+Floors: `capless` (transfer and credit without `spendVia`), one per ledger. Inhabited: one deployed
+move of 10 through a cap-10 grant.
+
+**Alternatives.** Keep `GrantStep` (names `World.step`/`Honest`, so no floor could swap `receive`); an
+existential chain; the transfer ledger only.
+
+**CRITIQUE.** A nested move is read through the kernel's walk of the call, so under a non-kernel
+`receive` a nested move that walk refuses is not counted; the floors exercise only the root case.
+
+**META-CRITIQUE.** `LedgerContiguous` is a separate premise (the design said `Kept` discharges it; it
+does not, `honest_ledgerContiguous` does).
+
+**Status.** open.
+
+## SPEC-14 A2′ fork consistency is stated at the post comparison, with the refusal carrying its evidence (2026-10-26)
+
+**Decision.** `ForkConsistent`: a frame that persists a page carrying another fold's self-head post
+(from the same start) at a step the page walks has one history with that fold up to there (or a
+collision among a length-pinned explicit list), or ends `refused forkedPost` WITH a post its own fold
+passed at another chain. Floor: `postBlind` (the deployed follower with `forkedPost` replaced by ok),
+on a computed run at `storeDigest`.
+
+**Found.** "Never moves past a forked post" is false by design (the page is kept). A post naming a
+step past the page's end is compared by nobody (cv 01a17ac1-5204), hence the premise
+`wg.steps ≤ f'.world.steps`; a writer's refusal can print as `refused forkedPost` (cv 01a17ac1-5233).
+
+**CRITIQUE.** Behind-position posts are the Host loop's (`behindOr`, no System field): the premise
+`f.world.steps < wg.steps` stands for it. The `sync --to` arm is not stated.
+
+**META-CRITIQUE.** The evidence disjunct is what the member saw, not what it can show a third party;
+that needs signed heads.
+
+**Status.** open.
+
+## SPEC-15 THE BELL as two slices; the composite owed; "once per key" is false (2026-10-26)
+
+**Decision.** `Bell.ringer` (over `bellAccept`): every `rings` upsert of a returning run of the package
+the resident accepts answers a row the caller pinned waiting, same capture, signed by the state's
+resident. `Bell.oneAsk` (over `ringAct`): every path of the resident's act asks at most once, about
+the decided ring, right after the intent is kept; within one process two spent asks for one ring have
+a freeing effect between. Floors: `laxBell` (accepts by layout, not guards), `askFirstResident`.
+
+**Found.** At most one answer per ring KEY is false of the deployed Bell (retire, re-ring at the same
+`notBefore`; cv 01a17ab4-17b1); the claim is per ring life.
+
+**CRITIQUE.** (1) is against the caller's pinned row, not the World's; (2) is one process: the crash
+between keep and ask is uncovered across a restart. The composite needs `RingLife` (§11.5).
+
+**META-CRITIQUE.** The three run facts do not hash; the kernel blocks on the package decoder's
+well-founded recursion. A structural decoder would make them `decide +kernel`.
+
+**Status.** open; composite owed.
+
+## SPEC-16 B2's exchange is `Integrity.exchange` over the `exchange` field; the one-party escrow is another claim (2026-10-26)
+
+**Decision.** A signed fuse of an object of `S.exchange …` that `S.receive` derives and `S.admit` admits
+from canonical cells and rows moves both legs (each offer row retracted and absent after), the two
+offers are one pair whose legs match (`LegsMatch`: each party receives what its offer wants), and every
+denomination's sum is unchanged (`escrow_fuse_admitted`). Floor: `lazyExchange` (the legs' judge
+`escrowFairT` replaced by `true`, P8j), refuted by a deployed run that admits a fuse paying X 1 β where
+X wants 7 β. Inhabited: a fair fuse under the deployed package.
+
+**Alternatives.** Fold `escrow_invokes_one_payout` in as "once": it is LEDGER's one-party escrow
+(world/escrow), another package (cv 01a17ad6-7245 for its own claim); a toy-Ctx floor.
+
+**CRITIQUE.** Per Turn only: nothing of withdraw or of a take without a fuse. The id read-back premises
+hold of every `Digest` and exist only because the claim is generic in `D`.
+
+**META-CRITIQUE.** The floor varies one term; an exchange paying the wrong `payTo` or dropping the
+peer's take is refused by the claim but not exhibited.
+
+**Status.** open.
+
+## SPEC-17 B3 over every history; its law-chain floor is the unjudged kernel; B3 and the cancel inhabited (2026-10-26)
+
+**Decision.** B3 (`Integrity.law`, Claims) is restated in place: EVERY `ObjectHistory` between the two Worlds in whose judged steps a `NoRef` law is in force is a `Std.Chain (Std.Step [] t)` (was: SOME history). `top_integrity_law` (Deployed) keeps its proof (`object_history_chain` was already stated for every history); the new form implies the old one, so it is a strengthening, and the old existential statement is deleted. `floor_integrity_law` (Floor, the raw writer) refutes the new statement's package clause unchanged. Floor `floor_integrity_lawChain` (Spec/Proofs/Law.lean): `unjudged` (the deployed system over `Xu`, `Lang.program` with `judge := fun … => .ok ()`) admits the founder's write `n := 9` to a data object under `Std.boundedPackage {n} n 5`, re-derived from genesis; `bounded_spec` admits no step to `n = 9`. Inhabited: `inhabited_law` (the deployed kernel judges and admits `n := 3`: one judged step, state moved, law in force); `inhabited_cancelOk` (follow at the World holding the founder's recorded cancel ends `cancel CALL` `done ok`).
+
+**Alternatives.** (1) Keep the existential and prove "a one-step audited log has exactly that judged step" (SPEC-2): unprovable — another call reaching the same World with a view lacking the law is excluded only by a collision over an unbounded preimage set, so the floor would carry a pigeonhole-true disjunct. (2) A log-indexed history: names the log, but a new inductive and a new totality proof for what the universal form already states. (3) A law that admits nothing as the floor's law: refutes, but cannot share the object with the inhabited run.
+
+**Why.** The universal form is the stronger promise (however the object's past is decomposed into judged steps, the law admitted each), costs nothing for the deployed system, and its floor is the bad step's own history, so it needs no collision argument.
+
+**CRITIQUE.** `unjudged` swaps seven fields (every one that reads the program), not one: the replaced component is the program's `judge`, inside `X`. The floor runs only the write receiver; a kernel that judged writes but skipped invokes is refused by this claim only via an invoke run, which no floor runs. The histories quantified over go World to World, so they include paths off the log: true of the deployed kernel, but the claim no longer says "this log's steps".
+
+**META-CRITIQUE.** The existential form survived because its floor was never attempted; the restatement came from trying to write the floor, not from reading the claim. `NoRef` is still the claim's largest hole and this entry does not move it.
+
+**Status.** open; `NoRef` removed by §11.6.
+
+## SPEC-18 B1 authority confinement, per step, over every cell (2026-10-26)
+
+**Decision.** `Integrity.authority`: every step of an audited log that changes a cell live at that
+step's World is a Turn `S.receive` derived from the call its event decodes to, and `Authorized`
+holds: objects (an owner/chain `write` or `law`, an authorized dispatched invoke), members (only its
+own `rotate`, to the precommitted key, signed by it), grants (the issuer's retire, a holder's single
+ledger append), accounts (a transfer or credit leg under the source/well owner's authority at the
+dispatched actor), ROM never. The kernel lemma it needs (`effect_prov`, `node_effect`,
+`changed_effect`: what each receiver of a walk wrote and on whose authority, generalising
+InvokeTree's private `dispatched_effects`) is proved in `Spec/Proofs/AuthKernel.lean`, stated for
+KERNEL to move down. Floor: `openKernel` (a `write` with no owner check), on a two-founder run where
+founder 1 writes founder 0's object. Inhabited: the owner's write.
+
+**Alternatives.** The design's endpoint form (implied by the per-step one, and needs a `foldSteps`); a
+scope parameter (the first draft: objects, grants, ROM; now closed); chaining each nested actor to
+the signer.
+
+**CRITIQUE.** Authority is named at the DISPATCHED actor: for a nested receiver that is the calling
+object, so "the signer exercised authority" holds only through the object's own invoke step, which
+the claim does not compose. Births (create/issue/account/grant/enroll/install) are not changes of a
+live cell: who may bear a cell is unclaimed. A Spec-side kernel lemma is a second home for a kernel
+fact until KERNEL moves it.
+
+**META-CRITIQUE.** One floor refutes only the object arm; the member, grant and account arms have no
+run of their own (a kernel letting a member rotate another's key, or revoke a grant it did not issue).
+The vacuity rule needs only the top claim refuted, and it is; the arms' floors are owed as teeth.
+
+**Status.** open; the AuthKernel lemma is KERNEL's to move.

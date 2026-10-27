@@ -15,7 +15,7 @@ hash and signature, which the kernel cannot reduce (cSHAKE256 and Ed25519 under 
 `native_decide` (allow rows in `gates/axioms-allow.tsv`, trust rows in `gates/tcb.tsv`).
 -/
 import Spec.Proofs.Bridge
-import Spec.Trivial
+import Spec.Sim.Run
 import Kernel.Proofs.Origin
 import Kernel.Proofs.Refusals
 import Kernel.Sim.Deployed
@@ -28,34 +28,6 @@ namespace Nanodregg.Spec
 open Nanodregg.Kernel Nanodregg.Kernel.Receive Nanodregg.Protocol Nanodregg.Codec
 
 /-! ## The deployed run -/
-
-private abbrev Xd : Ctx Digest := Host.Deployed.X
-
-private def wSeed (t : String) : ByteArray := Kernel.Sim.Deployed.seed t.toUTF8
-
-private def wKey : ByteArray := Ed25519.publicKey (wSeed "f0")
-private def wNext : ByteArray := Ed25519.publicKey (wSeed "f0-next")
-
-/-- One founder, its key and its precommitted next key. -/
-private def wGenesis : World Digest :=
-  genesisWorld Xd "spec".toUTF8 "spec-0".toUTF8 100000000 [(wKey, nextKeyDigest Xd wNext)]
-    Authority.none
-
-private def wMember : Digest := founderId Xd wGenesis.origin 0
-
-/-- The founder rotates to its precommitted key, signed by that key (a rotate is signed by the key it moves to, `receiveWith_key`). -/
-private def wCall : Call Digest :=
-  let u : Unsigned Digest :=
-    { world := wGenesis.origin, member := wMember, key := wNext, notBefore := 0, validUntil := 101,
-      pins := [(wMember, pinOf Xd.env (wGenesis.entry Xd.env wMember))], maxCharge := 1000000,
-      body := .rotate wNext (nextKeyDigest Xd (Ed25519.publicKey (wSeed "f0-next-next"))) }
-  ⟨u, Ed25519.sign (wSeed "f0-next") (Xd.callMessage u)⟩
-
-/-- The log the writer stages for that call. -/
-private def wLog : List (Step Digest) :=
-  match submit Xd wGenesis wCall with
-  | .ok (t, _) => [.turn t]
-  | .error _ => []
 
 theorem run_rederives : (rederiveLog Xd wGenesis wLog).toOption.map World.height = some 1 := by
   native_decide
@@ -88,10 +60,7 @@ theorem inhabited_audited (d : ByteArray → ByteArray) (me : Command.Self Diges
 
 /-! ## §2 ONE HISTORY: the follower that takes the World it is told -/
 
-/-- A digest other than the zero one. -/
-private def oneDigest : Digest := ⟨⟨Array.replicate 32 1⟩, by simp [ByteArray.size]⟩
-
-private theorem state_empty : Command.State.ofBytes ByteArray.empty = none := by decide +kernel
+theorem state_empty : Command.State.ofBytes ByteArray.empty = none := by decide +kernel
 
 /-- **FLOOR (A1).** Even under the relay premise the deployed theorem needs, the claim refuses the
 trusting follower: the World it reaches has more Turns than steps and another World's origin, which
@@ -124,22 +93,7 @@ theorem floor_oneHistory_member (d : ByteArray → ByteArray) :
 
 /-! ## §2 ONE HISTORY (A2): the chain that binds nothing -/
 
-/-- The run's call with another next-key digest: the founder could have rotated either way. -/
-private def wCall2 : Call Digest :=
-  let u : Unsigned Digest :=
-    { wCall.unsigned with body := .rotate wNext (nextKeyDigest Xd (Ed25519.publicKey (wSeed "f0-other"))) }
-  ⟨u, Ed25519.sign (wSeed "f0-next") (Xd.callMessage u)⟩
-
-private def wLog2 : List (Step Digest) :=
-  match submit Xd wGenesis wCall2 with
-  | .ok (t, _) => [.turn t]
-  | .error _ => []
-
-/-- No two distinct preimages in the list hash alike: `CollidesAmong`'s negation, as a computation. -/
-private def collisionFree (hash : String → ByteArray → Digest) (S : List (String × ByteArray)) : Bool :=
-  S.all fun p => S.all fun q => decide (p = q ∨ hash p.1 p.2 ≠ hash q.1 q.2)
-
-private theorem not_collides {hash : String → ByteArray → Digest} {S : List (String × ByteArray)}
+theorem not_collides {hash : String → ByteArray → Digest} {S : List (String × ByteArray)}
     (h : collisionFree hash S = true) : ¬ CollidesAmong hash S := by
   rintro ⟨p, hp, q, hq, hne, he⟩
   have := List.all_eq_true.mp (List.all_eq_true.mp h p hp) q hq
@@ -190,11 +144,6 @@ theorem floor_oneHistory_pair (d : ByteArray → ByteArray) : ¬ OneHistory.pair
 
 /-! ## §4 CONSENT: the follower that reports the Host's word, the settlement that is always final -/
 
-private def wCb : ByteArray := Xd.callBytes wCall
-
-/-- A settle-phase continuation carrying the run's call. -/
-private def wKb : ByteArray := (Command.State.bytes ⟨[], 4, [wCb]⟩).getD .empty
-
 theorem run_continuation :
     (Command.State.ofBytes wKb).map (fun s => decide (s.argv = [] ∧ s.phase = 4 ∧ s.acc = [wCb])) =
       some true := by
@@ -226,12 +175,12 @@ theorem floor_consent_okCommitted (d : ByteArray → ByteArray) : ¬ Consent.okC
     rw [wGenesis, Foreign.genesisWorld_journalAt] at hj'
     cases hj'
 
-private theorem genesisWorld_refusalsCanon {D : Type} [Ord D] [DecidableEq D] (X : Ctx D)
+theorem genesisWorld_refusalsCanon {D : Type} [Ord D] [DecidableEq D] (X : Ctx D)
     (name nonce : ByteArray) (a : Nat) (fs : List (ByteArray × D)) (au : Authority) :
     (genesisWorld X name nonce a fs au).RefusalsCanon X.env :=
   genesis_refusalsCanon X.env (originOf X name nonce a fs au) a
 
-private theorem genesisWorld_journalCanon {D : Type} [Ord D] [DecidableEq D] (X : Ctx D)
+theorem genesisWorld_journalCanon {D : Type} [Ord D] [DecidableEq D] (X : Ctx D)
     (name nonce : ByteArray) (a : Nat) (fs : List (ByteArray × D)) (au : Authority) :
     (genesisWorld X name nonce a fs au).JournalCanon X.env :=
   genesis_journalCanon X.env (originOf X name nonce a fs au) a
@@ -258,7 +207,7 @@ theorem floor_consent_final (d : ByteArray → ByteArray) : ¬ Consent.final (al
 
 /-! ## §8 SHOWN: the host that serves every frame -/
 
-private theorem envelope_empty : Envelope.ofBytes Xd ByteArray.empty = none := by decide +kernel
+theorem envelope_empty : Envelope.ofBytes Xd ByteArray.empty = none := by decide +kernel
 
 /-- **FLOOR (G2).** The claim refuses a host that defers a frame whose payload is no envelope. -/
 theorem floor_shown (d : ByteArray → ByteArray) : ¬ Shown.onlyFollowers (openHost d) := by
@@ -269,21 +218,6 @@ theorem floor_shown (d : ByteArray → ByteArray) : ¬ Shown.onlyFollowers (open
   cases this
 
 /-! ## §3 INTEGRITY (B2): the kernel that mints -/
-
-private def mintDenom : ByteArray := "spec-mint".toUTF8
-
-/-- A value cell of 10 units and no floor: a balance from nowhere. -/
-private def mintCell : Cell :=
-  { kind := 0, discipline := .value,
-    slots := [(Value.denomKey, mintDenom), (Value.balanceKey, Value.balanceBytes 10),
-      (Value.floorKey, Value.floorBytes 0)] }
-
-private def tMint0 : Turn Digest :=
-  { txId := oneDigest, notBefore := 0, validUntil := 10, touches := [], creates := [(oneDigest, mintCell)],
-    nullifiers := [], charge := 0, event := .empty, member := oneDigest }
-
-/-- The Turn that bears it, paying exactly its weight. -/
-private def tMint : Turn Digest := { tMint0 with charge := tMint0.weight }
 
 /-- **The mint**: at the genesis World the kernel refuses the Turn `notConserved` (and only
 `checkValue` refuses it: the minting kernel admits it), and the World the minting kernel reaches
@@ -328,38 +262,6 @@ theorem floor_integrity_value (d : ByteArray → ByteArray) : ¬ Integrity.value
 
 /-! ## §3 INTEGRITY (B3): the writer that rewrites the package slot -/
 
-/-- The founder creates a data object (no package, no laws) holding one state slot. -/
-private def oCreate : Call Digest :=
-  let u : Unsigned Digest :=
-    { world := wGenesis.origin, member := wMember, key := wKey, notBefore := 0, validUntil := 101,
-      pins := [(wMember, pinOf Xd.env (wGenesis.entry Xd.env wMember))], maxCharge := 1000000,
-      body := .create none [] [(stateBase, "x".toUTF8)] }
-  ⟨u, Ed25519.sign (wSeed "f0") (Xd.callMessage u)⟩
-
-/-- The World after the create, as the writer stages it. -/
-private def oLog : List (Step Digest) :=
-  match submit Xd wGenesis oCreate with
-  | .ok (t, _) => [.turn t]
-  | .error _ => []
-
-/-- The World the writer stages on that log. -/
-private def oWorld : World Digest :=
-  match submit Xd wGenesis oCreate with
-  | .ok (_, w) => w
-  | .error _ => wGenesis
-
-/-- The object it bore. -/
-private def oId : Digest := cellIdOf Xd.env (txIdOf Xd oCreate) 0
-
-/-- The owner writes 32 bytes at edit key 0: under the kernel, state slot `stateBase`; under the raw
-writer, the package slot. -/
-private def oWrite : Call Digest :=
-  let u : Unsigned Digest :=
-    { world := oWorld.origin, member := wMember, key := wKey, notBefore := 0, validUntil := 101,
-      pins := [(wMember, pinOf Xd.env (oWorld.entry Xd.env wMember)), (oId, pinOf Xd.env (oWorld.entry Xd.env oId))],
-      maxCharge := 1000000, body := .write oId [(slotPackage, some oneDigest.bytes)] none }
-  ⟨u, Ed25519.sign (wSeed "f0") (Xd.callMessage u)⟩
-
 /-- The create re-derives from genesis (so the object's World is an honest fold, canonical), the
 object is live with no package; the raw writer derives the write and the kernel admits it, and the
 object's package after is not its package before. -/
@@ -379,13 +281,6 @@ theorem run_raw_write :
       | .error _ => false
      | .error _ => false) = true := by
   native_decide
-
-/-- A law term and a package holding it: the claim's law premises, inhabited. -/
-private def law0 : Lang.Term := .lam .nat (.lam .nat (.lam .nat (.bool true)))
-
-private def pkg0 : Lang.Package :=
-  { imports := [], state := .nat, iface := .nat, body := .record [("law", law0)], methods := [],
-    laws := ["law"] }
 
 /-- **FLOOR (B3).** The claim refuses the kernel whose `write` reaches the package slot: an audited
 one-step log from a canonical World (the genesis World and the founder's create) moves the
@@ -434,7 +329,7 @@ theorem floor_integrity_law (d : ByteArray → ByteArray) : ¬ Integrity.law (ra
           have ha' : Audited (rawWriter d) w₁ [.turn tw] w₂ :=
             ⟨by simp only [System.fold, System.step, hs],
               ⟨c, decide_eq_true_eq.mp hd, htw, fun _ _ => trivial⟩⟩
-          obtain ⟨-, -, ⟨cell'', hl'', hpk⟩, -⟩ :=
+          obtain ⟨-, ⟨cell'', hl'', hpk⟩, -⟩ :=
             h (obj := obj) (law := oneDigest) (p := pkg0) (fs := [("law", law0)]) (ℓ := "law") (t := law0)
               rfl (by simp [pkg0]) (by simp [Lang.Row.find?]) ⟨_, _, _, _, rfl⟩
               (by simp [law0, Lang.NoRef]) ha' hcan hl hk
@@ -450,20 +345,7 @@ theorem floor_integrity_law (d : ByteArray → ByteArray) : ¬ Integrity.law (ra
 
 /-! ## §4 CONSENT, inhabited: a command settled `ok`, a settlement final -/
 
-private def wMe : Command.Self Digest := ⟨oneDigest, oneDigest, oneDigest, 0⟩
-
-/-- A `rotate` command at its settle phase, carrying the run's call. -/
-private def wKbS : ByteArray := (Command.State.bytes ⟨["rotate".toUTF8], 4, ["out".toUTF8, wCb]⟩).getD .empty
-
-/-- The writer's word: `committed`. -/
-private def wRes : ByteArray := ⟨#[Attempt.Action.committed.code]⟩
-
-/-- A reply that ends its command `ok`. -/
-private def okDone : Command.Reply → Bool
-  | .done code _ _ => decide (code = CommandExit.ok.code.toUInt8)
-  | _ => false
-
-private theorem okDone_eq {r : Command.Reply} (h : okDone r = true) :
+theorem okDone_eq {r : Command.Reply} (h : okDone r = true) :
     ∃ o e, r = .done CommandExit.ok.code.toUInt8 o e := by
   cases r <;> simp_all [okDone]
 
@@ -510,11 +392,6 @@ theorem inhabited_okCommitted :
         subst hd
         exact ⟨wMe, ⟨w, none, none⟩, f', kb, res, o, e, p, argv, acc, hs, hR⟩
 
-/-- The founder's other rotation with a one-height window: admissible at the genesis World. -/
-private def cExp : Call Digest :=
-  let u : Unsigned Digest := { wCall2.unsigned with validUntil := 1 }
-  ⟨u, Ed25519.sign (wSeed "f0-next") (Xd.callMessage u)⟩
-
 /-- **The expired run**: the writer would admit `cExp` at the genesis World; after the run's one
 step, follow settles it `expired`. -/
 theorem run_expired :
@@ -558,10 +435,6 @@ theorem inhabited_final (d : ByteArray → ByteArray) :
         fold_refusalsCanon hrc hfh.1, fold_journalCanon hjc hfh.1, hv⟩
 
 /-! ## §4 CONSENT (cancel): the follower that says ok on the writer's word -/
-
-/-- A `cancel CALL` command of the run's call. -/
-private def wKbC : ByteArray :=
-  (Command.State.bytes ⟨["cancel".toUTF8, (Text.toHex wCb).toUTF8], 10, []⟩).getD .empty
 
 /-- The continuation parses as `cancel` of the run's call, and at the genesis World follow does not
 settle that call `refused cancelled`. -/
@@ -613,15 +486,6 @@ theorem floor_consent_cancelOk (d : ByteArray → ByteArray) : ¬ Consent.cancel
 
 /-! ## §8 SHOWN, inhabited: a page served past a passing envelope -/
 
-/-- The founder's envelope for the log from height 0, under its own root grant, signed by its key. -/
-private def wEnvelope : Envelope Digest :=
-  let grant := founderGrantId Xd wGenesis.origin 0
-  { world := wGenesis.origin, member := wMember, grant, start := 0, notBefore := 0, validUntil := 10,
-    key := wKey,
-    signature := Ed25519.sign (wSeed "f0") (Envelope.message Xd wGenesis.origin wMember grant 0 0 10) }
-
-private def wFrame : Host.Frame := ⟨0, Protocol.Op.log.code, (Envelope.bytes Xd wEnvelope).getD .empty⟩
-
 /-- The writer, at the genesis World, defers the founder's `log` frame (a page of the log). -/
 theorem run_shown : (match Host.handle Xd wGenesis wFrame with | .defer _ => true | _ => false) = true := by
   native_decide
@@ -641,36 +505,6 @@ theorem inhabited_shown (d : ByteArray → ByteArray) :
   exact ⟨g, fr, _, hh⟩
 
 /-! ## §3 INTEGRITY (B2), inhabited: value moved -/
-
-/-- A call of the founder (current key) against `w`, pinning `pins`. -/
-private def fCall (w : World Digest) (pins : List Digest) (b : Body Digest) : Call Digest :=
-  let u : Unsigned Digest :=
-    { world := w.origin, member := wMember, key := wKey, notBefore := 0, validUntil := 101,
-      pins := (wMember :: pins).map fun c => (c, pinOf Xd.env (w.entry Xd.env c)), maxCharge := 1000000,
-      body := b }
-  ⟨u, Ed25519.sign (wSeed "f0") (Xd.callMessage u)⟩
-
-/-- The World and Turn the writer stages for a call (the World unchanged if it refuses). -/
-private def staged (w : World Digest) (c : Call Digest) : World Digest × List (Step Digest) :=
-  match submit Xd w c with
-  | .ok (t, w') => (w', [.turn t])
-  | .error _ => (w, [])
-
-/-- The founder issues a well of 1000. -/
-private def vIssue : Call Digest := fCall wGenesis [] (.issue 1000)
-private def vWell : Digest := cellIdOf Xd.env (txIdOf Xd vIssue) 0
-private def vW1 : World Digest := (staged wGenesis vIssue).1
-
-/-- The founder opens its own account of the well's denomination. -/
-private def vAccount : Call Digest := fCall vW1 [] (.account vWell wMember)
-private def vAcct : Digest := accountId Xd wMember vWell
-private def vW2 : World Digest := (staged vW1 vAccount).1
-
-/-- The founder transfers 10 out of the well into the account. -/
-private def vTransfer : Call Digest := fCall vW2 [vWell, vAcct] (.transfer (.well vWell) (.of wMember vWell) 10 none none)
-
-private def vLog : List (Step Digest) :=
-  (staged wGenesis vIssue).2 ++ (staged vW1 vAccount).2 ++ (staged vW2 vTransfer).2
 
 /-- **The value run**: THE re-deriver accepts the three calls from genesis, and the account holds 10. -/
 theorem run_value :
@@ -710,15 +544,6 @@ theorem inhabited_value (d : ByteArray → ByteArray) :
       exact ⟨g, l, w, id, cell, audited_deployed.mpr hfh, hl, hb⟩
 
 /-! ## §4 CONSENT (stale): the settlement that says stale on its own word -/
-
-/-- The founder as a member of the genesis World. -/
-private def sMe : Command.Self Digest := ⟨wGenesis.origin, wMember, founderGrantId Xd wGenesis.origin 0, 10⟩
-
-/-- What follow plans at the genesis World for the founder's `issue 1000` (no signed reads). -/
-private def sU : Unsigned Digest :=
-  match Command.plan Xd sMe wGenesis wKey {} (.issue 1000) with
-  | .ok u => u
-  | .error _ => wCall.unsigned
 
 theorem run_plan :
     (match Command.plan Xd sMe wGenesis wKey {} (.issue 1000) with
@@ -776,5 +601,7 @@ theorem floor_consent_staleFinal (d : ByteArray → ByteArray) : ¬ Consent.stal
     rcases h me (l₁ := []) (l₂ := []) ⟨u, sig⟩ hfit hrc hok hrs hp rfl hrfc hjc rfl rfl hset with hn | hcol
     · exact hn out hsub
     · exact not_collides hc hcol
+
+
 
 end Nanodregg.Spec

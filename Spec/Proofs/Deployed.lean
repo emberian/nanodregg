@@ -31,14 +31,15 @@ theorem top_oneHistory_pair (d : ByteArray → ByteArray) : OneHistory.pair (dep
   exact fold_reaches_host deployed_lawful hg hf hs hc
 
 /-- **B3 of the deployed system, for `NoRef` laws**: `object_history_of_honest`,
-`fold_package_fixed`, `object_history_chain` at the deployed program (`deployed_ctx_lawful`). -/
+`fold_package_fixed`, `object_history_chain` (stated for every history) at the deployed program
+(`deployed_ctx_lawful`). -/
 theorem top_integrity_law (d : ByteArray → ByteArray) : Integrity.law (deployed d) := by
   intro obj law p fs ℓ t hb hℓ hfind hlaw hnr w w' l ha hcan cell hl hk
   rw [audited_deployed] at ha
   obtain ⟨tr, htr⟩ := object_history_of_honest ha.1 ha.2 hcan hl hk
   obtain ⟨cell', hl', -, -, hpk⟩ := fold_package_fixed ha.1 ha.2 hl hk
-  exact ⟨tr, htr, ⟨cell', hl', hpk⟩, fun hin o ho =>
-    object_history_chain (deployed_ctx_lawful _) rfl hb hℓ hfind hlaw hnr htr hin hl ho⟩
+  exact ⟨⟨tr, htr⟩, ⟨cell', hl', hpk⟩, fun tr' htr' hin _ ho =>
+    object_history_chain (deployed_ctx_lawful _) rfl hb hℓ hfind hlaw hnr htr' hin hl ho⟩
 
 /-- **C(ii) of the deployed system, submit-class**: `step_settled_ok`, `settle_committed`. -/
 theorem top_consent_okCommitted (d : ByteArray → ByteArray) : Consent.okCommitted (deployed d) := by

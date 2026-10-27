@@ -10,7 +10,9 @@ The fields are the decisions, not their callers: the kernel's derivation of a si
 (`receive`), its re-judge of a logged refusal (`recordedBy`), the admission of a Turn and the
 record of a refusal (`admit`, `refuse`), the writer's verdict on a submitted call (`submit`),
 one frame of the member's command machine (`follow`, run by `host follow`), the member's
-settlement of its own call (`settle`), and the writer's answer to a frame (`handle`). What a field
+settlement of its own call (`settle`), the writer's answer to a frame (`handle`), the receipt check
+a law's foreign read runs (`rc`), the writer's reopen after a crash (`reopen`), the exchange package
+(`exchange`), the resident's bell check and its act on the rings (`bellAccept`, `ringAct`). What a field
 does not vary (the call codec, the signature check, the Lang program, the hash) is `X`.
 -/
 import Kernel.Receive.Rederive
@@ -19,6 +21,10 @@ import Protocol.Command.Machine
 import Host.Serve
 import Host.Deployed
 import Host.Keys
+import Host.Open
+import Lang.StdOfferEscrow
+import Lang.Bell
+import Hosting.Resident.Run
 
 namespace Nanodregg.Spec
 
@@ -48,6 +54,20 @@ structure System (D : Type) [Ord D] [DecidableEq D] where
   settle : Command.Self D → World D → Call D → Settle.Verdict D
   /-- the writer's answer to a frame on its World (`Host.handle`) -/
   handle : World D → Host.Frame → Host.Answer (World D) (Step D)
+  /-- the check a Lang law's receipt read runs against a held head (`Protocol.Foreign.check`, the
+  check `Host.Deployed.X`'s program is built over: `deployed_program_reads`) -/
+  rc : Lang.ReceiptCheck
+  /-- the writer's open of its Store after a crash: keys, base file, header, index, segment
+  (`Host.openWith` at the deployed instance) -/
+  reopen : Host.Keys → ByteArray → ByteArray → ByteArray → ByteArray →
+    Except (Host.StoreFault (Host.Record.Fault (Reject D))) (Host.Opening (World D))
+  /-- the two-party exchange package the stdlib installs (`Lang.Std.offerEscrowPackageOf`) -/
+  exchange : List Lang.Label → List Lang.Label → Nat → Nat → Nat → Nat → Lang.Package
+  /-- the resident's check of the configured bell's package (`Lang.Bell.shapeOk`) -/
+  bellAccept : Lang.Package → Bool
+  /-- the resident's act on the rings a tick read (`Hosting.Resident.actOn`) -/
+  ringAct : Hosting.Resident.Where → Hosting.Resident.Shape → Hosting.Resident.Mem →
+    List Hosting.Resident.Ring → Hosting.Resident.Prog Hosting.Resident.Tick
 
 variable {D : Type} [Ord D] [DecidableEq D]
 
@@ -88,6 +108,13 @@ def deployed (worldDigest : ByteArray → ByteArray) : System Digest where
     ⟨Host.Deployed.world, World.steps, worldDigest, Host.Deployed.c.worldBytesMax⟩
   settle := Command.settleOf Host.Deployed.X
   handle := Host.handle Host.Deployed.X
+  rc := Protocol.Foreign.check Codec.Deployed.env Codec.Deployed.digestCodec
+  reopen := fun keys file H I seg => Id.run (Host.openWith keys Host.Deployed.c Host.Deployed.world
+    Host.Deployed.recorder.mark Host.Deployed.originChain Host.Deployed.foldStep file H seg.size I.size
+    (Host.segReader I) (Host.segReader seg))
+  exchange := Lang.Std.offerEscrowPackageOf
+  bellAccept := Lang.Bell.shapeOk
+  ringAct := Hosting.Resident.actOn
 
 /-- The digest a Store pins a World's bytes by: `Host.Keys.ofKey`'s `worldDigest`, which does not
 depend on the Store's key (an unkeyed digest under `domBaseDigest`, HOST-15). `deployed storeDigest`

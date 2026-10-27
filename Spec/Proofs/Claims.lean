@@ -112,24 +112,29 @@ def Integrity.value (S : System D) : Prop :=
 
 /-- **B3. Law (what an object's author is promised), for `NoRef` laws.** Along an audited log, an
 object live at the start has a history of judged steps (`ObjectHistory`), its package never
-changes, and for every `NoRef` law `t` of its package in force at every step, the object's states
-along the log are a chain of steps the law's reference meaning admits (`Std.Step [] t`, the
-`BigStep` semantics), each paired with the request that made it. The restriction to `NoRef` is
-the premise TOPLEVEL-SPEC §11.6 removes. -/
+changes, and EVERY history of it between the two Worlds in whose judged steps a `NoRef` law `t` of
+its package is in force is a chain of steps the law's reference meaning admits (`Std.Step [] t`,
+the `BigStep` semantics), each paired with the request that made it. Every history, not some: a
+judged step carries the view of the call that made it, and a step of another call reaching the same
+World with a view that lacks the law makes "some history" vacuous; excluding it is a collision over
+an unbounded preimage set, so the existential form (SPEC-2) had no floor against a kernel no law
+judges (`floor_integrity_lawChain`). The restriction to `NoRef` is the premise TOPLEVEL-SPEC §11.6
+removes. -/
 def Integrity.law (S : System D) : Prop :=
   ∀ {obj law : D} {p : Lang.Package} {fs : List (Lang.Label × Lang.Term)} {ℓ : Lang.Label}
     {t : Lang.Term}, p.body = .record fs → ℓ ∈ p.laws → Lang.Row.find? ℓ fs = some t →
     Lang.IsLaw t → Lang.NoRef t →
     ∀ {w w' : World D} {l : List (Step D)}, Audited S w l w' → CellsCanon S.X.env w →
     ∀ {cell : Cell}, w.live S.X.env obj = some cell → cell.kind = kindObject →
-      ∃ tr, ObjectHistory S.X obj w w' tr ∧
+      (∃ tr, ObjectHistory S.X obj w w' tr) ∧
         (∃ cell', w'.live S.X.env obj = some cell' ∧ packageOf S.X obj cell' = packageOf S.X obj cell) ∧
-        ((∀ e ∈ tr, law ∈ e.2.1.toList ++ e.2.2.1 ∧ Lang.readPackage e.1 law = .ok p) →
+        ∀ tr, ObjectHistory S.X obj w w' tr →
+          (∀ e ∈ tr, law ∈ e.2.1.toList ++ e.2.2.1 ∧ Lang.readPackage e.1 law = .ok p) →
           ∀ {o : Lang.Data}, Lang.readState S.X.digestOf (Lang.recordRow p.state) (stateOf cell) = .ok o →
             ∃ steps, Lang.Std.Chain (Lang.Std.Step [] t) o steps ∧
               tr.map (fun e => (Lang.reqData S.X.env.bytes e.2.2.2.1,
                 Lang.readState S.X.digestOf (Lang.recordRow p.state) e.2.2.2.2.2.1)) =
-                steps.map (fun s => (s.1, .ok s.2)))
+                steps.map (fun s => (s.1, .ok s.2))
 
 /-! ## §4 CONSENT AND SETTLEMENT — what a member is promised of its own follower -/
 
