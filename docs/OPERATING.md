@@ -31,3 +31,13 @@ A resident sees its package, writable volume and own member/broker sockets. It r
 Uncertain is an unknown outcome: use member settlement. Do not invent missing Store files or start a second writer. The [Store layout](../deploy/units/STORE.md) gives backup order: key, atomic base, index, segments. Preserve the backup together and check the restored Store against a held steps/chain anchor. Retention can make older anchors unavailable.
 
 The optional base.cert sidecar is self-authenticating to its consumer, not a replacement for the base/log. [TRUST](TRUST.md) explains the producer boundary.
+
+## Durability and recovery
+
+One host serve process holds the Store. Requests queue while a sync runs and become the next batch, so a batch is one frame and there is no batching timer. Each batch frame is appended and synced before any of its replies leave. No reply reports a state a crash can take back.
+
+A failed append or sync is never retried, because the kernel may have dropped the dirty pages. Every reply of that batch is uncertain, the process exits with a restart-class status, and the next open decides what is on disk.
+
+Open reads the base, then the segment frame by frame. The first incomplete frame or frame that fails its tag ends the log. Only the last frame can be torn, because each batch is synced before the next is written. Bytes after the last good frame are truncated as a torn tail only if they are no longer than one frame and no frame verifies anywhere after them. A verifying frame after bad bytes means acknowledged data follows, and open refuses with storeCorrupt instead of truncating. A corruption inside the last frame reads as torn: the height goes back for the client holding that receipt.
+
+The supervisor owns the socket and parses no payload. It routes each reply to its connection by number and drops a reply it cannot route. The client recovers with lookup.

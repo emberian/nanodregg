@@ -26,3 +26,13 @@ A refusal names the failed condition. Stale means a signed pin no longer matches
 An unsettled attempt stores exact argv, continuation and signed call. Repeating its argv resumes it. The writer reply is a hint; only the follower's receipt settles it. Repeating an already-settled command can create a new call: argv is not a durable caller-intent identifier. Transfer's --once HEX is a separate once-key mechanism.
 
 The [protocol rows](../Protocol/Rows.lean) exercise join, use, describe, receipt, settlement, cancellation and fork comparison through the command machine.
+
+## What nd does and does not do
+
+nd decides nothing. It sends its argv to follow and executes the steps follow returns, echoing an opaque continuation each time. The steps ask nd to sign exact bytes, to relay a request to the writer socket, to submit a frozen call, or to print the final output and exit. The step order belongs to follow, and nd stops after a fixed bound of steps.
+
+Custody reads each key file only if it is regular, owned by the effective user and private to it. It signs the bytes it is handed and adds nothing. The signed call is frozen in its attempt directory before any byte leaves, so a member never signs two calls for one attempt.
+
+A frame is a four-byte little-endian body length, then one operation or status byte, then the payload. A length past the table bound is refused before allocation, and a stream that ends inside a frame is refused as truncated.
+
+nd has no command parser, request encoder, refusal names, config file or local fallback that starts a writer. The writer socket may be a symlink or an OpenSSH forward of a remote one, and nd cannot tell.

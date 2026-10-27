@@ -15,7 +15,7 @@ refuses case-colliding paths (GATES-2, aa4c0ab). Every number it
 renders is read from another layer's Lean value (HOST's `Status.codesOf`, CLIENT's nd-supervise
 grammar), never copied. Closure rule C10 (GATES, 5be0d98): nothing outside `Ops/` imports `Ops`.
 **Alternatives.** (a) No OPS layer: units in `client/`, plants in `Host/Sim/`, the runbook in
-`Host/DESIGN.md`. Each piece is small, but then nobody owns "can an operator actually run this",
+the Host docs. Each piece is small, but then nobody owns "can an operator actually run this",
 and that is exactly what was never exercised: the first `host serve` on a missing Store died
 `uncaught exception`, exit 1, no name (fixed in 28de15e). (b) OPS inside HOST: HOST would render
 its own units, which is fine until a unit needs CLIENT's grammar too.

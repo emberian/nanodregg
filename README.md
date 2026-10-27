@@ -172,7 +172,6 @@ Decisions: [`decisions/ops.md`](decisions/ops.md), [`decisions/perf.md`](decisio
 | Why is a layer designed this way? | [`decisions/README.md`](decisions/README.md), one append-only file per layer. Later entries revise earlier ones. |
 | What does a complete scenario look like? | [`Lang/Journey/`](Lang/Journey/) for language scenarios and [`Protocol/Rows.lean`](Protocol/Rows.lean) for member conversations |
 | What is still proposed? | [`proposals/`](proposals/README.md) |
-| What did earlier designs say? | Historical, and superseded where they disagree with the guides above: [`Host/DESIGN.md`](Host/DESIGN.md) and [`client/DESIGN.md`](client/DESIGN.md). |
 
 Research memos and outside reviews live in a separate repository, redregg, which is not part of this tree.
 
