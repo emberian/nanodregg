@@ -106,38 +106,12 @@ import Lang.Journey.Activity
 import Lang.Journey.HoleChecks
 import Lang.Sim.Need
 import Lang.Bell
+import Lang.Journey.Owned
 
 namespace Nanodregg.Lang.Journey
 
 open Nanodregg.Kernel Nanodregg.Kernel.Receive
 abbrev D := Sim.D
-
-def S : Ty := .record [("owner", .digest), ("total", .nat)]
-
-def ok : Term := .inj verdictTy "ok" (.record [])
-def refused (why : String) : Term := .inj verdictTy "refused" (.bytes why.toUTF8)
-
-/-- Under `lam S (lam S (lam reqTy _))`: var 2 = old, var 1 = new, var 0 = req. -/
-def law3 (body : Term) : Term := .lam S (.lam S (.lam reqTy body))
-
-def bounded : Term :=
-  law3 (.ite (.prim .le (.get (.var 1) "total") (.nat 100)) ok (refused "over 100"))
-
-def ownerOnly : Term :=
-  law3 (.ite (.prim .deq (.get (.var 0) "agent") (.get (.var 1) "owner"))
-    (.ite (.prim .deq (.get (.var 2) "owner") (.get (.var 1) "owner")) ok (refused "owner changed"))
-    (refused "not the owner"))
-
-/-- `set state n req = {owner = state.owner, total = n}` -/
-def setM : Term := Std.methodOf S .nat [("owner", .get (.var 2) "owner"), ("total", .var 1)]
-
-def iface : Ty :=
-  .record [("bounded", lawTy S), ("ownerOnly", lawTy S), ("set", methodTy S .nat)]
-
-def owned : Package :=
-  { imports := [], state := S, iface,
-    body := .record [("bounded", bounded), ("ownerOnly", ownerOnly), ("set", setM)],
-    methods := ["set"], laws := ["bounded", "ownerOnly"] }
 
 /-- The Sim.same package with a body that does not check at its interface (`set` returns a nat). -/
 def illTyped : Package :=

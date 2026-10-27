@@ -82,6 +82,26 @@ demos.creator = {
   ],
 };
 
+// PCC (LANG-93, KERNEL-73, journey §LK): a package carries a claim about itself, and install checks it.
+// `Kept` claims `keeps le100 bounded`: every state of every object keeps total <= 100, because the law
+// `bounded` refuses every step whose new state fails it. The texts are the journey's (`Lang.Journey.kept`
+// and LK6's leaky law), printed by the kernel (`tg_text`).
+demos.claims = {
+  title: 'Claims: a package says what it keeps, and install checks it',
+  texts: { kept: 'kernel:kept', leaky: 'kernel:keptLeaky' },
+  steps: [
+    { who: 'alice', say: 'alice installs a package that claims total <= 100 always holds, but its law lets a write skip the test. Install refuses it (claimUnproved bounded).',
+      argv: (v) => ['install', v.text.leaky], expect: 'refused' },
+    { who: 'alice', say: 'alice installs Kept: the same claim, and a law that tests every write. Install accepts it. The claim is part of its bytes, so it is part of its id.',
+      argv: (v) => ['install', v.text.kept], bind: 'kept' },
+    { who: 'alice', argv: (v) => ['create', '--pkg', v.kept, `(record (owner #${v.alice}) (total 0))`], bind: 'K', open: 'K' },
+    { who: 'alice', argv: (v) => ['read', v.K, '?'], method: { set: 'set' } },
+    { who: 'alice', argv: (v) => ['invoke', v.K, v.set, '50'] },
+    { who: 'alice', say: 'alice sets total = 101. The law the claim names refuses it (lawDenied bounded).',
+      argv: (v) => ['invoke', v.K, v.set, '101'], expect: 'refused' },
+  ],
+};
+
 // OBS (KERNEL-68, DESIGN-OBS §1): the meter. A Turn names its member and the ticks its run spent; the
 // kernel counts them per member per window and refuses past `ticksPerWindow` (`ticksBudget`). Each
 // member reads the meter back from its OWN fold (`tg_meter`: World.ticksUsed). `spin {n}` counts n

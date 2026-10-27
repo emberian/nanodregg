@@ -565,6 +565,7 @@ const tour = [
   // one demo per axis (DESIGN-TESTGROUND §5): each is demos.js's argv, typed into the terminals
   { say: 'A generator: a package whose method installs another package. The generated package has the law n <= 100; setting n = 101 is refused (lawDenied).', demo: 'generator' },
   { say: 'A creator: one call makes a package and an object of it. The object belongs to the member who asked. A second member at the same bound gets a new object of the same package.', demo: 'creator' },
+  { say: 'A claim: a package says what it keeps (total <= 100), and install checks that its own law enforces it. A package whose law skips the test on a write is refused (claimUnproved).', demo: 'claims' },
   { say: 'The meter: each Turn records its member and its ticks (evaluator steps). bob repeats an expensive call until his ticks for the window run out (ticksBudget).', demo: 'meter' },
   { say: 'A time lock: a second World (A) runs in this tab. alice\'s lock releases only with a receipt showing that A admitted a call at or after the deadline height.', demo: 'timelock' },
   { say: 'An inbox for an agent: alice rings her Bell (a queue of questions) and names a section of a document as the place for the answer. The answer becomes a proposed text of that section (a candidate) in the same Turn. Her revoke of the Bell\'s grant suspends it (support0 dead). Here bob types the answer (a scripted answerer); on a hosted World a model answers.', demo: 'inbox' },
