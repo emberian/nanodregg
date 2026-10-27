@@ -1,23 +1,27 @@
 /-
-# Lang.Proofs.StdOffer — what the generated offer judge, its take and its matcher decide (PROT-6)
+# Lang.Proofs.StdOffer — what the generated offer judge and its take decide (PROT-6)
 
 Every theorem here is about a term `Lang.StdOffer` generates, by its `BigStep` meaning, or about
 `Lang.program`'s `run` of the generated package:
 
 * `offerJoint_meaning` / `offerJoint_total` (term grain): the joint judge `offerJoint` says
   `sameRole`, `ok` (exactly `JointOk`: different roles, θ inside BOTH boxes) or `notCompliant`.
-* `take_iff_compliant` (method-term grain, as the receiver applies it): with both offer slots
-  present, the take returns iff its own pinned offer is the one the deal names for it (`NamedKey`)
-  and `JointOk` of the two pinned offers and the θ it decoded. The matcher's code is not a premise.
-  Its refusals by name: `take_offerUnpinned`, `take_noOffer`, `take_peerRowUnpinned`,
-  `take_noPeerOffer`, `take_offerNotNamed`, `take_sameRole`, `take_notCompliant`.
+* `offerTakeTree_decides` (body grain, over the receiver's env `[req, arg, state, rows]`): the tree
+  the take and the fuse share ends in one result, a value iff `NamedKey` and `JointOk`.
+* `take_iff_compliant` (as the receiver applies it: `apply4 g "take"` at a `lib[g]` whose `take` is
+  the generated method): with both offer slots present, the take returns iff its own pinned offer is
+  the one the deal names for it (`NamedKey`) and `JointOk` of the two pinned offers and the θ it
+  decoded. No other code is a premise. Its refusals by name, at the same grain:
+  `take_offerUnpinned`, `take_noOffer`, `take_peerRowUnpinned`, `take_noPeerOffer`,
+  `take_offerNotNamed`, `take_sameRole`, `take_notCompliant`.
 * `take_run_sound` (the deployed run): a returned take decoded `{keys, pair, theta}`, read both
   pinned offers, its own the one the deal names for it, found them `JointOk`, makes no calls, and
   its row acts are exactly that named offer's retract and its own session insert.
 * `fuse_refused_disjoint`: buyer `[5,10]` and seller `[11,12]` over `["price"]` have no common θ, and
-  the take term refuses that pair `notCompliant` at every θ.
+  the take, as the receiver applies it, refuses that pair `notCompliant` at every θ.
 
-The fuse's run (`fuse_run_sound`) is in `Lang.Proofs.StdOfferFuse`, with what a signed fuse seals.
+The fuse's iff (`fuse_iff_compliant`) and run (`fuse_run_sound`) are in `Lang.Proofs.StdOfferFuse`,
+with what a signed fuse seals.
 The run-grain steps (`get_data`, `apply4_method`, `runMeasured_inv`, `means_toVal`) are
 `Lang.Proofs.MethodRun`'s.
 
@@ -491,16 +495,6 @@ private theorem judge_in_take {theta roles : List Label} {lib : List Term} {req 
   obtain ⟨⟨rq, hqr, hrq⟩, ⟨qt, hqt, hqtc⟩⟩ := offer_fields hq
   exact judge_in_tree hR hor hro hot hotc hqr hrq hqt hqtc hth
 
-/-- The method term, applied as the receiver applies it, runs its body over `[req, arg, state, rows]`. -/
-private theorem method_app {S A R : Ty} {body : Term} {lib : List Term} {req state : Val} {arg rows : Data}
-    {env : Env} {r : Except Fault Val}
-    (h : BigStep lib (bodyEnv req state arg rows (req :: arg.toVal :: state :: rows.toVal :: env)) body r) :
-    BigStep lib (req :: arg.toVal :: state :: rows.toVal :: env)
-      (activityApply (activityMethod S A R body) [.var 3, .var 2, .var 1, .var 0]) r := by
-  unfold activityApply activityMethod
-  simp only [List.foldl]
-  exact .app (.app (.app (.app .lam (.var rfl) .lam) (.var rfl) .lam) (.var rfl) .lam) (.var rfl) h
-
 /-! ### The named offer -/
 
 theorem keys_shape {keys : Data} (h : Conforms keys offerKeysTy) :
@@ -577,173 +571,120 @@ private theorem named_in_take {lib : List Term} {state : Val} {rq keys pair th k
     (get_data (d := takeArg keys pair th tail) (BigStep.var (i := 5) rfl) rfl)
     (get_data (d := takeArg keys pair th tail) (BigStep.var (i := 5) rfl) rfl) hkeys hpair hkc
 
-/-- **Each party's honesty** (method-term grain, the generated `take` as the receiver applies it,
-over the env `[req, arg, state, rows]` it builds): with both offer slots pinned and present (own
-point `k`/`o`, peer point `kq`/`q`), the argument `{keys, pair, theta := th}` and a request whose
-`self` is `sb`, the take returns iff its own pinned offer is the one the deal NAMES for `sb`
-(`NamedKey`) and `JointOk`: it checks the name and judges the pair itself, whoever called it. The
-matcher's code is not a premise. Mutation P2 (`take` without the judge: the `ok` arm taken
-unconditionally) makes it false at F2 (buyer `[5,10]`, seller `[11,12]`, θ = 11: the mutant
-returns, `JointOk` is false); mutation PA (the name check skipped) at LF8 (the deal names Y's offer
-1, the pin is Y's offer 0: the mutant returns, `NamedKey` is false). -/
-theorem take_iff_compliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
+/-- **The take's tree decides** (body grain, over exactly the env `[req, arg, state, rows]` the
+receiver builds; any `done` that is a record term, any fields after `{keys, pair, theta}`): with both
+offer slots pinned and present (own point `k`/`o`, peer point `kq`/`q`), the argument
+`{keys, pair, theta := th, …}` and a request whose `self` is `sb`, the tree ends in ONE result `r`,
+and `r` is a value iff the own pinned offer is the one the deal names for `sb` (`NamedKey`) and
+`JointOk` of the two pinned offers and θ. `Std.offer`'s take and fuse are this tree at their `done`
+(`offerTakeBody`, `offerFuseBody`): `take_iff_compliant`, `fuse_iff_compliant` carry it to the
+receiver's `apply4`. -/
+theorem offerTakeTree_decides {theta roles : List Label} {done : Term} {fs : List (Label × Term)}
+    (hd : done = .record fs) {lib : List Term} {state : Val} {rq keys pair th k o kq q : Data}
+    {tail : List (Label × Data)} {sb : ByteArray}
     (hR : (offerRoleTy roles).wf = true)
     (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
     (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
     (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
-    (∃ v, BigStep lib (rq.toVal :: (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal :: state ::
+    ∃ r, BigStep lib [rq.toVal, (Data.record ([("keys", keys), ("pair", pair), ("theta", th)] ++ tail)).toVal, state,
         (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
-          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal ::
-          env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0]) (.ok v)) ↔
-    NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th := by
-  obtain ⟨v, hv, hd⟩ := judge_in_take (lib := lib) (tail := []) (req := rq.toVal) (state := state) (keys := keys) (pair := pair)
-    (k := k) (kq := kq) (E := rq.toVal :: (takeArg keys pair th []).toVal :: state :: (bothRows k o kq q).toVal :: env) hR ho hq hth
-  obtain ⟨nb, hnb, hni⟩ := named_in_take (lib := lib) (tail := []) (state := state) (th := th) (o := o) (kq := kq) (q := q)
-    (E := rq.toVal :: (takeArg keys pair th []).toVal :: state :: (bothRows k o kq q).toVal :: env) hself hkeys hpair hk
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (offerTakeTree theta roles (offerValTy theta roles) none done) r ∧
+      ((∃ v, r = .ok v) ↔ NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th) := by
+  subst hd
+  obtain ⟨v, hv, hdj⟩ := judge_in_take (lib := lib) (tail := tail) (req := rq.toVal) (state := state) (keys := keys)
+    (pair := pair) (k := k) (kq := kq) (E := []) hR ho hq hth
+  obtain ⟨nb, hnb, hni⟩ := named_in_take (lib := lib) (tail := tail) (state := state) (th := th) (o := o) (kq := kq)
+    (q := q) (E := []) hself hkeys hpair hk
   cases nb with
   | false =>
-    constructor
-    · rintro ⟨w, hw⟩
-      cases bigStep_deterministic hw (method_app (body_notNamed hnb))
-    · rintro ⟨hnk, -⟩
-      cases hni.mpr hnk
+    refine ⟨_, body_notNamed hnb, ⟨fun ⟨_, h⟩ => (by cases h), fun ⟨hn, _⟩ => ?_⟩⟩
+    cases hni.mpr hn
   | true =>
-    constructor
-    · rintro ⟨w, hw⟩
-      rcases hd with ⟨-, rfl⟩ | ⟨hok, -⟩ | ⟨-, -, rfl⟩
-      · cases bigStep_deterministic hw (method_app (body_refused (.inl rfl) hnb hv))
-      · exact ⟨hni.mp rfl, hok⟩
-      · cases bigStep_deterministic hw (method_app (body_refused (.inr rfl) hnb hv))
-    · rintro ⟨-, hok⟩
-      rcases hd with ⟨hr, -⟩ | ⟨-, rfl⟩ | ⟨-, hn, -⟩
+    rcases hdj with ⟨hr, rfl⟩ | ⟨hok, rfl⟩ | ⟨-, hn, rfl⟩
+    · exact ⟨_, body_refused (.inl rfl) hnb hv, ⟨fun ⟨_, h⟩ => (by cases h), fun ⟨_, hok⟩ => absurd hr hok.1⟩⟩
+    · exact ⟨_, body_ok hnb hv (fun (f : Term) (e : (none : Option Term) = some f) => nomatch e) .record,
+        ⟨fun _ => ⟨hni.mp rfl, hok⟩, fun _ => ⟨_, rfl⟩⟩⟩
+    · exact ⟨_, body_refused (.inr rfl) hnb hv, ⟨fun ⟨_, h⟩ => (by cases h), fun ⟨_, hok⟩ => absurd hok hn⟩⟩
+
+/-- **The take's tree decides, with an instance's own compliance** (`offerTakeTree_decides` for a
+tree that declares `fair`, LANG-82): at a value type `V` whose values carry a `role` and `terms`, and a
+`fair` term that evaluates, wherever the judge's `ok` arm holds the peer's value at 1 and the own at 3,
+to a Boolean that is `true` exactly when `P`, the tree ends in ONE result, a value iff `NamedKey`,
+`JointOk` and `P`. The escrow's take and fuse are this tree at `escrowFairT` (`P = LegsMatch o q`). -/
+theorem offerTakeTree_decides_fair {theta roles : List Label} {V : Ty} {fair done : Term}
+    {fs : List (Label × Term)} (hd : done = .record fs) {P : Prop} {lib : List Term} {state : Val}
+    {rq keys pair th k o kq q : Data} {tail : List (Label × Data)} {sb : ByteArray}
+    (hval : ∀ {u : Data}, Conforms u V →
+      (∃ ru, u.field "role" = some ru ∧ Conforms ru (offerRoleTy roles)) ∧
+        (∃ tu, u.field "terms" = some tu ∧ Conforms tu (offerTermsTy theta)))
+    (hfair : ∀ env : Env, env[1]? = some q.toVal → env[3]? = some o.toVal →
+      ∃ b, BigStep lib env fair (.ok (.bool b)) ∧ (b = true ↔ P))
+    (hR : (offerRoleTy roles).wf = true) (ho : Conforms o V) (hq : Conforms q V)
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
+    ∃ r, BigStep lib [rq.toVal, (Data.record ([("keys", keys), ("pair", pair), ("theta", th)] ++ tail)).toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (offerTakeTree theta roles V (some fair) done) r ∧
+      ((∃ v, r = .ok v) ↔ NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th ∧ P) := by
+  subst hd
+  obtain ⟨⟨ro, hor, hro⟩, ⟨ot, hot, hotc⟩⟩ := hval ho
+  obtain ⟨⟨rq', hqr, hrq⟩, ⟨qt, hqt, hqtc⟩⟩ := hval hq
+  obtain ⟨v, hv, hdj⟩ := judge_in_tree (V := V) (lib := lib) (tail := tail) (req := rq.toVal) (state := state)
+    (keys := keys) (pair := pair) (k := k) (kq := kq) (E := []) hR hor hro hot hotc hqr hrq hqt hqtc hth
+  obtain ⟨nb, hnb, hni⟩ := named_in_take (lib := lib) (tail := tail) (state := state) (rq := rq) (th := th) (o := o)
+    (kq := kq) (q := q) (E := []) hself hkeys hpair hk
+  obtain ⟨b, hb, hbi⟩ := hfair (okEnv rq.toVal state keys pair th tail k o kq q []) rfl rfl
+  cases nb with
+  | false =>
+    refine ⟨_, body_notNamed hnb, ⟨fun ⟨_, h⟩ => (by cases h), fun ⟨hn, _⟩ => ?_⟩⟩
+    cases hni.mpr hn
+  | true =>
+    rcases hdj with ⟨hr, rfl⟩ | ⟨hok, rfl⟩ | ⟨-, hn, rfl⟩
+    · exact ⟨_, body_refused (.inl rfl) hnb hv, ⟨fun ⟨_, h⟩ => (by cases h), fun ⟨_, hok, _⟩ => absurd hr hok.1⟩⟩
+    · cases b with
+      | false =>
+        refine ⟨_, body_unfair hnb hv hb, ⟨fun ⟨_, h⟩ => (by cases h), fun ⟨_, _, hp⟩ => ?_⟩⟩
+        cases hbi.mpr hp
+      | true =>
+        exact ⟨_, body_ok hnb hv (fun f' e => by cases e; exact hb) .record,
+          ⟨fun _ => ⟨hni.mp rfl, hok, hbi.mp rfl⟩, fun _ => ⟨_, rfl⟩⟩⟩
+    · exact ⟨_, body_refused (.inr rfl) hnb hv, ⟨fun ⟨_, h⟩ => (by cases h), fun ⟨_, hok, _⟩ => absurd hok hn⟩⟩
+
+/-- A both-offers-present take over the receiver's env, refused by name at the body grain: one of the
+three refusals past the unwraps (`offerNotNamed`, `sameRole`, `notCompliant`), each at its premise. -/
+private theorem body_named_refusal {theta roles : List Label} {done : Term} {lib : List Term} {state : Val}
+    {rq keys pair th k o kq q : Data} {sb : ByteArray}
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
+    (¬ NamedKey sb keys pair k → BigStep lib (bodyEnv rq.toVal state (takeArg keys pair th []) (bothRows k o kq q) [])
+        (offerTakeTree theta roles (offerValTy theta roles) none done) (.error (.refused "offerNotNamed".toUTF8))) ∧
+    (NamedKey sb keys pair k → o.field "role" = q.field "role" →
+      BigStep lib (bodyEnv rq.toVal state (takeArg keys pair th []) (bothRows k o kq q) [])
+        (offerTakeTree theta roles (offerValTy theta roles) none done) (.error (.refused "sameRole".toUTF8))) ∧
+    (NamedKey sb keys pair k → o.field "role" ≠ q.field "role" → ¬ JointOk (offerLabels theta) o q th →
+      BigStep lib (bodyEnv rq.toVal state (takeArg keys pair th []) (bothRows k o kq q) [])
+        (offerTakeTree theta roles (offerValTy theta roles) none done) (.error (.refused "notCompliant".toUTF8))) := by
+  obtain ⟨v, hv, hdj⟩ := judge_in_take (lib := lib) (tail := []) (req := rq.toVal) (state := state) (keys := keys)
+    (pair := pair) (k := k) (kq := kq) (E := []) hR ho hq hth
+  obtain ⟨nb, hnb, hni⟩ := named_in_take (lib := lib) (tail := []) (state := state) (th := th) (o := o) (kq := kq)
+    (q := q) (E := []) hself hkeys hpair hk
+  cases nb with
+  | false =>
+    exact ⟨fun _ => body_notNamed hnb, fun hnk => (by cases hni.mpr hnk), fun hnk => (by cases hni.mpr hnk)⟩
+  | true =>
+    refine ⟨fun hn => absurd (hni.mp rfl) hn, fun _ hr => ?_, fun _ hr hn => ?_⟩
+    · rcases hdj with ⟨-, rfl⟩ | ⟨hok, -⟩ | ⟨hne, -, -⟩
+      · exact body_refused (.inl rfl) hnb hv
       · exact absurd hr hok.1
-      · exact ⟨_, method_app (body_ok hnb hv (fun (f : Term) (e : (none : Option Term) = some f) => nomatch e) .record)⟩
+      · exact absurd hr hne
+    · rcases hdj with ⟨he, -⟩ | ⟨hok, -⟩ | ⟨-, -, rfl⟩
+      · exact absurd he hr
       · exact absurd hok hn
-
-/-! ### The take's refusals, by name (method-term grain) -/
-
-/-- Own offer slot unpinned: `offerUnpinned`. -/
-theorem take_offerUnpinned {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {req state : Val} {arg peer : Data} :
-    BigStep lib (req :: arg.toVal :: state ::
-        (Data.record [("offer", .record [("p0", .inj "none" (.record []))]),
-          ("peer", .record [("offer", .record [("p0", peer)])])]).toVal :: env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-      (.error (.refused "offerUnpinned".toUTF8)) :=
-  method_app (rows := takeRows (optD none) peer) body_offerUnpinned
-
-/-- Own offer slot pinned absent: `noOffer`. -/
-theorem take_noOffer {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {req state : Val} {arg k peer : Data} :
-    BigStep lib (req :: arg.toVal :: state ::
-        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "none" (.record []))]))]),
-          ("peer", .record [("offer", .record [("p0", peer)])])]).toVal :: env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-      (.error (.refused "noOffer".toUTF8)) :=
-  method_app (rows := takeRows (.inj "some" (pointD k none)) peer) body_noOffer
-
-/-- Peer offer slot unpinned: `peerRowUnpinned`. -/
-theorem take_peerRowUnpinned {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {req state : Val} {arg k o : Data} :
-    BigStep lib (req :: arg.toVal :: state ::
-        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
-          ("peer", .record [("offer", .record [("p0", .inj "none" (.record []))])])]).toVal :: env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-      (.error (.refused "peerRowUnpinned".toUTF8)) :=
-  method_app (rows := takeRows (.inj "some" (pointD k (some o))) (optD none)) body_peerRowUnpinned
-
-/-- Peer offer slot pinned absent: `noPeerOffer`. -/
-theorem take_noPeerOffer {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {req state : Val} {arg k o kq : Data} :
-    BigStep lib (req :: arg.toVal :: state ::
-        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
-          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "none" (.record []))]))])])]).toVal :: env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-      (.error (.refused "noPeerOffer".toUTF8)) :=
-  method_app (rows := takeRows (.inj "some" (pointD k (some o))) (.inj "some" (pointD kq none))) body_noPeerOffer
-
-/-- Both offers present, the own pinned offer not the one the deal names for `self` (`¬ NamedKey`):
-`offerNotNamed`, before the judge reads either value. Mutation PA (the check skipped): false at LF8. -/
-theorem take_offerNotNamed {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
-    (hself : rq.field "self" = some (.digest sb))
-    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)]))
-    (hn : ¬ NamedKey sb keys pair k) :
-    BigStep lib (rq.toVal :: (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal :: state ::
-        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
-          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal ::
-          env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-      (.error (.refused "offerNotNamed".toUTF8)) := by
-  obtain ⟨nb, hnb, hni⟩ := named_in_take (lib := lib) (tail := []) (state := state) (th := th) (o := o) (kq := kq) (q := q)
-    (E := rq.toVal :: (takeArg keys pair th []).toVal :: state :: (bothRows k o kq q).toVal :: env) hself hkeys hpair hk
-  cases nb with
-  | false => exact method_app (body_notNamed hnb)
-  | true => exact absurd (hni.mp rfl) hn
-
-/-- Both offers present and the own one named, equal chooser roles: `sameRole`. Mutation: the two
-refusal names swapped. -/
-theorem take_sameRole {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
-    (hR : (offerRoleTy roles).wf = true)
-    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
-    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
-    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)]))
-    (hnk : NamedKey sb keys pair k) (hr : o.field "role" = q.field "role") :
-    BigStep lib (rq.toVal :: (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal :: state ::
-        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
-          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal ::
-          env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-      (.error (.refused "sameRole".toUTF8)) := by
-  obtain ⟨v, hv, hd⟩ := judge_in_take (lib := lib) (tail := []) (req := rq.toVal) (state := state) (keys := keys) (pair := pair)
-    (k := k) (kq := kq) (E := rq.toVal :: (takeArg keys pair th []).toVal :: state :: (bothRows k o kq q).toVal :: env) hR ho hq hth
-  obtain ⟨nb, hnb, hni⟩ := named_in_take (lib := lib) (tail := []) (state := state) (th := th) (o := o) (kq := kq) (q := q)
-    (E := rq.toVal :: (takeArg keys pair th []).toVal :: state :: (bothRows k o kq q).toVal :: env) hself hkeys hpair hk
-  cases nb with
-  | false => cases hni.mpr hnk
-  | true =>
-    rcases hd with ⟨-, rfl⟩ | ⟨hok, -⟩ | ⟨hn, -, -⟩
-    · exact method_app (body_refused (.inl rfl) hnb hv)
-    · exact absurd hr hok.1
-    · exact absurd hr hn
-
-/-- Both offers present and the own one named, different roles, θ outside a box: `notCompliant`. -/
-theorem take_notCompliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
-    {lib : List Term} {env : Env} {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
-    (hR : (offerRoleTy roles).wf = true)
-    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
-    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
-    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)]))
-    (hnk : NamedKey sb keys pair k) (hr : o.field "role" ≠ q.field "role")
-    (hn : ¬ JointOk (offerLabels theta) o q th) :
-    BigStep lib (rq.toVal :: (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal :: state ::
-        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
-          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal ::
-          env)
-      (activityApply (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
-        (offerTakeBody theta roles rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-      (.error (.refused "notCompliant".toUTF8)) := by
-  obtain ⟨v, hv, hd⟩ := judge_in_take (lib := lib) (tail := []) (req := rq.toVal) (state := state) (keys := keys) (pair := pair)
-    (k := k) (kq := kq) (E := rq.toVal :: (takeArg keys pair th []).toVal :: state :: (bothRows k o kq q).toVal :: env) hR ho hq hth
-  obtain ⟨nb, hnb, hni⟩ := named_in_take (lib := lib) (tail := []) (state := state) (th := th) (o := o) (kq := kq) (q := q)
-    (E := rq.toVal :: (takeArg keys pair th []).toVal :: state :: (bothRows k o kq q).toVal :: env) hself hkeys hpair hk
-  cases nb with
-  | false => cases hni.mpr hnk
-  | true =>
-    rcases hd with ⟨he, -⟩ | ⟨hok, -⟩ | ⟨-, -, rfl⟩
-    · exact absurd he hr
-    · exact absurd hok hn
-    · exact method_app (body_refused (.inr rfl) hnb hv)
+      · exact body_refused (.inr rfl) hnb hv
 
 /-! ## The package: closed facts about the generator's method table -/
 
@@ -798,6 +739,166 @@ private theorem noRef_take (theta roles : List Label) (rels : List (Label × Rel
   simp [activityMethod, offerTakeBody, NoRef, NoRefRow, activityResult, activityResultCalls, activityEdit, resultT, activityKeyTerm,
     noCallT, someCallT, slot_e2, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT, offerTakeTree, offerUnwrap, offerGate,
     offerTakeDone, offerTakeEdits]
+
+/-! ## The take and its refusals, as the receiver applies it
+
+The receiver resolves `apply4 g "take"` against `lib[g]`, the loaded package body relocated
+(`load_top`); its field `take` is the generated method term. These theorems take exactly that: `hlib`
+and `hf`. The body then runs under exactly `[req, arg, state, rows]` (`apply4_method`), and whatever
+the application ends in is what the body ends in (`apply4_method_iff`). -/
+
+private theorem take_app {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    {req state : Val} {arg rows : Data} {r : Except Fault Val}
+    (h : BigStep lib [req, arg.toVal, state, rows.toVal] (offerTakeBody theta roles rels od sd) r) :
+    BigStep lib [req, arg.toVal, state, rows.toVal] (apply4 g "take") r :=
+  apply4_method hlib rfl hf (noRef_take _ _ _ _ _) h
+
+/-- **Each party's honesty** (the generated `take` as the receiver applies it: `apply4 g "take"` over
+the env `[req, arg, state, rows]` it builds, at a `lib[g]` whose `take` is the generated method): with
+both offer slots pinned and present (own point `k`/`o`, peer point `kq`/`q`), the argument
+`{keys, pair, theta := th}` and a request whose `self` is `sb`, the take returns iff its own pinned
+offer is the one the deal NAMES for `sb` (`NamedKey`) and `JointOk`: it checks the name and judges
+the pair itself, whoever called it. No other code is a premise. Mutation P2 (`take` without the
+judge: the `ok` arm taken unconditionally) makes it false at F2 (buyer `[5,10]`, seller `[11,12]`,
+θ = 11: the mutant returns, `JointOk` is false); mutation PA (the name check skipped) at LF8 (the deal
+names Y's offer 1, the pin is Y's offer 0: the mutant returns, `NamedKey` is false). -/
+theorem take_iff_compliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
+    (∃ v, BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (apply4 g "take") (.ok v)) ↔
+    NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th := by
+  obtain ⟨r, hr, hiff⟩ := offerTakeTree_decides (done := offerTakeDone theta rels od sd) (tail := []) (lib := lib)
+    (state := state) (kq := kq) rfl hR ho hq hth hself hkeys hpair hk
+  have hap := apply4_method_iff hlib rfl hf (noRef_take _ _ _ _ _) hr
+  rw [← hiff]
+  exact ⟨fun ⟨v, hv⟩ => ⟨v, ((hap _).mp hv).symm⟩, fun ⟨v, e⟩ => ⟨v, (hap _).mpr e.symm⟩⟩
+
+/-- Own offer slot unpinned: `offerUnpinned`. -/
+theorem take_offerUnpinned {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    {req state : Val} {arg peer : Data} :
+    BigStep lib [req, arg.toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "none" (.record []))]),
+          ("peer", .record [("offer", .record [("p0", peer)])])]).toVal]
+      (apply4 g "take") (.error (.refused "offerUnpinned".toUTF8)) :=
+  take_app hlib hf (rows := takeRows (optD none) peer) (body_offerUnpinned (E := []))
+
+/-- Own offer slot pinned absent: `noOffer`. -/
+theorem take_noOffer {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    {req state : Val} {arg k peer : Data} :
+    BigStep lib [req, arg.toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "none" (.record []))]))]),
+          ("peer", .record [("offer", .record [("p0", peer)])])]).toVal]
+      (apply4 g "take") (.error (.refused "noOffer".toUTF8)) :=
+  take_app hlib hf (rows := takeRows (.inj "some" (pointD k none)) peer) (body_noOffer (E := []))
+
+/-- Peer offer slot unpinned: `peerRowUnpinned`. -/
+theorem take_peerRowUnpinned {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    {req state : Val} {arg k o : Data} :
+    BigStep lib [req, arg.toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "none" (.record []))])])]).toVal]
+      (apply4 g "take") (.error (.refused "peerRowUnpinned".toUTF8)) :=
+  take_app hlib hf (rows := takeRows (.inj "some" (pointD k (some o))) (optD none)) (body_peerRowUnpinned (E := []))
+
+/-- Peer offer slot pinned absent: `noPeerOffer`. -/
+theorem take_noPeerOffer {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    {req state : Val} {arg k o kq : Data} :
+    BigStep lib [req, arg.toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "none" (.record []))]))])])]).toVal]
+      (apply4 g "take") (.error (.refused "noPeerOffer".toUTF8)) :=
+  take_app hlib hf (rows := takeRows (.inj "some" (pointD k (some o))) (.inj "some" (pointD kq none)))
+    (body_noPeerOffer (E := []))
+
+/-- Both offers present, the own pinned offer not the one the deal names for `self` (`¬ NamedKey`):
+`offerNotNamed`, before the judge reads either value. Mutation PA (the check skipped): false at LF8. -/
+theorem take_offerNotNamed {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)]))
+    (hn : ¬ NamedKey sb keys pair k) :
+    BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (apply4 g "take") (.error (.refused "offerNotNamed".toUTF8)) :=
+  take_app hlib hf ((body_named_refusal (lib := lib) (state := state) (kq := kq) (th := th)
+    hR ho hq hth hself hkeys hpair hk).1 hn)
+
+/-- Both offers present and the own one named, equal chooser roles: `sameRole`. Mutation: the two
+refusal names swapped. -/
+theorem take_sameRole {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)]))
+    (hnk : NamedKey sb keys pair k) (hr : o.field "role" = q.field "role") :
+    BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (apply4 g "take") (.error (.refused "sameRole".toUTF8)) :=
+  take_app hlib hf ((body_named_refusal (lib := lib) (state := state) (kq := kq) (th := th)
+    hR ho hq hth hself hkeys hpair hk).2.1 hnk hr)
+
+/-- Both offers present and the own one named, different roles, θ outside a box: `notCompliant`. -/
+theorem take_notCompliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (offerTakeBody theta roles rels od sd)))
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)]))
+    (hnk : NamedKey sb keys pair k) (hr : o.field "role" ≠ q.field "role")
+    (hn : ¬ JointOk (offerLabels theta) o q th) :
+    BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (apply4 g "take") (.error (.refused "notCompliant".toUTF8)) :=
+  take_app hlib hf ((body_named_refusal (lib := lib) (state := state) (kq := kq) (th := th)
+    hR ho hq hth hself hkeys hpair hk).2.2 hnk hr hn)
 
 /-! ## The deployed run of `take` -/
 
@@ -1150,8 +1251,9 @@ private theorem sellerB_conforms : Conforms sellerB (offerValTy ["price"] ["buye
 
 /-- **No common θ for the buyer `[5,10]` and the seller `[11,12]`** (θ labels `["price"]`, roles
 `["buyer","seller"]`): each box holds a θ of its own (7 and 11), no θ is inside both (so no θ is
-`JointOk` for the pair), and the generated take term, at every conforming θ with its own offer the
-one the deal names, refuses the pair `notCompliant`. This is the arithmetic half of the deleted `separate_witnesses_over_substitutions`
+`JointOk` for the pair), and the generated take, applied as the receiver applies it (at any `lib[g]`
+whose `take` is the generated method), at every conforming θ with its own offer the one the deal
+names, refuses the pair `notCompliant`. This is the arithmetic half of the deleted `separate_witnesses_over_substitutions`
 (each side satisfiable, no common point), over the two real rows. Mutation: `offerJoint := okT`
 (the take then returns at every θ), and a judge that refuses only the journey's θ = 11 and accepts
 another (it returns at θ = 12). -/
@@ -1165,20 +1267,21 @@ theorem fuse_refused_disjoint :
         (.record [("role", .inj "seller" (.record [])),
           ("terms", .record [("price", .record [("hi", .nat 12), ("lo", .nat 11)])])]) th) ∧
     (∀ (th keys pair k kq rq : Data) (sb : ByteArray) (rels : List (Label × RelDecl)) (od sd : RelDecl)
-        (lib : List Term) (env : Env) (state : Val), Conforms th (offerThetaTy ["price"]) →
+        (lib : List Term) (g : Nat) (f : Nat → Nat) (fs : List (Label × Term)) (state : Val),
+        lib[g]? = some ((Term.record fs).relocate f) →
+        Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg ["price"]) (offerTakeRows rels)
+          (offerTakeBody ["price"] ["buyer", "seller"] rels od sd)) →
+        Conforms th (offerThetaTy ["price"]) →
         rq.field "self" = some (.digest sb) → Conforms keys offerKeysTy → Conforms pair pairTy →
         Conforms k (.record [("n", .nat)]) → NamedKey sb keys pair k →
-      BigStep lib (rq.toVal :: (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal :: state ::
+      BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal, state,
           (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some"
               (.record [("role", .inj "buyer" (.record [])),
                 ("terms", .record [("price", .record [("hi", .nat 10), ("lo", .nat 5)])])]))]))]),
             ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some"
               (.record [("role", .inj "seller" (.record [])),
-                ("terms", .record [("price", .record [("hi", .nat 12), ("lo", .nat 11)])])]))]))])])]).toVal ::
-            env)
-        (activityApply (activityMethod offerStateTy (offerTakeArg ["price"]) (offerTakeRows rels)
-          (offerTakeBody ["price"] ["buyer", "seller"] rels od sd)) [.var 3, .var 2, .var 1, .var 0])
-        (.error (.refused "notCompliant".toUTF8))) := by
+                ("terms", .record [("price", .record [("hi", .nat 12), ("lo", .nat 11)])])]))]))])])]).toVal]
+        (apply4 g "take") (.error (.refused "notCompliant".toUTF8))) := by
   have hnot : ∀ th, ¬ JointOk (offerLabels ["price"]) buyerA sellerB th := by
     rintro th ⟨-, ⟨ot, hot, hA⟩, ⟨qt, hqt, hB⟩⟩
     simp [buyerA, sellerB, Data.field, Row.find?] at hot hqt
@@ -1198,8 +1301,8 @@ theorem fuse_refused_disjoint :
     exact ⟨5, 10, 7, rfl, rfl, by decide, by decide⟩
   · rw [labels_price]; intro f hf; simp only [List.mem_singleton] at hf; subst hf
     exact ⟨11, 12, 11, rfl, rfl, by decide, by decide⟩
-  · intro th keys pair k kq rq sb rels od sd lib env state hth hself hkeys hpair hk hnk
-    exact take_notCompliant (o := buyerA) (q := sellerB) roles_wf buyerA_conforms sellerB_conforms hth hself hkeys
+  · intro th keys pair k kq rq sb rels od sd lib g f fs state hlib hf hth hself hkeys hpair hk hnk
+    exact take_notCompliant (o := buyerA) (q := sellerB) hlib hf roles_wf buyerA_conforms sellerB_conforms hth hself hkeys
       hpair hk hnk hrole (hnot th)
 
 /-- **A deal's session row leaves exactly from its deadline** (LANG-80): the package's session guard

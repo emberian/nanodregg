@@ -14,6 +14,9 @@
   point's and a signed range row's `receipt` field is what the run's `ReceiptCheck` showed for the
   head object that slot's key names, through the caller's pinned view, and the method's own
   `receipt` argument.
+* `cited_authenticated`, `live_row_authenticated` (E1): on a `(live)` read, a pinned point's and a
+  signed range row's `live` bit is `cellLive` of the kernel cell that slot's key names, through the
+  caller's pinned view.
 * `keyOf_keyBytes`: a key's bytes read back to the key (`keyOf_keyBytes_fields` without premises:
   to the key's declared fields, sorted).
 * `guard_never_stuck`, `guardEdits_never_stuck`: the guard `guardEdits` runs on each edit never
@@ -517,6 +520,59 @@ theorem receipt_row_authenticated {digestOf : ByteArray → Option D} {rc : Rece
       · cases hr
       · exact ⟨key, amt, vb, ver, k, val, b, g, c, rb, s, hrow, hk, hv, hb, hg, hc, ha, hs,
           by rw [← hq]; simp [List.append_assoc]⟩
+
+/-- **A range row's live column is authenticated** (E1 on a range, CLIENT-36's `(facts (range m n)
+(live))`, the arm `nd --range` drives; the range twin of `cited_authenticated`): on a live read with a
+range, the rows argument's `range` is built from the caller's ONE signed listing of that relation,
+and its row `j` is the listing's `j`-th row (its key read back at the key, its value at the value
+type) whose `live` bit is `cellLive look g` for the kernel cell `g` THAT row's key names: the caller's
+pinned view of that cell, never a field a method, a poster or the listing wrote. On a read without
+`receipt` the row carries no other column. -/
+theorem live_row_authenticated {digestOf : ByteArray → Option D} {rc : ReceiptCheck} {look : Pinned D}
+    {rv : RowView D} {self : D} {i : Nat} {ℓ : Label} {d : RelDecl} {x : RelRead} {args : Data} {v : Data}
+    {m n : Nat} (h : relReads digestOf rc look rv self i ℓ d x args = .ok v) (hl : x.live = true)
+    (hr : x.range = some (m, n)) :
+    ∃ ps pre most rows p rs, rv.ranges self i = .ok [(pre, most, rows)] ∧
+      v = .record (slotsD "p" x.points ps ++ [("range", .record [("pre", p), ("rows", .record (slotsD "r" n rs))])]) ∧
+      ∃ hlen : rs.length = rows.length,
+      ∀ j (hj : j < rs.length), ∃ key amt vb ver k val b g col,
+        rows[j]'(hlen ▸ hj) = (.row key, .row amt vb ver) ∧
+        keyOf d d.key.length key.k = .ok k ∧ valOf digestOf d s!"rows: {ℓ}" vb = .ok val ∧
+        keyCell k = some b ∧ digestOf b = some g ∧
+        rs[j] = .record ([("key", k), ("live", .bool (cellLive look g))] ++ col ++ [("val", val)]) ∧
+        (x.receipt = false → col = []) := by
+  unfold relReads at h
+  rw [hr] at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals first | (cases h; done) | skip
+  all_goals
+    simp only [Except.ok.injEq] at h
+    subst h
+    have hrange := ‹rv.ranges self i = Except.ok _›
+    have hrd := ‹rangeRowData digestOf ℓ d _ = Except.ok _›
+    have hcr := ‹columnRows digestOf rc look ℓ x.live x.receipt args _ = Except.ok _›
+    rw [hl] at hcr
+    unfold columnRows at hcr
+    rw [if_pos (by simp)] at hcr
+    obtain ⟨hl1, hg1⟩ := rangeRowData_getElem hrd
+    obtain ⟨hl2, hg2⟩ := mapM_ok_getElem hcr
+    refine ⟨_, _, _, _, _, _, hrange, rfl, hl2.trans hl1, fun j hj => ?_⟩
+    obtain ⟨key, amt, vb, ver, k, val, hrow, hk, hv, hd⟩ := hg1 j (hl2 ▸ hj)
+    have hq := hg2 j hj
+    rw [hd] at hq
+    unfold columnRow at hq
+    cases hcs : keyColumns digestOf rc look ℓ true x.receipt args k with
+    | error e => simp [hcs] at hq
+    | ok cs =>
+      simp only [hcs, Except.ok.injEq] at hq
+      rcases keyColumns_ok hcs with ⟨-, hf, -⟩ | ⟨hx, -, b, g, c, hb, hg, -, rfl⟩ |
+          ⟨hx, b, g, c, rb, s, hb, hg, -, -, -, -, rfl⟩
+      · cases hf
+      · exact ⟨key, amt, vb, ver, k, val, b, g, [], hrow, hk, hv, hb, hg,
+          by rw [← hq]; simp, fun _ => rfl⟩
+      · exact ⟨key, amt, vb, ver, k, val, b, g, [("receipt", seenData s)], hrow, hk, hv, hb, hg,
+          by rw [← hq]; simp, fun h' => by rw [hx] at h'; cases h'⟩
 
 /-! ## A key's bytes read back -/
 

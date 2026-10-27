@@ -6,7 +6,7 @@ machine typed
 theorems). `decodeData_eq_ok_iff`: `decodeData T b = .ok d ↔ encodeData T d = some b`: one value,
 one byte string. `Conforms d T`: data `d` is a value of data type `T` (in bounds; a sum's label names
 its first arm). `decodeData_conforms`: whatever the decoder returns conforms to the type it decoded
-at, from ANY bytes. `toVal_typed`: conforming data becomes a machine value of its type. With
+at, from ANY bytes. `ofData_iff_conforms`: at a well-formed type `Conforms d T` is exactly the domain of `ofData`. `toVal_typed`: conforming data becomes a machine value of its type. With
 `method_run_sound` this discharges the typing premises for everything a receiver decodes from cells.
 -/
 import Lang.Wire.Data
@@ -359,6 +359,18 @@ theorem rowOfData_of_conforms : ∀ {ds : List (Label × Data)} {r : List (Label
     obtain ⟨y, hy⟩ := rowOfData_of_conforms hr
     exact ⟨(x, y), by simp only [Wire.rowOfData, if_true, hx, hy]⟩
 end
+
+/-- **A datum is in `ofData`'s domain exactly when it conforms** (at a well-formed type): `Conforms d T`
+is the set `Wire.ofData T` reads, not a second description of it. Forward: `Wire.toData_ofData` with
+`toData_conforms` (what `ofData` reads is `toData` of a value, and every value's data conforms); back:
+`ofData_of_conforms`. -/
+theorem ofData_iff_conforms {T : Ty} (hT : T.wf = true) {d : Data} :
+    (∃ x, Wire.ofData T d = some x) ↔ Conforms d T := by
+  constructor
+  · rintro ⟨x, hx⟩
+    have h := toData_conforms T hT x
+    rwa [Wire.toData_ofData T hx] at h
+  · exact ofData_of_conforms
 
 /-- **The encoder is total on conforming data at a wire type**: what a checked run produces at a
 `dataTy` type has bytes. The reason `callsOf`'s encode arm (LANG-77) is unreachable past typing. -/

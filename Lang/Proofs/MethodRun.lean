@@ -7,6 +7,7 @@ The steps every run-grain theorem about a specific method takes, stated once:
   extracted result, its calls and its edits, the row acts);
 * `apply4_method`: the receiver's application `apply4 g ℓ`, at a closure body whose field `ℓ` is a
   method term with no closure reference, runs that method's body over `[req, arg, state, rows]`;
+  `apply4_method_iff`: and ends in nothing else;
 * `get_data`: selecting a field of data put into the machine means the field's data;
 * `means_toVal`: data conforming to a type means itself there.
 
@@ -70,6 +71,20 @@ theorem apply4_method {lib : List Term} {g : Nat} {f : Nat → Nat} {pb : Term}
     .get (.ref hlib .record) (.field (find_suspend_of hf') .lam)
   unfold apply4
   exact .app (.app (.app (.app hget (.var rfl) .lam) (.var rfl) .lam) (.var rfl) .lam) (.var rfl) h
+
+/-- **The receiver's application ends exactly as the body does**: at `apply4_method`'s premises, with
+the body's result `r` fixed, `apply4 g ℓ` ends in `r'` iff `r' = r` (`bigStep_deterministic`). So a
+statement of what the body returns is a statement of what the receiver's application returns. -/
+theorem apply4_method_iff {lib : List Term} {g : Nat} {f : Nat → Nat} {pb : Term}
+    {fs : List (Label × Term)} {ℓ : Label} {R S A Q : Ty} {body : Term} {req arg state rows : Val}
+    {r : Except Fault Val}
+    (hlib : lib[g]? = some (pb.relocate f)) (hb : pb = .record fs)
+    (hf : Row.find? ℓ fs = some (.lam R (.lam S (.lam A (.lam Q body)))))
+    (hn : NoRef (Term.lam R (.lam S (.lam A (.lam Q body)))))
+    (h : BigStep lib [req, arg, state, rows] body r) :
+    ∀ r', BigStep lib [req, arg, state, rows] (apply4 g ℓ) r' ↔ r' = r :=
+  fun _ => ⟨fun h' => bigStep_deterministic h' (apply4_method hlib hb hf hn h),
+    fun e => e ▸ apply4_method hlib hb hf hn h⟩
 
 /-- `runMeasured`'s do-block inverted, with the calls conjunct (`runMeasuredWith_ok` with `callsOf`). -/
 theorem runMeasured_inv {D : Type} {bytesOf : D → ByteArray} {digestOf : ByteArray → Option D} {rc : Lang.ReceiptCheck}

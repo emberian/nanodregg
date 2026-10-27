@@ -15,7 +15,11 @@ Every theorem here is about `Lang.program`'s `run` of the generated package
 * `escrow_retract_moves_leg` (the linear corollary, over every method of the package): every
   retract of an offer row among a returned run's row acts comes with a call in the same result that
   transfers THAT row's leg out of the object, to the row's own `payTo` or to the `payTo` of the
-  offer the run read under its peer. `fuse` makes no row act and `post` only inserts.
+  offer the run read under its peer (the escrow fuse retracts its own offer and pays its leg, as the
+  take does). `post` only inserts.
+* `escrow_take_iff_compliant`, `escrow_fuse_iff_compliant` (as the receiver applies them): with both
+  offer slots present, the take and the fuse return iff `NamedKey`, `JointOk` and `LegsMatch` of the
+  two pinned offers.
 
 What leaves the object arrives in the named account by the kernel's conservation of every
 denomination (`Kernel.Proofs.Value.admit_value`); this module states the CALL, not the transfer's
@@ -310,6 +314,63 @@ theorem escrow_fair_true {theta roles : List Label} {lib : List Term} {env : Env
   have := bigStep_deterministic hb h
   simp only [Except.ok.injEq, Val.bool.injEq] at this
   exact hi.mp this
+
+/-! ## The escrow's take and fuse, as the receiver applies them -/
+
+/-- **Each escrow party's honesty** (the generated escrow `take` as the receiver applies it:
+`apply4 g "take"` over `[req, arg, state, rows]`, at a `lib[g]` whose `take` is the generated method;
+the escrow twin of `take_iff_compliant`): with both offer slots pinned and present, the take returns iff
+its own pinned offer is the one the deal names for `self` (`NamedKey`), the two are `JointOk` at θ,
+and their legs match (`LegsMatch`, LANG-82). Mutation P8j (the judge ignores the legs) makes it false
+at LE7's unfair deal. -/
+theorem escrow_take_iff_compliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    {state : Val} {rq keys pair th k o kq q : Data} {sb : ByteArray}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "take" fs = some (activityMethod offerStateTy (offerTakeArg theta) (offerTakeRows rels)
+      (escrowTakeBody theta roles rels od sd)))
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (escrowValTy theta roles)) (hq : Conforms q (escrowValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
+    (∃ v, BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th)]).toVal, state,
+        (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (apply4 g "take") (.ok v)) ↔
+    NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q := by
+  obtain ⟨r, hr, hiff⟩ := offerTakeTree_decides_fair (done := escrowTakeDone theta rels od sd) (tail := [])
+    (lib := lib) (state := state) (kq := kq) rfl escrow_fields (fun _ h1 h3 => escrowFair_eval ho hq h1 h3)
+    hR ho hq hth hself hkeys hpair hk
+  have hap := apply4_method_iff hlib rfl hf (noRef_take _ _ _ _ _) hr
+  rw [← hiff]
+  exact ⟨fun ⟨v, hv⟩ => ⟨v, ((hap _).mp hv).symm⟩, fun ⟨v, e⟩ => ⟨v, (hap _).mpr e.symm⟩⟩
+
+/-- **The escrow fuser's honesty** (the generated escrow `fuse` as the receiver applies it; the
+twin of `escrow_take_iff_compliant` and `fuse_iff_compliant`): with both offer slots pinned and
+present, the argument `{keys, pair, theta := th, via}`, the fuse returns iff `NamedKey`, `JointOk`
+and `LegsMatch` of the two pinned offers: the first judge of every escrow fuse decides exactly what
+the take decides, before it pays or calls. -/
+theorem escrow_fuse_iff_compliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {budget : Nat} {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    {state : Val} {rq keys pair th via k o kq q : Data} {sb : ByteArray}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "fuse" fs = some (activityMethod offerStateTy (offerFuseArg theta) (offerTakeRows rels)
+      (escrowFuseBody theta roles rels od sd budget)))
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (escrowValTy theta roles)) (hq : Conforms q (escrowValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
+    (∃ v, BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]).toVal,
+        state, (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (apply4 g "fuse") (.ok v)) ↔
+    NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th ∧ LegsMatch o q := by
+  obtain ⟨r, hr, hiff⟩ := offerTakeTree_decides_fair (done := escrowFuseDone theta rels od sd budget)
+    (tail := [("via", via)]) (lib := lib) (state := state) (kq := kq) rfl escrow_fields
+    (fun _ h1 h3 => escrowFair_eval ho hq h1 h3) hR ho hq hth hself hkeys hpair hk
+  have hap := apply4_method_iff hlib rfl hf (noRef_escrow_fuse _ _ _ _ _ _) hr
+  rw [← hiff]
+  exact ⟨fun ⟨v, hv⟩ => ⟨v, ((hap _).mp hv).symm⟩, fun ⟨v, e⟩ => ⟨v, (hap _).mpr e.symm⟩⟩
 
 /-! ## The one transfer -/
 

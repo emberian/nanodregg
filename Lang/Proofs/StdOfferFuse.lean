@@ -1,6 +1,9 @@
 /-
 # Lang.Proofs.StdOfferFuse — what a signed fuse seals (PROT-6, LANG-77)
 
+* `fuse_iff_compliant` (as the receiver applies it, the twin of `take_iff_compliant`): with both offer
+  slots present, a party's fuse returns iff its own pinned offer is the one the deal names for it
+  (`NamedKey`) and the two pinned offers are `JointOk` at θ;
 * `fuse_run_sound` (`Lang.program`'s run of a party's `fuse`): a returned fuse decoded
   `{keys, pair, theta, via}`, read its own pinned offer and its peer's (the declared peer read),
   found its own the one the deal names for it (`NamedKey`) and the two `JointOk` at θ, its row acts
@@ -104,6 +107,34 @@ private theorem noRef_fuse (theta roles : List Label) (rels : List (Label × Rel
   simp [activityMethod, offerFuseBody, NoRef, NoRefRow, activityResultCalls, activityEdit, resultT, activityKeyTerm,
     noCallT, someCallT, callsT, slot_e2, slot_c1, activityApply, noRef_offerJoint, offerNamedOkT, offerNamedT,
     offerTakeTree, offerUnwrap, offerGate, offerFuseDone, offerFuseCall, offerTakeCall, offerPeerT, offerTakeEdits]
+
+/-- **The fuser's honesty** (the generated `fuse` as the receiver applies it: `apply4 g "fuse"` over
+the env `[req, arg, state, rows]` it builds, at a `lib[g]` whose `fuse` is the generated method; the
+twin of `take_iff_compliant`, since the fuse runs the take's tree, `offerTakeTree_decides`): with both
+offer slots pinned and present (own point `k`/`o`, peer point `kq`/`q`), the argument
+`{keys, pair, theta := th, via}` and a request whose `self` is `sb`, the fuse returns iff its own
+pinned offer is the one the deal names for `sb` (`NamedKey`) and `JointOk` of the two pinned offers
+and θ. The first judge of every fuse decides exactly what a take decides, before it calls anyone. -/
+theorem fuse_iff_compliant {theta roles : List Label} {rels : List (Label × RelDecl)} {od sd : RelDecl}
+    {budget : Nat} {lib : List Term} {g : Nat} {f : Nat → Nat} {fs : List (Label × Term)}
+    {state : Val} {rq keys pair th via k o kq q : Data} {sb : ByteArray}
+    (hlib : lib[g]? = some ((Term.record fs).relocate f))
+    (hf : Row.find? "fuse" fs = some (activityMethod offerStateTy (offerFuseArg theta) (offerTakeRows rels)
+      (offerFuseBody theta roles rels od sd budget)))
+    (hR : (offerRoleTy roles).wf = true)
+    (ho : Conforms o (offerValTy theta roles)) (hq : Conforms q (offerValTy theta roles))
+    (hth : Conforms th (offerThetaTy theta)) (hself : rq.field "self" = some (.digest sb))
+    (hkeys : Conforms keys offerKeysTy) (hpair : Conforms pair pairTy) (hk : Conforms k (.record [("n", .nat)])) :
+    (∃ v, BigStep lib [rq.toVal, (Data.record [("keys", keys), ("pair", pair), ("theta", th), ("via", via)]).toVal,
+        state, (Data.record [("offer", .record [("p0", .inj "some" (.record [("key", k), ("val", .inj "some" o)]))]),
+          ("peer", .record [("offer", .record [("p0", .inj "some" (.record [("key", kq), ("val", .inj "some" q)]))])])]).toVal]
+      (apply4 g "fuse") (.ok v)) ↔
+    NamedKey sb keys pair k ∧ JointOk (offerLabels theta) o q th := by
+  obtain ⟨r, hr, hiff⟩ := offerTakeTree_decides (done := offerFuseDone theta rels od sd budget)
+    (tail := [("via", via)]) (lib := lib) (state := state) (kq := kq) rfl hR ho hq hth hself hkeys hpair hk
+  have hap := apply4_method_iff hlib rfl hf (noRef_fuse _ _ _ _ _ _) hr
+  rw [← hiff]
+  exact ⟨fun ⟨v, hv⟩ => ⟨v, ((hap _).mp hv).symm⟩, fun ⟨v, e⟩ => ⟨v, (hap _).mpr e.symm⟩⟩
 
 /-- The slot's invoke argument type, read off the slot. -/
 theorem slotInvokeArg_offer (theta : List Label) :
