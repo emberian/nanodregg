@@ -9,12 +9,18 @@
 #
 #  1. fetch origin; replay the commit(s) onto origin/main (git merge-tree, no checkout). A conflict stops here and
 #     names the paths: resolve it in this worktree (git rebase origin/main) and run this again;
+#     The script refuses to run when its own bytes are not origin/main's scripts/commit (a worktree that has not
+#     rebased since the gate changed), unless the commit being landed is itself the change to scripts/commit and
+#     this is that version: "this tree's scripts/commit is stale: rebase onto origin/main first";
 #  2. materialize the rebased tree in the lane's build directory on the home disk (hbox: NVMe, never /tank):
 #     ~/nd-land/<worktree name>/tree, its .lake and cargo target kept between landings (seeded once from this
 #     worktree's .lake/build), so a build re-hashes only that tree;
 #  3. build what the change touched (gates/touched.py: the changed modules and their importers, their libs and the
 #     exes whose closure holds one; `cargo check` of the reached packages), under the clone's build wrapper
 #     (hbox: swarm-build, SWARM_MEM_MAX default 24G) at idle priority (ionice -c3, nice 15);
+#     The build and the rows hold one of ND_BUILD_SLOTS (default 6) box-wide build slots
+#     (~/nd-land/.locks/build-K.flock), taken in arrival order through one door lock (~/nd-land/.locks/door.flock):
+#     a landing waits for a build slot, never for a verdict, and keeps no queue state;
 #  4. run the rows the change touched (gates/touched.py rows: the Lean verdict rows whose exe it reaches, the cargo
 #     rows whose crate or driven exes it reaches), at idle priority;
 #  5. push to origin main. A push refused because main moved is re-based and pushed again; it is rebuilt and re-run
@@ -103,6 +109,16 @@ replay() {
   echo "$onto"
 }
 base=$(git -C "$repo" rev-parse origin/main)
+# the self-check: this script is origin/main's, or the version this landing brings
+me=$(git -C "$repo" hash-object "$0")
+if [ "$me" != "$(git -C "$repo" rev-parse -q --verify "$base:scripts/commit" || true)" ]; then
+  mb=$(git -C "$repo" merge-base "$base" "$tip")
+  theirs=$(git -C "$repo" rev-parse -q --verify "$tip:scripts/commit" || true)
+  if [ "$me" != "$theirs" ] || [ "$theirs" = "$(git -C "$repo" rev-parse -q --verify "$mb:scripts/commit" || true)" ]; then
+    echo "scripts/commit: REFUSED — this tree's scripts/commit is stale: rebase onto origin/main first (git rebase origin/main)"; exit 1
+  fi
+  echo "scripts/commit: running the scripts/commit this landing brings"
+fi
 [ -n "$(git -C "$repo" rev-list -1 --no-merges "$base..$tip")" ] || { echo "scripts/commit: origin/main already holds this"; exit 0; }
 R=$(replay "$base") || exit 1
 git -C "$repo" log --oneline "$base..$R" | sed 's/^/  landing: /' | cut -c1-140
@@ -160,7 +176,25 @@ judge() {
   else echo "scripts/commit: no row touched"; fi
   return 0
 }
-judge "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
+# build_slot: one of ND_BUILD_SLOTS box-wide slots on fd 8, entered through the door (fd 7) so slots go in arrival order
+L=$HOME/nd-land/.locks
+build_slot() {
+  local n=${ND_BUILD_SLOTS:-6} k said=""
+  command -v flock > /dev/null || { echo "scripts/commit: no flock(1) on this box; building without a slot"; return 0; }
+  mkdir -p "$L" || return 2
+  exec 7> "$L/door.flock"; flock 7
+  while :; do
+    for k in $(seq 1 "$n"); do
+      exec 8> "$L/build-$k.flock"
+      if flock -n 8; then exec 7>&-; stage slot "$k of $n"; return 0; fi
+    done
+    exec 8>&-
+    [ -n "$said" ] || { echo "scripts/commit: all $n build slots are busy; waiting for one"; said=1; }
+    sleep 5
+  done
+}
+judged() { build_slot || return 2; judge "$@"; local rc=$?; exec 8>&-; return $rc; }
+judged "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
 
 # 5. push; a moved main is re-based, and re-judged only when it changed a path this change changed
 mine=$(git -C "$repo" diff --name-only "$base" "$R")
@@ -178,7 +212,7 @@ for attempt in $(seq 1 20); do
   R=$(replay "$base") || exit 1
   if [ -n "$overlap" ]; then
     echo "scripts/commit: main moved and changed $(wc -l <<< "$overlap") path(s) this change changed ($(head -3 <<< "$overlap" | tr '\n' ' ')); building and running again"
-    judge "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
+    judged "$R"; rc=$?; [ $rc -eq 0 ] || exit $rc
   else
     echo "scripts/commit: main moved (${old:0:9}..${base:0:9}), touching none of this change's paths; re-based, pushing"
   fi
