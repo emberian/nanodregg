@@ -99,7 +99,7 @@ half_wasm() {
     -sEXPORTED_RUNTIME_METHODS=HEAPU8
   echo "$key" > "$root/testground/.kernel-key"
   fi
-  for d in doc resident escrow head; do mkdir -p "$root/testground/world/$d" && cp "$root/world/$d"/* "$root/testground/world/$d/"; done
+  for d in doc resident escrow head grain hosting; do mkdir -p "$root/testground/world/$d" && cp "$root/world/$d"/* "$root/testground/world/$d/"; done
   mkdir -p "$root/testground/world/timelock" && cp "$root/client/tests/fixtures/foreign/Timelock" "$root/testground/world/timelock/"
   # kernel.json: what the page shows a visitor beside the sha256 it computes of the bytes it loaded —
   # the commit the pack's C came from and how it was built, so the tab's kernel ties to a commit

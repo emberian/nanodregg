@@ -6,7 +6,7 @@ import { compositor } from './compositor.js';
 import { element as $, confirmAction, submitForm, listen, disposeEvents } from './toolkit.js';
 import { loadKernel, client, genesis, hex, quoteArg } from './nd.js';
 import { joinIn, resumeIn, rosterOf, worldOf, httpOf } from './hosted.mjs';
-import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf } from './demos.js';
+import { demos, runDemo, lieScenes, memberLies, runScene, head0Of, outcomeOf, questionText } from './demos.js';
 import { teach } from './teach.js';
 import { residentDriver } from './resident.js';
 
@@ -241,11 +241,29 @@ function openHosted() {
       ['sponsor', 'The member whose key signed the invitation.'], ['follow', 'Your own copy of the World. It replays the log and checks every entry.'],
       ['saved', 'Your seeds, member id and invitation in this browser\'s storage (localStorage). Any page on this site can read them.'],
       ['members', 'The member cells in your follow\'s copy of the World. The writer does not supply this list.'], ...kernelTerms]),
-    relayMenu(me), forkCheck(me),
+    relayMenu(me), forkCheck(me), askBox(me),
     $('button', { class: 'btn', onclick: () => { history.replaceState(null, '', location.pathname); newWorld(); } }, 'Local World'), ' ',
     me.id && kept.get(world.url) ? confirmAction('Forget me', 'Delete the saved membership? A new join makes a new member.', () => forgetMe()) : '');
   openWindow({ id: 'world', title: world.url === LIVE ? 'Live World' : 'Hosted World', x: 110, y: 16, w: 570, body });
   renderRoster();
+}
+
+// The hosted World's inbox (HOSTING-62, CLIENT-59): world.json names the public Bell and its resident,
+// a program on the server whose model calls go through the key broker. A visitor rings the Bell with
+// a question aimed at a section it owns; the answer arrives as that section's candidate.
+function askBox(me) {
+  const inbox = world.wj?.inbox;
+  if (!inbox) return '';
+  const q = $('input', { class: 'sunken', 'aria-label': 'question for the resident', placeholder: 'What should the first section of a document about lighthouses say?', maxlength: '300', style: 'width: 100%' });
+  const ask = async () => {
+    const text = questionText(q.value || q.placeholder);
+    if (!text) return;
+    await playDemo('inboxHosted', { bell: inbox.bell, section: inbox.section, bellGrant: me.bellGrant, q: text });
+  };
+  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Ask the resident'),
+    me.bellGrant ? [q, ' ', $('button', { class: 'btn', onclick: ask }, 'Ask')]
+      : $('div', { class: 'dim' }, 'Your membership has no grant on the Bell: it was made before the inbox. Forget me, then join again.'),
+    $('div', { class: 'dim' }, `The resident (member ${short(inbox.resident)}) answers the Bell ${short(inbox.bell)} with a model's words. A daily cap bounds the questions it sends to the model; past it the answer is "(refused askCap)".`));
 }
 
 // ---------------------------------------------------------------- the Writer menu: the writer lies
@@ -709,7 +727,7 @@ function openDemos() {
       $('button', { class: 'btn', onclick: () => { history.replaceState(null, '', location.pathname); newWorld(); openDemos(); } }, 'Start a local World')) });
     return;
   }
-  const list = Object.entries(demos).map(([k, d]) => $('li', {}, $('b', {}, d.title), ' ',
+  const list = Object.entries(demos).filter(([, d]) => !d.hosted).map(([k, d]) => $('li', {}, $('b', {}, d.title), ' ',
     $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run here'), ' ',
     confirmAction('Run on a new World', 'Discard this local World and its commands?', () => { newWorld(); return playDemo(k); }), $('div', { class: 'dim' }, `${d.steps.length} commands`)));
   openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' }, $('ol', {}, list), $('p', { class: 'dim' }, 'Run here types the commands into the terminals of the current World; a package it already installed is reused. Run on a new World starts from genesis.')) });
@@ -778,12 +796,14 @@ function openResident(activate = true) {
       ['withdrawn', 'An answer the resident gave up because a cell it cites is gone (retired). The ring stays in the queue; the resident skips it.'],
     ])) });
 }
-async function playDemo(name) {
-  if (world.hosted) return { ok: false, hosted: true };
+// a hosted World runs only its own demos (`hosted: true`, the resident's inbox); the others need the
+// tab's two founders
+async function playDemo(name, vars = {}) {
   const d = demos[name];
-  return withActivity(d.title, d.steps.reduce((n, s) => n + (s.repeat ?? 1), 0), job => playDemoSequence(name, job));
+  if (world.hosted !== !!d.hosted) return { ok: false, hosted: true };
+  return withActivity(d.title, d.steps.reduce((n, s) => n + (s.repeat ?? 1), 0), job => playDemoSequence(name, job, vars));
 }
-async function playDemoSequence(name, job) {
+async function playDemoSequence(name, job, vars = {}) {
   const t = performance.now();
   const d = demos[name];
   const origin = { B: world.text.match(/^origin (\S+)/m)?.[1] };
@@ -791,7 +811,7 @@ async function playDemoSequence(name, job) {
   for (const [w, names] of Object.entries(d.worlds ?? {})) { const x = await secondWorld(w, names); origin[w] = x.origin; members.push(...x.members); }
   const r = await runDemo(name, {
     fetchText: async (p) => (p.startsWith('kernel:') ? new TextDecoder().decode(K.text(p.slice(7)).slice(1)) : (await fetch(p)).text()),
-    members, origin, idOfText: T.idOfText,
+    members, origin, idOfText: T.idOfText, vars,
     resident: ((d) => ({
       start: (m, a, s) => job.run(async () => { if (s.say) print(m, $('div', { class: 'warn' }, s.say)); return d.start(m, a); }),
       tick: (m, answers, s) => job.run(async () => { if (s.say) print(m, $('div', { class: 'warn' }, s.say)); return d.tick(m, answers); }),

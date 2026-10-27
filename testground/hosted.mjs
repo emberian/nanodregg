@@ -43,7 +43,7 @@ export async function joinIn(K, url, wj, name, { onFrame, run = (m, argv) => m.n
   let en;
   try { en = await (await fetch(`${httpOf(url)}/enroll`, { method: 'POST', body: token })).json(); } catch (e) { en = { refused: e.message }; }
   if (!en.member) throw new Error(`Not enrolled: ${en.refused ?? JSON.stringify(en)}`);
-  K.self(m.index, en.member, en.grant); m.id = en.member; m.grant = en.grant;
+  K.self(m.index, en.member, en.grant); m.id = en.member; m.grant = en.grant; m.bellGrant = en.bellGrant ?? null;
   m.record = recordOf(m, url, wj);
   return m;
 }
@@ -51,7 +51,7 @@ export async function joinIn(K, url, wj, name, { onFrame, run = (m, argv) => m.n
 /** What a tab keeps of a member so that its visitor can come back (JSON; the page's localStorage). */
 export function recordOf(m, url, wj) {
   return { v: 1, relay: url, origin: m.origin, invitation: wj.invitation, sponsorKey: wj.sponsorKey, sponsor: wj.sponsor,
-           seeds: m.custody.seeds.map(hex), member: m.id, grant: m.grant, joined: new Date().toISOString() };
+           seeds: m.custody.seeds.map(hex), member: m.id, grant: m.grant, bellGrant: m.bellGrant ?? null, joined: new Date().toISOString() };
 }
 
 /** Come back: the record's invitation accepted again in K (the origin it makes must be the record's),
@@ -63,7 +63,7 @@ export function resumeIn(K, rec, name, { onFrame } = {}) {
   const m = memberIn(K, rec.relay, { name, ...a, seeds: rec.seeds.map(unhex), onFrame });
   const s = K.self(m.index, rec.member, rec.grant);
   if (s[0] !== okOf(K)) throw new Error(`self: ${dec.decode(s.slice(1))}`);
-  m.id = rec.member; m.grant = rec.grant; m.record = rec;
+  m.id = rec.member; m.grant = rec.grant; m.bellGrant = rec.bellGrant ?? null; m.record = rec;
   return m;
 }
 

@@ -240,6 +240,43 @@ demos.inbox = {
   ],
 };
 
+// AGENT, hosted (HOSTING-62, CLIENT-59): the same inbox on the hosted World, answered by the real
+// resident on the server. The visitor (`you`) owns the section; the World's public Bell (world.json's
+// `inbox`) is the guest-book's, its resident a program whose asks go through the key broker, which
+// holds the provider key. `vars`: bell, section (the section package the guest-book installed),
+// bellGrant (the visitor's grant to ring it, made at its enrolment) and q (the question, already a
+// quoted Lang text).
+const aimHosted = (v) => `(some (record (cand #${v.gS}) (method 3) (target #${v.doc}) (via #${v.gS})))`;
+demos.inboxHosted = {
+  hosted: true,
+  title: 'Ask the resident: a model answers into your document',
+  steps: [
+    { who: 'you', say: 'You create a section of a document (the section package is installed in this World). Its text is a hole: a slot filled later by selecting one proposed text (a candidate).',
+      argv: (v) => ['create', '--pkg', v.section, `(record (accepted false) (acceptor #${v.you}) (cap 2000) (chooser #${v.you}) (closes 100000) (selected none))`], bind: 'doc', open: 'doc' },
+    { who: 'you', say: 'You grant the World\'s Bell (the resident\'s inbox) the right to propose a text to your section (invoke:3). You post that grant as a fact: the answer cites it as its support.',
+      argv: (v) => ['grant', v.doc, v.bell, 'invoke:3'], bind: 'gS' },
+    { who: 'you', argv: (v) => ['invoke', v.doc, '2', `(record (cell #${v.gS}) (pin #${v.gS}))`] },
+    { who: 'you', say: 'You ring the Bell with your question. The ring names your section as the place for the answer (an aim).',
+      argv: (v) => ['invoke', v.bell, '4', `(record (text ${v.q}) (to ${aimHosted(v)}))`, '--via', v.bellGrant] },
+    { who: 'you', say: 'The resident runs on the server. It reads the ring and asks a model through the key broker, which holds the API key and the budget. Its answer is one Turn: the Bell records the text, and calls your section\'s propose with it (a typed call, under the grant you gave the Bell). Waiting for that Turn.',
+      argv: (v) => ['read', v.doc, 'candidates', '8'], until: 'verified', tries: 40, every: 3000 },
+    { who: 'you', say: 'Your section holds the answer as a candidate: by the resident\'s member (the signer), supported by your grant to the Bell, status verified. Now you retire that grant and judge the candidate again (method 5).',
+      argv: (v) => ['retire', v.gS] },
+    { who: 'you', argv: (v) => ['invoke', v.doc, '5', `(record (cand #${v.gS}))`, '--pin', 'candidates', `(record (cand #${v.gS}))`, '--pin', 'facts', `(record (cell #${v.gS}))`] },
+    { who: 'you', say: 'The candidate is suspended. Its row names the dead support.',
+      argv: (v) => ['read', v.doc, 'candidates', '8'], says: 'support0 dead' },
+    { who: 'you', say: 'Choosing the answer as the section\'s text is refused (support0 dead). A ring aimed through a retired grant is never delivered: the resident withdraws its answer by the grant\'s name.',
+      argv: (v) => ['invoke', v.doc, '9', `(record (cand #${v.gS}))`, '--pin', 'candidates', `(record (cand #${v.gS}))`, '--pin', 'facts', `(record (cell #${v.gS}))`], expect: 'refused', says: 'support0 dead' },
+  ],
+};
+
+/** A visitor's question as a Lang text literal: printable, at most 300 characters, `\\` and `"`
+ * escaped; `null` for an empty one. */
+export function questionText(q) {
+  const t = Array.from(q.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()).slice(0, 300).join('');
+  return t ? `"${t.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : null;
+}
+
 const hexOf = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 /** A receipt as `nd receipt` prints it: `receipt HEX`, `head STEPS HEIGHT ROOTS CHAIN`, `settled …`. */
 export function receiptOf(out) {
@@ -254,9 +291,9 @@ export function receiptOf(out) {
 // attempt store's frozen bytes, as `cancel`/`receipt` take them), a receipt (`receipt`), method
 // numbers (`method`), a pattern's group (`grab`), and check a word in its output (`says`) or a refusal's name (`refusal`).
 // `resident` (resident.js residentDriver) runs the `start` and `tick` steps: the Bell's resident in the kernel.
-export async function runDemo(name, { fetchText, members, run, origin = {}, idOfText = null, resident = null }) {
+export async function runDemo(name, { fetchText, members, run, origin = {}, idOfText = null, resident = null, vars = {} }) {
   const d = demos[name];
-  const v = { text: {}, origin };
+  const v = { text: {}, origin, ...vars };
   for (const m of members) v[m.name] = m.id;
   for (const [k, path] of Object.entries(d.texts ?? {})) v.text[k] = await fetchText(path);
   const results = [];
@@ -269,6 +306,14 @@ export async function runDemo(name, { fetchText, members, run, origin = {}, idOf
     } else r = await run(m, s.argv(v), s);
     // `repeat: N`: the same argv until it ends as `expect` (at most N runs; each before it must be ok)
     for (let i = 1; s.repeat && i < s.repeat && r.exit === 'ok'; i++) r = await run(m, s.argv(v), { ...s, say: null, again: i });
+    // `until: WORD`: the same argv after a sync, every `every` ms, until its output holds WORD (an
+    // answer that another process writes: the hosted resident's Turn)
+    for (let i = 1; s.until && i < (s.tries ?? 20) && !(r.stdout + r.stderr).includes(s.until); i++) {
+      await new Promise((ok) => setTimeout(ok, s.every ?? 2000));
+      await run(m, ['sync'], { ...s, say: null, again: i });
+      r = await run(m, s.argv(v), { ...s, say: null, again: i });
+    }
+    if (s.until && !(r.stdout + r.stderr).includes(s.until)) return { ok: false, at: s, results, v };
     // a package this World already holds (`refused idTaken`): the demo reuses it, by the id it was
     // installed under in this tab
     if (r.exit === 'refused' && /idTaken/.test(r.stderr) && idOfText && s.argv && s.argv(v)[0] === 'install') {

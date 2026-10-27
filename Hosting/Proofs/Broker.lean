@@ -318,14 +318,15 @@ by name, gets the key slot, the charge and Lean's request bytes). -/
 theorem verdictOf_wire {v : Verdict} {w : Wire.VerdictTy} (h : Wire.verdictWire? v = some w) :
     Wire.verdictOf w = v := by
   cases v with
-  | grant k c hs t hd kh bd =>
+  | grant k c hs t hd kh bd a =>
     simp only [Wire.verdictWire?] at h
     split at h
     · simp only [bind, Option.bind_eq_some_iff] at h
-      obtain ⟨hs', hhs, t', ht, hd', hhd, kh', hkh, bd', hbd, hw⟩ := h
+      obtain ⟨hs', hhs, t', ht, hd', hhd, kh', hkh, bd', hbd, a', ha, hw⟩ := h
       simp only [pure, Option.some.injEq] at hw
       subst hw
-      simp only [Wire.verdictOf, bytes?_val hhs, bytes?_val ht, bytes?_val hhd, bytes?_val hkh, bytes?_val hbd]
+      simp only [Wire.verdictOf, bytes?_val hhs, bytes?_val ht, bytes?_val hhd, bytes?_val hkh, bytes?_val hbd,
+        bytes?_val ha]
       simp
     · cases h
   | refuse why =>
@@ -692,9 +693,10 @@ private theorem refuse_size (w : Wire.VerdictTy) (hw : w.1 = ⟨1, by decide⟩)
   subst hw
   rfl
 
-/-- Every provider's fixed request fields fit the 4096 bytes `bodyMax` leaves in a verdict frame. -/
+/-- Every provider's fixed request fields fit the 4096 bytes `bodyMax` leaves in a verdict frame,
+beside the grant's other fields and the daily cap's sixteen `asked` bytes (HOSTING-62). -/
 theorem providerOf_fits {m : ByteArray} {u : Upstream} (h : providerOf m = some u) :
-    u.host.size + u.target.size + u.headers.size + u.keyHeader.size ≤ 4096 - 33 := by
+    u.host.size + u.target.size + u.headers.size + u.keyHeader.size ≤ 4096 - 53 := by
   unfold providerOf at h
   obtain ⟨x, hf, rfl⟩ := Option.map_eq_some_iff.mp h
   have hm := List.mem_of_find?_eq_some hf
@@ -707,6 +709,24 @@ theorem refuse_encodes (why : Broker.Refusal) : (Wire.encodeVerdict (.refuse why
   simp only [Wire.encodeVerdict, Wire.verdictWire?, pure, bind, Option.bind]
   rw [← verdictCodec_lawful.size_eq, refuse_size _ rfl]
   simp [Bounds.frameMax]
+
+/-- A grant whose fields fit a frame (37 bytes of tag, lengths, slot and charge) encodes. -/
+theorem grant_encodes {k : UInt32} {c : Nat} {hs t h kh body a : ByteArray} (hc : c < 2 ^ 64)
+    (hsum : 37 + hs.size + t.size + h.size + kh.size + body.size + a.size ≤ Bounds.frameMax) :
+    (Wire.encodeVerdict (.grant k c hs t h kh body a)).isSome = true := by
+  have h1 : hs.size ≤ Bounds.frameMax := by omega
+  have h2 : t.size ≤ Bounds.frameMax := by omega
+  have h3 : h.size ≤ Bounds.frameMax := by omega
+  have h4 : kh.size ≤ Bounds.frameMax := by omega
+  have h5 : body.size ≤ Bounds.frameMax := by omega
+  have h6 : a.size ≤ Bounds.frameMax := by omega
+  simp only [Wire.encodeVerdict, Wire.verdictWire?, hc, dite_true, Wire.bytes?, h1, h2, h3, h4, h5, h6,
+    bind, Option.bind, pure]
+  rw [← verdictCodec_lawful.size_eq]
+  show (if 1 + (4 + (8 + ((4 + hs.size) + ((4 + t.size) + ((4 + h.size) + ((4 + kh.size) +
+      ((4 + body.size) + ((4 + a.size) + 0)))))))) ≤ Bounds.frameMax then _ else none).isSome = true
+  rw [if_pos (by omega)]
+  rfl
 
 /-- The verdict of every `step` encodes in one frame: a refusal is two bytes, and a grant's fields
 (Lean's body within `bodyMax`, the provider's fixed request fields, a charge below `capMax`) fit
@@ -725,19 +745,9 @@ theorem step_encodes (b : Broker) (r : ByteArray) (now : Nat) (askBytes : ByteAr
       obtain ⟨-, -, -, -, -, -, -, -, -, hpv, -, -, -, -, hbs, -⟩ := grant_allowed hd
       have hsz := providerOf_fits hpv
       have hc64 : g.charged < 2 ^ 64 := by unfold Bounds.capMax at hc; omega
-      have hb : g.body.size ≤ Bounds.frameMax := by unfold Bounds.bodyMax at hbs; omega
-      have hs : g.upstream.host.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
-      have ht : g.upstream.target.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
-      have hh : g.upstream.headers.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
-      have hk : g.upstream.keyHeader.size ≤ Bounds.frameMax := by unfold Bounds.frameMax; omega
-      simp only [Wire.encodeVerdict, Wire.verdictWire?, hc64, dite_true, Wire.bytes?, hs, ht, hh, hk, hb,
-        bind, Option.bind, pure]
-      rw [← verdictCodec_lawful.size_eq]
-      show (if 1 + (4 + (8 + ((4 + g.upstream.host.size) + ((4 + g.upstream.target.size) +
-          ((4 + g.upstream.headers.size) + ((4 + g.upstream.keyHeader.size) + ((4 + g.body.size) + 0))))))) ≤
-          Bounds.frameMax then _ else none).isSome = true
-      rw [if_pos (by unfold Bounds.bodyMax Bounds.frameMax at hbs; unfold Bounds.frameMax; omega)]
-      rfl
+      exact grant_encodes hc64 (by
+        unfold Bounds.bodyMax Bounds.frameMax at hbs; unfold Bounds.frameMax
+        simp only [ByteArray.size_empty]; omega)
     · exact refuse _
 
 /-! ## Which sockets keybroker serves, and who is decided (HOSTING-26) -/
@@ -936,5 +946,100 @@ theorem admit_tooth :
     (Broker.admit [] b0 res 60000 ⟨#[7, 0]⟩).2 = .refuse .notResident ∧
       (Broker.admit [res] b0 res 60000 ⟨#[7, 0]⟩).2 = .refuse .badAsk := by
   decide
+
+/-! ## The operator's daily ask cap (HOSTING-62) -/
+
+/-- **A day never grants past its limit.** A taken ask leaves the count at most the limit, keeps the
+limit, and never moves the day back, whatever the clock said (a clock that ran back counts against the
+day already reached). -/
+theorem take_le {d d' : Daily} {n now : Nat} (hl : d.limit = some n) (h : d.take now = .ok d') :
+    d'.count ≤ n ∧ d'.limit = some n ∧ d.day ≤ d'.day := by
+  unfold Daily.take at h
+  rw [hl] at h
+  simp only at h
+  by_cases hd : d.day < now / dayMs <;> simp only [hd, if_true, if_false] at h
+  · by_cases hn : n ≤ 0
+    · simp [hn] at h
+    · simp only [hn, if_false, Except.ok.injEq] at h
+      subst h
+      exact ⟨by simp; omega, rfl, Nat.le_max_left _ _⟩
+  · by_cases hn : n ≤ d.count
+    · simp [hn] at h
+    · simp only [hn, if_false, Except.ok.injEq] at h
+      subst h
+      exact ⟨by simp; omega, rfl, Nat.le_max_left _ _⟩
+
+/-- Within one day (the clock at or before the day already reached), every taken ask counts: the
+count goes up by exactly one, never back to zero. -/
+theorem take_counts {d d' : Daily} {n now : Nat} (hl : d.limit = some n) (hday : now / dayMs ≤ d.day)
+    (h : d.take now = .ok d') : d'.count = d.count + 1 ∧ d'.day = d.day := by
+  unfold Daily.take at h
+  rw [hl] at h
+  simp only [show ¬ d.day < now / dayMs from by omega, if_false] at h
+  by_cases hn : n ≤ d.count
+  · simp [hn] at h
+  · simp only [hn, if_false, Except.ok.injEq] at h
+    subst h
+    exact ⟨rfl, by simp; omega⟩
+
+/-- **What keybroker keeps is what the next life reads.** `KEYS.asks` holds `Daily.bytes` of the cap
+after the last grant (made durable before that call); a restart's `ofBytes` reads back exactly that
+day and count. So no restart refunds a day. -/
+theorem ofBytes_bytes {d : Daily} (hl : d.limit.isSome = true) (hd : d.day < 2 ^ 64) (hc : d.count < 2 ^ 64) :
+    Daily.ofBytes d.limit d.bytes = some d := by
+  have hx := Codec.Stream.u64_lawful.get_of_occurs d.day.toUInt64
+    (Codec.Stream.u64.bytes d.day.toUInt64 ++ Codec.Stream.u64.bytes d.count.toUInt64) 0
+    (Codec.Stream.occursAt_append.mp (Codec.Stream.occursAt_self _)).1
+  have hy := Codec.Stream.u64_lawful.get_of_occurs d.count.toUInt64
+    (Codec.Stream.u64.bytes d.day.toUInt64 ++ Codec.Stream.u64.bytes d.count.toUInt64) (0 + 8)
+    (Codec.Stream.occursAt_append.mp (Codec.Stream.occursAt_self _)).2
+  simp only [Codec.Stream.u64_size, Nat.zero_add] at hx hy
+  unfold Daily.ofBytes Daily.bytes
+  simp only [hl, if_true, ByteArray.size_append, Codec.Stream.u64_size, hx, hy]
+  obtain ⟨l, dy, ct⟩ := d
+  simp only at hd hc
+  simp [Nat.toUInt64, Nat.mod_eq_of_lt hd, Nat.mod_eq_of_lt hc]
+
+/-- What keybroker keeps is at most sixteen bytes. -/
+theorem bytes_size_le (d : Daily) : d.bytes.size ≤ 16 := by
+  unfold Daily.bytes
+  split <;> simp
+
+/-- **Every verdict `hosting-broker` sends for an ask under the daily cap has a frame**: a refusal
+(the World's, or `askCap`), or the grant with the day's sixteen bytes (`providerOf_fits` leaves room
+for them). So `unencodable` stays unreachable. -/
+theorem admit_daily_encodes (rs : List ByteArray) (b b0 : Broker) (r : ByteArray) (now : Nat)
+    (ask : ByteArray) (d : Daily) :
+    (Wire.encodeVerdict (Broker.daily d b0 (Broker.admit rs b r now ask).1 now
+      (Broker.admit rs b r now ask).2).2.2).isSome = true := by
+  unfold Broker.admit
+  split
+  · unfold Broker.step
+    split
+    · exact refuse_encodes _
+    · split
+      · rename_i ask _ b'' g hd
+        have hc := grant_cap hd
+        obtain ⟨-, -, -, -, -, -, -, -, -, hpv, -, -, -, -, hbs, -⟩ := grant_allowed hd
+        have hsz := providerOf_fits hpv
+        have hc64 : g.charged < 2 ^ 64 := by unfold Bounds.capMax at hc; omega
+        simp only [Broker.daily]
+        split
+        · rename_i d' _
+          have := bytes_size_le d'
+          exact grant_encodes hc64 (by
+            unfold Bounds.bodyMax Bounds.frameMax at hbs; unfold Bounds.frameMax; omega)
+        · exact refuse_encodes _
+      · exact refuse_encodes _
+  · exact refuse_encodes _
+
+/-- Tooth: a cap of one ask a day grants the first, refuses the second the same day `askCap`, refuses
+one under a clock that ran back a day, and grants again the next day. -/
+theorem daily_tooth :
+    (⟨some 1, 5, 0⟩ : Daily).take (5 * dayMs) = .ok ⟨some 1, 5, 1⟩ ∧
+    (⟨some 1, 5, 1⟩ : Daily).take (5 * dayMs + 1) = .error .askCap ∧
+    (⟨some 1, 5, 1⟩ : Daily).take (4 * dayMs) = .error .askCap ∧
+    (⟨some 1, 5, 1⟩ : Daily).take (6 * dayMs) = .ok ⟨some 1, 6, 1⟩ := by
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> rfl
 
 end Nanodregg.Hosting.Proofs.Broker

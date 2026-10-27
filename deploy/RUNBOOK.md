@@ -278,6 +278,13 @@ rendered by emit-units as `deploy/units/linux/nd-keybroker.service` (system unit
   relayed) or `refused NAME`. A 200 body that is not one object with a `content` array of typed
   blocks, or has a repeated key, is refused `replyMalformed` (22). A reply text holding the key is
   `keyEchoed`;
+- THE DAILY ASK CAP (HOSTING-62): a line `asks N` in the key file (N ≥ 1) caps the asks keybroker
+  sends per day of the operator clock, whatever the World's allowances say. The count is
+  `/etc/nd/keybroker/provider.key.asks` (16 bytes: day, count; made empty at the first start), kept
+  durably before every call; a restart reads it back, so no restart refunds a day. Past N an ask is
+  refused `askCap` and no allowance is charged; a count that cannot be kept is `askState` (nothing
+  sent). A count file that fails custody stops the unit `asksState` (164, fatal). To lift the cap,
+  raise N and restart; never delete or truncate the count file;
 - there is no operator list of residents (HOSTING-26, ruled (A)): keybroker asks its decider which
   resident grains the World holds, every 200 ms, so a resident's socket appears when its grain is born
   and goes, with its directory, when the grain is removed, with no restart and no operator step. A

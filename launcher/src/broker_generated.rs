@@ -238,6 +238,8 @@ pub mod wire {
         Regressed,
         Unanchored,
         CertifyState,
+        AskCap,
+        AskState,
     }
 
     impl BrokerRefusal {
@@ -273,6 +275,8 @@ pub mod wire {
                 BrokerRefusal::Regressed => 27,
                 BrokerRefusal::Unanchored => 28,
                 BrokerRefusal::CertifyState => 29,
+                BrokerRefusal::AskCap => 30,
+                BrokerRefusal::AskState => 31,
             }
         }
 
@@ -308,6 +312,8 @@ pub mod wire {
                 27 => Some(BrokerRefusal::Regressed),
                 28 => Some(BrokerRefusal::Unanchored),
                 29 => Some(BrokerRefusal::CertifyState),
+                30 => Some(BrokerRefusal::AskCap),
+                31 => Some(BrokerRefusal::AskState),
                 _ => None,
             }
         }
@@ -345,6 +351,8 @@ pub mod wire {
                 BrokerRefusal::Regressed => "regressed",
                 BrokerRefusal::Unanchored => "unanchored",
                 BrokerRefusal::CertifyState => "certifyState",
+                BrokerRefusal::AskCap => "askCap",
+                BrokerRefusal::AskState => "askState",
             }
         }
     }
@@ -480,6 +488,7 @@ pub mod wire {
             headers: Vec<u8>,
             key_header: Vec<u8>,
             body: Vec<u8>,
+            asked: Vec<u8>,
         },
         Refuse {
             broker_refusal: BrokerRefusal,
@@ -511,6 +520,7 @@ pub mod wire {
                     let headers = c.bytes(131072)?;
                     let key_header = c.bytes(131072)?;
                     let body = c.bytes(131072)?;
+                    let asked = c.bytes(131072)?;
                     Verdict::Grant {
                         key_slot,
                         charged,
@@ -519,6 +529,7 @@ pub mod wire {
                         headers,
                         key_header,
                         body,
+                        asked,
                     }
                 }
                 2 => {
@@ -558,6 +569,7 @@ pub mod wire {
                     headers,
                     key_header,
                     body,
+                    asked,
                 } => {
                     out.push(1);
                     out.extend_from_slice(&key_slot.to_le_bytes());
@@ -567,6 +579,7 @@ pub mod wire {
                     put_bytes(&mut out, headers, 131072)?;
                     put_bytes(&mut out, key_header, 131072)?;
                     put_bytes(&mut out, body, 131072)?;
+                    put_bytes(&mut out, asked, 131072)?;
                 }
                 Verdict::Refuse { broker_refusal } => {
                     out.push(2);
@@ -725,9 +738,10 @@ pub mod keybroker_exit {
     pub const DECIDER_MECHANISM: u8 = 79;
     pub const PARENT_DEATH: u8 = 149;
     pub const CERTIFIED_STATE: u8 = 163;
+    pub const ASKS_STATE: u8 = 164;
     pub const ALL: &[u8] = &[
         80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 140, 141, 142, 143,
-        144, 145, 146, 147, 148, 98, 99, 100, 103, 102, 104, 105, 79, 149, 163,
+        144, 145, 146, 147, 148, 98, 99, 100, 103, 102, 104, 105, 79, 149, 163, 164,
     ];
 }
 

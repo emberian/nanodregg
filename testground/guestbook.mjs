@@ -21,7 +21,22 @@
 // only by a `reserve HEX` line, which the relay never sends (it forwards `join` only): the operator's,
 // on the box, to enrol a member for a check after the public has used the rest. A member enrolled
 // once needs no enrolment again (the page keeps its keys); the floor is for the World's operator.
-import { readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync } from 'node:fs';
+//
+// THE HOSTED RESIDENT (HOSTING-62). One line `resident HEX MODEL CAP WINDOW_MS PRICE` (the operator's,
+// once, from `run.sh resident`; the relay never sends it) makes the World's inbox: it enrols the
+// resident's join token HEX (`grant world … observe`), installs `world/grain/Lifecycle` and creates
+// the resident grain (installed, never started: keybroker binds a socket for each resident grain the
+// World holds), installs `world/hosting/Allowance` and creates the resident's allowance on MODEL (cap
+// CAP micro-units per WINDOW_MS, PRICE micro-units per 1000 tokens, key slot 7, 300 tokens an ask),
+// installs `world/resident/Bell` and creates the public Bell, its resident the resident's member,
+// granted `observe,invoke:0` on it, and installs the document section's four texts (`world/doc`), so
+// that a visitor creates a section without installing 80 KB of package. It keeps the ids in
+// DIR/resident.json and adds `inbox` (the Bell, the resident's member and the section package) to
+// world.json. From then on every `join` also grants the new member
+// `invoke:3,invoke:4` on the Bell (ring, and withdraw its own ring) and answers that grant as `bellGrant`.
+// This member is the allowance's OPERATOR: keybroker's decider reads only allowances it owns.
+import { readFileSync, writeFileSync, existsSync, unlinkSync, chmodSync, renameSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import { webcrypto } from 'node:crypto';
 import factory from './kernel.mjs';
@@ -68,7 +83,41 @@ if (s.exit !== 'ok') process.exit(1);
 const inv = await run(['invite', input]);
 const invitation = (inv.stdout.match(/^invite ([0-9a-f]+)/m) || [])[1];
 if (!invitation) process.exit(1);
-writeFileSync(`${dir}/world.json`, JSON.stringify({ origin: lines.origin, invitation, sponsorKey: hex(K.pub(seeds[0])), sponsor: me.id }) + '\n');
+// the hosted resident's ids, once `resident` made them
+let inbox = existsSync(`${dir}/resident.json`) ? JSON.parse(readFileSync(`${dir}/resident.json`, 'utf8')) : null;
+const writeWorld = () => {
+  const w = { origin: lines.origin, invitation, sponsorKey: hex(K.pub(seeds[0])), sponsor: me.id };
+  if (inbox) w.inbox = { bell: inbox.bell, resident: inbox.member, section: inbox.section };
+  writeFileSync(`${dir}/world.json.tmp`, JSON.stringify(w) + '\n');
+  renameSync(`${dir}/world.json.tmp`, `${dir}/world.json`);
+};
+writeWorld();
+const text = (rel) => readFileSync(fileURLToPath(new URL(`./world/${rel}`, import.meta.url)), 'utf8');
+// the inbox, made once (HOSTING-62): every act is this member's own nd command
+const makeInbox = async (token, model, cap, windowMs, price) => {
+  if (inbox) return { refused: 'exists' };
+  const e = await run(['enroll', token]);
+  const member = idOf(e);
+  if (!member) return { refused: e.stderr.trim() || e.exit };
+  const step = async (argv) => { const r = await run(argv); const id = idOf(r); if (!id) throw new Error(`${argv[0]}: ${r.stderr.trim() || r.exit}`); return id; };
+  try {
+    const grant = await step(['grant', 'world', member, 'observe', '--via', me.grant]);
+    const life = await step(['install', text('grain/Lifecycle')]);
+    const grain = await step(['create', '--pkg', life, '(record (entry "resident") (kind resident) (phase installed))']);
+    const apkg = await step(['install', text('hosting/Allowance')]);
+    const allowance = await step(['create', '--pkg', apkg,
+      `(record (cap ${cap}) (keySlot 7) (maxTokens 300) (microPerKTok ${price}) (model "${model}") (resident #${grain}) (revoked false) (windowMs ${windowMs}))`]);
+    const bpkg = await step(['install', text('resident/Bell')]);
+    const bell = await step(['create', '--pkg', bpkg, `(record (open true) (resident #${member}))`]);
+    const bellGrant = await step(['grant', bell, member, 'observe,invoke:0']);
+    let section = null;
+    for (const t of ['doc/Section.lib0', 'doc/Section.lib1', 'doc/Section.lib2', 'doc/Section']) section = await step(['install', text(t)]);
+    inbox = { member, grant, grain, allowance, bell, bellGrant, model, section };
+    writeFileSync(`${dir}/resident.json`, JSON.stringify(inbox) + '\n', { mode: 0o600 });
+    writeWorld();
+    return inbox;
+  } catch (err) { return { refused: err.message }; }
+};
 
 let queue = Promise.resolve();
 const enroll = async (token, reserve = false) => {
@@ -79,7 +128,12 @@ const enroll = async (token, reserve = false) => {
   if (!member) return { refused: e.stderr.trim() || e.exit };
   const g = await run(['grant', 'world', member, 'observe', '--via', me.grant]);
   const grant = idOf(g);
-  return grant ? { member, grant } : { refused: g.stderr.trim() || g.exit };
+  if (!grant) return { refused: g.stderr.trim() || g.exit };
+  if (!inbox) return { member, grant };
+  // the inbox: ring the public Bell (4) and withdraw its own ring (3)
+  const b = await run(['grant', inbox.bell, member, 'invoke:3,invoke:4']);
+  const bellGrant = idOf(b);
+  return bellGrant ? { member, grant, bellGrant } : { refused: b.stderr.trim() || b.exit };
 };
 const sock = `${dir}/guestbook.sock`;
 if (existsSync(sock)) unlinkSync(sock);
@@ -94,6 +148,11 @@ net.createServer((c) => {
         const h = (a.stdout.match(/^attest ([0-9a-f]+)/m) || [])[1];
         c.end(JSON.stringify(h ? { attest: h } : { refused: a.stderr.trim() || a.exit }) + '\n');
       }).catch(() => c.end('{"refused":"guestbook"}\n'));
+      return;
+    }
+    const r = buf.slice(0, nl).match(/^resident ([0-9a-f]{1,400}) (claude-[a-z0-9.-]{1,60}) ([1-9][0-9]{0,15}) ([1-9][0-9]{0,12}) ([1-9][0-9]{0,9})$/);
+    if (r) {
+      queue = queue.then(async () => c.end(JSON.stringify(await makeInbox(r[1], r[2], r[3], r[4], r[5])) + '\n')).catch(() => c.end('{"refused":"guestbook"}\n'));
       return;
     }
     const m = buf.slice(0, nl).match(/^(join|reserve) ([0-9a-f]{1,400})$/);

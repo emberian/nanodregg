@@ -1100,3 +1100,79 @@ fn a_silent_or_stalled_decider_is_lost_within_the_answer_bound() {
         }
     }
 }
+
+/// HOSTING-62, the operator's daily ask cap: KEYS holds `asks 2`. Past the start window two asks are
+/// granted and called; the third is refused `askCap` with no call, though the World's allowance has
+/// room. `KEYS.asks` holds the day and the count (sixteen bytes) before each call. keybroker
+/// restarted: in a fresh allowance window the ask is still refused `askCap` (the day is read back,
+/// never refunded), and no call is made. CONTROL: the same World and allowance with no `asks` line
+/// grants a third ask. A count file of mode 0644 stops keybroker `asksState` (164).
+#[test]
+fn the_daily_ask_cap_holds_across_a_restart() {
+    let d = dir("asks");
+    let keys = key_file(&d, 0o600);
+    let mut k = fs::read(&keys).unwrap();
+    k.extend_from_slice(b"asks 2\n");
+    fs::write(&keys, &k).unwrap();
+    let pki = Pki::new();
+    let anchors = pki.anchors(&d, 0o644);
+    let server = pki.server(HOST, false);
+    pki.pin(&d, &[&server]);
+    let (up, seen) = upstream(Mode::Ok, &server);
+    let w = World::genesis("asks");
+    w.allowance(&w.r1, "claude-m", 7, 100_000);
+    let pids = d.join("pids");
+    let state = d.join("keys.asks");
+    let granted = |a: &Answer| matches!(a, Answer::Reply { text } if text.as_slice() == REPLY);
+    {
+        let b = start(&d, &keys, &anchors, &up, &w);
+        assert_eq!(fs::read(&state).unwrap().len(), 0, "the count file is made empty");
+        past_start_window(&pids);
+        let mut r = Resident::connect(&b);
+        assert!(granted(&r.ask(&ask(b"claude-m", 10, b"one"))), "first ask");
+        let kept = fs::read(&state).unwrap();
+        assert_eq!(kept.len(), 16, "the day and the count are kept before the call");
+        assert_eq!(u64::from_le_bytes(kept[8..16].try_into().unwrap()), 1);
+        assert_eq!(
+            u64::from_le_bytes(kept[0..8].try_into().unwrap()),
+            now_ms() / 86_400_000,
+            "the day is the operator clock's"
+        );
+        assert!(granted(&r.ask(&ask(b"claude-m", 10, b"two"))), "second ask");
+        assert!(
+            is_refused(&r.ask(&ask(b"claude-m", 10, b"three")), BrokerRefusal::AskCap),
+            "the third ask of the day"
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2, "two calls, none for the refused ask");
+    }
+    // a restart reads the day back: a fresh allowance window, and still no third call
+    {
+        let b = start(&d, &keys, &anchors, &up, &w);
+        past_start_window(&pids);
+        let mut r = Resident::connect(&b);
+        assert!(
+            is_refused(&r.ask(&ask(b"claude-m", 10, b"after")), BrokerRefusal::AskCap),
+            "a restart refunded the day"
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2, "no call after the restart");
+    }
+    // CONTROL: without the cap the same allowance grants a third ask
+    fs::write(&keys, [b"7 ".as_slice(), KEY, b"\n"].concat()).unwrap();
+    {
+        let b = start(&d, &keys, &anchors, &up, &w);
+        past_start_window(&pids);
+        let mut r = Resident::connect(&b);
+        assert!(granted(&r.ask(&ask(b"claude-m", 10, b"control"))), "control: no cap, granted");
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+    // an exposed count file stops keybroker by name before any socket
+    fs::write(&keys, &k).unwrap();
+    fs::set_permissions(&state, fs::Permissions::from_mode(0o644)).unwrap();
+    let (err, code) = ends(&d, &keys, &anchors);
+    assert_eq!(
+        code,
+        Some(i32::from(nanodregg_launcher::broker_generated::keybroker_exit::ASKS_STATE)),
+        "{err}"
+    );
+    assert!(err.contains("asksState"), "{err}");
+}

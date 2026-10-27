@@ -477,6 +477,7 @@ def keybrokerAction : KeybrokerExit → String
   | .deciderMechanism => "the decider's sandbox or program failed before the decider ran (stderr names the raw code: the confinement step, a missing program or library): fix the mechanism (deploy/live/README.md), then start the unit"
   | .parentDeath => "the process could not tie its life to its parent's (prctl PR_SET_PDEATHSIG on Linux, the getppid watch thread on macOS): read the stderr line; a defect of the platform or the build, report to CLIENT"
   | .certifiedState => "the certify slot's last-certified file (provider.key.certified, beside the key) fails custody or could not be made: a regular file owned by `nd`, mode 0600; empty means nothing certified yet. Never delete or truncate it while the World lives: it is what stops a second certificate at one step (HOSTING-56)"
+  | .asksState => "the daily ask cap's count file (provider.key.asks, beside the key) fails custody or could not be made: a regular file owned by `nd`, mode 0600; empty means no ask granted yet. Never delete or truncate it to lift the cap: it is what keeps a restart from refunding the day (HOSTING-62); raise `asks N` in the key file instead"
 
 /-- The codes the keybroker unit must not restart: both broker tables' fatal classes. -/
 def brokerPreventCodes : List Nat := DeciderExit.codesOf .fatal ++ KeybrokerExit.codesOf .fatal
