@@ -402,4 +402,42 @@ def certifiesWorld (X : Ctx D) (w : World D) (b : ByteArray) : Except CertRefusa
         | .error r => .error r
         | .ok c => if c.head = headOf X.env w then .ok () else .error .otherHead
 
+/-! ## The writer's certified head on a log page (PROTOCOL-81; DESIGN-TRUST T3d)
+
+A `log` page carries the writer's certificate of its newest base's head. Follow verifies it under
+the authority of its OWN World, the fold from the start it already trusts (never the page's word:
+KERNEL-69.2, `authorityOf_honest_fold`), and compares the certified chain with its own fold at that
+step count, as it compares a member's self-head post. A mismatch is the writer's own signature on a
+head of another history: attributable evidence of a fork, which no member's post can be. What it does
+NOT show: that the certified head is lawful (a writer may sign one fabricated head per step count and
+never equivocate); follow's re-execution is what makes its own fold lawful. -/
+
+/-- The head a log page's certificate `b` certifies, as `(steps, chain bytes)`, when it verifies
+under the authority of follow's World `w` for `w`'s origin (`certified`). `none` for no certificate,
+an authority naming nobody, or a certificate that does not verify (not the writer's signature, so
+evidence of nothing). -/
+def pageCertified (X : Ctx D) (w : World D) (b : ByteArray) : Option (Nat × ByteArray) :=
+  if b.isEmpty then none else
+  match authorityOf w with
+  | none => none
+  | some auth =>
+    match certified X auth w.origin b with
+    | .ok c => some (c.head.steps, X.env.bytes c.head.chain)
+    | .error _ => none
+
+/-- The certified head's step count when follow's fold reached it ON THIS PAGE with another chain
+(`anchorCheck` from follow's position `w` before the page, as `forkedSelfPost` walks). A head at a
+position follow was already past is `behindCertified`'s (its own Store answers it); one past the
+page is not compared here. -/
+@[irreducible] def forkedCertified (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (b : ByteArray) :
+    Option Nat :=
+  match pageCertified X w b with
+  | some (s, c) => if anchorCheck X.env s c w.steps w.chain ts = .forked then some s else none
+  | none => none
+
+/-- The certified head when it sits AT or behind follow's position before the page (`steps ≤
+w.steps`): `anchorCheck` cannot reach it, follow's own Store answers it (`Host.Follow.behindOr`). -/
+def behindCertified (X : Ctx D) (w : World D) (b : ByteArray) : Option (Nat × ByteArray) :=
+  (pageCertified X w b).filter fun p => decide (p.1 ≤ w.steps)
+
 end Nanodregg.Protocol.Head

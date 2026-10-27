@@ -80,9 +80,9 @@ theorem step_steps {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)}
     {ts : List (Step D × D)} {r : Command.Reply}
     (h : Command.step X dc B me f kb res = (f', p, r)) (hp : p = .steps ts) :
     (ts = [] ∧ f'.world = f.world) ∨ ∃ (cmd : Command.Cmd D) (evs : List ByteArray) (steps : Nat)
-      (chain : ByteArray) (base : Nat) (wb : Option (World D)) (r₀ : Command.Reply),
+      (chain : ByteArray) (base : Nat) (wb : Option (World D)) (cert : ByteArray) (r₀ : Command.Reply),
       Command.absorbSync X me cmd f.world evs steps chain base = .ok (f'.world, ts, wb) ∧
-      r = Command.postOr X f.world ts f'.world r₀ ∧
+      r = Command.postOr X f.world ts f'.world cert r₀ ∧
       ∃ st, Command.State.ofBytes kb = some st ∧ Command.parse X.digestOf st.argv = .ok cmd := by
   unfold Command.step at h
   cases hst : Command.State.ofBytes kb with
@@ -115,7 +115,7 @@ theorem step_steps {X : Ctx D} {dc : Codec.Stream D} {B : Thin.Base (World D)}
       all_goals (try simp only [Command.Persist.steps.injEq, reduceCtorEq] at hp)
       all_goals first
         | exact .inl ⟨hp.symm, rfl⟩
-        | (subst hp; exact .inr ⟨_, _, _, _, _, _, _, ‹_›, rfl, st, rfl, hpa⟩)
+        | (subst hp; exact .inr ⟨_, _, _, _, _, _, _, _, ‹_›, rfl, st, rfl, hpa⟩)
 
 omit [Ord D] [DecidableEq D] in
 /-- The walk reaches every step count strictly after its start and no later than its end. -/
@@ -141,7 +141,7 @@ theorem top_forkConsistent (d : ByteArray → ByteArray) : ForkConsistent (deplo
   rw [fold_eq_world _ rfl rfl] at h₀ hg
   have h' : Command.step Host.Deployed.X Codec.Deployed.digestCodec (deployed d).B me f kb res =
       (f', .steps ts, r) := h
-  rcases step_steps h' rfl with ⟨rfl, -⟩ | ⟨cmd, evs, steps, chain, base, wb, r₀, ha, hr, -⟩
+  rcases step_steps h' rfl with ⟨rfl, -⟩ | ⟨cmd, evs, steps, chain, base, wb, cert, r₀, ha, hr, -⟩
   · simp [Head.selfPosts] at hmem
   · have hrf := Command.absorbPage_admits (Command.absorbSync_ok ha)
     have hlen : f'.world.steps = f.world.steps + ts.length := by
@@ -346,7 +346,7 @@ theorem top_forkConsistent_sync (d : ByteArray → ByteArray) : ForkConsistent.s
   rw [fold_eq_world _ rfl rfl] at h₀ hg
   have h' : Command.step Host.Deployed.X Codec.Deployed.digestCodec (deployed d).B me f kb res =
       (f', .steps ts, r) := h
-  rcases step_steps h' rfl with ⟨-, hw⟩ | ⟨cmd, evs, n, ch, base, wb, r₀, ha, -, st', hst', hpa'⟩
+  rcases step_steps h' rfl with ⟨-, hw⟩ | ⟨cmd, evs, n, ch, base, wb, -, r₀, ha, -, st', hst', hpa'⟩
   · rw [hw] at hhi; omega
   · rw [hst] at hst'
     obtain rfl := Option.some.inj hst'

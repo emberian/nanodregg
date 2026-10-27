@@ -232,6 +232,9 @@ inductive Mutation
   /-- the writer's certificate of its base carries a flipped signature byte: a forged certification
   (PROTOCOL-77.1) -/
   | forgeCertificate
+  /-- the writer certifies its base under a head with ANOTHER chain than its own fold holds there: a
+  genuine signature on a head of another history (PROTOCOL-81) -/
+  | forkCertificate
   /-- the writer refuses an expired envelope by the name alone, stating no height (PROTOCOL-12's
   shape, before PROTOCOL-19) -/
   | unstatedExpiry
@@ -1843,11 +1846,30 @@ def certifiedRow : Row where
     ok "thin" ["read", "@shared", "2=1"]])
   plant := .caught .forgeCertificate 14 (.refused "badCertifySignature")
 
+/-- PROTOCOL-81 (DESIGN-TRUST T3d): every `log` page carries the writer's certificate of its newest
+base's head, and follow compares it with its own fold. The newcomer writes, the writer seals (its
+certificate certifies the sealed head), the newcomer writes again, and the operator, cold, follows the
+whole log from genesis on one page that walks past the sealed step count: the certified chain is its
+own there, nothing to refuse. The plant has the writer certify, with its genuine key, a head of the
+sealed step count whose chain is not the fold's (`forkCertificate`): line 9 is refused
+`forkedCertified` by name, the writer's own signature the witness. -/
+def certifiedPageRow : Row where
+  name := "certifiedPage"
+  replaces := []
+  ops := everyWrite
+  kinds := ["enroll", "install", "create", "grant", "write"]
+  drive := .members (welcome ++ [
+    ok "newcomer" ["write", "@shared", "2", "1", "--via", "@g"],
+    { actor := "operator", act := .seal, expect := .ok },
+    ok "newcomer" ["write", "@shared", "3", "1", "--via", "@g"],
+    { actor := "operator", act := .cmd ["sync"], expect := .ok, fault := .cold }])
+  plant := .caught .forkCertificate 9 (.refused "forkedCertified")
+
 def rows : List Row :=
   [journey, reopen, laws, rotate, audit, paging, coldCatchUp, forgotten, refusedRow, refusedFinalRow, inviteRow, useRow, describeRow, stateRow, receiptRow, healthRow, settleRow, carry, carriedInviteWrongWorld, thin, thinStale, sealRow, basePin, pageIoRow, wrongWorld, wrongWorldRead, pay, well, bounty, grain, hermes, bar,
    langJourney, rangeRow, rangeLimitRow, bellRow, bigEventRow, wrongFollowerRow,
    uncertainHintRow, rangeInvokeRow, rangeFlagRow, beforeLogRow, bellDocRow, cancelRow, cancelForgedRow,
    fullPageRow, cancelLieRow, staleRefusingRow,
-   forgedRefusalRow, forkRow, selfHeadRow, certifiedRow]
+   forgedRefusalRow, forkRow, selfHeadRow, certifiedRow, certifiedPageRow]
 
 end Nanodregg.Protocol

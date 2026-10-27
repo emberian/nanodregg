@@ -161,9 +161,10 @@ theorem not_asks_refused {r : Command.Refusal D} {msg : ByteArray} : ¬ Asks (re
   not_asks_of_cont (by simp [refused, Reply.cont])
 
 theorem asks_postOr {X : Ctx D} {w : World D} {ts : List (Kernel.Step D × D)} {w' : World D}
-    {r : Reply} {msg : ByteArray} (h : Asks (postOr X w ts w' r) msg) : Asks r msg := by
-  rcases postOr_cases X w ts w' r with hp | ⟨s, m, -, hp⟩
+    {b : ByteArray} {r : Reply} {msg : ByteArray} (h : Asks (postOr X w ts w' b r) msg) : Asks r msg := by
+  rcases postOr_cases X w ts w' b r with hp | ⟨s, m, -, hp⟩ | ⟨s, -, -, hp⟩
   · rw [hp] at h; exact h
+  · rw [hp] at h; exact absurd h not_asks_refused
   · rw [hp] at h; exact absurd h not_asks_refused
 
 omit [Ord D] [DecidableEq D] in

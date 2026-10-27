@@ -2386,3 +2386,39 @@ the log's lawfulness, and do not commit `allowance` at all (DESIGN-TRUST §T3c).
 **Critique.** (1) The category error in the reader's version: POSSESSION of a key is a fact about the key, shown by any signature it makes, in any World or none. Binding the possession proof to a World turns that fact into a contextual datum, and the result would have been two signatures by one key per enrolment, a World-free one that refuses nothing the World-bound one does not (a no-op), or a "possession" that is false in the next World although the key is the same. The defect was elsewhere: the message was a consent to join (it named the sponsor) mislabelled as possession, and a consent is contextual, so it names its World. The join's signature is also the possession proof, because it is a signature by the key; no separate datum. (2) Content-addressed member ids replace `bornAt` for members only: a consent's digest is a better id than the transaction's position, because the id now says what was consented to; the price is that a member's id no longer orders by birth (nothing read that order: the build and every row are the measurement). (3) The World check sits at two entry points (`receive`, `signedBy`) instead of one receiver. That is the price of KERNEL-40's opacity, which the receiver placement broke (`dispatch_world` went red, measured); both entry points are the ones every call passes, and `receive_join_world` states the result at `receive`. (4) Not done: a member already enrolled in A and carried into B stays a member of B (KERNEL-40 carries state, not history); this decision concerns new consents only, which is the case the defect was.
 
 **What re-emits.** Every Store re-geneses (none deployed): an enrolment's bytes, the join token and the receive refusal codes moved. Codec vectors re-drawn (`kernel/body`, `kernel/call`, `kernel/unsigned`); `client/src/generated.rs` re-emitted where it carries refusal names. An old join token is refused by `Join.ofBytes` (four fields, not three); an old enrolment does not decode at tag 0.
+
+## PROTOCOL-81 · Every `log` page carries the writer's certificate of its newest base's head, and follow compares it with its own fold: another chain there is `refused forkedCertified`, the writer's own signature the witness (2026-10-27, TRUST-SEED-3; DESIGN-TRUST T3d, cv 01a17a55-5ea9; the certificate's producer is HOST-80, its key HOSTING-56)
+
+`logReplyLayout` gains a last field, `certificate`: `STORE/base.cert` as read (`Host.Page.pageCert`:
+empty when the writer holds none, or when it is wider than `Bounds.certificateBytesMax`, 1424 bytes,
+room for 16 signatures; `logReplyFramingBytes` keeps that room, so a full page and its continuation
+still fit one frame, `FrameFit.resume_frame_fits` with the new premise). Follow verifies it under the
+authority of its OWN World for its own origin (`Head.pageCertified`; never the page's word: follow's
+World is its re-executed fold from the start it trusts), and compares the certified chain with its
+own fold at the certified step count: on the page by `anchorCheck` from its position before the page
+(`Head.forkedCertified`, inside `Command.postOr` after the self-head posts), and at or behind that
+position by its own Store's chain (`Head.behindCertified`, `Host.Follow.behindOr` over `chainKept`,
+on an empty page too: the caught-up member compares the writer's newest certified base every time it
+pages). A mismatch ends the command `refused forkedCertified` with the page kept (it is lawful on
+follow's fold). `Proofs.Head.forkedCertified_forked`: the refusal is never free: the certificate
+verifies under follow's authority, certifies that step count, and follow's own fold holds a prefix of
+the page reaching it with another chain. A certificate that does not verify is compared on nothing
+(it is not the writer's signature, so it is evidence of nothing). Row `certifiedPage` (toy and
+deployed): a cold member follows a log that walks past the sealed base, the certified chain is its
+own; plant `forkCertificate` (the writer signs, with its genuine key, a head of the sealed step count
+with another chain): refused `forkedCertified` by name.
+
+**Critique.** A certificate on a page proves the key holder committed to that head; it does not prove
+the head is lawful (CRIT-SPEC, PROTOCOL-78's paragraph). What this adds is ATTRIBUTION: a member that
+re-executes and finds the writer's signed head off its own fold holds a non-repudiable, transferable
+witness of the writer's fork, which a member's self-head post (PROTOCOL-75) is not: a post is the
+poster's word about the writer. The behind comparison has no row (the rows' loopback runs
+`Follow.answer`, not `Follow.loop`) and no cargo test (a forked certificate needs the certify key to
+sign another history, which keybroker refuses by design); it reads the same `chainKept` the behind
+posts read (T2b'). The page certificate is per base, so between seals a member compares the same
+head on every page: one `chainKept` read per page, O(one record).
+
+**What changed shape / re-emits / refuses.** `logReplyLayout` (+`certificate`): a follower of the old
+shape decoding a new page is `badResult`, and a new follower refuses an old writer's page the same
+way. `Bounds.logReplyFramingBytes` grows by 1428, so `Host.Page.budget` (`pageBytesMax`) drops from
+129717 to 128289 event bytes; `budget_fits_event` still holds. No persisted byte moves. `protocol!`.

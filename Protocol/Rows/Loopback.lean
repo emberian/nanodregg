@@ -138,6 +138,7 @@ def sys (R : Rows.Params D) : Option Mutation → Sys D
   | some .lieTip => { writer := { R, X := R.ctx, lieTip := true }, follow := R.ctx }
   | some .forgeBase => { writer := { R, X := R.ctx, forgeBase := true }, follow := R.ctx }
   | some .forgeCertificate => { writer := { R, X := R.ctx, forgeCertificate := true }, follow := R.ctx }
+  | some .forkCertificate => { writer := { R, X := R.ctx, forkCertificate := true }, follow := R.ctx }
   | some .unstatedExpiry => { writer := { R, X := R.ctx, unstatedExpiry := true }, follow := R.ctx }
   | some .forgottenRefused => { writer := { R, X := R.ctx, forgottenRefused := true }, follow := R.ctx }
   | some .nonceRepeats => { writer := { R, X := R.ctx }, follow := R.ctx, nonceRepeats := true }
@@ -663,9 +664,9 @@ def editPage (f : List ByteArray → List ByteArray) (reply : ByteArray) : ByteA
   match Command.hostReply reply with
   | some (.ok, p) =>
       match logReplyFrame.decode p with
-      | .ok (l, n, c, t, th, bs, bd, ()) =>
+      | .ok (l, n, c, t, th, bs, bd, k, ()) =>
           match Text.fitList Bounds.frameBytesMax (f (Text.unlist l)) with
-          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', n, c, t, th, bs, bd, ())
+          | some l' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l', n, c, t, th, bs, bd, k, ())
           | none => reply
       | .error _ => reply
   | _ => reply
@@ -700,7 +701,7 @@ def hideLog (X : Ctx D) (w : World D) (reply : ByteArray) : ByteArray :=
   match Command.hostReply reply with
   | some (.ok, p) =>
       match logReplyFrame.decode p with
-      | .ok (_, _, _, _, _, bs, bd, ()) =>
+      | .ok (_, _, _, _, _, bs, bd, k, ()) =>
           let f := Text.fit Bounds.frameBytesMax
           let base := match Text.ofU64 bs.1 with
             | some b => if b ≤ w.steps then bs.1 else Text.u64 0
@@ -708,7 +709,7 @@ def hideLog (X : Ctx D) (w : World D) (reply : ByteArray) : ByteArray :=
           match Text.fitList Bounds.frameBytesMax [], f (Text.u64 w.steps), f (X.env.bytes w.chain),
               f (Text.u64 w.steps), f (Text.u64 w.height), f base with
           | some l, some n, some c, some t, some th, some b =>
-              ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, b, bd, ())
+              ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, b, bd, k, ())
           | _, _, _, _, _, _ => reply
       | .error _ => reply
   | _ => reply
@@ -760,18 +761,18 @@ def tipEdit (m : Move) (reply : ByteArray) : ByteArray :=
   match Command.hostReply reply with
   | some (.ok, p) =>
       match logReplyFrame.decode p with
-      | .ok (l, n, c, t, th, bs, bd, ()) =>
+      | .ok (l, n, c, t, th, bs, bd, k, ()) =>
           let f := Text.fit Bounds.frameBytesMax
           match Text.ofU64 n.1, Text.ofU64 t.1, Text.ofU64 th.1, m with
           | some ns, some _, some hs, .tip 0 =>
               match f (Text.u64 ns), f (Text.u64 hs) with
-              | some t', some h' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t', h', bs, bd, ())
+              | some t', some h' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t', h', bs, bd, k, ())
               | _, _ => reply
           | some _, some ts, some hs, .tip x =>
               match f (Text.u64 (ts + x)), f (Text.u64 (hs + x)) with
-              | some t', some h' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t', h', bs, bd, ())
+              | some t', some h' => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t', h', bs, bd, k, ())
               | _, _ => reply
-          | _, _, _, .base => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, t, bd, ())
+          | _, _, _, .base => ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, t, bd, k, ())
           | _, _, _, _ => reply
       | .error _ => reply
   | _ => reply

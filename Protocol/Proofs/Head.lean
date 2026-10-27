@@ -488,4 +488,44 @@ theorem certifiesWorld_none {X : Ctx D} {w : World D} (b : ByteArray) (ha : auth
     certifiesWorld X w b = .ok () := by
   simp [certifiesWorld, ha, Authority.none]
 
+/-! ## The writer's certified head on a log page (PROTOCOL-81) -/
+
+/-- **A `forkedCertified` is never free** (PROTOCOL-81): the certificate the page carries verifies
+under the authority of follow's own World for its origin (`certified`: a threshold of distinct listed
+certifiers signed it), it certifies step count `s`, and follow's own fold holds at `s` a prefix of the
+page whose chain is NOT the certified one (`forked_on_fold`). -/
+theorem forkedCertified_forked {X : Ctx D} {w w' : World D} {ts : List (Kernel.Step D × D)}
+    {b : ByteArray} {s : Nat} (hr : World.RootedFold X.env w ts w') (h : forkedCertified X w ts b = some s) :
+    ∃ auth c, authorityOf w = some auth ∧ certified X auth w.origin b = .ok c ∧ c.head.steps = s ∧
+      ∃ pre post v, ts = pre ++ post ∧ World.fold X.env w (pre.map Prod.fst) = .ok v ∧ v.steps = s ∧
+        X.env.bytes v.chain ≠ X.env.bytes c.head.chain := by
+  unfold forkedCertified at h
+  cases hpc : pageCertified X w b with
+  | none => rw [hpc] at h; cases h
+  | some sc =>
+    obtain ⟨s', c'⟩ := sc
+    rw [hpc] at h
+    simp only at h
+    split at h
+    · rename_i hk
+      simp only [Option.some.injEq] at h
+      subst h
+      unfold pageCertified at hpc
+      by_cases hb : b.isEmpty
+      · simp [hb] at hpc
+      · simp only [hb, if_false, Bool.false_eq_true] at hpc
+        cases ha : authorityOf w with
+        | none => rw [ha] at hpc; cases hpc
+        | some auth =>
+          rw [ha] at hpc
+          simp only at hpc
+          cases hc : certified X auth w.origin b with
+          | error e => rw [hc] at hpc; cases hpc
+          | ok c =>
+            rw [hc] at hpc
+            simp only [Option.some.injEq, Prod.mk.injEq] at hpc
+            obtain ⟨rfl, rfl⟩ := hpc
+            exact ⟨auth, c, rfl, hc, rfl, forked_on_fold hr hk⟩
+    · cases h
+
 end Nanodregg.Protocol.Head

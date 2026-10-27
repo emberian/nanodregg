@@ -54,6 +54,9 @@ structure Params (D : Type) [Ord D] where
   /-- the writer's certificate of its base carries a flipped signature byte (a plant: a forged
   certification, PROTOCOL-77.1) -/
   forgeCertificate : Bool := false
+  /-- the writer certifies a head of its base's step count with another chain (a plant: a genuine
+  signature on a head of another history, PROTOCOL-81) -/
+  forkCertificate : Bool := false
   /-- an `expired` refusal states the name alone, no height (a plant: the shape before
   PROTOCOL-19, which leaves a follower more than a window behind unable to catch up) -/
   unstatedExpiry : Bool := false
@@ -167,7 +170,8 @@ def authority (R : Rows.Params D) : Authority := ⟨[R.pub certifierSecret], 1�
 /-- The writer's certificate of its newest base's head (PROTOCOL-77.1): the base's World decoded from
 the base file, its head (`Head.headOf`) signed under `domCertify` with the rows' certifier key at its
 index in that World's authority; empty when the authority does not list it (or the base does not
-decode). `forgeCertificate` flips the signature's first byte. -/
+decode). `forgeCertificate` flips the signature's first byte; `forkCertificate` certifies the head
+with another chain. -/
 def certificate (P : Params D) (m : Mem) (r : Resident (World D)) : IO ByteArray := do
   let file := (← m.bases.get).file
   match P.R.world.decode (worldBytesOf file r.sealed.bytes) with
@@ -176,7 +180,9 @@ def certificate (P : Params D) (m : Mem) (r : Resident (World D)) : IO ByteArray
     match authorityOf w with
     | none => pure ByteArray.empty
     | some auth =>
-      match auth.certifiers.idxOf? (P.R.pub certifierSecret), Head.certifiedBytes P.X.env (Head.headOf P.X.env w) with
+      let h := Head.headOf P.X.env w
+      let h := if P.forkCertificate then { h with chain := P.X.env.hash "nanodregg/rows/forked" (P.X.env.bytes h.chain) } else h
+      match auth.certifiers.idxOf? (P.R.pub certifierSecret), Head.certifiedBytes P.X.env h with
       | some i, some u =>
           let sig := P.R.sign certifierSecret (Head.certifyMessage u)
           let sig := if P.forgeCertificate then Host.Sim.flipByte sig 0 else sig
@@ -209,7 +215,9 @@ def pager (P : Params D) (m : Mem) (r : Resident (World D)) : Deferred → IO (U
     -- `lieTip` hides the log after the page, so a base after the page too (a consistent lie)
     let baseSteps := if P.lieBase then r.world.steps
       else if P.lieTip then min r.sealed.steps a.steps else r.sealed.steps
-    match Page.bytes a (if P.lieTip then a.steps else r.world.steps) r.world.height baseSteps r.sealed.digest with
+    let cert ← certificate P m r
+    match Page.bytes a (if P.lieTip then a.steps else r.world.steps) r.world.height baseSteps r.sealed.digest
+        (Page.pageCert cert) with
     | .ok b => pure (Status.ok.code, b)
     | .error f => pure (Status.refused.code, f.name.toUTF8)
 

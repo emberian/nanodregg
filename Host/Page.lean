@@ -232,20 +232,27 @@ def kept (E : Env D) (dc : Stream D) (digestOf : ByteArray → Option D) (s : Lo
   | x => return x
 
 /-- The page on the wire: `logReplyLayout` (events, steps u64, chain, tipSteps u64, tipHeight u64,
-baseSteps u64, baseDigest): `tipSteps` and `tipHeight` the World's step count and height the page
+baseSteps u64, baseDigest, certificate): `tipSteps` and `tipHeight` the World's step count and height the page
 was built at (a member pages again until its step count reaches `tipSteps`; it signs its next
 envelope from `tipHeight`, since windows are in heights); `baseSteps` and `baseDigest` the newest
 DURABLE base's when the page was built (`Sealed.steps`, `Sealed.digest`: the base a thin member
 adopts, PROTOCOL-47). A seal racing the page makes them stale; the inviter then refuses
-`noBase` or `baseMismatch`, never pins them. -/
-def bytes (a : Acc) (tipSteps tipHeight baseSteps : Nat) (baseDigest : ByteArray) : Except Fault ByteArray :=
+`noBase` or `baseMismatch`, never pins them. Last `cert`, the writer's certificate of that base's
+head as `pageCert` serves it (PROTOCOL-81): served as read, never checked here. -/
+def bytes (a : Acc) (tipSteps tipHeight baseSteps : Nat) (baseDigest cert : ByteArray) : Except Fault ByteArray :=
   let f := Protocol.Text.fit Protocol.Bounds.frameBytesMax
   match Protocol.Text.fitList Protocol.Bounds.frameBytesMax a.events.toList,
       f (Protocol.Text.u64 a.steps), f a.chain, f (Protocol.Text.u64 tipSteps), f (Protocol.Text.u64 tipHeight),
-      f (Protocol.Text.u64 baseSteps), f baseDigest with
-  | some l, some h, some c, some t, some th, some bs, some bd =>
-      .ok (Protocol.logReplyFrame.bytes (l, h, c, t, th, bs, bd, ()))
-  | _, _, _, _, _, _, _ => .error .tooLarge
+      f (Protocol.Text.u64 baseSteps), f baseDigest, f cert with
+  | some l, some h, some c, some t, some th, some bs, some bd, some k =>
+      .ok (Protocol.logReplyFrame.bytes (l, h, c, t, th, bs, bd, k, ()))
+  | _, _, _, _, _, _, _, _ => .error .tooLarge
+
+/-- The certificate a `log` page carries (PROTOCOL-81): the base's certificate as read, or empty when
+it is wider than `Bounds.certificateBytesMax` (the room `logReplyFramingBytes` keeps for it, so a
+full page still fits its frame). -/
+def pageCert (cert : ByteArray) : ByteArray :=
+  if cert.size ≤ Protocol.Bounds.certificateBytesMax then cert else ByteArray.empty
 
 /-- A `read` page (HOST-15): the newest base's World bytes from byte `start`, at most `budget` of
 them less the certificate's encoding, with the base's step count, total size, digest and chain and

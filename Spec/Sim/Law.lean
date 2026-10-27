@@ -93,6 +93,6 @@ def cKb : ByteArray :=
 def cRes : ByteArray :=
   ByteArray.mk #[Status.ok.code] ++
     ((Host.Page.bytes { steps := cWorld.steps, chain := Xd.env.bytes cWorld.chain } cWorld.steps
-      cWorld.height 0 .empty).toOption.getD .empty)
+      cWorld.height 0 .empty .empty).toOption.getD .empty)
 
 end Nanodregg.Spec

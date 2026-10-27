@@ -26,13 +26,13 @@ theorem ofU64_u64 {n : Nat} (h : n < 2 ^ 64) : Text.ofU64 (Text.u64 n) = some n 
 
 /-- **A page states the base its writer passed**: whatever page `Host.Page.bytes` writes for the
 base `(bs, bd)`, the follower's reader returns `bs` and `bd` as the page's base. -/
-theorem bytes_states_base {a : Host.Page.Acc} {ts th bs : Nat} {bd b : ByteArray} {p : LogPage}
-    (h : Host.Page.bytes a ts th bs bd = .ok b) (hbs : bs < 2 ^ 64) (hp : logPage b = some p) :
+theorem bytes_states_base {a : Host.Page.Acc} {ts th bs : Nat} {bd k b : ByteArray} {p : LogPage}
+    (h : Host.Page.bytes a ts th bs bd k = .ok b) (hbs : bs < 2 ^ 64) (hp : logPage b = some p) :
     p.baseSteps = bs ∧ p.baseDigest = bd := by
   unfold Host.Page.bytes at h
   dsimp only at h
   split at h
-  · rename_i hl hh hc ht hth hb hd
+  · rename_i hl hh hc ht hth hb hd hk
     simp only [Except.ok.injEq] at h
     subst h
     unfold logPage at hp
@@ -51,15 +51,15 @@ theorem bytes_states_base {a : Host.Page.Acc} {ts th bs : Nat} {bd b : ByteArray
 with: for in-range values whose page end and base are at or below its tip (the writer's own
 `Sealed` and World: an honest pager), `logPage` reads it, so `bytes_states_base` is about pages
 that exist. -/
-theorem bytes_reads {a : Host.Page.Acc} {ts th bs : Nat} {bd b : ByteArray}
-    (h : Host.Page.bytes a ts th bs bd = .ok b) (hs : a.steps < 2 ^ 64) (hts : ts < 2 ^ 64)
+theorem bytes_reads {a : Host.Page.Acc} {ts th bs : Nat} {bd k b : ByteArray}
+    (h : Host.Page.bytes a ts th bs bd k = .ok b) (hs : a.steps < 2 ^ 64) (hts : ts < 2 ^ 64)
     (hth : th < 2 ^ 64) (hbs : bs < 2 ^ 64) (hle : a.steps ≤ ts) (hb : bs ≤ ts) :
     ∃ p, logPage b = some p ∧ p.steps = a.steps ∧ p.tipSteps = ts ∧ p.baseSteps = bs ∧
       p.baseDigest = bd := by
   unfold Host.Page.bytes at h
   dsimp only at h
   split at h
-  · rename_i hl hh hc ht hth' hb' hd
+  · rename_i hl hh hc ht hth' hb' hd hk
     simp only [Except.ok.injEq] at h
     subst h
     unfold logPage

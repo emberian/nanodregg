@@ -152,6 +152,12 @@ inductive Refusal (D : Type)
   fold), the command ends by name, and the post is the witness: its poster signed that head
   (`Proofs.Head.body_post`) -/
   | forkedPost (steps : Nat) (member : Option D)
+  /-- a page carried the writer's CERTIFICATE of a head (`Head.pageCertified`: it verifies under
+  follow's own World's authority) at a position follow's own fold holds with ANOTHER chain
+  (PROTOCOL-81; `Proofs.Head.forkedCertified_forked` on the page, `Host.Follow.behindOr` behind it).
+  The page is KEPT (it is lawful on follow's fold), the command ends by name, and the certificate is
+  the witness: the authority's key signed a head of another history -/
+  | forkedCertified (steps : Nat)
   /-- `sync --check`: the attestation refused by `Protocol.Head`'s name -/
   | attest (r : Head.Refusal)
   /-- `adopt`: under an authority that names certifiers, the base the pin bound is not certified by
@@ -208,6 +214,7 @@ def Refusal.name : Refusal D → String
   | .forkedWorld _ => "forkedWorld"
   | .ahead _ => "ahead"
   | .forkedPost .. => "forkedPost"
+  | .forkedCertified _ => "forkedCertified"
   | .attest r => r.name
   | .certified r => r.name
 
@@ -518,17 +525,19 @@ structure LogPage where
   /-- the writer's newest durable base when it built the page: its step count and digest -/
   baseSteps : Nat
   baseDigest : ByteArray
+  /-- the writer's certificate of that base's head, as carried (PROTOCOL-81; empty: none) -/
+  certificate : ByteArray := ByteArray.empty
 
 /-- A page's stated base past its stated tip is no base of that log: not a page. -/
 def logPage (b : ByteArray) : Option LogPage :=
   match logReplyFrame.decode b with
-  | .ok (l, n, c, t, th, bs, bd, ()) => do
+  | .ok (l, n, c, t, th, bs, bd, k, ()) => do
       let steps ← Text.ofU64 n.1
       let tipSteps ← Text.ofU64 t.1
       let tipHeight ← Text.ofU64 th.1
       let baseSteps ← Text.ofU64 bs.1
       if steps ≤ tipSteps ∧ baseSteps ≤ tipSteps then
-        some ⟨Text.unlist l, steps, c.1, tipSteps, tipHeight, baseSteps, bd.1⟩
+        some ⟨Text.unlist l, steps, c.1, tipSteps, tipHeight, baseSteps, bd.1, k.1⟩
       else none
   | .error _ => none
 
@@ -1084,16 +1093,22 @@ def absorbSync (X : Ctx D) (me : Self D) (cmd : Cmd D) (w : World D) (evs : List
 
 /-- The reply a page's self-head posts force, else `r` (PROTOCOL-75): `forkedPost` when a member's
 post of its head of this World sits at a position follow's fold reached on this page with another
-chain (`Head.forkedSelfPost`). The page itself is kept by the caller (`moved`: it is lawful on
+chain (`Head.forkedSelfPost`), else `forkedCertified` when the writer's certificate the page carries
+(`cert`, PROTOCOL-81) certifies a head follow's fold reached on this page with another chain
+(`Head.forkedCertified`). The page itself is kept by the caller (`moved`: it is lawful on
 follow's fold; the fork is the poster's or the writer's), the command ends by name, and the next
 command proceeds past the post. A top-level function, not a match in `step`: `step_world`'s blanket
 split pays per match of `step`'s body; irreducible, so no reply-shape proof over `step` unifies
 through it (two stuck matchers cost what a constructor mismatch does not): they read it by
 `postOr_cases` and the elims beside it. -/
-@[irreducible] def postOr (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D) (r : Reply) : Reply :=
+@[irreducible] def postOr (X : Ctx D) (w : World D) (ts : List (Kernel.Step D × D)) (w' : World D)
+    (cert : ByteArray) (r : Reply) : Reply :=
   match Head.forkedSelfPost X w ts w' with
   | some (s, m) => refused (D := D) (.forkedPost s m)
-  | none => r
+  | none =>
+    match Head.forkedCertified X w ts cert with
+    | some s => refused (D := D) (.forkedCertified s)
+    | none => r
 
 /-- `shared` or `unreached` at the tip: the anchor's step count against follow's. `start` refused to
 begin past the anchor (`ahead`), and every page on the way compared the chain there
@@ -1150,7 +1165,8 @@ instead (`hintNames`). Arguments are placeholders; a name drops them. -/
 def hintReps : List (Refusal Nat) :=
   [.eventMismatch 0, .badState, .badResult, .planMoved, .expect 0, .missingCell 0, .tooManyPins,
    .chainMismatch 0, .pageTooLong 0, .noText, .expired 0, .badCall, .unknownRelation "",
-   .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0, .forkedPost 0 none] ++
+   .rangePastLimit 0, .badPrefix, .badKey, .forkedWorld 0, .ahead 0, .forkedPost 0 none,
+   .forkedCertified 0] ++
   Head.Refusal.all.map Refusal.attest ++ Head.CertRefusal.all.map Refusal.certified ++
   ([.argvPastBound 0, .notUtf8 0, .noVerb, .unknownVerb "", .usage "" "", .badDigest "", .badNumber "",
     .badRight "", .badToken "", .badExpect "", .badPackage "", .badAccount "", .badOnce ""] :
@@ -1460,7 +1476,7 @@ def step (X : Ctx D) (dc : Stream D) (B : Thin.Base (World D)) (me : Self D) (f 
                         | none => f.verified
                       let moved (w' : World D) (ts : List (Kernel.Step D × D)) (r : Reply) :
                           Follow D × Persist D × Reply :=
-                        ({ f with world := w', verified := v }, .steps ts, postOr X w ts w' r)
+                        ({ f with world := w', verified := v }, .steps ts, postOr X w ts w' pg.certificate r)
                       if pg.steps < pg.tipSteps then
                         if Bounds.pagesPerCommandMax ≤ pages + 1 then
                           moved w' ts (behind pg.steps pg.tipSteps)

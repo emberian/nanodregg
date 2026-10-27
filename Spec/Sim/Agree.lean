@@ -32,10 +32,10 @@ def agPage : ByteArray :=
   let w := agBatch.1
   let f := Text.fit Bounds.frameBytesMax
   match Text.fitList Bounds.frameBytesMax agEvents, f (Text.u64 w.steps), f (Xd.env.bytes w.chain),
-      f (Text.u64 w.steps), f (Text.u64 w.height), f (Text.u64 0), f ByteArray.empty with
-  | some l, some n, some c, some t, some th, some b, some bd =>
-      ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, b, bd, ())
-  | _, _, _, _, _, _, _ => ByteArray.empty
+      f (Text.u64 w.steps), f (Text.u64 w.height), f (Text.u64 0), f ByteArray.empty, f ByteArray.empty with
+  | some l, some n, some c, some t, some th, some b, some bd, some k =>
+      ByteArray.mk #[Status.ok.code] ++ logReplyFrame.bytes (l, n, c, t, th, b, bd, k, ())
+  | _, _, _, _, _, _, _, _ => ByteArray.empty
 
 /-- A plain `sync` at its log phase (2), first page. -/
 def agKb : ByteArray :=

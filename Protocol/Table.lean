@@ -399,10 +399,14 @@ command). Last, the writer's newest DURABLE base when it built the page (PROTOCO
 count (`baseSteps`, at most `tipSteps`, else the page is refused) and its digest (`baseDigest`, the
 `read` header's and `host seal`'s). A seal racing the page leaves them stale; the follower trusts
 neither: it records its OWN World's digest where its fold sits at `baseSteps`, and `invite` pins
-that only when the stated digest agrees (`baseMismatch` otherwise). -/
+that only when the stated digest agrees (`baseMismatch` otherwise). Last, the writer's CERTIFICATE of
+that base's head (PROTOCOL-81, DESIGN-TRUST T3d; `STORE/base.cert` as read, empty when the writer
+holds none or it is wider than `Bounds.certificateBytesMax`): follow verifies it under its OWN World's
+authority and compares the certified chain with its own fold at that step count, so a writer that
+signs a head of another history is caught by its own signature (`forkedCertified`). -/
 def logReplyLayout : Codec.Layout :=
   [.list "events", .bytes "steps", .bytes "chain", .bytes "tipSteps", .bytes "tipHeight",
-   .bytes "baseSteps", .bytes "baseDigest"]
+   .bytes "baseSteps", .bytes "baseDigest", .bytes "certificate"]
 
 /-- The `read` reply's payload: one page of the World bytes of the writer's NEWEST base (HOST-14,
 HOST-15), for a thin member (PROTOCOL-14, option A). The request is the read envelope, its `start`
@@ -515,10 +519,21 @@ def signedBytes : Nat := (4 + custodyKeyBytes) + (4 + custodyKeyBytes) + (4 + cu
 /-- What a `resume` frame spends beside its two fields' bytes: the op byte and the two `u32`
 lengths (`resumeLayout`). -/
 def resumeFramingBytes : Nat := 1 + 4 + 4
+/-- The certificates a `log` page carries (PROTOCOL-81): at most this many signatures. A certificate
+needs only `threshold` of them, so every authority of at most this threshold certifies on pages. -/
+def pageCertifiersMax : Nat := 16
+/-- The widest certificate a `log` page carries (`Protocol.Head.certificateLayout` at the deployed
+widths): the certified bytes (origin, roots and chain behind their lengths, two `u64`s behind theirs)
+behind a length, then `pageCertifiersMax` signer indices (`u64`) and Ed25519 signatures, each list
+behind its count. A wider one is not served on pages (the `read` reply still carries it). -/
+def certificateBytesMax : Nat :=
+  (4 + (3 * (4 + Host.digestBytes) + 2 * (4 + 8))) + (4 + pageCertifiersMax * (4 + 8)) +
+    (4 + pageCertifiersMax * (4 + custodySignatureBytes))
 /-- What a `log` reply spends beside its events' bytes: the status byte, the events' `u32` count,
-the four `u64` positions behind their lengths, and the chain and base digest behind theirs
-(`logReplyLayout`). A `read` reply spends less (`readReplyLayout`: two `u64`s and two digests). -/
-def logReplyFramingBytes : Nat := 1 + 4 + 4 * (4 + 8) + 2 * (4 + Host.digestBytes)
+the four `u64` positions behind their lengths, the chain and base digest behind theirs, and room for
+the widest certificate behind its length (`logReplyLayout`). A `read` reply spends less (`readReplyLayout`: two `u64`s and two digests). -/
+def logReplyFramingBytes : Nat :=
+  1 + 4 + 4 * (4 + 8) + 2 * (4 + Host.digestBytes) + (4 + certificateBytesMax)
 /-- The largest continuation a page-asking step hands out: phase 2's (`log`), the argv at
 `argvBytesMax` (`parse` refuses a longer one), the phase byte, the acc's `u32` count and its five
 fields (`start`, `pages`, `upTo`, `tried` as `u64`s, custody's `signed` answer), each behind its

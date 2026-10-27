@@ -101,20 +101,20 @@ theorem Signed.bytes_size {s : Signed} {b : ByteArray} (h : s.bytes = some b) :
   omega
 
 /-- **A log page's size** (`Host.Page.bytes`): its events' wire bytes, the list's count, four `u64`
-positions, the chain and the base digest, each behind its length. -/
-theorem page_size {a : Host.Page.Acc} {ts th bs : Nat} {bd p : ByteArray}
-    (h : Host.Page.bytes a ts th bs bd = .ok p) :
-    p.size = 4 + a.eventBytes + 4 * (4 + 8) + (4 + a.chain.size) + (4 + bd.size) := by
+positions, the chain, the base digest and the certificate, each behind its length. -/
+theorem page_size {a : Host.Page.Acc} {ts th bs : Nat} {bd k p : ByteArray}
+    (h : Host.Page.bytes a ts th bs bd k = .ok p) :
+    p.size = 4 + a.eventBytes + 4 * (4 + 8) + (4 + a.chain.size) + (4 + bd.size) + (4 + k.size) := by
   unfold Host.Page.bytes at h
   dsimp only at h
   split at h
-  · rename_i l n c t th' bs' bd' hl hn hc ht hth hbs hbd
+  · rename_i l n c t th' bs' bd' k' hl hn hc ht hth hbs hbd hk
     simp only [Except.ok.injEq] at h
     subst h
     rw [← logReplyFrame_lawful.size_eq]
     simp only [logReplyFrame, logReplyLayout, Layout.codec, Field.codec, Stream.product, Stream.unit]
     rw [list_size, unlist_fitList hl]
-    simp only [Stream.bytesOf, fit_val hn, fit_val hc, fit_val ht, fit_val hth, fit_val hbs, fit_val hbd, u64_size,
+    simp only [Stream.bytesOf, fit_val hn, fit_val hc, fit_val ht, fit_val hth, fit_val hbs, fit_val hbd, fit_val hk, u64_size,
       Host.Page.Acc.eventBytes]
     omega
   · cases h
@@ -133,7 +133,7 @@ for every page `Host.Page.bytes` writes from an `Acc` holding at most `Host.Page
 digest of the deployed digest width: the continuation and the Host's reply (`ok ‖ page`) each fit a
 field, and the `resume` frame carrying both fits the transport's bound AS A WHOLE. At the old budget
 it does not (`perField_budget_overflows`, and the rows' `fullPage` plant). -/
-theorem resume_frame_fits {argv : List ByteArray} {startB pagesB upToB triedB signedB k page bd : ByteArray}
+theorem resume_frame_fits {argv : List ByteArray} {startB pagesB upToB triedB signedB k page bd cert : ByteArray}
     {s : Signed} {a : Host.Page.Acc} {ts th bs : Nat}
     (hargv : argvSize argv ≤ Bounds.argvBytesMax)
     (hu : startB.size = 8 ∧ pagesB.size = 8 ∧ upToB.size = 8 ∧ triedB.size = 8)
@@ -143,7 +143,8 @@ theorem resume_frame_fits {argv : List ByteArray} {startB pagesB upToB triedB si
     (hk : State.bytes ⟨argv, 2, [startB, signedB, pagesB, upToB, triedB]⟩ = some k)
     (ha : a.eventBytes ≤ Host.Page.budget)
     (hc : a.chain.size ≤ Host.digestBytes) (hd : bd.size ≤ Host.digestBytes)
-    (hp : Host.Page.bytes a ts th bs bd = .ok page) :
+    (hcert : cert.size ≤ Bounds.certificateBytesMax)
+    (hp : Host.Page.bytes a ts th bs bd cert = .ok page) :
     ∃ kf rf, Text.fit Bounds.frameBytesMax k = some kf ∧
       Text.fit Bounds.frameBytesMax (⟨#[Status.ok.code]⟩ ++ page) = some rf ∧
       bodyFits (resumeFrame.bytes (kf, rf, ())) = true := by
@@ -153,7 +154,8 @@ theorem resume_frame_fits {argv : List ByteArray} {startB pagesB upToB triedB si
   simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil] at hks
   obtain ⟨h1, h2, h3, h4⟩ := hu
   obtain ⟨w1, w2, w3⟩ := hw
-  have nb : Host.Page.budget = 129717 := by decide
+  have nb : Host.Page.budget = 128289 := by decide
+  have nc : Bounds.certificateBytesMax = 1424 := by decide
   have na : Bounds.argvBytesMax = 132096 := by decide
   have nf : Bounds.frameBytesMax = 262144 := rfl
   have nk : Bounds.custodyKeyBytes = 32 := rfl

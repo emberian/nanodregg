@@ -25,6 +25,24 @@ def pageEvents (b : ByteArray) : List ByteArray :=
     | none => []
   | _ => []
 
+/-- The writer's certificate a log page in `b` carries (PROTOCOL-81); empty otherwise. -/
+def pageCertificate (b : ByteArray) : ByteArray :=
+  match hostReply b with
+  | some (.ok, p) => match logPage p with
+    | some pg => pg.certificate
+    | none => ByteArray.empty
+  | _ => ByteArray.empty
+
+/-- The writer's certificate one frame's result carries on a log page, read where `frameEvents`
+reads the page's events (the Host's reply, or custody's `ok` payload). -/
+def frameCertificate (res : ByteArray) : ByteArray :=
+  let c := pageCertificate res
+  if c.isEmpty then
+    match hostReply res with
+    | some (.ok, p) => pageCertificate p
+    | _ => ByteArray.empty
+  else c
+
 /-- **Every event one frame's result could hand follow's fold**: a log page in the result as the
 Host sent it, or in custody's `ok` payload (`stepResult`'s two readings; follow absorbs only at a
 `log` reply's phase). A function of the frame's bytes alone, so a list of frames' results bounds
