@@ -12,6 +12,8 @@ every answer here is the language's own function, never a second implementation:
 * `tg_source I PKG` — package `PKG` as member `I`'s follow holds it, printed by `Lang.Print.package`
   (the core text `install` reads back to the same package).
 * `tg_example TYPE ME` — a value of a method's argument type to start editing from.
+* `tg_cell I ID` — what an id names on member `I`'s World (object, package, grant with its fields,
+  member, none), so a link opens the right window.
 * `tg_grants I OBJ` — the live grants on `OBJ` in member `I`'s follow World: one line each.
 * `tg_turn I TX` — the step with transaction id `TX`, re-derived on the World member `I`'s follow
   absorbed it onto (`Testground.Member.seen`): who, the ticks, the call, every pin and what was done
@@ -132,6 +134,40 @@ def slotHex (c : Cell) (k : Nat) : String := ((c.slots.get k).map Text.toHex).ge
         else none
       | _, _ => none
     return okText (String.join (lines.map (· ++ "\n")))
+
+/-! ## What an id names -/
+
+def kindWord (k : Nat) : String :=
+  if k = kindPackage then "package" else if k = kindObject then "object" else if k = kindGrant then "grant"
+  else if k = kindMember then "member" else if k = kindAuthority then "authority"
+  else if k = kindAccount then "account" else s!"kind{k}"
+
+/-- `tg_cell I ID`: what ID names on member I's follow World, so the page opens the right window:
+`kind WORD` (`none`: no cell has this id, a hash that is not a cell's), `retired` for a tombstone,
+and for a grant its fields (`target`, `grantee` (or `anyone`), `issuer`, `parent`, `rights`). -/
+@[export tg_cell] def tgCell (i : UInt32) (id : ByteArray) : IO ByteArray := do
+  match ← memberWorld i with
+  | .error r => return r
+  | .ok m =>
+    let some d := digestOfHex id | return refusedText "badId"
+    let w := m.follow.world
+    match World.live P.X.env w d with
+    | none =>
+      match World.entry P.X.env w d with
+      | some .tomb => return okText "kind retired\n"
+      | _ => return okText "kind none\n"
+    | some c =>
+      let anyone := P.X.env.bytes (worldId P.X)
+      let extra := if c.kind = kindGrant then
+          [s!"target {slotHex c grantTarget}",
+           s!"grantee {if c.slots.get grantGrantee == some anyone then "anyone" else slotHex c grantGrantee}",
+           s!"issuer {slotHex c grantIssuer}"] ++
+          ((c.slots.get grantParent).map fun p => [s!"parent {Text.toHex p}"]).getD [] ++
+          [s!"rights {",".intercalate (rightsOf c)}"]
+        else if c.kind = kindObject then
+          [s!"owner {slotHex c slotOwner}"] ++ ((c.slots.get slotPackage).map fun p => [s!"package {Text.toHex p}"]).getD []
+        else []
+      return okText (String.join ((s!"kind {kindWord c.kind}" :: extra).map (· ++ "\n")))
 
 /-! ## The Turn view -/
 

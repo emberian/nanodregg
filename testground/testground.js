@@ -19,7 +19,7 @@ const short = (h) => (h && h.length > 12 ? `${h.slice(0, 8)}…` : h);
 // a two-column table of labelled values (STYLE.md: a labelled value instead of a sentence)
 const kv = (pairs) => $('table', { class: 'props sunken' }, pairs.filter(Boolean).map(([k, ...v]) => $('tr', {}, $('td', {}, k), $('td', {}, ...v))));
 // the terms a window uses, defined in that window (STYLE.md)
-const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'Terms'), $('dl', {}, pairs.flatMap(([t, d]) => [$('dt', {}, t), $('dd', {}, d)])));
+const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'What these words mean'), $('dl', {}, pairs.flatMap(([t, d]) => [$('dt', {}, t), $('dd', {}, d)])));
 
 // ---------------------------------------------------------------- the window manager
 const desk = document.getElementById('desktop'), tasks = document.getElementById('tasks');
@@ -113,7 +113,7 @@ function newWorld() {
       await runIn(r.other, r.argv, `while ${m.name}'s call waits to be sent`);
     },
   });
-  openWorld(); openLog(); world.members.forEach((m, i) => openTerm(m, 700, 16 + i * 380)); openTour();
+  refreshIcons(); openWorld(); openLog(); world.members.forEach((m, i) => openTerm(m, 700, 16 + i * 380)); openTour();
 }
 
 // ---------------------------------------------------------------- the World's properties
@@ -190,7 +190,7 @@ async function joinHosted(url = null) {
   frames = []; cmdNo = 0; lie = 'honest'; setTray();
   const onFrame = (f) => { frames.push({ n: frames.length, cmd: cmdNo, lie, ...f }); renderLog(); };
   world = { hosted: true, url, wj, origin: wj.origin, members: [], objects: new Map(), text: '' };
-  const enter = (m) => { world.members = [m]; world.origin = m.origin; openHosted(); openLog(); openTerm(m, 700, 16); };
+  const enter = (m) => { world.members = [m]; world.origin = m.origin; refreshIcons(); openHosted(); openLog(); openTerm(m, 700, 16); openTour(); };
   if (rec) {
     let me = null;
     try { me = resumeIn(K, rec, 'you', { onFrame }); } catch (e) { stale = rec; kept.forget(url); }
@@ -234,6 +234,12 @@ function renderRoster() {
       r.members.length > shown.length ? $('tr', {}, $('td', {}, ''), $('td', {}, `and ${r.members.length - shown.length} more`)) : '')),
     $('div', { class: 'dim' }, 'Read from your follow\'s copy of the World. A World knows members by key, so other members are ids. ',
       $('a', { class: 'cmd', onclick: () => runIn(me, ['sync'], 'new members since') }, 'sync'), ' to update.'));
+}
+function refreshIcons() {
+  const a = document.getElementById('icon-m0'), b = document.getElementById('icon-m1');
+  if (!a || !b) return;
+  a.querySelector('.label').textContent = world.hosted ? 'you' : 'alice'; a.querySelector('.glyph').textContent = world.hosted ? 'y' : 'a';
+  b.hidden = !!world.hosted;
 }
 function refreshDoor() { const l = document.getElementById('door-label'); if (l) l.textContent = doorLabel(); }
 function forgetMe() {
@@ -297,15 +303,18 @@ function writerMenu() {
 function forkCheck(me) {
   const url = $('input', { class: 'sunken', 'aria-label': 'another writer\'s relay', value: new URLSearchParams(location.search).get('fork') ?? '', placeholder: 'ws://…/ws (another writer, same genesis)', size: 34 });
   const go = async () => {
+    const u = url.value.trim();
+    if (!/^wss?:\/\/[^/]+\/ws$/.test(u)) { print(me, $('div', { class: 'warn' }, 'Enter the second server\'s address, ws://HOST/ws or wss://HOST/ws.')); return; }
+    if (u === world.url) { print(me, $('div', { class: 'warn' }, 'That is your own writer. A history compared with itself always agrees. Enter another writer of this genesis (deploy/testground/run.sh fork starts one).')); return; }
     let a;
-    try { a = await (await fetch(`${httpOf(url.value)}/attest`)).json(); } catch (e) { a = { refused: e.message }; }
+    try { a = await (await fetch(`${httpOf(u)}/attest`)).json(); } catch (e) { a = { refused: `no answer from ${httpOf(u)}/attest` }; }
     if (!a.attest) { print(me, $('div', { class: 'bad' }, `No attestation from ${url.value}: ${a.refused}`)); return; }
     K.cold(me.index);
     print(me, $('div', { class: 'warn' }, `Attestation from ${url.value}: the other writer's head, signed by its guest-book. Your follow resets, replays your writer's log up to that position, and compares the two chains.`));
     await runIn(me, ['sync', '--check', a.attest], 'attestation from another writer');
   };
-  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Fork check'),
-    $('div', {}, url, ' ', $('button', { class: 'btn', onclick: go }, 'Check attestation')),
+  return $('fieldset', { class: 'writer' }, $('legend', {}, 'Compare histories (fork check)'),
+    $('div', {}, url, ' ', $('button', { class: 'btn', onclick: go }, 'Compare signed history')),
     $('div', { class: 'dim' }, 'Two writers can serve the same genesis. A follow checks only its own writer. A signed head (attestation) from the other writer shows a fork: refused forkedWorld.'));
 }
 // A hosted tab's relay: the rows' relay lies, told by this tab's own relay around its socket
@@ -342,30 +351,24 @@ async function playLie(name, { fresh = true, from = 0 } = {}) {
     return runIn(m, s.argv(v), '', { quiet: s.check || s.expect });
   } });
   const row = rowOf(name) ?? {};
-  if (r.ok) caught(name, r, row); else print(world.members[0], $('div', { class: 'bad' }, `scene ${name} stopped: ${r.r?.exit} ${r.r?.stderr ?? ''}`));
+  if (r.ok) caught(name, r, row, (r.r && world.members.find((x) => x.name === sc.steps.find((x) => x.check)?.who)) || world.members.find((x) => x.name === 'bob') || world.members[0]); else print(world.members[0], $('div', { class: 'bad' }, `scene ${name} stopped: ${r.r?.exit} ${r.r?.stderr ?? ''}`));
 }
 // the verdict of a scene's checked line: what the member's own follow said, beside what the row expects
-function caught(name, r, row) {
+function caught(name, r, row, m) {
   const fs = frames.filter((f) => f.cmd === cmdNo);
   const member = row.kind === 'member';
   const liar = member ? frames.filter((f) => f.forged).at(-1)
     : fs.filter((f) => f.lied).at(-1) ?? fs.filter((f) => f.to === 'writer' && f.op === 'log').at(-1);
-  const match = r.outcome === row.expect;
-  const body = $('div', {},
-    $('div', { class: 'mark' + (r.outcome === 'ok' ? ' okm' : '') }, r.outcome === 'ok' ? '✓' : '×'),
-    $('div', {},
-      $('div', { class: 'name' }, r.outcome),
-      kv([['lie', member ? `by a member: ${lieTitle(name)}` : `by the writer: ${lieTitle(name)}`],
-        member ? ['writer', 'honest; it admitted the call (laws judge the new state, not the history)'] : null,
-        ...(r.r.stderr || '').trim().split('\n').filter((l) => l && l !== r.outcome).map((l) => ['detail', l]),
-        ['result', r.outcome === 'ok' ? 'ok: the follow decided the call from its own copy of the World, not from the writer\'s reply'
-          : `refused by the member's follow: what the writer served does not match ${member ? 'the post' : 'what the writer says'}. Nothing signed depends on it.`],
-        liar ? ['lying frame', $('a', { class: 'cmd', onclick: () => { logSel = liar.n; openLog(); } }, `#${liar.n} ${liar.who} → writer ${liar.op}`), member ? ' (hostile call, admitted)' : liar.lied ? ' (rewritten by the relay)' : ' (from the lying writer)'] : null,
-        row.row ? ['row expects', `${row.expect} (row ${row.row}, line ${row.line})`] : null,
-        row.row ? ['match', $('span', { class: match ? 'ok' : 'bad' }, match ? 'yes' : 'NO')] : null]),
-      explain(r.outcome) ? $('p', {}, explain(r.outcome)) : ''),
-    $('div', { class: 'actions' }, $('button', { class: 'btn', onclick: () => d.el.querySelector('.titlebar button').click() }, 'OK')));
-  const d = openWindow({ id: `caught-${cmdNo}`, title: r.outcome === 'ok' ? 'Lie without effect' : 'Lie caught', x: 240, y: 160, w: 500, body, dialog: true });
+  const by = member ? 'a member (hostile client)' : row.kind === 'relay' ? 'the relay between the member and the writer' : 'the writer';
+  const title = r.outcome === 'ok' ? 'The false reply had no effect: the follow confirmed the call itself' : 'Rejected by the follow';
+  print(m, $('div', { class: `result ${r.outcome === 'ok' ? 'ok' : 'bad'}` },
+    $('b', {}, `${title}: ${r.outcome}`),
+    kv([['fault', `${by}: ${lieTitle(name)}`],
+      member ? ['writer', 'unmodified; it admitted the call, because laws judge the new state, not the history'] : null,
+      ...(r.r.stderr || '').trim().split('\n').filter((l) => l && l !== r.outcome).map((l) => ['detail', l]),
+      liar ? ['frame', $('a', { class: 'cmd', onclick: () => { logSel = liar.n; openLog(); } }, `#${liar.n} ${liar.who} → ${liar.to} ${liar.op}`), member ? ' (the hostile call)' : liar.lied ? ' (altered by the relay)' : ' (from the writer)'] : null,
+      row.row ? ['expected', `${row.expect} (regression test ${row.row}, line ${row.line})`, r.outcome === row.expect ? '' : $('b', { class: 'bad' }, ' — this tab said otherwise')] : null]),
+    explain(r.outcome) ? $('div', {}, explain(r.outcome)) : ''));
   if (liar) { logSel = liar.n; renderLog(); }
 }
 
@@ -377,12 +380,8 @@ function linkify(text, m) {
     // a `tx` line names a step of the log: it opens the Turn view
     if (line.startsWith('tx ') && /^tx [0-9a-f]{64}$/.test(line)) return ['tx ', $('a', { class: 'hex', title: `Turn ${line.slice(3)}`, onclick: () => T.openTurn(m, line.slice(3)) }, short(line.slice(3)))];
     if (line.startsWith('tx ') || line.startsWith('join ') || line.startsWith('invite ')) return [line];
-    return line.split(/([0-9a-f]{64})/).map((part) => {
-      if (!/^[0-9a-f]{64}$/.test(part)) return part;
-      const who = world.members.find((x) => x.id === part);
-      if (who) return $('span', { title: `member ${part}` }, `${who.name}:${short(part)}`);
-      return $('a', { class: 'hex', title: part, onclick: () => openObject(m, part) }, short(part));
-    });
+    // an id opens the window for its kind (teach.js idLink); a hash that names no cell stays text
+    return line.split(/([0-9a-f]{64})/).map((part) => (/^[0-9a-f]{64}$/.test(part) ? T.idLink(m, part) : part));
   });
 }
 const commandText = (argv) => argv.map(quoteArg).join(' ');
@@ -453,7 +452,7 @@ async function runOne(m, argv, why, { forge = false, quiet = false, typed = null
   if (argv[0] === 'install' && r.exit === 'ok') { const id = (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1]; if (id) T.remember(id, argv[1]); }
   const hm = r.stdout.match(/^height (\d+)/m); if (hm) world.height = +hm[1];
   document.getElementById('tray-height').textContent = `${frames.length} frames · ${cmdNo} commands`;
-  if (r.exit !== 'ok' && !quiet) refusal(m, argv, r, frames.slice(n0));
+  if (r.exit !== 'ok') print(m, resultBlock(m, argv, r, frames.slice(n0)));
   for (const o of wins.values()) if (o.refresh) o.refresh();
   renderRoster();
   tourCheck(m, argv, r);
@@ -469,27 +468,37 @@ function meterOf(m) {
 }
 
 // ---------------------------------------------------------------- refusals are dialogs, by name
-function refusal(m, argv, r, fs) {
-  // follow's stderr: one line `EXIT NAME…` (the refusal by name) and any lines that explain it
+// A result that is not plain ok is shown beside the command that made it, in the member's terminal:
+// the exact outcome name, what it means, what the writer answered, and links to the rule and the
+// object. Nothing interrupts the experiment (CLIENT-51: no result dialogs).
+function resultBlock(m, argv, r, fs) {
   const lines = (r.stderr || '').trim().split('\n').filter(Boolean);
   const head = lines.find((l) => l.startsWith(r.exit + ' ')) ?? lines.at(-1) ?? r.exit;
-  const rest = [...lines.filter((l) => l !== head), ...(r.stdout || '').trim().split('\n').filter(Boolean)];
-  const sub = fs.filter((f) => f.to === 'writer' && (f.op === 'submit' || f.op === 'lookup')).at(-1);
-  const writerSaid = sub ? `${sub.op} → ${sub.status}${sub.status === 'ok' ? '' : ' ' + new TextDecoder().decode(sub.payload)}` : 'nothing: your follow refused the call before signing, so nothing was sent';
-  const body = $('div', {},
-    $('div', { class: 'mark' + (r.exit === 'declined' ? ' warn' : '') }, r.exit === 'declined' ? '!' : '×'),
-    $('div', {},
-      $('div', { class: 'name' }, head),
-      rest.map((l) => $('div', {}, l)),
-      kv([['command', `${m.name}: nd ${argv[0]}`], ['exit', r.exit], ['writer\'s reply', writerSaid],
-        lie !== 'honest' ? ['lie on', $('span', { class: 'bad' }, `${world.hosted ? 'relay' : 'writer'}: ${lieTitle(lie)}`, (() => { const l = fs.filter((f) => f.lied).at(-1); return l ? `; lying frame #${l.n} (${l.op})` : ''; })())] : null]),
-      explain(head) ? $('p', {}, explain(head)) : ''),
-    $('div', { class: 'actions' }, $('button', { class: 'btn', onclick: () => d.el.querySelector('.titlebar button').click() }, 'OK')));
-  const d = openWindow({ id: `dlg-${cmdNo}`, title: r.exit === 'declined' ? 'Declined call' : 'Refusal', x: 260 + (cmdNo % 5) * 14, y: 180 + (cmdNo % 5) * 14, w: 460, body, dialog: true });
+  const kind = { declined: 'Declined', open: 'Call unresolved', uncertain: 'Outcome unknown', refused: 'Refused', client: 'Not run' }[r.exit] ?? r.exit;
+  const sub = fs.filter((f) => f.to !== 'follow' && (f.op === 'submit' || f.op === 'lookup')).at(-1);
+  const writerSaid = sub ? `${sub.op} → ${sub.status}${sub.status === 'ok' ? '' : ' ' + new TextDecoder().decode(sub.payload)}`
+    : 'no call was submitted; the answer came from your follow';
+  const hintLaw = (r.stdout.match(/^hint lawDenied ([0-9a-f]{64}): (.*)$/m) || []);
+  const target = /^[0-9a-f]{64}$/.test(argv[1] ?? '') ? argv[1] : null;
+  const l = fs.filter((f) => f.lied).at(-1);
+  const what = r.exit === 'open' ? 'The writer has neither admitted nor refused the call yet. nd sync, or nd receipt CALL, settles it later; cancel CALL withdraws it.'
+    : r.exit === 'uncertain' ? 'Your follow could not settle whether the call landed. nd sync and look again.' : explain(head);
+  return $('div', { class: `result ${r.exit === 'refused' || r.exit === 'client' ? 'bad' : 'warn'}` },
+    $('b', {}, `${kind}: ${head}`),
+    what ? $('div', {}, what) : '',
+    kv([['writer', writerSaid],
+      hintLaw[1] ? ['rule', 'law in package ', T.idLink(m, hintLaw[1]), `: ${hintLaw[2]}`] : null,
+      target ? ['object', T.idLink(m, target), ' (unchanged by this command)'] : null,
+      lie !== 'honest' ? ['fault on', `${rowOf(lie)?.kind === 'relay' || world.hosted ? 'relay' : 'writer'}: ${lieTitle(lie)}`, l ? `; altered frame #${l.n} (${l.op})` : ''] : null]));
 }
 // What a refusal's NAME means, for a visitor; the name itself is the kernel's (law 7).
 const glossary = {
   stale: 'stale: your call pinned a cell (named the state it expected), and the cell changed before the writer admitted the call. The writer does not apply a call signed over an older state. Run the command again; the follow plans it on the new state.',
+  hasMethods: 'hasMethods: this object runs a package. Change it by calling a method (invoke OBJ METHOD "ARGUMENT"), not by writing slots.',
+  grantRight: 'grantRight: the grant named with --via does not include the right this call needs (for example invoke:0 when the grant gives invoke:1).',
+  usage: 'usage: the command has the wrong arguments. The hint above shows the form; quote an argument that holds a space.',
+  unknownVerb: 'unknownVerb: not a command. The hint above lists every command.',
+  badPackage: 'badPackage: the text does not read as a package. The hint gives the reader\'s reason and the character offset; the package editor shows the line.',
   noGrant: 'noGrant: you do not own the object and named no grant (--via GRANT) that reaches its owner.',
   missingCell: 'missingCell: no cell with this id in your follow\'s World.',
   idTaken: 'idTaken: a package id is the hash of its bytes. These bytes are already installed.',
@@ -563,7 +572,29 @@ function tourCheck(m, argv, r) {
   if (outcomeOf(r) !== s.want) return;
   tourAt++; openTour();
 }
+// A hosted tab has one member, you; the lesson that needs a second member uses a second tab.
+const hostedTour = { at: 0, cell: null, grant: null, wrote: null };
+function openHostedTour() {
+  const me = world.members[0], ht = hostedTour;
+  const others = world.hosted && me.id ? rosterOf(K, me).members.filter((id) => id !== me.id && id !== world.wj.sponsor) : [];
+  const pick = $('select', { 'aria-label': 'member to grant' }, others.map((id) => $('option', { value: id }, short(id))));
+  const run = async (argv, check) => { const r = await runIn(me, argv); if (check(r)) { ht.at++; } openHostedTour(); return r; };
+  const steps = [
+    ['Create a cell. You own it.', () => $('button', { class: 'btn', onclick: () => run(['create'], (r) => { ht.cell = (r.stdout.match(/^id (\S+)/m) || [])[1]; return !!ht.cell; }) }, 'Run: nd create')],
+    ['Open this page in a private window or another browser (a tab of this browser returns as you: your membership is saved here). It joins as a second member. Then press sync here: the second member appears in the Members list of the World window.',
+      () => [$('a', { class: 'cmd', href: location.href, target: '_blank' }, 'this page\'s address'), ' ', $('button', { class: 'btn', onclick: () => run(['sync'], () => rosterOf(K, me).members.filter((id) => id !== me.id && id !== world.wj.sponsor).length > 0) }, 'Run: nd sync')]],
+    ['Grant the second member the right to write your cell (mutate).', () => others.length ? [pick, ' ', $('button', { class: 'btn', onclick: () => run(['grant', ht.cell, pick.value, 'mutate'], (r) => { ht.grant = (r.stdout.match(/^id (\S+)/m) || [])[1]; return !!ht.grant; }) }, 'Run: nd grant')] : 'No second member yet: open a second tab and sync.'],
+    ['In the second window, type this command. Its follow checks it and its key signs it:', () => [$('code', {}, `write ${ht.cell} 0 "from the second window" --via ${ht.grant}`), ' ',
+      $('button', { class: 'btn', onclick: () => navigator.clipboard?.writeText(`write ${ht.cell} 0 "from the second window" --via ${ht.grant}`) }, 'copy'), ' then here: ',
+      $('button', { class: 'btn', onclick: () => run(['read', ht.cell], (r) => r.exit === 'ok' && /from the second window/.test(r.stdout)) }, 'Run: nd read')]],
+  ];
+  const items = steps.map(([say, ctl], i) => $('li', { class: i < ht.at ? 'done' : '' }, say, i === ht.at ? $('div', {}, ctl()) : ''));
+  openWindow({ id: 'tour', title: 'Tour (hosted World)', x: 110, y: 270, w: 600, body: $('div', { class: 'tour' },
+    $('p', {}, 'You are one member of a World whose writer runs on a server. Other visitors are members too. This tour uses a second window as a second member.'), $('ol', {}, items),
+    ht.at >= steps.length ? $('p', { class: 'ok' }, 'Done: the second member wrote your cell through your grant, and your follow checked that Turn.') : '') });
+}
 function openTour() {
+  if (world.hosted) return openHostedTour();
   const items = tour.map((s, i) => $('li', { class: i < tourAt ? 'done' : '' }, s.say, i === tourAt ? $('div', {},
     $('code', {}, s.demo ? `Demos ▸ ${demos[s.demo].title}` : `${world.members[s.who].name}$ nd ${s.argv().map((a) => short(a)).join(' ')}`), ' ',
     $('button', { class: 'btn', onclick: async () => {
@@ -583,6 +614,12 @@ function openTour() {
 
 // ---------------------------------------------------------------- demos: command sequences a member types
 function openDemos() {
+  if (world.hosted) {
+    openWindow({ id: 'demos', title: 'Demos', x: 140, y: 300, w: 520, body: $('div', { class: 'tour' },
+      $('p', {}, 'These examples need two members, alice and bob, in this tab, so they run in a World in this tab, not in the hosted World.'),
+      $('button', { class: 'btn', onclick: () => { history.replaceState(null, '', location.pathname); newWorld(); openDemos(); } }, 'Start a local World')) });
+    return;
+  }
   const list = Object.entries(demos).map(([k, d]) => $('li', {}, $('b', {}, d.title), ' ',
     $('button', { class: 'btn', onclick: () => playDemo(k) }, 'Run here'), ' ',
     $('button', { class: 'btn', onclick: () => { newWorld(); playDemo(k); } }, 'Run on a new World'), $('div', { class: 'dim' }, `${d.steps.length} commands`)));
@@ -623,16 +660,19 @@ async function playDemo(name) {
 
 // ---------------------------------------------------------------- desktop icons
 const icons = document.getElementById('icons');
-const icon = (glyph, label, act) => icons.append($('button', { class: 'icon', ondblclick: act, onkeydown: (e) => e.key === 'Enter' && act() }, $('span', { class: 'glyph' }, glyph), $('span', { class: 'label' }, label)));
+// one click opens (a double click is the same click twice: the window is focused, not rebuilt)
+const icon = (glyph, label, act, id = null) => icons.append($('button', { class: 'icon', ...(id ? { id } : {}), onclick: act, onkeydown: (e) => e.key === 'Enter' && act() }, $('span', { class: 'glyph' }, glyph), $('span', { class: 'label' }, label)));
 icon('◆', 'World', () => openWorld());
-icon('a', 'alice', () => openTerm(world.members[0]));
-icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]));
+icon('a', 'alice', () => openTerm(world.members[0]), 'icon-m0');
+icon('b', 'bob', () => world.members[1] && openTerm(world.members[1]), 'icon-m1');
 icon('≡', 'Frames', () => openLog());
 icon('?', 'Start here', () => openTour());
 icon('▶', 'Demos', () => openDemos());
+icon('n', 'Lesson', () => T.openLesson());
 icon('1', 'Tutorial', () => T.openTutorial());
 icon('{', 'Editor', () => T.openEditor());
-icon('λ', 'Terms', () => T.openRepl());
+icon('λ', 'Expressions', () => T.openRepl());
+icon('#', 'Cells', () => T.openInventory(world.members[0], [...world.objects.entries()]));
 if (LIVE) { icon('◎', doorLabel(), () => liveDoor()); icons.lastChild.querySelector('.label').id = 'door-label'; }
 document.getElementById('start').addEventListener('click', () => openWorld());
 const q = new URLSearchParams(location.search);

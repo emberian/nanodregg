@@ -68,6 +68,7 @@ export async function loadKernel(factory, opts = {}) {
     grants: (i, obj) => call(K._w_grants, i, enc.encode(obj)),
     turn: (i, tx) => call(K._w_turn, i, enc.encode(tx)),
     example: (ty, me) => call(K._w_example, enc.encode(ty), enc.encode(me)),
+    cell: (i, id) => call(K._w_cell, i, enc.encode(id)),
   };
 }
 

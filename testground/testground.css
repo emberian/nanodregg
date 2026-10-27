@@ -95,3 +95,12 @@ textarea.code { font: 12px var(--mono); color: var(--text); width: 100%; box-siz
 .tutorial table.steps td { word-break: normal; } .tutorial table.steps pre.src { max-height: 120px; }
 .tabs button { cursor: pointer; }
 .inspector table.methods td { word-break: normal; overflow-wrap: anywhere; } .inspector table.methods td:nth-child(2) { white-space: nowrap; }
+.term .out .result { font: 12px var(--ui); border-left: 4px solid var(--bad); padding: 4px 8px; margin: 4px 0 6px; background: var(--face); white-space: normal; word-break: normal; }
+.term .out .result.warn { border-left-color: var(--warn); } .term .out .result.ok { border-left-color: var(--ok); }
+.term .out .result.bad > b { color: var(--bad); } .term .out .result.warn > b { color: var(--warn); } .term .out .result.ok > b { color: var(--ok); }
+.term .out .result .props { margin-top: 4px; font-size: 11px; }
+.lesson { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.lesson .pane { border: 2px groove var(--face); padding: 6px; } .lesson .pane h4 { margin: 0 0 4px; }
+.lesson .wide { grid-column: 1 / -1; } .lesson textarea { width: 100%; box-sizing: border-box; }
+.lesson .tasks li { margin: 3px 0; } .lesson .tasks li.done { color: var(--ok); }
+.lesson mark { background: #ffe680; color: #000; }

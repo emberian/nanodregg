@@ -36,7 +36,7 @@ export function teach(ctx) {
   const answer = (r) => ({ ok: r[0] === OK, text: dec.decode(r.slice(1)) });
   const ob = (form) => answer(K().ob(form));
   const kv = (pairs) => $('table', { class: 'props sunken' }, pairs.filter(Boolean).map(([k, ...v]) => $('tr', {}, $('td', {}, k), $('td', {}, ...v))));
-  const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'Terms'), $('dl', {}, pairs.flatMap(([t, d]) => [$('dt', {}, t), $('dd', {}, d)])));
+  const glossed = (pairs) => $('details', { class: 'terms' }, $('summary', {}, 'What these words mean'), $('dl', {}, pairs.flatMap(([t, d]) => [$('dt', {}, t), $('dd', {}, d)])));
   const pre = (t, cls = '') => $('pre', { class: `src sunken ${cls}` }, t);
   const h = (t) => $('h4', {}, t);
 
@@ -52,14 +52,76 @@ export function teach(ctx) {
 
   const idOfText = (t) => [...sources].find(([, x]) => x.text === t)?.[0];
 
-  // a member's name, for a member id; else a short id link
+  // what an id names on the viewer's World (tg_cell): `{ kind, …fields }`; kind `none` for a hash
+  // that is no cell's (a chain, a root, a transaction)
+  function cellOf(m, hex) {
+    const r = answer((m.K ?? K()).cell(m.index, hex));
+    if (!r.ok) return { kind: 'none' };
+    return Object.fromEntries(r.text.trim().split('\n').map((l) => { const i = l.indexOf(' '); return [l.slice(0, i), l.slice(i + 1)]; }));
+  }
+  // a member's name, for a member id
   const nameOf = (hex) => members().find((m) => m.id === hex)?.name;
+  // every id opens the window for its kind; a hash that names no cell is plain text
+  function openId(m, hex) {
+    const c = cellOf(m, hex);
+    if (c.kind === 'object') return openInspector(m, hex);
+    if (c.kind === 'package') return openPackage(m, hex);
+    if (c.kind === 'grant') return openGrant(m, hex);
+    return null;
+  }
   function idLink(m, hex) {
     if (!hex || hex === '-') return hex ?? '';
     const n = nameOf(hex);
     if (n) return $('span', { title: `member ${hex}` }, n);
     if (hex === 'anyone') return 'anyone';
-    return $('a', { class: 'hex', title: hex, onclick: () => openInspector(m, hex) }, short(hex));
+    const c = cellOf(m, hex);
+    if (!['object', 'package', 'grant'].includes(c.kind)) return $('span', { class: 'dim', title: `${hex} (${c.kind === 'none' ? 'not a cell' : c.kind})` }, short(hex));
+    return $('a', { class: 'hex', title: `${c.kind} ${hex}`, onclick: () => openId(m, hex) }, `${c.kind} ${short(hex)}`);
+  }
+
+  // ---------------------------------------------------------------- a package
+  function openPackage(m, id) {
+    let src = sources.get(id);
+    if (!src?.core) {
+      const r = answer((m.K ?? K()).source(m.index, id));
+      if (r.ok) { remember(id, r.text); sources.get(id).core = r.text; src = sources.get(id); }
+    }
+    const core = src?.core ?? src?.text ?? '';
+    const stateTy = (core.match(/^\s*\(state (.*)\)\s*$/m) || [])[1] ?? '(rec)';
+    const seed = example(m, stateTy);
+    const body = $('div', { class: 'inspector' },
+      kv([['package', id], ['state type', $('code', {}, stateTy)],
+        ['methods', $('code', {}, (core.match(/^\s*\(methods(.*)\)\s*$/m) || [])[1]?.trim() || '(none)')],
+        ['laws', $('code', {}, (core.match(/^\s*\(laws(.*)\)\s*$/m) || [])[1]?.trim() || '(none)')],
+        ['next', $('a', { class: 'cmd', onclick: () => prefill(m, `create --pkg ${id} ${quoteArg(seed)}`) }, `create an object of it (as ${m.name})…`)]]),
+      $('p', { class: 'dim' }, 'A package is named by the hash of its bytes. Installing a changed source makes a new package with a new id; objects of the old package keep running the old code.'),
+      h('Source'), sourcePanel(m, id, src));
+    openWindow({ id: `pkg-${id}`, title: `Package ${short(id)}`, w: 640, body });
+  }
+
+  // ---------------------------------------------------------------- a grant
+  function openGrant(m, id) {
+    const c = cellOf(m, id);
+    const rights = (c.rights ?? '').split(',').filter(Boolean).map((r) => {
+      const [k, n] = r.split(':');
+      const what = { observe: 'read the target', mutate: 'write its slots and laws (a data object)', invoke: `call method ${n}`, enroll: `enrol up to ${n} members`, transfer: `move up to ${n}`, credit: `extend up to ${n} of credit` }[k] ?? r;
+      return $('div', {}, $('code', {}, r), ` ${what}`);
+    });
+    const body = $('div', { class: 'inspector' },
+      kv([['grant', id], ['state', c.kind === 'grant' ? 'live' : c.kind === 'retired' ? 'revoked (retired)' : c.kind],
+        c.target ? ['target', idLink(m, c.target)] : null, c.grantee ? ['grantee', idLink(m, c.grantee)] : null,
+        c.issuer ? ['issuer', idLink(m, c.issuer)] : null, c.parent ? ['parent grant', idLink(m, c.parent)] : null,
+        rights.length ? ['rights', rights] : null]),
+      $('p', { class: 'dim' }, 'A grant is a cell. A call names it with --via GRANT; the kernel checks that the grantee signed the call and that the right covers it. revoke GRANT retires it, and every grant carved from it.'));
+    openWindow({ id: `grant-${id}`, title: `Grant ${short(id)}`, w: 560, body });
+  }
+
+  // ---------------------------------------------------------------- the session's cells
+  function openInventory(m, ids) {
+    const rows = ids.map(([id, verb]) => { const c = cellOf(m, id); return $('tr', {}, $('td', {}, c.kind), $('td', {}, idLink(m, id)), $('td', {}, `made by ${verb}`)); });
+    openWindow({ id: 'inventory', title: 'Cells', x: 160, y: 120, w: 520, body: $('div', {},
+      $('p', { class: 'dim' }, `Every cell a command in this tab created, as ${m.name}'s follow sees it now.`),
+      rows.length ? $('table', { class: 'props sunken' }, $('tr', {}, $('td', {}, 'kind'), $('td', {}, 'id'), $('td', {}, 'made by')), rows) : $('p', {}, 'none yet: run create, install or grant.')) });
   }
 
   // ---------------------------------------------------------------- the object inspector
@@ -316,7 +378,7 @@ export function teach(ctx) {
       glossed([['term', 'An expression of the core language. Ctrl+Enter evaluates.'], ['type', 'The checker\'s type for the term; the evaluator runs only a well-typed term.'],
         ['tick', 'One step of the evaluator. Every run has a tick budget; past it the run stops (fault ticks). A call pays for its ticks.'],
         ['fault', 'A run that stopped without a value: ticks, underflow, divZero, a refusal.']]));
-    openWindow({ id: 'repl', title: 'Terms', x: 200, y: 80, w: 640, body });
+    openWindow({ id: 'repl', title: 'Expressions', x: 200, y: 80, w: 640, body });
   }
 
   // ---------------------------------------------------------------- the Turn view
@@ -355,6 +417,111 @@ export function teach(ctx) {
           ['refusal', 'A call the writer recorded as refused, with the rule that refused it, re-derived by this follow.']]));
     }
     openWindow({ id: `turn-${tx}`, title: `Turn ${short(tx)}`, x: 180, y: 60, w: 680, body });
+  }
+
+  // ---------------------------------------------------------------- the lesson: one object, its code and its rule
+  // One window holds the source, the current state, the argument, the result and the tasks: a call's
+  // cause and effect are never in two places. Every answer is the kernel's: the state is `read`, the
+  // before/after is the Turn re-derived (tg_turn), a refusal is the follow's name and the law's own
+  // reason, the check of an edited source names its line.
+  const lessonSource = `(package
+  (doc "A number with a limit. set replaces n. The law keeps n at most 100.")
+  (state (rec (n nat)))
+  (method set (arg (rec (n nat)))
+    (done (with state (n arg.n))))
+  (law limit
+    (on (birth invoke) (if (<= new.n 100) ok (refuse "n over 100")))
+    (else ok)))`;
+  const lesson = { pkg: null, obj: null, first: null, predicted: null, refusedBy: null, pointed: null, repaired: false, log: [] };
+  async function lessonSetup(m, text) {
+    const k = ob(`(core ${text})`);
+    if (!k.ok) return { error: `refused ${k.text}` };
+    let r = await runIn(m, ['install', k.text], 'lesson', { quiet: true });
+    let pkg = (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1] ?? (/idTaken/.test(r.stderr) ? idOfText(k.text) : null);
+    if (!pkg) return { error: (r.stderr || r.exit).trim() };
+    remember(pkg, k.text, text);
+    r = await runIn(m, ['create', '--pkg', pkg, '(record (n 0))'], 'lesson', { quiet: true });
+    const obj = (r.stdout.match(/^id ([0-9a-f]{64})/m) || [])[1];
+    return obj ? { pkg, obj } : { error: (r.stderr || r.exit).trim() };
+  }
+  async function openLesson() {
+    const m = members()[0];
+    if (!lesson.obj) {
+      const x = await lessonSetup(m, lessonSource);
+      if (x.error) { openWindow({ id: 'lesson', title: 'Lesson', w: 600, body: $('div', { class: 'bad' }, x.error) }); return; }
+      Object.assign(lesson, x); lesson.first = x.pkg;
+    }
+    const src = $('textarea', { class: 'sunken code', rows: 9, spellcheck: 'false', 'aria-label': 'package source' }, sources.get(lesson.pkg)?.surface ?? lessonSource);
+    const arg = $('textarea', { class: 'sunken code', rows: 1, spellcheck: 'false', 'aria-label': 'argument' }, '(record (n 7))');
+    const statePane = $('div', {}), resultPane = $('div', {}, $('p', { class: 'dim' }, 'Call set to see the change.')), lawPane = $('div', {}), taskPane = $('div', {});
+    const readState = async () => {
+      const r = await (m.nd ?? ctx.nd()).run(m, ['read', lesson.obj]);
+      statePane.replaceChildren(kv([['object', idLink(m, lesson.obj)], ['package', idLink(m, lesson.pkg), lesson.pkg === lesson.first ? ' (the first one)' : ' (installed from your edit)'],
+        ['current state', $('b', {}, r.stdout.trim() || r.stderr.trim())], ['state type', $('code', {}, '(rec (n nat))')]]));
+      return r.stdout.trim();
+    };
+    const showLaw = (mark) => {
+      const clause = declOf(src.value, 'law', 'limit') || '(no law named limit in the source)';
+      lawPane.replaceChildren(h('The rule (law limit)'), mark ? $('pre', { class: 'src sunken' }, $('mark', {}, clause)) : pre(clause),
+        $('div', { class: 'dim' }, 'A law sees old, new and req. It runs on every change of the object (here at birth and at each invoke) and answers ok or (refuse "why").'));
+    };
+    const tasks = () => {
+      const t = [
+        [lesson.log.some((x) => x.ok && /\(n 7\)/.test(x.after ?? '')), 'Set n to 7.'],
+        [lesson.predicted != null && lesson.refusedBy != null, $('span', {}, 'Predict, then try n = 101. Accepted? ',
+          $('button', { class: 'btn', onclick: () => { lesson.predicted = 'accepted'; tasks(); } }, 'yes'), ' ', $('button', { class: 'btn', onclick: () => { lesson.predicted = 'refused'; tasks(); } }, 'no'),
+          lesson.predicted ? ` You said: ${lesson.predicted}.` : '', lesson.refusedBy ? ` The kernel: refused ${lesson.refusedBy}.` : '')],
+        [lesson.pointed === 'limit', $('span', {}, 'Which rule refused it? ', ['set', 'limit'].map((x) => [$('button', { class: 'btn', onclick: () => { lesson.pointed = x; tasks(); } }, x === 'set' ? 'the method set' : 'the law limit'), ' ']),
+          lesson.pointed ? (lesson.pointed === 'limit' ? ' Right: the method computed n = 101; the law refused the new state.' : ' No: set ran and returned n = 101. The law judged that result.') : '')],
+        [lesson.repaired, 'Change 100 to 200 in the source (both places), press Install changed source, then set n = 150 on the new object.'],
+      ];
+      taskPane.replaceChildren($('ol', { class: 'tasks' }, t.map(([done, text]) => $('li', { class: done ? 'done' : '' }, done ? '✓ ' : '', text))));
+    };
+    const call = async () => {
+      const before = await readState();
+      const r = await runIn(m, ['invoke', lesson.obj, '0', arg.value], 'lesson', { quiet: true });
+      const tx = (r.stdout.match(/^tx ([0-9a-f]{64})/m) || [])[1];
+      const after = await readState();
+      const name = (r.stderr || '').trim().split('\n').find((l) => l.startsWith(r.exit + ' ')) ?? r.exit;
+      const reason = (r.stdout.match(/^hint lawDenied [0-9a-f]{64}: (.*)$/m) || r.stdout.match(/^hint \S+: (.*)$/m) || [])[1];
+      const entry = { arg: arg.value, ok: r.exit === 'ok', before, after, name, reason, tx };
+      lesson.log.push(entry);
+      if (!entry.ok && /\(n 101\)/.test(arg.value)) lesson.refusedBy = name.replace(/^refused /, '');
+      if (entry.ok && lesson.pkg !== lesson.first && /\(n 150\)/.test(after)) lesson.repaired = true;
+      resultPane.replaceChildren(kv([['call', $('code', {}, `invoke ${short(lesson.obj)} 0 ${quoteArg(arg.value)}`), ' (method 0 is set)'],
+        ['argument', $('code', {}, arg.value)],
+        ['result', $('b', { class: entry.ok ? 'ok' : 'bad' }, entry.ok ? 'ok: admitted' : name)],
+        reason ? ['reason', $('b', {}, reason)] : null,
+        ['state', entry.ok ? [$('code', {}, before), ' → ', $('b', {}, after)] : [$('b', {}, after), ' (unchanged)']],
+        tx ? ['Turn', $('a', { class: 'cmd', onclick: () => openTurn(m, tx) }, short(tx)), ' (pins, runs, before and after)'] : null]));
+      showLaw(!entry.ok && /lawDenied/.test(name));
+      tasks();
+    };
+    const reinstall = async () => {
+      const c = ob(`(check ${src.value})`);
+      if (!c.ok) {
+        const line = (c.text.match(/ line (\d+)/) || [])[1];
+        resultPane.replaceChildren(kv([['source', $('b', { class: 'bad' }, `refused ${c.text}`)], line ? ['line', line] : null]));
+        return;
+      }
+      const x = await lessonSetup(m, src.value);
+      if (x.error) { resultPane.replaceChildren(kv([['install', $('b', { class: 'bad' }, x.error)]])); return; }
+      const old = lesson.obj; Object.assign(lesson, x);
+      resultPane.replaceChildren(kv([['installed', idLink(m, x.pkg), x.pkg === lesson.first ? ' (the same bytes as the first: the same package)' : ' (a new package: new bytes, new id)'],
+        ['new object', idLink(m, x.obj), ' starts at (record (n 0))'], ['old object', idLink(m, old), ' still runs the old package and its law']]));
+      await readState(); showLaw(false); tasks();
+    };
+    await readState(); showLaw(false); tasks();
+    const body = $('div', { class: 'lesson' },
+      $('div', { class: 'pane wide' }, h('Tasks'), taskPane),
+      $('div', { class: 'pane' }, h('Source'), src, $('div', {}, $('button', { class: 'btn', onclick: reinstall }, 'Install changed source'), ' ', $('button', { class: 'btn', onclick: () => openGrammar('surface') }, 'grammar'))),
+      $('div', { class: 'pane' }, h('State'), statePane, lawPane),
+      $('div', { class: 'pane' }, h('Call set'), $('div', { class: 'dim' }, 'The argument has the method\'s type (rec (n nat)). Edit it and call.'), arg, $('button', { class: 'btn', onclick: call }, 'Call set as alice')),
+      $('div', { class: 'pane' }, h('Result'), resultPane),
+      $('div', { class: 'wide' }, glossed([['method', 'set computes the new state from the argument: (with state (n arg.n)).'], ['law', 'limit judges every change: new.n must be at most 100.'],
+        ['package', 'The source installed: named by the hash of its bytes. A changed source is a new package; an object keeps the package it was made with.'],
+        ['Turn', 'The log entry of one admitted call. Its view shows the pin, the run and the state before and after.']])));
+    openWindow({ id: 'lesson', title: 'Lesson: a number with a limit', x: 120, y: 20, w: 820, body });
   }
 
   // ---------------------------------------------------------------- the tutorial
@@ -475,6 +642,11 @@ export function teach(ctx) {
     tut.done.add(i);
   }
   async function openTutorial(at = tut.at) {
+    if (!members().some((x) => x.name === 'alice') || !members().some((x) => x.name === 'bob')) {
+      openWindow({ id: 'tutorial', title: 'Tutorial', x: 130, y: 20, w: 560, body: $('div', {},
+        $('p', {}, 'The tutorial uses two members, alice and bob, in this tab. It runs in a World in this tab, not in a hosted World. The Lesson window works here.')) });
+      return;
+    }
     tut.at = at;
     const s = steps[at];
     const src = await stepSource(s);
@@ -493,6 +665,6 @@ export function teach(ctx) {
   }
 
   // a new World: the tutorial starts again at step 1 with no bindings
-  const reset = () => { tut.at = 0; tut.v = {}; tut.done.clear(); };
-  return { openInspector, openEditor, openRepl, openGrammar, openTurn, openTutorial, remember, idOfText, reset, steps, templates, parseLine };
+  const reset = () => { tut.at = 0; tut.v = {}; tut.done.clear(); Object.assign(lesson, { pkg: null, obj: null, first: null, predicted: null, refusedBy: null, pointed: null, repaired: false, log: [] }); };
+  return { openLesson, openId, openPackage, openGrant, openInventory, cellOf, idLink, openInspector, openEditor, openRepl, openGrammar, openTurn, openTutorial, remember, idOfText, reset, steps, templates, parseLine };
 }
