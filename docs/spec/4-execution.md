@@ -442,16 +442,17 @@ A row support holds only at exactly the version the ROM names.
 2. Decode its value as a natural `i`, or `holeSelectionType n`.
 3. Take candidate `c = code[i]`, or `holeSelectionIndex n`.
 4. Every cell support of `c` must be observed, or `holeUnpinned π…` naming every unobserved one.
-5. Every row support of `c` must hold, or `holeDerivationMoved n π…` naming every one that moved or is not pinned.
-6. Every support of `c` must hold, or `holeSupportDead n π…` naming every cell support that is not live.
-7. For each context position `x` with a support hypothesis `π`:
+5. Every row support of `c` must be pinned, or `holeSupportUnpinned n π…` naming every one whose row the caller did not pin.
+6. Every row support of `c` must hold, or `holeDerivationMoved n π…` naming every one that moved or is pinned absent.
+7. Every support of `c` must hold, or `holeSupportDead n π…` naming every cell support that is not live.
+8. For each context position `x` with a support hypothesis `π`:
    `π` must be pinned (`holeUnpinnedRow REL KEY` for a row, `holeUnpinned π` for a cell);
    if `π` holds, keep `x`;
    if `π` does not hold and `c` uses variable `x`, refuse `holeSupportMoved n x π`;
    if `π` does not hold and `c` does not use `x`, *strengthen* `x` away.
-8. The guard pin, if any, must be pinned, as in step 7; run the guard on whether it holds (`true` with no pin), under `Bounds.holeGuardFuel` = 256 ticks.
+9. The guard pin, if any, must be pinned, as in step 8; run the guard on whether it holds (`true` with no pin), under `Bounds.holeGuardFuel` = 256 ticks.
    `false` is `holeGuardBlocked n`; a fault or a non-boolean is `holeGuardFault n`.
-9. Factor the candidate over the kept positions and re-embed it at the original context (`factorHole`, `reembed`).
+10. Factor the candidate over the kept positions and re-embed it at the original context (`factorHole`, `reembed`).
    The result is the filling.
 
 A refusal names its coordinates as `row:REL:KEYHEX:VER`, `cell:IDHEX`, `cellLaw:IDHEX:LAWHEX` or `cellPackage:IDHEX:PKGHEX` (`SupportPin.wire`).

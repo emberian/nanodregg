@@ -59,7 +59,8 @@ def factKey : ByteArray := factKeyAt 1
 
 /-- Every dependency includes an explicit absence; an omitted pin is not absence. -/
 def view (selected : Option Nat) (hypVersion : Option Nat)
-    (coverHyp : Bool := true) (left : Option Nat := some 1) (right : Option Nat := some 1)
+    (coverHyp : Bool := true) (left : Option Nat := some 1) (coverLeft : Bool := true)
+    (right : Option Nat := some 1)
     (used : Option Nat := some 1) (blocker : Option Nat := none)
     (coverBlocker : Bool := true) : RowView Sim.D where
   points _ rel :=
@@ -67,7 +68,8 @@ def view (selected : Option Nat) (hypVersion : Option Nat)
       ((Wire.encodeData .nat (.nat n)).getD .empty) 1)]
     else if rel = 2 then
       ((if coverHyp then [(factKeyAt 1, hypVersion)] else []) ++
-        [(factKeyAt 2, left), (factKeyAt 3, right), (factKeyAt 4, used)] ++
+        (if coverLeft then [(factKeyAt 2, left)] else []) ++
+        [(factKeyAt 3, right), (factKeyAt 4, used)] ++
         (if coverBlocker then [(factKeyAt 5, blocker)] else [])).map
           (fun (k, v) => (k, v.map fun n => .row 0 .empty n))
     else if rel = 1 then [(key, none)]
@@ -189,6 +191,12 @@ def boundaryRows : List (String × Bool) := Id.run do
       "execute" (.nat 7) .nat |> resultName) == s!"execute: refused holeSupportMoved 0 1 {(factPinAt 4).wire}"),
     ("derivation-withdrawn", (invoke b p (view (some 0) (some 1) (left := none))
       "execute" (.nat 7) .nat |> resultName) == s!"execute: refused holeDerivationMoved 0 {(factPinAt 2).wire}"),
+    -- a row support the caller did not pin and one whose row moved are two names: the client that
+    -- learns its own pin is missing fixes it by pinning, the one whose row moved re-reads
+    ("support-moved", (invoke b p (view (some 0) (some 1) (left := some 2))
+      "execute" (.nat 7) .nat |> resultName) == s!"execute: refused holeDerivationMoved 0 {(factPinAt 2).wire}"),
+    ("support-unpinned", (invoke b p (view (some 0) (some 1) (coverLeft := false))
+      "execute" (.nat 7) .nat |> resultName) == s!"execute: refused holeSupportUnpinned 0 {(factPinAt 2).wire}"),
     ("alternative-same-filling", (invoke b p (view (some 1) (some 1) (left := none))
       "execute" (.nat 7) .nat |> outputNat) == some 7),
     ("clause-conflict", (invoke b p good "execute" (.nat 11) .nat |> resultName) ==

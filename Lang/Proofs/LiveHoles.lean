@@ -335,8 +335,18 @@ theorem selectHole_live_selects {h : HoleROM} {amount ver i used : Nat} {bytes :
   have h2 : c.supports.all (rowSupportHolds digestOf look rv self) = true :=
     List.all_eq_true.mpr fun p hp => by
       cases p <;> simp only [rowSupportHolds] <;> first | rfl | exact (hsup _ hp).2
+  have h0 : c.supports.all (rowSupportPinned rv self) = true :=
+    List.all_eq_true.mpr fun p hp => by
+      cases p with
+      | row rel key _ =>
+        simp only [rowSupportPinned]
+        have hlv := (hsup _ hp).2
+        cases hr : holeRow rv self rel key with
+        | ok _ => rfl
+        | error _ => simp [supportLive, hr] at hlv
+      | _ => rfl
   unfold selectHole
-  simp only [hrow, hdec, hc, h1, h2, h3, hch, hg, bind, Except.bind, pure, Except.pure]
+  simp only [hrow, hdec, hc, h0, h1, h2, h3, hch, hg, bind, Except.bind, pure, Except.pure]
   exact ⟨_, rfl, rfl, rfl⟩
 
 

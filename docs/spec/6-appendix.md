@@ -183,12 +183,13 @@ The other top claims are listed in the [README](../../README.md#what-the-world-g
 |---|---|
 | `holeType`, `holeContext`, `holeCandidates`, `holeGuardType`, `holeCandidateType` | §3.6 |
 | `holeSignatureBound`, `holeDuplicate`, `holeBodyType` | §3.7.4 |
-| `holeUnpinnedRow` | §4.10.2 steps 1, 7 and 8 |
+| `holeUnpinnedRow` | §4.10.2 steps 1, 8 and 9 |
 | `holeSelectionAbsent`, `holeSelectionType`, `holeSelectionIndex` | §4.10.2 steps 1 to 3 |
-| `holeUnpinned` | §4.10.2 steps 4, 7 and 8 |
-| `holeDerivationMoved`, `holeSupportDead` | §4.10.2 steps 5 and 6 |
-| `holeSupportMoved` | §4.10.2 step 7 |
-| `holeGuardBlocked`, `holeGuardFault` | §4.10.2 step 8 |
+| `holeUnpinned` | §4.10.2 steps 4, 8 and 9 |
+| `holeSupportUnpinned` | §4.10.2 step 5 |
+| `holeDerivationMoved`, `holeSupportDead` | §4.10.2 steps 6 and 7 |
+| `holeSupportMoved` | §4.10.2 step 8 |
+| `holeGuardBlocked`, `holeGuardFault` | §4.10.2 step 9 |
 | `holeWorkBound`, `holeSizeBound`, `holeProvenance`, `holeInstanceType` | §4.10.3, §3.7.4 |
 | `holeUnresolved` | §4.2.1 E-Hole, §4.5.2 |
 

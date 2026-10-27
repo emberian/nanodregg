@@ -160,6 +160,11 @@ def contextualRows (r0 : Run) (a b : Sim.Member) : Run := Id.run do
   let (_, v, _) := go prog r (call r "execute" (argBytes .nat (.nat 7)) true)
   r := note r s!"LP omitted blocker pin: {v}"
     (refusedBy v "execute" s!"holeUnpinnedRow 2 {hexOf (Contextual.factKeyAt 5)}")
+  -- the selected candidate cites fact3; the caller that does not pin it is told the new name, not
+  -- the moved one (the rows it named moved only when it pinned them)
+  let (_, v, _) := go prog r (call r "execute" (argBytes .nat (.nat 7)) false (omitFact := some 3))
+  r := note r s!"LP omitted derivation pin: {v}"
+    (refusedBy v "execute" s!"holeSupportUnpinned 0 {(SupportPin.row 2 (Contextual.factKeyAt 3) 0).wire}")
   let (rr, v, _) := go prog r (withdraw r 4)
   r := note rr s!"LP withdraw used nat hypothesis: {v}" (v == "admitted")
   let (_, v, _) := go prog r (exec r)

@@ -15,8 +15,9 @@ its text is what the kernel's `Refusal.program` and a blocked hole's `.refuse` c
 
 A refusal about a justification NAMES THE JUSTIFICATION (DESIGN-CTX §2.3, the why-not half of CONTEXTUAL
 INTEGRITY): the row the caller did not pin (`unpinnedRow`: its relation and key), every cell support the caller
-did not pin (`unpinned`), every support whose row moved or whose cell is not live (`derivationMoved`,
-`supportDead`), the hypothesis position AND its pin (`supportMoved`). The lists are never empty when thrown
+did not pin (`unpinned`), every row support whose row the caller did not pin (`supportUnpinned`), every
+support whose row moved or whose cell is not live (`derivationMoved`, `supportDead`), the hypothesis
+position AND its pin (`supportMoved`). The lists are never empty when thrown
 (each is the filter of a failed `all`); a client re-plans from them without guessing. -/
 inductive HoleRefusal where
   | type (hole : Nat)
@@ -41,7 +42,11 @@ inductive HoleRefusal where
   | selectionAbsent (hole : Nat)
   | selectionType (hole : Nat)
   | selectionIndex (hole : Nat)
-  /-- the selected candidate's row supports that are not at their ROM version -/
+  /-- the selected candidate's row supports whose row the caller did not pin: not in the view at
+  all, as `holeRow` reads it (a row the caller pinned absent is in the view) -/
+  | supportUnpinned (hole : Nat) (pins : List SupportPin)
+  /-- the selected candidate's row supports that are in the caller's view but not at their ROM
+  version (a row not in the view is `supportUnpinned`) -/
   | derivationMoved (hole : Nat) (pins : List SupportPin)
   /-- the selected candidate's cell supports that are not live in the caller's pinned view (E1) -/
   | supportDead (hole : Nat) (pins : List SupportPin)
@@ -132,6 +137,13 @@ def rowSupportHolds {D : Type} (digestOf : ByteArray → Option D) (look : Pinne
   | .row .. => supportLive digestOf look rv self p
   | _ => true
 
+/-- A row pin's row is in the caller's view (`holeRow` reads it): a pinned absence is in the view;
+a row not in the view at all is not, and refuses `supportUnpinned`, not `derivationMoved`. -/
+def rowSupportPinned {D : Type} (rv : RowView D) (self : D) (p : SupportPin) : Bool :=
+  match p with
+  | .row rel key _ => (holeRow rv self rel key).isOk
+  | _ => true
+
 /-- The caller observed the pin: its row under `self` (absent and unpinned differ) or its cell. -/
 def supportPinned {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) (rv : RowView D)
     (self : D) (p : SupportPin) : Except HoleRefusal Unit :=
@@ -174,6 +186,7 @@ def HoleRefusal.wire : HoleRefusal → String
   | .selectionAbsent n => s!"holeSelectionAbsent {n}"
   | .selectionType n => s!"holeSelectionType {n}"
   | .selectionIndex n => s!"holeSelectionIndex {n}"
+  | .supportUnpinned n ps => s!"holeSupportUnpinned {n} {pinsWire ps}"
   | .derivationMoved n ps => s!"holeDerivationMoved {n} {pinsWire ps}"
   | .supportDead n ps => s!"holeSupportDead {n} {pinsWire ps}"
   | .expansion .work => "holeWorkBound"
@@ -255,7 +268,8 @@ def reembed (embedding : List Nat) (filling : Term) : Term :=
 /-- Selection is fresh on each invocation. Its bytes contain a code index,
 never a filling supplied by the caller. All derivation supports and used
 contextual assumptions must still have the ROM-pinned versions; every cell support must be pinned
-(`unpinned`) and live (`supportDead`). Each refusal carries EVERY support that failed its check (the filter of
+(`unpinned`) and live (`supportDead`), every row support pinned (`supportUnpinned`) and at its ROM
+version (`derivationMoved`). Each refusal carries EVERY support that failed its check (the filter of
 the failed `all`), so the caller learns its whole missing read set in one refusal (DESIGN-CTX §2.3).
 
 Each invocation judges only the index its selection row names. The hole's LIVE LABEL, the indices that would select
@@ -270,6 +284,8 @@ def selectHole {D : Type} (digestOf : ByteArray → Option D) (look : Pinned D) 
   let some c := h.code[i]? | throw (.selectionIndex h.name)
   unless c.supports.all (supportObserved digestOf look) do
     throw (.unpinned (c.supports.filter fun p => !supportObserved digestOf look p))
+  unless c.supports.all (rowSupportPinned rv self) do
+    throw (.supportUnpinned h.name (c.supports.filter fun p => !rowSupportPinned rv self p))
   unless c.supports.all (rowSupportHolds digestOf look rv self) do
     throw (.derivationMoved h.name (c.supports.filter fun p => !rowSupportHolds digestOf look rv self p))
   unless c.supports.all (supportLive digestOf look rv self) do
