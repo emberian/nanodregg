@@ -126,15 +126,14 @@ def lawOf (S : Ty) (birth adopt relaw change : At → Term) : Term :=
 
 /-! ## Authority narrowing
 
-Authority is the kernel's. Once KERNEL-25 lands (ruled 10-17, NOT YET BUILT: invoke owner-gated
-like write; a stranger refused `noGrant` before any law runs), every admitted write, law
-replacement and invoke has as its `principal` the object's owner, reached directly or through a
-grant chain rooted at the owner; today a write or relaw already does, an invoke does not. A law
+Authority is the kernel's. By KERNEL-25 (invoke is owner-gated like write; a stranger is refused
+`noGrant` before any law runs), every admitted write, law replacement and invoke has as its
+`principal` the object's owner, reached directly or through a grant chain rooted at the owner. A law
 only NARROWS that authority. So there is no "owner acts" law (it would re-check the kernel's gate
 against a copy of the owner in state, a twin) and no "anyone" law (strangers never reach a law). -/
 
 /-- The signer is the principal, so no delegate acts through a grant. With KERNEL-25 that is
-"only the owner's own key"; before it, an invoke without a grant has principal = signer = anyone. -/
+"only the owner's own key". -/
 def ownerSigns (S : Ty) : Term :=
   let c (a : At) := allOf [(.prim .deq (a.reqF "agent") (a.reqF "principal"), "not signed by the owner")]
   lawOf S c c c c

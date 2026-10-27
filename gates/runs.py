@@ -317,7 +317,7 @@ def run_group(argv: list[str], cwd: str, env: dict) -> subprocess.CompletedProce
     """Run `argv` as the leader of a process group of its own; past DEADLINE the WHOLE group is
     killed (SIGKILL), not only the direct child (CLIENT-38, A19: the child is cargo or strace, and a
     kill of it alone left the test binary and every supervisor under it alive: the 336 of 10-23).
-    A process that left the group (bwrap's --new-session) is our binaries' parent-death link's
+    A process that left the group (a confined child calls setsid, CLIENT-48) is our binaries' parent-death link's
     to end. Raises subprocess.TimeoutExpired as subprocess.run does, with what was printed."""
     with subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           text=True, start_new_session=True) as p:

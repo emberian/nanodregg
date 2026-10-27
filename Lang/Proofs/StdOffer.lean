@@ -1,14 +1,14 @@
 /-
-# Lang.Proofs.StdOffer — what the generated offer judge, its take and its matcher decide (PROT-6)
+# Lang.Proofs.StdOffer — what the generated offer judge and its take decide (PROT-6)
 
 Every theorem here is about a term `Lang.StdOffer` generates, by its `BigStep` meaning, or about
 `Lang.program`'s `run` of the generated package:
 
 * `offerJoint_meaning` / `offerJoint_total` (term grain): the joint judge `offerJoint` says
   `sameRole`, `ok` (exactly `JointOk`: different roles, θ inside BOTH boxes) or `notCompliant`.
-* `take_iff_compliant` (method-term grain, as the receiver applies it): with both offer slots
+* `take_iff_compliant` (method-term grain: the take applied inline, not through the receiver's `apply4`): with both offer slots
   present, the take returns iff its own pinned offer is the one the deal names for it (`NamedKey`)
-  and `JointOk` of the two pinned offers and the θ it decoded. The matcher's code is not a premise.
+  and `JointOk` of the two pinned offers and the θ it decoded. No other code is a premise: the take judges the pair itself.
   Its refusals by name: `take_offerUnpinned`, `take_noOffer`, `take_peerRowUnpinned`,
   `take_noPeerOffer`, `take_offerNotNamed`, `take_sameRole`, `take_notCompliant`.
 * `take_run_sound` (the deployed run): a returned take decoded `{keys, pair, theta}`, read both
@@ -577,12 +577,14 @@ private theorem named_in_take {lib : List Term} {state : Val} {rq keys pair th k
     (get_data (d := takeArg keys pair th tail) (BigStep.var (i := 5) rfl) rfl)
     (get_data (d := takeArg keys pair th tail) (BigStep.var (i := 5) rfl) rfl) hkeys hpair hkc
 
-/-- **Each party's honesty** (method-term grain, the generated `take` as the receiver applies it,
-over the env `[req, arg, state, rows]` it builds): with both offer slots pinned and present (own
+/-- **Each party's honesty** (method-term grain: the generated `take` applied inline over the env
+`rq :: arg :: state :: rows :: env`, so its body runs under that env doubled; the receiver's `apply4`
+runs it under exactly `[req, arg, state, rows]`, and no lemma here transports the statement to that
+grain): with both offer slots pinned and present (own
 point `k`/`o`, peer point `kq`/`q`), the argument `{keys, pair, theta := th}` and a request whose
 `self` is `sb`, the take returns iff its own pinned offer is the one the deal NAMES for `sb`
-(`NamedKey`) and `JointOk`: it checks the name and judges the pair itself, whoever called it. The
-matcher's code is not a premise. Mutation P2 (`take` without the judge: the `ok` arm taken
+(`NamedKey`) and `JointOk`: it checks the name and judges the pair itself, whoever called it. No
+other code is a premise. Mutation P2 (`take` without the judge: the `ok` arm taken
 unconditionally) makes it false at F2 (buyer `[5,10]`, seller `[11,12]`, θ = 11: the mutant
 returns, `JointOk` is false); mutation PA (the name check skipped) at LF8 (the deal names Y's offer
 1, the pin is Y's offer 0: the mutant returns, `NamedKey` is false). -/
@@ -756,7 +758,7 @@ private theorem take_rowsOf (theta roles : List Label) (ol sl : Nat) :
   simp [rowsOf, offerTakeRows, rowsTy, readsTy, offerRead, offerRels, Row.find?, relReadTy, readsOf,
     relReadOf, relReadShape, peerLabel, slot_p1, Row.sort, Row.insert, pointsMax, rangeRowsMax]
 
-/-- The take resolves to its declared signature: argument `{pair, theta}`, no calls, the one offer
+/-- The take resolves to its declared signature: argument `{keys, pair, theta}`, no calls, the one offer
 point read under itself and under its peer, two edits. -/
 private theorem take_resolve {D : Type} {theta roles : List Label} {ol sl pt b : Nat} {x : Label × Sig}
     (h : resolveMethod (D := D) (offerPackageOf theta roles ol sl pt b) offerTakeIx = .ok x) :

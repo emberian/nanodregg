@@ -29,7 +29,7 @@
                                                    position through the writer's own checkpoint
                                                    (`Loop.sealNow`), then `sealed steps=S chain=C
                                                    digest=D`, the base a thin member adopts; at a
-                                                   sealed position it writes nothing. No socket op
+                                                   sealed position the seal writes nothing (the open may repair a torn tail, HOST-77). No socket op
                                                    seals: a forced seal writes the whole World
     host import STORE NAME IN --digest HEX [--nonce HEX32]
     host import STORE NAME IN --origin HEX --nonce HEX32

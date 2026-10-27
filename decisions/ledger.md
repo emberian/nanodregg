@@ -816,6 +816,7 @@ subject; that the package cell never changes is KERNEL's (ROM), not composed.
 (4) The self-deposit remark of LEDGER-14 (3) stands.
 **Nothing moves.** No wire, vector, shipped text or package byte. ledger-sim 1 ALL PASS; --harness-control
 RED (1).
+**Amended (FAERIE-DOCS 2026-10-27; KERNEL-59, 4442b43; READ-LEDGER B3).** `escrow_invokes_one_payout` is no longer over `Invokes X obj pkg escrow w invs`: it is over `ObjectHistory X obj w w' tr` plus `hpkg`, and the hand-rolled `Invokes` is deleted. Critique (2) is superseded: an invoke of `obj` nested in another object's call tree IS covered (`ObjectStep.nested`), and so is every other turn and recorded refusal.
 
 ## LEDGER-17 · Unspent credit sits: no sweep, no decay, no reclaim to a commons (ROOT for LEDGER, Ember's ruling 2026-10-21; closes LEDGER-4's taste fork)
 **Decision.** A credit line, once extended (LEDGER-4), sits until the holder uses or repays it. No

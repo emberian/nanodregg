@@ -493,7 +493,7 @@ that keeps the names would keep the stamp. Carry across a cell-spelling change i
 an operator may find surprising; the refusal must say so.
 **Meta-critique.** I prefer the mechanism I already built (Tag.of) to a new rule, which is the familiar-tool
 bias; the test is that it removes a promise someone would have to keep.
-Status: accepted by OPS-2 (7f7b6da); built after KERNEL-29's Carried lands.
+Status: BUILT (the paragraph below, CODEC-5 2026-10-18). The refine label is `kernel/carried`, with no version suffix.
 **Built (CODEC-5, 2026-10-18, on KERNEL-29 b8e0f82).** `Codec/World.lean`: `carriedWire E dc` = `cells E dc ‖
 nat64 allowance ‖ nat64 height ‖ ascendingList Bounds.journalMax Prod.fst (dc ‖ nat64 ‖ dc)` (KERNEL-29's
 `Carried` = {trie, allowance, height, journal}; the same order as KERNEL's `carryInput`), and `carried E dc`
@@ -1462,6 +1462,7 @@ enough to go red. A change of meaning inside an existing tag (a field read diffe
 that use that tag, so each tag has one row, not a sweep of its payloads.
 
 - **2026-10-19, KERNEL-50 (KERNEL-19, ROOT for CODEC):** the World-wire refine chain is now journal → refusals → refusals-disjoint → steps → **refusals-counted** → rows → rows-headed → rows-parented → world-budget. `kernel/refusals-counted` (`countedWire`, `countedWire_lawfulOn`) refuses a base whose window counts are not its records (KERNEL-50 `refusalsCounted`). `kernel/refusal-leaf` gains the charged member (`refused h code member`), so its tag moves with the meaning. Vectors re-emitted for the moved families; the boundary pair is a counted World and the same World with one charge moved.
+Status: BUILT. The label moves with every Lang wire change: it is `lang/package/7` now (`Lang.Proofs.Wire.packageCodec_label`), not `lang/package/2`.
 
 ## CODEC-37 · Versions on the wire: a u64 varint, the entry and rows leaf carry it, the pin preimages keep eight bytes (KERNEL-54 with KERNEL-21; CODEC-12, 2026-10-19)
 

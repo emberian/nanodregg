@@ -1,4 +1,4 @@
-//! A POINT read pinned from the deployed client (CLIENT-33, cv 01a166e9): `nd invoke … --pin REL KEY`
+//! A POINT read pinned from the deployed client (CLIENT-35, cv 01a166e9): `nd invoke … --pin REL KEY`
 //! pins one row of a relation at follow's World, so a method's `(live)` point read (E1, LANG-75.1)
 //! is drivable by a real member, not only by the Sims. Over `host serve` and `host follow` on two
 //! real Stores (as `real.rs`), a package whose `use` reads its cell-keyed `facts` live is invoked:

@@ -18,7 +18,7 @@ walks at most `wordBytes` primitive operand bytes per tick it is charged (`Lang.
 measured by `walked`). `run` is the only loop: at most `fuel` steps, a stack
 of at most `stackMax` frames (carried as `depth`, so the bound costs nothing per step), and it
 reports the exact number of steps it took. Every way a run can end is a named `Fault` or a value;
-`Lang.Proofs.Sound` proves a checked program never reaches `stuck` and that only a primitive faults;
+`Lang.Proofs.Sound` proves a checked program ends with a value or a fault other than `stuck`;
 `Lang.Proofs.Run` that a final outcome is independent of any extra fuel.
 -/
 import Lang.Bounds
